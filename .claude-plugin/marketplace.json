@@ -1,0 +1,13 @@
+{
+  "name": "agent-skills",
+  "owner": {
+    "name": "Roubtec"
+  },
+  "plugins": [
+    {
+      "name": "dev-skills",
+      "source": "./plugins/dev-skills",
+      "description": "Cross-repo software development workflow skills: planned task batches, review addressing, stacked-PR maintenance, open-question resolution, and task authoring."
+    }
+  ]
+}
