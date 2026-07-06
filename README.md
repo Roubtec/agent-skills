@@ -8,7 +8,7 @@ own channel.
 ## Layout
 
 ```
-.claude-plugin/marketplace.json   # the marketplace manifest (marketplace name: agent-skills)
+.claude-plugin/marketplace.json   # the marketplace manifest (marketplace name: roubtec — "agent-skills" is CLI-reserved for anthropics repos)
 plugins/
   dev-skills/                     # Claude Code plugin: software development workflow skills
     .claude-plugin/plugin.json
@@ -35,10 +35,10 @@ codex/
 
 ```
 claude plugin marketplace add Roubtec/agent-skills
-claude plugin install dev-skills@agent-skills
+claude plugin install dev-skills@roubtec
 ```
 
-Or from within Claude Code: `/plugin` → search for the `agent-skills`
+Or from within Claude Code: `/plugin` → search for the `roubtec`
 marketplace. Skills then appear namespaced, e.g. `/dev-skills:address-review`.
 
 Repos that use these skills carry a pointer in `.claude/settings.json` so
@@ -47,12 +47,12 @@ collaborators are prompted to install on first trust:
 ```json
 {
   "extraKnownMarketplaces": {
-    "agent-skills": {
+    "roubtec": {
       "source": { "source": "github", "repo": "Roubtec/agent-skills" }
     }
   },
   "enabledPlugins": {
-    "dev-skills@agent-skills": true
+    "dev-skills@roubtec": true
   }
 }
 ```
@@ -65,11 +65,11 @@ every merged commit is picked up as an update. Only curated (PR → review →
 merge) changes propagate.
 
 To stay current, either enable auto-update for this marketplace (`/plugin` →
-Marketplaces → `agent-skills` → Enable auto-update; updates apply at session
+Marketplaces → `roubtec` → Enable auto-update; updates apply at session
 start) or refresh manually:
 
 ```
-claude plugin marketplace update agent-skills
+claude plugin marketplace update roubtec
 ```
 
 ## Consumers
