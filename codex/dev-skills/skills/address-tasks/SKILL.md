@@ -29,7 +29,7 @@ Worktrees are disposable working directories: the shared `.git` object store kee
 The operating discipline that follows:
 
 - Keep worktrees under a **gitignored base directory** (e.g. `.worktrees/` at the repo root) or outside the repository entirely, so worktree contents never show up in the main tree's status or get committed.
-- **Commit early and often**, and **push after every commit** — a worktree's working tree is more volatile than committed-and-pushed history, and pushing provides remote durability and keeps the PR current.
+- **Commit early and often**, and **push after every commit** while the remote is available — a worktree's working tree is more volatile than committed-and-pushed history, and pushing provides remote durability and keeps the PR current. In the local-only fallback (Session Bootstrap's remote probe failed), commits are the durability boundary — push when access returns.
 - Package managers with a content-addressed store (e.g. pnpm) make per-worktree installs cheap: when the store and the worktree share a filesystem, installs hardlink package files from the store instead of copying them, so many worktrees can install concurrently without multiplying disk usage.
 
 ## Session Bootstrap (run once, before any worktree)
@@ -37,7 +37,7 @@ The operating discipline that follows:
 Do this in the **main working tree** before creating worktrees.
 The same bootstrap serves this skill and `address-reviews`:
 
-1. **Choose the worktree base directory** (`$WT_BASE`): a gitignored directory such as `.worktrees/` at the repo root (add it to `.gitignore` if it isn't listed), or a directory outside the repository.
+1. **Choose the worktree base directory** (`$WT_BASE`): an ignored directory such as `.worktrees/` at the repo root (if it isn't already ignored, list it in `.git/info/exclude` rather than editing `.gitignore` mid-run — an ignore edit dirties the main checkout), or a directory outside the repository.
 
 2. **Prune stale state:** run `git worktree prune`, then remove any orphaned directories under the base — directories whose git worktree registration is gone (`git worktree list` no longer shows them). Never remove a directory that is still a registered worktree.
 

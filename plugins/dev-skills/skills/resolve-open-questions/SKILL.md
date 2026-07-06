@@ -51,7 +51,8 @@ mirror the review skills: `push` and `ping-codex` / `ping-claude` / `ping-copilo
 publication: even for a fix-now item it **asks the maintainer to confirm before pushing and before
 editing any review threads** (the flags merely pre-answer that prompt). `ping-codex` / `ping-claude`
 post an `@codex` / `@claude` review comment; **`ping-copilot` requests review via
-`gh pr edit <PR#> --add-reviewer @copilot`** — never an `@copilot review` comment, which drives
+`gh pr edit <PR#> --add-reviewer @copilot`** (needs gh ≥ 2.88.0; on an older `gh`, request the
+review from the PR's web reviewer menu) — never an `@copilot review` comment, which drives
 Copilot's coding agent rather than its reviewer. **`ping-contributing`** carries the same meaning as in
 `address-review`: re-ping a bot only if it brought a genuinely new finding this round, so a reviewer
 that has gone quiet drops out of the loop — combined with explicit `ping-*` it filters that named set,
@@ -154,8 +155,8 @@ resumes cleanly. Treat a wrap-up as a clean pause, never a discard.
 introduces or leans on a non-obvious invariant (e.g. "a record may stay `ACTIVE` past its
 soft-expiry"), do not just implement it — first **sweep every other consumer of that invariant** and
 report whether any mishandles it. This turns "fix this one spot" into "confirm the whole subsystem
-agrees", and is frequently the most valuable thing the skill does. Use `rg` (never recursive
-`grep`) and, for broad sweeps, an Explore fan-out; report findings before proceeding.
+agrees", and is frequently the most valuable thing the skill does. Use `rg` where available (else
+`git grep`/`grep -R`) and, for broad sweeps, an Explore fan-out; report findings before proceeding.
 
 ### 5. Apply the decision
 

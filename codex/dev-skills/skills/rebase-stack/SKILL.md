@@ -137,7 +137,7 @@ Include `X` as a chain candidate if all of these hold:
 - `mb` is a descendant of `EF`: `git merge-base --is-ancestor <EF> mb` (and `mb != EF`)
 - `mb` is an ancestor of `<source>`: `git merge-base --is-ancestor mb <source>`
 - `X != <target>` and `X != <source>`
-- **`X` has at least one unique commit past `<source>`**: `git rev-list --count <source>..<X>` is greater than zero. Branches whose tip is itself an ancestor of source contribute nothing to a rebase — replaying them would be a no-op. They typically arise as "snapshot" refs left behind from a prior workflow stage. (This filter is bypassed when the user supplied an explicit `chain` form — that list is authoritative.)
+- **`X` has at least one unique commit past `<source>`**: `git rev-list --count <source>..<X>` is greater than zero. All-ancestor tips are usually "snapshot" refs left behind from a prior workflow stage; excluding them keeps such refs out of the chain, at the cost of also skipping a real chain branch that has no commits of its own — to carry those refs along too, use the explicit `chain` form (which bypasses this filter — that list is authoritative) or plain `git rebase --update-refs`.
 
 This is **heuristic, not metadata** — pure git topology with patch-id awareness.
 It correctly catches "leafy" branches whose tip has diverged from their descendants (e.g., `feature/03` with a `fixes 03` commit that `feature/04` doesn't have), because the merge-base of any such leafy branch with the source still lies on the chain spine.
