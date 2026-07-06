@@ -154,8 +154,8 @@ resumes cleanly. Treat a wrap-up as a clean pause, never a discard.
 introduces or leans on a non-obvious invariant (e.g. "a record may stay `ACTIVE` past its
 soft-expiry"), do not just implement it — first **sweep every other consumer of that invariant** and
 report whether any mishandles it. This turns "fix this one spot" into "confirm the whole subsystem
-agrees", and is frequently the most valuable thing the skill does. Use `rg` (per `AGENTS.md`, never
-recursive `grep`) and, for broad sweeps, an Explore fan-out; report findings before proceeding.
+agrees", and is frequently the most valuable thing the skill does. Use `rg` (never recursive
+`grep`) and, for broad sweeps, an Explore fan-out; report findings before proceeding.
 
 ### 5. Apply the decision
 
@@ -201,8 +201,9 @@ and scan recent run reports / commit messages for discovered findings.
   "decision direction" options, and gives acceptance criteria. Pull its options straight into the
   brief.
 - Read the **real code** at those sites. In a stack, read **across branches without checking
-  anything out** using the image-baked `gitcat <ref> <path> [start [end]]` helper (stable line
-  numbers). Confirm the gap still exists on the *addressed* tip.
+  anything out** using `git show <ref>:<path>` (pipe through `cat -n` when line numbers matter); if
+  a `gitcat` helper is on PATH, prefer it for stable line-numbered slices. Confirm the gap still
+  exists on the *addressed* tip.
 - Classify **reachability** exactly as in the core (live today / dormant under a stub-flag-adapter /
   impossible until a named prerequisite) — it drives the recommendation.
 
@@ -211,9 +212,9 @@ and scan recent run reports / commit messages for discovered findings.
 **Fix-now items → worktree → review → publish** (borrow the machinery from
 `address-reviews`):
 
-- One **git worktree per owning branch** (Session Bootstrap, `wt-enter`, isolation model — see that
-  skill). A coupled fix + sibling-analog may span two branches: each lands on **the branch that owns
-  that code**; never split one atomic change across two worktrees.
+- One **git worktree per owning branch** (see the `address-reviews` skill's Session Bootstrap and
+  isolation model). A coupled fix + sibling-analog may span two branches: each lands on **the
+  branch that owns that code**; never split one atomic change across two worktrees.
 - Delegate the implementation to a fresh subagent with the worktree contract, the task-file spec,
   and the decided option. Require: real **tests** (deterministic, clock-injected where the bug is a
   race — they verify the fix even when the production trigger is dormant), validation on an
@@ -222,10 +223,11 @@ and scan recent run reports / commit messages for discovered findings.
   copy of work already done; when it only **partially** satisfies the task, leave the file in
   `tasks/` for a follow-up round and do **not** claim the thread as done. Archiving inside the
   *same* commit/PR is deliberate, not a violation of `tasks/AGENTS.md`'s "move to `done/` after
-  merge" rule: a fix-now item pulled into another PR's scope has **no branch of its own**, so its
-  `tasks/done/` move can only ride that PR — if the PR never merges, the move is discarded with it
-  and nothing is lost. That is distinct from a task **selected for its own implementation**, which
-  stays in `tasks/` for a final review under the one-task-one-branch model.
+  merge" rule (where the repo follows the `tasks/` convention): a fix-now item pulled into another
+  PR's scope has **no branch of its own**, so its `tasks/done/` move can only ride that PR — if the
+  PR never merges, the move is discarded with it and nothing is lost. That is distinct from a task
+  **selected for its own implementation**, which stays in `tasks/` for a final review under the
+  one-task-one-branch model.
 - Run a **fresh-eyes reviewer** per change (it edits nothing; PASS or numbered issues); fix-up
   rounds as needed.
 - **Publish** each passing change *only after the maintainer confirms the push* — this interactive
@@ -296,14 +298,15 @@ and scan recent run reports / commit messages for discovered findings.
   still goes through review before publish).
 - Read `AGENTS.md` / `CLAUDE.md` for repo conventions (task layout, `tasks/done/`, test harness,
   isolated-DB story) before forming options.
-- Cross-branch reads use `gitcat`; never check a sibling branch out just to read it.
+- Cross-branch reads use `git show <ref>:<path>` (or a `gitcat` helper where available); never
+  check a sibling branch out just to read it.
 
 ## Checklist
 
 - [ ] Mode detected (continuation vs pointed); full work-list gathered (parked choices + blockers +
       discovered findings + — for review work — deferrals & cross-branch issues).
 - [ ] Each item **grounded** in its authoritative artifact (real code/data/spec; cross-branch via
-      `gitcat`); gap re-confirmed; reachability classified.
+      `git show`/`gitcat`); gap re-confirmed; reachability classified.
 - [ ] Coupled items grouped; order set; served **one at a time** (trivial independents may share one
       multiple-choice round) with context + trigger example + options-as-outcomes + recommendation;
       decision captured via AskUserQuestion. Each round opens with a `resolved · pending · total`
