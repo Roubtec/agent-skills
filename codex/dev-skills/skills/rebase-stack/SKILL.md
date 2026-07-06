@@ -187,7 +187,7 @@ The following branches will be rebased on top of `main` (a03ab1f), in order:
 [!] login-tests  47 commits ahead of feature/03  tip: 88f9011  test login UI
                  Merge-base lies on the chain spine but commit count and name suggest unrelated work.
 
-effective frontier (EF):  d4f12a8  01-12 conversion-blocks  (3 source commits patch-equivalent to main)
+effective frontier (EF):  d4f12a8  01-12 example-feature   (3 source commits patch-equivalent to main)
 local main:               a03ab1f
 cached origin/main:       a02ee02  (1 commit behind local main, last fetched 4h ago)
 

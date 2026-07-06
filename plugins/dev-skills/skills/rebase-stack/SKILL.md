@@ -14,7 +14,7 @@ It works one branch at a time, with explicit user confirmation up front and inte
 
 ## When to use this
 
-Typical scenario: you implemented tasks via the `address-tasks` skill, producing branches `feature/01 → feature/02 → ... → feature/N` each PR'd into the previous.
+Typical scenario: you produced a chain of branches `feature/01 → feature/02 → ... → feature/N` (e.g. via the `address-tasks` skill), each PR'd into the previous.
 After PR review, branches accumulate "fixes" commits.
 After `feature/01` and `feature/02` are merged into `main`, the remaining branches still share an old common ancestor with `main` and contain commits that are now duplicated in `main` (with different hashes but identical patches).
 Use this skill from the topmost branch (or pass it explicitly) to bring the entire remaining stack forward, branch by branch, onto the new `main` tip.
@@ -186,7 +186,7 @@ The following branches will be rebased on top of `main` (a03ab1f), in order:
 [!] login-tests  47 commits ahead of feature/03  tip: 88f9011  test login UI
                  Merge-base lies on the chain spine but commit count and name suggest unrelated work.
 
-effective frontier (EF):  d4f12a8  01-12 conversion-blocks  (3 source commits patch-equivalent to main)
+effective frontier (EF):  d4f12a8  01-12 example-feature   (3 source commits patch-equivalent to main)
 local main:               a03ab1f
 cached origin/main:       a02ee02  (1 commit behind local main, last fetched 4h ago)
 
