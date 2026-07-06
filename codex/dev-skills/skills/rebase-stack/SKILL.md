@@ -334,7 +334,7 @@ Output:
   git update-ref refs/heads/<branch> $(git rev-parse refs/pre-rebase/<branch>/<timestamp>)
 
   # Delete all pre-rebase refs created in this run (cleanup):
-  git for-each-ref --format='%(refname)' refs/pre-rebase/ | xargs -r -n1 git update-ref -d
+  git for-each-ref --format='%(refname)' refs/pre-rebase/ | while IFS= read -r ref; do git update-ref -d "$ref"; done
   ```
 - A reminder that nothing has been pushed.
 - Any divergence between local target and cached `origin/<target>` (still a non-blocking note).

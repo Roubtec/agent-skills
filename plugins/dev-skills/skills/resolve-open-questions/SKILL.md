@@ -156,7 +156,8 @@ introduces or leans on a non-obvious invariant (e.g. "a record may stay `ACTIVE`
 soft-expiry"), do not just implement it — first **sweep every other consumer of that invariant** and
 report whether any mishandles it. This turns "fix this one spot" into "confirm the whole subsystem
 agrees", and is frequently the most valuable thing the skill does. Use `rg` where available (else
-`git grep`/`grep -R`) and, for broad sweeps, an Explore fan-out; report findings before proceeding.
+`git grep`/`grep -R`) and, for broad sweeps, parallel research subagents when the session exposes
+them; report findings before proceeding.
 
 ### 5. Apply the decision
 

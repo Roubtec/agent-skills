@@ -40,14 +40,14 @@ Be lenient about parsing: trust the agent to extract source, target, and (option
 
 | Form | Meaning |
 |---|---|
-| `/rebase-stack` | Current branch onto `main`; chain auto-detected |
-| `/rebase-stack onto <target>` | Current branch onto `<target>`; chain auto-detected |
-| `/rebase-stack <source>` | `<source>` onto `main`; chain auto-detected |
-| `/rebase-stack <source> onto <target>` | `<source>` onto `<target>`; chain auto-detected |
-| `/rebase-stack <source> -> <target>` | Same; arrow tolerated |
-| `/rebase-stack <source> → <target>` | Same; unicode arrow tolerated |
-| `/rebase-stack chain <b1> <b2> ... <bN> onto <target>` | Explicit chain in stacking order; the last branch is the source; auto-detection is skipped entirely |
-| `/rebase-stack chain <b1> -> <b2> -> ... -> <bN>` | Same with arrows; `onto <target>` defaults to `main` if omitted |
+| `/dev-skills:rebase-stack` | Current branch onto `main`; chain auto-detected |
+| `/dev-skills:rebase-stack onto <target>` | Current branch onto `<target>`; chain auto-detected |
+| `/dev-skills:rebase-stack <source>` | `<source>` onto `main`; chain auto-detected |
+| `/dev-skills:rebase-stack <source> onto <target>` | `<source>` onto `<target>`; chain auto-detected |
+| `/dev-skills:rebase-stack <source> -> <target>` | Same; arrow tolerated |
+| `/dev-skills:rebase-stack <source> → <target>` | Same; unicode arrow tolerated |
+| `/dev-skills:rebase-stack chain <b1> <b2> ... <bN> onto <target>` | Explicit chain in stacking order; the last branch is the source; auto-detection is skipped entirely |
+| `/dev-skills:rebase-stack chain <b1> -> <b2> -> ... -> <bN>` | Same with arrows; `onto <target>` defaults to `main` if omitted |
 
 Quoting is optional; branch names with spaces should use quotes.
 If `main` doesn't exist, fall back to `master`.
@@ -314,7 +314,7 @@ In delegated unattended mode, the current disposable branch is instead restored 
 
 The user can resume by:
 - Manually completing or aborting the in-progress rebase.
-- Re-invoking `/rebase-stack` from the source (or any descendant of where things stopped). The new invocation will re-detect a fresh, smaller chain starting from the current state of the world.
+- Re-invoking `/dev-skills:rebase-stack` from the source (or any descendant of where things stopped). The new invocation will re-detect a fresh, smaller chain starting from the current state of the world.
 
 The skill itself is **not re-entrant** in the formal sense — it does not persist state across invocations. Each run is a fresh detection-and-execution cycle. Git is the only persistent state.
 
@@ -333,7 +333,7 @@ Output:
   git update-ref refs/heads/<branch> $(git rev-parse refs/pre-rebase/<branch>/<timestamp>)
 
   # Delete all pre-rebase refs created in this run (cleanup):
-  git for-each-ref --format='%(refname)' refs/pre-rebase/ | xargs -r -n1 git update-ref -d
+  git for-each-ref --format='%(refname)' refs/pre-rebase/ | while IFS= read -r ref; do git update-ref -d "$ref"; done
   ```
 - A reminder that nothing has been pushed.
 - Any divergence between local target and cached `origin/<target>` (still a non-blocking note).
