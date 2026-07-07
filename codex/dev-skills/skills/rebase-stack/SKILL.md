@@ -210,9 +210,9 @@ Skipped branches are **left entirely untouched** — they stay on their current 
 For each branch `X` in the confirmed chain (in order, with `<target>` as the new base for the first, and the just-rebased predecessor as the new base for each subsequent one):
 
 1. **Save pre-rebase ref.**
-   `git update-ref refs/pre-rebase/<X>/<timestamp> <X>` where `<timestamp>` is `YYYYMMDD-HHMMSS`.
+   `git update-ref refs/pre-rebase/<X>/<timestamp> <X>` where `<timestamp>` is `YYYYMMDD-HHMMSS`, **captured once at the start of the run** so every ref this run creates shares the same timestamp.
    This is the safety net.
-   These refs are not deleted automatically; document the cleanup pattern in the final summary.
+   These refs are not deleted automatically; document the cleanup pattern in the final summary — scoped to **this run's** refs (the shared timestamp, or the exact list saved), never the whole `refs/pre-rebase/` namespace.
 2. **Checkout.**
    `git checkout <X>`.
 3. **Rebase.**
@@ -333,8 +333,10 @@ Output:
   # Restore a single branch from its pre-rebase snapshot:
   git update-ref refs/heads/<branch> $(git rev-parse refs/pre-rebase/<branch>/<timestamp>)
 
-  # Delete all pre-rebase refs created in this run (cleanup):
-  git for-each-ref --format='%(refname)' refs/pre-rebase/ | while IFS= read -r ref; do git update-ref -d "$ref"; done
+  # Delete only the pre-rebase refs created in THIS run. Every ref this run saved shares one <timestamp>,
+  # so filter by that suffix — do NOT blanket-delete refs/pre-rebase/, which would also remove snapshots
+  # from other branches and earlier runs:
+  git for-each-ref --format='%(refname)' refs/pre-rebase/ | grep '/<timestamp>$' | while IFS= read -r ref; do git update-ref -d "$ref"; done
   ```
 - A reminder that nothing has been pushed.
 - Any divergence between local target and cached `origin/<target>` (still a non-blocking note).

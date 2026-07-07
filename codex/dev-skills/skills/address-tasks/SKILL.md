@@ -120,7 +120,7 @@ Record in the final summary whenever you throttled below the dependency-derived 
 
 Validation that boots a *built* app server is the most common thing that won't run from inside a worktree. Next.js `next build` standalone output and Playwright's `webServer` both infer the workspace root from the repo-root lockfile, then look for the server at a path that ignores the nested `.worktrees/<slug>/` prefix — so `test:e2e` can't find the server and self-skips or errors. This is a repo-config limitation, not something the worktree skill can fix from the outside; handle it by choosing one of these, in order of preference:
 
-1. **Run that task's e2e phase serially in the main checkout** after its branch is pushed: from the main tree, check out the task branch, build, run e2e, then restore. This keeps unit/integration coverage in-worktree and serializes only the part that needs the un-nested path.
+1. **Run that task's e2e phase serially in the main checkout** after its branch is pushed: from the main tree, **check out the branch tip detached** (`git checkout --detach <branch>`) — a plain `git checkout <branch>` fails with `fatal: '<branch>' is already used by worktree ...` because the branch is still checked out in the task's worktree — then build, run e2e, and restore the main checkout's prior HEAD. (Or remove the task's clean worktree first, then check out the branch normally.) This keeps unit/integration coverage in-worktree and serializes only the part that needs the un-nested path.
 2. **Defer e2e to CI** and rely on the in-worktree unit/integration suites for the in-loop signal, noting in the PR that e2e runs in CI.
 3. **Run it in-worktree only if the repo's config is worktree-aware** (resolves the standalone/server path from `next build`'s actual output dir rather than assuming repo root).
 
@@ -207,7 +207,7 @@ Include in each implementer prompt:
 - **Upstream context:** if this task builds on a dependency task, briefly describe what that task introduced (and that the worktree was branched from it, so that code is already present).
 - **Commit, push, and validation instructions:**
   - Commit at logical milestones, keeping each commit buildable when practical.
-  - **After every commit, push:** `git push -u origin HEAD` on the first push, `git push` thereafter. Worktrees are disposable, so pushing is the backup. If a push fails (e.g. no remote auth), keep committing and note it — commits still persist locally.
+  - **After every commit, push while the remote is available** (per Bootstrap's remote probe): `git push -u origin HEAD` on the first push, `git push` thereafter. Worktrees are disposable, so pushing is the backup. **In a known local-only run (Bootstrap's probe failed), skip pushing entirely** and rely on commits for durability — don't retry a push you already know will fail every commit; if a push unexpectedly fails mid-run, keep committing and note it — commits still persist locally.
   - Run the project build/lint periodically and a full build check before reporting done.
 - **Coordination:** it must not revert unrelated or concurrent edits, and must accommodate that its base branch may itself be a sibling task's branch.
 - **Reporting:** when done, report what was implemented, decisions/tradeoffs/deviations, and any areas needing focused review.
@@ -233,7 +233,7 @@ Include in each reviewer prompt:
 Default behavior, matching the existing workflow: each task that passes review gets **pushed and a PR opened** against its resolved base.
 
 1. The implementer already pushed its branch during the loop. Ensure the final state is pushed: `git -C <worktree> push`.
-2. Open the PR against the recorded base branch (the chosen base for independent tasks; the dependency's branch for dependent tasks → stacked PR):
+2. Open the PR against the recorded base branch (the chosen base for independent tasks; the dependency's branch for dependent tasks → stacked PR). **If the recorded base exists only locally — a synthetic multi-parent integration branch, or a dependency branch not yet pushed — push it to the remote first** (`git push -u origin <base-branch>`); otherwise `gh pr create --base <base-branch>` fails because GitHub has no such base ref:
 
    ```bash
    gh pr create --base <base-branch> --head <branch-name> --title "<task title>" --body "<summary>"

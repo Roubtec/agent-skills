@@ -217,6 +217,7 @@ For each task file in the input set:
    - If **pass**: proceed to step 8.
    - If **issues found**: enter the feedback loop (see below).
 8. **Open a PR** against the recorded base branch.
+   - **First push the task branch** (`git push -u origin HEAD`), and push the recorded base too if it exists only locally (e.g. a dependency's not-yet-pushed branch). `gh pr create` on an unpushed branch prompts interactively for a push target, which hangs a delegated/no-TTY run. If the remote is unavailable (see the local-only fallback), skip the PR and record the branch as pending push instead.
    - Reference the task file in the PR description for context.
    - Include any reviewer-relevant caveats (tradeoffs, intentional divergences, uncertainties surfaced by the implementer or reviewer).
    - Do not restate the entire task unless doing so adds real review value.
