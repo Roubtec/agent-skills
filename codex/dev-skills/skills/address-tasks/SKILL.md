@@ -232,7 +232,7 @@ Include in each reviewer prompt:
 
 Default behavior, matching the existing workflow: each task that passes review gets **pushed and a PR opened** against its resolved base.
 
-1. The implementer already pushed its branch during the loop. Ensure the final state is pushed: `git -C <worktree> push`.
+1. **While the remote is available** (per Bootstrap's probe), ensure the final state is pushed — the implementer already pushed its branch during the loop: `git -C <worktree> push`. In a known local-only run (Bootstrap's probe failed), there is nothing to push; skip to the local-branch fallback in step 3.
 2. Open the PR against the recorded base branch (the chosen base for independent tasks; the dependency's branch for dependent tasks → stacked PR). **If the recorded base exists only locally — a synthetic multi-parent integration branch, or a dependency branch not yet pushed — push it to the remote first** (`git push -u origin <base-branch>`); otherwise `gh pr create --base <base-branch>` fails because GitHub has no such base ref:
 
    ```bash
