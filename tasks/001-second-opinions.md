@@ -1,69 +1,69 @@
-# 001 - Best-Effort Second Opinions for Implementation Work
+# 001 - Best-Effort Cross-Agent Second Opinions (umbrella + protocol)
 
-my current workflow involves (same for the Claude and Codex counterpart, to the extent their respective harnesses afford):
-0. writing a plan in iterations with agentic help, however that comes about.
-1. writing tasks using @plugins/dev-skills/skills/write-tasks/SKILL.md usually based on a bigger plan (or individual tasks if needed)
-2. addressing any loose ends in the tasks using @plugins/dev-skills/skills/resolve-open-questions/SKILL.md
-3. addressing the tasks, usually in parallel, using @codex/dev-skills/skills/address-tasks/SKILL.md (or the serialized counterpart).
-4. observing the automated & human reviews for any PRs that come out of "address-tasks" delivered work
-5. running @codex/dev-skills/skills/address-reviews/SKILL.md or the singular version to deal with review feedback and deliver fixes & responses to any review comments.
-6. after reviews have been addressed, we often invoke the continuation mode of "resolve-open-questions" to answer any requests for feedback/direction/approval and to tweak any follow-up tasks (sometimes referred to as "deferred") that may have been filed as a response to a review comment (if an edge-case fix would bloat the scope of the current PR, for example).
+This is the umbrella task for wiring **best-effort cross-agent second opinions** into the dev-skills review loops, plus the accompanying **iteration-budget raise (3 → 6)**.
+It defines the canonical protocol once; the implementation is decomposed into tasks 001a–001f, each owning a disjoint set of skill files so they can run in parallel worktrees without collisions.
 
-once the reviews no longer surface material findings, we usually merge.
+## Why
 
-please help me find opportunities to streamline / simplify / automate this process somewhat. we still want to have some interactive opportunities within the review/fix/review process.
+Both agent harnesses (Claude and Codex) are often installed side by side (powbox guarantees it; other environments may not).
+The `address-tasks` implement→review→fix loop already benefits from an independent reviewer subagent; invoking the *other* harness CLI as an additional reviewer, in parallel, systematically incorporates the strengths of both agents and should reduce review churn after the PR opens.
+Peer availability is never guaranteed, so participation is strictly **best-effort** — but once a peer delivers coherent, fact-grounded findings, those findings are first-class and can gate delivery like the own reviewer's.
 
-my first idea is to leverage that both agent harnesses (Claude _and_ Codex) are often installed in the environment. (note that this is not guaranteed since these skills are supposed to be applicable generically.) "address-tasks" already has the work of an isolated implementer sub-agent reviewed by an independent reviewer sub-agent, which has proven effective. if we found that there is the other harness available, we could call it via the CLI to review the work instead of a sub-agent (or better - in parallel with a sub-agent) to get the most "second opinions" during the initial development locally. incorporating the strengths of both agents more systematically, we might be able to reduce the churn once the PR is opened.
+## Verified capability findings (in-container, 2026-07-10)
 
-if the other agent fails to respond (e.g. it is not even installed), we can forfeit its opinion and continue with own feedback only as currently happens. if it responds with "usage exceeded"- or "missing login"-type feedback, same applies. if it has a transient error, we can retry once or twice before giving up. this is a best-effort attempt at solidifying code before even opening a PR during "address-tasks".
+- `codex exec --sandbox read-only --cd <dir> -o <file> "<prompt>"` runs a **full agentic loop** in one invocation, exit 0, final message captured to `<file>`. `--output-schema <schema.json>` can force a parseable final message; `--ephemeral` skips session persistence.
+- `codex review --base <branch>` is a purpose-built review subcommand, but `--base` and a custom prompt are **mutually exclusive** (hard error, exit 2) — we need a custom output contract, so the protocol uses `codex exec` with a review prompt instead.
+- `codex login status` exits 1 when not logged in ("Not logged in"); an unauthenticated `codex exec` retries ~30s before exiting 1, so the preflight matters.
+- `claude -p "<prompt>"` is the symmetric counterpart (`--output-format json`, `--json-schema` available). Both CLIs accept per-invocation model/effort: `codex exec -m <model> -c model_reasoning_effort=<level>`; `claude -p --model <alias> --effort <low|medium|high|xhigh|max>`.
+- Powbox complement (already merged separately): the container guidance advertises the one-shot forms — https://github.com/Roubtec/powbox/pull/98. The skills must NOT depend on it: **all detection, preflight, invocation, and forfeit logic lives in the skills**, since they must work in any environment, including ones where the peer binary is absent.
 
-the same could apply to "address-reviews" as well, where we could seek a best-effort second opinion from the other agent harness before responding to review comments. "resolve-open-questions" could also benefit from this approach if it needs to implement any of the resolutions.
+## The Peer Second-Opinion Protocol (canonical — implementation tasks reference this section)
 
-the Codex agent already leverages `claude -p` heavily on its own. i would like to examine whether the Claude agent could also leverage the `codex` executable in a similar way, and if so, how to do it. if we can get both agents to leverage each other in a best-effort manner, we might be able to reduce the number of iterations needed to get a PR ready for merge.
+### 1. Peer identification and availability preflight (once per skill run)
 
-i don't know whether the CLI access for "claude" or "codex" can directly request a particular model + effort combo, maybe that's something that we should consider based on the user's wishes.
+- The peer is any *other* known harness CLI: from Claude skills the peer is `codex`; from Codex skills the peer is `claude`. Keep the pairing extensible (a future harness adds one entry).
+- Preflight in the orchestrator, in the main working tree, before the first review phase: `command -v <peer>` (missing → unavailable), then for codex `codex login status` (non-zero exit → unavailable; skipping this burns ~30s of auth retries on every later invocation). `claude` has no verified cheap status probe: classify at first real invocation — an auth/usage-type failure marks the peer unavailable for the rest of the run.
+- Unavailability is never an error and never blocks: proceed with own-harness review only, and note the forfeit (with reason) **once** in the final summary.
 
-is it plausible that a single-prompt cross agent invocation gives enough room to request a thorough review and receive the verdict & findings?
+### 2. Invocation (per review round, read-only, from the task's worktree)
 
----
+- From Claude skills: `codex exec --sandbox read-only --cd <worktree> -o <outfile> "<prompt>"`. From Codex skills: `claude -p "<prompt>"` with the working directory set to the worktree.
+- Default to the peer's own configured model/effort; add `-m` / `-c model_reasoning_effort=<level>` (codex) or `--model` / `--effort` (claude) only when the user asked for a specific combo.
+- The prompt must carry: the worktree path, the review scope (base branch or commit range), the relevant context verbatim (task file, or review threads under verification), an instruction to read the actual files, an explicit "edit nothing", and the **output contract**: `VERDICT: PASS | ISSUES` followed by numbered findings, each tagged `blocking` or `minor` with `file:line` and a one-line rationale.
+- **Bounded patience:** wrap the invocation in a timeout (~10 minutes). On timeout or transient error, retry once (two attempts total), then forfeit this round's opinion.
+- **Concurrency:** launch the peer in the background at the same moment the own reviewer subagent is spawned — both are read-only against a committed worktree, so this is safe and adds no wall-clock. Collect both results before triage.
+- **Cadence:** invoke the peer on **every** review round while it remains available (default). Skills accept an optional `peer-opinions=off` argument for users who must conserve peer-side usage.
 
-## Solidified findings (verified in-container, 2026-07-10)
+### 3. Triage, merging, and gating
 
-The open questions above were answered empirically against the shipped CLIs (codex logged in via ChatGPT; claude). Verdict: **viable — proceed with implementation.**
+- **Unintelligible output** (not parseable as a verdict + findings) → forfeit that round's opinion, note it, proceed. Same category as unreachable: best-effort.
+- **Grounding check** (orchestrator, cheap): each peer finding must reference verifiable facts — the file/line exists and the claim is not self-evidently false. A spot-check, not a re-review. Ungrounded findings are discarded (noted in the summary).
+- The **union** of own-reviewer findings and grounded peer findings feeds the next fix round; the fixer addresses each item specifically.
+- **Gating:** a round passes only when the own reviewer passes AND the peer (when it delivered an intelligible verdict this round) reports no grounded **blocking** findings. Grounded blocking peer findings alone — even with an own-reviewer pass — force a fresh implementer round.
+- Grounded **minor** peer findings with an own-reviewer pass do NOT burn a round: record them in the PR description / final report instead.
+- **Dispute resolution:** the next round's own reviewer adjudicates contested peer claims — if the fixer pushes back with evidence and the fresh reviewer confirms the peer finding is not real, it stops gating. This prevents a hallucinating peer from looping the task forever.
 
-### Can Claude leverage `codex` the way Codex leverages `claude -p`? — Yes
+### 4. Round accounting and iteration budget (3 → 6)
 
-`codex exec` is the symmetric counterpart to `claude -p`: a single invocation runs a **full agentic loop** (repo exploration, file reads, shell), not a one-completion answer. Verified working:
+- Every implementer round counts toward the cap, whichever reviewer triggered it.
+- Raise the cap from **3 to 6** in every skill that has the loop (both trees). Rationale: the cap is a **runaway-loop guard against arcane token bloat, not a quality dial** — it was already being hit legitimately at 3, and with more eyes picking at the code, more legitimate rounds are expected. Behavior on exhaustion is unchanged: stop, no PR / no push, surface outstanding findings.
 
-- `codex exec --sandbox read-only -o <file> "<prompt>"` — exit 0, final message written to `<file>` (stdout carries the event stream). `--sandbox read-only` is the right posture for a reviewer: it reads the worktree but cannot mutate it.
-- `codex review --base <branch>` — a **purpose-built non-interactive review subcommand**: reviews the current checkout's diff against the base and prints verdict/findings as the final message (exit 0, verified live on this branch). Caveats: `--base` and a custom prompt are **mutually exclusive** (hard error, exit 2), and it reviews the repo at the current working directory, so run it from inside the task's worktree. `--uncommitted` and `--commit <sha>` variants exist.
-- `codex exec --output-schema <schema.json>` forces the final message into a JSON Schema, so the orchestrator can demand `{verdict, findings[]}` and parse mechanically; `--json` (JSONL events) and `--cd <worktree>` / `--ephemeral` also exist.
+## Decomposition (disjoint file ownership; parallelizable)
 
-### Failure modes — all detectable, matching the best-effort design
+| Task | Tree | Files owned |
+|------|------|-------------|
+| 001a | Claude (`plugins/dev-skills`) | `address-tasks-serialized/SKILL.md`, `address-tasks/SKILL.md` |
+| 001b | Claude (`plugins/dev-skills`) | `address-review/SKILL.md`, `address-reviews/SKILL.md` |
+| 001c | Claude (`plugins/dev-skills`) | `resolve-open-questions/SKILL.md` |
+| 001d | Codex (`codex/dev-skills`) | `address-tasks-serialized/SKILL.md`, `address-tasks/SKILL.md` |
+| 001e | Codex (`codex/dev-skills`) | `address-review/SKILL.md`, `address-reviews/SKILL.md` |
+| 001f | Codex (`codex/dev-skills`) | `resolve-open-questions/SKILL.md` |
 
-- not installed → `command -v codex` fails.
-- not logged in → `codex login status` exits 1 ("Not logged in"). This preflight matters: an unauthenticated `codex exec` retries for ~30s before exiting 1.
-- transient/API errors → non-zero exit; retry once or twice, then forfeit the opinion.
+## Out of scope (tracked separately)
 
-### Model + effort per invocation — Yes, both directions
+- The powbox-seeded workflow scripts `wf-address-tasks.js` / `wf-address-review.js` hardcode `MAX_ROUNDS = 3` and live in the **powbox repo** (`docker/claude/agent-container/workflows/`), not here. Bumping them to 6 (and any future peer-opinion support there) is a powbox PR — pending maintainer go-ahead (open question).
+- Powbox container guidance: already delivered via https://github.com/Roubtec/powbox/pull/98.
 
-- `codex exec -m <model> -c model_reasoning_effort=<level>` (defaults come from `~/.codex/config.toml`).
-- `claude -p --model <alias|full-name> --effort <low|medium|high|xhigh|max>`, plus `--output-format json` / `--json-schema <schema>` for structured verdicts.
+## Acceptance for the umbrella
 
-Recommendation: default to the peer's own configured defaults; expose an optional model/effort knob in the skill arguments rather than hardcoding.
-
-### Is a single prompt enough for a thorough review? — Yes
-
-Because the invocation is agentic, the prompt only needs to carry **scope** (worktree path, base branch or commit range) and the **output contract** (verdict + numbered findings) — not the diff itself. Verified live: `codex review --base main` on this branch performed a real review pass and returned a coherent verdict as its final message.
-
-### Design decisions to carry into implementation
-
-1. **Skills stay generic and self-sufficient**: detection, login preflight, invocation, and forfeit/retry logic live in the skills — peer availability is never guaranteed.
-2. **Run the cross-agent reviewer in parallel with the reviewer sub-agent** (the "or better" option above): the peer call is just a shell command the orchestrator can run in the background during Phase B, so both opinions land in the same fix round with no extra round-trips.
-3. **The peer opinion augments but never gates**: merge its findings into the fix round, but keep the own-harness reviewer as the pass/fail gatekeeper, so peer flakiness can never wedge a batch.
-4. **Read-only posture for review invocations** (`--sandbox read-only` for codex; `claude -p` is naturally read-only without granted permissions).
-5. Insertion points: `address-tasks` / `address-tasks-serialized` review phase, `address-review`'s fresh-eyes verification, and `resolve-open-questions` when it implements resolutions.
-
-### Powbox complement (done)
-
-Powbox's container guidance now advertises each peer's one-shot form and the best-effort semantics — see https://github.com/Roubtec/powbox/pull/98. This helps ad-hoc in-container delegation, but the skills must not depend on it.
+All of 001a–001f merged; both trees describe the identical protocol (allowing for harness-specific invocation syntax); `grep -rn "3 rounds\|3 iterations\|round 3" plugins/ codex/` returns no stale budget references.
