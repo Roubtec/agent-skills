@@ -16,7 +16,7 @@ When `resolve-open-questions` applies a decision that writes code, that change c
 
 ## Target files or areas
 
-- In that flow, launch the peer invocation (`codex exec --sandbox read-only --cd <worktree> -o <outfile> "<prompt>"`, where `<worktree>` is the decision's implementation worktree — the owning branch's worktree the fresh-eyes reviewer reads) in the background alongside the fresh-eyes reviewer, scoped to the decision's change (commit range), with the umbrella output contract.
+- In that flow, launch the peer invocation (`codex exec --sandbox read-only --cd <worktree> -o <outfile> -c mcp_servers={} "<prompt>" < /dev/null`, where `<worktree>` is the decision's implementation worktree — the owning branch's worktree the fresh-eyes reviewer reads; stdin closed per umbrella §2) in the background alongside the fresh-eyes reviewer, scoped to the decision's change (commit range), with the umbrella output contract.
 - Preflight once per run (`command -v codex`, `codex login status`, with the `CODEX_API_KEY` carve-out per umbrella §1) the first time a resolution needs an implementation; skip entirely for decision-only sessions that write no code.
 
 ## Implementation notes

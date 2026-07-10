@@ -23,7 +23,7 @@ When review feedback is being addressed, the fresh-eyes verification of each dis
 
 ## Implementation notes
 
-- Invocation form and prompt contract identical to 001a (`codex exec --sandbox read-only --cd <worktree> -o <outfile> "<prompt>"`).
+- Invocation form and prompt contract identical to 001a (`codex exec --sandbox read-only --cd <worktree> -o <outfile> -c mcp_servers={} "<prompt>" < /dev/null`, stdin closed and stderr captured per umbrella §2).
 - The peer verifies **dispositions**, not just code: fixes hold in committed code, push-backs are technically justified, deferrals point at a committed task file that covers the concern — same checklist the fresh Reviewer gets, **minus the execution steps**: the peer examines code only (umbrella §2); running the build/typecheck stays the fresh Reviewer's job.
 - In `delegated-fix` mode `address-review` spawns no Reviewer, and likewise launches no peer — the batch orchestrator owns both; the peer launch in `address-review` itself applies to standalone runs that reach the reviewer step.
 - Best-effort semantics per umbrella §1–§3; forfeits never block publication on their own and are noted once in the final report.

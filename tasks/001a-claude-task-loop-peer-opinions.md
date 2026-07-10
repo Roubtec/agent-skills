@@ -23,7 +23,7 @@ This is the highest-leverage insertion point: it hardens code before a PR ever o
 
 ## Implementation notes
 
-- Peer invocation from this tree: `codex exec --sandbox read-only --cd <worktree> -o <outfile> "<prompt>"` with the prompt contract from the umbrella (scope, context, "edit nothing", `VERDICT` + numbered `blocking`/`minor` findings with `file:line`).
+- Peer invocation from this tree: `codex exec --sandbox read-only --cd <worktree> -o <outfile> -c mcp_servers={} "<prompt>" < /dev/null` (stdin closed and stderr captured to a peekable file per umbrella §2) with the prompt contract from the umbrella (scope, context, "edit nothing", `VERDICT` + numbered `blocking`/`minor` findings with `file:line`).
 - Gating semantics exactly per umbrella §3: both feedback sets go to the fixer verbatim; grounded peer findings — blocking and minor alike — gate even on an own-reviewer pass and get fixed pre-PR; only noise is pushed back, with the next round's own reviewer adjudicating disputes.
 - The peer is examination-only per umbrella §2: it reads code and diffs, never runs builds or tests — the own reviewer keeps its build-as-blocker contract unchanged, which is what makes the parallel launch safe.
 - The skill must remain generic: it cannot assume `codex` exists, is logged in, or that powbox guidance is present. Forfeit silently per round, note once in the final summary.
