@@ -74,12 +74,12 @@ claude plugin marketplace update roubtec
 
 ## Consumers
 
-| Consumer | Channel |
-|----------|---------|
-| Claude Code users (any machine) | plugin install from this marketplace |
-| powbox containers (Claude) | same plugin channel, pre-installed at image build |
-| powbox containers (Codex) | `codex/` tree baked into the image, seeded to the Codex config volume |
+| Consumer                        | Channel                                                               |
+|---------------------------------|-----------------------------------------------------------------------|
+| Claude Code users (any machine) | plugin install from this marketplace                                  |
+| powbox containers (Claude)      | same plugin channel, pre-installed at image build                     |
+| powbox containers (Codex)       | `codex/` tree baked into the image, seeded to the Codex config volume |
 
 powbox-*specific* skills (those that only make sense inside its sandbox) do not
-live here — they remain in the powbox repo and reach containers through its
+live here — they remain in the `Roubtec/powbox` repo and reach containers through its
 image-bake + seed mechanism.
