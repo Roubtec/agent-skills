@@ -1,9 +1,10 @@
 # Claude Instructions
 
-See [AGENTS.md](AGENTS.md)
+[AGENTS.md](AGENTS.md):
 
+@AGENTS.md
 
-## When Asked to Do a Code Review
+## Code Review Format Guidelines
 
 - Post each finding as a separate **inline comment** anchored to the exact file and line it concerns, using the `mcp__github_inline_comment__create_inline_comment` tool — one comment per issue, so each becomes its own independently resolvable thread. Do NOT fold all findings into a single monolithic comment.
 - Prefix each inline comment with a severity marker so its weight is obvious at a glance: "⚠️ Bug", "🔒 Security", "💡 Suggestion", or "nit:".
