@@ -14,6 +14,7 @@ Mirror of 001a for the Codex tree: the implement→review→fix loop in the Code
 
 - Protocol: `tasks/001-second-opinions.md` § "The Peer Second-Opinion Protocol" — same semantics as 001a, with the invocation direction reversed.
 - Structural blueprint: `tasks/001a-claude-task-loop-peer-opinions.md` — mirror its placement decisions (protocol text in the serialized base skill, parallel-execution specifics in `address-tasks`) so the two trees stay recognizably symmetric.
+- **Dependency: schedule after 001a passes review.** The orchestrator passes 001a's branch name so the implementer can read the delivered Claude-tree text (`git show <branch>:plugins/dev-skills/skills/address-tasks-serialized/SKILL.md`, or `gitcat` where available) and mirror it, rather than re-deriving placement from scratch.
 
 ## Target files or areas
 

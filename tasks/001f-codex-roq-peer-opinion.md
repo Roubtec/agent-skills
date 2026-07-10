@@ -13,6 +13,7 @@ Mirror of 001c for the Codex tree: when `resolve-open-questions` applies a decis
 
 - Protocol: `tasks/001-second-opinions.md` § "The Peer Second-Opinion Protocol".
 - Structural blueprint: `tasks/001c-claude-roq-peer-opinion.md` — mirror its decisions, including the interactive escape: a disputed peer finding that is a judgment call goes to the maintainer as part of the item's brief rather than into a subagent loop.
+- **Dependency: schedule after 001c passes review.** The orchestrator passes 001c's branch name so the implementer can read the delivered Claude-tree text (`git show <branch>:plugins/dev-skills/skills/resolve-open-questions/SKILL.md`, or `gitcat` where available) and mirror it.
 
 ## Target files or areas
 
