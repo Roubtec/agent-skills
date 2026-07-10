@@ -18,7 +18,7 @@ Mirror of 001a for the Codex tree: the implement→review→fix loop in the Code
 
 ## Target files or areas
 
-- Peer invocation from this tree: `claude -p "<prompt>"` executed with the working directory set to the task's worktree (optionally `--output-format json`; `--model` / `--effort` only when the user asked for a specific combo). The prompt carries the umbrella contract: worktree path, base branch/commit range, task context verbatim, "edit nothing", `VERDICT` + numbered `blocking`/`minor` findings with `file:line`.
+- Peer invocation from this tree: `claude -p "<prompt>"` executed with the working directory set to the task's worktree (optionally `--output-format json`; effort per the umbrella §2 quality floor — request `--effort high` when the peer's configured default is not known to be high/xhigh; never grant permission-bypass flags, the peer is examination-only). The prompt carries the umbrella contract: worktree path, base branch/commit range, task context verbatim, "edit nothing", `VERDICT` + numbered `blocking`/`minor` findings with `file:line`.
 - Availability preflight: `command -v claude`; there is no verified cheap login probe for `claude`, so classify at first invocation — an auth/usage-type failure marks the peer unavailable for the rest of the run (umbrella §1).
 - The peer call is a plain shell command run by the orchestrator (with a ~10-minute timeout, one retry on transient failure), launched when the wave's reviewer subagents are spawned; it is not a Codex subagent, so the skill's subagent-interface caveats don't apply to it.
 

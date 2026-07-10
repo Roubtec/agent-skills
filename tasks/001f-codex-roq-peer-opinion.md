@@ -22,7 +22,7 @@ Mirror of 001c for the Codex tree: when `resolve-open-questions` applies a decis
 
 ## Implementation notes
 
-- Gating per umbrella §3 adapted as in 001c: grounded blocking findings send the change back through a fresh fix + fresh review before the thread is answered or the task file updated; minor findings fold into the change or the resolution record; judgment calls surface to the maintainer.
+- Gating per umbrella §3 adapted as in 001c: grounded findings — blocking and minor alike — send the change back through a fresh fix + fresh review before the thread is answered or the task file updated; only noise is pushed back; judgment calls surface to the maintainer.
 - Best-effort semantics; forfeit noted once in the wrap-up; respect `peer-opinions=off`.
 - Match the codex tree's style; keep the addition compact.
 

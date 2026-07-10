@@ -18,27 +18,27 @@ When review feedback is being addressed, the fresh-eyes verification of each dis
 
 ## Target files or areas
 
-- `address-review/SKILL.md`: launch the peer invocation in the background when the fresh Reviewer subagent is spawned, giving it the same inputs the Reviewer gets (unresolved threads + dispositions verbatim, effective review base, current branch — but not the fixer's reasoning) and the umbrella output contract. Union/gating per umbrella §3: grounded blocking peer findings block publication exactly like reviewer Issues; the reviewer-round cap becomes **6**.
+- `address-review/SKILL.md`: launch the peer invocation in the background when the fresh Reviewer subagent is spawned, giving it the same inputs the Reviewer gets (unresolved threads + dispositions verbatim, effective review base, current branch — but not the fixer's reasoning) and the umbrella output contract. Union/gating per umbrella §3: grounded peer findings block publication exactly like reviewer Issues; the reviewer-round cap becomes **6**.
 - `address-reviews/SKILL.md`: the "up to 3 reviewer rounds" mentions become 6; add the one-time peer preflight to the shared bootstrap so each delegated `address-review` doesn't re-probe; note that concurrent entries each invoke the peer, so repeated peer-side rate/usage errors are a signal to fan out less (mirroring the existing provider rate-limiting guidance).
 
 ## Implementation notes
 
 - Invocation form and prompt contract identical to 001a (`codex exec --sandbox read-only --cd <worktree> -o <outfile> "<prompt>"`).
-- The peer verifies **dispositions**, not just code: fixes hold in committed code, push-backs are technically justified, deferrals point at a committed task file that covers the concern — same checklist the fresh Reviewer gets.
+- The peer verifies **dispositions**, not just code: fixes hold in committed code, push-backs are technically justified, deferrals point at a committed task file that covers the concern — same checklist the fresh Reviewer gets, **minus the execution steps**: the peer examines code only (umbrella §2); running the build/typecheck stays the fresh Reviewer's job.
 - Best-effort semantics per umbrella §1–§3; forfeits never block publication on their own and are noted once in the final report.
 - Respect `peer-opinions=off`; in hands-off batch mode the default remains on.
 - Match existing style: one line per paragraph; keep additions tight.
 
 ## Acceptance criteria
 
-- `address-review` collects and triages the peer verdict alongside the fresh Reviewer's, with grounded blocking peer findings gating publication; cap is 6; exhaustion behavior unchanged (stop, do not push, surface findings).
+- `address-review` collects and triages the peer verdict alongside the fresh Reviewer's, with grounded peer findings (blocking and minor) gating publication; cap is 6; exhaustion behavior unchanged (stop, do not push, surface findings).
 - `address-reviews` carries no stale "3 reviewer rounds" text and states the batch-level preflight and rate-signal guidance.
 - No powbox-specific assumptions introduced.
 
 ## Validation
 
 - `grep -n "3 rounds\|round 3\|3 reviewer" plugins/dev-skills/skills/address-review*/SKILL.md` is empty.
-- Read the publish step end to end: it must be impossible to reach "push" while a grounded blocking peer finding is outstanding and rounds remain.
+- Read the publish step end to end: it must be impossible to reach "push" while a grounded peer finding is outstanding and rounds remain.
 
 ## Review plan
 

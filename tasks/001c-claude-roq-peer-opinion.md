@@ -21,14 +21,14 @@ When `resolve-open-questions` applies a decision that writes code, that change c
 
 ## Implementation notes
 
-- Triage/gating per umbrella §3, adapted to this skill's shape: grounded blocking peer findings send the change back through a fresh fix subagent + fresh reviewer before the thread is answered or the task file updated; minor findings are folded into the applied change or noted in the resolution record.
+- Triage/gating per umbrella §3, adapted to this skill's shape: grounded peer findings — blocking and minor alike — send the change back through a fresh fix subagent + fresh reviewer before the thread is answered or the task file updated; only noise is pushed back.
 - Because the maintainer is interactively present in this skill, a disputed peer finding may also be surfaced to them as part of the item's brief instead of looping — prefer that over burning subagent rounds when the finding is a judgment call rather than a factual defect.
 - Best-effort: forfeit silently per invocation, note once in the wrap-up summary. Respect `peer-opinions=off`.
 - Keep the addition compact and in the file's established style (one line per paragraph).
 
 ## Acceptance criteria
 
-- The code-writing flow describes the parallel peer launch, triage, gating (blocking → re-fix before replying; judgment calls → surface to the maintainer), and forfeit semantics consistently with the umbrella.
+- The code-writing flow describes the parallel peer launch, triage, gating (grounded findings → re-fix before replying; judgment calls → surface to the maintainer), and forfeit semantics consistently with the umbrella.
 - Decision-only sessions are explicitly unaffected (no preflight, no peer chatter in the summary).
 
 ## Validation

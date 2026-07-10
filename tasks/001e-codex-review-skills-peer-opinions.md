@@ -23,14 +23,14 @@ Mirror of 001b for the Codex tree: disposition verification in the review-addres
 
 ## Implementation notes
 
-- Same disposition checklist for the peer as for the Reviewer: fixes hold in committed code, push-backs technically justified, deferrals covered by a committed task file.
+- Same disposition checklist for the peer as for the Reviewer — minus the execution steps: the peer examines code only (umbrella §2); build/typecheck stays the Reviewer's job. Never grant the `claude -p` peer permission-bypass flags.
 - Best-effort semantics throughout; forfeits noted once in the final report; respect `peer-opinions=off`.
 - The peer call is a plain shell command, not a Codex subagent — the skill's one-subagent-at-a-time rules don't apply to it, but it must only run against a committed, clean tree.
 - Match the codex tree's style; keep additions tight.
 
 ## Acceptance criteria
 
-- Publication is unreachable while a grounded blocking peer finding is outstanding and rounds remain; cap is 6; exhaustion behavior unchanged (stop, do not push, surface findings).
+- Publication is unreachable while a grounded peer finding is outstanding and rounds remain; cap is 6; exhaustion behavior unchanged (stop, do not push, surface findings).
 - No stale "3 reviewer rounds" / "round 3" text in either file; no powbox assumptions.
 
 ## Validation
