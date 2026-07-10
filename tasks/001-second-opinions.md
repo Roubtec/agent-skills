@@ -1,7 +1,8 @@
 # 001 - Best-Effort Cross-Agent Second Opinions (umbrella + protocol)
 
 This is the umbrella task for wiring **best-effort cross-agent second opinions** into the dev-skills review loops, plus the accompanying **iteration-budget raise (3 → 6)**.
-It defines the canonical protocol once; the implementation is decomposed into tasks 001a–001f, each owning a disjoint set of skill files so they can run in parallel worktrees without collisions.
+It defines the canonical protocol once; the implementation is decomposed into tasks 001a–001f, each owning a disjoint set of skill files so worktrees never collide within a wave.
+Scheduling runs in **two waves**: 001a–001c in parallel first, then each Codex mirror (001d/001e/001f) only after its Claude counterpart passes review, so the mirror implementer can read the delivered wording instead of re-deriving it (see each mirror task's Dependency note).
 
 ## Why
 
@@ -14,7 +15,7 @@ Peer availability is never guaranteed, so participation is strictly **best-effor
 - `codex exec --sandbox read-only --cd <dir> -o <file> "<prompt>"` runs a **full agentic loop** in one invocation, exit 0, final message captured to `<file>`. `--output-schema <schema.json>` can force a parseable final message; `--ephemeral` skips session persistence.
 - `codex review --base <branch>` is a purpose-built review subcommand, but `--base` and a custom prompt are **mutually exclusive** (hard error, exit 2) — we need a custom output contract, so the protocol uses `codex exec` with a review prompt instead.
 - `codex login status` exits 1 when not logged in ("Not logged in"); an unauthenticated `codex exec` retries ~30s before exiting 1, so the preflight matters.
-- `claude -p "<prompt>"` is the symmetric counterpart (`--output-format json`, `--json-schema` available). Both CLIs accept per-invocation model/effort: `codex exec -m <model> -c model_reasoning_effort=<level>`; `claude -p --model <alias> --effort <low|medium|high|xhigh|max>`.
+- `claude -p "<prompt>"` is the symmetric counterpart (`--output-format json`, `--json-schema` available); unlike `codex exec` it has no read-only sandbox default, but `--permission-mode plan` and a restrictive `--tools` list are available to pin it to examination-only. Both CLIs accept per-invocation model/effort: `codex exec -m <model> -c model_reasoning_effort=<level>`; `claude -p --model <alias> --effort <low|medium|high|xhigh|max>`.
 - Powbox complement (already merged separately): the container guidance advertises the one-shot forms — https://github.com/Roubtec/powbox/pull/98. The skills must NOT depend on it: **all detection, preflight, invocation, and forfeit logic lives in the skills**, since they must work in any environment, including ones where the peer binary is absent.
 
 ## The Peer Second-Opinion Protocol (canonical — implementation tasks reference this section)
@@ -22,16 +23,16 @@ Peer availability is never guaranteed, so participation is strictly **best-effor
 ### 1. Peer identification and availability preflight (once per skill run)
 
 - The peer is any *other* known harness CLI: from Claude skills the peer is `codex`; from Codex skills the peer is `claude`. Keep the pairing extensible (a future harness adds one entry).
-- Preflight in the orchestrator, in the main working tree, before the first review phase: `command -v <peer>` (missing → unavailable), then for codex `codex login status` (non-zero exit → unavailable; skipping this burns ~30s of auth retries on every later invocation). `claude` has no verified cheap status probe: classify at first real invocation — an auth/usage-type failure marks the peer unavailable for the rest of the run.
+- Preflight in the orchestrator, in the main working tree, before the first review phase: `command -v <peer>` (missing → unavailable), then for codex `codex login status` (non-zero exit → unavailable; skipping this burns ~30s of auth retries on every later invocation). Carve-out: when `CODEX_API_KEY` is set (it authenticates `codex exec` without a saved login), a failed `codex login status` does **not** mark the peer unavailable — classify at first real invocation instead. `claude` has no verified cheap status probe: classify at first real invocation — an auth/usage-type failure marks the peer unavailable for the rest of the run.
 - Unavailability is never an error and never blocks: proceed with own-harness review only, and note the forfeit (with reason) **once** in the final summary.
 
 ### 2. Invocation (per review round, read-only, from the task's worktree)
 
 - From Claude skills: `codex exec --sandbox read-only --cd <worktree> -o <outfile> "<prompt>"`. From Codex skills: `claude -p "<prompt>"` with the working directory set to the worktree.
-- **Examination-only peer:** the peer reviews by reading code and diffs — it must NOT run builds or tests. The worktree is shared with the own reviewer, whose contract includes running the full build (an automatic blocker), so concurrent execution would contend for the same artifacts; the codex read-only sandbox blocks artifact writes anyway, and a `claude -p` peer must never be given permission-bypass/autonomy flags. Execution-based verification is already covered twice — the implementer (full verification before reporting) and the own reviewer (build/typecheck) — and the peer's differential value is fresh-eyes reasoning from a different model family, not a third build. This is what keeps the parallel launch safe: two readers, one builder.
+- **Examination-only peer:** the peer reviews by reading code and diffs — it must NOT run builds or tests. The worktree is shared with the own reviewer, whose contract includes running the full build (an automatic blocker), so concurrent execution would contend for the same artifacts; the codex read-only sandbox blocks artifact writes anyway, and a `claude -p` peer must be **explicitly restricted to read-only operation** — plain `claude -p` still carries edit/execute tools, so pass an explicit guard (e.g. `--permission-mode plan`, or a `--tools` list without edit/write tools) and never permission-bypass/autonomy flags. Execution-based verification is already covered twice — the implementer (full verification before reporting) and the own reviewer (build/typecheck) — and the peer's differential value is fresh-eyes reasoning from a different model family, not a third build. This is what keeps the parallel launch safe: two readers, one builder.
 - **Model/effort quality floor:** reviews run on a high-capability model tier at **high or xhigh** reasoning effort — never `max` (token waste) and never an economy tier. Default to the peer's configured model (the maintainer keeps it current); when the peer's configured effort is not known to be high/xhigh, request it explicitly (`-c model_reasoning_effort=high` for codex, `--effort high` for claude) without downgrading a stronger configured default. When a model must be named, use rolling aliases or the harness default — never dated model IDs in skill text; they go stale.
 - The prompt must carry: the worktree path, the review scope (base branch or commit range), the relevant context verbatim (task file, or review threads under verification), an instruction to read the actual files, an explicit "edit nothing", and the **output contract**: `VERDICT: PASS | ISSUES` followed by numbered findings, each tagged `blocking` or `minor` with `file:line` and a one-line rationale.
-- **Bounded patience:** the CLI peer is fire-and-collect — there is no reliable built-in signal distinguishing "working" from "hung" (`codex exec` streams events to stdout, which a background-running orchestrator can peek at; `claude -p` prints nothing until the final message). Recommend a **loose ~12-minute timeout** — large reviews may legitimately run long (e.g. the peer runs tests) — with orchestrator discretion to wait longer when it expects a long run or can see activity in the peer's event stream. Most batch runs are unattended, so waiting is acceptable; hanging forever is not. On timeout or transient error, retry once (two attempts total), then forfeit this round's opinion.
+- **Bounded patience:** the CLI peer is fire-and-collect — there is no reliable built-in signal distinguishing "working" from "hung" (`codex exec` streams events to stdout, which a background-running orchestrator can peek at; `claude -p` prints nothing until the final message). Recommend a **loose ~12-minute timeout** — large reviews may legitimately run long (e.g. a wide diff across many files takes long to read and reason through) — with orchestrator discretion to wait longer when it expects a long run or can see activity in the peer's event stream. Most batch runs are unattended, so waiting is acceptable; hanging forever is not. On timeout or transient error, retry once (two attempts total), then forfeit this round's opinion.
 - **Concurrency and barrier:** launch the peer in the background at the same moment the own reviewer subagent is spawned — both are read-only against a committed worktree, so this is safe and adds no wall-clock. Wait for **both** reviewers before deciding the round's outcome or spawning the next implementer: feedback is acted on as one set, mirroring how `address-review` fetches all comments before acting.
 - **Cadence:** invoke the peer on **every** review round while it remains available (default). Skills accept an optional `peer-opinions=off` argument for users who must conserve peer-side usage.
 
@@ -55,7 +56,7 @@ The nested alternative — the own reviewer invoking the peer and synthesizing o
 With aggregation-without-transformation (§3), the orchestrator's context cost of the flat design is one extra verbatim blob per round — acceptable.
 The same topology applies symmetrically when a Codex orchestrator invokes a `claude -p` reviewer alongside its own subagent reviewer.
 
-## Decomposition (disjoint file ownership; parallelizable)
+## Decomposition (disjoint file ownership; two scheduling waves)
 
 | Task | Tree | Files owned |
 |------|------|-------------|
@@ -65,6 +66,8 @@ The same topology applies symmetrically when a Codex orchestrator invokes a `cla
 | 001d | Codex (`codex/dev-skills`) | `address-tasks-serialized/SKILL.md`, `address-tasks/SKILL.md` |
 | 001e | Codex (`codex/dev-skills`) | `address-review/SKILL.md`, `address-reviews/SKILL.md` |
 | 001f | Codex (`codex/dev-skills`) | `resolve-open-questions/SKILL.md` |
+
+Wave 1: 001a–001c in parallel. Wave 2: 001d–001f, each scheduled only after its Claude counterpart passes review.
 
 ## Out of scope (tracked separately)
 

@@ -19,7 +19,7 @@ This is the highest-leverage insertion point: it hardens code before a PR ever o
 ## Target files or areas
 
 - `plugins/dev-skills/skills/address-tasks-serialized/SKILL.md`: new protocol section; the review step (reviewer spawn) gains the parallel peer launch; the "Cap the feedback loop at 3 iterations" item becomes 6 with the runaway-guard rationale and unchanged exhaustion behavior.
-- `plugins/dev-skills/skills/address-tasks/SKILL.md`: Session Bootstrap gains the one-time peer preflight (`command -v codex` + `codex login status`); Phase B says to launch the peer invocation in the background per task worktree at the same moment the wave's reviewer subagents are spawned, and to collect both before triage; "up to **3 iterations**" (intro) and "up to **3 rounds** total" (Phase B) become 6.
+- `plugins/dev-skills/skills/address-tasks/SKILL.md`: Session Bootstrap gains the one-time peer preflight (`command -v codex` + `codex login status`, with the `CODEX_API_KEY` carve-out per umbrella §1); Phase B says to launch the peer invocation in the background per task worktree at the same moment the wave's reviewer subagents are spawned, and to collect both before triage; "up to **3 iterations**" (intro) and "up to **3 rounds** total" (Phase B) become 6.
 
 ## Implementation notes
 
