@@ -6,7 +6,7 @@ Issue [#2](https://github.com/Roubtec/agent-skills/issues/2) asked for a full re
 The maintainer scoped that down (2026-07-10): the skill already has the core/layer shape — a domain-neutral core loop (steps 1–5) plus a review-addressing layer — and an ad-hoc adapter would be nearly empty because the generic core *is* the ad-hoc handling.
 The one genuinely misplaced piece is the task-hygiene machinery ("Deferred items → task hygiene": reuse task numbers / no orphans, lock the chosen option, keep-standalone vs bind-to-prerequisite, archive to `tasks/done/`), which lives inside the review layer but applies to **any** task-file-sourced decision regardless of whether a review run produced it.
 This task hoists exactly that piece into its own source-agnostic section and nothing more.
-The PR should close issue #2 (`Closes #2`) and record the full parallel-adapters restructure as **considered & declined** (reason above).
+The **implementing** PR's description should carry the closing reference for issue #2 (spec-only PRs must not use a literal closing keyword, or GitHub closes the issue prematurely on merge) and record the full parallel-adapters restructure as **considered & declined** (reason above).
 
 ## Scope
 
@@ -33,7 +33,7 @@ The PR should close issue #2 (`Closes #2`) and record the full parallel-adapters
 4. Update the layered-structure blockquote to mention the task-file section alongside the review layer, and adjust the checklist bullet so it references the hoisted section without duplicating its content.
 5. Frontmatter stays untouched in both files — verify with `git diff` that no hunk touches lines 1–14.
 6. Mirror the edit so the two flavors' new/changed sections stay textually parallel (their existing deliberate divergences elsewhere are not in scope).
-7. One line per paragraph is the repo's convention for *new* Markdown; this file is pre-wrapped throughout, so match its existing wrapped style instead of reflowing.
+7. One line per paragraph is the repo's convention for *new* Markdown; the **target SKILL.md files**, however, are pre-wrapped throughout, so match their existing wrapped style there instead of reflowing (this task file itself follows the one-line-per-paragraph convention).
 
 ## Acceptance criteria
 
@@ -41,7 +41,7 @@ The PR should close issue #2 (`Closes #2`) and record the full parallel-adapters
 - Every clause of the old subsection survives — either in the hoisted section or explicitly kept in the review layer as review-specific; nothing is silently dropped.
 - Frontmatter (name + description) is unchanged in both files; the skill remains one skill.
 - Both flavors carry the mirrored edit with the same section title and placement.
-- The PR closes issue #2 and its description records the full restructure as considered & declined, with the maintainer's rationale.
+- The implementing PR's description carries the closing reference for issue #2 and records the full restructure as considered & declined, with the maintainer's rationale.
 
 ## Validation
 
