@@ -14,7 +14,7 @@ Deliberately deferred from PR #4 review (thread: https://github.com/Roubtec/agen
 ## Context and references
 
 - Current contract: `CLAUDE.md` § "Code Review Format Guidelines" (four bullets: inline per-finding comments with the tool anchor + `gh api` fallback, severity markers, overview-only summary, use-existing-comments/no-re-raise).
-- Rationale for the tool-name anchor: left to its own devices, Claude posts one monolithic review comment; naming the exact MCP tool is the proven lever that produces per-finding resolvable threads (which the `address-review` workflow depends on). Whatever placement wins, that anchor must keep firing in review runs.
+- Rationale for the tool-name anchor: left to its own devices, Claude posts one monolithic review comment; naming the exact MCP tool is the proven lever that produces per-finding resolvable threads (which the `address-review`/`address-reviews` **skills** depend on — their whole triage model reads GitHub's per-thread resolved/unresolved state; no GitHub Actions workflow is meant here, this repo has none). Whatever placement wins, that anchor must keep firing in review runs.
 - **Discovered constraint:** this repo has **no `.github/workflows/`** — `@claude review` is currently triggered through the app-managed integration, so there is no repo-side prompt input yet. The prompt-scoping idea therefore requires either (a) adding a repo workflow using [claude-code-action](https://github.com/anthropics/claude-code-action) with a `prompt`/`claude_args` input carrying the contract, or (b) finding the integration's existing configuration surface, if any.
 
 ## Target files or areas
