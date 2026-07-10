@@ -1,0 +1,7 @@
+# Task Management
+
+Numbered tasks use a three-digit number, optionally followed by a lowercase letter suffix (e.g. `001`, `001a`, `042b`) — "three digits" refers to the numeric portion only. Primary tasks should be numbered with odd three-digit numbers, starting from 001. This allows us to insert new tasks between them using even numbers.
+
+Follow-up tasks (that are out of scope of an existing PR but relate to it) can be queued under the parent's number with a letter suffix: 001a, 001b, etc. for tasks related to task 001, for example. This allows us to preserve the follow-up intent and implement it soon after the original task has been addressed satisfactorily enough. Generic follow-up tasks (that arose from batch reviews or other general observations) can be slotted into the queue as even numbers, e.g. 002, 002a, 002b, etc. This allows us to order new tasks among existing ones as needed.
+
+Once a task is completed and merged, it is moved to "tasks/done/" during the next task cleanup cycle. This is why cross-referenced tasks could be found in either folder. Tasks that we need to keep track of but are not yet actionable (e.g. because their prerequisites are not ready or they are optional future improvements) are tracked in "tasks/deferred/". Deferred tasks are moved to "tasks/" when they become actionable.
