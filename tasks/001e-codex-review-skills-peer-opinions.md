@@ -13,7 +13,7 @@ Mirror of 001b for the Codex tree: disposition verification in the review-addres
 ## Context and references
 
 - Protocol: `tasks/001-second-opinions.md` § "The Peer Second-Opinion Protocol".
-- Structural blueprint: `tasks/001b-claude-review-skills-peer-opinions.md` — mirror its decisions (peer verifies dispositions with the same inputs as the fresh Reviewer, minus the fixer's reasoning; grounded blocking findings block publication like reviewer Issues).
+- Structural blueprint: `tasks/001b-claude-review-skills-peer-opinions.md` — mirror its decisions (peer verifies dispositions with the same inputs as the fresh Reviewer, minus the fixer's reasoning; grounded findings — blocking and minor alike — block publication like reviewer Issues).
 - **Dependency: schedule after 001b passes review.** The orchestrator passes 001b's branch name so the implementer can read the delivered Claude-tree text (`git show <branch>:plugins/dev-skills/skills/address-review/SKILL.md`, or `gitcat` where available) and mirror it.
 
 ## Target files or areas

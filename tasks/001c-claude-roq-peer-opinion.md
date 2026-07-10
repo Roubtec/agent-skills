@@ -33,7 +33,7 @@ When `resolve-open-questions` applies a decision that writes code, that change c
 
 ## Validation
 
-- Read the modified flow end to end; confirm no step replies to a thread or edits a task file while a grounded blocking peer finding on that item is unaddressed.
+- Read the modified flow end to end; confirm no step replies to a thread or edits a task file while a grounded peer finding on that item is unaddressed.
 
 ## Review plan
 

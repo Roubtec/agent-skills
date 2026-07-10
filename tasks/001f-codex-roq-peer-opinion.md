@@ -33,7 +33,7 @@ Mirror of 001c for the Codex tree: when `resolve-open-questions` applies a decis
 
 ## Validation
 
-- Read the modified flow end to end; confirm no thread reply or task-file edit happens while a grounded blocking peer finding on that item is unaddressed.
+- Read the modified flow end to end; confirm no thread reply or task-file edit happens while a grounded peer finding on that item is unaddressed.
 
 ## Review plan
 
