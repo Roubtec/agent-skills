@@ -17,8 +17,8 @@ Mirror of 001c for the Codex tree: when `resolve-open-questions` applies a decis
 
 ## Target files or areas
 
-- The "decision that writes code" flow: launch `claude -p "<prompt>"` (cwd = the working tree, umbrella prompt/output contract, read-only guard per umbrella §2, ~12-minute timeout, one retry) in the background alongside the fresh-eyes reviewer, scoped to the decision's commit range.
-- Preflight (`command -v claude`; login classified at first invocation) once per run, only when a resolution actually needs an implementation; decision-only sessions are untouched.
+- The "decision that writes code" flow: launch `claude -p "<prompt>"` (cwd = the decision's implementation worktree — the owning branch's worktree the fresh-eyes reviewer reads, never the repo root — umbrella prompt/output contract, read-only guard per umbrella §2, ~12-minute timeout, one retry) in the background alongside the fresh-eyes reviewer, scoped to the decision's commit range.
+- Preflight (`command -v claude` + `claude auth status`, with umbrella §1's `ANTHROPIC_API_KEY` and missing-subcommand carve-outs) once per run, only when a resolution actually needs an implementation; decision-only sessions are untouched.
 
 ## Implementation notes
 
