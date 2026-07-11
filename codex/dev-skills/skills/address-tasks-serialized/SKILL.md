@@ -5,7 +5,7 @@ description: Execute a batch of pre-planned task files end to end, strictly sequ
 
 Implement the given task or a set of tasks using a delegated subagent workflow.
 
-**Arguments:** `<glob-or-file-list of task files to implement>`
+**Arguments:** `<glob-or-file-list of task files to implement> [peer-opinions=off]`
 
 ## Architecture
 
@@ -21,6 +21,7 @@ This separation keeps your context window clean across long batches and ensures 
 > **Critical — one agent at a time; Codex subagents share your working tree.**
 > Unless you explicitly configured per-agent git worktrees, each subagent operates on the same checked-out branch and working tree as the orchestrator. Two checkout-dependent subagents running at once can race or corrupt each other's view of the repo. The most common failure: a reviewer spawned alongside its implementer scopes `git diff <base>...HEAD` before the implementer has finished committing, sees nothing, and falsely reports "no implementation" — so the work ships **unreviewed**.
 > Therefore: **never spawn or request two checkout-dependent subagents in the same natural-language turn, same tool block, or before the previous subagent has been waited on and closed.** Start one subagent, wait for its result, close it, then start the next. The general guidance to batch independent tool calls does not apply here: implementers and reviewers are not independent because they contend for one working tree.
+> The examination-only peer CLI described below is the sole exception: launch it alongside the reviewer only after the implementation is committed, and forbid it from running builds or tests, so it remains a concurrent reader while the own reviewer may build.
 
 ### How to spawn a subagent in Codex
 
@@ -211,11 +212,11 @@ For each task file in the input set:
 3. **Read the task file** enough to construct a good implementer prompt. Identify the acceptance criteria so you can later evaluate the reviewer's report.
 4. **Spawn the implementer agent** with a well-structured prompt (see Implementer Agent section). Wait for completion and close the agent. Spawn nothing else in the same natural-language turn or tool block — the reviewer comes only after the implementer's commits exist on disk.
 5. **Evaluate the implementer's report.** If the implementer hit a blocker it could not resolve, stop and surface it to the user before spawning a reviewer.
-6. **Only after step 5, spawn the reviewer agent** with a fresh prompt (see Reviewer Agent section), wait for completion, and close the agent. Do not spawn it in the same natural-language turn or tool block as the implementer — you share one working tree, so a concurrent reviewer reviews an unfinished branch.
+6. **Only after step 5, spawn the reviewer agent** with a fresh prompt (see Reviewer Agent section) and launch the peer second opinion in the background at the same moment (unless unavailable or `peer-opinions=off`); wait for both, then close the reviewer agent. Do not spawn the reviewer in the same natural-language turn or tool block as the implementer — you share one working tree, so a reviewer started before the commit reviews an unfinished branch.
 7. **Evaluate the reviewer's report:**
    - If the report says the branch is **empty / has no implementation / shows an empty diff**, do not trust it at face value — that is the signature of a race (reviewer started before the implementer committed) or a wrong-branch checkout, not a real gap. Verify with `git diff --name-only <base>...HEAD`; if the work is actually present, spawn a fresh reviewer and use that verdict instead.
-   - If **pass**: proceed to step 8.
-   - If **issues found**: enter the feedback loop (see below).
+   - If the own reviewer **passes** and the peer has no unaddressed grounded findings under the protocol below: proceed to step 8.
+   - If either feedback source has issues: enter the feedback loop (see below).
 8. **Open a PR** against the recorded base branch.
    - **First push the task branch** (`git push -u origin HEAD`), and push the recorded base too if it exists only locally (e.g. a dependency's not-yet-pushed branch). `gh pr create` on an unpushed branch prompts interactively for a push target, which hangs a delegated/no-TTY run. If the remote is unavailable (see the local-only fallback), skip the PR and record the branch as pending push instead.
    - Reference the task file in the PR description for context.
@@ -224,19 +225,37 @@ For each task file in the input set:
 9. **Continue to the next task** or, if this was the last one, produce the final summary.
    If you hit a blocker that prevents responsible progress, stop and ask the user for clarification.
 
+## Peer second opinion (best-effort)
+
+Unless `peer-opinions=off`, preflight `claude` once per skill run in the main working tree before the first review: require `command -v claude`, then run `claude auth status`. A missing binary or failed authentication makes the peer unavailable, except that a set `ANTHROPIC_API_KEY` downgrades a failed probe to classify-at-first-invocation. If the failure indicates an older CLI without the `auth status` subcommand, also classify at the first real invocation rather than marking the peer unavailable. On either classify-at-first-invocation path, an auth or usage failure on that invocation makes the peer unavailable for the rest of the run. Unavailability never fails or delays the own-harness review; record the reason and mention the peer forfeit once in the final summary.
+
+On every review round while available, first create a per-invocation artifact directory outside the worktree and write `git log --oneline <base>..HEAD` plus `git diff <base>...HEAD` to a diff artifact there. Then launch the peer as a plain background shell process from the committed task worktree at the same moment as the own reviewer: `claude -p "<prompt>" --add-dir <artifact-dir> [--effort high] --tools "Read,Glob,Grep" --disallowedTools "mcp__*" > <outfile> 2>&1 &`. The redirect is the capture contract; every invocation gets its own outfile, and `--output-format json` may be added for parseable output. Append the examination-only flags after the prompt because the variadic tool flags can otherwise swallow it. Never pass permission-bypass or autonomy flags.
+
+Use the peer's configured high-capability model. If its configured effort is not known to be high or xhigh, request `--effort high` without overriding a known stronger setting; never request `max`. Allow a loose timeout of about 12 minutes, with discretion to wait longer for an expected wide review. On timeout or transient failure, retry once (two attempts total), then forfeit only that round. An auth or usage failure on a classify-at-first-invocation path disables the peer for the rest of the run.
+
+The peer is **examination-only**: it may use only `Read`, `Glob`, and `Grep`, with all MCP tools denied; it must edit nothing and run no builds or tests. Its prompt must include the worktree path, base branch or commit range, the diff-artifact path, the relevant task content verbatim, an instruction to read the actual files, and this output contract: `VERDICT: PASS | ISSUES`, followed by numbered findings tagged `blocking` or `minor`, each with `file:line` and a one-line rationale. The own reviewer retains the full-build-first contract, which makes the parallel launch safe.
+
+Wait for both reviewers before deciding the round. Read only their verdict lines for triage; do not summarize, merge, or rewrite their reports. Unintelligible peer output that lacks a parseable verdict and findings forfeits that round. When either reviewer reports issues, give the next fresh implementer both reports verbatim as separately labeled **Reviewer findings** and **Peer (claude) findings** blocks.
+
+A round passes only when the own reviewer passes and the peer, when it delivered an intelligible report, has no unaddressed grounded findings, whether `blocking` or `minor`. Only when a passing own review would otherwise be overturned by peer findings, cheaply spot-check that each gate-deciding `file:line` exists and its claim is not self-evidently false; discard and record ungrounded findings, but pass all other feedback through verbatim. Pure noise or stylistic churn against repository conventions may be pushed back with evidence; the next round's fresh own reviewer adjudicates disputes, and a rejected peer claim stops gating when that reviewer confirms it is not real.
+
+Every implementer round counts toward the feedback-loop cap, whichever reviewer triggered it. Invoke the peer on every round while it remains available.
+
 ## Feedback Loop
 
-When the reviewer reports material issues:
+When either reviewer reports issues:
+
+> **Fix-ups always use a fresh subagent spawn — never a continuation of the prior implementer.** Fresh context is intentional: the fix-up agent reads the already-committed branch plus the reviewers' verbatim findings with no attachment to its earlier choices.
 
 1. **Spawn a fresh `worker` implementer** (on its own, as in step 4). Do not continue the prior implementer thread with `send_input`; fresh context is intentional because the fix-up agent should read the committed branch plus the reviewer's findings without attachment to earlier choices. Include:
    - The original task file content.
-   - The reviewer's numbered findings, verbatim.
+   - Both the own reviewer's and peer's numbered findings verbatim as two labeled blocks; omit only a peer report that was unavailable, forfeited, or unintelligible that round.
    - The branch name (same as before).
    - Instruction to address each finding specifically and report what was fixed.
    - The same project context and validation instructions as the original implementer prompt.
-2. After the fix-up implementer completes — and only then, in a later turn — **spawn a new reviewer agent** to re-check (same fresh prompt structure as before; never concurrent with the fix-up implementer).
-3. Repeat until the reviewer passes or you judge that remaining findings are minor enough to note in the PR description rather than block on.
-4. **Cap the feedback loop at 3 iterations.** If issues persist after 3 rounds, stop iterating and do not open a PR for this task. Surface the outstanding findings clearly to the user in the final summary and ask for guidance on how to proceed.
+2. After the fix-up implementer completes — and only then, in a later turn — **spawn a new reviewer agent** and launch the peer per the protocol above to re-check (same fresh prompt structure as before; never concurrent with the fix-up implementer).
+3. Repeat until the own reviewer passes and the peer has no unaddressed grounded findings under the protocol above.
+4. **Cap the feedback loop at 6 iterations.** This is a runaway-loop guard against arcane token bloat, not a quality dial; more legitimate rounds are expected with another reviewer. If issues persist after 6 rounds, stop iterating and do not open a PR for this task. Surface the outstanding findings clearly to the user in the final summary and ask for guidance on how to proceed.
 
 ## Hints
 
@@ -255,5 +274,6 @@ After completing the batch, provide a concise summary:
 
 - Which tasks were implemented and their PR links.
 - How many review iterations each task required (and whether any hit the cap).
+- Whether the peer participated; if it was unavailable or forfeited any rounds, note the reason once without treating it as a failure.
 - Any observations outside the task descriptions worth flagging.
 - Any blockers or uncertainties that remain.
