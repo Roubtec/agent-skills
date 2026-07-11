@@ -1,0 +1,4 @@
+shadow:
+  - .worktrees
+  - .claude/worktrees
+  - .git/worktrees

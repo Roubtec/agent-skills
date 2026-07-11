@@ -1,2 +1,6 @@
 # powbox
 .powbox.local.yml
+
+# powbox git worktrees (container-local; never commit working trees)
+.worktrees/
+.claude/worktrees/
