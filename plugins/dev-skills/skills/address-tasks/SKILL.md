@@ -5,9 +5,9 @@ description: Execute a batch of pre-planned task files in parallel using one git
 
 Implement a set of pre-planned task files using a **parallel, worktree-isolated** delegated subagent workflow.
 
-**Arguments:** `<glob-or-file-list of task files to implement>`
+**Arguments:** `<glob-or-file-list of task files to implement> [peer-opinions=off]`
 
-This skill is the parallel sibling of `address-tasks-serialized`. The roles (orchestrator / implementer / reviewer), the implementer and reviewer prompt contracts, and the code-quality review checklist are all inherited from that skill — read it if you need the rationale behind those pieces. **What changes here is the execution model:** instead of one branch on one shared working tree processed strictly sequentially, each task gets its **own git worktree** so independent tasks can run **concurrently**, while each individual task still runs its implement→review→fix loop **sequentially** (up to 3 iterations).
+This skill is the parallel sibling of `address-tasks-serialized`. The roles (orchestrator / implementer / reviewer), the implementer and reviewer prompt contracts, the code-quality review checklist, and the full peer second-opinion protocol are all inherited from that skill — read it for those contracts and their rationale. **What changes here is the execution model:** instead of one branch on one shared working tree processed strictly sequentially, each task gets its **own git worktree** so independent tasks can run **concurrently**, while each individual task still runs its implement→review→fix loop **sequentially** (up to 6 iterations).
 
 ## Why worktrees change the rules
 
@@ -16,7 +16,7 @@ This skill is the parallel sibling of `address-tasks-serialized`. The roles (orc
 A git worktree removes that constraint. Each worktree is a **separate working directory with its own `HEAD` and index** (`.git/worktrees/<name>/`), while sharing the one common object store (`.git/objects`, append-only and concurrency-safe) and refs (lock-protected). So:
 
 - **Two agents in two different worktrees never corrupt each other.** They touch different files, different indexes, different HEADs. Concurrent commits land on different branches under separate ref locks.
-- Therefore the base skill's "one agent at a time" rule is replaced by: **agents that operate in distinct worktrees may run concurrently; only agents sharing one worktree must be serialized.**
+- Therefore the base skill's "one agent at a time" rule is replaced by: **own-harness agents that operate in distinct worktrees may run concurrently; own-harness agents sharing one worktree must be serialized.** The inherited examination-only peer CLI is the deliberate exception during review.
 - **Within a single task, the implementer and its reviewer still share that task's worktree** — so they still run one-at-a-time, implementer first. The parallelism is strictly *across* independent tasks, never between a task's own implementer and reviewer.
 
 ### Durability
@@ -39,7 +39,9 @@ Do this in the **main working tree** before creating worktrees. The same bootstr
 
 4. **Measure free disk space** on the base directory's filesystem (`df -k "$WT_BASE"`) — the starting input for Adaptive throttling below.
 
-If a `wt-bootstrap` helper is on PATH, prefer it — it performs these checks, prunes orphans, and prints the base dir (`wtBase`) and free space (`availBytes`) as JSON.
+5. **Preflight the peer once** unless `peer-opinions=off`: require `command -v codex`, then run `codex login status`. Treat a failed login as unavailable unless `CODEX_API_KEY` is set, in which case classify auth or usage availability on the first real invocation. Peer unavailability is never an error; proceed with own reviewers and note the reason once in the final summary, as specified by the inherited protocol.
+
+If a `wt-bootstrap` helper is on PATH, prefer it for steps 1–4 — it performs those worktree checks, prunes orphans, and prints the base dir (`wtBase`) and free space (`availBytes`) as JSON. Still run the peer preflight in step 5 separately.
 
 ## Orchestrator Responsibilities
 
@@ -110,9 +112,9 @@ For a wave of tasks `T1..Tn`:
 2. **Run each task's loop, fanned out by phase.** Each task runs its own implement→review→fix loop, but you advance all of the wave's tasks **in lockstep by phase** so that same-phase agents (which live in different worktrees) can be spawned **together in one tool block and run concurrently**:
 
    - **Phase A — implement:** spawn one implementer per still-unfinished task in the wave, each pointed at its own worktree path, **all in a single tool block** (concurrent). Wait for all to return.
-   - **Phase B — review:** only after *all* Phase-A implementers have returned, spawn one fresh reviewer per task, each in its task's worktree, **all in a single tool block** (concurrent). Wait for all. Collect verdicts.
-   - Tasks whose reviewer passes exit the loop. Tasks with issues carry their reviewer's verbatim findings into the next round's Phase A.
-   - Repeat A→B for up to **3 rounds** total. After round 3, any task still failing review does **not** get a PR; surface its outstanding findings to the user.
+   - **Phase B — review:** only after *all* Phase-A implementers have returned, spawn one fresh reviewer per task, each in its task's worktree, **all in a single tool block** (concurrent). At the same moment, launch one background peer per task while the peer remains available: `codex exec --sandbox read-only --cd <worktree> -o <outfile> -c mcp_servers={} "<prompt>" < /dev/null 2> <stderr-file> &`, using separate per-invocation output and peekable stderr files. The peers are examination-only and run no builds or tests. Wait for both feedback sources for every task before triage.
+   - A task exits the loop only when its own reviewer passes and the peer, when it delivered an intelligible report, has no unaddressed grounded findings. Tasks with issues carry both reports verbatim as separately labeled blocks into the next round's Phase A; apply the inherited grounding, gating, dispute, retry, and forfeit rules without re-summarizing either report.
+   - Repeat A→B for up to **6 rounds** total. The cap is a runaway-loop guard against arcane token bloat, not a quality dial. After round 6, any task still failing review does **not** get a PR; surface its outstanding findings to the user.
 
    > Phase ordering is what preserves the per-task discipline: a task's reviewer never starts until that task's implementer (and every sibling implementer) has finished and committed. You get cross-task parallelism without ever running a task's own implementer and reviewer at the same time.
 
@@ -164,7 +166,7 @@ Include in each implementer prompt:
 - **Coordination:** it must not revert unrelated or concurrent edits, and must accommodate that its base branch may itself be a sibling task's branch.
 - **Reporting:** when done, report what was implemented, decisions/tradeoffs/deviations, and any areas needing focused review.
 
-On a fix-up round, spawn a **fresh** implementer for the task — a new `Agent`, never a "continued" prior implementer. If an `Agent` result prints a `SendMessage` continuation footer, ignore it; this harness does not expose that tool. A fresh spawn is the preferred path because the new implementer reads the committed worktree plus the findings without bias toward its earlier choices. Paste the reviewer's numbered findings verbatim and instruct it to address each specifically and report what changed (same branch, same worktree).
+On a fix-up round, spawn a **fresh** implementer for the task — a new `Agent`, never a "continued" prior implementer. If an `Agent` result prints a `SendMessage` continuation footer, ignore it; this harness does not expose that tool. A fresh spawn is the preferred path because the new implementer reads the committed worktree plus the findings without bias toward its earlier choices. Paste both reports verbatim as separately labeled own-reviewer and peer blocks, omitting only a peer report forfeited under the inherited protocol, and instruct the implementer to address each finding specifically and report what changed (same branch, same worktree).
 
 ## Reviewer Agent
 
@@ -257,7 +259,8 @@ If the restack stops partway, the canonical order remains the review recommendat
 After the batch, provide a concise summary:
 
 - Each task: its PR link (or "local branch only" if PRs were skipped) and which wave it ran in.
-- How many review rounds each task needed, and any task that hit the 3-round cap without passing (with its outstanding findings).
+- How many review rounds each task needed, and any task that hit the 6-round cap without passing (with its outstanding findings).
+- Whether the peer participated; if it was unavailable or forfeited any rounds, note the reason once without treating it as a failure.
 - The dependency/wave structure actually used, and any base-branch/stacking choices worth flagging.
 - The **recommended merge order** using canonical PR branch names — `b1 → … → bN`, merge `b1` first — plus the corresponding local `review-stack/...` guide refs, the integration-checked prefix, any stop point or merge-history guard, reproducible conflict notes, and any empty guide branch. Make clear the guide stack is local only and not pushed; the canonical PR branches were not rewritten, and independent-branch tie ordering is advisory.
 - Any blockers, local branches that still need pushing, or uncertainties that remain.
