@@ -154,7 +154,20 @@ It edits nothing and reports Pass or numbered Issues.
 
 Give the peer those same inputs verbatim, not the fixer's reasoning or the Reviewer's execution steps. Tell it to read the actual files, edit nothing, and verify dispositions in committed code: fixes hold, already-addressed claims are true, push-backs are technically justified, and deferrals point to a committed task file that covers the concern. It may inspect code for quality but must not run builds/tests; the fresh Reviewer owns build/typecheck. Require `VERDICT: PASS | ISSUES`, followed for Issues by numbered findings tagged `blocking` or `minor`, each with `file:line` and a one-line rationale.
 
-After assigning the entry's worktree path, unique per-entry/per-attempt output paths, and review text to the shell variables `worktree`, `outfile`, `stderr_file`, and `prompt`, launch the peer from that worktree: `codex exec --sandbox read-only --cd "$worktree" -o "$outfile" -c mcp_servers={} "$prompt" < /dev/null 2> "$stderr_file" &`. The unique files keep concurrent output from interleaving, stdin is closed, and separately captured stderr exposes progress. Preserve a configured `high` or `xhigh` reasoning effort; only when the configured effort is not already known to be `high`/`xhigh`, add `-c model_reasoning_effort=high` to the invocation. Use a loose roughly 12-minute timeout, extending it when visible stderr progress or review size warrants; retry a timeout or transient failure once, then forfeit that entry's opinion for the round. An auth/usage failure on a classify-at-first-invocation attempt makes the peer unavailable for all later entries and rounds. Always wait for the Reviewer; when a peer was launched, wait for it too before deciding this entry's outcome, otherwise carry the disabled or unavailable outcome forward explicitly.
+Assign every per-entry/per-attempt value first; preserve a known `high`/`xhigh` configured effort by leaving `peer_effort_args` empty, or replace that assignment with the commented override when needed:
+
+```bash
+worktree="/absolute/path/to/review-worktree"
+outfile="/absolute/path/to/peer-review.txt"
+stderr_file="/absolute/path/to/peer-review.stderr"
+prompt="Peer review instructions"
+peer_effort_args=()
+# peer_effort_args=(-c model_reasoning_effort=high) # only when high/xhigh is not already known
+
+codex exec --sandbox read-only --cd "$worktree" -o "$outfile" -c mcp_servers={} "${peer_effort_args[@]}" "$prompt" < /dev/null 2> "$stderr_file" &
+```
+
+Launch the peer from that worktree. The unique files keep concurrent output from interleaving, stdin is closed, and separately captured stderr exposes progress. Use a loose roughly 12-minute timeout, extending it when visible stderr progress or review size warrants; retry a timeout or transient failure once, then forfeit that entry's opinion for the round. An auth/usage failure on a classify-at-first-invocation attempt makes the peer unavailable for all later entries and rounds. Always wait for the Reviewer; when a peer was launched, wait for it too before deciding this entry's outcome, otherwise carry the disabled or unavailable outcome forward explicitly.
 
 Read the Reviewer's verdict line and, only when the peer returned an intelligible report, the peer's verdict line for orchestration. Disabled, unavailable, and forfeited peer opinions are explicit non-blocking gate outcomes. A round passes only when the Reviewer passes and any intelligible peer report has no unaddressed grounded findings, whether tagged `blocking` or `minor`. Only when the Reviewer passed and the peer alone would gate, cheaply spot-check each gate-deciding `file:line` and claim; discard nonexistent or self-evidently false references and note the discard. Do not summarize, merge, or rewrite either result.
 

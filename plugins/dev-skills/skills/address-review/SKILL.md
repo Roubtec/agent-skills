@@ -172,7 +172,20 @@ Give it: every unresolved thread and explicitly included standalone item verbati
 
 Give the peer the worktree path, effective review base, current branch, and every review item plus proposed disposition verbatim — the same evidence as the Reviewer, but not the fixer's report, your reasoning, drafted rationales, or the Reviewer's execution steps. Its prompt must instruct it to read the actual files, edit nothing, and verify dispositions in the committed code: fixes and already-addressed claims hold, push-backs are technically justified, and deferrals point at a committed task file that covers the concern. It may do a read-only quality pass, but must not run builds/tests; that remains the Reviewer's job. Require exactly `VERDICT: PASS | ISSUES`, followed for Issues by numbered findings tagged `blocking` or `minor`, each with `file:line` and a one-line rationale.
 
-After assigning the worktree path, unique per-attempt output paths, and review text to the shell variables `worktree`, `outfile`, `stderr_file`, and `prompt`, invoke the peer from this worktree with stdin closed and stderr captured separately so progress can be inspected: `codex exec --sandbox read-only --cd "$worktree" -o "$outfile" -c mcp_servers={} "$prompt" < /dev/null 2> "$stderr_file" &`. Preserve a configured `high` or `xhigh` reasoning effort; only when the configured effort is not already known to be `high`/`xhigh`, add `-c model_reasoning_effort=high` to the invocation. Use a loose roughly 12-minute timeout, waiting longer when visible progress or review size justifies it; on timeout or transient failure retry once, then forfeit that round. An auth/usage failure on a classify-at-first-invocation attempt marks the peer unavailable for later rounds. Always wait for the Reviewer; when a peer was launched, wait for it too before deciding the round, otherwise carry the disabled or unavailable outcome forward explicitly.
+Assign every per-invocation value first; preserve a known `high`/`xhigh` configured effort by leaving `peer_effort_args` empty, or replace that assignment with the commented override when needed:
+
+```bash
+worktree="/absolute/path/to/review-worktree"
+outfile="/absolute/path/to/peer-review.txt"
+stderr_file="/absolute/path/to/peer-review.stderr"
+prompt="Peer review instructions"
+peer_effort_args=()
+# peer_effort_args=(-c model_reasoning_effort=high) # only when high/xhigh is not already known
+
+codex exec --sandbox read-only --cd "$worktree" -o "$outfile" -c mcp_servers={} "${peer_effort_args[@]}" "$prompt" < /dev/null 2> "$stderr_file" &
+```
+
+Invoke the peer from this worktree with stdin closed, unique per-attempt output paths, and separately captured stderr so progress can be inspected. Use a loose roughly 12-minute timeout, waiting longer when visible progress or review size justifies it; on timeout or transient failure retry once, then forfeit that round. An auth/usage failure on a classify-at-first-invocation attempt marks the peer unavailable for later rounds. Always wait for the Reviewer; when a peer was launched, wait for it too before deciding the round, otherwise carry the disabled or unavailable outcome forward explicitly.
 
 Read the Reviewer's verdict line and, only when the peer returned an intelligible report, the peer's verdict line for orchestration. Disabled, unavailable, and forfeited peer opinions are explicit non-blocking gate outcomes. A round passes only when the Reviewer passes and any intelligible peer report has no unaddressed grounded findings; both `blocking` and `minor` peer findings gate. Only when the Reviewer passed and peer findings alone would gate, cheaply spot-check each finding's `file:line` and factual claim; discard self-evidently false or nonexistent references and note that discard. Do not summarize, merge, or rewrite feedback: when another fix round is needed, give the fresh Fixer the complete available results verbatim as labeled `Reviewer findings` and, when present, `Peer (codex) findings` blocks so it can reconcile overlap or conflict. A pushed-back peer claim is adjudicated by the next fresh Reviewer.
 
