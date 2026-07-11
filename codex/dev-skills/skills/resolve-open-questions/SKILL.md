@@ -60,8 +60,9 @@ Copilot's coding agent rather than its reviewer. **`ping-contributing`** carries
 that has gone quiet drops out of the loop — combined with explicit `ping-*` it filters that named set,
 supplied alone it falls back to the bots that reviewed.
 
-The optional `peer-opinions=off` flag disables cross-harness second opinions. Otherwise, lazily
-preflight `claude` once per run when the first resolution needs an implementation: in the
+For any code-writing decision, whether generic or review-derived, the optional `peer-opinions=off`
+flag disables cross-harness second opinions. Otherwise, lazily preflight `claude` once per run when
+the first resolution needs an implementation: in the
 orchestrator's main working tree run `command -v claude`, then `claude auth status`. A missing binary
 always makes the peer unavailable. A failed authentication probe also makes it unavailable, except
 that when `ANTHROPIC_API_KEY` is set the failed probe defers classification to the first real
