@@ -6,7 +6,11 @@ on:
   pull_request_review_comment:
     types: [created]
   issues:
-    types: [opened, assigned]
+    # No `assigned`: the gate below only checks the issue title/body for
+    # @claude, so on a matching issue every later (unrelated) assignment
+    # change would re-fire this write-permission job. Summon the bot on an
+    # existing issue with an @claude comment instead.
+    types: [opened]
   pull_request_review:
     types: [submitted]
 
