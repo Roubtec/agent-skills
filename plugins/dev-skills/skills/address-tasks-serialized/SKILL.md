@@ -217,7 +217,27 @@ For each task file in the input set:
 
 Unless `peer-opinions=off`, preflight `codex` once per skill run in the main working tree before the first review: require `command -v codex`, then run `codex login status`. A missing binary or failed login makes the peer unavailable, except that a set `CODEX_API_KEY` downgrades a failed login probe to classify-at-first-invocation; an auth or usage failure on that invocation then makes it unavailable for the rest of the run. Unavailability never fails or delays the own-harness review; record the reason and mention the peer forfeit once in the final summary.
 
-On every review round while available, launch the peer in the background at the same moment as the own reviewer, from the committed task checkout. In this serialized skill, `<worktree>` means the orchestrator's single shared repository checkout path, not a separately created git worktree: `codex exec --sandbox read-only --cd <worktree> -o <outfile> -c mcp_servers={} "<prompt>" < /dev/null 2> <stderr-file> &`. Keep the stderr file peekable because progress is emitted there, use the configured high-capability model and request `-c model_reasoning_effort=high` when high/xhigh effort is not otherwise known; when the override is needed, combine the flags as `codex exec ... -c mcp_servers={} -c model_reasoning_effort=high ...`. Allow a loose timeout of about 12 minutes with discretion to wait longer when progress is visible. On timeout or transient failure, retry once, then forfeit only that round; an auth or usage failure on a classify-at-first-invocation path disables the peer for the rest of the run.
+On every review round while available, launch the peer in the background at the same moment as the own reviewer, from the committed task checkout. In this serialized skill, `worktree` means the orchestrator's single shared repository checkout path, not a separately created git worktree. Prepare a distinct artifact directory for the invocation, then launch it with this shell-safe form:
+
+```bash
+worktree="/absolute/path/to/committed-task-checkout"
+artifact_dir="/absolute/path/to/peer-artifacts/task-slug/round-1"
+outfile="${artifact_dir}/peer-review.out"
+stderr_file="${artifact_dir}/peer-review.stderr"
+prompt='Review the committed task using the required peer prompt contract.'
+
+mkdir -p "${artifact_dir}"
+
+# Leave this empty when configured effort is already known to be high/xhigh.
+effort_args=()
+# Otherwise use: effort_args=(-c model_reasoning_effort=high)
+
+codex exec --sandbox read-only --cd "${worktree}" -o "${outfile}" \
+  -c mcp_servers={} "${effort_args[@]}" "${prompt}" \
+  < /dev/null 2> "${stderr_file}" &
+```
+
+Keep the stderr file peekable because progress is emitted there, use the configured high-capability model, and populate `effort_args` with `-c model_reasoning_effort=high` when high/xhigh effort is not otherwise known. Allow a loose timeout of about 12 minutes with discretion to wait longer when progress is visible. On timeout or transient failure, retry once, then forfeit only that round; an auth or usage failure on a classify-at-first-invocation path disables the peer for the rest of the run.
 
 The peer is **examination-only**: instruct it to read code and diffs, edit nothing, and run no builds or tests. Its prompt must include that checkout path, the base branch or commit range, the relevant task content verbatim, and this output contract: `VERDICT: PASS | ISSUES`, followed by numbered findings tagged `blocking` or `minor`, each with `file:line` and a one-line rationale. The own reviewer retains the full-build-first contract, which makes the parallel launch safe.
 

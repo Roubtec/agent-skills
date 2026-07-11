@@ -114,7 +114,27 @@ For a wave of tasks `T1..Tn`:
 2. **Run each task's loop, fanned out by phase.** Each task runs its own implement→review→fix loop, but you advance all of the wave's tasks **in lockstep by phase** so that same-phase agents (which live in different worktrees) can be spawned **together in one tool block and run concurrently**:
 
    - **Phase A — implement:** spawn one implementer per still-unfinished task in the wave, each pointed at its own worktree path, **all in a single tool block** (concurrent). Wait for all to return.
-   - **Phase B — review:** only after *all* Phase-A implementers have returned, spawn one fresh reviewer per task, each in its task's worktree, **all in a single tool block** (concurrent). At the same moment, launch one background peer per task while the peer remains available: `codex exec --sandbox read-only --cd <worktree> -o <outfile> -c mcp_servers={} "<prompt>" < /dev/null 2> <stderr-file> &`, using separate per-invocation output and peekable stderr files. The peers are examination-only and run no builds or tests. Before triage, wait for every task's own reviewer and for every peer actually launched.
+   - **Phase B — review:** only after *all* Phase-A implementers have returned, spawn one fresh reviewer per task, each in its task's worktree, **all in a single tool block** (concurrent). At the same moment, launch one background peer per task while the peer remains available, using separate per-invocation output and peekable stderr files. For each task, prepare and launch the peer with this shell-safe form:
+
+     ```bash
+     worktree="/absolute/path/to/committed-task-worktree"
+     artifact_dir="/absolute/path/to/peer-artifacts/task-slug/round-1"
+     outfile="${artifact_dir}/peer-review.out"
+     stderr_file="${artifact_dir}/peer-review.stderr"
+     prompt='Review the committed task using the required peer prompt contract.'
+
+     mkdir -p "${artifact_dir}"
+
+     # Leave this empty when configured effort is already known to be high/xhigh.
+     effort_args=()
+     # Otherwise use: effort_args=(-c model_reasoning_effort=high)
+
+     codex exec --sandbox read-only --cd "${worktree}" -o "${outfile}" \
+       -c mcp_servers={} "${effort_args[@]}" "${prompt}" \
+       < /dev/null 2> "${stderr_file}" &
+     ```
+
+     The peers are examination-only and run no builds or tests. Before triage, wait for every task's own reviewer and for every peer actually launched.
    - A task exits the loop only when its own reviewer passes and the peer, when it delivered an intelligible report, has no unaddressed grounded findings. Tasks with issues carry both reports verbatim as separately labeled blocks into the next round's Phase A; apply the inherited grounding, gating, dispute, retry, and forfeit rules without re-summarizing either report.
    - Repeat A→B for up to **6 rounds** total. The cap is a runaway-loop guard against arcane token bloat, not a quality dial. After round 6, any task still failing review does **not** get a PR; surface its outstanding findings to the user.
 
