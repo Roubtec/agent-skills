@@ -149,7 +149,30 @@ For a wave of tasks `T1..Tn`:
 2. **Run each task's loop, fanned out by phase.** Each task runs its own implement→review→fix loop, but you advance all of the wave's tasks **in lockstep by phase** so that same-phase subagents (which live in different worktrees) can be spawned **together in one natural-language turn or tool-call batch and run concurrently**:
 
    - **Phase A — implement:** spawn one `worker` per still-unfinished task in the wave, each pointed at its own worktree path, all together. Wait until every implementer has completed, then close the finished implementer threads.
-   - **Phase B — review:** only after *all* Phase-A implementers have returned, spawn one fresh `explorer` reviewer per task, each in its task's worktree, all together. At the same moment, launch one plain-shell background peer per task while the peer remains available. Before each launch, create a unique per-invocation artifact directory under `$WT_BASE/.peer-artifacts/` (the Bootstrap contract keeps `$WT_BASE` ignored or outside the repository; never place artifacts inside a task worktree), write `git -C <worktree> log --oneline <base>..HEAD` to `<artifact-dir>/commits.log` and `git -C <worktree> diff <base>...HEAD` to `<artifact-dir>/changes.diff`, and name both exact paths in `<prompt>`. Then run `claude -p "<prompt>" --add-dir <artifact-dir> [--effort high] --tools "Read,Glob,Grep" --disallowedTools "mcp__*" > <artifact-dir>/peer.out 2>&1 &` from that task's worktree, using a separate artifact directory and outfile per invocation. The peers are examination-only and run no builds or tests. Wait for both feedback sources for every task, read each peer output into the feedback set, remove its artifact directory, then triage and close the finished own-reviewer threads.
+   - **Phase B — review:** only after *all* Phase-A implementers have returned, spawn one fresh `explorer` reviewer per task, each in its task's worktree, all together. At the same moment, launch one plain-shell background peer per task while the peer remains available. For each peer, run the following pattern with that task's values (the Bootstrap contract keeps `$WT_BASE` ignored or outside the repository; never place artifacts inside a task worktree):
+
+     ```bash
+     wt_base="/absolute/path/to/worktree-root"
+     worktree="/absolute/path/to/task-worktree"
+     base_ref="main"
+     artifact_root="${wt_base}/.peer-artifacts"
+     mkdir -p -- "${artifact_root}"
+     artifact_dir="$(mktemp -d "${artifact_root}/address-tasks-peer.XXXXXX")"
+     peer_out="${artifact_dir}/peer.out"
+     prompt="Review ${worktree} against ${base_ref}; read ${artifact_dir}/commits.log and ${artifact_dir}/changes.diff, then follow the inherited prompt contract."
+     effort_args=()
+     # When the configured effort is not known to be high or xhigh:
+     # effort_args=(--effort high)
+
+     git -C "${worktree}" log --oneline "${base_ref}..HEAD" > "${artifact_dir}/commits.log"
+     git -C "${worktree}" diff "${base_ref}...HEAD" > "${artifact_dir}/changes.diff"
+     (
+       cd -- "${worktree}" || exit
+       claude -p "${prompt}" --add-dir "${artifact_dir}" "${effort_args[@]}" --tools "Read,Glob,Grep" --disallowedTools "mcp__*" > "${peer_out}" 2>&1
+     ) &
+     ```
+
+     Replace the example values with the task's actual worktree, base, and complete prompt; the prompt must name both exact artifact paths. Use a separate artifact directory and outfile per invocation. The peers are examination-only and run no builds or tests. Wait for both feedback sources for every task, read each peer output into the feedback set, remove its artifact directory, then triage and close the finished own-reviewer threads.
    - A task exits the loop only when its own reviewer passes and the peer, when it delivered an intelligible report, has no unaddressed grounded findings. Tasks with issues carry both reports verbatim as separately labeled blocks into the next round's Phase A; apply the inherited grounding, blocking-and-minor gating, dispute, timeout/retry, and forfeit rules without re-summarizing either report.
    - Repeat A→B for up to **6 rounds** total. The cap is a runaway-loop guard against arcane token bloat, not a quality dial. After round 6, any task still failing review does **not** get a PR; surface its outstanding findings to the user.
 

@@ -229,7 +229,27 @@ For each task file in the input set:
 
 Unless `peer-opinions=off`, preflight `claude` once per skill run in the main working tree before the first review: require `command -v claude`, then run `claude auth status`. A missing binary or failed authentication makes the peer unavailable, except that a set `ANTHROPIC_API_KEY` downgrades a failed probe to classify-at-first-invocation. If the failure indicates an older CLI without the `auth status` subcommand, also classify at the first real invocation rather than marking the peer unavailable. On either classify-at-first-invocation path, an auth or usage failure on that invocation makes the peer unavailable for the rest of the run. Unavailability never fails or delays the own-harness review; record the reason and mention the peer forfeit once in the final summary.
 
-On every review round while available, first create a unique per-invocation artifact directory in the system temporary directory and outside the working tree (for example, `mktemp -d "${TMPDIR:-/tmp}/address-tasks-peer.XXXXXX"`), write `git -C <working-tree> log --oneline <base>..HEAD` to `<artifact-dir>/commits.log`, and write `git -C <working-tree> diff <base>...HEAD` to `<artifact-dir>/changes.diff`. Name both exact paths in `<prompt>`, then launch the peer as a plain background shell process from the committed task working tree at the same moment as the own reviewer: `claude -p "<prompt>" --add-dir <artifact-dir> [--effort high] --tools "Read,Glob,Grep" --disallowedTools "mcp__*" > <artifact-dir>/peer.out 2>&1 &`. The redirect is the capture contract; every invocation gets its own outfile, and `--output-format json` may be added for parseable output. Append the examination-only flags after the prompt because the variadic tool flags can otherwise swallow it. Never pass permission-bypass or autonomy flags.
+On every review round while available, use named variables and quoted expansions to create the artifacts and launch the peer as a plain background shell process from the committed task working tree at the same moment as the own reviewer:
+
+```bash
+working_tree="/absolute/path/to/task-working-tree"
+base_ref="main"
+artifact_dir="$(mktemp -d "${TMPDIR:-/tmp}/address-tasks-peer.XXXXXX")"
+peer_out="${artifact_dir}/peer.out"
+prompt="Review ${working_tree} against ${base_ref}; read ${artifact_dir}/commits.log and ${artifact_dir}/changes.diff, then follow the full prompt contract below."
+effort_args=()
+# When the configured effort is not known to be high or xhigh:
+# effort_args=(--effort high)
+
+git -C "${working_tree}" log --oneline "${base_ref}..HEAD" > "${artifact_dir}/commits.log"
+git -C "${working_tree}" diff "${base_ref}...HEAD" > "${artifact_dir}/changes.diff"
+(
+  cd -- "${working_tree}" || exit
+  claude -p "${prompt}" --add-dir "${artifact_dir}" "${effort_args[@]}" --tools "Read,Glob,Grep" --disallowedTools "mcp__*" > "${peer_out}" 2>&1
+) &
+```
+
+Replace the example values with the round's actual working tree, base, and complete prompt; the prompt must name both exact artifact paths. The redirect is the capture contract; every invocation gets its own outfile, and `--output-format json` may be added for parseable output. Append the examination-only flags after the prompt because the variadic tool flags can otherwise swallow it. Never pass permission-bypass or autonomy flags.
 
 Use the peer's configured high-capability model. If its configured effort is not known to be high or xhigh, request `--effort high` without overriding a known stronger setting; never request `max`. Allow a loose timeout of about 12 minutes, with discretion to wait longer for an expected wide review. After each attempt's output has been read or the attempt has been classified as timed out or failed, remove its artifact directory before retrying or continuing. On timeout or transient failure, retry once (two attempts total), then forfeit only that round. An auth or usage failure on a classify-at-first-invocation path disables the peer for the rest of the run.
 
