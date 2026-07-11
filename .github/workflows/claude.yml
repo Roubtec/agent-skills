@@ -37,7 +37,10 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
-          fetch-depth: 1
+          # Full history, mirroring claude-code-review.yml: @claude tasks
+          # (reviews, fixes) can use git blame/log, which stop at a
+          # shallow-clone boundary. This repo is small, so it stays cheap.
+          fetch-depth: 0
 
       # Not currently needed: this repo has no package.json / pnpm project
       # (these steps were inherited from a monorepo template). Uncomment if
