@@ -7,6 +7,8 @@ Implement the given task or a set of tasks using a delegated subagent workflow.
 
 **Arguments:** `<glob-or-file-list of task files to implement> [peer-opinions=off]`
 
+`peer-opinions=off` is the only accepted explicit peer-opinion setting. Omit it to use the default, which enables best-effort peer opinions.
+
 ## Architecture
 
 You are the **orchestrator**.
@@ -212,7 +214,7 @@ For each task file in the input set:
 3. **Read the task file** enough to construct a good implementer prompt. Identify the acceptance criteria so you can later evaluate the reviewer's report.
 4. **Spawn the implementer agent** with a well-structured prompt (see Implementer Agent section). Wait for completion and close the agent. Spawn nothing else in the same natural-language turn or tool block — the reviewer comes only after the implementer's commits exist on disk.
 5. **Evaluate the implementer's report.** If the implementer hit a blocker it could not resolve, stop and surface it to the user before spawning a reviewer.
-6. **Only after step 5, spawn the reviewer agent** with a fresh prompt (see Reviewer Agent section) and launch the peer second opinion in the background at the same moment (unless unavailable or `peer-opinions=off`); wait for both, then close the reviewer agent. Do not spawn the reviewer in the same natural-language turn or tool block as the implementer — you share one working tree, so a reviewer started before the commit reviews an unfinished branch.
+6. **Only after step 5, spawn the reviewer agent** with a fresh prompt (see Reviewer Agent section) and launch the peer second opinion in the background at the same moment (unless unavailable or `peer-opinions=off`). Always wait for the reviewer before triage, and also wait for the peer when one was launched; then close the reviewer agent. Do not spawn the reviewer in the same natural-language turn or tool block as the implementer — you share one working tree, so a reviewer started before the commit reviews an unfinished branch.
 7. **Evaluate the reviewer's report:**
    - If the report says the branch is **empty / has no implementation / shows an empty diff**, do not trust it at face value — that is the signature of a race (reviewer started before the implementer committed) or a wrong-branch checkout, not a real gap. Verify with `git diff --name-only <base>...HEAD`; if the work is actually present, spawn a fresh reviewer and use that verdict instead.
    - If the own reviewer **passes** and the peer has no unaddressed grounded findings under the protocol below: proceed to step 8.
@@ -255,7 +257,7 @@ Use the peer's configured high-capability model. If its configured effort is not
 
 The peer is **examination-only**: it may use only `Read`, `Glob`, and `Grep`, with all MCP tools denied; it must edit nothing and run no builds or tests. Its prompt must include the working-tree path, base branch or commit range, the exact `<artifact-dir>/commits.log` and `<artifact-dir>/changes.diff` paths, the relevant task content verbatim, an instruction to read the actual files, and this output contract: `VERDICT: PASS | ISSUES`, followed by numbered findings tagged `blocking` or `minor`, each with `file:line` and a one-line rationale. The own reviewer retains the full-build-first contract, which makes the parallel launch safe.
 
-Wait for both reviewers before deciding the round. Read only their verdict lines for triage; do not summarize, merge, or rewrite their reports. Unintelligible peer output that lacks a parseable verdict and findings forfeits that round. When either reviewer reports issues, give the next fresh implementer both reports verbatim as separately labeled **Reviewer findings** and **Peer (claude) findings** blocks.
+Always wait for the own reviewer before deciding the round, and wait for the peer only when it was actually launched. Read only the available verdict lines for triage; do not summarize, merge, or rewrite their reports. Unintelligible peer output that lacks a parseable verdict and findings forfeits that round. When either reviewer reports issues, give the next fresh implementer the own-reviewer report and any available peer report verbatim as separately labeled **Reviewer findings** and **Peer (claude) findings** blocks.
 
 A round passes only when the own reviewer passes and the peer, when it delivered an intelligible report, has no unaddressed grounded findings, whether `blocking` or `minor`. Only when a passing own review would otherwise be overturned by peer findings, cheaply spot-check that each gate-deciding `file:line` exists and its claim is not self-evidently false; discard and record ungrounded findings, but pass all other feedback through verbatim. Pure noise or stylistic churn against repository conventions may be pushed back with evidence; the next round's fresh own reviewer adjudicates disputes, and a rejected peer claim stops gating when that reviewer confirms it is not real.
 

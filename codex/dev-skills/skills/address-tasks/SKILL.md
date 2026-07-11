@@ -7,6 +7,8 @@ Implement a set of pre-planned task files using a **parallel, worktree-isolated*
 
 **Arguments:** `<glob-or-file-list of task files to implement> [peer-opinions=off]`
 
+`peer-opinions=off` is the only accepted explicit peer-opinion setting. Omit it to use the default, which enables best-effort peer opinions.
+
 This skill is the parallel sibling of `address-tasks-serialized`.
 The roles (orchestrator / implementer / reviewer), the implementer and reviewer prompt contracts, the code-quality review checklist, and the full peer second-opinion protocol are all inherited from that skill — read it for those contracts and their rationale.
 **What changes here is the execution model:** instead of one branch on one shared working tree processed strictly sequentially, each task gets its **own git worktree** so independent tasks can run **concurrently**, while each individual task still runs its implement→review→fix loop **sequentially** (up to 6 iterations).
@@ -172,8 +174,8 @@ For a wave of tasks `T1..Tn`:
      ) &
      ```
 
-     Replace the example values with the task's actual worktree, base, and complete prompt; the prompt must name both exact artifact paths. Use a separate artifact directory and outfile per invocation. The peers are examination-only and run no builds or tests. Wait for both feedback sources for every task, read each peer output into the feedback set, remove its artifact directory, then triage and close the finished own-reviewer threads.
-   - A task exits the loop only when its own reviewer passes and the peer, when it delivered an intelligible report, has no unaddressed grounded findings. Tasks with issues carry both reports verbatim as separately labeled blocks into the next round's Phase A; apply the inherited grounding, blocking-and-minor gating, dispute, timeout/retry, and forfeit rules without re-summarizing either report.
+     Replace the example values with the task's actual worktree, base, and complete prompt; the prompt must name both exact artifact paths. Use a separate artifact directory and outfile per invocation. The peers are examination-only and run no builds or tests. Always wait for every own reviewer; for each task whose peer was actually launched, also wait for its peer output, read it into the feedback set, and remove its artifact directory. Then triage and close the finished own-reviewer threads.
+   - A task exits the loop only when its own reviewer passes and the peer, when it delivered an intelligible report, has no unaddressed grounded findings. Tasks with issues carry the own-reviewer report and any available peer report verbatim as separately labeled blocks into the next round's Phase A; apply the inherited grounding, blocking-and-minor gating, dispute, timeout/retry, and forfeit rules without re-summarizing either report.
    - Repeat A→B for up to **6 rounds** total. The cap is a runaway-loop guard against arcane token bloat, not a quality dial. After round 6, any task still failing review does **not** get a PR; surface its outstanding findings to the user.
 
    > Phase ordering is what preserves the per-task discipline: a task's reviewer never starts until that task's implementer (and every sibling implementer) has finished and committed. You get cross-task parallelism without ever running a task's own implementer and reviewer at the same time.
