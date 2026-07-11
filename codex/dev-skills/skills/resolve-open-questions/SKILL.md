@@ -196,7 +196,7 @@ offering the change for delivery:
 - Spawn a **fresh-eyes reviewer** against the committed change (it edits nothing; PASS or numbered
   issues). Define `<decision-base>` as the commit immediately before the decision's first commit. At
   the same moment, when peer opinions are enabled and preflight did not mark the peer unavailable,
-  precompute
+  precompute from inside that implementation worktree
   `git log --oneline <decision-base>..HEAD` plus `git diff <decision-base>...HEAD` for the decision's
   commit range in a read-only artifact outside the worktree, then launch
   `claude -p "<prompt>" --output-format json --add-dir <artifact-dir> --tools "Read,Glob,Grep" --disallowedTools "mcp__*" > <outfile> 2>&1`
