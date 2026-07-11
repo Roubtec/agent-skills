@@ -7,6 +7,8 @@ Implement a set of pre-planned task files using a **parallel, worktree-isolated*
 
 **Arguments:** `<glob-or-file-list of task files to implement> [peer-opinions=off]`
 
+`peer-opinions=off` is the only accepted explicit peer-opinion setting. Omit it to use the default, which enables best-effort peer opinions.
+
 This skill is the parallel sibling of `address-tasks-serialized`. The roles (orchestrator / implementer / reviewer), the implementer and reviewer prompt contracts, the code-quality review checklist, and the full peer second-opinion protocol are all inherited from that skill — read it for those contracts and their rationale. **What changes here is the execution model:** instead of one branch on one shared working tree processed strictly sequentially, each task gets its **own git worktree** so independent tasks can run **concurrently**, while each individual task still runs its implement→review→fix loop **sequentially** (up to 6 iterations).
 
 ## Why worktrees change the rules

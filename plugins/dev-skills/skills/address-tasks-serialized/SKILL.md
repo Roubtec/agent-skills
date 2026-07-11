@@ -7,6 +7,8 @@ Implement the given task or a set of tasks using a delegated subagent workflow.
 
 **Arguments:** `<glob-or-file-list of task files to implement> [peer-opinions=off]`
 
+`peer-opinions=off` is the only accepted explicit peer-opinion setting. Omit it to use the default, which enables best-effort peer opinions.
+
 ## Architecture
 
 You are the **orchestrator**.
