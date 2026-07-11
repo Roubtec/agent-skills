@@ -63,11 +63,12 @@ supplied alone it falls back to the bots that reviewed.
 The optional `peer-opinions=off` flag disables cross-harness second opinions. Otherwise, lazily
 preflight `claude` once per run when the first resolution needs an implementation: in the
 orchestrator's main working tree run `command -v claude`, then `claude auth status`. A missing binary
-or failed authentication makes the peer unavailable, except that when `ANTHROPIC_API_KEY` is set a
-failed probe defers classification to the first real invocation. If the installed CLI lacks the
-`auth status` subcommand, treat that as no probe and likewise classify at the first real invocation,
-not as unavailability; an auth/usage failure there makes the peer unavailable for the rest of the
-run. Decision-only sessions perform no preflight and mention no peer forfeit in their summary.
+always makes the peer unavailable. A failed authentication probe also makes it unavailable, except
+that when `ANTHROPIC_API_KEY` is set the failed probe defers classification to the first real
+invocation. If the installed CLI lacks the `auth status` subcommand, treat that as no probe and
+likewise classify at the first real invocation, not as unavailability; an auth/usage failure there
+makes the peer unavailable for the rest of the run. Decision-only sessions perform no preflight and
+mention no peer forfeit in their summary.
 
 ## The core loop
 
@@ -192,9 +193,10 @@ For **every code-writing decision**, run this review loop before recording the i
 offering the change for delivery:
 
 - Spawn a **fresh-eyes reviewer** against the committed change (it edits nothing; PASS or numbered
-  issues). At the same moment, when the lazy preflight found the peer available, precompute
-  `git log --oneline <base>..HEAD` plus `git diff <base>...HEAD` for the decision's commit range in a
-  read-only artifact outside the worktree, then launch
+  issues). Define `<decision-base>` as the commit immediately before the decision's first commit. At
+  the same moment, when the lazy preflight found the peer available, precompute
+  `git log --oneline <decision-base>..HEAD` plus `git diff <decision-base>...HEAD` for the decision's
+  commit range in a read-only artifact outside the worktree, then launch
   `claude -p "<prompt>" --output-format json --add-dir <artifact-dir> --tools "Read,Glob,Grep" --disallowedTools "mcp__*" > <outfile> 2>&1`
   in the background with its working directory set to that implementation worktree. Append the
   explicit read-only tool guard after the prompt as shown, never pass a bypass flag, and use a new
