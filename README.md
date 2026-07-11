@@ -83,3 +83,11 @@ claude plugin marketplace update roubtec
 powbox-*specific* skills (those that only make sense inside its sandbox) do not
 live here — they remain in the `Roubtec/powbox` repo and reach containers through its
 image-bake + seed mechanism.
+
+## GitHub automation
+
+This repo runs Claude directly against its own PRs via two workflows in `.github/workflows/`.
+Both require a `CLAUDE_CODE_OAUTH_TOKEN` repo secret and only run for PRs from this repository (not forks).
+
+- **`claude.yml`** — a mention bot. Comment `@claude ...` on an issue or PR (or in a PR review) to summon it; only OWNER/MEMBER/COLLABORATOR authors can trigger it, since the job runs with write permissions.
+- **`claude-code-review.yml`** — runs Anthropic's `code-review` plugin automatically on every PR open/update and posts inline review comments.
