@@ -33,19 +33,17 @@ jobs:
         with:
           fetch-depth: 1
 
-      # The claude-code-action runs `pnpm` from the AGENTS.md verification
-      # checklist, which needs pnpm@11 — and pnpm@11 needs Node >=22.13.
-      # The action itself runs on Node 20, but tools it shells out to pick
-      # up the Node from setup-node's PATH, so installing Node 24 + Corepack
-      # here makes `pnpm` resolve to the version pinned in package.json's
-      # "packageManager" field.
-      - name: Setup Node.js
-        uses: actions/setup-node@v4
-        with:
-          node-version: 24
-
-      - name: Enable Corepack (provides pnpm from packageManager field)
-        run: corepack enable
+      # Not currently needed: this repo has no package.json / pnpm project
+      # (these steps were inherited from a monorepo template). Uncomment if
+      # that changes — see claude_args below for the matching pnpm/npx/
+      # corepack tool allowances, also commented out.
+      # - name: Setup Node.js
+      #   uses: actions/setup-node@v4
+      #   with:
+      #     node-version: 24
+      #
+      # - name: Enable Corepack (provides pnpm from packageManager field)
+      #   run: corepack enable
 
       - name: Run Claude Code
         id: claude
@@ -64,10 +62,10 @@ jobs:
           # or https://code.claude.com/docs/en/cli-reference for available options
           # Allowed tools the agent may invoke without prompting:
           #   - gh pr:*        — read/comment on the PR it was summoned from
-          #   - pnpm:*, npx:*  — run the AGENTS.md verification checklist
-          #                      (format, lint, check, build, test) and fix issues
-          #   - corepack:*     — bootstrap pnpm from the packageManager field,
-          #                      matching the deploy workflow's setup step
+          #   - pnpm:*, npx:*, corepack:* — commented out below along with the
+          #                      Node/Corepack setup steps above; this repo has
+          #                      no pnpm project right now. Uncomment both
+          #                      together if that changes.
           #   - mcp__github_inline_comment__create_inline_comment — post each
           #                      review finding as its own line-anchored,
           #                      independently resolvable thread instead of
@@ -88,4 +86,5 @@ jobs:
           #                      and fixes real PRs. Only fires on a manual @claude
           #                      mention, so the added cost is bounded. Valid
           #                      levels: low|medium|high|xhigh|max.
-          claude_args: '--model claude-opus-4-8 --effort xhigh --allowed-tools "Bash(gh pr:*),Bash(pnpm:*),Bash(npx:*),Bash(corepack:*),mcp__github_inline_comment__create_inline_comment"'
+          claude_args: '--model claude-opus-4-8 --effort xhigh --allowed-tools "Bash(gh pr:*),mcp__github_inline_comment__create_inline_comment"'
+          # claude_args: '--model claude-opus-4-8 --effort xhigh --allowed-tools "Bash(gh pr:*),Bash(pnpm:*),Bash(npx:*),Bash(corepack:*),mcp__github_inline_comment__create_inline_comment"'
