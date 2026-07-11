@@ -19,16 +19,33 @@ jobs:
       (github.event_name == 'issues' && (contains(github.event.issue.body, '@claude') || contains(github.event.issue.title, '@claude')))
     runs-on: ubuntu-latest
     permissions:
-      contents: read
-      pull-requests: read
-      issues: read
+      contents: write
+      pull-requests: write
+      issues: write
       id-token: write
       actions: read # Required for Claude to read CI results on PRs
+    concurrency:
+      group: claude-${{ github.workflow }}-${{ github.event.issue.number || github.event.pull_request.number || github.run_id }}
+      # cancel-in-progress: true
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 1
+
+      # The claude-code-action runs `pnpm` from the AGENTS.md verification
+      # checklist, which needs pnpm@11 — and pnpm@11 needs Node >=22.13.
+      # The action itself runs on Node 20, but tools it shells out to pick
+      # up the Node from setup-node's PATH, so installing Node 24 + Corepack
+      # here makes `pnpm` resolve to the version pinned in package.json's
+      # "packageManager" field.
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Enable Corepack (provides pnpm from packageManager field)
+        run: corepack enable
 
       - name: Run Claude Code
         id: claude
@@ -36,15 +53,39 @@ jobs:
         with:
           claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
 
-          # This is an optional setting that allows Claude to read CI results on PRs
+          # Mirrors the job-level `actions: read` permission above — the
+          # action only uses that permission to read CI results if it's
+          # also declared here.
           additional_permissions: |
             actions: read
-
-          # Optional: Give a custom prompt to Claude. If this is not specified, Claude will perform the instructions specified in the comment that tagged it.
-          # prompt: 'Update the pull request description to include a summary of changes.'
 
           # Optional: Add claude_args to customize behavior and configuration
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
-          # claude_args: '--allowed-tools Bash(gh pr *)'
-
+          # Allowed tools the agent may invoke without prompting:
+          #   - gh pr:*        — read/comment on the PR it was summoned from
+          #   - pnpm:*, npx:*  — run the AGENTS.md verification checklist
+          #                      (format, lint, check, build, test) and fix issues
+          #   - corepack:*     — bootstrap pnpm from the packageManager field,
+          #                      matching the deploy workflow's setup step
+          #   - mcp__github_inline_comment__create_inline_comment — post each
+          #                      review finding as its own line-anchored,
+          #                      independently resolvable thread instead of
+          #                      folding everything into one comment (see "When
+          #                      Asked to Do a Code Review" in the repo-root
+          #                      CLAUDE.md)
+          # Git operations (staging, committing the fixup, pushing back to the
+          # PR branch) are handled by claude-code-action itself, so we don't
+          # need to list Bash(git:*) here.
+          #
+          # Model + reasoning effort:
+          #   --model claude-opus-4-8 — pin the Opus tier by full snapshot id
+          #                      (not a floating alias) so review/fix quality
+          #                      doesn't silently shift when the action's default
+          #                      model moves.
+          #   --effort xhigh   — Opus 4.8 defaults to "high"; bump to "xhigh", the
+          #                      top coding/agentic tier, since this bot reviews
+          #                      and fixes real PRs. Only fires on a manual @claude
+          #                      mention, so the added cost is bounded. Valid
+          #                      levels: low|medium|high|xhigh|max.
+          claude_args: '--model claude-opus-4-8 --effort xhigh --allowed-tools "Bash(gh pr:*),Bash(pnpm:*),Bash(npx:*),Bash(corepack:*),mcp__github_inline_comment__create_inline_comment"'
