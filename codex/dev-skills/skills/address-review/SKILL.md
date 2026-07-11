@@ -198,40 +198,65 @@ Launch the peer in a dedicated session and process group; do not use a plain bac
 
 ```sh
 peer_session_file="$invocation_dir/session.pid"
-setsid --fork --wait sh -c '
-  session_file=$1
-  worktree=$2
-  shift 2
-  printf "%s\n" "$$" > "$session_file"
-  cd "$worktree" || exit 125
-  exec "$@"
-' peer-launch "$peer_session_file" "$worktree" \
-  claude -p --safe-mode --tools "Read,Glob,Grep" --disallowedTools "mcp__*" \
-  --add-dir "$invocation_dir" --output-format json \
-  < "$prompt_file" > "$outfile" 2>&1 &
-peer_wait_pid=$!
+if (umask 077 && : > "$peer_session_file"); then
+  setsid --fork --wait sh -c '
+    session_file=$1
+    worktree=$2
+    shift 2
+    printf "%s\n" "$$" > "$session_file" || exit 125
+    cd "$worktree" || exit 125
+    exec "$@"
+  ' peer-launch "$peer_session_file" "$worktree" \
+    claude -p --safe-mode --tools "Read,Glob,Grep" --disallowedTools "mcp__*" \
+    --add-dir "$invocation_dir" --output-format json \
+    < "$prompt_file" > "$outfile" 2>&1 &
+  peer_wait_pid=$!
+else
+  peer_wait_pid=
+  peer_launch_status=125
+fi
 ```
 
-Poll briefly for a non-empty `peer_session_file`, require its contents to be a positive decimal PID, and save that value as `peer_pgid`; do not infer it from `peer_wait_pid`, because `setsid --fork` deliberately makes the wait supervisor and session leader different processes. Use a loose roughly 12-minute timeout, extending it when review size warrants. On normal completion, `wait "$peer_wait_pid"`. On timeout, run this cleanup only after `peer_pgid` has passed the numeric/positive check:
+Create `peer_session_file` as an empty, owner-only regular file before the launch and do not launch if that preparation fails. Poll for it to become non-empty, require its contents to be a positive decimal PID, and save that value as `peer_pgid`; do not infer it from `peer_wait_pid`, because `setsid --fork` deliberately makes the wait supervisor and session leader different processes. The PID-file write is the first operation in the session and is checked, so `claude` cannot start unless the handoff succeeds. If the supervisor exits before a valid handoff, immediately `wait "$peer_wait_pid"` to reap it, record the launch failure (normally status 125 for the write or `cd` guard), and never advance or retry from that attempt. Use a loose roughly 12-minute timeout, extending it when review size warrants.
+
+After `peer_pgid` passes the numeric/positive check, use the following helpers. The negative PID operand targets the validated process group; omitting `--` is intentional because the Dash `kill` builtin rejects it. Keep this form for TERM, KILL, and every death probe:
 
 ```sh
-kill -TERM -- "-$peer_pgid" 2>/dev/null || :
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-  kill -0 -- "-$peer_pgid" 2>/dev/null || break
-  sleep 1
-done
-if kill -0 -- "-$peer_pgid" 2>/dev/null; then
-  kill -KILL -- "-$peer_pgid" 2>/dev/null || :
+peer_group_alive() {
+  kill -0 "-$peer_pgid" 2>/dev/null
+}
+
+peer_stop_group() {
+  kill -TERM "-$peer_pgid" 2>/dev/null || :
   for _ in 1 2 3 4 5 6 7 8 9 10; do
-    kill -0 -- "-$peer_pgid" 2>/dev/null || break
+    peer_group_alive || break
     sleep 1
   done
-fi
-wait "$peer_wait_pid" 2>/dev/null || :
-! kill -0 -- "-$peer_pgid" 2>/dev/null
+  if peer_group_alive; then
+    kill -KILL "-$peer_pgid" 2>/dev/null || :
+  fi
+  wait "$peer_wait_pid" 2>/dev/null || :
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    peer_group_alive || break
+    sleep 1
+  done
+  ! peer_group_alive
+}
+
+peer_finish_group() {
+  if wait "$peer_wait_pid"; then
+    peer_wait_status=0
+  else
+    peer_wait_status=$?
+  fi
+  if peer_group_alive; then
+    peer_stop_group || return 1
+  fi
+  ! peer_group_alive
+}
 ```
 
-The final command must succeed; otherwise a group member survived, so treat cleanup as failed and do not retry or advance until it is gone. This TERM → bounded wait → KILL → `wait` → group-death sequence is mandatory on every timeout. Retry a timeout or transient failure once with an entirely new invocation directory, prompt, outfile, artifact, session file, and process group, then forfeit that round. An auth/usage failure on a classify-at-first-invocation attempt marks the peer unavailable for later rounds. `claude -p` may print nothing until completion; wait for both Reviewer and peer before deciding the round.
+On timeout, call `peer_stop_group`; on observed supervisor completion, call `peer_finish_group` and interpret its saved `peer_wait_status` only after it succeeds. The final command on either path must succeed. `peer_stop_group` always performs TERM → bounded wait → KILL when needed → supervisor `wait` → bounded death check, and failure means a group member survived: do not retry or advance until it is gone. Apply this verification on every completion path, not only timeouts. Retry a timeout or transient failure once with an entirely new invocation directory, prompt, outfile, artifact, session file, and process group, then forfeit that round. An auth/usage failure on a classify-at-first-invocation attempt marks the peer unavailable for later rounds. `claude -p` may print nothing until completion; wait for both Reviewer and peer before deciding the round.
 
 Parse the peer's captured JSON only far enough to extract its final message, then read only the two verdict lines for orchestration. Unintelligible peer output is a non-blocking forfeit. A round clears the review gate when the Reviewer passes and the peer either reports no unaddressed grounded findings or has an explicit forfeited, unavailable, or disabled outcome; both `blocking` and `minor` grounded peer findings gate. Only when the Reviewer passed and peer findings alone would gate, cheaply spot-check each finding's `file:line` and factual claim; discard self-evidently false or nonexistent references and note that discard. Do not summarize, merge, or rewrite feedback: when another fix round is needed, give the fresh Fixer the complete results verbatim as labeled `Reviewer findings` and `Peer (claude) findings` blocks so it can reconcile overlap or conflict. A pushed-back peer claim is adjudicated by the next fresh Reviewer.
 

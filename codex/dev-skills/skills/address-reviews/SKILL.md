@@ -182,42 +182,65 @@ Launch every entry's peer in its own dedicated session and process group; do not
 
 ```sh
 peer_session_file="$invocation_dir/session.pid"
-setsid --fork --wait sh -c '
-  session_file=$1
-  worktree=$2
-  shift 2
-  printf "%s\n" "$$" > "$session_file"
-  cd "$worktree" || exit 125
-  exec "$@"
-' peer-launch "$peer_session_file" "$worktree" \
-  claude -p --safe-mode --tools "Read,Glob,Grep" --disallowedTools "mcp__*" \
-  --add-dir "$invocation_dir" --output-format json \
-  < "$prompt_file" > "$outfile" 2>&1 &
-peer_wait_pid=$!
+if (umask 077 && : > "$peer_session_file"); then
+  setsid --fork --wait sh -c '
+    session_file=$1
+    worktree=$2
+    shift 2
+    printf "%s\n" "$$" > "$session_file" || exit 125
+    cd "$worktree" || exit 125
+    exec "$@"
+  ' peer-launch "$peer_session_file" "$worktree" \
+    claude -p --safe-mode --tools "Read,Glob,Grep" --disallowedTools "mcp__*" \
+    --add-dir "$invocation_dir" --output-format json \
+    < "$prompt_file" > "$outfile" 2>&1 &
+  peer_wait_pid=$!
+else
+  peer_wait_pid=
+  peer_launch_status=125
+fi
 ```
 
-Store `peer_wait_pid` in that entry's record, poll briefly for its non-empty `peer_session_file`, require the contents to be a positive decimal PID, and store that value as the entry's `peer_pgid`. Never infer the group ID from the supervisor PID, because `setsid --fork` deliberately makes them different.
+Create each entry's `peer_session_file` as an empty, owner-only regular file before launch and do not launch that entry if preparation fails. Store `peer_wait_pid` in the entry's record, poll for the file to become non-empty, require its contents to be a positive decimal PID, and store that value as the entry's `peer_pgid`. Never infer the group ID from the supervisor PID, because `setsid --fork` deliberately makes them different. The PID-file write is the session's first operation and is checked, so `claude` cannot start unless the handoff succeeds. If a supervisor exits before a valid handoff, immediately `wait` for that entry's `peer_wait_pid` to reap it, record the launch failure (normally status 125 for the write or `cd` guard), and never advance or retry from that attempt.
 
-Use a loose roughly 12-minute timeout per entry, extending it when review size warrants. On normal completion, `wait` for that entry's supervisor. On timeout, run this cleanup in the entry's isolated context only after its `peer_pgid` has passed the numeric/positive check:
+Use a loose roughly 12-minute timeout per entry, extending it when review size warrants. After an entry's `peer_pgid` passes the numeric/positive check, define these helpers in that entry's isolated context. The negative PID operand targets the validated process group; omitting `--` is intentional because the Dash `kill` builtin rejects it. Keep this form for TERM, KILL, and every death probe:
 
 ```sh
-kill -TERM -- "-$peer_pgid" 2>/dev/null || :
-for _ in 1 2 3 4 5 6 7 8 9 10; do
-  kill -0 -- "-$peer_pgid" 2>/dev/null || break
-  sleep 1
-done
-if kill -0 -- "-$peer_pgid" 2>/dev/null; then
-  kill -KILL -- "-$peer_pgid" 2>/dev/null || :
+peer_group_alive() {
+  kill -0 "-$peer_pgid" 2>/dev/null
+}
+
+peer_stop_group() {
+  kill -TERM "-$peer_pgid" 2>/dev/null || :
   for _ in 1 2 3 4 5 6 7 8 9 10; do
-    kill -0 -- "-$peer_pgid" 2>/dev/null || break
+    peer_group_alive || break
     sleep 1
   done
-fi
-wait "$peer_wait_pid" 2>/dev/null || :
-! kill -0 -- "-$peer_pgid" 2>/dev/null
+  if peer_group_alive; then
+    kill -KILL "-$peer_pgid" 2>/dev/null || :
+  fi
+  wait "$peer_wait_pid" 2>/dev/null || :
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    peer_group_alive || break
+    sleep 1
+  done
+  ! peer_group_alive
+}
+
+peer_finish_group() {
+  if wait "$peer_wait_pid"; then
+    peer_wait_status=0
+  else
+    peer_wait_status=$?
+  fi
+  if peer_group_alive; then
+    peer_stop_group || return 1
+  fi
+  ! peer_group_alive
+}
 ```
 
-The final command must succeed; otherwise that entry still has a group member, so treat cleanup as failed and do not retry or advance it until the member is gone. Apply this TERM → bounded wait → KILL → `wait` → group-death sequence independently to every timed-out entry. Retry a timeout or transient failure once with an entirely new invocation directory, prompt, outfile, artifact, session file, and process group, then forfeit that entry's opinion for the round. An auth/usage failure on a classify-at-first-invocation attempt makes the peer unavailable for all later entries and rounds. `claude -p` may emit nothing until completion; wait for both the Reviewer and peer before deciding this entry's outcome.
+On timeout, call that entry's `peer_stop_group`; on observed supervisor completion, call its `peer_finish_group` and interpret the saved `peer_wait_status` only after it succeeds. The final command on either path must succeed. `peer_stop_group` always performs TERM → bounded wait → KILL when needed → supervisor `wait` → bounded death check, and failure means that entry still has a group member: do not retry or advance it until the member is gone. Apply this verification independently on every completion path for every entry, not only timeouts. Retry a timeout or transient failure once with an entirely new invocation directory, prompt, outfile, artifact, session file, and process group, then forfeit that entry's opinion for the round. An auth/usage failure on a classify-at-first-invocation attempt makes the peer unavailable for all later entries and rounds. `claude -p` may emit nothing until completion; wait for both the Reviewer and peer before deciding this entry's outcome.
 
 Parse each peer's captured JSON only far enough to extract its final message, then read only both verdict lines for orchestration. Unintelligible peer output is a non-blocking forfeit. A round clears the review gate when the Reviewer passes and the peer either reports no unaddressed grounded findings or has an explicit forfeited, unavailable, or disabled outcome; both `blocking` and `minor` grounded peer findings gate. Only when the Reviewer passed and the peer alone would gate, cheaply spot-check each gate-deciding `file:line` and claim; discard nonexistent or self-evidently false references and note the discard. Do not summarize, merge, or rewrite either result.
 
