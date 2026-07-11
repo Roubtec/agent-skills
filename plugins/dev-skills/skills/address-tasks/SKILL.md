@@ -121,7 +121,11 @@ For a wave of tasks `T1..Tn`:
      artifact_dir="/absolute/path/to/peer-artifacts/task-slug/round-1"
      outfile="${artifact_dir}/peer-review.out"
      stderr_file="${artifact_dir}/peer-review.stderr"
-     prompt='Review the committed task using the required peer prompt contract.'
+     prompt="$(
+       cat <<'PEER_REVIEW_PROMPT'
+     <the complete peer prompt, including verbatim task content>
+     PEER_REVIEW_PROMPT
+     )"
 
      mkdir -p "${artifact_dir}"
 
