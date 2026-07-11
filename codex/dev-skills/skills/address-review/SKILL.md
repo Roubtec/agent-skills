@@ -192,7 +192,46 @@ Give it: every unresolved thread and explicitly included standalone item verbati
 
 Give the peer the worktree path, effective review base, current branch, and every review item plus proposed disposition verbatim — the same evidence as the Reviewer, but not the fixer's report, your reasoning, drafted rationales, or the Reviewer's execution steps. Its prompt must instruct it to read the actual files, edit nothing, and verify dispositions in the committed code: fixes and already-addressed claims hold, push-backs are technically justified, and deferrals point at a committed task file that covers the concern. It may do a read-only quality pass, but must not run builds/tests; that remains the Reviewer's job. Require exactly `VERDICT: PASS | ISSUES`, followed for Issues by numbered findings tagged `blocking` or `minor`, each with `file:line` and a one-line rationale.
 
-Before launching the peer CLI process, create a unique directory outside the worktree for this invocation and attempt; never reuse or share that directory. Write the prompt verbatim to a file there without evaluating it, and write `git -C <worktree> log --oneline <base>..HEAD` plus `git -C <worktree> diff <base>...HEAD` from this exact worktree to a read-only diff artifact in that same directory. Include the artifact path in the prompt and grant only this invocation directory with `--add-dir`; without that grant an out-of-cwd Read can be auto-denied, while granting a shared parent directory would let concurrent peers cross-read another invocation. Launch from this exact worktree in `--safe-mode` to disable user- and project-level instructions, skills, plugins, hooks, MCP servers, and other customizations, and feed the prompt through stdin so review-controlled backticks or `$()` syntax never reaches shell evaluation: `(cd <worktree> && claude -p --safe-mode --tools "Read,Glob,Grep" --disallowedTools "mcp__*" --add-dir <invocation-dir> --output-format json < <prompt-file> > <outfile> 2>&1) &`. Managed hooks and organization settings policy can still apply under `--safe-mode`, so an operator in a managed environment must disable peer opinions or first ensure those hooks cannot mutate the worktree before launching a peer concurrently with the Reviewer. Unless the configured or default effort is already known to be `high` or stronger (`high`, `xhigh`, `max`, or `ultracode`), insert `--effort high` immediately after `-p`; never put bracketed optional tokens in the command. Shell-quote every generated path when replacing the placeholders, keep `--safe-mode` and both read-only tool guard flags, and never pass permission-bypass flags. Capture the background job's PID. Use a loose roughly 12-minute timeout, extending it when review size warrants; on timeout, terminate the entire background job including any descendant `claude` process, wait for it to exit, and confirm it is gone before retrying or moving on. Retry a timeout or transient failure once with an entirely new invocation directory, prompt, outfile, and artifact, then forfeit that round. An auth/usage failure on a classify-at-first-invocation attempt marks the peer unavailable for later rounds. `claude -p` may print nothing until completion; wait for both Reviewer and peer before deciding the round.
+Before launching the peer CLI process, create a unique directory outside the worktree for this invocation and attempt; never reuse or share that directory. Write the prompt verbatim to a file there without evaluating it, and write `git -C <worktree> log --oneline <base>..HEAD` plus `git -C <worktree> diff <base>...HEAD` from this exact worktree to a read-only diff artifact in that same directory. Include the artifact path in the prompt and grant only this invocation directory with `--add-dir`; without that grant an out-of-cwd Read can be auto-denied, while granting a shared parent directory would let concurrent peers cross-read another invocation. Managed hooks and organization settings policy can still apply under `--safe-mode`, so an operator in a managed environment must disable peer opinions or first ensure those hooks cannot mutate the worktree before launching a peer concurrently with the Reviewer. Unless the configured or default effort is already known to be `high` or stronger (`high`, `xhigh`, `max`, or `ultracode`), insert `--effort high` immediately after `-p`; never put bracketed optional tokens in the command. Shell-quote every generated path when replacing the placeholders, keep `--safe-mode` and both read-only tool guard flags, and never pass permission-bypass flags.
+
+Launch the peer in a dedicated session and process group; do not use a plain background subshell, because killing that subshell can orphan `claude` or its descendants. Require `setsid` for this path (otherwise disable/forfeit the peer), assign the worktree, invocation directory, prompt, and output paths to the shell variables below, and use this launch shape; `--fork --wait` keeps a waitable supervisor alive, while the inner shell records the distinct session/process-group leader before it becomes `claude`:
+
+```sh
+peer_session_file="$invocation_dir/session.pid"
+setsid --fork --wait sh -c '
+  session_file=$1
+  worktree=$2
+  shift 2
+  printf "%s\n" "$$" > "$session_file"
+  cd "$worktree" || exit 125
+  exec "$@"
+' peer-launch "$peer_session_file" "$worktree" \
+  claude -p --safe-mode --tools "Read,Glob,Grep" --disallowedTools "mcp__*" \
+  --add-dir "$invocation_dir" --output-format json \
+  < "$prompt_file" > "$outfile" 2>&1 &
+peer_wait_pid=$!
+```
+
+Poll briefly for a non-empty `peer_session_file`, require its contents to be a positive decimal PID, and save that value as `peer_pgid`; do not infer it from `peer_wait_pid`, because `setsid --fork` deliberately makes the wait supervisor and session leader different processes. Use a loose roughly 12-minute timeout, extending it when review size warrants. On normal completion, `wait "$peer_wait_pid"`. On timeout, run this cleanup only after `peer_pgid` has passed the numeric/positive check:
+
+```sh
+kill -TERM -- "-$peer_pgid" 2>/dev/null || :
+for _ in 1 2 3 4 5 6 7 8 9 10; do
+  kill -0 -- "-$peer_pgid" 2>/dev/null || break
+  sleep 1
+done
+if kill -0 -- "-$peer_pgid" 2>/dev/null; then
+  kill -KILL -- "-$peer_pgid" 2>/dev/null || :
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    kill -0 -- "-$peer_pgid" 2>/dev/null || break
+    sleep 1
+  done
+fi
+wait "$peer_wait_pid" 2>/dev/null || :
+! kill -0 -- "-$peer_pgid" 2>/dev/null
+```
+
+The final command must succeed; otherwise a group member survived, so treat cleanup as failed and do not retry or advance until it is gone. This TERM → bounded wait → KILL → `wait` → group-death sequence is mandatory on every timeout. Retry a timeout or transient failure once with an entirely new invocation directory, prompt, outfile, artifact, session file, and process group, then forfeit that round. An auth/usage failure on a classify-at-first-invocation attempt marks the peer unavailable for later rounds. `claude -p` may print nothing until completion; wait for both Reviewer and peer before deciding the round.
 
 Parse the peer's captured JSON only far enough to extract its final message, then read only the two verdict lines for orchestration. Unintelligible peer output is a non-blocking forfeit. A round clears the review gate when the Reviewer passes and the peer either reports no unaddressed grounded findings or has an explicit forfeited, unavailable, or disabled outcome; both `blocking` and `minor` grounded peer findings gate. Only when the Reviewer passed and peer findings alone would gate, cheaply spot-check each finding's `file:line` and factual claim; discard self-evidently false or nonexistent references and note that discard. Do not summarize, merge, or rewrite feedback: when another fix round is needed, give the fresh Fixer the complete results verbatim as labeled `Reviewer findings` and `Peer (claude) findings` blocks so it can reconcile overlap or conflict. A pushed-back peer claim is adjudicated by the next fresh Reviewer.
 
