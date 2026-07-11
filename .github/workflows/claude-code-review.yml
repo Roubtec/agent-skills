@@ -12,6 +12,11 @@ on:
 
 jobs:
   claude-review:
+    # Same-repo guard: secrets.CLAUDE_CODE_OAUTH_TOKEN isn't available to
+    # `pull_request` runs triggered from a fork, so without this the job
+    # would just fail (or the action would skip) on every external PR.
+    if: github.event.pull_request.head.repo.full_name == github.repository
+
     # Optional: Filter by PR author
     # if: |
     #   github.event.pull_request.user.login == 'external-contributor' ||
