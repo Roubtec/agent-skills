@@ -5,7 +5,7 @@ description: Address the maintainer-vetted review feedback on one pull request �
 
 Address the review feedback on a single pull request, end to end.
 
-**Arguments:** `[PR#] [rebase on top of <branch>] [no-push] [push] [hands-off] [ping-codex] [ping-claude] [ping-copilot] [ping-contributing]`
+**Arguments:** `[PR#] [rebase on top of <branch>] [no-push] [push] [hands-off] [peer-opinions=off] [ping-codex] [ping-claude] [ping-copilot] [ping-contributing]`
 
 Explicit Codex invocation uses `$address-review`; natural-language equivalents are fine.
 
@@ -27,6 +27,7 @@ All arguments are optional and parsing is **lenient** — accept commas, `&`, an
 | `no-push` | **Local-only run** — make commits, but do **not** mutate the PR at all (no push, no replies/resolves, no summary comment, no ping). This was the default until now; it is now the explicit way to ask for a dry run / inspect-only pass. The final report still captures every disposition so a later push turn can replay it. |
 | `push` | Push the branch to the PR's actual head repository/ref and perform all PR-side communication (replies, resolves, summary comment) — but **ping no reviewer**. Use it to publish fixes quietly, without summoning a fresh review round. (Normal push for a fast-forward; explicit `--force-with-lease=<ref>:<expected-oid>` only when history was rewritten.) |
 | `hands-off` | Run with no user interaction — best-effort to completion, documenting every skipped/blocked item in the final report. See "Hands-off mode". Typically how a parallel review orchestrator invokes this skill in a subagent. |
+| `peer-opinions=off` | Disable the best-effort `claude` second opinion for this run. By default it runs beside every fresh Reviewer round while the peer remains available. |
 | `ping-codex` | After a push that advances the PR branch (new commits or rewritten history), post a dedicated top-level `@codex review` comment to summon a fresh review round. **Implies `push`**, but skip the ping on an "Everything up-to-date" no-op push. |
 | `ping-claude` | After a push that advances the PR branch, post a dedicated top-level `@claude review` comment. **Implies `push`**, but skip the ping on an "Everything up-to-date" no-op push. |
 | `ping-copilot` | After a push that advances the PR branch, request a fresh Copilot review via `gh pr edit <PR#> --add-reviewer @copilot` (the canonical CLI request; needs gh ≥ 2.88.0) — **not** an `@copilot review` comment, which drives Copilot's coding agent (it can start editing the branch) rather than its reviewer. **Implies `push`**, but skip on an "Everything up-to-date" no-op push. Tested working: `--add-reviewer @copilot` re-requests Copilot's review even on a PR it already reviewed (it does **not** silently no-op), and it never misfires into the coding agent the way an `@copilot` comment would. |
@@ -55,15 +56,16 @@ All arguments are optional and parsing is **lenient** — accept commas, `&`, an
 ## Architecture
 
 At top level, address ordinary feedback **inline** and delegate only large or independent rework.
-Then hand verification to a **fresh, independent reviewer subagent**.
+Then hand verification to a **fresh, independent reviewer subagent** and, by default, an independent best-effort `claude` peer.
 
-Two top-level subagent roles:
+Two top-level subagent roles plus one CLI peer:
 
 - **Fixer** (optional) — a fresh `worker` subagent that handles a large, multi-file, or exploratory fix for one or more related comments. Skip it for small surgical fixes you can do directly.
 - **Reviewer** (default before any push) — a fresh `explorer` subagent that receives every unresolved thread and explicitly included standalone item verbatim, plus the proposed disposition labels, but **not** your implementation reasoning; it independently confirms that each disposition is sound in the committed code and performs a quality pass on the changed files. This is the `address-tasks-serialized` reviewer pattern.
+- **Peer (`claude`, best-effort)** — a read-only CLI review launched in the background at the same moment as the Reviewer. It receives the same disposition context but no implementation reasoning, examines code without running builds/tests, and returns an independent verdict. `peer-opinions=off`, unavailability, timeout, or unintelligible output forfeits only that opinion; a coherent, grounded finding is first-class.
 
 > **Critical — one checkout-dependent agent at a time; Codex subagents share your working tree.**
-> Unless explicitly assigned distinct git worktrees, subagents operate on the same checked-out branch as the orchestrator. Never spawn two checkout-dependent subagents in the same natural-language turn or tool-call batch, and never spawn the reviewer until the fixer's commits have landed. Spawn one, wait for it, close it, then spawn the next. A reviewer racing unfinished work can inspect an empty or partial branch and falsely pass it.
+> Unless explicitly assigned distinct git worktrees, subagents operate on the same checked-out branch as the orchestrator. Never spawn two checkout-dependent subagents in the same natural-language turn or tool-call batch, and never spawn the reviewer until the fixer's commits have landed. Spawn one, wait for it, close it, then spawn the next. A reviewer racing unfinished work can inspect an empty or partial branch and falsely pass it. The sole concurrency exception is the examination-only `claude` peer launched beside the Reviewer after the tree is clean and committed: two readers are safe, while the Reviewer alone owns build/typecheck execution.
 
 > **Fix-ups and re-reviews always use a fresh subagent spawn**, never `send_input` to continue a prior worker or reviewer. Fresh context with no attachment to the earlier fix is intentional.
 
@@ -87,9 +89,9 @@ Codex subagents must not be assumed to spawn nested subagents.
 `address-reviews` therefore uses this skill in two internal modes; these are orchestrator controls, not normal user flags:
 
 - **`delegated-fix`** — run steps 0–5 directly in the assigned worktree, without spawning helpers, then stop before review/publication and return a complete review packet: PR/head metadata, starting/final SHAs, every item verbatim with stable refs and proposed disposition, validation run, and any blocker.
-- **`publish-reviewed`** — receive that packet plus a fresh external reviewer's Pass verdict, verify the packet still matches the clean committed `HEAD`, then run only step 7 and return step 8's report. Refuse to edit code, re-triage, or publish without the packet and Pass verdict.
+- **`publish-reviewed`** — receive that packet plus a fresh external reviewer's Pass verdict and the peer outcome (no grounded findings, explicit forfeit/unavailability, or disabled), verify the packet still matches the clean committed `HEAD`, then run only step 7 and return step 8's report. Refuse to edit code, re-triage, or publish without this complete passing review gate.
 
-The worktree orchestrator owns the fresh reviewer and any fix-up rounds between these modes.
+The worktree orchestrator owns the fresh reviewer, peer invocation, and any fix-up rounds between these modes.
 
 ## Procedure
 
@@ -99,6 +101,7 @@ The worktree orchestrator owns the fresh reviewer and any fix-up rounds between 
 2. **No rebase already in progress** — check `git rev-parse --git-path rebase-merge` and `--git-path rebase-apply`. If either exists, stop and ask the user to finish or abort it first.
 3. **Confirm `gh` is authenticated** (`gh auth status`). Without it you cannot read threads, reply, resolve, or comment.
 4. **Record the starting branch and tip SHA** so you can describe exactly what changed in the final report and recover if needed.
+5. **Preflight the peer once for a standalone run, unless `peer-opinions=off`.** Run `command -v claude`; when missing, mark the peer unavailable. Otherwise run `claude auth status`: success marks it available; on failure, a set `ANTHROPIC_API_KEY` or output showing that this older CLI lacks the `auth status` subcommand means classify availability at the first real invocation, while any other failure marks it unavailable. In a classify-at-first-invocation path, an auth/usage failure marks the peer unavailable for the rest of the run. Unavailability never blocks; record its reason for one final-summary note. Skip this probe in `delegated-fix` and `publish-reviewed`: `address-reviews` preflights once in its shared bootstrap and supplies the peer outcome.
 
 ### Step 1 — Resolve and verify the PR
 
@@ -166,12 +169,12 @@ For the **deferred** items, write the follow-up task file(s) following the `writ
 
 Fixer subagent prompt should include: the relevant review comment(s) **verbatim**, the file/line locations, the branch name (and "verify you are on it"), an instruction to read `AGENTS.md` first, the same-pattern sweep instruction, commit/validation instructions, an instruction not to write to any shared task/plan tracker, and a request to report what it changed, any tradeoffs, and anything uncertain. Do **not** give it unrelated context.
 
-In `delegated-fix` mode, do not spawn a Fixer or Reviewer.
+In `delegated-fix` mode, do not spawn a Fixer or Reviewer and do not launch the peer; the batch orchestrator owns both review paths.
 Perform the fixes directly, leave the worktree clean with all intended changes committed, return the review packet defined above, and stop here.
 
 ### Step 6 — Verify with a fresh reviewer
 
-Once fixes are committed and the worktree is clean, spawn **one fresh `explorer` Reviewer subagent** (never concurrently with a fixer; only after commits land), wait for it, and close it after recording the result:
+Once fixes are committed and the worktree is clean, spawn **one fresh `explorer` Reviewer subagent** (never concurrently with a fixer; only after commits land) and, unless disabled or unavailable, launch the `claude` peer in the background at that same moment. Wait for both, then close the Reviewer after recording the results.
 
 Give it: every unresolved thread and explicitly included standalone item verbatim, each proposed disposition label (actionable-fixed / already-addressed / push-back / deferred-to-task / ambiguous), the effective review base, and the current branch. The effective review base is the requested rebase target when step 2 ran; otherwise it is `baseRefName`. Do **not** give it your implementation reasoning, drafted rationale, or the fixer's report. Tell it to:
 
@@ -181,15 +184,23 @@ Give it: every unresolved thread and explicitly included standalone item verbati
 - Do a quality pass on the changed files (logic correctness, error handling, edge cases, dead code, consistency, duplication, type safety) and check the same-pattern sweep did not miss a sibling occurrence.
 - Report **Pass** or a numbered, actionable **Issues** list. Edit nothing; write to no shared task/plan tracker.
 
-If the reviewer finds material gaps, re-triage the affected comments, then loop: a fresh `worker` Fixer with the verbatim findings when code must change, followed by a fresh `explorer` Reviewer. Wait for and close each before spawning the next. Allow at most **3 reviewer rounds total**, including the initial review. If issues persist after round 3, stop iterating, do **not** push, and surface the outstanding findings in the final report (and to the user if interactive).
+Give the peer the worktree path, effective review base, current branch, and every review item plus proposed disposition verbatim — the same evidence as the Reviewer, but not the fixer's report, your reasoning, drafted rationales, or the Reviewer's execution steps. Its prompt must instruct it to read the actual files, edit nothing, and verify dispositions in the committed code: fixes and already-addressed claims hold, push-backs are technically justified, and deferrals point at a committed task file that covers the concern. It may do a read-only quality pass, but must not run builds/tests; that remains the Reviewer's job. Require exactly `VERDICT: PASS | ISSUES`, followed for Issues by numbered findings tagged `blocking` or `minor`, each with `file:line` and a one-line rationale.
 
-### Step 7 — Publish (every run except `no-push`)
+Before launching the shell-less peer, write `git log --oneline <base>..HEAD` and `git diff <base>...HEAD` to a unique read-only diff artifact outside the worktree, alongside the peer outfile. Include the artifact path in the prompt and grant its containing directory explicitly with `--add-dir`; without that grant an out-of-cwd Read can be auto-denied. Launch from this exact worktree with a unique outfile per attempt: `(cd <worktree> && claude -p "<prompt>" --tools "Read,Glob,Grep" --disallowedTools "mcp__*" --add-dir <artifact-dir> --output-format json [--effort high] > <outfile> 2>&1) &`. Keep both guard flags after the prompt so the variadic options do not swallow it, never pass permission-bypass flags, and omit `--effort high` only when the configured effort is already known to be `high` or `xhigh` so a stronger default is not downgraded. Use a loose roughly 12-minute timeout, extending it when review size warrants; on timeout or transient failure retry once with a new outfile and artifact, then forfeit that round. An auth/usage failure on a classify-at-first-invocation attempt marks the peer unavailable for later rounds. `claude -p` may print nothing until completion; wait for both Reviewer and peer before deciding the round.
+
+Parse the peer's captured JSON only far enough to extract its final message, then read only the two verdict lines for orchestration. Unintelligible peer output is a non-blocking forfeit. A round passes only when the Reviewer passes and an intelligible peer has no unaddressed grounded findings; both `blocking` and `minor` peer findings gate. Only when the Reviewer passed and peer findings alone would gate, cheaply spot-check each finding's `file:line` and factual claim; discard self-evidently false or nonexistent references and note that discard. Do not summarize, merge, or rewrite feedback: when another fix round is needed, give the fresh Fixer the complete results verbatim as labeled `Reviewer findings` and `Peer (claude) findings` blocks so it can reconcile overlap or conflict. A pushed-back peer claim is adjudicated by the next fresh Reviewer.
+
+If either result leaves material gaps, re-triage the affected comments, then loop: a fresh `worker` Fixer with both verbatim finding blocks when code must change, followed by a fresh `explorer` Reviewer and peer round. Wait for and close each subagent before spawning the next. Allow at most **6 reviewer rounds total**, including the initial review; every fix-up round counts regardless of which reviewer triggered it. If issues persist after round 6, stop iterating, do **not** push, and surface both outstanding finding sets in the final report (and to the user if interactive).
+
+### Step 7 — Publish after the review gate (every run except `no-push`)
 
 If `no-push` was given this is a local-only run: **skip this entire step** — do not touch the PR. Go to step 8.
 
 Otherwise:
 
-In `publish-reviewed` mode, first require the supplied review packet, a fresh external reviewer Pass, and a clean committed `HEAD` equal to the packet's final SHA. If any differ, stop; do not re-triage or publish stale work.
+Do not enter publication unless the fresh Reviewer passed and the peer either returned no grounded findings, forfeited/unavailable, or was explicitly disabled. Any outstanding grounded peer finding — `blocking` or `minor` — returns to step 6 while rounds remain, or stops publication at the cap.
+
+In `publish-reviewed` mode, first require the supplied review packet, a fresh external reviewer Pass, the peer outcome satisfying that same gate, and a clean committed `HEAD` equal to the packet's final SHA. If any differ or the peer outcome is missing, stop; do not re-triage or publish stale work.
 
 1. **Re-check before publication:** require a clean worktree and no rebase in progress; re-fetch the PR and confirm it is still open, still points to the recorded head repository/ref, and its current `headRefOid` is the expected remote tip you are prepared to replace. Resolve the current branch's exact push remote/ref, verify they match that PR head, and fetch that exact head ref without moving the local branch so the expected commit object is available for the ancestry test — never assume `origin`, especially for fork PRs. If the PR head moved, the push target cannot be matched, or the branch has no usable push permission, stop and report instead of guessing.
 2. **Push:** if the expected remote tip is an ancestor of `HEAD`, use a normal explicit push (`git push <remote> HEAD:refs/heads/<headRefName>`). If history was rewritten, use an exact lease (`git push <remote> --force-with-lease=refs/heads/<headRefName>:<expected-head-oid> HEAD:refs/heads/<headRefName>`). If the lease is rejected, **never** escalate to bare `--force`; stop and report because the remote moved under you.
@@ -214,6 +225,7 @@ Always produce a report (this is the only output of a no-push run, and it double
 - Deferrals, each with its committed task file, and whether it was maintainer-directed or agent-proposed.
 - Proactive same-pattern fixes made beyond the literal comments.
 - Reviewer outcome and how many iterations it took (and whether it hit the cap).
+- Peer participation and outcome; note an unavailable/disabled/round-forfeited peer once with its reason, plus any discarded ungrounded findings.
 - Anything blocked or skipped for lack of an authoritative decision, with what's needed to unblock.
 
 ## Hands-off mode
@@ -299,7 +311,7 @@ gh pr edit NUMBER --add-reviewer @copilot
 - [ ] Fixes done inline or via a fixer subagent (one checkout-dependent agent at a time); same-pattern sweep done in changed/related code.
 - [ ] Deferred items recorded as standalone task files per `write-tasks` conventions, numbered into the repo's task folder, committed on the current branch separately from code fixes.
 - [ ] Worktree clean and every intended change committed before review and publication.
-- [ ] Fresh independent reviewer checked every disposition after commits landed; feedback loop capped at 3 reviewer rounds.
+- [ ] Fresh independent Reviewer and best-effort `claude` peer checked every disposition after commits landed; both verdicts were collected before each outcome; grounded blocking and minor findings gated publication; feedback loop capped at 6 reviewer rounds.
 - [ ] Publish run (the default; suppressed only by `no-push`): PR head and exact push target re-verified; normal push used for fast-forward or explicit expected-OID lease used for rewrite (never bare `--force`); threads re-read after push; replies + resolves applied idempotently; push-backs resolved and flagged; deferred threads replied with their committed task file; ambiguous/new items left open; Summary comment posted without stray `@` mentions; pings as separate dedicated actions (codex/claude → a comment; copilot → `gh pr edit --add-reviewer @copilot`, never an `@copilot review` comment) only after summary success **and only when new commits were actually pushed** (skip pings on a no-op push so an automated loop can terminate). Ping set: a bare run (or `ping-contributing`) pings the contributing bots; an explicit `push` pings nobody; a named `ping-*` pings exactly those (filtered to contributors when `ping-contributing` is also present).
 - [ ] `no-push` run: zero PR mutations; final report maps every thread to its disposition for a later push turn.
-- [ ] Final report covers rebase outcome, dispositions with stable refs, push-backs, proactive fixes, reviewer result, and blocked/skipped items.
+- [ ] Final report covers rebase outcome, dispositions with stable refs, push-backs, proactive fixes, Reviewer and peer outcomes, and blocked/skipped items.
