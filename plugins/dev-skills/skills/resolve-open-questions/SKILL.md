@@ -195,16 +195,19 @@ offering the change for delivery:
 - Wait for both reviews before deciding the round. Unavailable, timed-out after retry, failed, or
   unintelligible peer output forfeits only that opinion and never blocks; keep quiet per invocation
   and note the reason once in the wrap-up summary. Read the two verdicts without summarizing or
-  rewriting their findings. When the own reviewer passes but peer findings alone would gate, cheaply
-  confirm each finding's file/line exists and its claim is not self-evidently false. Pure noise may
-  be pushed back; every grounded finding, `blocking` and `minor` alike, sends the change through a
-  fresh fix subagent and then a fresh reviewer, with both reviewers' findings supplied verbatim as
-  labeled blocks. A disputed factual claim is adjudicated by that fresh reviewer. When the dispute
-  is a judgment call, prefer surfacing the peer finding verbatim in the item's brief for the
-  maintainer to decide instead of spending more subagent rounds. The peer informs; the maintainer
-  still makes every judgment call.
-- Do not record the item as applied or offer the change for delivery while any grounded peer finding
-  on that item remains unaddressed.
+  rewriting their findings. A round passes only when the own reviewer reports PASS and no grounded
+  peer finding remains unaddressed. When the own reviewer reports issues, send the change through a
+  fresh fix subagent with its issues and any concurrent peer feedback supplied verbatim as labeled
+  blocks, then rerun both reviews. When the own reviewer passes but peer findings alone would gate,
+  cheaply confirm each finding's file/line exists and its claim is not self-evidently false. Pure
+  noise may be pushed back; every grounded finding, `blocking` and `minor` alike, sends the change
+  through a fresh fix subagent with both reviewers' findings supplied verbatim as labeled blocks,
+  then through both reviews again. A disputed factual claim is adjudicated by that fresh reviewer.
+  When the dispute is a judgment call, prefer surfacing the peer finding verbatim in the item's brief
+  for the maintainer to decide instead of spending more subagent rounds. The peer informs; the
+  maintainer still makes every judgment call.
+- Do not record the item as applied or offer the change for delivery unless the latest own review
+  reports PASS and no grounded peer finding on that item remains unaddressed.
 
 Keep a per-item ledger: the decision, where it landed (file/commit/record), or how the item was
 refined.
@@ -355,10 +358,10 @@ and scan recent run reports / commit messages for discovered findings.
 - [ ] Adjacent-invariant audit run whenever a resolution relies on/introduces one; findings reported
       before implementing.
 - [ ] Code-writing decisions verified (tests, build, isolated validation) through a fresh review +
-      best-effort peer opinion, with grounded findings fixed or surfaced for the maintainer's judgment
-      before delivery; review-case fix-now items additionally use a worktree per owning branch and
-      **fast-forward** publish (thread reply, Summary, re-ping), with no atomic change split across
-      branches.
+      best-effort peer opinion; grounded factual `blocking` and `minor` findings are fixed and freshly
+      reviewed before delivery, while only disputed judgment calls may be surfaced for the maintainer's
+      judgment; review-case fix-now items additionally use a worktree per owning branch and
+      **fast-forward** publish (thread reply, Summary, re-ping), with no atomic change split across branches.
 - [ ] Review-case deferred items: task numbers reused (no orphans), chosen option locked, rejected
       options demoted, implemented tasks archived to `tasks/done/`; keep-standalone vs bind decided
       with the maintainer.
