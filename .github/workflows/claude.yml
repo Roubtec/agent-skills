@@ -78,8 +78,8 @@ jobs:
           #   - mcp__github_inline_comment__create_inline_comment — post each
           #                      review finding as its own line-anchored,
           #                      independently resolvable thread instead of
-          #                      folding everything into one comment (see "When
-          #                      Asked to Do a Code Review" in the repo-root
+          #                      folding everything into one comment (see "Code
+          #                      Review Format Guidelines" in the repo-root
           #                      CLAUDE.md)
           # Git operations (staging, committing the fixup, pushing back to the
           # PR branch) are handled by claude-code-action itself, so we don't
