@@ -354,10 +354,11 @@ and scan recent run reports / commit messages for discovered findings.
       wrap-up, finish + persist the current item, then stop with a resume-ready ledger.
 - [ ] Adjacent-invariant audit run whenever a resolution relies on/introduces one; findings reported
       before implementing.
-- [ ] Code-writing decisions verified (tests, build, isolated validation) through a fresh review;
-      review-case fix-now items: worktree per owning branch → subagent implement → fresh review +
-      best-effort peer opinion → grounded findings fixed or surfaced for the maintainer's judgment →
-      **fast-forward** publish (thread reply, Summary, re-ping); no atomic change split across branches.
+- [ ] Code-writing decisions verified (tests, build, isolated validation) through a fresh review +
+      best-effort peer opinion, with grounded findings fixed or surfaced for the maintainer's judgment
+      before delivery; review-case fix-now items additionally use a worktree per owning branch and
+      **fast-forward** publish (thread reply, Summary, re-ping), with no atomic change split across
+      branches.
 - [ ] Review-case deferred items: task numbers reused (no orphans), chosen option locked, rejected
       options demoted, implemented tasks archived to `tasks/done/`; keep-standalone vs bind decided
       with the maintainer.
