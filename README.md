@@ -90,4 +90,4 @@ This repo runs Claude directly against its own PRs via two workflows in `.github
 Both require a `CLAUDE_CODE_OAUTH_TOKEN` repo secret.
 
 - **`claude.yml`** — a mention bot. Comment `@claude ...` on an issue or PR (or in a PR review) to summon it; only OWNER/MEMBER/COLLABORATOR authors can trigger it, since the job runs with write permissions.
-- **`claude-code-review.yml`** — runs Anthropic's `code-review` plugin automatically on every PR open/update and posts inline review comments; skipped on PRs from forks, which don't receive the secret.
+- **`claude-code-review.yml`** — runs Anthropic's `code-review` plugin automatically when a PR is opened (or reopened / marked ready for review) and posts inline review comments; later pushes are not auto-reviewed — ask for a re-review with an `@claude` mention. Skipped on PRs from forks, which don't receive the secret.

@@ -2,7 +2,13 @@ name: Claude Code Review
 
 on:
   pull_request:
-    types: [opened, synchronize, ready_for_review, reopened]
+    # No `synchronize`: the code-review plugin stops when Claude has already
+    # commented on the PR, so per-push runs after the first review would
+    # self-skip anyway — and we don't want a full review per push regardless.
+    # Re-reviews are on demand via an @claude mention (claude.yml). To bring
+    # back on-push reviews, re-add `synchronize` here and solve the plugin's
+    # already-commented skip (e.g. a prompt override) at the same time.
+    types: [opened, ready_for_review, reopened]
     # Optional: Only run on specific file changes
     # paths:
     #   - "src/**/*.ts"
@@ -32,8 +38,10 @@ jobs:
       issues: read
       id-token: write
     concurrency:
-      # A rapid string of pushes to the same PR only needs a review of the
-      # latest one; cancel stale in-flight reviews rather than queuing them.
+      # One review run per PR at a time; mostly moot without `synchronize`
+      # (open/reopen/ready-for-review events rarely overlap), but kept as a
+      # cheap guard — and it becomes load-bearing again if `synchronize`
+      # is ever re-added.
       group: claude-review-${{ github.event.pull_request.number }}
       cancel-in-progress: true
 
