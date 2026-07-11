@@ -105,8 +105,13 @@ For a wave of tasks `T1..Tn`:
 1. **Create a worktree per task** from the main tree (orchestrator calls; safe to run while other waves' subagents are active — they touch only their own worktrees):
 
    ```bash
-   git worktree add "$WT_BASE/<task-slug>" -b <branch-name> <base-branch>   # new branch off the base
-   git worktree add "$WT_BASE/<task-slug>" <branch-name>                    # rerun: attach the existing branch
+   task_slug="001-short-name"
+   branch_name="task/001-short-name"
+   base_branch="main"
+   worktree="$WT_BASE/$task_slug"
+
+   git worktree add "$worktree" -b "$branch_name" "$base_branch" # new branch off the base
+   git worktree add "$worktree" "$branch_name"                    # rerun: attach the existing branch
    ```
 
    `$WT_BASE` is the base directory chosen in Bootstrap. Make this **rerun-safe**: check `git worktree list` first — if the task's worktree already exists, it must have the expected branch checked out (reuse it, prior commits intact); if it is on a different branch, or the base does not resolve, **stop and report rather than guessing**. If the branch already exists from an interrupted prior run, attach it (second form) instead of creating it with `-b`. If a `wt-enter <slug> <branch> <base>` helper is on PATH, prefer it — it encodes exactly these checks and prints the worktree's absolute path. Use a stable, collision-free slug per task (e.g. the task number + short name). The worktree's absolute path is what you hand to that task's subagents.
@@ -158,15 +163,23 @@ Independent tasks in the same wave run in **separate worktrees**, so two of them
 - **Catch it before the PRs.** After a wave's tasks pass review but **before** opening their PRs, compare what each sibling branch newly added:
 
   ```bash
+  wave_branches=("task/001-first" "task/002-second")
+  declare -A branch_bases=(
+    ["task/001-first"]="main"
+    ["task/002-second"]="main"
+  )
+
   # Exact same new path.
-  for b in <wave-branch-1> <wave-branch-2> ...; do
-    git diff --diff-filter=A --name-only <that-branch's-base>...$b
+  for branch in "${wave_branches[@]}"; do
+    base="${branch_bases[$branch]}"
+    git diff --diff-filter=A --name-only "$base...$branch"
   done | sort | uniq -d
 
   # Same new basename at any path; inspect repeated first columns.
-  for b in <wave-branch-1> <wave-branch-2> ...; do
-    git diff --diff-filter=A --name-only <that-branch's-base>...$b |
-      awk -v branch="$b" '{ n=split($0, p, "/"); print p[n] "\t" branch "\t" $0 }'
+  for branch in "${wave_branches[@]}"; do
+    base="${branch_bases[$branch]}"
+    git diff --diff-filter=A --name-only "$base...$branch" |
+      awk -v branch="$branch" '{ n=split($0, p, "/"); print p[n] "\t" branch "\t" $0 }'
   done | sort
   ```
 
@@ -202,7 +215,7 @@ Include in each reviewer prompt:
 
 - The same **WORKTREE CONTRACT** first: "Your worktree is `<absolute worktree path>`. `cd` into it and confirm `git rev-parse --show-toplevel` matches before doing anything. Review only this worktree."
 - **The full task file content** (same source of truth the implementer got).
-- **The PR base branch** for this task, so the reviewer scopes with `git -C <worktree> diff --name-only <base>...HEAD`. The implementation is already committed on the current branch in this worktree — the reviewer must read the actual files and must NOT conclude "no implementation" without first confirming the diff is genuinely empty (an empty diff at this stage signals a wrong worktree/branch, not real absence — say so rather than reviewing nothing).
+- The **PR base branch** for this task. After assigning it and the task worktree to the shell variables `base` and `worktree`, the reviewer scopes with `git -C "$worktree" diff --name-only "$base"...HEAD`. The implementation is already committed on the current branch in this worktree — the reviewer must read the actual files and must NOT conclude "no implementation" without first confirming the diff is genuinely empty (an empty diff at this stage signals a wrong worktree/branch, not real absence — say so rather than reviewing nothing).
 - Instruction to run a **full build / type-check first** (a failure is an automatic blocker), then check each acceptance criterion against the code, then a code-quality pass over the touched files using the inherited checklist (logic, error handling, edge cases, dead code, consistency, duplication, type safety).
 - Reporting format: **Pass** (all criteria met, build passes, no material issues) or **Issues** (numbered, each with category + file/line + what's wrong + what to change).
 - **Do NOT edit, create, or delete any files. Do NOT read commit messages or `git diff` content** — list touched files for scoping only, then read whole files. Be strict but fair; flag real gaps, not style nits. Put any follow-up suggestions in the report only.
