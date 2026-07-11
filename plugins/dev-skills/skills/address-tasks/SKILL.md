@@ -18,7 +18,7 @@ This skill is the parallel sibling of `address-tasks-serialized`. The roles (orc
 A git worktree removes that constraint. Each worktree is a **separate working directory with its own `HEAD` and index** (`.git/worktrees/<name>/`), while sharing the one common object store (`.git/objects`, append-only and concurrency-safe) and refs (lock-protected). So:
 
 - **Two agents in two different worktrees never corrupt each other.** They touch different files, different indexes, different HEADs. Concurrent commits land on different branches under separate ref locks.
-- Therefore the base skill's "one agent at a time" rule is replaced by: **own-harness agents that operate in distinct worktrees may run concurrently; own-harness agents sharing one worktree must be serialized.** The inherited examination-only peer CLI is the deliberate exception during review.
+- Therefore the base skill's "one agent at a time" rule is replaced by: **checkout-dependent `Agent` subagents that operate in distinct worktrees may run concurrently; checkout-dependent `Agent` subagents sharing one worktree must be serialized.** The inherited examination-only peer CLI is the deliberate exception during review.
 - **Within a single task, the implementer and its reviewer still share that task's worktree** — so they still run one-at-a-time, implementer first. The parallelism is strictly *across* independent tasks, never between a task's own implementer and reviewer.
 
 ### Durability
@@ -31,7 +31,7 @@ Worktrees are disposable working directories: the shared `.git` object store kee
 
 ## Session Bootstrap (run once, before any worktree)
 
-Do this in the **main working tree** before creating worktrees. The same bootstrap serves this skill and `address-reviews`:
+Do this in the **main working tree** before creating worktrees. The worktree checks in steps 1–4 also serve `address-reviews`; step 5 is required only when this skill runs with peer opinions enabled:
 
 1. **Choose the worktree base directory** (`$WT_BASE`): an ignored directory such as `.worktrees/` at the repo root (if it isn't already ignored, list it in `.git/info/exclude` rather than editing `.gitignore` mid-run — an ignore edit dirties the main checkout), or a directory outside the repository.
 
