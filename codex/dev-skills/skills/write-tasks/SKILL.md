@@ -18,7 +18,7 @@ The output should help a worker understand what to build, why it matters, what c
 Writing the task files and committing them on the **current branch** is the entire git footprint of this skill. Whatever branch is checked out right now is where the task files land.
 
 - **Never create a new branch** for the tasks — stay on the branch that is already checked out.
-- Follow-up tasks recorded for in-flight work (review deferrals, decision records) belong **on the branch that prompted them** — being on a PR or task branch when invoked is intended, not a mistake: merging that branch then also lands the record of its loose ends. Do not relocate such tasks to a fresh branch off `main`; they would only need manual re-homing onto the real branch later.
+- Follow-up tasks recorded for in-flight work (review follow-ups, decision records) belong **on the branch that prompted them** — being on a PR or task branch when invoked is intended, not a mistake: merging that branch then also lands the record of its loose ends. Do not relocate such tasks to a fresh branch off `main`; they would only need manual re-homing onto the real branch later.
 - **Never push.** Do not run `git push` for any reason, and most emphatically never push to `main` or the repository's default branch. Task files are local artifacts an implementer picks up later; publishing them is a separate, explicit decision the user makes, not part of this skill.
 - If the checked-out branch happens to **be** `main` or the default branch, still commit locally only — committing task files onto a local `main` is fine, pushing them is not.
 - Commit only the task files you wrote — a focused commit with a clear message; do not sweep unrelated working-tree changes into it.
@@ -58,7 +58,9 @@ Keep work together when splitting would force brittle interfaces or excessive co
 
 ## File naming and ordering
 
-Number files as `{phase}-{taskNo}-{brief-kebab-name}.md` to make execution order obvious.
+Honor any explicit target folder and/or numbering supplied by the user or invoking skill. Otherwise, default to the repo's task folder (commonly `tasks/`), create it if missing, and follow the repo's documented numbering house style (for example, `tasks/AGENTS.md`) when continuing the sequence.
+
+When the repo has no documented numbering style, number files as `{phase}-{taskNo}-{brief-kebab-name}.md` to make execution order obvious.
 Examples: `A-01-scaffold-project.md`, `02-12-hook-keyboard-shortcuts.md`.
 
 If there are existing task files in the target folder, continue the numbering sequence.
