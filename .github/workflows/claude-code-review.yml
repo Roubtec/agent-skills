@@ -56,10 +56,21 @@ jobs:
 
       # Pin the review contract to the PR base commit, so a PR that edits the
       # contract is still reviewed under the rules it proposes to replace.
+      # The fallback only bootstraps the PR that initially introduces the
+      # contract, whose base commit cannot contain the file yet.
       - name: Stage review-format contract
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: git show "${BASE_SHA}:.github/claude/review-format.md" > "$RUNNER_TEMP/review-format.md"
+        run: |
+          contract_path=.github/claude/review-format.md
+          staged_contract="$RUNNER_TEMP/review-format.md"
+
+          git cat-file -e "${BASE_SHA}^{commit}"
+          if git cat-file -e "${BASE_SHA}:${contract_path}" 2>/dev/null; then
+            git show "${BASE_SHA}:${contract_path}" > "$staged_contract"
+          else
+            cp "$contract_path" "$staged_contract"
+          fi
 
       # Not currently needed: this repo has no package.json / pnpm project
       # (mirrors claude.yml — see that file's comment). Uncomment together
