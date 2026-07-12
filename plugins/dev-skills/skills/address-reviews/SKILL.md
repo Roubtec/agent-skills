@@ -9,7 +9,7 @@ Address the review feedback on **several pull requests at once**, fanning each P
 
 This skill is the parallel batch front-end for `address-review`.
 It does **not** re-implement review-addressing — it sets up one isolated worktree per entry and uses `address-review`'s delegated fix and publish procedures, with a fresh orchestrator-owned reviewer and best-effort `codex` second opinion between them.
-Each batch entry is either a **PR number** (work the PR head from `origin`) or a **local branch name** (work *your* local ref exactly as it stands) — see "Resolving and checking out each entry" for the local-first rule that keeps a locally-rebased branch from being silently replaced by a stale `origin` copy.
+Each batch entry is either a **PR number** (resolve the PR head, preferring a usable same-named local branch before falling back to `origin`) or a **local branch name** (work *your* local ref exactly as it stands) — see "Resolving and checking out each entry" for the local-first rule that keeps a locally-rebased branch from being silently replaced by a stale `origin` copy.
 It borrows its worktree machinery (isolation model, Session Bootstrap, adaptive throttling, cleanup) wholesale from `address-tasks` — **read that skill for the rationale behind those pieces**; only the deltas are spelled out here.
 
 ## How this differs from address-tasks

@@ -58,6 +58,8 @@ Copilot's coding agent rather than its reviewer. **`ping-contributing`** carries
 that has gone quiet drops out of the loop — combined with explicit `ping-*` it filters that named set,
 supplied alone it falls back to the bots that reviewed.
 
+For any code-writing decision, whether generic or review-derived, the optional `peer-opinions=off` flag disables cross-harness second opinions. Otherwise, lazily preflight `codex` once per run when the first resolution needs an implementation: in the orchestrator's main working tree run `command -v codex`, then `codex login status`. A missing binary or failed login makes the peer unavailable, except that when `CODEX_API_KEY` is set a failed login probe defers classification to the first real invocation; an auth/usage failure there makes the peer unavailable for the rest of the run. Decision-only sessions perform no preflight and mention no peer forfeit in their summary.
+
 ## The core loop
 
 ### 1. Gather the work-list
@@ -165,9 +167,13 @@ Collect decisions across the whole list, then apply. The mechanics depend on the
 
 - **A decision that just records intent** (a product choice, a spec edit, a "leave as-is") → make
   the edit, leave nothing dangling, note where it landed.
-- **A decision that writes code** → implement it under whatever verification the repo expects
-  (tests, build/lint, isolated validation), through a fresh review before anything ships. For the
-  review-follow-up case the full machinery is in the review layer.
+- **A decision that writes code** → delegate the locked decision to a fresh implementation subagent in the worktree that owns the change, under whatever verification the repo expects (tests, build/lint, isolated validation), and require a clean commit before review.
+
+For **every code-writing decision**, run this review loop before recording the item as applied or offering the change for delivery:
+
+- Spawn a **fresh-eyes reviewer** against the committed change (it edits nothing; PASS or numbered issues). At the same moment, when peer opinions are enabled and the lazy preflight did not mark the peer unavailable, construct the prompt as data in `prompt`, then launch `codex exec --sandbox read-only --cd "$worktree" -o "$outfile" -c mcp_servers={} "$prompt" < /dev/null 2> "$progressfile" &` in the background against that implementation worktree and commit range. Request high reasoning effort with `-c model_reasoning_effort=high` when the configured effort is not known to be high/xhigh. The prompt carries the worktree, commit range, relevant decision context verbatim, and instructions to read the actual files, run no builds or tests, and edit nothing; require `VERDICT: PASS | ISSUES`, followed by numbered findings tagged `blocking` or `minor`, each with `file:line` and a one-line rationale. Capture progress stderr separately, allow a loose approximately twelve-minute timeout (longer when activity justifies it), and retry a timeout or transient failure once. Invoke the peer again on every fix-up review round while it remains available.
+- Wait for both reviews before deciding the round. Unavailable, timed-out after retry, failed, or unintelligible peer output forfeits only that opinion and never blocks; keep quiet per invocation and note the reason once in the wrap-up summary. Read the two verdicts without summarizing or rewriting their findings. A round passes only when the own reviewer reports PASS and no grounded peer finding remains unaddressed. When the own reviewer reports issues, send the change through a fresh fix subagent with its issues and any concurrent peer feedback supplied verbatim as labeled blocks, then rerun both reviews. When the own reviewer passes but peer findings alone would gate, cheaply confirm each finding's file/line exists and its claim is not self-evidently false. Pure noise may be pushed back; every grounded finding, `blocking` and `minor` alike, sends the change through a fresh fix subagent with both reviewers' findings supplied verbatim as labeled blocks, then through both reviews again. A disputed factual claim is adjudicated by that fresh reviewer. When the dispute is a judgment call, prefer surfacing the peer finding verbatim in the item's brief for the maintainer to decide instead of spending more subagent rounds. The peer informs; the maintainer still makes every judgment call.
+- Do not record the item as applied or offer the change for delivery unless the latest own review reports PASS and no grounded peer finding on that item remains unaddressed.
 
 Keep a per-item ledger: the decision, where it landed (file/commit/record), or how the item was
 refined.
@@ -230,8 +236,7 @@ and scan recent run reports / commit messages for discovered findings.
   PR never merges, the move is discarded with it and nothing is lost. That is distinct from a task
   **selected for its own implementation**, which stays in `tasks/` for a final review under the
   one-task-one-branch model.
-- Run a **fresh-eyes reviewer** per change (it edits nothing; PASS or numbered issues); fix-up
-  rounds as needed.
+- Run the core code-writing review/peer loop above in each implementation worktree. Its delivery gate additionally means: do not reply to a review thread, update a task file, or offer the change for publication while any grounded peer finding on that item remains unaddressed.
 - **Publish** each passing change *only after the maintainer confirms the push* — this interactive
   skill never pushes or edits review threads unprompted (a one-line "publish these fixes now?"
   question, pre-answered by a `push`/`ping-*` flag): these are commits *on top of* an already-pushed
@@ -316,10 +321,7 @@ and scan recent run reports / commit messages for discovered findings.
       wrap-up, finish + persist the current item, then stop with a resume-ready ledger.
 - [ ] Adjacent-invariant audit run whenever a resolution relies on/introduces one; findings reported
       before implementing.
-- [ ] Code-writing decisions verified (tests, build, isolated validation) through a fresh review;
-      review-case fix-now items: worktree per owning branch → subagent implement → fresh review →
-      **fast-forward** publish (thread reply, Summary, re-ping); no atomic change split across
-      branches.
+- [ ] Code-writing decisions verified (tests, build, isolated validation) through a fresh review + best-effort peer opinion; grounded factual `blocking` and `minor` findings are fixed and freshly reviewed before delivery, while only disputed judgment calls may be surfaced for the maintainer's judgment; review-case fix-now items additionally use a worktree per owning branch and **fast-forward** publish (thread reply, Summary, re-ping), with no atomic change split across branches.
 - [ ] Review-case deferred items: task numbers reused (no orphans), chosen option locked, rejected
       options demoted, implemented tasks archived to `tasks/done/`; keep-standalone vs bind decided
       with the maintainer.

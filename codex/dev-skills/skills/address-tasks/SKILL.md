@@ -167,20 +167,27 @@ For a wave of tasks `T1..Tn`:
      artifact_dir="$(mktemp -d "${artifact_root}/address-tasks-peer.XXXXXX")"
      peer_out="${artifact_dir}/peer.out"
      peer_err="${artifact_dir}/peer.err"
-     prompt="Review ${worktree} against ${base_ref}; read ${artifact_dir}/commits.log and ${artifact_dir}/changes.diff, then follow the inherited prompt contract."
+     prompt_file="${artifact_dir}/prompt"
+     prompt="$(
+       printf '%s\n' "Review ${worktree} against ${base_ref}; read ${artifact_dir}/commits.log and ${artifact_dir}/changes.diff, then follow the inherited prompt contract."
+       cat <<'PEER_REVIEW_PROMPT'
+     <the complete peer prompt, including verbatim task content>
+     PEER_REVIEW_PROMPT
+     )"
      effort_args=()
      # When the configured effort is not known to be high or xhigh:
      # effort_args=(--effort high)
 
      git -C "${worktree}" log --oneline "${base_ref}..HEAD" > "${artifact_dir}/commits.log"
      git -C "${worktree}" diff "${base_ref}...HEAD" > "${artifact_dir}/changes.diff"
+     printf '%s\n' "${prompt}" > "${prompt_file}"
      (
        cd -- "${worktree}" || exit
-       claude -p "${prompt}" --add-dir "${artifact_dir}" "${effort_args[@]}" --tools "Read,Glob,Grep" --disallowedTools "mcp__*" > "${peer_out}" 2> "${peer_err}"
+       claude -p --safe-mode --tools "Read,Glob,Grep" --disallowedTools "mcp__*" --add-dir "${artifact_dir}" --output-format json "${effort_args[@]}" < "${prompt_file}" > "${peer_out}" 2> "${peer_err}"
      ) &
      ```
 
-     Replace the example values with the task's actual worktree, base, and complete prompt; the prompt must name both exact artifact paths. Use a separate artifact directory, stdout artifact, and stderr diagnostics file per invocation. The peers are examination-only and run no builds or tests. Always wait for every own reviewer; for each task whose peer was actually launched, also wait for its peer output, read it into the feedback set, and remove its artifact directory. Then triage and close the finished own-reviewer threads.
+     Replace the example values with the task's actual worktree, base, and complete prompt; the prompt must name both exact artifact paths. Use a separate artifact directory, prompt file, stdout file, and stderr file per invocation so JSON stdout stays parseable while diagnostics remain available. Feeding the prompt through stdin keeps review-controlled shell syntax inert, while `--safe-mode` and the examination-only tool guards prevent lifecycle commands or worktree mutation. The peers run no builds or tests. Always wait for every own reviewer; for each task whose peer was actually launched, also wait for its peer output, read it into the feedback set, and remove its artifact directory, including both capture files. Then triage and close the finished own-reviewer threads.
    - A task exits the loop only when its own reviewer passes and the peer, when it delivered an intelligible report, has no unaddressed grounded findings. Tasks with issues carry the own-reviewer report and any available peer report verbatim as separately labeled blocks into the next round's Phase A; apply the inherited grounding, blocking-and-minor gating, dispute, timeout/retry, and forfeit rules without re-summarizing either report.
    - Repeat A→B for up to **6 rounds** total. The cap is a runaway-loop guard against arcane token bloat, not a quality dial. After round 6, any task still failing review does **not** get a PR; surface its outstanding findings to the user.
 
