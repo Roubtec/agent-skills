@@ -161,6 +161,7 @@ For a wave of tasks `T1..Tn`:
      mkdir -p -- "${artifact_root}"
      artifact_dir="$(mktemp -d "${artifact_root}/address-tasks-peer.XXXXXX")"
      peer_out="${artifact_dir}/peer.out"
+     peer_err="${artifact_dir}/peer.err"
      prompt="Review ${worktree} against ${base_ref}; read ${artifact_dir}/commits.log and ${artifact_dir}/changes.diff, then follow the inherited prompt contract."
      effort_args=()
      # When the configured effort is not known to be high or xhigh:
@@ -170,7 +171,7 @@ For a wave of tasks `T1..Tn`:
      git -C "${worktree}" diff "${base_ref}...HEAD" > "${artifact_dir}/changes.diff"
      (
        cd -- "${worktree}" || exit
-       claude -p "${prompt}" --add-dir "${artifact_dir}" "${effort_args[@]}" --tools "Read,Glob,Grep" --disallowedTools "mcp__*" > "${peer_out}" 2>&1
+       claude -p "${prompt}" --add-dir "${artifact_dir}" "${effort_args[@]}" --tools "Read,Glob,Grep" --disallowedTools "mcp__*" > "${peer_out}" 2> "${peer_err}"
      ) &
      ```
 

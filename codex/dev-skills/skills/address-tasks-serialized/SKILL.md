@@ -238,6 +238,7 @@ working_tree="/absolute/path/to/task-working-tree"
 base_ref="main"
 artifact_dir="$(mktemp -d "${TMPDIR:-/tmp}/address-tasks-peer.XXXXXX")"
 peer_out="${artifact_dir}/peer.out"
+peer_err="${artifact_dir}/peer.err"
 prompt="Review ${working_tree} against ${base_ref}; read ${artifact_dir}/commits.log and ${artifact_dir}/changes.diff, then follow the full prompt contract below."
 effort_args=()
 # When the configured effort is not known to be high or xhigh:
@@ -247,11 +248,11 @@ git -C "${working_tree}" log --oneline "${base_ref}..HEAD" > "${artifact_dir}/co
 git -C "${working_tree}" diff "${base_ref}...HEAD" > "${artifact_dir}/changes.diff"
 (
   cd -- "${working_tree}" || exit
-  claude -p "${prompt}" --add-dir "${artifact_dir}" "${effort_args[@]}" --tools "Read,Glob,Grep" --disallowedTools "mcp__*" > "${peer_out}" 2>&1
+  claude -p "${prompt}" --add-dir "${artifact_dir}" "${effort_args[@]}" --tools "Read,Glob,Grep" --disallowedTools "mcp__*" > "${peer_out}" 2> "${peer_err}"
 ) &
 ```
 
-Replace the example values with the round's actual working tree, base, and complete prompt; the prompt must name both exact artifact paths. The redirect is the capture contract; every invocation gets its own outfile, and `--output-format json` may be added for parseable output. Append the examination-only flags after the prompt because the variadic tool flags can otherwise swallow it. Never pass permission-bypass or autonomy flags.
+Replace the example values with the round's actual working tree, base, and complete prompt; the prompt must name both exact artifact paths. The redirects are the capture contract: every invocation gets separate stdout and stderr files, and `--output-format json` may be added for parseable stdout without diagnostics corrupting it. Append the examination-only flags after the prompt because the variadic tool flags can otherwise swallow it. Never pass permission-bypass or autonomy flags.
 
 Use the peer's configured high-capability model. If its configured effort is not known to be high or xhigh, request `--effort high` without overriding a known stronger setting; never request `max`. Allow a loose timeout of about 12 minutes, with discretion to wait longer for an expected wide review. After each attempt's output has been read or the attempt has been classified as timed out or failed, remove its artifact directory before retrying or continuing. On timeout or transient failure, retry once (two attempts total), then forfeit only that round. An auth or usage failure on a classify-at-first-invocation path disables the peer for the rest of the run.
 
