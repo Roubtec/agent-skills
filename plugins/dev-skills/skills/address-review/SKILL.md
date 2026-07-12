@@ -174,7 +174,7 @@ Give it: every unresolved thread and explicitly included standalone item verbati
 
 Give the peer the worktree path, effective review base, current branch, and every review item plus proposed disposition verbatim — the same evidence as the Reviewer, but not the fixer's report, your reasoning, drafted rationales, or the Reviewer's execution steps. Its prompt must instruct it to read the actual files, edit nothing, and verify dispositions in the committed code: fixes and already-addressed claims hold; push-backs are technically justified; and follow-up-task items point at a committed task file that genuinely covers the concern, with the follow-up itself justified (maintainer-directed, genuinely scope-expanding while the branch builds and covers its main paths, or condition-bound under step 5's deferred-placement criteria — never an evasion of a cheap fix) and its queued or deferred placement consistent with step 5. It may do a read-only quality pass, but must not run builds/tests; that remains the Reviewer's job. Require exactly `VERDICT: PASS | ISSUES`, followed for Issues by numbered findings tagged `blocking` or `minor`, each with `file:line` and a one-line rationale.
 
-Assign every per-invocation value first; preserve a known `high`/`xhigh` configured effort by leaving `peer_effort_args` empty, or replace that assignment with the commented override when needed:
+Assign every per-invocation value first. Leave `peer_effort_args` empty only for a known `high`/`xhigh` configured effort; for every other level, including `max`, use the override so the peer runs at `high`:
 
 ```bash
 worktree="/absolute/path/to/review-worktree"
@@ -182,7 +182,7 @@ outfile="/absolute/path/to/peer-review.txt"
 stderr_file="/absolute/path/to/peer-review.stderr"
 prompt="Peer review instructions"
 peer_effort_args=()
-# peer_effort_args=(-c model_reasoning_effort=high) # only when high/xhigh is not already known
+# peer_effort_args=(-c model_reasoning_effort=high) # unless high/xhigh is already known
 
 codex exec --sandbox read-only --cd "$worktree" -o "$outfile" -c mcp_servers={} "${peer_effort_args[@]}" "$prompt" < /dev/null 2> "$stderr_file" &
 ```
