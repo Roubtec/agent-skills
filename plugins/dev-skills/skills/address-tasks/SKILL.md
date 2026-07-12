@@ -114,7 +114,7 @@ For a wave of tasks `T1..Tn`:
 2. **Run each task's loop, fanned out by phase.** Each task runs its own implement→review→fix loop, but you advance all of the wave's tasks **in lockstep by phase** so that same-phase agents (which live in different worktrees) can be spawned **together in one tool block and run concurrently**:
 
    - **Phase A — implement:** spawn one implementer per still-unfinished task in the wave, each pointed at its own worktree path, **all in a single tool block** (concurrent). Wait for all to return.
-   - **Phase B — review:** only after *all* Phase-A implementers have returned, spawn one fresh reviewer per task, each in its task's worktree, **all in a single tool block** (concurrent). At the same moment, launch one background peer per task while the peer remains available, using separate per-invocation prompt, output, and peekable stderr files. For each task, prepare and launch the peer with this shell-safe form:
+   - **Phase B — review:** only after *all* Phase-A implementers have returned, spawn one fresh reviewer per task, each in its task's worktree, **all in a single tool block** (concurrent). At the same moment, unless `peer-opinions=off`, launch one background peer per task while the peer remains available, using separate per-invocation prompt, output, and peekable stderr files. For each task, prepare and launch the peer with this shell-safe form:
 
      ```bash
      worktree="/absolute/path/to/committed-task-worktree"
