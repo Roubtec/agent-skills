@@ -14,7 +14,7 @@ The goal is to close completed work cleanly and surface any remaining gaps as ne
 
 ## Review process
 
-For a sweep, also inspect the repo's deferred task subfolder and report entries whose recorded condition appears to have arrived; promotion into the active task folder remains a maintainer decision, so do not move them automatically.
+For a sweep, if the repo's deferred task subfolder exists (for example, `tasks/deferred/`), inspect it and report entries whose recorded condition appears to have arrived; promotion into the active task folder remains a maintainer decision, so do not move them automatically.
 
 For every task file:
 
