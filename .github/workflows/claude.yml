@@ -46,6 +46,12 @@ jobs:
           # shallow-clone boundary. This repo is small, so it stays cheap.
           fetch-depth: 0
 
+      # Tag mode checks out an open PR's head branch before starting Claude.
+      # Preserve the trigger-time copy outside the checkout so reviews still
+      # work for branches that predate this contract file.
+      - name: Stage review-format contract
+        run: cp .github/claude/review-format.md "$RUNNER_TEMP/review-format.md"
+
       # Not currently needed: this repo has no package.json / pnpm project
       # (these steps were inherited from a monorepo template). Uncomment if
       # that changes — see claude_args below for the matching pnpm/npx/
@@ -98,7 +104,9 @@ jobs:
           #                      and fixes real PRs. Only fires on a manual @claude
           #                      mention, so the added cost is bounded. Valid
           #                      levels: low|medium|high|xhigh|max.
-          # Explicit review requests append the shared review contract. Keeping
+          # Review requests append the staged shared contract. Matching
+          # "review" also covers natural requests such as "please review";
+          # the job-level gate already requires an @claude mention. Keeping
           # this in claude_args instead of adding a prompt input preserves tag
           # mode, including mention detection and the tracking comment.
           claude_args: >-
@@ -110,18 +118,18 @@ jobs:
                 (
                   github.event_name == 'issue_comment' &&
                   github.event.issue.pull_request &&
-                  contains(github.event.comment.body, '@claude review')
+                  contains(github.event.comment.body, 'review')
                 ) ||
                 (
                   github.event_name == 'pull_request_review_comment' &&
-                  contains(github.event.comment.body, '@claude review')
+                  contains(github.event.comment.body, 'review')
                 ) ||
                 (
                   github.event_name == 'pull_request_review' &&
-                  contains(github.event.review.body, '@claude review')
+                  contains(github.event.review.body, 'review')
                 )
               ) &&
-              '--append-system-prompt-file .github/claude/review-format.md' ||
+              format('--append-system-prompt-file {0}/review-format.md', runner.temp) ||
               ''
             }}
           # If this repo gains a pnpm project, add Bash(pnpm:*), Bash(npx:*),
