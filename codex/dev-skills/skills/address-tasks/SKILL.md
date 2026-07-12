@@ -22,7 +22,7 @@ Each worktree is a **separate working directory with its own `HEAD` and index** 
 So:
 
 - **Two subagents in two different worktrees never corrupt each other.** They touch different files, different indexes, different HEADs. Concurrent commits land on different branches under separate ref locks.
-- Therefore the base skill's "one subagent at a time" rule is replaced by: **own-harness subagents that operate in distinct worktrees may run concurrently; own-harness subagents sharing one worktree must be serialized.** The inherited examination-only peer CLI is the deliberate exception during review.
+- Therefore the base skill's "one subagent at a time" rule is replaced by: **Codex subagents that operate in distinct worktrees may run concurrently; Codex subagents sharing one worktree must be serialized.** The inherited examination-only peer CLI is the deliberate exception during review.
 - **Within a single task, the implementer and its reviewer still share that task's worktree** — so they still run one-at-a-time, implementer first. The parallelism is strictly *across* independent tasks, never between a task's own implementer and reviewer.
 
 ### Durability
