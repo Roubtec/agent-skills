@@ -12,18 +12,14 @@ own channel.
 plugins/
   dev-skills/                     # Claude Code plugin: software development workflow skills
     .claude-plugin/plugin.json
+    bin/gh-review-threads          # hardened review-thread helper added to the plugin PATH
     skills/<name>/SKILL.md
 codex/
   dev-skills/                     # Codex flavors of the same skills (SKILL.md + agents/openai.yaml)
     skills/<name>/...
 ```
 
-- **`plugins/`** holds the Claude Code plugins. Each subdirectory is one
-  independently installable plugin; `dev-skills` is the first (cross-repo
-  software development workflow: planned task batches, review addressing,
-  stacked-PR maintenance, open-question resolution, task authoring). Additional
-  plugins for other domains get sibling directories here and an entry in
-  `marketplace.json`.
+- **`plugins/`** holds the Claude Code plugins. Each subdirectory is one independently installable plugin; `dev-skills` is the first (cross-repo software development workflow: planned task batches, review addressing, stacked-PR maintenance, open-question resolution, task authoring), and its `bin/` executables are available on the Bash tool's PATH while the plugin is enabled. Additional plugins for other domains get sibling directories here and an entry in `marketplace.json`.
 - **`codex/`** mirrors the plugin tree with the Codex CLI flavors of the same
   skills. The two flavors share most of their text but diverge deliberately
   where harness capabilities differ; a verbiage change is one PR touching both

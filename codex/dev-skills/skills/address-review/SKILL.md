@@ -336,6 +336,8 @@ query($owner:String!,$repo:String!,$pr:Int!,$after:String){
 
 **Optional accelerator — if `gh-review-threads` is available on PATH** (`command -v gh-review-threads`), prefer it: it encodes the same query plus the scope check below. `gh-review-threads <PR#>` prints the unresolved threads as a JSON array on stdout — each thread with `id isResolved isOutdated path line` and `comments[]` (`databaseId`, `author { login __typename }`, `body`, `diffHunk`, `url`); add `--all` to include resolved threads, `--repo <owner>/<repo>` for a repo other than the current one. It already encapsulates everything the recipe above spells out: fresh single-shot per-page pagination (never `--paginate`), nested comment fetch-up, and the repo-qualified boundary-safe scope check — failing closed with exit code `3` and nothing on stdout if a response is contaminated (after one retry). If your environment ships such a helper, its query should match the block above.
 
+Outside powbox, Codex users can copy `plugins/dev-skills/bin/gh-review-threads` onto their PATH.
+
 ```sh
 gh-review-threads NUMBER | jq '...'          # unresolved threads, scope-checked
 gh-review-threads --all NUMBER               # include resolved threads too
