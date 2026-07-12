@@ -269,7 +269,7 @@ When either reviewer reports issues:
 
 > **Fix-ups always use a fresh subagent spawn — never a continuation of the prior implementer.** Fresh context is intentional: the fix-up agent reads the already-committed branch plus the reviewers' verbatim findings with no attachment to its earlier choices.
 
-1. **Spawn a fresh `worker` implementer** (on its own, as in step 4). Do not continue the prior implementer thread with `send_input`; fresh context is intentional because the fix-up agent should read the committed branch plus the reviewer's findings without attachment to earlier choices. Include:
+1. **Spawn a fresh `worker` implementer** (on its own, as in step 4). Do not continue the prior implementer thread with `send_input`; fresh context is intentional because the fix-up agent should read the committed branch plus the reviewers' findings without attachment to earlier choices. Include:
    - The original task file content.
    - Both the own reviewer's and peer's numbered findings verbatim as two labeled blocks; omit only a peer report that was unavailable, forfeited, or unintelligible that round.
    - The branch name (same as before).
