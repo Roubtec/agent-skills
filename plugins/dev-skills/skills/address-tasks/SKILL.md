@@ -31,7 +31,7 @@ Worktrees are disposable working directories: the shared `.git` object store kee
 
 ## Session Bootstrap (run once, before any worktree)
 
-Do this in the **main working tree** before creating worktrees. The worktree checks in steps 1–4 also serve `address-reviews`; step 5 is required only when this skill runs with peer opinions enabled:
+Do this in the **main working tree** before creating worktrees. The worktree checks in steps 1–4 also serve `address-reviews`; both skills require step 5 when peer opinions are enabled (`address-reviews` also documents it in its own bootstrap):
 
 1. **Choose the worktree base directory** (`$WT_BASE`): an ignored directory such as `.worktrees/` at the repo root (if it isn't already ignored, list it in `.git/info/exclude` rather than editing `.gitignore` mid-run — an ignore edit dirties the main checkout), or a directory outside the repository.
 
