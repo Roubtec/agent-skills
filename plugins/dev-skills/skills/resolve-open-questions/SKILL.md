@@ -209,7 +209,7 @@ pointed run over `tasks/`:
   competing options. When unsure, prefer `tasks/`: a mis-queued task can be reprioritized during a
   batch, while a mis-deferred task is easily forgotten.
 - **Promote awakened deferred tasks.** When a deferred task's condition arrives, move it into the
-  repo's task folder and give it a number under the repo's numbering convention.
+  repo's task folder and assign or revise its number under the repo's numbering convention.
 - **Archive implemented tasks** to `tasks/done/` (repo convention) with the implementing commit
   noted.
 

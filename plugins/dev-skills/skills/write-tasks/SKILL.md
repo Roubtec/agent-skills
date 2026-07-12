@@ -60,7 +60,7 @@ Keep work together when splitting would force brittle interfaces or excessive co
 
 Honor any explicit target folder and/or numbering supplied by the user or invoking skill. Otherwise, default to the repo's task folder (commonly `tasks/`), create it if missing, and follow the repo's documented numbering house style (for example, `tasks/AGENTS.md`) when continuing the sequence.
 
-Number files as `{phase}-{taskNo}-{brief-kebab-name}.md` to make execution order obvious.
+When the repo has no documented numbering style, number files as `{phase}-{taskNo}-{brief-kebab-name}.md` to make execution order obvious.
 Examples: `A-01-scaffold-project.md`, `02-12-hook-keyboard-shortcuts.md`.
 
 If there are existing task files in the target folder, continue the numbering sequence.
