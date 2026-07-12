@@ -154,7 +154,7 @@ It edits nothing and reports Pass or numbered Issues.
 
 Give the peer those same inputs verbatim, not the fixer's reasoning or the Reviewer's execution steps. Tell it to read the actual files, edit nothing, and verify dispositions in committed code: fixes hold, already-addressed claims are true, push-backs are technically justified, and follow-up-task items point to a committed task file that covers the concern. It may inspect code for quality but must not run builds/tests; the fresh Reviewer owns build/typecheck. Require `VERDICT: PASS | ISSUES`, followed for Issues by numbered findings tagged `blocking` or `minor`, each with `file:line` and a one-line rationale.
 
-Assign every per-entry/per-attempt value first; preserve a known `high`/`xhigh` configured effort by leaving `peer_effort_args` empty, or replace that assignment with the commented override when needed:
+Assign every per-entry/per-attempt value first. Leave `peer_effort_args` empty only for a known `high`/`xhigh` configured effort; for every other level, including `max`, use the override so the peer runs at `high`:
 
 ```bash
 worktree="/absolute/path/to/review-worktree"
@@ -162,7 +162,7 @@ outfile="/absolute/path/to/peer-review.txt"
 stderr_file="/absolute/path/to/peer-review.stderr"
 prompt="Peer review instructions"
 peer_effort_args=()
-# peer_effort_args=(-c model_reasoning_effort=high) # only when high/xhigh is not already known
+# peer_effort_args=(-c model_reasoning_effort=high) # unless high/xhigh is already known
 
 codex exec --sandbox read-only --cd "$worktree" -o "$outfile" -c mcp_servers={} "${peer_effort_args[@]}" "$prompt" < /dev/null 2> "$stderr_file" &
 ```

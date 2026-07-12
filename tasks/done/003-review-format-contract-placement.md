@@ -49,7 +49,7 @@ Reviewer verifies the live test-PR evidence (threads, prefixes, summary shape), 
 
 ### Investigation outcome
 
-The repository no longer has the integration topology described above: PR #14 added two active repository workflows, [`.github/workflows/claude.yml`](../.github/workflows/claude.yml) for trusted `@claude` mentions and [`.github/workflows/claude-code-review.yml`](../.github/workflows/claude-code-review.yml) for automatic reviews on `pull_request` open, reopen, and ready-for-review events.
+The repository no longer has the integration topology described above: PR #14 added two active repository workflows, [`.github/workflows/claude.yml`](../../.github/workflows/claude.yml) for trusted `@claude` mentions and [`.github/workflows/claude-code-review.yml`](../../.github/workflows/claude-code-review.yml) for automatic reviews on `pull_request` open, reopen, and ready-for-review events.
 
 `@claude review` now fires through the `issue_comment` trigger in `claude.yml`, not through an additional app-managed default: [run 29173036316](https://github.com/Roubtec/agent-skills/actions/runs/29173036316) was triggered by [this `@claude review` comment](https://github.com/Roubtec/agent-skills/pull/11#issuecomment-4949244224), ran the repository workflow once, and produced an overview-only tracking comment plus no new inline threads because the review was clean.
 
