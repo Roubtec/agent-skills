@@ -47,7 +47,7 @@ The same bootstrap serves this skill and `address-reviews`:
 
 4. **Measure free disk space** on the base directory's filesystem (`df -k "$WT_BASE"`) — the starting input for Adaptive throttling below.
 
-5. **Preflight the peer once** unless `peer-opinions=off`: require `command -v claude`, then run `claude auth status`. Treat a failed authentication probe as unavailable unless `ANTHROPIC_API_KEY` is set, in which case classify auth or usage availability on the first real invocation. An older CLI that lacks the `auth status` subcommand also defers classification to the first invocation. Peer unavailability is never an error; proceed with own reviewers and note the reason once in the final summary, as specified by the inherited protocol.
+5. **Preflight the peer once** unless `peer-opinions=off`: if `command -v claude` fails, mark the peer unavailable and proceed with own reviewers; otherwise run `claude auth status`. Treat a failed authentication probe as unavailable unless `ANTHROPIC_API_KEY` is set, in which case classify auth or usage availability on the first real invocation. An older CLI that lacks the `auth status` subcommand also defers classification to the first invocation. Peer unavailability is never an error; proceed with own reviewers and note the reason once in the final summary, as specified by the inherited protocol.
 
 If a `wt-bootstrap` helper is on PATH, prefer it for steps 1–4 — it performs those worktree checks, prunes orphans, and prints the base dir (`wtBase`) and free space (`availBytes`) as JSON. Still run the peer preflight in step 5 separately.
 
@@ -151,7 +151,7 @@ For a wave of tasks `T1..Tn`:
 2. **Run each task's loop, fanned out by phase.** Each task runs its own implement→review→fix loop, but you advance all of the wave's tasks **in lockstep by phase** so that same-phase subagents (which live in different worktrees) can be spawned **together in one natural-language turn or tool-call batch and run concurrently**:
 
    - **Phase A — implement:** spawn one `worker` per still-unfinished task in the wave, each pointed at its own worktree path, all together. Wait until every implementer has completed, then close the finished implementer threads.
-   - **Phase B — review:** only after *all* Phase-A implementers have returned, spawn one fresh `explorer` reviewer per task, each in its task's worktree, all together. At the same moment, launch one plain-shell background peer per task while the peer remains available. For each peer, run the following pattern with that task's values (the Bootstrap contract keeps `$WT_BASE` ignored or outside the repository; never place artifacts inside a task worktree):
+   - **Phase B — review:** only after *all* Phase-A implementers have returned, spawn one fresh `explorer` reviewer per task, each in its task's worktree, all together. At the same moment, unless `peer-opinions=off` or the peer is unavailable, launch one plain-shell background peer per task. For each peer, run the following pattern with that task's values (the Bootstrap contract keeps `$WT_BASE` ignored or outside the repository; never place artifacts inside a task worktree):
 
      ```bash
      wt_base="/absolute/path/to/worktree-root"
