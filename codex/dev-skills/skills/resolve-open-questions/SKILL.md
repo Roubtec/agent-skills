@@ -199,16 +199,19 @@ offering the change for delivery:
   precompute from inside that implementation worktree
   `git log --oneline <decision-base>..HEAD` plus `git diff <decision-base>...HEAD` for the decision's
   commit range in a read-only artifact outside the worktree, then launch
-  `claude -p "<prompt>" --safe-mode --output-format json --add-dir <artifact-dir> --tools "Read,Glob,Grep" --disallowedTools "mcp__*" > <outfile> 2>&1 &`
+  `claude -p "<prompt>" --safe-mode --output-format json --add-dir <artifact-dir> --tools "Read,Glob,Grep" --disallowedTools "mcp__*" > <outfile> 2> <errfile> &`
   in the background with its working directory set to that implementation worktree. Append the
-  explicit read-only tool guard after the prompt as shown, never pass a bypass flag, and use a new
-  outfile for every invocation. Request `--effort high` when the configured effort is not known to
-  be high/xhigh. The prompt carries the worktree, commit range, artifact path, relevant decision
-  context verbatim, and instructions to read the actual files, run no builds or tests, and edit
-  nothing; require `VERDICT: PASS | ISSUES`, followed by numbered findings tagged `blocking` or
+  explicit read-only tool guard after the prompt as shown, never pass a bypass flag, and use new
+  outfile and errfile paths for every invocation. Keep the outfile reserved for parseable JSON and
+  use the errfile only for diagnostics. Request `--effort high` when the configured effort is not
+  known to be high/xhigh. The prompt carries the worktree, commit range, artifact path, relevant
+  decision context verbatim, and instructions to read the actual files, run no builds or tests, and
+  edit nothing; require `VERDICT: PASS | ISSUES`, followed by numbered findings tagged `blocking` or
   `minor`, each with `file:line` and a one-line rationale. Allow a loose approximately twelve-minute
   timeout (longer when expected review size justifies it), retry a timeout or transient failure once,
-  and invoke the peer again on every fix-up review round while it remains available.
+  and invoke the peer again on every fix-up review round while it remains available. After an
+  attempt's output has been read or its failure classified, remove its artifact, outfile, and errfile
+  before retrying or continuing.
 - Wait for both reviews before deciding the round. Unavailable, timed-out after retry, failed, or
   unintelligible peer output forfeits only that opinion and never blocks; keep quiet per invocation
   and note the reason once in the wrap-up summary. Read the two verdicts without summarizing or
