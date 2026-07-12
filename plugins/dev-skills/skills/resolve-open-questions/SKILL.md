@@ -29,11 +29,14 @@ This is the **interactive counterpart** to the hands-off skills. Where `address-
 `address-reviews`, and batch executors *document and stop* on anything they should not
 guess, this skill is where those parked questions get answered.
 
-> **Generic core, review-aware layer.** Sections 1–5 below are domain-neutral and apply to any list
-> of open questions. The later **"When the items come from a review-addressing pass"** section adds
-> the review-lifecycle machinery (deferrals, cross-branch reads, fix-now publish, task hygiene). If
-> the list at hand is *not* review follow-up, read that layer as inapplicable and ignore its
-> vocabulary — don't force review framing onto, say, a set of product or accounting decisions.
+> **Generic core, task-file hygiene, review-aware layer.** Sections 1–5 below are domain-neutral and
+> apply to any list of open questions. The later **"When decisions live in task files (the `tasks/`
+> convention)"** section adds source-agnostic hygiene for decisions recorded under that convention.
+> The **"When the items come from a review-addressing pass"** section then adds the review-lifecycle
+> machinery (deferrals, cross-branch reads, fix-now publish) and points task-file decisions to that
+> hygiene. If the list at hand is *not* review follow-up, read the review layer as inapplicable and
+> ignore its vocabulary — don't force review framing onto, say, a set of product or accounting
+> decisions.
 
 ## Inputs
 
@@ -180,6 +183,27 @@ refined.
 
 ---
 
+## When decisions live in task files (the `tasks/` convention)
+
+Apply this hygiene whenever a decision lives in a task file under the repository's `tasks/`
+convention, regardless of whether it came from a review deferral, a `write-tasks` batch, or a
+pointed run over `tasks/`:
+
+- **Reuse task numbers — no orphans.** If a better solution emerged, **rewrite the existing task in
+  place** rather than spawning a new number. If two tasks collapse into one (a shared helper),
+  consolidate into one existing number and have it absorb the others.
+- **Lock the chosen option.** Edit the task to mark the maintainer-selected approach as *the*
+  solution and demote the rejected ones to a "considered & declined" note, so the implementer has no
+  ambiguity.
+- **Keep-standalone vs bind-to-prerequisite is the maintainer's risk call.** Binding a task as a
+  hard prerequisite of a future feature is clean on paper but fragile (it can be forgotten when the
+  feature ships). Default to a **self-standing committed task** unless the maintainer prefers the
+  binding.
+- **Archive implemented tasks** to `tasks/done/` (repo convention) with the implementing commit
+  noted.
+
+---
+
 ## When the items come from a review-addressing pass
 
 This is the canonical application and the reason the skill exists. `address-review` (one PR) and
@@ -249,20 +273,11 @@ and scan recent run reports / commit messages for discovered findings.
   (`@codex`/`@claude` via comment; Copilot via `gh pr edit <PR#> --add-reviewer @copilot`, never an
   `@copilot review` comment; under `ping-contributing`, only the bots that brought a new finding this round).
 
-**Deferred items → task hygiene** (no code, but leave nothing dangling):
+**Deferred items → task-file hygiene** (no code, but leave nothing dangling):
 
-- **Reuse task numbers — no orphans.** If a better solution emerged, **rewrite the existing task in
-  place** rather than spawning a new number. If two tasks collapse into one (a shared helper),
-  consolidate into one existing number and have it absorb the others.
-- **Lock the chosen option.** Edit the task to mark the maintainer-selected approach as *the*
-  solution and demote the rejected ones to a "considered & declined" note, so the implementer has no
-  ambiguity.
-- **Keep-standalone vs bind-to-prerequisite is the maintainer's risk call.** Binding a task as a
-  hard prerequisite of a future feature is clean on paper but fragile (it can be forgotten when the
-  feature ships). Default to a **self-standing committed task** unless the maintainer prefers the
-  binding; either way the resolved thread already points at the file.
-- **Archive implemented tasks** to `tasks/done/` (repo convention) with the implementing commit
-  noted.
+Apply **"When decisions live in task files (the `tasks/` convention)"** above to every deferred
+task-file decision. The review-specific context is that the resolved thread already points at the
+file; preserve that target while applying the source-agnostic hygiene.
 
 ### Review-specific aggregate & flag
 
@@ -322,8 +337,8 @@ and scan recent run reports / commit messages for discovered findings.
 - [ ] Adjacent-invariant audit run whenever a resolution relies on/introduces one; findings reported
       before implementing.
 - [ ] Code-writing decisions verified (tests, build, isolated validation) through a fresh review + best-effort peer opinion; grounded factual `blocking` and `minor` findings are fixed and freshly reviewed before delivery, while only disputed judgment calls may be surfaced for the maintainer's judgment; review-case fix-now items additionally use a worktree per owning branch and **fast-forward** publish (thread reply, Summary, re-ping), with no atomic change split across branches.
-- [ ] Review-case deferred items: task numbers reused (no orphans), chosen option locked, rejected
-      options demoted, implemented tasks archived to `tasks/done/`; keep-standalone vs bind decided
-      with the maintainer.
+- [ ] Decisions recorded under the `tasks/` convention follow **"When decisions live in task files
+      (the `tasks/` convention)"**; review-case deferred items preserve the file their resolved
+      thread already points at.
 - [ ] Final ledger + (review case) prominent flag of any NEW review threads + `rebase-stack` pointer
       for the leafy stack.
