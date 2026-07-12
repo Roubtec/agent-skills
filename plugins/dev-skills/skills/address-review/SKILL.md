@@ -149,7 +149,7 @@ For the actionable items:
 For the **follow-up-task** items, write the task file(s) following the `write-tasks` skill conventions (invoke that skill where available):
 
 - Follow whatever task layout the repo already uses. Default to its task folder (commonly `tasks/`): a planned follow-up stays queued and numbered there even when it has prerequisites, which the task must state so its ordering remains visible.
-- Use the deferred subfolder (for example, `tasks/deferred/`) only for deliberately unscheduled work: functionality is uncertain to arrive; the relevant condition cannot occur yet or has not manifested and would be costly to fix; or a spike or decision between competing options is still pending.
+- Use the deferred subfolder (for example, `tasks/deferred/`) only for deliberately unscheduled work: it depends on functionality that is not certain to arrive; it addresses a condition that cannot occur yet or has not manifested, and fixing it would be costly; or it awaits a spike or decision between competing options.
 - When unsure, prefer `tasks/`: a mis-queued task can be reprioritized during a batch, while a mis-deferred task is easily forgotten.
 - Number each file to continue the folder's existing sequence, slotted by priority/intended order.
 - Each task must stand alone: restate the concern with file/line references and link the PR thread; an implementer should not need to re-read the review.

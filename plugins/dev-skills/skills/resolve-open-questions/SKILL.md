@@ -33,7 +33,7 @@ guess, this skill is where those parked questions get answered.
 > apply to any list of open questions. The later **"When decisions live in task files (the `tasks/`
 > convention)"** section adds source-agnostic hygiene for decisions recorded under that convention.
 > The **"When the items come from a review-addressing pass"** section then adds the review-lifecycle
-> machinery (deferrals, cross-branch reads, fix-now publish) and points task-file decisions to that
+> machinery (task-backed follow-ups, cross-branch reads, fix-now publish) and points task-file decisions to that
 > hygiene. If the list at hand is *not* review follow-up, read the review layer as inapplicable and
 > ignore its vocabulary — don't force review framing onto, say, a set of product or accounting
 > decisions.
@@ -76,7 +76,7 @@ Sweep every source into one list of **distinct decisions**. Generic sources:
   run's scope.
 - **Coupled forks** — one underlying choice that surfaces in two places (handle as one item).
 
-(For the review-addressing case, the concrete forms these take — `deferred-to-task` dispositions,
+(For the review-addressing case, the concrete forms these take — `follow-up-task` dispositions,
 hands-off blockers, sibling observations, cross-branch issues — are enumerated in the review layer.)
 
 ### 2. Ground each item — do this BEFORE asking anything
@@ -131,10 +131,11 @@ Every brief has the same four parts:
    it or how to make it manifest* — with the reachability verdict explicit ("live today: a user
    who…", "dormant until the async rail exists", "only on a flag flip across overlapping periods").
    This is what lets a busy maintainer decide fast.
-3. **Options as distinct outcomes.** The candidate resolutions — typically *do it one way (A)*, *the
-   other way (B)*, *defer / leave as-is* — and for each, **what choosing it actually produces**:
+3. **Options as distinct outcomes.** The candidate resolutions — typically *do it now (A/B)*,
+   *postpone (follow-up task, queued)*, *park (deferred, condition-bound)*, or *leave as-is* — and
+   for each, **what choosing it actually produces**:
    blast radius, where it lands, cost, what stays exposed. Pull pre-drafted options straight from
-   the source where they exist; add the do-now-vs-defer axis.
+   the source where they exist; add the do-now / postpone / park / leave-as-is axis.
 4. **A recommendation, when one is defensible.** State your pick and *why*, using the heuristics
    below. Put it first in the option list and mark it "(Recommended)". If the call genuinely turns
    on something only the maintainer knows ("do you ever change this cadence live?"), say so and make
@@ -186,7 +187,7 @@ refined.
 ## When decisions live in task files (the `tasks/` convention)
 
 Apply this hygiene whenever a decision lives in a task file under the repository's `tasks/`
-convention, regardless of whether it came from a review deferral, a `write-tasks` batch, or a
+convention, regardless of whether it came from a review follow-up, a `write-tasks` batch, or a
 pointed run over `tasks/`:
 
 - **Reuse task numbers — no orphans.** If a better solution emerged, **rewrite the existing task in
@@ -199,6 +200,16 @@ pointed run over `tasks/`:
   hard prerequisite of a future feature is clean on paper but fragile (it can be forgotten when the
   feature ships). Default to a **self-standing committed task** unless the maintainer prefers the
   binding.
+- **Queue planned tasks; defer only deliberately unscheduled work.** Follow the repo's layout and
+  default to its task folder (commonly `tasks/`). A planned follow-up stays queued and numbered there
+  even when it has prerequisites; state them in the task so ordering remains visible. Use the
+  deferred subfolder (for example, `tasks/deferred/`) only for deliberately unscheduled work: it
+  depends on functionality that is not certain to arrive; it addresses a condition that cannot occur
+  yet or has not manifested, and fixing it would be costly; or it awaits a spike or decision between
+  competing options. When unsure, prefer `tasks/`: a mis-queued task can be reprioritized during a
+  batch, while a mis-deferred task is easily forgotten.
+- **Promote awakened deferred tasks.** When a deferred task's condition arrives, move it into the
+  repo's task folder and give it a number under the repo's numbering convention.
 - **Archive implemented tasks** to `tasks/done/` (repo convention) with the implementing commit
   noted.
 
@@ -214,8 +225,8 @@ where the agreed fixes land. It is the interactive inverse of the review-address
 
 ### Review-specific sources for the work-list (step 1)
 
-- **`deferred-to-task` dispositions** — every thread the run replied to with "deferred to
-  `tasks/NNN-*.md`". The committed task file is the spec; the thread is the origin.
+- **`follow-up-task` dispositions** — every thread the run answered with a queued-follow-up or
+  condition-bound deferred-task reply. The committed task file is the spec; the thread is the origin.
 - **Hands-off blockers** — anything a fixer or publisher *documented and stopped on* (a
   migration-ordering conflict, an ambiguous high-stakes choice).
 - **Discovered findings with no thread** — sibling observations a fixer/reviewer noticed but didn't
@@ -224,8 +235,8 @@ where the agreed fixes land. It is the interactive inverse of the review-address
   analog of one fix that recurs on a sibling branch.
 
 In **pointed mode** for review work, re-derive these: for each PR read its committed task files
-(grep `tasks/` for bodies citing that PR's deferred threads), read the threads resolved-as-deferred,
-and scan recent run reports / commit messages for discovered findings.
+(grep `tasks/` for bodies citing that PR's task-backed threads), read the threads resolved with a
+`follow-up-task` disposition, and scan recent run reports / commit messages for discovered findings.
 
 ### Review-specific grounding (step 2)
 
@@ -273,10 +284,10 @@ and scan recent run reports / commit messages for discovered findings.
   (`@codex`/`@claude` via comment; Copilot via `gh pr edit <PR#> --add-reviewer @copilot`, never an
   `@copilot review` comment; under `ping-contributing`, only the bots that brought a new finding this round).
 
-**Deferred items → task-file hygiene** (no code, but leave nothing dangling):
+**Task-backed follow-up items → task-file hygiene** (no code, but leave nothing dangling):
 
-Apply **"When decisions live in task files (the `tasks/` convention)"** above to every deferred
-task-file decision. The review-specific context is that the resolved thread already points at the
+Apply **"When decisions live in task files (the `tasks/` convention)"** above to every task-backed
+follow-up decision. The review-specific context is that the resolved thread already points at the
 file; preserve that target while applying the source-agnostic hygiene.
 
 ### Review-specific aggregate & flag
@@ -293,22 +304,24 @@ file; preserve that target while applying the source-agnostic hygiene.
 ## Recommendation heuristics (how to pick the "(Recommended)" option)
 
 - **Reachability dominates.** *Live today* → lean **do it now** (it bites real users). *Dormant
-  under a stub/adapter/flag* → lean **defer**, and tie the follow-up to the trigger that wakes it.
-  *Impossible until a named prerequisite* → **defer**, but keep the work *implementable and
-  verifiable now* if it's independent of that prerequisite (hardening a seam *before* the feature
-  that exposes it is the safer order).
+  under a stub/adapter/flag* → lean **postpone** to a queued follow-up with the trigger stated as a
+  prerequisite. *Impossible until a named prerequisite* → likewise **postpone** by default and state
+  that prerequisite, while keeping the work *implementable and verifiable now* when it is independent
+  (hardening a seam *before* the feature that exposes it is the safer order). **Park** in the deferred
+  folder only when the waking condition is genuinely uncertain.
 - **Blast radius & altitude.** A one-seam fix that mirrors an already-accepted pattern → do it now.
   A change that widens a cross-module interface, reverses a prior accepted decision, or touches the
-  most sensitive path (money, auth, migrations) → prefer the **robust** option or defer; never the
+  most sensitive path (money, auth, migrations) → prefer the **robust** option or postpone to a
+  queued follow-up; park only under the condition-bound criteria above, and never choose the
   blunt stopgap on a sensitive path.
 - **Robust over blunt** for a correctness invariant: prefer the option that holds under *any* input
   (and is a no-op in the common case) over one that parks/blocks legitimate flows.
 - **Stack-aware placement** (review case). Land a fix on the branch that **owns** the code; inherited
   copies heal at restack — don't duplicate it on every branch. Surface a sibling-branch **analog**
   and let the maintainer opt in rather than silently expanding scope.
-- **Conservatism on the sensitive path.** When unsure between do-now and defer on a
-  financial/security/migration change, recommend the committed task/deliberate build — defendable as
-  it stands, and the fix gets built carefully.
+- **Conservatism on the sensitive path.** When unsure between do-now and postpone on a
+  financial/security/migration change, recommend the committed queued task/deliberate build —
+  defendable as it stands, and the fix gets built carefully.
 - **Make it conditional when it hinges on intent.** If the right answer depends on a product/ops
   fact only the maintainer holds ("will you ever change this setting live?"), ask *that* and frame
   the recommendation around the answer.
@@ -326,7 +339,7 @@ file; preserve that target while applying the source-agnostic hygiene.
 ## Checklist
 
 - [ ] Mode detected (continuation vs pointed); full work-list gathered (parked choices + blockers +
-      discovered findings + — for review work — deferrals & cross-branch issues).
+      discovered findings + — for review work — follow-up tasks & cross-branch issues).
 - [ ] Each item **grounded** in its authoritative artifact (real code/data/spec; cross-branch via
       `git show`/`gitcat`); gap re-confirmed; reachability classified.
 - [ ] Coupled items grouped; order set; served **one at a time** (trivial independents may share one
@@ -338,7 +351,7 @@ file; preserve that target while applying the source-agnostic hygiene.
       before implementing.
 - [ ] Code-writing decisions verified (tests, build, isolated validation) through a fresh review + best-effort peer opinion; grounded factual `blocking` and `minor` findings are fixed and freshly reviewed before delivery, while only disputed judgment calls may be surfaced for the maintainer's judgment; review-case fix-now items additionally use a worktree per owning branch and **fast-forward** publish (thread reply, Summary, re-ping), with no atomic change split across branches.
 - [ ] Decisions recorded under the `tasks/` convention follow **"When decisions live in task files
-      (the `tasks/` convention)"**; review-case deferred items preserve the file their resolved
+      (the `tasks/` convention)"**; review-case follow-up-task items preserve the file their resolved
       thread already points at.
 - [ ] Final ledger + (review case) prominent flag of any NEW review threads + `rebase-stack` pointer
       for the leafy stack.

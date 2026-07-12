@@ -14,6 +14,8 @@ The goal is to close completed work cleanly and surface any remaining gaps as ne
 
 ## Review process
 
+For a sweep, also inspect the repo's deferred task subfolder and report entries whose recorded condition appears to have arrived; promotion into the active task folder remains a maintainer decision, so do not move them automatically.
+
 For every task file:
 
 1. **Read the task file fully**, including its acceptance criteria, validation steps, scope, implementation notes, and spec divergences.
