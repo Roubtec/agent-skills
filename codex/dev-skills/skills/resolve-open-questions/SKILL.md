@@ -199,7 +199,7 @@ offering the change for delivery:
   precompute from inside that implementation worktree
   `git log --oneline <decision-base>..HEAD` plus `git diff <decision-base>...HEAD` for the decision's
   commit range in a read-only artifact outside the worktree, then launch
-  `claude -p "<prompt>" --output-format json --add-dir <artifact-dir> --tools "Read,Glob,Grep" --disallowedTools "mcp__*" > <outfile> 2>&1`
+  `claude -p "<prompt>" --output-format json --add-dir <artifact-dir> --tools "Read,Glob,Grep" --disallowedTools "mcp__*" > <outfile> 2>&1 &`
   in the background with its working directory set to that implementation worktree. Append the
   explicit read-only tool guard after the prompt as shown, never pass a bypass flag, and use a new
   outfile for every invocation. Request `--effort high` when the configured effort is not known to
