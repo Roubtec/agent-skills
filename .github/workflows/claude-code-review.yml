@@ -54,6 +54,13 @@ jobs:
           # small, so a full fetch stays cheap.
           fetch-depth: 0
 
+      # Pin the review contract to the PR base commit, so a PR that edits the
+      # contract is still reviewed under the rules it proposes to replace.
+      - name: Stage review-format contract
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: git show "${BASE_SHA}:.github/claude/review-format.md" > "$RUNNER_TEMP/review-format.md"
+
       # Not currently needed: this repo has no package.json / pnpm project
       # (mirrors claude.yml — see that file's comment). Uncomment together
       # with the pnpm/npx/corepack tool allowances below if that changes.
@@ -90,7 +97,7 @@ jobs:
             --model claude-opus-4-8
             --effort xhigh
             --allowed-tools "Bash(gh pr:*),mcp__github_inline_comment__create_inline_comment"
-            --append-system-prompt-file .github/claude/review-format.md
+            --append-system-prompt-file ${{ runner.temp }}/review-format.md
           # If this repo gains a pnpm project, add Bash(pnpm:*), Bash(npx:*),
           # and Bash(corepack:*) to the allowed-tools value above when enabling
           # the matching setup steps.
