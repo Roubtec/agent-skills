@@ -5,10 +5,10 @@ description: Address maintainer-vetted review feedback on several pull requests 
 
 Address the review feedback on **several pull requests at once**, fanning each PR out into its own git worktree so they progress concurrently without polluting each other.
 
-**Arguments:** `<PRs and/or branches> [no-push] [push] [ping-codex] [ping-claude] [ping-copilot] [ping-contributing]`
+**Arguments:** `<PRs and/or branches> [no-push] [push] [peer-opinions=off] [ping-codex] [ping-claude] [ping-copilot] [ping-contributing]`
 
 This skill is the parallel batch front-end for `address-review`.
-It does **not** re-implement review-addressing — it sets up one isolated worktree per entry and uses `address-review`'s delegated fix and publish procedures, with a fresh orchestrator-owned reviewer between them.
+It does **not** re-implement review-addressing — it sets up one isolated worktree per entry and uses `address-review`'s delegated fix and publish procedures, with a fresh orchestrator-owned reviewer and best-effort `codex` second opinion between them.
 Each batch entry is either a **PR number** (work the PR head from `origin`) or a **local branch name** (work *your* local ref exactly as it stands) — see "Resolving and checking out each entry" for the local-first rule that keeps a locally-rebased branch from being silently replaced by a stale `origin` copy.
 It borrows its worktree machinery (isolation model, Session Bootstrap, adaptive throttling, cleanup) wholesale from `address-tasks` — **read that skill for the rationale behind those pieces**; only the deltas are spelled out here.
 
@@ -18,7 +18,7 @@ Everything here follows from one fact: **the PRs already exist**, so we modify e
 
 - **No new PR head lineage, no `gh pr create`.** Each worktree checks out an **existing PR head branch** (creating a local tracking branch only when needed); pushing is handled inside `address-review`.
 - **No dependency waves.** Distinct PR heads are independent review-addressing units, so they can run concurrently from the start (subject to throttling). Entries that resolve to the same head branch must be serialized; genuinely stacked but distinct branches can still run independently, with restacking left for later.
-- **Per-PR guidance comes from `address-review`, but the parallel orchestrator owns the phases.** A fix subagent runs `delegated-fix`; a separate fresh reviewer checks the returned packet; fix-up/re-review rounds follow as needed; only a passing entry gets a `publish-reviewed` subagent.
+- **Per-PR guidance comes from `address-review`, but the parallel orchestrator owns the phases.** A fix subagent runs `delegated-fix`; a separate fresh reviewer and concurrent best-effort `codex` peer check the returned packet; fix-up/re-review rounds follow as needed; only an entry that clears the review gate gets a `publish-reviewed` subagent. The peer wiring in standalone `address-review` is not inherited because `delegated-fix` stops before review.
 - **A leafy branch stack is the expected outcome and is fine.** Parallel fixes leave the PR branches diverged. This skill does **not** build a restack guide — integrating the result is a deliberate follow-up via `rebase-stack` (or manual rebases). See "After the batch".
 
 ## Stacked PRs: a fix may be hostable on only one branch
@@ -34,6 +34,7 @@ Parsing is **lenient** — accept commas, `&`, `#` prefixes, and free word order
 | `<PRs and/or branches>` | The batch: one or more entries, each a **PR number** (`#38`, `38`) or a **local branch name** (`task/088`). May be mixed (`#38 task/084 6`). Each becomes one worktree + one phased review-addressing workflow. This is the only required argument. |
 | `no-push` | Passed through to every entry as a **local-only run**: fix and commit in each worktree, but mutate no PR (no push, replies, resolves, Summary, or ping). This was the default until now; it is now the explicit way to run the whole batch as a dry run. |
 | `push` | Passed through to every passing entry's publisher: push the fixed branch (normal fast-forward or exact expected-OID lease for a rewrite) and do the PR-side communication (replies, resolves, Summary comment) — but **ping no reviewer**. Use it to publish the batch quietly, without summoning fresh review rounds. |
+| `peer-opinions=off` | Disable the best-effort `codex` disposition review for the whole batch. It is on by default, including in hands-off mode. |
 | `ping-codex` | Passed through: after `address-review` pushes new commits or rewritten history, post a dedicated `@codex review` comment on that PR. Implies `push`; `address-review` skips the ping when publication is an "Everything up-to-date" no-op. |
 | `ping-claude` | Passed through: after `address-review` pushes new commits or rewritten history, post a dedicated `@claude review` comment on that PR. Implies `push`; `address-review` skips the ping when publication is an "Everything up-to-date" no-op. |
 | `ping-copilot` | Passed through: after `address-review` pushes new commits or rewritten history, request a Copilot review on that PR via `gh pr edit <PR#> --add-reviewer @copilot` (canonical CLI request, not an `@copilot review` comment — that drives Copilot's coding agent, not its reviewer). Implies `push`; `address-review` skips the request when publication is an "Everything up-to-date" no-op. |
@@ -67,8 +68,9 @@ Follows `address-tasks` → "Session Bootstrap" — see that skill's Bootstrap f
 
 1. **Prepare the worktree base and prune stale state.** Pick or create a base directory for worktrees — an ignored directory inside the repo (e.g. `<repo>/.worktrees/`; if it is not already ignored, list it in `.git/info/exclude` rather than editing `.gitignore` — a dirty main checkout would later block freeing a batch branch it occupies) or a directory outside the repo. Run `git worktree prune` to clear stale registrations, and remove any orphaned directories under the base that `git worktree list` no longer knows about. Then probe remote access with `git ls-remote origin`. **Stricter than the task batch:** here a failed remote probe is a stop — PR-number resolution and lease-safe publication cannot be trusted from stale refs. The chosen base is the `$WT_BASE` used below. If a `wt-bootstrap` helper is on PATH, prefer it — it performs these checks and prints the base dir as JSON.
 2. **Confirm GitHub API access.** `gh auth status` must succeed for every run because each subagent must read review threads (the `git ls-remote` probe checks git remote access, not the API).
-3. **`git fetch origin`** to refresh remote-tracking refs. This updates `origin/*` only — it never moves a local branch or rewrites a worktree — so it is safe for branch entries (which work the local ref regardless) and is what makes a later `--force-with-lease` push compare against the true current remote tip. It also lets a PR-number entry whose head you lack locally check out the current `origin` head.
-4. **Record the main checkout's starting checkout mode:** current branch (which may be empty when detached) and `HEAD` SHA. A branch can be checked out in only one place at a time, so any entry branch the **main checkout currently occupies** must be freed before its worktree is created. The orchestrator does this on demand by detaching the main `HEAD` (see "Resolving and checking out each entry"), which needs the main tree clean. Restore the original branch after all entries using it are finished, or the original detached SHA if the session began detached. Starting from a branch outside the batch (usually `main`) avoids this dance.
+3. **Preflight the peer once for the batch, unless `peer-opinions=off`.** In this main working tree run `command -v codex`; when missing, mark the peer unavailable. Otherwise run `codex login status`: a non-zero exit marks it unavailable when `CODEX_API_KEY` is unset, while a set `CODEX_API_KEY` means classify availability at the first real invocation instead. In that path, an auth/usage failure on the first real invocation marks the peer unavailable for the rest of the batch. Never repeat the probe inside entries. Unavailability does not block the batch; retain its reason for one final-summary note.
+4. **`git fetch origin`** to refresh remote-tracking refs. This updates `origin/*` only — it never moves a local branch or rewrites a worktree — so it is safe for branch entries (which work the local ref regardless) and is what makes a later `--force-with-lease` push compare against the true current remote tip. It also lets a PR-number entry whose head you lack locally check out the current `origin` head.
+5. **Record the main checkout's starting checkout mode:** current branch (which may be empty when detached) and `HEAD` SHA. A branch can be checked out in only one place at a time, so any entry branch the **main checkout currently occupies** must be freed before its worktree is created. The orchestrator does this on demand by detaching the main `HEAD` (see "Resolving and checking out each entry"), which needs the main tree clean. Restore the original branch after all entries using it are finished, or the original detached SHA if the session began detached. Starting from a branch outside the batch (usually `main`) avoids this dance.
 
 ## Orchestrator responsibilities
 
@@ -78,7 +80,7 @@ You are the orchestrator. You do **not** edit the PR branches yourself; delegate
 2. Run the **Session Bootstrap**.
 3. Resolve every entry to a `(local-or-origin branch, PR number)` pair before creating worktrees. De-duplicate aliases for the same PR (for example `#38` plus its branch name), and group different PRs that share one head branch so they run serially rather than contending for the same ref.
 4. **Create one worktree per distinct head branch in the current sub-batch** (see next section). Create a later same-head entry's worktree only after the earlier entry is complete and removed. Skip-and-record any entry that cannot be set up (closed/merged or PR-less, branch checked out elsewhere, unsupported fork branch entry).
-5. Run the per-PR **fix → review → fix-up** loop in lockstep phases across distinct worktrees, up to 3 reviewer rounds (see "Per-PR phased subagents").
+5. Run the per-PR **fix → review → fix-up** loop in lockstep phases across distinct worktrees, up to 6 reviewer rounds (see "Per-PR phased subagents").
 6. For entries that pass, spawn `publish-reviewed` subagents concurrently across distinct worktrees — unless the run is `no-push` (local-only), in which case skip publication and keep each entry's disposition map for a later push.
 7. **Clean up** each worktree once its subagents return (never delete the PR branch).
 8. **Aggregate** every per-PR report into one batch summary, surfacing the hands-off blockers prominently.
@@ -125,8 +127,8 @@ The absolute worktree path, the checked-out branch name, the **paired PR number*
 
 ## Per-PR phased subagents
 
-Claude subagents cannot be assumed to spawn their own subagents, so the top-level orchestrator owns every phase.
-For each reviewer round, fan out one same-phase `general-purpose` `Agent` per distinct worktree concurrently, wait for all to return, then advance the phase.
+Claude subagents cannot be assumed to spawn their own subagents, so the top-level orchestrator owns every phase, including peer launch and triage.
+For each reviewer round, fan out one same-phase `general-purpose` `Agent` per distinct worktree concurrently and, when enabled and available, launch that entry's peer beside it; wait for every Reviewer and any launched peers, recording disabled, unavailable, or forfeited peer outcomes explicitly, then advance the phase.
 
 Every prompt starts with:
 
@@ -145,21 +147,40 @@ If it reports a successful no-op because no actionable review items remain, mark
 
 ### Phase B — fresh review
 
-Only after all Phase-A agents return, spawn one fresh reviewer per PR.
+Only after all Phase-A agents return, spawn one fresh reviewer per PR and, at the same moment for each entry, launch a background `codex` peer unless disabled or unavailable.
 Give it the verbatim review items and proposed dispositions from that PR's packet, its effective review base, branch, and worktree path — never the fixer's reasoning.
 Use `address-review` step 6's reviewer contract.
 It edits nothing and reports Pass or numbered Issues.
 
+Give the peer those same inputs verbatim, not the fixer's reasoning or the Reviewer's execution steps. Tell it to read the actual files, edit nothing, and verify dispositions in committed code: fixes hold, already-addressed claims are true, push-backs are technically justified, and deferrals point to a committed task file that covers the concern. It may inspect code for quality but must not run builds/tests; the fresh Reviewer owns build/typecheck. Require `VERDICT: PASS | ISSUES`, followed for Issues by numbered findings tagged `blocking` or `minor`, each with `file:line` and a one-line rationale.
+
+Assign every per-entry/per-attempt value first; preserve a known `high`/`xhigh` configured effort by leaving `peer_effort_args` empty, or replace that assignment with the commented override when needed:
+
+```bash
+worktree="/absolute/path/to/review-worktree"
+outfile="/absolute/path/to/peer-review.txt"
+stderr_file="/absolute/path/to/peer-review.stderr"
+prompt="Peer review instructions"
+peer_effort_args=()
+# peer_effort_args=(-c model_reasoning_effort=high) # only when high/xhigh is not already known
+
+codex exec --sandbox read-only --cd "$worktree" -o "$outfile" -c mcp_servers={} "${peer_effort_args[@]}" "$prompt" < /dev/null 2> "$stderr_file" &
+```
+
+Launch the peer from that worktree. The unique files keep concurrent output from interleaving, stdin is closed, and separately captured stderr exposes progress. Use a loose roughly 12-minute timeout, extending it when visible stderr progress or review size warrants; retry a timeout or transient failure once, then forfeit that entry's opinion for the round. An auth/usage failure on a classify-at-first-invocation attempt makes the peer unavailable for all later entries and rounds. Always wait for the Reviewer; when a peer was launched, wait for it too before deciding this entry's outcome, otherwise carry the disabled or unavailable outcome forward explicitly.
+
+Read the Reviewer's verdict line and, only when the peer returned an intelligible report, the peer's verdict line for orchestration. Disabled, unavailable, and forfeited peer opinions are explicit non-blocking gate outcomes. A round passes only when the Reviewer passes and any intelligible peer report has no unaddressed grounded findings, whether tagged `blocking` or `minor`. Only when the Reviewer passed and the peer alone would gate, cheaply spot-check each gate-deciding `file:line` and claim; discard nonexistent or self-evidently false references and note the discard. Do not summarize, merge, or rewrite either result.
+
 ### Fix-up rounds
 
-For each failed entry, spawn a fresh fix-up agent with that PR's packet and the reviewer's findings verbatim.
+For each failed entry, spawn a fresh fix-up agent with that PR's packet and the complete available outputs verbatim as separate `Reviewer findings` and, when present, `Peer (codex) findings` blocks; omit the peer block when disabled, unavailable, or forfeited.
 It works only in that worktree, addresses each finding directly, runs validation, commits everything, leaves a clean worktree, and returns an updated packet.
-Then spawn a fresh reviewer.
-Allow at most 3 reviewer rounds total; an entry still failing after round 3 is blocked and must not publish.
+Then spawn a fresh reviewer and, when enabled and available, peer round; the next Reviewer adjudicates any evidence-backed push-back on a peer claim.
+Allow at most 6 reviewer rounds total, counting every fix-up regardless of which reviewer triggered it; an entry still failing after round 6 is blocked and must not publish, and every outstanding finding set is surfaced verbatim.
 
 ### Publication
 
-Unless the run is `no-push` (local-only), spawn a fresh publisher for each passing entry with its final packet and Pass verdict.
+Unless the run is `no-push` (local-only), spawn a fresh publisher only for an entry whose Reviewer passed and whose peer returned no grounded findings, forfeited/unavailable, or was disabled; pass its final packet, Reviewer Pass, and explicit peer outcome.
 Tell it to invoke the `address-review` skill with arguments `#N hands-off publish-reviewed <resolved push/ping tokens>` — pass the run's resolved push/ping set (a bare default batch resolves to `ping-contributing`; a `no-push` batch skips publication entirely).
 It edits no code and returns the full final report, including per-thread dispositions, push/ping outcome, and blockers.
 
@@ -169,8 +190,9 @@ Do **not** give any subagent another PR's context — strict per-PR isolation.
 
 Inherit `address-tasks` → "Adaptive throttling" in full (storage headroom before each fan-out, `ENOSPC` back-off, serialize shared-exclusive-resource phases, fan out less on `429`/`529`).
 
-Effective subagent concurrency now equals the number of PRs in the current phase, not a nested multiple.
+Effective subagent concurrency remains the number of PRs in the current phase, while each review entry also starts one peer CLI process.
 Still start with a modest number of PRs in flight (for example 2–3), widen only when storage and provider limits are comfortable, and serialize shared build/database resources.
+Because concurrent entries each invoke the peer, repeated peer-side rate, transient usage, or capacity failures are a signal to reduce the next fan-out (and retry each affected invocation at most once), just like provider `429`/`529` pressure; a definitive auth/usage exhaustion may mark the peer unavailable without blocking own-harness review.
 Record whenever you ran narrower than the batch size and why.
 
 ## Cleanup
@@ -195,14 +217,15 @@ Aggregate the per-PR `address-review` reports into one batch summary:
 - **Push-backs** made across the batch, with their rationale.
 - **No-push runs:** include each PR's per-thread disposition map (from its `address-review` report) so a later "push now" pass can replay replies/resolves precisely.
 - **Throttling:** note whenever you ran narrower than the batch size, and why (storage-bound, rate-limited, resource-serialized).
+- **Peer opinion:** note participation and grounded/discarded findings per affected entry; report a disabled/unavailable/round-forfeited peer once with its reason rather than repeating the same failure for every PR.
 - **A leafy-stack note** pointing at `rebase-stack` if the user will want to integrate the branches.
 
 ## Checklist
 
-- [ ] Session Bootstrap ran: worktree base prepared, stale worktree registrations pruned, GitHub/remote access confirmed, `git fetch origin` done.
+- [ ] Session Bootstrap ran: worktree base prepared, stale worktree registrations pruned, GitHub/remote access confirmed, one-time peer preflight completed unless disabled, `git fetch origin` done.
 - [ ] Batch parsed into entries (each classified PR-number vs branch-name); pass-through flag set captured (the default — no push/ping argument — resolves to publish + `ping-contributing`; `no-push` makes the whole batch local-only); `hands-off` force-injected into every `address-review` invocation and equivalent unattended guidance given to reviewers/fix-ups; aliases for one PR de-duplicated and same-head PRs serialized.
 - [ ] Each entry resolved to a `(branch, PR#)` pair and checked out on the right ref — **branch entries use the local ref, never `origin`**; PR-number entries prefer a same-named local branch, else `origin` head; worktrees under the chosen base dir; un-setup-able / PR-less entries skipped-and-recorded.
-- [ ] Per-PR phases ran in order: `address-review ... delegated-fix`, fresh external review, fresh fix-up/re-review as needed (3 reviewer rounds max), then `address-review ... publish-reviewed` for passing entries unless the run is `no-push`; distinct heads fanned out concurrently but throttled; same-head entries serialized.
+- [ ] Per-PR phases ran in order: `address-review ... delegated-fix`, fresh external Reviewer plus a concurrent best-effort peer when enabled and available, fresh fix-up/re-review as needed (6 reviewer rounds max), then `address-review ... publish-reviewed` only after the Reviewer passed and the peer outcome satisfied the conditional gate unless the run is `no-push`; distinct heads fanned out concurrently but throttled; same-head entries serialized.
 - [ ] No new PR head lineage created, no `gh pr create`, no restack performed.
 - [ ] Clean worktrees removed after each subagent returns; dirty/in-progress worktrees preserved and reported; **no PR branch deleted**; main checkout restored to its starting checkout mode after any temporary detach.
-- [ ] Batch summary aggregates outcomes, hands-off blockers (prominently), push-backs, no-push disposition maps, throttling notes, and the `rebase-stack` follow-up pointer.
+- [ ] Batch summary aggregates outcomes, hands-off blockers (prominently), push-backs, peer outcomes/forfeits, no-push disposition maps, throttling notes, and the `rebase-stack` follow-up pointer.
