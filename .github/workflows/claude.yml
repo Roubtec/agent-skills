@@ -47,10 +47,34 @@ jobs:
           fetch-depth: 0
 
       # Tag mode checks out an open PR's head branch before starting Claude.
-      # Preserve the trigger-time copy outside the checkout so reviews still
-      # work for branches that predate this contract file.
-      - name: Stage review-format contract
-        run: cp .github/claude/review-format.md "$RUNNER_TEMP/review-format.md"
+      # Classify the trigger and preserve the trigger-time contract outside
+      # the checkout before that switch, so old branches can still load it.
+      - name: Prepare review-format contract
+        id: prepare-review-format
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          IS_PULL_REQUEST_COMMENT: ${{ github.event.issue.pull_request && 'true' || 'false' }}
+          REQUEST_BODY: ${{ github.event.comment.body || github.event.review.body || '' }}
+        run: |
+          is_review_event=false
+          case "$EVENT_NAME" in
+            issue_comment)
+              if [[ "$IS_PULL_REQUEST_COMMENT" == 'true' ]]; then
+                is_review_event=true
+              fi
+              ;;
+            pull_request_review_comment|pull_request_review)
+              is_review_event=true
+              ;;
+          esac
+
+          review_format_arg=''
+          if [[ "$is_review_event" == 'true' ]] && grep -Eiq '(^|[^[:alnum:]_])review([^[:alnum:]_]|$)' <<< "$REQUEST_BODY"; then
+            cp .github/claude/review-format.md "$RUNNER_TEMP/review-format.md"
+            review_format_arg="--append-system-prompt-file $RUNNER_TEMP/review-format.md"
+          fi
+
+          printf 'claude_arg=%s\n' "$review_format_arg" >> "$GITHUB_OUTPUT"
 
       # Not currently needed: this repo has no package.json / pnpm project
       # (these steps were inherited from a monorepo template). Uncomment if
@@ -104,34 +128,16 @@ jobs:
           #                      and fixes real PRs. Only fires on a manual @claude
           #                      mention, so the added cost is bounded. Valid
           #                      levels: low|medium|high|xhigh|max.
-          # Review requests append the staged shared contract. Matching
-          # "review" also covers natural requests such as "please review";
-          # the job-level gate already requires an @claude mention. Keeping
+          # Review requests append the staged shared contract. The preparation
+          # step matches "review" as a case-insensitive whole word, so natural
+          # requests work without classifying "preview" or "reviewer". Keeping
           # this in claude_args instead of adding a prompt input preserves tag
           # mode, including mention detection and the tracking comment.
           claude_args: >-
             --model claude-opus-4-8
             --effort xhigh
             --allowed-tools "Bash(gh pr:*),mcp__github_inline_comment__create_inline_comment"
-            ${{
-              (
-                (
-                  github.event_name == 'issue_comment' &&
-                  github.event.issue.pull_request &&
-                  contains(github.event.comment.body, 'review')
-                ) ||
-                (
-                  github.event_name == 'pull_request_review_comment' &&
-                  contains(github.event.comment.body, 'review')
-                ) ||
-                (
-                  github.event_name == 'pull_request_review' &&
-                  contains(github.event.review.body, 'review')
-                )
-              ) &&
-              format('--append-system-prompt-file {0}/review-format.md', runner.temp) ||
-              ''
-            }}
+            ${{ steps.prepare-review-format.outputs.claude_arg }}
           # If this repo gains a pnpm project, add Bash(pnpm:*), Bash(npx:*),
           # and Bash(corepack:*) to the allowed-tools value above when enabling
           # the matching setup steps.
