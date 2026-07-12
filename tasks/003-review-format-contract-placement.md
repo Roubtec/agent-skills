@@ -44,3 +44,37 @@ Deliberately deferred from PR #4 review (thread: https://github.com/Roubtec/agen
 ## Review plan
 
 Reviewer verifies the live test-PR evidence (threads, prefixes, summary shape), confirms `CLAUDE.md` still carries the durable rule intact, and checks the workflow change introduces no unrelated triggers or permission expansions.
+
+## Decision brief (2026-07-12)
+
+### Investigation outcome
+
+The repository no longer has the integration topology described above: PR #14 added two active repository workflows, [`.github/workflows/claude.yml`](../.github/workflows/claude.yml) for trusted `@claude` mentions and [`.github/workflows/claude-code-review.yml`](../.github/workflows/claude-code-review.yml) for automatic reviews on `pull_request` open, reopen, and ready-for-review events.
+
+`@claude review` now fires through the `issue_comment` trigger in `claude.yml`, not through an additional app-managed default: [run 29173036316](https://github.com/Roubtec/agent-skills/actions/runs/29173036316) was triggered by [this `@claude review` comment](https://github.com/Roubtec/agent-skills/pull/11#issuecomment-4949244224), ran the repository workflow once, and produced an overview-only tracking comment plus no new inline threads because the review was clean.
+
+Earlier reviews on the same PR prove the current unmodified contract's finding path: [run 29169600761](https://github.com/Roubtec/agent-skills/actions/runs/29169600761) produced a [top-level overview](https://github.com/Roubtec/agent-skills/pull/11#issuecomment-4948895410) and separate severity-prefixed, independently resolvable inline threads such as [the security finding](https://github.com/Roubtec/agent-skills/pull/11#discussion_r3565112898) and [the suggestion](https://github.com/Roubtec/agent-skills/pull/11#discussion_r3565113135) through the mention workflow.
+
+The action's mode boundary makes a direct `prompt:` migration unsafe without an explicit behavior decision: for comment events, the inspected v1 revision [selects agent mode whenever `prompt` is non-empty and tag mode otherwise](https://github.com/anthropics/claude-code-action/blob/e90deca47693f9457b72f2b53c17d7c445a87342/src/modes/detector.ts), while agent mode [bypasses mention checking and tracking comments](https://github.com/anthropics/claude-code-action/blob/e90deca47693f9457b72f2b53c17d7c445a87342/src/modes/agent/index.ts).
+
+The dedicated automatic-review workflow has a different execution path: its explicit prompt invokes Anthropic's `code-review` plugin, whose [command already names `mcp__github_inline_comment__create_inline_comment` for one-comment-per-issue posting](https://github.com/anthropics/claude-code/blob/d4d8fbbb333c627d8fe2c1c583a5ccc26fdb1aed/plugins/code-review/commands/code-review.md), but its native summary behavior is not the same tracking-comment behavior as the mention workflow.
+
+### Why this branch does not migrate the contract
+
+The required live proof cannot be obtained safely before merge because `claude-code-action` validates that a workflow file on a PR is byte-for-byte identical to the default-branch copy; [run 29167095938](https://github.com/Roubtec/agent-skills/actions/runs/29167095938) shows the action skipping a PR-local workflow revision for exactly that reason.
+
+Consequently, a single PR cannot both change the review workflow and prove that changed workflow before slimming `CLAUDE.md`; doing so would violate the explicit prove-before-slimming rule, while adding the scoped contract and leaving the global copy indefinitely would create the forbidden half-migrated duplicate state.
+
+This branch therefore leaves `CLAUDE.md` and both workflows unchanged.
+
+### Maintainer decision and recommended sequence
+
+Decision required: authorize a two-PR migration, or retain the current global placement.
+
+The recommended option is a two-PR migration because it preserves the current behavior until evidence exists:
+
+1. PR A adds the action-specific contract to review-run configuration while retaining `CLAUDE.md` unchanged; for `@claude review`, use a review-conditional `claude_args` system-prompt addition rather than the action's `prompt:` input so the established tag-mode tracking behavior remains intact, and cover the automatic-review path without duplicating the contract text (for example through one shared review-run configuration surface).
+2. After PR A merges, open a throwaway PR with deterministic review findings and trigger both the automatic review and `@claude review`; verify one severity-prefixed resolvable inline thread per finding and an overview-only top-level summary, and record the PR, run, comment, and thread URLs.
+3. Only after that evidence exists, PR B removes the MCP/action mechanics from `CLAUDE.md`, retaining the durable tool-agnostic rule.
+
+If the maintainer does not want the temporary duplication between PR A and the E2E proof, retain the current `CLAUDE.md` placement; there is no safe one-PR migration under the action's default-branch workflow validation.
