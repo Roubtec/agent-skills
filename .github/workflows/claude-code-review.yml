@@ -72,17 +72,6 @@ jobs:
             cp "$contract_path" "$staged_contract"
           fi
 
-      # Not currently needed: this repo has no package.json / pnpm project
-      # (mirrors claude.yml — see that file's comment). Uncomment together
-      # with the pnpm/npx/corepack tool allowances below if that changes.
-      # - name: Setup Node.js
-      #   uses: actions/setup-node@v4
-      #   with:
-      #     node-version: 24
-      #
-      # - name: Enable Corepack (provides pnpm from packageManager field)
-      #   run: corepack enable
-
       - name: Run Claude Code Review
         id: claude-review
         uses: anthropics/claude-code-action@v1
@@ -97,18 +86,22 @@ jobs:
           # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
           # or https://code.claude.com/docs/en/cli-reference for available options
           #
-          # Same model/effort floor and tool allowlist as claude.yml — see
-          # that file for the full rationale. The shared review contract at
+          # Same model/effort floor as claude.yml — see that file for the
+          # full rationale. The shared review contract at
           # .github/claude/review-format.md requires one inline comment per
-          # finding, so this job needs the inline-comment tool. The
-          # pnpm/npx/corepack allowances are commented out along with the
-          # Node/Corepack setup steps above — uncomment both together if
-          # this repo grows a pnpm project.
+          # finding, so this job needs the inline-comment tool.
+          #
+          # The allowlist below is deliberately read-only, and stays that way
+          # even in a repo that has a build: unlike mention-gated claude.yml,
+          # this job is triggered automatically by `pull_request`, holds
+          # CLAUDE_CODE_OAUTH_TOKEN, and has no human in the loop. Any tool
+          # that executes PR-authored code (pnpm/npx/corepack install, build,
+          # test) would give a prompt injection smuggled into PR content a
+          # path to exfiltrate that token. Reviewing needs to read the diff,
+          # not run it — command-executing allowances belong only in
+          # claude.yml.
           claude_args: >-
             --model claude-opus-4-8
             --effort xhigh
             --allowed-tools "Bash(gh pr:*),mcp__github_inline_comment__create_inline_comment"
             --append-system-prompt-file ${{ runner.temp }}/review-format.md
-          # If this repo gains a pnpm project, add Bash(pnpm:*), Bash(npx:*),
-          # and Bash(corepack:*) to the allowed-tools value above when enabling
-          # the matching setup steps.
