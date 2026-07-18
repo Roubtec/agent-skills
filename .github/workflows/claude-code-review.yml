@@ -91,15 +91,20 @@ jobs:
           # .github/claude/review-format.md requires one inline comment per
           # finding, so this job needs the inline-comment tool.
           #
-          # The allowlist below is deliberately read-only, and stays that way
-          # even in a repo that has a build: unlike mention-gated claude.yml,
-          # this job is triggered automatically by `pull_request`, holds
-          # CLAUDE_CODE_OAUTH_TOKEN, and has no human in the loop. Any tool
-          # that executes PR-authored code (pnpm/npx/corepack install, build,
-          # test) would give a prompt injection smuggled into PR content a
-          # path to exfiltrate that token. Reviewing needs to read the diff,
-          # not run it — command-executing allowances belong only in
-          # claude.yml.
+          # The allowlist below withholds any tool that executes PR-authored
+          # code, and stays that way even in a repo that has a build: unlike
+          # mention-gated claude.yml, this job is triggered automatically by
+          # `pull_request`, holds CLAUDE_CODE_OAUTH_TOKEN, and has no human in
+          # the loop. Any tool that runs the untrusted diff (pnpm/npx/corepack
+          # install, build, test) would give a prompt injection smuggled into
+          # PR content a path to exfiltrate that token. Reviewing needs to read
+          # the diff, not run it — command-executing allowances belong only in
+          # claude.yml. Note the invariant is "does not execute PR-authored
+          # code", not literally read-only: Bash(gh pr:*) still includes write
+          # verbs (comment/edit/close/merge) this job's pull-requests:write
+          # token could perform — gh pr comment is in fact needed to post the
+          # review summary — so the load-bearing distinction from claude.yml is
+          # the no-code-execution one, not read-only.
           claude_args: >-
             --model claude-opus-4-8
             --effort xhigh
