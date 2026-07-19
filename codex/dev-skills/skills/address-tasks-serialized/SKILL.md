@@ -285,7 +285,7 @@ When either reviewer reports issues:
    - The same project context and validation instructions as the original implementer prompt.
 2. After the fix-up implementer completes — and only then, in a later turn — **spawn a new reviewer agent** and launch the peer per the protocol above to re-check (same fresh prompt structure as before; never concurrent with the fix-up implementer).
 3. Repeat until the own reviewer passes and the peer has no unaddressed grounded findings under the protocol above.
-4. **Cap the feedback loop at 6 iterations.** This is a runaway-loop guard against arcane token bloat, not a quality dial; more legitimate rounds are expected with another reviewer. If issues persist after 6 rounds, stop iterating and do not open a PR for this task. Surface the outstanding findings clearly to the user in the final summary and ask for guidance on how to proceed.
+4. **Cap the feedback loop at 12 iterations.** This is a runaway-loop guard against arcane token bloat, not a quality dial; more legitimate rounds are expected with another reviewer. If issues persist after 12 rounds, stop iterating and do not open a PR for this task. Surface the outstanding findings clearly to the user in the final summary and ask for guidance on how to proceed.
 
 ## Hints
 
