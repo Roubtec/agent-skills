@@ -259,7 +259,7 @@ It edits no code and returns the full final report, including per-thread disposi
 
 Do **not** give any subagent another PR's context — strict per-PR isolation.
 
-## Adaptive throttling (finish over fan-out)
+## Adaptive throttling (width from real constraints)
 
 Inherit `address-tasks` → "Adaptive throttling" in full (storage headroom before each fan-out, `ENOSPC` back-off, serialize shared-exclusive-resource phases, fan out less on `429`/`529`).
 

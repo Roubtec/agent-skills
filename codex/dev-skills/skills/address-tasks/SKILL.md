@@ -104,7 +104,7 @@ When in doubt, treat tasks that touch the same files or migrations as dependent.
 
 If the whole batch is a linear dependency chain, this degrades gracefully to one task per wave — i.e. effectively sequential, like `address-tasks-serialized`, but still worktree-isolated.
 
-## Adaptive throttling (finish over fan-out)
+## Adaptive throttling (width from real constraints)
 
 Default to the wave's full dependency-derived width, bounded only by resources actually available to the run.
 If nine independent tasks are ready and nine worker slots plus their worktrees are supportable, launch nine implementers; do not impose an arbitrary small starting width merely because the run is unattended.
