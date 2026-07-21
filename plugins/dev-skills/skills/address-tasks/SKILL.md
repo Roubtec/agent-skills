@@ -9,7 +9,7 @@ Implement a set of pre-planned task files using a **parallel, worktree-isolated*
 
 `peer-opinions=off` is the only accepted explicit peer-opinion setting. Omit it to use the default, which enables best-effort peer opinions.
 
-This skill is the parallel sibling of `address-tasks-serialized`. The roles (orchestrator / implementer / reviewer), the implementer and reviewer prompt contracts, the code-quality review checklist, and the full peer second-opinion protocol are all inherited from that skill — read it for those contracts and their rationale. **What changes here is the execution model:** instead of one branch on one shared working tree processed strictly sequentially, each task gets its **own git worktree** so independent tasks can run **concurrently**, while each individual task still runs its implement→review→fix loop **sequentially** (up to 6 iterations).
+This skill is the parallel sibling of `address-tasks-serialized`. The roles (orchestrator / implementer / reviewer), the implementer and reviewer prompt contracts, the code-quality review checklist, and the full peer second-opinion protocol are all inherited from that skill — read it for those contracts and their rationale. **What changes here is the execution model:** instead of one branch on one shared working tree processed strictly sequentially, each task gets its **own git worktree** so independent tasks can run **concurrently**, while each individual task still runs its implement→review→fix loop **sequentially** (up to 12 iterations).
 
 ## Why worktrees change the rules
 
@@ -77,9 +77,9 @@ If the whole batch is a linear dependency chain, this degrades gracefully to one
 
 ## Adaptive throttling (finish over fan-out)
 
-When this skill runs **unattended**, completing the batch matters more than maximizing parallel width. A wave that runs four-wide and dies to `ENOSPC`, a port clash, or provider rate-limiting has delivered nothing; the same wave run two-wide — or serially — delivers everything a little slower. So treat wave width as a knob to turn **down** the moment concurrency is the problem. Prefer a slower run that completes over a faster one that fails, and never push fan-out past what the environment can sustain.
+Default to the wave's full dependency-derived width, bounded only by resources actually available to the run. If nine independent tasks are ready and nine worker slots plus their worktrees are supportable, launch nine implementers; do not impose an arbitrary small starting width merely because the run is unattended.
 
-Cap each wave's concurrency at the **minimum** of its dependency-derived width and what the environment can support. Concretely, before and during each wave:
+Throttle only for an objective constraint or a concrete reason to anticipate one: unavailable agent/process slots, measured storage headroom, shared exclusive resources, or observed provider pressure. If breadth causes failures, preserve completed and viable in-flight work, then reduce subsequent implement/review phases enough to avoid repeating the same failure rather than restarting partially completed tasks. Concretely, before and during each wave:
 
 - **Storage headroom.** Before launching a wave, measure free space on the worktree base's filesystem (`df -k "$WT_BASE"`, re-measured mid-run as needed; if you used the `wt-bootstrap` helper, it already reported this as `availBytes`). Estimate `per_worktree_need`, then cap width at `max_concurrent = max(1, floor(free_bytes / per_worktree_need))`; if that is below the wave's task count, run the wave in **sub-batches** of `max_concurrent` rather than all at once. When the package store hardlinks into worktrees (same filesystem), `per_worktree_need` is mainly build artifacts plus package metadata; otherwise, measure one representative install and add its full package-copy cost. When unsure, measure one install before fanning out.
 - **`ENOSPC` mid-wave.** Stop adding concurrency, let viable in-flight tasks finish, and reclaim only worktrees whose changes are committed and pushed. Then retry the failed and remaining tasks in smaller sub-batches — ultimately one at a time. Never force-remove a worktree with uncommitted changes just to free space, and never abandon a task because the parallel attempt failed.
@@ -145,7 +145,7 @@ For a wave of tasks `T1..Tn`:
 
      The peers are examination-only and run no builds or tests. Before triage, wait for every task's own reviewer and for every peer actually launched.
    - A task exits the loop only when its own reviewer passes and the peer, when it delivered an intelligible report, has no unaddressed grounded findings. Tasks with issues carry both reports verbatim as separately labeled blocks into the next round's Phase A; apply the inherited grounding, gating, dispute, retry, and forfeit rules without re-summarizing either report.
-   - Repeat A→B for up to **6 rounds** total. The cap is a runaway-loop guard against arcane token bloat, not a quality dial. After round 6, any task still failing review does **not** get a PR; surface its outstanding findings to the user.
+   - Repeat A→B for up to **12 rounds** total. The cap is a runaway-loop guard against arcane token bloat, not a quality dial. After round 12, any task still failing review does **not** get a PR; surface its outstanding findings to the user.
 
    > Phase ordering is what preserves the per-task discipline: a task's reviewer never starts until that task's implementer (and every sibling implementer) has finished and committed. You get cross-task parallelism without ever running a task's own implementer and reviewer at the same time.
 
@@ -298,7 +298,7 @@ If the restack stops partway, the canonical order remains the review recommendat
 After the batch, provide a concise summary:
 
 - Each task: its PR link (or "local branch only" if PRs were skipped) and which wave it ran in.
-- How many review rounds each task needed, and any task that hit the 6-round cap without passing (with its outstanding findings).
+- How many review rounds each task needed, and any task that hit the 12-round cap without passing (with its outstanding findings).
 - Whether the peer participated; if it was unavailable or forfeited any rounds, note the reason once without treating it as a failure.
 - The dependency/wave structure actually used, and any base-branch/stacking choices worth flagging.
 - The **recommended merge order** using canonical PR branch names — `b1 → … → bN`, merge `b1` first — plus the corresponding local `review-stack/...` guide refs, the integration-checked prefix, any stop point or merge-history guard, reproducible conflict notes, and any empty guide branch. Make clear the guide stack is local only and not pushed; the canonical PR branches were not rewritten, and independent-branch tie ordering is advisory.
