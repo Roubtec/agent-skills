@@ -2,111 +2,15 @@ name: Claude Code Review
 
 on:
   pull_request:
-    # No `synchronize`: the code-review plugin stops when Claude has already
-    # commented on the PR, so per-push runs after the first review would
-    # self-skip anyway — and we don't want a full review per push regardless.
-    # Re-reviews are on demand via an @claude mention (claude.yml). To bring
-    # back on-push reviews, re-add `synchronize` here and solve the plugin's
-    # already-commented skip (e.g. a prompt override) at the same time.
     types: [opened, ready_for_review, reopened]
-    # Optional: Only run on specific file changes
-    # paths:
-    #   - "src/**/*.ts"
-    #   - "src/**/*.tsx"
-    #   - "src/**/*.js"
-    #   - "src/**/*.jsx"
 
 jobs:
   claude-review:
-    # Same-repo guard: secrets.CLAUDE_CODE_OAUTH_TOKEN isn't available to
-    # `pull_request` runs triggered from a fork, so without this the job
-    # would just fail (or the action would skip) on every external PR.
-    if: github.event.pull_request.head.repo.full_name == github.repository
-
-    # Optional: Filter by PR author
-    # if: |
-    #   github.event.pull_request.user.login == 'external-contributor' ||
-    #   github.event.pull_request.user.login == 'new-developer' ||
-    #   github.event.pull_request.author_association == 'FIRST_TIME_CONTRIBUTOR'
-
-    runs-on: ubuntu-latest
+    uses: Roubtec/workflow-infra/.github/workflows/claude-code-review.yml@main
     permissions:
       contents: read
-      # write: posting inline review comments (mcp__github_inline_comment__
-      # create_inline_comment) needs pull-requests write, not just read.
       pull-requests: write
       issues: read
       id-token: write
-    concurrency:
-      # One review run per PR at a time; mostly moot without `synchronize`
-      # (open/reopen/ready-for-review events rarely overlap), but kept as a
-      # cheap guard — and it becomes load-bearing again if `synchronize`
-      # is ever re-added.
-      group: claude-review-${{ github.event.pull_request.number }}
-      cancel-in-progress: true
-
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v7
-        with:
-          # Full history: the code-review plugin has a blame/history-based
-          # review path that stops at a shallow-clone boundary. This repo is
-          # small, so a full fetch stays cheap.
-          fetch-depth: 0
-
-      # Pin the review contract to the PR base commit, so a PR that edits the
-      # contract is still reviewed under the rules it proposes to replace.
-      # The fallback only bootstraps the PR that initially introduces the
-      # contract, whose base commit cannot contain the file yet.
-      - name: Stage review-format contract
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: |
-          contract_path=.github/claude/review-format.md
-          staged_contract="$RUNNER_TEMP/review-format.md"
-
-          git cat-file -e "${BASE_SHA}^{commit}"
-          if git cat-file -e "${BASE_SHA}:${contract_path}" 2>/dev/null; then
-            git show "${BASE_SHA}:${contract_path}" > "$staged_contract"
-          else
-            cp "$contract_path" "$staged_contract"
-          fi
-
-      - name: Run Claude Code Review
-        id: claude-review
-        uses: anthropics/claude-code-action@v1
-        with:
-          claude_code_oauth_token: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
-          plugin_marketplaces: 'https://github.com/anthropics/claude-code.git'
-          plugins: 'code-review@claude-code-plugins'
-          # --comment is required for the review to reach the PR: without it
-          # the code-review command stops after printing its summary to the
-          # Actions log and explicitly posts no GitHub comments.
-          prompt: '/code-review:code-review ${{ github.repository }}/pull/${{ github.event.pull_request.number }} --comment'
-          # See https://github.com/anthropics/claude-code-action/blob/main/docs/usage.md
-          # or https://code.claude.com/docs/en/cli-reference for available options
-          #
-          # Same model/effort floor as claude.yml — see that file for the
-          # full rationale. The shared review contract at
-          # .github/claude/review-format.md requires one inline comment per
-          # finding, so this job needs the inline-comment tool.
-          #
-          # The allowlist below withholds any tool that executes PR-authored
-          # code, and stays that way even in a repo that has a build: unlike
-          # mention-gated claude.yml, this job is triggered automatically by
-          # `pull_request`, holds CLAUDE_CODE_OAUTH_TOKEN, and has no human in
-          # the loop. Any tool that runs the untrusted diff (pnpm/npx/corepack
-          # install, build, test) would give a prompt injection smuggled into
-          # PR content a path to exfiltrate that token. Reviewing needs to read
-          # the diff, not run it — command-executing allowances belong only in
-          # claude.yml. Note the invariant is "does not execute PR-authored
-          # code", not literally read-only: Bash(gh pr:*) still includes write
-          # verbs (comment/edit/close/merge) this job's pull-requests:write
-          # token could perform — gh pr comment is in fact needed to post the
-          # review summary — so the load-bearing distinction from claude.yml is
-          # the no-code-execution one, not read-only.
-          claude_args: >-
-            --model claude-opus-4-8
-            --effort xhigh
-            --allowed-tools "Bash(gh pr:*),mcp__github_inline_comment__create_inline_comment"
-            --append-system-prompt-file ${{ runner.temp }}/review-format.md
+    secrets:
+      CLAUDE_CODE_OAUTH_TOKEN: ${{ secrets.CLAUDE_CODE_OAUTH_TOKEN }}
