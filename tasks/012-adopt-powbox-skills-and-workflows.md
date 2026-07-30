@@ -15,8 +15,9 @@ Included:
 - Add `plugins/dev-skills/workflows/` carrying `wf-address-review.js` and `wf-address-tasks.js`, taken verbatim from powbox `docker/claude/agent-container/workflows/` (current seeded copies are also on the config volume at `~/.claude/workflows/`). Keep `meta.name` as-is (`wf-address-review`, `wf-address-tasks`); the plugin namespace disambiguates from the same-named skills.
 - Verify the plugin manifest needs no change for the default `workflows/` location (add the `workflows` manifest field only if the layout demands it).
 - Port the relevant parts of powbox's `workflows/README.md` (authoring constraints, worktree model rationale, verified runtime facts) into a README next to the workflow sources here; powbox keeps only its container-specific content (wt-* helper contract, volume rationale) plus a pointer.
-- Add `enable-worktrees` and `session-learnings` to `plugins/dev-skills/skills/` (Claude) and `codex/dev-skills/skills/` (Codex), taken from powbox's baked copies. The Codex start-time sync iterates whatever the marketplace clone carries, so the Codex copies flow with no powbox-side mechanism change beyond its forfeit branch.
-- Update this repo's README to list the new components and note the invocation rename for the workflows (bare `/wf-address-tasks` from the seeded copy becomes `/dev-skills:wf-address-tasks` from the plugin; existing seeded copies keep working until powbox's prune retires them).
+- Add `enable-worktrees` and `session-learnings` to `plugins/dev-skills/skills/` (Claude) and `codex/dev-skills/skills/` (Codex), taken from powbox's baked copies — INCLUDING the Codex-side `agents/openai.yaml` sidecars (UI labels/default prompts); a bare SKILL.md mirror regresses the Codex UI. The Codex start-time sync iterates whatever the marketplace clone carries, so the Codex copies flow with no powbox-side mechanism change beyond its forfeit branch.
+- Import powbox's `scripts/test-checkout-cleanliness-report.mjs` (unit test of `wf-address-tasks.js`'s `mainCheckoutSummary`, extracted from the shipped source) alongside the relocated workflow, with paths adapted — the powbox forfeit branch deletes it, so this repo must carry the regression coverage or it is lost.
+- Update this repo's README to list the new components and note the invocation rename for the workflows (bare `/wf-address-tasks` from the seeded copy becomes `/dev-skills:wf-address-tasks` from the plugin; existing seeded copies keep working until powbox's `agent-update-skills --prune` retires them), and sweep any prose/prompts in this repo that reference the bare `/wf-…` form.
 
 Out of scope:
 
@@ -27,7 +28,8 @@ Out of scope:
 
 - powbox `docker/claude/agent-container/workflows/` and `docker/{claude,codex}/agent-container/skills/` — the sources to import.
 - powbox `docker/shared/sync-codex-skills.sh` header — documents that the Codex sync channel follows the clone's contents.
-- powbox branch `forfeit-skills-and-workflows-to-agent-skills` — the counterpart change; its task file lists the merge prerequisites this task satisfies.
+- powbox branch `forfeit-skills-and-workflows-to-agent-skills` (local, at `f10672d`) — the counterpart change; its task 051 lists the merge prerequisites this task satisfies. Merge ordering is strict: powbox's build hard-fails only on an EMPTY Codex skill palette, not an incomplete one, so a premature powbox merge would silently ship images missing the two skills — hence the completeness criterion below.
+- powbox open tasks re-homed here by the forfeit: its 041 (peer-review stage in the wf-* workflows) is covered by [014](014-extract-review-cycle-building-block.md)/[015](015-adopt-peer-review-run-in-review-skills.md); its 047 `wf-check` fixtures and 029a workflow-side prompt changes will consume the copies this task creates.
 - Claude Code plugin docs, "Distribute a workflow in a plugin" — the `workflows/` plugin dir and namespacing behavior.
 
 ## Target files or areas
@@ -43,8 +45,9 @@ Out of scope:
 ## Acceptance criteria
 
 - Both workflows live under `plugins/dev-skills/workflows/`, parse (meta block first, plain JS), and are invocable plugin-namespaced in a consumer session.
-- Both skills exist on both harness sides with content matching the powbox sources at the import commit.
-- README documents the new components and the invocation rename.
+- Both skills exist on both harness sides — Codex copies with their `agents/openai.yaml` sidecars — with content matching the powbox sources at the import commit.
+- The imported `mainCheckoutSummary` regression test runs green via `node`.
+- README documents the new components and the invocation rename; no bare `/wf-…` invocation references remain in this repo's prose.
 - No powbox-repo paths remain in the imported texts.
 
 ## Validation
