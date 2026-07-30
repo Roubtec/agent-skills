@@ -41,7 +41,7 @@ Out of scope:
 ## Acceptance criteria
 
 - A batch with one slow task delivers every fast task's PR without waiting for the slow one; a dependent task starts as soon as its specific prerequisite delivers.
-- The incremental guard catches an add/add clash between a ready task and an already-delivered one, renaming the undelivered side, and catches it equally against a task still in flight through delivery on a number it reserved — including one whose push landed before its PR creation failed.
+- The incremental guard catches an add/add clash between a ready task and an already-delivered one, renaming the side that is neither delivered nor reserved, and catches it equally against a task still in flight through delivery on a number it reserved — including one whose push landed before its PR creation failed.
 - `address-reviews` publishes each entry on its own gate; no entry waits on a sibling.
 - Batch summary correctly reports mixed terminal states including merged-during-run, and every orphaned pushed branch is acted on before the batch ends — PR creation retried, or the branch deleted — with any that survives both attempts named in the summary alongside the task number it still holds, so the next run can reclaim it.
 
