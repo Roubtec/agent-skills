@@ -57,7 +57,7 @@ Out of scope:
 - Peer prompt templates carry the no-network and executed-vs-static-verification instructions.
 - Codex-side variants mirror the change with `--provider claude`.
 - Existing gate semantics (grounding, blocking+minor, non-blocking unavailability, `peer-opinions=off`) are textually preserved.
-- The batch skills carry the adaptive throttle as specced: unbounded start; a first step-down to `max(2, min(8, current in-flight))`; halving on each further trouble cluster down to the floor of 2, which no rule may undercut; in-flight calls never killed; invocations beyond the cap queued rather than forfeited; auth/usage short-circuits excluded as throttle events; and every step-down surfaced in the run summary.
+- The batch skills carry the adaptive throttle as specced: unbounded start; a first step-down to `max(2, min(8, current in-flight))`; halving on each further trouble cluster down to the floor of 2, which no rule may undercut; in-flight calls never killed; invocations beyond the cap queued rather than forfeited; trouble counted as timeouts, `failed`, and empty/garbled outputs; auth/usage short-circuits excluded as throttle events; the counter session-local, uncoordinated across containers, and reset next session; and every step-down surfaced in the run summary.
 
 ## Validation
 
