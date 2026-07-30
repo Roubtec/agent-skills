@@ -53,4 +53,4 @@ Out of scope:
 
 ## Review plan
 
-Reviewer enumerates every scratch-file mention across the five skills and checks each is either worktree-local or identity-namespaced, and that the cleanliness step cannot be read as license to clean the shared checkout.
+Reviewer enumerates every scratch-file mention across the four skills named above and checks each is either worktree-local or identity-namespaced, and that the cleanliness step cannot be read as license to clean the shared checkout.
