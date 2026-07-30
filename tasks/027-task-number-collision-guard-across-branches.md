@@ -37,7 +37,7 @@ Out of scope:
 ## Acceptance criteria
 
 - The batch skills' guard section names the same-number-different-name case and its deconfliction procedure.
-- `write-tasks` instructs checking open PR heads before allocating.
+- `write-tasks` instructs checking open PR heads as well as the working tree before allocating, recursing the whole `tasks/` subtree on both, and says why allocation compares numeric slots where the guard compares full numbers.
 - `review-tasks` flags duplicate full task numbers across the whole subtree, with the report-don't-rename exception for archived folders.
 - The matching rule distinguishes suffix families from true collisions: it compares full number+suffix, so `001`/`001a` never trip it and `024`/`024` with different slugs always does.
 - The guard resolves every open PR head to a readable tree via the base repo's `refs/pull/<N>/head` rather than assuming a local ref, enumerates open PRs without relying on a default result cap, scans the whole `tasks/` subtree **recursively** rather than its top level alone, and names any head it could not scan instead of silently omitting it.
