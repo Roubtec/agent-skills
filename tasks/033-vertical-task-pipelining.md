@@ -9,7 +9,7 @@
 Included:
 
 - **Dependency-DAG scheduling** in `wf-address-tasks`: replace wave barriers with per-task readiness — a task starts the moment its specific prerequisites succeed (the structural `base`->`branch` derivation already in the script), and each task's implement -> review -> fix cycle, delivery, and worktree reclaim run as one end-to-end pipeline.
-- **Incremental collision guard**: when a task's cycle passes, scan it against the already-delivered set plus currently-ready siblings, serialized through a single guard step (first-ready-wins). The undelivered side always renames, which removes the "least disruptive side" judgment for the common case; the comparison set is delivered-but-unmerged branches plus anything merged since batch start. Extends the same-number guard of [027](027-task-number-collision-guard-across-branches.md): in a pipelined run, "open PR heads" includes branches delivered earlier in this same run, and a second claimant of a task number renumbers.
+- **Incremental collision guard**: when a task's cycle passes, scan it against the already-delivered set plus currently-ready siblings, serialized through a single guard step (first-ready-wins). The undelivered side always renames, which removes the "least disruptive side" judgment for the common case; the comparison set is delivered-but-unmerged branches plus anything merged since batch start. **Clearing the guard reserves the number atomically, and the reservation is held through delivery** — a task that has left the guard but is still in its network-bound push/PR-creation step is neither "already delivered" nor a "currently-ready sibling", so without the reservation a second task can clear the guard on the same number and both publish, defeating the serialization the guard exists to provide. The comparison set is therefore delivered ∪ reserved-in-flight ∪ currently-ready, and a reservation is released only on the task's terminal state (converted to delivered on success, dropped if delivery fails). Extends the same-number guard of [027](027-task-number-collision-guard-across-branches.md): in a pipelined run, "open PR heads" includes branches delivered earlier in this same run, and a second claimant of a task number renumbers.
 - **Early merges move the base**: when a sibling merges mid-run, later tasks may rebase onto the advanced base via the rebase nugget of [016](016-default-rebase-policy-in-review-addressing.md) before their final review; a clash with an already-merged sibling surfaces as an honest conflict at that rebase, not as an invisible add/add.
 - **Publish-as-ready in `address-reviews`**: each entry publishes (push, thread hygiene, summary, pings) the moment its own gate passes; no batch-level publish barrier.
 - **Peer throttle integration**: peer invocations use the session-local adaptive throttle of [015](015-adopt-peer-review-run-in-review-skills.md) as a global semaphore around the peer step, since pipelining removes the natural wave-boundary pacing.
@@ -40,7 +40,7 @@ Out of scope:
 ## Acceptance criteria
 
 - A batch with one slow task delivers every fast task's PR without waiting for the slow one; a dependent task starts as soon as its specific prerequisite delivers.
-- The incremental guard catches an add/add clash between a ready task and an already-delivered one, renaming the undelivered side.
+- The incremental guard catches an add/add clash between a ready task and an already-delivered one, renaming the undelivered side, and catches it equally against a task still in flight through delivery on a number it reserved.
 - `address-reviews` publishes each entry on its own gate; no entry waits on a sibling.
 - Batch summary correctly reports mixed terminal states including merged-during-run.
 
@@ -50,4 +50,4 @@ Out of scope:
 
 ## Review plan
 
-Reviewer checks the guard's serialization cannot deadlock with held branches, that first-ready-wins never renames a delivered branch, and that removing the wave barriers did not remove the dependency gate itself.
+Reviewer checks the guard's serialization cannot deadlock with held branches, that first-ready-wins never renames a delivered branch, that a number reserved by a task still mid-delivery is visible to the next task entering the guard, and that removing the wave barriers did not remove the dependency gate itself.
