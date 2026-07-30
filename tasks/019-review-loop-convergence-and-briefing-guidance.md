@@ -36,7 +36,7 @@ Out of scope: gating-rule changes, peer-launch mechanics (task 015), scratch hyg
 
 ## Acceptance criteria
 
-- All six patterns are present, each naming its trigger and the prescribed response.
+- All six patterns are present, each naming its trigger and the prescribed response. Item 2's trigger is a stated number of consecutive rounds — two, or a higher number the delivered text names outright — so "several" or an unbound `N` fails this criterion.
 - No existing gate/round-cap semantics changed.
 - Combined addition stays within roughly the stated budget; no duplicated prose between the two skills.
 
