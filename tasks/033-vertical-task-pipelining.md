@@ -15,7 +15,7 @@ Included:
 - **Early merges move the base**: when a sibling merges mid-run, later tasks may rebase onto the advanced base via the rebase nugget of [016](016-default-rebase-policy-in-review-addressing.md) before their final review; a clash with an already-merged sibling surfaces as an honest conflict at that rebase, not as an invisible add/add.
 - **Publish-as-ready in `address-reviews`**: each entry publishes (push, thread hygiene, summary, pings) the moment its own gate passes; no batch-level publish barrier.
 - **Peer throttle integration**: peer invocations use the session-local adaptive throttle of [015](015-adopt-peer-review-run-in-review-skills.md) as a global semaphore around the peer step, since pipelining removes the natural wave-boundary pacing.
-- **End-of-batch artifacts adapt**: the review-stack construction and batch summary tolerate already-merged members; the summary and the main-checkout cleanliness comparison remain the only true end-of-batch barriers.
+- **End-of-batch artifacts adapt**: the review-stack construction and batch summary tolerate already-merged members; the summary and the main-checkout cleanliness comparison remain the only true end-of-batch barriers. Both fire once every entry has reached **any** terminal state — delivered, blocked, failed, or merged-during-run — per [017](017-scratch-artifact-hygiene-in-parallel-skills.md); pipelining removes the wave boundary but must not turn the cleanliness assertion into something only a delivery can trigger.
 - Storage throttling simplifies: deliver-then-reclaim per task bounds live worktrees continuously, replacing the wave-boundary `df` re-probe with a concurrency cap derived from the same measurement.
 
 Out of scope:
