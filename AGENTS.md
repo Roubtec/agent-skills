@@ -8,7 +8,7 @@ Use one line per paragraph in Markdown if possible. Do not pre-wrap lines in com
 
 Task specifications on which many PRs are based live in [`tasks/`](./tasks/).
 
-We strive to merge linearly after rebasing each PR, no squash merges allowed.
+How we open and merge PRs is a development practice like any other, so it lives in [README.md](README.md#contributing) rather than here — read it before opening or merging one.
 
 ## Code Review Guidelines
 
