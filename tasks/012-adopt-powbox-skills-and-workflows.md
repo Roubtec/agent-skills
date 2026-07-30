@@ -2,7 +2,7 @@
 
 ## Why this task exists
 
-Powbox still bakes and seeds four prompt-material items that belong with the rest of the dev workflow material in this repo: the Claude dynamic workflows `wf-address-review.js` and `wf-address-tasks.js` (seeded into `~/.claude/workflows/`), and the `enable-worktrees` + `session-learnings` skills for both harnesses. Everything else already flows from here — Claude dev-skills via the `dev-skills@roubtec` plugin, Codex dev-skills via the start-time sync from the marketplace clone — so these stragglers are the last items whose iteration requires a powbox image rebuild instead of a plugin refresh. Claude Code plugins support a `workflows/` directory at the plugin root (workflows register plugin-namespaced, e.g. `/dev-skills:wf-address-tasks`), so the plugin can carry the workflows natively. A powbox branch (`forfeit-skills-and-workflows-to-agent-skills`) removes the bake/seed on that side; the maintainer merges it only after this task ships, so sequencing risk is on the powbox side, not here. This relocation is also a prerequisite for [014](014-extract-review-cycle-building-block.md): the shared `wf-review-cycle` workflow must be born in the plugin, and refactoring `wf-address-*` to use it happens on the copies that live here.
+Powbox still bakes and seeds four prompt-material items that belong with the rest of the dev workflow material in this repo: the Claude dynamic workflows `wf-address-review.js` and `wf-address-tasks.js` (seeded into `~/.claude/workflows/`), and the `enable-worktrees` + `session-learnings` skills for both harnesses. Everything else already flows from here — Claude dev-skills via the `dev-skills@roubtec` plugin, Codex dev-skills via the start-time sync from the marketplace clone — so these stragglers are the last items whose iteration requires a powbox image rebuild instead of a plugin refresh. Claude Code plugins support a `workflows/` directory at the plugin root (workflows register plugin-namespaced, e.g. `/dev-skills:wf-address-tasks`), so the plugin can carry the workflows natively. A powbox branch (`forfeit-skills-and-workflows-to-agent-skills`) removes the bake/seed on that side; the maintainer merges it only after this task ships, so sequencing risk is on the powbox side, not here. This relocation is also a prerequisite for 014: the shared `wf-review-cycle` workflow must be born in the plugin, and refactoring `wf-address-*` to use it happens on the copies that live here.
 
 ## Scope
 
@@ -18,14 +18,14 @@ Included:
 Out of scope:
 
 - The powbox-side removal (its forfeit branch, merged by the maintainer after this lands).
-- Any behavioral change to the four items — this is a verbatim relocation; refactors ride later tasks ([014](014-extract-review-cycle-building-block.md), [033](033-vertical-task-pipelining.md)).
+- Any behavioral change to the four items — this is a verbatim relocation; refactors ride later tasks (014, 033).
 
 ## Context and references
 
 - powbox `docker/claude/agent-container/workflows/` and `docker/{claude,codex}/agent-container/skills/` — the sources to import.
 - powbox `docker/shared/sync-codex-skills.sh` header — documents that the Codex sync channel follows the clone's contents.
 - powbox branch `forfeit-skills-and-workflows-to-agent-skills` (local, at `f10672d`) — the counterpart change; its task 051 lists the merge prerequisites this task satisfies. Merge ordering is strict: powbox's build hard-fails only on an EMPTY Codex skill palette, not an incomplete one, so a premature powbox merge would silently ship images missing the two skills — hence the completeness criterion below.
-- powbox open tasks re-homed here by the forfeit: its 041 (peer-review stage in the wf-* workflows) is covered by [014](014-extract-review-cycle-building-block.md)/[015](015-adopt-peer-review-run-in-review-skills.md); its 047 `wf-check` fixtures and 029a workflow-side prompt changes will consume the copies this task creates.
+- powbox open tasks re-homed here by the forfeit: its 041 (peer-review stage in the wf-* workflows) is covered by 014/015; its 047 `wf-check` fixtures and 029a workflow-side prompt changes will consume the copies this task creates.
 - Claude Code plugin docs, "Distribute a workflow in a plugin" — the `workflows/` plugin dir and namespacing behavior.
 
 ## Target files or areas

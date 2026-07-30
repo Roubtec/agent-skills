@@ -2,7 +2,7 @@
 
 ## Why this task exists
 
-Singular `address-review` today works in the current checkout: invoked from the target branch it advances that branch under the maintainer (expected and desired), but invoked from anywhere else it must check the branch out in place, which hijacks the main checkout for the duration of an interactive run and demands a clean tree even when the maintainer's dirt is unrelated. The maintainer wants the singular skill malleable: keep the inline behavior when already on the branch, but otherwise do the work in a worktree so the main checkout stays free for branch management while the review-addressing proceeds — without giving up the interactive main-loop orchestration that distinguishes singular from the hands-off plural. Worktree mode also gives the [016](016-default-rebase-policy-in-review-addressing.md) rebase points a disposable tree to conflict in, and drops the clean-main-checkout preflight where it no longer protects anything.
+Singular `address-review` today works in the current checkout: invoked from the target branch it advances that branch under the maintainer (expected and desired), but invoked from anywhere else it must check the branch out in place, which hijacks the main checkout for the duration of an interactive run and demands a clean tree even when the maintainer's dirt is unrelated. The maintainer wants the singular skill malleable: keep the inline behavior when already on the branch, but otherwise do the work in a worktree so the main checkout stays free for branch management while the review-addressing proceeds — without giving up the interactive main-loop orchestration that distinguishes singular from the hands-off plural. Worktree mode also gives the 016 rebase points a disposable tree to conflict in, and drops the clean-main-checkout preflight where it no longer protects anything.
 
 ## Scope
 
@@ -21,14 +21,14 @@ Included:
 Out of scope:
 
 - A symmetric `worktree` token forcing mode 2 while standing on the target branch — that needs the detach-and-restore dance from `address-reviews`; switching off the branch before invoking achieves the same with zero mechanics. Revisit only if the workaround proves annoying.
-- `address-reviews` (already always-worktree, hands-off) and [033](033-vertical-task-pipelining.md) (batch pipelining) — unaffected.
+- `address-reviews` (already always-worktree, hands-off) and 033 (batch pipelining) — unaffected.
 
 ## Context and references
 
 - `plugins/dev-skills/skills/address-review/SKILL.md` — the preflight (clean tree, no rebase in progress) and PR-resolution steps this task makes location-aware.
 - `plugins/dev-skills/skills/address-reviews/SKILL.md` — "Resolving and checking out each entry" carries the attach rules, local-first guarantee, and slug conventions to borrow (reference, do not restate).
-- [014](014-extract-review-cycle-building-block.md) — implement after it: the skill and workflow both shrink around the extracted review cycle first, so this task edits the surviving per-PR shell once.
-- [016](016-default-rebase-policy-in-review-addressing.md) — its two rebase points run in the working location this task selects; in inline mode a rebase rewrites the branch under the maintainer, which is the accepted mode-1 contract (the branch advancing under you is the point).
+- 014 — implement after it: the skill and workflow both shrink around the extracted review cycle first, so this task edits the surviving per-PR shell once.
+- 016 — its two rebase points run in the working location this task selects; in inline mode a rebase rewrites the branch under the maintainer, which is the accepted mode-1 contract (the branch advancing under you is the point).
 
 ## Target files or areas
 

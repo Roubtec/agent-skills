@@ -19,7 +19,7 @@ Out of scope: gating-rule changes, peer-launch mechanics (task 015), scratch hyg
 
 ## Context and references
 
-- **Sequencing**: implement AFTER [014](014-extract-review-cycle-building-block.md). All six heuristics are protocol content and land ONCE in the canonical `review-cycle` block (skill + workflow prompt templates + Codex mirror), reaching every consumer by reference; the per-skill anchors below describe the pre-014 world.
+- **Sequencing**: implement AFTER 014. All six heuristics are protocol content and land ONCE in the canonical `review-cycle` block (skill + workflow prompt templates + Codex mirror), reaching every consumer by reference; the per-skill anchors below describe the pre-014 world.
 - `plugins/dev-skills/skills/address-review/SKILL.md` — the fix/review loop section (round cap paragraph) is the anchor for items 1–4; the Fixer/Reviewer prompt-content specs anchor items 5–6.
 - `plugins/dev-skills/skills/address-reviews/SKILL.md` — inherits per-PR loops; add pointers, not duplication, where it references the single-PR protocol.
 - `codex/dev-skills/skills/*` mirrors.

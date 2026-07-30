@@ -2,7 +2,7 @@
 
 ## Why this task exists
 
-The `session-learnings` skill currently picks its default transport from `POWBOX_WORKSPACE_HOST_PATH`: set (host bind mount) means local mode, unset means ferry mode. That heuristic answers the wrong question ("can the user already see this file?") and is powbox-specific — once the skill is distributed via the plugin ([012](012-adopt-powbox-skills-and-workflows.md)), it runs in environments where the variable never exists and the guess degrades to always-ferry or always-local by accident of the env. The maintainer's decision: the useful signal is whether a git repo is in reach at all. Creating a throwaway branch is basically free even on `origin`, and agents often run on remote boxes or isolated containers whence fetching a stray untracked file is cumbersome — so when ferrying is possible, it should be the default, bind mount or not.
+The `session-learnings` skill currently picks its default transport from `POWBOX_WORKSPACE_HOST_PATH`: set (host bind mount) means local mode, unset means ferry mode. That heuristic answers the wrong question ("can the user already see this file?") and is powbox-specific — once the skill is distributed via the plugin (012), it runs in environments where the variable never exists and the guess degrades to always-ferry or always-local by accident of the env. The maintainer's decision: the useful signal is whether a git repo is in reach at all. Creating a throwaway branch is basically free even on `origin`, and agents often run on remote boxes or isolated containers whence fetching a stray untracked file is cumbersome — so when ferrying is possible, it should be the default, bind mount or not.
 
 ## Scope
 
@@ -21,7 +21,7 @@ Out of scope:
 
 ## Context and references
 
-- [012](012-adopt-powbox-skills-and-workflows.md) — prerequisite: the skill must live in this repo first (012 is a verbatim import; this behavior change deliberately rides separately so the relocation diff stays a pure move).
+- 012 — prerequisite: the skill must live in this repo first (012 is a verbatim import; this behavior change deliberately rides separately so the relocation diff stays a pure move).
 - powbox `docker/claude/agent-container/skills/session-learnings/SKILL.md` step 3 — the current mode-selection logic being replaced (frontmatter description narrates the same heuristic).
 
 ## Target files or areas

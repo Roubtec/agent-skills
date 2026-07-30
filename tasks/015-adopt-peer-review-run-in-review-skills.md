@@ -31,7 +31,7 @@ Out of scope:
 
 ## Context and references
 
-- **Sequencing**: implement AFTER [014](014-extract-review-cycle-building-block.md). 014 already lands the baseline `peer-review-run` invocation inside the `review-cycle` block, so this task narrows to what 014 does not carry: the fallback paragraph, the no-network and executed-vs-static prompt guidance, the adaptive throttle above, and sweeping any pre-014 raw-launch text that still lingers in un-extracted copies. The per-skill target list below describes the pre-014 world; prefer landing 014 first over fanning the swap across ten files.
+- **Sequencing**: implement AFTER 014. 014 already lands the baseline `peer-review-run` invocation inside the `review-cycle` block, so this task narrows to what 014 does not carry: the fallback paragraph, the no-network and executed-vs-static prompt guidance, the adaptive throttle above, and sweeping any pre-014 raw-launch text that still lingers in un-extracted copies. The per-skill target list below describes the pre-014 world; prefer landing 014 first over fanning the swap across ten files.
 - `plugins/dev-skills/skills/address-review/SKILL.md:180-195` — the current launch snippet and gate rules (the semantics to preserve).
 - `plugins/dev-skills/skills/address-tasks/SKILL.md:44,141` — preflight and the batch launch site.
 - powbox `docker/shared/peer-review-run` header and `docs/architecture.md` (peer-review-run bullet) — the invocation/result contract; treat it as stable and cite the schema name rather than copying implementation detail.

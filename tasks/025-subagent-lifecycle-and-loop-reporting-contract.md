@@ -23,7 +23,7 @@ Out of scope: peer-launch mechanics (task 015), scratch hygiene (task 017).
 
 ## Context and references
 
-- **Sequencing**: implement AFTER [014](014-extract-review-cycle-building-block.md). Items 1–3 and 5 are the review-cycle block's packet/loop contract and land ONCE there; item 4's report-don't-correct shape feeds the block's result contract directly (a reported deviation travels alongside `openQuestions[]` so the maintainer sees it at cycle end). The per-skill anchors below describe the pre-014 world.
+- **Sequencing**: implement AFTER 014. Items 1–3 and 5 are the review-cycle block's packet/loop contract and land ONCE there; item 4's report-don't-correct shape feeds the block's result contract directly (a reported deviation travels alongside `openQuestions[]` so the maintainer sees it at cycle end). The per-skill anchors below describe the pre-014 world.
 - `plugins/dev-skills/skills/address-review/SKILL.md` — the delegated-fix contract ("leave the worktree clean…") that items 1–3 harden.
 - `plugins/dev-skills/skills/address-tasks/SKILL.md` / `-serialized` — implementer contract and round-loop result assembly (items 1–5).
 - Codex-side mirrors.

@@ -9,13 +9,13 @@ The implement -> fresh-eyes review -> best-effort peer review -> fix loop is cur
 Included:
 
 - **Canonical `review-cycle` skill** (`plugins/dev-skills/skills/review-cycle/`), both the referenced protocol and a user-invocable drop-in ("run the review cycle on this change/worktree/task file"). It defines, once:
-  - the roles: fixer/implementer packet contract, fresh-eyes reviewer brief, best-effort peer step. The peer step is BORN invoking the powbox `peer-review-run` helper (schema `powbox.peer-review-run/v1`) as its baseline interface — `unavailable`/`timeout`/`forfeited` are explicit non-blocking outcomes and the peer is never required; [015](015-adopt-peer-review-run-in-review-skills.md) then layers the fallback pattern, prompt-guidance, and throttle on this single site, so the two tasks compose rather than circle;
+  - the roles: fixer/implementer packet contract, fresh-eyes reviewer brief, best-effort peer step. The peer step is BORN invoking the powbox `peer-review-run` helper (schema `powbox.peer-review-run/v1`) as its baseline interface — `unavailable`/`timeout`/`forfeited` are explicit non-blocking outcomes and the peer is never required; 015 then layers the fallback pattern, prompt-guidance, and throttle on this single site, so the two tasks compose rather than circle;
   - the gates: grounding spot-check, blocking+minor peer findings both gate, verbatim finding relay, 12-round cap;
   - the disposition rule: every reviewer/peer finding is dispatched to a fixer that explicitly disposes each item — `fixed`, `declined` (with reason), or `escalated` to an open question — and the cycle ends only when the reviewer passes AND the fixer's last pass disposed nothing new. No finding is ever dropped by the orchestrator without an agent having considered it with full context.
   - a `light` mode that skips the final no-op fixer pass for small mechanical changes, at the invoker's explicit choice;
   - **artifact-type parameterization**: code diff (default), task-file/doc prose (reviewer checks verbiage, scoping, house numbering style), applied-decision diffs.
 - **`wf-review-cycle` workflow** (`plugins/dev-skills/workflows/`), the same protocol as a self-contained script taking `{worktree, branch, base, scope, artifactType, maxRounds, peer, mode}`, where `maxRounds` may only **lower** the canonical 12-round cap — a caller asking for more gets 12 — so the convergence safeguard stays a property of the protocol rather than of each consumer's configuration, and no two consumers can quietly acquire different cap semantics. Its result contract is the information-flow backbone:
-  - lean structured return: final verdict, per-finding dispositions (an `escalated` disposition names the question `id` it raised), `openQuestions[]` in the PINNED wire format below, and an `artifactDir` path holding the full per-round prose (reviewer reports, peer output, fixer packets) for anyone who needs the unabridged history. The format maps one-to-one onto the four-part brief `resolve-open-questions` serves (grounded context, concrete trigger, distinct options, recommendation) so a bare `resolve-open-questions` invocation consumes it without re-derivation — while its step-2 grounding still applies: every carried claim is re-verified against current state before serving, per item 5 of [019](019-review-loop-convergence-and-briefing-guidance.md).
+  - lean structured return: final verdict, per-finding dispositions (an `escalated` disposition names the question `id` it raised), `openQuestions[]` in the PINNED wire format below, and an `artifactDir` path holding the full per-round prose (reviewer reports, peer output, fixer packets) for anyone who needs the unabridged history. The format maps one-to-one onto the four-part brief `resolve-open-questions` serves (grounded context, concrete trigger, distinct options, recommendation) so a bare `resolve-open-questions` invocation consumes it without re-derivation — while its step-2 grounding still applies: every carried claim is re-verified against current state before serving, per item 5 of 019.
 
     ```
     openQuestions: [{
@@ -34,8 +34,8 @@ Included:
     }]
     ```
 
-  - open questions ALWAYS bubble up structurally (they exist for the human), bulk prose stays on disk behind the pointer — per-cycle unique dirs per the hygiene rules of [017](017-scratch-artifact-hygiene-in-parallel-skills.md);
-  - deviations from locked decisions surface per the report-don't-correct rule of [025](025-subagent-lifecycle-and-loop-reporting-contract.md).
+  - open questions ALWAYS bubble up structurally (they exist for the human), bulk prose stays on disk behind the pointer — per-cycle unique dirs per the hygiene rules of 017;
+  - deviations from locked decisions surface per the report-don't-correct rule of 025.
 - **Embeddability**: structure the script so the cycle logic sits in clearly-delimited copyable functions with a marked embeddable section, and document both consumption modes — `workflow('wf-review-cycle', …)` child invocation where the runtime supports nesting, and synthesis (an orchestrator authoring a single flat workflow that embeds the section) where it does not.
 - **Consumer conversion**: `wf-address-review.js` / `wf-address-tasks.js` replace their inlined loops with the shared cycle (this closes their missing-peer gap); the five prose skills replace their restated protocol sections with a reference plus skill-specific deltas; `write-tasks` gains an explicit self-review + peer-review step on drafted task files (the verbiage cycle — suppressible in prose per invocation); `resolve-open-questions` runs a scoped cycle on each applied decision's diff.
 - **Codex mirror**: `codex/dev-skills/skills/review-cycle/` carrying the same protocol with the peer direction flipped (`--provider claude`), referenced by the Codex skill mirrors.
@@ -49,8 +49,8 @@ Out of scope:
 ## Context and references
 
 - `plugins/dev-skills/skills/address-review/SKILL.md` — the richest current statement of the protocol (peer section, gates, round cap); the extraction's semantic baseline.
-- `plugins/dev-skills/workflows/wf-address-{review,tasks}.js` (after [012](012-adopt-powbox-skills-and-workflows.md)) — the inlined loops to replace; note `wf-address-tasks`'s `VERDICT_SCHEMA` as the seed of the result contract.
-- Tasks [015](015-adopt-peer-review-run-in-review-skills.md), [019](019-review-loop-convergence-and-briefing-guidance.md), [025](025-subagent-lifecycle-and-loop-reporting-contract.md) — content that lands in (or is invoked by) the block; implement 014 first, then those three each edit ONE place.
+- `plugins/dev-skills/workflows/wf-address-{review,tasks}.js` (after 012) — the inlined loops to replace; note `wf-address-tasks`'s `VERDICT_SCHEMA` as the seed of the result contract.
+- Tasks 015, 019, 025 — content that lands in (or is invoked by) the block; implement 014 first, then those three each edit ONE place.
 - `resolve-open-questions/SKILL.md` — the downstream consumer of `openQuestions[]`; its item format is the target shape for escalations.
 
 ## Target files or areas
@@ -60,7 +60,7 @@ Out of scope:
 
 ## Implementation notes
 
-- Depends on [012](012-adopt-powbox-skills-and-workflows.md) for the workflow home. The skill half can be drafted in parallel, but land together so consumers reference a complete block.
+- Depends on 012 for the workflow home. The skill half can be drafted in parallel, but land together so consumers reference a complete block.
 - Trimming is a goal: each consuming skill's protocol section should collapse to a reference plus deltas; if a consumer's text does not shrink, the extraction boundary is probably wrong.
 - The disposition rule costs one extra fixer turn per cycle; that is the accepted price for "no finding dropped unconsidered" on meaningful changes — hence the explicit `light` opt-out rather than a heuristic.
 - Escalated open questions must round-trip: `resolve-open-questions` with no arguments should be able to consume a completed cycle's `openQuestions[]` from context without re-derivation.
