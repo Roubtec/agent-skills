@@ -22,6 +22,7 @@ Out of scope:
 
 ## Context and references
 
+- **Sequencing**: implement AFTER [012](012-adopt-powbox-skills-and-workflows.md), which creates `plugins/dev-skills/workflows/` and the `wf-address-review.js` this task edits, and AFTER [014](014-extract-review-cycle-building-block.md), which establishes where the rebase nugget is placed.
 - [021](021-stacked-pr-rebase-and-conflict-resolution-guidance.md) — the correctness guidance (stacked ordering hazards, hunk-vs-file conflict resolution, patch-id) this task turns from advice-on-request into default behavior; implement 021's text first or together, and reference rather than restate it.
 - `plugins/dev-skills/skills/address-review/SKILL.md` — the existing optional `rebase on top of <branch>` token and its flag parsing; `wf-address-review.js` — the flag-parsing block and pipeline where the two rebase points slot in.
 - [014](014-extract-review-cycle-building-block.md) — the `openQuestions[]` ferry the halted-conflict path reports through.

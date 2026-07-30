@@ -25,7 +25,7 @@ Out of scope:
 
 - `plugins/dev-skills/workflows/wf-address-tasks.js` — the wave loop, `slugByBranch` structural gating, collision scan/resolve stages, and storage throttling to be restructured.
 - `plugins/dev-skills/skills/{address-tasks,address-reviews}/SKILL.md` — the prose counterparts; keep their orchestration descriptions in step.
-- Prerequisites — implement first: [014](014-extract-review-cycle-building-block.md), [015](015-adopt-peer-review-run-in-review-skills.md), [016](016-default-rebase-policy-in-review-addressing.md), [027](027-task-number-collision-guard-across-branches.md), and the block-content tasks [019](019-review-loop-convergence-and-briefing-guidance.md) and [025](025-subagent-lifecycle-and-loop-reporting-contract.md) (033 relies on 025's no-latched-flags/final-state rule directly).
+- Prerequisites — implement first: [012](012-adopt-powbox-skills-and-workflows.md) (it brings `wf-address-tasks.js` into this repo, so there is nothing to restructure before it lands), [014](014-extract-review-cycle-building-block.md), [015](015-adopt-peer-review-run-in-review-skills.md), [016](016-default-rebase-policy-in-review-addressing.md), [027](027-task-number-collision-guard-across-branches.md), and the block-content tasks [019](019-review-loop-convergence-and-briefing-guidance.md) and [025](025-subagent-lifecycle-and-loop-reporting-contract.md) (033 relies on 025's no-latched-flags/final-state rule directly).
 
 ## Target files or areas
 
