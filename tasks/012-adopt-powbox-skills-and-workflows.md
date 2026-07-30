@@ -2,11 +2,7 @@
 
 ## Why this task exists
 
-Powbox still bakes and seeds four prompt-material items that belong with the rest of the dev workflow material in this repo: the Claude dynamic workflows `wf-address-review.js` and `wf-address-tasks.js` (seeded into `~/.claude/workflows/`), and the `enable-worktrees` + `session-learnings` skills for both harnesses.
-Everything else already flows from here — Claude dev-skills via the `dev-skills@roubtec` plugin, Codex dev-skills via the start-time sync from the marketplace clone — so these stragglers are the last items whose iteration requires a powbox image rebuild instead of a plugin refresh.
-Claude Code plugins support a `workflows/` directory at the plugin root (workflows register plugin-namespaced, e.g. `/dev-skills:wf-address-tasks`), so the plugin can carry the workflows natively.
-A powbox branch (`forfeit-skills-and-workflows-to-agent-skills`) removes the bake/seed on that side; the maintainer merges it only after this task ships, so sequencing risk is on the powbox side, not here.
-This relocation is also a prerequisite for [014](014-extract-review-cycle-building-block.md): the shared `wf-review-cycle` workflow must be born in the plugin, and refactoring `wf-address-*` to use it happens on the copies that live here.
+Powbox still bakes and seeds four prompt-material items that belong with the rest of the dev workflow material in this repo: the Claude dynamic workflows `wf-address-review.js` and `wf-address-tasks.js` (seeded into `~/.claude/workflows/`), and the `enable-worktrees` + `session-learnings` skills for both harnesses. Everything else already flows from here — Claude dev-skills via the `dev-skills@roubtec` plugin, Codex dev-skills via the start-time sync from the marketplace clone — so these stragglers are the last items whose iteration requires a powbox image rebuild instead of a plugin refresh. Claude Code plugins support a `workflows/` directory at the plugin root (workflows register plugin-namespaced, e.g. `/dev-skills:wf-address-tasks`), so the plugin can carry the workflows natively. A powbox branch (`forfeit-skills-and-workflows-to-agent-skills`) removes the bake/seed on that side; the maintainer merges it only after this task ships, so sequencing risk is on the powbox side, not here. This relocation is also a prerequisite for [014](014-extract-review-cycle-building-block.md): the shared `wf-review-cycle` workflow must be born in the plugin, and refactoring `wf-address-*` to use it happens on the copies that live here.
 
 ## Scope
 

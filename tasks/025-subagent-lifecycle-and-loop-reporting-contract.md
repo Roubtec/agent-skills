@@ -2,8 +2,7 @@
 
 ## Why this task exists
 
-Delegated subagents in the task/review loops have returned in states the orchestrator had to detect and repair, and loop summaries have misdescribed what shipped.
-All items are observed, each from a different real run:
+Delegated subagents in the task/review loops have returned in states the orchestrator had to detect and repair, and loop summaries have misdescribed what shipped. All items are observed, each from a different real run:
 
 - a fix-up subagent spawned a background `codex` to double-check itself, then **ended its turn "waiting for the monitor notification"** — leaving a dirty worktree and no conclusion; subagents are not auto-resumed, so the orchestrator had to notice the missing packet, hunt the child process, and resume it by hand (kalm2);
 - an implementer launched its own detached `codex` self-review that outlived it, orphaned, and wandered into an unrelated sibling worktree because it lacked a tight `--cd` (powbox);

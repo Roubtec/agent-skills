@@ -2,8 +2,7 @@
 
 ## Why this task exists
 
-Agents repeatedly lose turns to a small set of GitHub CLI/API behaviors that look like failures but aren't (or vice versa).
-Each was independently rediscovered — some by three separate subagents in one session — and each has a one-line reliable recipe the skills can carry.
+Agents repeatedly lose turns to a small set of GitHub CLI/API behaviors that look like failures but aren't (or vice versa). Each was independently rediscovered — some by three separate subagents in one session — and each has a one-line reliable recipe the skills can carry.
 
 ## Scope
 

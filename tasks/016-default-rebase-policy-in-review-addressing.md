@@ -2,10 +2,7 @@
 
 ## Why this task exists
 
-The maintainer's repos use rebase-then-merge: linear default branches whose merge commits are parented by the previous merge commit and the PR tip.
-Keeping a batch of in-flight PRs continuously rebased onto the advancing base is currently manual toil between review rounds, and the skills only rebase when explicitly asked.
-Rebasing EARLY means the fixer works on the code as it will look when merged; rebasing again PRE-PUSH means reviewers (human and bot) see a minimal diff against the current base right when the PR may become mergeable.
-Both are often no-ops and cheap; when they are not, they are exactly the work the maintainer does by hand today.
+The maintainer's repos use rebase-then-merge: linear default branches whose merge commits are parented by the previous merge commit and the PR tip. Keeping a batch of in-flight PRs continuously rebased onto the advancing base is currently manual toil between review rounds, and the skills only rebase when explicitly asked. Rebasing EARLY means the fixer works on the code as it will look when merged; rebasing again PRE-PUSH means reviewers (human and bot) see a minimal diff against the current base right when the PR may become mergeable. Both are often no-ops and cheap; when they are not, they are exactly the work the maintainer does by hand today.
 
 ## Scope
 

@@ -2,11 +2,7 @@
 
 ## Why this task exists
 
-`plugins/dev-skills/bin/gh-review-threads` exists to detect the (server-side, GitHub) failure where concurrent GraphQL calls return **another PR's** review threads, and to fail closed (exit 3, empty stdout) instead of letting a publisher post replies and `resolveReviewThread` mutations onto the wrong PR.
-Its scope check has a shape blind spot, reproduced deterministically in a kalm2 session: `scope_offenders()` reads comment URLs via a process substitution (`done < <(jq -r '.[].comments.nodes[].url' <<<"$combined")` at line 282), and a `jq` failure inside a process substitution is not caught by `set -euo pipefail`.
-With any thread carrying `comments: null`, `comments: {}`, or no `comments` key, `jq` errors and prints nothing, the offender list is empty, and the helper emits its payload with **exit 0** — the guard fails open on exactly the malformed shapes a crossed or truncated response can produce.
-Well-formed contamination (right shape, wrong URLs) is still caught; the fix is about shape.
-In the same session a live `gh-review-threads 142` call returned PR #143's comments at exit 0, so the fail-open is not theoretical.
+`plugins/dev-skills/bin/gh-review-threads` exists to detect the (server-side, GitHub) failure where concurrent GraphQL calls return **another PR's** review threads, and to fail closed (exit 3, empty stdout) instead of letting a publisher post replies and `resolveReviewThread` mutations onto the wrong PR. Its scope check has a shape blind spot, reproduced deterministically in a kalm2 session: `scope_offenders()` reads comment URLs via a process substitution (`done < <(jq -r '.[].comments.nodes[].url' <<<"$combined")` at line 282), and a `jq` failure inside a process substitution is not caught by `set -euo pipefail`. With any thread carrying `comments: null`, `comments: {}`, or no `comments` key, `jq` errors and prints nothing, the offender list is empty, and the helper emits its payload with **exit 0** — the guard fails open on exactly the malformed shapes a crossed or truncated response can produce. Well-formed contamination (right shape, wrong URLs) is still caught; the fix is about shape. In the same session a live `gh-review-threads 142` call returned PR #143's comments at exit 0, so the fail-open is not theoretical.
 
 ## Scope
 

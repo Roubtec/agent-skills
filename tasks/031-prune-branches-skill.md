@@ -2,9 +2,7 @@
 
 ## Why this task exists
 
-A fan-out implementation batch (`address-tasks`, `address-reviews`, `rebase-stack`) leaves the local checkout littered with task feature branches, rebase-stack disposable snapshots, and ad-hoc combination branches created to test stacked or interdependent work together.
-After the batch is merged, pruning this noise is a repetitive manual chore: figure out which branches are safely merged, which are transient scaffolding, which still hold unique work, then delete the safe ones without losing anything.
-We want a skill that automates the listing, classification, and confirmed local deletion — erring on the side of caution and leaving recovery breadcrumbs — so the workspace returns to a clean state in one prompt.
+A fan-out implementation batch (`address-tasks`, `address-reviews`, `rebase-stack`) leaves the local checkout littered with task feature branches, rebase-stack disposable snapshots, and ad-hoc combination branches created to test stacked or interdependent work together. After the batch is merged, pruning this noise is a repetitive manual chore: figure out which branches are safely merged, which are transient scaffolding, which still hold unique work, then delete the safe ones without losing anything. We want a skill that automates the listing, classification, and confirmed local deletion — erring on the side of caution and leaving recovery breadcrumbs — so the workspace returns to a clean state in one prompt.
 
 ## Scope
 

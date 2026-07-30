@@ -2,9 +2,7 @@
 
 ## Why this task exists
 
-Long review-addressing sessions outlive their own PRs: in a kalm2 batch, PRs #139/#140 merged (by the maintainer, mid-run) while non-blocking nits on them were still open.
-The nits' files had moved to `main` and the branches carrying them were gone, so landing each nit required choosing a still-open PR to host it, rebasing that PR so the file was present, and explaining the provenance.
-The judgment calls (which PR "owns" an orphaned nit? when is rebase-first mandatory?) were made ad hoc; `resolve-open-questions` — the skill that processes exactly these leftover items — has no guidance for them.
+Long review-addressing sessions outlive their own PRs: in a kalm2 batch, PRs #139/#140 merged (by the maintainer, mid-run) while non-blocking nits on them were still open. The nits' files had moved to `main` and the branches carrying them were gone, so landing each nit required choosing a still-open PR to host it, rebasing that PR so the file was present, and explaining the provenance. The judgment calls (which PR "owns" an orphaned nit? when is rebase-first mandatory?) were made ad hoc; `resolve-open-questions` — the skill that processes exactly these leftover items — has no guidance for them.
 
 ## Scope
 

@@ -2,8 +2,7 @@
 
 ## Why this task exists
 
-Multi-round review loops across kalm2, Scribz, and powbox sessions kept burning rounds on failure modes that are now well-characterized and cheap to name in the skill text.
-Each item below cost 2–4 extra reviewer+fixer rounds in at least one real run; none is currently mentioned in `address-review`/`address-reviews`.
+Multi-round review loops across kalm2, Scribz, and powbox sessions kept burning rounds on failure modes that are now well-characterized and cheap to name in the skill text. Each item below cost 2–4 extra reviewer+fixer rounds in at least one real run; none is currently mentioned in `address-review`/`address-reviews`.
 
 ## Scope
 

@@ -2,10 +2,7 @@
 
 ## Why this task exists
 
-The implement -> fresh-eyes review -> best-effort peer review -> fix loop is currently spelled out about ten times: in five prose skills (`address-review`, `address-reviews`, `address-tasks`, `-serialized`, `resolve-open-questions`), their five Codex mirrors, and inlined again in `wf-address-review.js` and `wf-address-tasks.js` — which, notably, carry NO peer step at all.
-Every protocol improvement (peer launch hardening, convergence heuristics, lifecycle contract) therefore fans out to ten edit sites, and the maintainer must restate the pattern in prose every time an ad-hoc change deserves the same treatment.
-Running this cycle locally, before a PR exists, is the cheapest place to catch findings: GitHub review rounds add days of latency and CI spend, so the PR should be the last sanity check, not the first reviewer.
-Extracting one canonical protocol with three renderings (prose skill, workflow, Codex mirror) makes the pattern a first-class drop-in and lets the consuming skills shrink to references plus their deltas.
+The implement -> fresh-eyes review -> best-effort peer review -> fix loop is currently spelled out about ten times: in five prose skills (`address-review`, `address-reviews`, `address-tasks`, `-serialized`, `resolve-open-questions`), their five Codex mirrors, and inlined again in `wf-address-review.js` and `wf-address-tasks.js` — which, notably, carry NO peer step at all. Every protocol improvement (peer launch hardening, convergence heuristics, lifecycle contract) therefore fans out to ten edit sites, and the maintainer must restate the pattern in prose every time an ad-hoc change deserves the same treatment. Running this cycle locally, before a PR exists, is the cheapest place to catch findings: GitHub review rounds add days of latency and CI spend, so the PR should be the last sanity check, not the first reviewer. Extracting one canonical protocol with three renderings (prose skill, workflow, Codex mirror) makes the pattern a first-class drop-in and lets the consuming skills shrink to references plus their deltas.
 
 ## Scope
 

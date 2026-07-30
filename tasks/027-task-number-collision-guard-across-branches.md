@@ -2,10 +2,7 @@
 
 ## Why this task exists
 
-Task numbers are allocated by scanning the working tree for the next free number, but concurrent branches each scan their **own** tree.
-In Scribz, PR #78 created `tasks/024-bound-the-unconfirmed-entitlement-retry-rate.md` while PR #83 already carried `tasks/024-bound-sqlcmd-execution-time-in-the-integration-rig.md`; the filenames differ, so Git reports no conflict and both would have merged, silently corrupting the numbering convention.
-It was caught only by an explicit manual cross-branch check.
-The `address-tasks` pre-PR collision guard already deconflicts **add/add clashes on identical paths**; the same-number-different-name case is invisible to it.
+Task numbers are allocated by scanning the working tree for the next free number, but concurrent branches each scan their **own** tree. In Scribz, PR #78 created `tasks/024-bound-the-unconfirmed-entitlement-retry-rate.md` while PR #83 already carried `tasks/024-bound-sqlcmd-execution-time-in-the-integration-rig.md`; the filenames differ, so Git reports no conflict and both would have merged, silently corrupting the numbering convention. It was caught only by an explicit manual cross-branch check. The `address-tasks` pre-PR collision guard already deconflicts **add/add clashes on identical paths**; the same-number-different-name case is invisible to it.
 
 ## Scope
 

@@ -2,8 +2,7 @@
 
 ## Why this task exists
 
-The skills that launch a cross-harness peer (`address-review`, `address-reviews`, `address-tasks`, `address-tasks-serialized`, `resolve-open-questions`) document a raw backgrounded launch (`codex exec --sandbox read-only --cd "$worktree" -o "$outfile" … &`, `address-review/SKILL.md:187`).
-Months of field use across kalm2, jabko, Scribz, and powbox sessions show that pattern is a reliability tarpit every orchestrator re-hits:
+The skills that launch a cross-harness peer (`address-review`, `address-reviews`, `address-tasks`, `address-tasks-serialized`, `resolve-open-questions`) document a raw backgrounded launch (`codex exec --sandbox read-only --cd "$worktree" -o "$outfile" … &`, `address-review/SKILL.md:187`). Months of field use across kalm2, jabko, Scribz, and powbox sessions show that pattern is a reliability tarpit every orchestrator re-hits:
 
 - run through a harness Bash tool, the wrapping shell exits immediately and the completion notification describes the **launcher**, not the peer — every launch needed a `nohup … &` workaround plus a `pgrep` liveness verification round-trip;
 - `pgrep -f "codex exec"` returns the entire multi-KB prompt from the process command line (34 KB in one liveness check), and `pkill -f <token>` has killed the killing shell itself when the token appeared in its own argv;
@@ -11,8 +10,7 @@ Months of field use across kalm2, jabko, Scribz, and powbox sessions show that p
 - a single foreground call capped by the Bash tool's 10-minute maximum silently forfeited the peer opinion on exactly the largest, most security-sensitive diffs (exit 143, no output file);
 - an empty `-o` file is ambiguous between "still running", "finished but forfeited", and "crashed".
 
-powbox now bakes `peer-review-run` (`/usr/local/bin/peer-review-run`), a provider-neutral runner that owns all of this: literal prompt-file handling (stdin, never shell-interpolated), read-only provider execution with config/hook isolation, process-group supervision with timeout, transient-only retry (auth/usage short-circuits to `unavailable`), reaping on every exit path, and a machine-readable result — final stdout line is one JSON object, schema `powbox.peer-review-run/v1`: `{ schema, provider, outcome, verdict, elapsedSeconds, exitStatus, attempts, retried, liveProgress, artifactDir, reason }`, `outcome ∈ passed | issues | unavailable | timeout | forfeited | failed`, exit 0 for any produced outcome.
-powbox's `docs/architecture.md` explicitly names this contract as the adoption boundary for these skills.
+powbox now bakes `peer-review-run` (`/usr/local/bin/peer-review-run`), a provider-neutral runner that owns all of this: literal prompt-file handling (stdin, never shell-interpolated), read-only provider execution with config/hook isolation, process-group supervision with timeout, transient-only retry (auth/usage short-circuits to `unavailable`), reaping on every exit path, and a machine-readable result — final stdout line is one JSON object, schema `powbox.peer-review-run/v1`: `{ schema, provider, outcome, verdict, elapsedSeconds, exitStatus, attempts, retried, liveProgress, artifactDir, reason }`, `outcome ∈ passed | issues | unavailable | timeout | forfeited | failed`, exit 0 for any produced outcome. powbox's `docs/architecture.md` explicitly names this contract as the adoption boundary for these skills.
 
 ## Scope
 

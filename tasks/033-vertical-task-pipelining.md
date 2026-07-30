@@ -2,9 +2,7 @@
 
 ## Why this task exists
 
-`wf-address-tasks` (and the prose batch skills) synchronize horizontally: a wave's tasks all finish implementation before reviews fan out, and delivery waits for the whole wave's pre-PR collision scan; `address-reviews` similarly tends to hold publishing until every entry converges.
-That leaves finished work idle — PR reviewers could already be chewing on the easy entries while the hard ones iterate, and simple PRs could merge before the batch ends.
-The throughput ceiling is orchestration-imposed, not inherent: per-task worktrees already isolate the work.
+`wf-address-tasks` (and the prose batch skills) synchronize horizontally: a wave's tasks all finish implementation before reviews fan out, and delivery waits for the whole wave's pre-PR collision scan; `address-reviews` similarly tends to hold publishing until every entry converges. That leaves finished work idle — PR reviewers could already be chewing on the easy entries while the hard ones iterate, and simple PRs could merge before the batch ends. The throughput ceiling is orchestration-imposed, not inherent: per-task worktrees already isolate the work.
 
 ## Scope
 

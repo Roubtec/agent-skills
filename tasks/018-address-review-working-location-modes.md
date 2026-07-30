@@ -2,9 +2,7 @@
 
 ## Why this task exists
 
-Singular `address-review` today works in the current checkout: invoked from the target branch it advances that branch under the maintainer (expected and desired), but invoked from anywhere else it must check the branch out in place, which hijacks the main checkout for the duration of an interactive run and demands a clean tree even when the maintainer's dirt is unrelated.
-The maintainer wants the singular skill malleable: keep the inline behavior when already on the branch, but otherwise do the work in a worktree so the main checkout stays free for branch management while the review-addressing proceeds — without giving up the interactive main-loop orchestration that distinguishes singular from the hands-off plural.
-Worktree mode also gives the [016](016-default-rebase-policy-in-review-addressing.md) rebase points a disposable tree to conflict in, and drops the clean-main-checkout preflight where it no longer protects anything.
+Singular `address-review` today works in the current checkout: invoked from the target branch it advances that branch under the maintainer (expected and desired), but invoked from anywhere else it must check the branch out in place, which hijacks the main checkout for the duration of an interactive run and demands a clean tree even when the maintainer's dirt is unrelated. The maintainer wants the singular skill malleable: keep the inline behavior when already on the branch, but otherwise do the work in a worktree so the main checkout stays free for branch management while the review-addressing proceeds — without giving up the interactive main-loop orchestration that distinguishes singular from the hands-off plural. Worktree mode also gives the [016](016-default-rebase-policy-in-review-addressing.md) rebase points a disposable tree to conflict in, and drops the clean-main-checkout preflight where it no longer protects anything.
 
 ## Scope
 
