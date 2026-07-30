@@ -18,7 +18,25 @@ Included:
   - a `light` mode that skips the final no-op fixer pass for small mechanical changes, at the invoker's explicit choice;
   - **artifact-type parameterization**: code diff (default), task-file/doc prose (reviewer checks verbiage, scoping, house numbering style), applied-decision diffs.
 - **`wf-review-cycle` workflow** (`plugins/dev-skills/workflows/`), the same protocol as a self-contained script taking `{worktree, branch, base, scope, artifactType, maxRounds, peer, mode}`. Its result contract is the information-flow backbone:
-  - lean structured return: final verdict, per-finding dispositions, `openQuestions[]` (`{question, context, origin: reviewer|peer|implementer, options?, recommendation?, blocking}`), and an `artifactDir` path holding the full per-round prose (reviewer reports, peer output, fixer packets) for anyone who needs the unabridged history;
+  - lean structured return: final verdict, per-finding dispositions (an `escalated` disposition names the question `id` it raised), `openQuestions[]` in the PINNED wire format below, and an `artifactDir` path holding the full per-round prose (reviewer reports, peer output, fixer packets) for anyone who needs the unabridged history. The format maps one-to-one onto the four-part brief `resolve-open-questions` serves (grounded context, concrete trigger, distinct options, recommendation) so a bare `resolve-open-questions` invocation consumes it without re-derivation — while its step-2 grounding still applies: every carried claim is re-verified against current state before serving, per item 5 of [019](019-review-loop-convergence-and-briefing-guidance.md).
+
+    ```
+    openQuestions: [{
+      id,                     // stable within the run (e.g. "<cycle-slug>-q1"); referenced by dispositions and coupledWith
+      question,               // the decision itself, phrased as the fork — not a narrative
+      origin,                 // reviewer | peer | implementer | rebase
+      originRound,            // cycle round it arose in
+      blocking,               // true: the cycle could not pass without the answer; false: parked nit/deferral
+      artifacts: [],          // authoritative pointers only ("file:line", ref, PR/thread URL, task file) — never paraphrase
+      trigger,                // the concrete situation that manifests the problem
+      reachability,           // live | dormant | impossible-until | unknown — a CARRIED claim, re-derived before serving
+      reachabilityCondition,  // the flag/prerequisite when dormant/impossible-until; empty otherwise
+      options: [{ label, consequence }],  // drafted resolutions with blast radius; may be empty
+      recommendation,         // escalator's pick + one-line why; empty when the call turns on maintainer intent
+      coupledWith: []         // ids of sibling questions sharing the one underlying decision
+    }]
+    ```
+
   - open questions ALWAYS bubble up structurally (they exist for the human), bulk prose stays on disk behind the pointer — per-cycle unique dirs per the hygiene rules of [017](017-scratch-artifact-hygiene-in-parallel-skills.md);
   - deviations from locked decisions surface per the report-don't-correct rule of [025](025-subagent-lifecycle-and-loop-reporting-contract.md).
 - **Embeddability**: structure the script so the cycle logic sits in clearly-delimited copyable functions with a marked embeddable section, and document both consumption modes — `workflow('wf-review-cycle', …)` child invocation where the runtime supports nesting, and synthesis (an orchestrator authoring a single flat workflow that embeds the section) where it does not.

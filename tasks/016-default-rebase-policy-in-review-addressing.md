@@ -36,7 +36,7 @@ Out of scope:
 ## Implementation notes
 
 - Parent-map tracking must stay cheap to codify: one `gh pr view --json baseRefName` per entry plus recording each parent's pre- and post-rebase tips; resist reimplementing `rebase-stack`.
-- `no-rebase` is per-invocation, not per-entry; a mixed batch that needs one entry pinned should run that entry separately.
+- `no-rebase` is per-invocation, not a per-entry parameter; per-entry exclusions are expressed in invocation prose ("rebase everything except branch `special/snowflake`") and honored as ordinary instructions — no flag syntax needed.
 - Force-pushes after rebase follow the existing exact-lease rules already in the skills (never bare `--force`).
 
 ## Acceptance criteria
