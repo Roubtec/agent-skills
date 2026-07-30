@@ -16,7 +16,7 @@ Included:
 - **Ordering**: the pre-push rebase happens BEFORE the final reviewer round, so the passing verdict always applies to the exact tree being pushed; a build plus the project's test suite runs after any non-noop rebase.
 - **Delegated rebase step**: rebasing runs in a subagent (never the orchestrator) with a compact brief — the "rebase nugget", specified once and referenced by both skills and the workflow, the same extraction shape as the review cycle of [014](014-extract-review-cycle-building-block.md). It resolves conflicts within its competence using the hunk-level rules of [021](021-stacked-pr-rebase-and-conflict-resolution-guidance.md), and when resolution genuinely needs maintainer input it halts that entry and returns the question through the `openQuestions[]` ferry rather than guessing.
 - **Stack awareness**: the nugget maintains a parent map for the batch (each entry's PR base ref). Entries rebase in topological order: a parent onto the true base first, then each child onto its parent's NEW tip (`git rebase --onto <newParentTip> <oldParentTip>`), with patch-id dropping of commits the base already carries per 021. This also covers the leafy-stack case where a parent gained fix commits mid-run and its child still sits on the old parent tip.
-- After any rebase, delegation ranges use stable refs (`origin/main..HEAD`), never pre-rebase SHAs (019 item 6 applies).
+- After any rebase, delegation ranges use stable refs, never pre-rebase SHAs (019 item 6 applies). The ref is the entry's **effective base** — its actual PR base ref (or, for a stacked entry, its parent's new tip), recorded as a ref or OID at the moment the rebase completes — delegated as `<effective-base>..HEAD`. Do not hard-code `origin/main`: this task explicitly supports arbitrary PR bases and stacked entries, and on those a `origin/main..HEAD` range hands the reviewer unrelated commits or the wrong parent boundary, so a verdict can be rendered on a diff that is not the entry's own.
 
 Out of scope:
 
@@ -43,6 +43,7 @@ Out of scope:
 
 - Default runs rebase at both points; `no-rebase` suppresses both; the explicit rebase token still works.
 - The final reviewer verdict is always rendered on the post-rebase tree; build+tests run after every non-noop rebase.
+- Delegated diff ranges name the entry's effective post-rebase base, so an entry whose PR targets something other than `main` — or that is stacked on another PR — is reviewed against its own diff.
 - Stacked entries rebase in topological order and the leafy-stack case produces a child based on the parent's new tip without duplicated parent commits.
 - A conflict beyond the nugget's competence halts that entry with an open question; other entries proceed.
 

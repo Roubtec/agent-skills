@@ -12,8 +12,8 @@ In the same session a live `gh-review-threads 142` call returned PR #143's comme
 
 Two changes to `plugins/dev-skills/bin/gh-review-threads`, both request-free:
 
-1. **Fail closed on extraction failure.** Replace the process substitution with a checked command substitution: `urls="$(jq -r '.[].comments.nodes[].url' <<<"$combined")" || die "scope extraction failed"` (matching the script's existing error/exit-3 conventions), then iterate over `$urls`. Any `jq` parse/shape error must produce exit 3 and empty stdout, like a detected contamination.
-2. **Positive identity assertion.** Request `repository { nameWithOwner }` and `pullRequest { number url }` in the same GraphQL query the helper already sends, and verify they equal the requested owner/repo and PR number **before** inspecting comments. This catches a wholesale crossed response even when every thread has zero comments (the URL-based check has nothing to inspect then). Verified against the live API: both fields are returned on the existing query shape at no extra request.
+1. **Fail closed on extraction failure.** Replace the process substitution with a checked command substitution: `urls="$(jq -r '.[].comments.nodes[].url' <<<"$combined")" || return 1`, then iterate over `$urls`. Return a distinguished failure to the caller rather than calling the script's `die()` here — `die` exits 1 on the spot, so the first malformed response would bypass the mandatory whole-fetch retry and never produce the documented exit 3. Route the failure into the same retry path a URL-scope offender takes today; only a retried response that also fails extraction produces exit 3 and empty stdout.
+2. **Positive identity assertion.** Request `repository { nameWithOwner }` and `pullRequest { number url }` in the same GraphQL query the helper already sends, and verify they match the requested owner/repo and PR number **before** inspecting comments. Compare `nameWithOwner` **case-insensitively** (lowercase both sides, exactly as the existing URL scope check already does) and the PR number exactly — GitHub resolves `roubtec/powbox` to `Roubtec/powbox`, so an exact string comparison would reject a valid response for a caller who passed noncanonical `--repo` casing, retry, and then fail closed on a healthy PR. This catches a wholesale crossed response even when every thread has zero comments (the URL-based check has nothing to inspect then). Verified against the live API: both fields are returned on the existing query shape at no extra request.
 
 Out of scope: the hermetic test suite lives in `Roubtec/powbox` (`scripts/test-gh-review-threads.sh`) and gets malformed-shape cases in powbox task 033 — coordinate landing order so powbox's Stage 0b (which bakes this file verbatim from the agent-skills clone) does not go red in between.
 
@@ -38,6 +38,8 @@ Out of scope: the hermetic test suite lives in `Roubtec/powbox` (`scripts/test-g
 
 - A response containing a thread with `comments: null`, `comments: {}`, or missing `comments` produces exit 3 and empty stdout (after the one retry).
 - A response whose echoed `repository.nameWithOwner` or `pullRequest.number` differs from the request produces exit 3 and empty stdout (after the one retry).
+- A response whose echoed `repository.nameWithOwner` differs from the request only in letter case is accepted as valid — no retry, no failure.
+- No failure path reaches exit 3 without the single whole-fetch retry having been attempted first.
 - Clean well-formed responses (including zero-comment threads) behave byte-identically to today.
 
 ## Validation

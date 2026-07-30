@@ -16,7 +16,7 @@ Included:
 
 1. **Unique-name rule** in every skill that runs parallel subagents (`address-reviews`, `address-tasks`, and `address-review` when invoked as a batch member): any scratch artifact a subagent writes outside its own worktree MUST be namespaced by its task identity — PR number, worktree slug, or `$$` — or live in a per-task subdirectory the orchestrator hands it. Name the two observed collisions (`threads.json`, `verify.log`) as the canonical counterexamples. Prefer redirecting validation output to a file **inside the assigned worktree** (gitignored or cleaned before commit) over the shared scratchpad.
 2. **`address-review` internal artifacts**: everywhere the skill's own recipe names a scratch file (review threads dump, verify logs, prompt files), bake the PR number into the documented filename (`threads-<PR#>.json`) so even single-PR guidance is collision-proof by default. The URL scope-check stays as backstop, not primary defense.
-3. **Post-batch cleanliness assertion** in `address-tasks`/`address-tasks-serialized`: after the last task delivers, the orchestrator runs `git -C <main-checkout> status --porcelain`; non-empty output is a loud finding in the final report (diff strays against delivered branches before touching them — another agent's uncommitted work is not ours to delete).
+3. **Post-batch cleanliness assertion** in `address-tasks`/`address-tasks-serialized`: once every batch entry has reached **any terminal state**, the orchestrator runs `git -C <main-checkout> status --porcelain`; non-empty output is a loud finding in the final report (diff strays against delivered branches before touching them — another agent's uncommitted work is not ours to delete). Trigger it unconditionally on batch termination, not on "the last task delivers": a batch where every task blocks, fails, or aborts never reaches a delivery, so gating on one skips the check exactly when it matters most — a failed implementer is at least as likely to have leaked strays, and the report would otherwise close out clean without surfacing them.
 4. **Diagnosis discipline** one-liner in the batch skills: a subagent's environment/infrastructure diagnosis is a hypothesis, not a finding — verify against its transcript (bounded greps for the specific commands it claims it ran) before propagating any mitigation to sibling prompts.
 
 Out of scope:
@@ -43,7 +43,7 @@ Out of scope:
 
 - No skill documents a fixed-name scratch file for anything a parallel subagent writes; `threads-<PR#>.json`-style naming appears in the recipes.
 - Batch skills instruct orchestrators to hand each subagent a unique scratch location (or require worktree-local output) in the subagent prompt template.
-- `address-tasks` (both variants) ends with the porcelain check and the report-don't-clean rule.
+- `address-tasks` (both variants) ends with the porcelain check and the report-don't-clean rule, and runs it on every batch termination — including zero-delivery and aborted batches — not only when a task delivered.
 - The hypothesis-not-finding line is present in the batch skills.
 
 ## Validation

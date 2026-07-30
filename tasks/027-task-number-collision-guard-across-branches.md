@@ -11,7 +11,7 @@ The `address-tasks` pre-PR collision guard already deconflicts **add/add clashes
 
 Included:
 
-- **`address-tasks` (and serialized variant) pre-PR guard extension:** before opening a PR that adds task files, check the new files' `NNN` prefixes against task files present on the base branch AND on every open PR head in the repo (e.g. `gh pr list --json headRefName` + `git ls-tree <head> tasks/`); a same-number-different-name hit is handled like the existing add/add clash (renumber one side + re-review, or hold with an imperative name).
+- **`address-tasks` (and serialized variant) pre-PR guard extension:** before opening a PR that adds task files, check the new files' `NNN` prefixes against task files present on the base branch AND on every open PR head in the repo; a same-number-different-name hit is handled like the existing add/add clash (renumber one side + re-review, or hold with an imperative name). Resolve each head to an object the local repo can actually read before scanning it: `gh pr list --json number,headRefName,headRefOid,headRepositoryOwner,isCrossRepository`, then `git ls-tree <headRefOid> tasks/` after fetching that exact OID (`git fetch <remote> <oid>`), or read the tree via `gh api repos/{owner}/{repo}/contents/tasks?ref=<oid>` when the head lives in a fork. A bare `git ls-tree <headRefName>` is not sufficient — a head that exists only as `origin/<name>`, or on a fork, does not resolve as a local ref and a normal base-repo fetch does not create it, so the guard would silently skip those PRs while claiming to scan every head.
 - **`write-tasks` numbering guidance:** when allocating numbers, scan not just the working tree but also open PR heads for `tasks/NNN-*` prefixes; on collision risk (or when the repo has multiple task-bearing PRs in flight), prefer the next number clear of all of them and say so in the task-writing commit message.
 - **`review-tasks` sweep addition:** during task cleanup cycles, flag duplicate `NNN` prefixes in `tasks/` (including `done/`, where a renumber-on-archive would break references — report, don't rename there).
 
@@ -33,8 +33,8 @@ Out of scope:
 
 ## Implementation notes
 
-- The check is prefix-based (`tasks/NNN-` and `tasks/NNNx-` with the letter suffix): two files sharing a numeric prefix (same suffix or one suffixed/one not is fine per house style — `001` and `001a` coexist by design) collide only when the FULL number+suffix matches with different slugs. State the matching rule precisely so the guard doesn't false-positive on legitimate `001`/`001a` families.
-- Keep it cheap: one `gh pr list` + one `git ls-tree` per open head at guard time; degrade gracefully (note-and-proceed) when the remote is unavailable, since local-only runs can't see PR heads.
+- State the matching rule precisely so the guard doesn't false-positive on legitimate `001`/`001a` families. Parse each task filename into its **full task number** — the three digits plus the optional lowercase letter suffix (`001`, `001a`, `042b`) — and its slug. Two files **collide** when their full task numbers are identical and their slugs differ. Two files whose full task numbers differ **never** collide, even when their numeric portions match: `001` and `001a` are distinct numbers that coexist by design, as do `001a` and `001b`. Identical full number *and* identical slug is the plain add/add clash the existing guard already handles.
+- Keep it cheap: one `gh pr list` at guard time plus one tree read per open head; degrade gracefully (note-and-proceed) when the remote is unavailable or a head cannot be resolved, since local-only runs can't see PR heads — report which heads were skipped rather than treating the scan as complete.
 - Write the guard parallelism-ready for [033](033-vertical-task-pipelining.md): in a pipelined run the comparison set is open PR heads PLUS branches delivered earlier in the same run, first claimant wins, and the second claimant renumbers (never the delivered side).
 
 ## Acceptance criteria
@@ -42,7 +42,8 @@ Out of scope:
 - The batch skills' guard section names the same-number-different-name case and its deconfliction procedure.
 - `write-tasks` instructs checking open PR heads before allocating.
 - `review-tasks` flags duplicate prefixes with the done/-folder exception.
-- The matching rule distinguishes suffix families from true collisions.
+- The matching rule distinguishes suffix families from true collisions: it compares full number+suffix, so `001`/`001a` never trip it and `024`/`024` with different slugs always does.
+- The guard resolves every open PR head to a readable tree (by OID, fetching or querying fork heads via the API) rather than assuming a local ref, and names any head it could not scan instead of silently omitting it.
 
 ## Validation
 

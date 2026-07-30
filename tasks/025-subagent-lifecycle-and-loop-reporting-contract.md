@@ -16,7 +16,7 @@ Add to the delegated-agent contracts (implementer, fixer, reviewer prompt specs)
 
 1. **No waiting to be resumed.** A subagent must never end its turn expecting a later wake-up. If it starts a long-running child, it either blocks on that child's completion within its own turn or finalizes on its own analysis; "I'll wait for the notification" is a contract violation.
 2. **Reap your children.** A subagent must not leave background processes running when it returns; anything it spawned is reaped (or completed) before the final packet. Implementers/fixers should not launch their own peer reviews at all — the orchestrator's peer step is the sanctioned second opinion.
-3. **Packet hard-check.** On every returned fix/implementation packet, the orchestrator verifies `git -C <worktree> status --porcelain` is clean (all changes committed as the contract already requires); dirt means redrive or resume, never silent adoption.
+3. **Packet hard-check.** On every returned fix/implementation packet, the orchestrator verifies the worktree is both clean AND idle: `git -C <worktree> status --porcelain` is empty (all changes committed as the contract already requires) **and** no Git operation is in progress. Check the operation-state paths explicitly (`git -C <worktree> rev-parse --git-path rebase-merge` / `rebase-apply`, plus `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`) — a subagent that returns mid-rebase or mid-cherry-pick can leave a working tree whose porcelain output happens to be empty, and a porcelain-only check would accept that packet and hand the next round an unsafe worktree. Failing either condition means redrive or resume, never silent adoption.
 4. **Report, don't correct, deviations from locked decisions.** When an implementer delivers something other than a decision marked locked, it states what it delivered instead and the constraint that forced it; the reviewer adds whether an in-spec route existed and a ratify/conform recommendation; the loop records the deviation prominently (top of any PR comment/summary) and leaves the decision to the human. Completeness, tests, and regressions are graded as strictly as ever — a deviation is not license for unfinished work.
 5. **No latched flags.** Any per-round condition carried into a loop's final result must be re-evaluated each round; the final result describes the **final** state, with history kept separately and named as history.
 
@@ -42,7 +42,7 @@ Out of scope: peer-launch mechanics (task 015), scratch hygiene (task 017).
 ## Acceptance criteria
 
 - Subagent prompt specs forbid wait-to-be-resumed and unreaped children, and drop any implication that self-launched peer review is expected.
-- Orchestrator sections specify the porcelain hard-check with redrive/resume as the response.
+- Orchestrator sections specify the hard-check — porcelain cleanliness AND no in-progress Git operation — with redrive/resume as the response to either failing.
 - The deviation protocol (report-don't-correct, with strict grading preserved) is present where locked decisions are handed to implementers.
 - The no-latched-flags rule is present where loop results are assembled.
 
