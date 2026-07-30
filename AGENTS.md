@@ -4,11 +4,11 @@
 
 Update [README.md](README.md) if there are any changes to the project overview, tech stack, or development practices.
 
-Use one line per paragraph in Markdown if possible.
-
-Do not pre-wrap lines in commit messages.
+Use one line per paragraph in Markdown if possible. Do not pre-wrap lines in commit messages. (Do not dwell on or point out existing line wrapping transgression in reviews, just follow the rules going forward.)
 
 Task specifications on which many PRs are based live in [`tasks/`](./tasks/).
+
+We strive to merge linearly after rebasing each PR, no squash merges allowed.
 
 ## Code Review Guidelines
 
