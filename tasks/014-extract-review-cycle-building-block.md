@@ -67,7 +67,7 @@ Out of scope:
 
 ## Acceptance criteria
 
-- One CANONICAL definition per harness (the `review-cycle` skill text for prose consumers; `wf-review-cycle.js` for workflows) — embedded copies synthesized from the marked section and the Codex mirror are derived renderings of it, each naming the source it derives from; no consumer restates gates, round caps, or peer semantics in its own words.
+- One CANONICAL definition per harness (the `review-cycle` skill text for prose consumers; `wf-review-cycle.js` for workflows) — the Codex mirror and any copy synthesized from the marked section are derived renderings of it, each synthesized copy naming the section it came from; no consumer restates gates, round caps, or peer semantics in its own words.
 - `wf-address-review` and `wf-address-tasks` invoke the shared cycle, including the peer step, via nesting or the embeddable section.
 - `maxRounds` is bounded at both ends: a caller passing a larger value still stops at 12, so no consumer can configure its way past the convergence safeguard, and a nonpositive or fractional value is rejected rather than silently producing a run that skips the review gate.
 - `write-tasks` explicitly runs the verbiage cycle on drafted tasks by default.
