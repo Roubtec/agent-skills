@@ -36,7 +36,7 @@ Out of scope:
 
 ## Implementation notes
 
-- Mode detection starts with one comparison (`git rev-parse --abbrev-ref HEAD` vs the resolved target branch) but a name match alone is not enough: mode 1 additionally requires the skill's existing PR-vs-branch sanity check to pass (shared recent history with the PR head; for fork PRs, the current branch's resolved push remote/ref matching the PR head repo/ref, as the publish preflight already computes) — a same-named but unrelated local branch falls through to mode 2 with the mismatch surfaced. Detached HEAD counts as "any other branch" — there is nothing to advance under the user.
+- Mode detection starts with one comparison (`git rev-parse --abbrev-ref HEAD` vs the resolved target branch) but a name match alone is not enough: mode 1 additionally requires the skill's existing PR-vs-branch sanity check to pass (shared recent history with the PR head; for fork PRs, the current branch's resolved push remote/ref matching the PR head repo/ref, as the publish preflight already computes) — a same-named but unrelated local branch falls through to mode 2 — but never *onto that branch*: the local-first attach rule is suspended for a ref that just failed the identity check, so the worktree attaches the verified PR head and the mismatch is surfaced to the maintainer. Inheriting local-first unqualified here would hand the fixer the very ref the check rejected, landing review changes on unrelated history and leaving the publication preflight, many commits later, as the first thing to notice. Detached HEAD counts as "any other branch" — there is nothing to advance under the user.
 - In worktree mode, never touch the main checkout after setup: no restore step is needed (nothing moved), and end-of-run reporting must not assume the main checkout still points where it did at invocation.
 - The `inline` token joins the existing argument table; it composes with `no-push` and the ping flags without interaction.
 
@@ -45,6 +45,7 @@ Out of scope:
 - Invoked from the target branch: behavior is byte-identical to today (inline, branch advances under the user).
 - Invoked from `main` (or detached): the fix lands in a worktree, the main checkout is never switched, dirtied, or required to be clean, and the user can repoint it to any other branch mid-run without breaking the run.
 - `inline` from another branch checks out the target and works in place, requiring the clean tree.
+- A local branch bearing the target's name but failing the PR identity check never becomes the working location: the run attaches the verified PR head in the worktree (or stops), rather than falling through to the local-first attach and committing onto unrelated history.
 - The worktree is reclaimed after publication; a halted run reports the surviving worktree path.
 - `wf-address-review` no longer commits in the shared checkout unless it started on the branch or was passed `inline`.
 

@@ -30,12 +30,12 @@ Out of scope: rebase mechanics that already work (patch-id duplicate dropping is
 
 ## Implementation notes
 
-- Keep each addition to 2–4 sentences at the exact decision point; the batch skill should detect the stacked case from PR base refs it already fetches (`baseRefName` vs other entries' `headRefName`) — name that check concretely.
+- Keep each addition to 2–4 sentences at the exact decision point; the batch skill should detect the stacked case from PR data it already fetches — one entry's base **repository and ref** matching another entry's head **repository and ref** — and name that check concretely. Compare the pair, not the two short branch names: a fork PR's head branch can share a name with some other entry's base while living in a different repository, and a PR in the base repository cannot target a fork's branch at all, so a name-only match declares an unrelated pair a stack and the base-first rule then rebases the supposed dependent onto a foreign tip.
 - Do not prescribe `git rerere` or tooling changes; this is decision guidance.
 
 ## Acceptance criteria
 
-- The batch rebase instruction explicitly orders base-before-dependent and mandates post-merge restacks with the SHA-rewrite rationale.
+- The batch rebase instruction explicitly orders base-before-dependent and mandates post-merge restacks with the SHA-rewrite rationale. The stacked-case check it names matches repository **and** ref on both sides, so two entries sharing only a branch name across different repositories are not treated as a stack.
 - Both rebase-executing skills carry the hunk-vs-whole-file rule with the auto-merged-content check.
 - The publish/apply-boundary re-verification sentence exists in the batch skill.
 

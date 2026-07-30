@@ -14,7 +14,7 @@ Included:
   - the disposition rule: every reviewer/peer finding is dispatched to a fixer that explicitly disposes each item — `fixed`, `declined` (with reason), or `escalated` to an open question — and the cycle ends only when the reviewer passes AND the fixer's last pass disposed nothing new. No finding is ever dropped by the orchestrator without an agent having considered it with full context.
   - a `light` mode that skips the final no-op fixer pass for small mechanical changes, at the invoker's explicit choice;
   - **artifact-type parameterization**: code diff (default), task-file/doc prose (reviewer checks verbiage, scoping, house numbering style), applied-decision diffs.
-- **`wf-review-cycle` workflow** (`plugins/dev-skills/workflows/`), the same protocol as a self-contained script taking `{worktree, branch, base, scope, artifactType, maxRounds, peer, mode}`. Its result contract is the information-flow backbone:
+- **`wf-review-cycle` workflow** (`plugins/dev-skills/workflows/`), the same protocol as a self-contained script taking `{worktree, branch, base, scope, artifactType, maxRounds, peer, mode}`, where `maxRounds` may only **lower** the canonical 12-round cap — a caller asking for more gets 12 — so the convergence safeguard stays a property of the protocol rather than of each consumer's configuration, and no two consumers can quietly acquire different cap semantics. Its result contract is the information-flow backbone:
   - lean structured return: final verdict, per-finding dispositions (an `escalated` disposition names the question `id` it raised), `openQuestions[]` in the PINNED wire format below, and an `artifactDir` path holding the full per-round prose (reviewer reports, peer output, fixer packets) for anyone who needs the unabridged history. The format maps one-to-one onto the four-part brief `resolve-open-questions` serves (grounded context, concrete trigger, distinct options, recommendation) so a bare `resolve-open-questions` invocation consumes it without re-derivation — while its step-2 grounding still applies: every carried claim is re-verified against current state before serving, per item 5 of [019](019-review-loop-convergence-and-briefing-guidance.md).
 
     ```
@@ -69,6 +69,7 @@ Out of scope:
 
 - One CANONICAL definition per harness (the `review-cycle` skill text for prose consumers; `wf-review-cycle.js` for workflows) — embedded copies synthesized from the marked section and the Codex mirror are derived renderings of it; no consumer restates gates, round caps, or peer semantics in its own words.
 - `wf-address-review` and `wf-address-tasks` invoke the shared cycle, including the peer step, via nesting or the embeddable section.
+- `maxRounds` cannot raise the 12-round cap: a caller passing a larger value still stops at 12, so no consumer can configure its way past the convergence safeguard.
 - `write-tasks` explicitly runs the verbiage cycle on drafted tasks by default.
 - A cycle's result carries dispositions for every finding and structurally surfaces open questions; full round history is reachable via `artifactDir`.
 - The drop-in works: invoking the skill on an ad-hoc uncommitted change runs the full cycle without batch scaffolding.
