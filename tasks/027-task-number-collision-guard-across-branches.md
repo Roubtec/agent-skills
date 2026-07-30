@@ -35,6 +35,7 @@ Out of scope:
 
 - The check is prefix-based (`tasks/NNN-` and `tasks/NNNx-` with the letter suffix): two files sharing a numeric prefix (same suffix or one suffixed/one not is fine per house style — `001` and `001a` coexist by design) collide only when the FULL number+suffix matches with different slugs. State the matching rule precisely so the guard doesn't false-positive on legitimate `001`/`001a` families.
 - Keep it cheap: one `gh pr list` + one `git ls-tree` per open head at guard time; degrade gracefully (note-and-proceed) when the remote is unavailable, since local-only runs can't see PR heads.
+- Write the guard parallelism-ready for [033](033-vertical-task-pipelining.md): in a pipelined run the comparison set is open PR heads PLUS branches delivered earlier in the same run, first claimant wins, and the second claimant renumbers (never the delivered side).
 
 ## Acceptance criteria
 

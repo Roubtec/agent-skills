@@ -23,7 +23,7 @@ Included:
 - Keep the existing protocol semantics untouched: preflight-once, `peer-opinions=off`, grounding spot-check, blocking+minor gating, verbatim finding relay, peer never required for publication.
 - Add a **fallback** paragraph for environments without the helper (`command -v peer-review-run` fails): the hardened manual pattern — write the prompt via quoted heredoc (`<<'PROMPT'`), launch with `nohup … &` with stdin closed and a unique per-attempt output path, check liveness by a unique token in the output path (never the prompt text), kill by PID captured at launch (never `pkill -f`), treat a non-empty `-o` containing a `VERDICT:` line as authoritative, and never run the peer as a capped foreground call.
 - Peer prompt guidance additions (apply in the templates the skills carry): forbid network access (read-only sandboxes have no GitHub egress — pass verbatim thread text/diffs instead), and require the peer to state explicitly whether it **executed** tests or judged them statically (read-only sandboxes typically cannot write build-tool caches, so "this test would fail" is usually a static claim).
-- Concurrency note for the batch skills: cap simultaneous peer invocations (2–3) — sustained fan-outs of concurrent `codex exec` runs have been observed to degrade into empty final outputs.
+- Concurrency for the batch skills: an **optimistic session-local adaptive throttle**, not a fixed cap. Start unbounded; when peer outcomes show trouble (timeouts, `failed`, empty/garbled outputs — sustained fan-outs of concurrent `codex exec` runs have degraded into empty final outputs), cap NEW launches at 8 (or the current in-flight count if lower — in-flight calls are never killed, they just finish), halve on each further trouble cluster (4, then floor 2), and QUEUE invocations beyond the cap rather than forfeiting them. Auth/usage short-circuits stay classified `unavailable` (non-blocking, not throttle events). The counter is session-local with no cross-container coordination (the maintainer runs several containers concurrently, so no global measure exists), resets next session, and every step-down is surfaced in the run summary so a future learnings pass can calibrate real limits.
 
 Out of scope:
 
@@ -32,6 +32,7 @@ Out of scope:
 
 ## Context and references
 
+- **Sequencing**: implement AFTER [014](014-extract-review-cycle-building-block.md). 014 already lands the baseline `peer-review-run` invocation inside the `review-cycle` block, so this task narrows to what 014 does not carry: the fallback paragraph, the no-network and executed-vs-static prompt guidance, the adaptive throttle below, and sweeping any pre-014 raw-launch text that still lingers in un-extracted copies. The per-skill target list below describes the pre-014 world; prefer landing 014 first over fanning the swap across ten files.
 - `plugins/dev-skills/skills/address-review/SKILL.md:180-195` — the current launch snippet and gate rules (the semantics to preserve).
 - `plugins/dev-skills/skills/address-tasks/SKILL.md:44,141` — preflight and the batch launch site.
 - powbox `docker/shared/peer-review-run` header and `docs/architecture.md` (peer-review-run bullet) — the invocation/result contract; treat it as stable and cite the schema name rather than copying implementation detail.
@@ -39,8 +40,8 @@ Out of scope:
 
 ## Target files or areas
 
-- `plugins/dev-skills/skills/{address-review,address-reviews,address-tasks,address-tasks-serialized,resolve-open-questions}/SKILL.md`
-- `codex/dev-skills/skills/*` peer sections
+- `plugins/dev-skills/skills/review-cycle/SKILL.md` and `plugins/dev-skills/workflows/wf-review-cycle.js` (the canonical peer step, once 014 lands), `codex/dev-skills/skills/review-cycle/` mirror.
+- Pre-014 fallback: `plugins/dev-skills/skills/{address-review,address-reviews,address-tasks,address-tasks-serialized,resolve-open-questions}/SKILL.md` and `codex/dev-skills/skills/*` peer sections.
 
 ## Implementation notes
 

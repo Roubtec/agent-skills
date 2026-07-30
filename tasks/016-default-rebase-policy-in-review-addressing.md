@@ -1,0 +1,56 @@
+# 016 — Rebase-onto-base by default in address-review(s), with a delegated rebase step
+
+## Why this task exists
+
+The maintainer's repos use rebase-then-merge: linear default branches whose merge commits are parented by the previous merge commit and the PR tip.
+Keeping a batch of in-flight PRs continuously rebased onto the advancing base is currently manual toil between review rounds, and the skills only rebase when explicitly asked.
+Rebasing EARLY means the fixer works on the code as it will look when merged; rebasing again PRE-PUSH means reviewers (human and bot) see a minimal diff against the current base right when the PR may become mergeable.
+Both are often no-ops and cheap; when they are not, they are exactly the work the maintainer does by hand today.
+
+## Scope
+
+Included:
+
+- **Opt-out default**: `address-review` and `address-reviews` rebase each entry onto its freshest base (its PR base branch, freshly fetched) unless the invocation passes `no-rebase` (e.g. `address-reviews 123 412 ping-codex no-rebase`). The existing explicit `rebase on top of <branch>` token still forces a specific target.
+- **Two rebase points**: before triage/fixing, and after fixes before the final review and push. In the prose skills the agent may judge a point unnecessary (e.g. base unchanged); in `wf-address-review` both points are unconditional (no-ops are cheap and deterministic).
+- **Ordering**: the pre-push rebase happens BEFORE the final reviewer round, so the passing verdict always applies to the exact tree being pushed; a build plus the project's test suite runs after any non-noop rebase.
+- **Delegated rebase step**: rebasing runs in a subagent (never the orchestrator) with a compact brief — the "rebase nugget", specified once and referenced by both skills and the workflow, the same extraction shape as the review cycle of [014](014-extract-review-cycle-building-block.md). It resolves conflicts within its competence using the hunk-level rules of [021](021-stacked-pr-rebase-and-conflict-resolution-guidance.md), and when resolution genuinely needs maintainer input it halts that entry and returns the question through the `openQuestions[]` ferry rather than guessing.
+- **Stack awareness**: the nugget maintains a parent map for the batch (each entry's PR base ref). Entries rebase in topological order: a parent onto the true base first, then each child onto its parent's NEW tip (`git rebase --onto <newParentTip> <oldParentTip>`), with patch-id dropping of commits the base already carries per 021. This also covers the leafy-stack case where a parent gained fix commits mid-run and its child still sits on the old parent tip.
+- After any rebase, delegation ranges use stable refs (`origin/main..HEAD`), never pre-rebase SHAs (019 item 6 applies).
+
+Out of scope:
+
+- Whole-chain restacks after merges — that remains `rebase-stack`; the nugget handles single-entry-onto-moving-base with parent awareness, and points at `rebase-stack` when it detects a full-chain restack is what is actually needed.
+- Mid-run base advancement caused by in-batch early merges (that integration lands with [033](033-vertical-task-pipelining.md), which reuses this nugget).
+
+## Context and references
+
+- [021](021-stacked-pr-rebase-and-conflict-resolution-guidance.md) — the correctness guidance (stacked ordering hazards, hunk-vs-file conflict resolution, patch-id) this task turns from advice-on-request into default behavior; implement 021's text first or together, and reference rather than restate it.
+- `plugins/dev-skills/skills/address-review/SKILL.md` — the existing optional `rebase on top of <branch>` token and its flag parsing; `wf-address-review.js` — the flag-parsing block and pipeline where the two rebase points slot in.
+- [014](014-extract-review-cycle-building-block.md) — the `openQuestions[]` ferry the halted-conflict path reports through.
+
+## Target files or areas
+
+- `plugins/dev-skills/skills/{address-review,address-reviews}/SKILL.md`, `plugins/dev-skills/workflows/wf-address-review.js`, a shared rebase-nugget reference (place it where 014 puts the review-cycle protocol), Codex mirrors.
+
+## Implementation notes
+
+- Parent-map tracking must stay cheap to codify: one `gh pr view --json baseRefName` per entry plus recording each parent's pre- and post-rebase tips; resist reimplementing `rebase-stack`.
+- `no-rebase` is per-invocation, not per-entry; a mixed batch that needs one entry pinned should run that entry separately.
+- Force-pushes after rebase follow the existing exact-lease rules already in the skills (never bare `--force`).
+
+## Acceptance criteria
+
+- Default runs rebase at both points; `no-rebase` suppresses both; the explicit rebase token still works.
+- The final reviewer verdict is always rendered on the post-rebase tree; build+tests run after every non-noop rebase.
+- Stacked entries rebase in topological order and the leafy-stack case produces a child based on the parent's new tip without duplicated parent commits.
+- A conflict beyond the nugget's competence halts that entry with an open question; other entries proceed.
+
+## Validation
+
+- Replay the kalm2 #140/#141 scenario from 021 against the new default: the child never re-shows parent commits at either rebase point.
+- A batch with an intentionally conflicting entry: the entry halts with a question, siblings deliver.
+
+## Review plan
+
+Reviewer checks the two rebase points cannot double-apply (idempotent no-ops), that stacked ordering is derived from PR base refs rather than assumed, and that the nugget's halt path never leaves a worktree mid-rebase.
