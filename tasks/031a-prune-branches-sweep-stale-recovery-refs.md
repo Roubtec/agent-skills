@@ -37,7 +37,7 @@ Out of scope:
 
 ## Implementation notes
 
-- Reachability is the right redundancy test and it is cheap: `git merge-base --is-ancestor <ref> <default-oid>` per breadcrumb, reusing the freshly fetched default comparison OID the skill already captures in step 4.
+- Reachability is the right redundancy test and it is cheap: `git merge-base --is-ancestor "$ref" "$default_oid"` per breadcrumb, reusing the freshly fetched default comparison OID the skill already captures in step 4.
 - Keep the existing budget discipline. If the ref count can be large, cap the inventory the way branch and PR lookups are capped, and say plainly in the report that the cap truncated the listing.
 - The skill's absolute safety rules already forbid overwriting or deleting existing refs during reservation; that rule is about step 8's claim loop and needs rewording, not weakening, so it does not read as forbidding this deliberate, confirmed sweep.
 - Dynamic ref names must be argv-safe or shell-quoted like every other interpolated value in the skill.

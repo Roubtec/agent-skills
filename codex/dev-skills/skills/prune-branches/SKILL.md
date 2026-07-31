@@ -82,7 +82,7 @@ Unless `no-pull` was supplied, update the local default with a fast-forward-only
 - If it is checked out in a dirty worktree, report that dirty state blocks only the pull; do not stash, reset, or clean it.
 - If it is not checked out and a local default branch exists, create a safely allocated temporary linked worktree for that branch, run `git -C "$temporary_path" pull --ff-only origin "refs/heads/$default_name"`, then remove the clean temporary worktree without `--force`.
 - If only `origin/<default>` exists, create the local tracking branch in the temporary worktree from the freshly fetched `refs/remotes/origin/<default-name>`, run the same origin-and-ref-pinned pull, and retain the local default branch as a protected ref.
-- If the pull, temporary-worktree creation, or cleanup fails, report it and continue; classification is unaffected, because the comparison OID below comes from the freshly fetched remote default ref rather than from the local branch. Never rewrite a divergent local default and never let a failed update make the protected default eligible.
+- If the pull, temporary-worktree creation, or cleanup fails, report it and continue; Merged classification is unaffected, because the comparison OID below comes from the freshly fetched remote default ref rather than from the local branch. A behind local default can still cost a branch its Transient proof, since those proofs rest on the local default surviving the run, so such a branch conservatively becomes Uncertain and is kept. Never rewrite a divergent local default and never let a failed update make the protected default eligible.
 
 With `no-pull`, only the pull is skipped: the local default branch stays at its current tip. State that, and state that the comparison still uses origin's freshly fetched default tip. The initial fetch and step 3's targeted refresh both remain mandatory.
 
@@ -134,7 +134,9 @@ A branch is Transient only when its snapshotted tip is fully recoverable from re
 - The tip is a local combination/test merge commit and every parent is reachable from the protected local default branch or another ref guaranteed to remain. A parent preserved only by a squash-merged branch that will also be deleted is not enough.
 - It is a recognizable disposable rebase-stack snapshot and its tip is reachable from a surviving `refs/pre-rebase/...`, protected branch, the protected local default branch, or other kept ref. A snapshot-like name alone is not enough.
 
-"The default" means the protected local `refs/heads/<default-name>` here, not `refs/remotes/origin/<default-name>`. The remote-tracking ref is the classification yardstick, but a later fetch can move or rewind it, so it is not a ref guaranteed to remain. Anything reachable from the freshly fetched remote default has already been classified Merged by ancestry before these rules run.
+"The default" means the protected local `refs/heads/<default-name>` here, not `refs/remotes/origin/<default-name>`. The remote-tracking ref is the classification yardstick, but a later fetch can move or rewind it — this skill force-updates it in step 3 — so it is not a ref guaranteed to remain.
+
+This pin costs nothing for the two tip-reachability cases: a branch tip reachable from the freshly fetched remote default is already Merged by ancestry before these rules run. It does bite the merge-parent case, which tests parents rather than a classified branch tip. A parent that is on origin's default but not yet on a local default that is behind, or absent because `no-pull` skipped the branch's creation, fails the proof and the merge commit falls to Uncertain. That is the conservative direction — the branch is kept, not deleted — and pulling the default (or creating it) restores the proof on the next run.
 
 Record the exact surviving ref(s) that prove recoverability in the one-line reason. A backup ref will still be created before deleting every Transient branch.
 
