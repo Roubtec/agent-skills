@@ -53,7 +53,7 @@ The top-level orchestrator (you) may still consult the user for **batch-level** 
 **Not user-facing (orchestrator may supply at its own discretion):** the per-PR `#N` (you always pass each subagent its assigned PR) and `rebase on top of <branch>`.
 The user has no reason to pass a rebase here — the leafy stack is resolved later — but if you detect a stacked PR that genuinely must be addressed against its near-final base, you may pass a rebase target to that one PR's `address-review`. Off by default.
 
-Detect a stack only when one entry's fully qualified `(base repository, baseRefName)` pair equals another entry's `(headRepository.nameWithOwner, headRefName)` pair; record the base repository as the current PR repository's `nameWithOwner`, and never infer a stack from matching short branch names alone. For a rebase-enabled stack, rebase the base entry first onto the pinned target, then pin the dependent's target to the exact rebased base tip — never rebase the dependent directly onto the original pinned target.
+Detect a stack only when one entry's fully qualified `(base repository, baseRefName)` pair equals another entry's `(head repository, headRefName)` pair; construct the head repository as `headRepositoryOwner.login + "/" + headRepository.name`, obtain the base repository with `gh repo view --json nameWithOwner`, and never infer a stack from matching short branch names alone. For a rebase-enabled stack, rebase the base entry first onto the pinned target, then pin the dependent's target to the exact rebased base tip — never rebase the dependent directly onto the original pinned target.
 
 For any rebase target that is not a just-rebased parent tip, **pin it to an exact commit** right after Bootstrap's `git fetch` (e.g. `git rev-parse origin/main`) rather than passing a symbolic name that a later fetch could move. If a parent PR merges during the batch, restacking every dependent onto the refreshed branch containing that merge is mandatory because the merge may rewrite the parent's commit SHAs; rely on patch-id dropping, then verify the dependent's diff no longer contains parent content and rerun its review gate before publication.
 
@@ -135,7 +135,7 @@ The local-control path (the rebased-locally / stale-origin case). Normalize an e
 
 The canonical path. Resolve the PR, then prefer a same-named local branch if you have one (so we still never bypass your local copy), else check out `origin`'s head.
 
-1. **Resolve and sanity-check:** `gh pr view N --json number,state,headRefName,headRefOid,headRepository,headRepositoryOwner,baseRefName,baseRefOid,url,title`. If `state` is not `OPEN`, skip-and-record. Record the fully qualified head repository/ref, the current PR repository's `nameWithOwner` as the fully qualified base repository, and both OIDs; note whether `headRepositoryOwner` matches `origin`'s owner (same-repo) or differs (fork).
+1. **Resolve and sanity-check:** `gh pr view N --json number,state,headRefName,headRefOid,headRepository,headRepositoryOwner,baseRefName,baseRefOid,url,title`. If `state` is not `OPEN`, skip-and-record. Record the fully qualified head repository/ref, run `gh repo view --json nameWithOwner` to record the current PR repository as the fully qualified base repository, and record both OIDs; note whether `headRepositoryOwner` matches `origin`'s owner (same-repo) or differs (fork).
 2. **Same-repo:**
    - If local `<headRefName>` exists, compare it with `origin/<headRefName>` **before** considering checkout occupancy. If it is strictly behind with no unique local commits, skip-and-record rather than force-rewriting newer remote work; ask the user to fast-forward it or explicitly pass the branch if they truly intend the stale local state.
    - A usable local `<headRefName>` that is free → the plain attach (`git worktree add "$WT_BASE/pr-<N>" <headRefName>`) and **record any ahead/diverged state** in the summary.
@@ -167,6 +167,8 @@ Every prompt starts with:
 - **No shared plan tracker:** "Do not write to any shared task or plan tracker; child entries leak into the orchestrator's view."
 
 ### Phase A — initial fix
+
+Before launching Phase A, topologically partition rebase-enabled stack entries into dependency waves. Launch only entries whose parents have completed Phase A; after each parent completes, pin each dependent's rebase target to that exact resulting parent tip, then launch the newly ready wave, while unrelated and non-rebase entries may still run concurrently.
 
 Spawn one `worker` per PR and prompt it to invoke `$address-review #N hands-off delegated-fix <optional rebase target>` (or read the supplied absolute skill path and follow that mode).
 It must make no PR mutations and return the complete review packet defined by `address-review`.
