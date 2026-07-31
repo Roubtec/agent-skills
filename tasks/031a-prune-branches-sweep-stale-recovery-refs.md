@@ -12,7 +12,7 @@ Included:
 
 - Inventory the existing `refs/pruned/**` refs during the normal run, not just the ones this run creates, and surface them in the step 7 audit listing and the step 11 report with their date segment, branch name, and tip. This inventory is subject to the same budget discipline as the skill's other lookups (see the implementation notes); a truncated listing must say so rather than read as complete.
 - Classify each pre-existing breadcrumb by whether it is still needed: a breadcrumb whose commit is now reachable from the resolved default (the work landed) is redundant and is a cleanup candidate; one holding otherwise-unreachable commits is still load-bearing and must be reported as such, never swept.
-- Offer removal of redundant breadcrumbs under the same confirmation model the skill already uses for branches — never delete a ref the run did not propose and the user did not confirm, and always use the expected-old-OID form (`git update-ref -d <ref> <old-oid>`) so a breadcrumb that moved since inventory is not removed by accident.
+- Offer removal of redundant breadcrumbs under the same confirmation model the skill already uses for branches — never delete a ref the run did not propose and the user did not confirm, and always use the expected-old-OID form (`git update-ref -d "$ref" "$old_oid"`) so a breadcrumb that moved since inventory is not removed by accident.
 - Decide and document the `hands-off` behaviour. The conservative default is to report redundant breadcrumbs without deleting them, matching how `hands-off` already refuses to touch Uncertain branches.
 - An age threshold is worth considering so a breadcrumb from the current or previous run is never swept out from under a user who is still orienting; if adopted, state it explicitly rather than leaving it implicit.
 - Apply to both harness renderings: `codex/dev-skills/skills/prune-branches/SKILL.md` and `plugins/dev-skills/skills/prune-branches/SKILL.md`, which must stay in parity apart from their harness-specific invocation and confirmation wording.
@@ -44,7 +44,7 @@ Out of scope:
 
 ## Acceptance criteria
 
-- A run in a repository containing breadcrumbs from earlier runs lists them, separated into redundant and still-load-bearing, in both the audit listing and the final report.
+- A run in a repository containing breadcrumbs from earlier runs lists them, separated into redundant and still-load-bearing, in both the audit listing and the final report, up to whatever budget the implementation adopts and saying so plainly when that budget truncated the listing.
 - No breadcrumb is ever deleted without an explicit confirmation covering it, and every deletion uses the expected-old-OID form.
 - A breadcrumb whose commits are unreachable from the resolved default is never proposed for deletion, whatever its age.
 - `hands-off` behaviour is stated explicitly in the skill text and matches whatever this task decides.

@@ -35,7 +35,7 @@ Parse arguments leniently and let the inventory listing be the safety net:
 - Never use `git worktree remove --force`, force helper cleanup, auto-stash, reset, clean, or any operation that can discard tracked modifications or non-ignored untracked files. If a worktree cannot be removed cleanly, keep its branch. Ignored untracked files are the one deliberate exception, defined in step 9.
 - Never remove the invoking/main worktree. Remove another linked worktree only when this run created it, the user approved its exact annotated canonical path and branch, or it is a confirmed Merged/Transient branch proven to belong to this container's exact helper root and is removed through `wt-remove` as defined in step 9. A clean or helper-looking path outside that exact current-container root, `hands-off`, and general confirmation are not ownership proof.
 - Never treat a `[gone]` upstream, a branch name, or a merge-looking commit subject as sufficient proof by itself.
-- Never interpolate a branch name, ref, or path into a command unquoted. Git accepts names containing shell metacharacters such as `topic;echo_PWN` or `topic$(echo_PWN)`, so pass every dynamic value as a separate argv element or shell-quote it — in commands you run and in commands you print for the user. `--` stops Git's own option parsing and does nothing about shell expansion.
+- Never interpolate a branch name, ref, or path into a command unquoted. Git accepts names containing shell metacharacters such as `topic;echo_PWN` or `topic$(echo_PWN)`, so pass every dynamic value as a separate argv element or shell-quote it — in commands you run and in commands you print for the user. `--` stops Git's own option parsing and does nothing about shell expansion. Double quotes suffice around a variable expansion; a literal name substituted into a printed command needs single quotes, because double quotes still expand `$(...)` and backticks.
 - Preserve the invoking checkout's branch or detached-HEAD state and all dirty state. Use `git -C "<path>"` and temporary linked worktrees rather than switching the invoking checkout.
 
 ## Procedure
@@ -131,8 +131,10 @@ A merged PR whose base is not the resolved default never establishes Merged, eve
 A branch is Transient only when its snapshotted tip is fully recoverable from refs guaranteed to remain after this run and one cheap topology check proves one of these cases:
 
 - The tip is reachable from a protected, explicitly kept, or other local branch already committed to the kept set. Establish that kept set before using it as proof; do not create circular proof where two branches slated for deletion are each other's only recovery source.
-- The tip is a local combination/test merge commit and every parent is reachable from the default or another ref guaranteed to remain. A parent preserved only by a squash-merged branch that will also be deleted is not enough.
-- It is a recognizable disposable rebase-stack snapshot and its tip is reachable from a surviving `refs/pre-rebase/...`, protected branch, default ref, or other kept ref. A snapshot-like name alone is not enough.
+- The tip is a local combination/test merge commit and every parent is reachable from the protected local default branch or another ref guaranteed to remain. A parent preserved only by a squash-merged branch that will also be deleted is not enough.
+- It is a recognizable disposable rebase-stack snapshot and its tip is reachable from a surviving `refs/pre-rebase/...`, protected branch, the protected local default branch, or other kept ref. A snapshot-like name alone is not enough.
+
+"The default" means the protected local `refs/heads/<default-name>` here, not `refs/remotes/origin/<default-name>`. The remote-tracking ref is the classification yardstick, but a later fetch can move or rewind it, so it is not a ref guaranteed to remain. Anything reachable from the freshly fetched remote default has already been classified Merged by ancestry before these rules run.
 
 Record the exact surviving ref(s) that prove recoverability in the one-line reason. A backup ref will still be created before deleting every Transient branch.
 
@@ -214,25 +216,25 @@ Print:
 - Every linked or temporary worktree removed or preserved.
 - A clear statement that no remote refs or PRs were mutated.
 
-Shell-quote every substituted branch name, ref, and path in the printed commands below, so they stay safe to copy and paste whatever the branch was called.
+Shell-quote every substituted branch name, ref, and path in the printed commands below, so they stay safe to copy and paste whatever the branch was called. Use **single** quotes here, escaping any embedded single quote as `'\''`. These templates carry a literal name rather than a variable expansion, and double quotes still expand `$(...)` and backticks — so a branch named `topic$(echo_PWN)` pasted inside double quotes would execute rather than be named. Double quotes are sufficient only around a variable, as in the commands the skill runs itself.
 
 For every deletion, show direct restoration from the reported SHA:
 
 ```sh
-git branch "<branch>" <full-tip-sha>
+git branch '<branch>' <full-tip-sha>
 ```
 
 For non-Merged deletions, also show how to inspect and restore through the exact backup ref:
 
 ```sh
-git for-each-ref "refs/pruned/<YYYYMMDD-UTC>/"
-git branch "<branch>" "<exact-refs/pruned/...-ref>"
+git for-each-ref 'refs/pruned/<YYYYMMDD-UTC>/'
+git branch '<branch>' '<exact-refs/pruned/...-ref>'
 ```
 
 Show cleanup only for the exact recovery refs created in this run, preferably with expected-old OIDs so a changed breadcrumb is not removed accidentally:
 
 ```sh
-git update-ref -d "<exact-recovery-ref>" <preserved-full-tip-sha>
+git update-ref -d '<exact-recovery-ref>' <preserved-full-tip-sha>
 ```
 
 Explain that refs keep commits advertised indefinitely until those refs are dropped. A deleted Merged branch has no automatic backup ref, but its printed SHA and reflogs or `git fsck --lost-found` may recover otherwise unreferenced commits until Git garbage collection removes them.
@@ -252,5 +254,5 @@ Explain that refs keep commits advertised indefinitely until those refs are drop
 - [ ] All non-Merged recovery refs atomically claimed at unused names and verified before any removal/deletion.
 - [ ] Tips rechecked; automatic cleanup covered only clean Merged/Transient worktrees attributed to this container's exact helper root and removed through `wt-remove`; every plain-Git candidate removal had exact path-and-branch approval.
 - [ ] Only local branches deleted; every deleted tip and every created recovery breadcrumb, including refs for branches that remained, reported.
-- [ ] Every dynamic branch, ref, and path was passed as argv or shell-quoted, in executed and printed commands alike.
+- [ ] Every dynamic branch, ref, and path was passed as argv or shell-quoted, in executed and printed commands alike, with literals in printed commands single-quoted.
 - [ ] Invoking checkout orientation and dirty work preserved; remote remained untouched.
