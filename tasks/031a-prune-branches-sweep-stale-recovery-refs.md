@@ -4,7 +4,7 @@
 
 `prune-branches` creates a `refs/pruned/<YYYYMMDD-UTC>/<branch>` breadcrumb before every non-Merged deletion, and step 11 prints the exact `git update-ref -d` cleanup command for the refs that run created. It never looks at the breadcrumbs left by *previous* runs. Those accumulate indefinitely, and unlike branches they are invisible to `git branch` — you only see them if you remember the `git for-each-ref refs/pruned/` incantation. Refs also keep their commits advertised forever, so the bytes never get garbage-collected either.
 
-The maintainer raised this while reviewing PR #31: the point of pruning is to reduce the amount of scaffolding you carry around, and silently trading visible branches for invisible refs undercuts that. It surfaced specifically as the counter-argument to gating PR-derived Merged classification on the default base (the `--base` fix in #31), because that gate moves some branches from "deleted, no ref" into "deleted, with recovery ref". The gate was the right call on safety grounds, so the ref-accumulation cost is dealt with here instead.
+The maintainer raised this while vetting the review dispositions on PR #31, not in a thread on the PR itself: the point of pruning is to reduce the amount of scaffolding you carry around, and silently trading visible branches for invisible refs undercuts that. It surfaced specifically as the counter-argument to gating PR-derived Merged classification on the default base (the `--base` fix in #31), because that gate moves some branches from "deleted, no ref" into "deleted, with recovery ref". The gate was the right call on safety grounds, so the ref-accumulation cost is dealt with here instead.
 
 ## Scope
 
@@ -26,7 +26,7 @@ Out of scope:
 ## Context and references
 
 - 031 — the parent task that introduced the skill and its recovery-ref mechanism.
-- PR #31 review thread on `--base` gating (`codex/dev-skills/skills/prune-branches/SKILL.md`, the Merged bucket in step 6) — where the maintainer flagged that converting branches into refs is "arguably even worse because refs are not readily visible."
+- PR #31 review thread on `--base` gating (`codex/dev-skills/skills/prune-branches/SKILL.md`, the Merged bucket in step 6) — the thread that prompted this task. The objection itself is not in that thread: the maintainer raised it while vetting the disposition, arguing that trading visible branches for `refs/pruned/**` breadcrumbs is arguably worse, because refs are not readily visible without remembering the syntax. This task file is the record of it.
 - Step 8 of either SKILL.md — breadcrumb reservation, the source of the refs this task sweeps.
 - Step 11 of either SKILL.md — the current run-scoped cleanup reporting this task generalises.
 
