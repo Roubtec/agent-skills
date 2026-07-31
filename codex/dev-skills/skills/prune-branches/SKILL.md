@@ -15,7 +15,7 @@ Explicit Codex invocation uses `$prune-branches`; natural-language equivalents a
 
 Parse arguments leniently and let the inventory listing be the safety net:
 
-- `no-pull` keeps the local default branch at its current tip; the initial `git fetch --prune` still runs.
+- `no-pull` keeps the local default branch at its current tip; the initial `git fetch --prune` and the targeted refresh of the remote default ref still run, so classification still compares against origin's current default.
 - `hands-off` prints the listing and then performs a best-effort purge without waiting: delete only Merged and Transient branches, reserve recovery refs for every Transient deletion, and leave every Uncertain branch untouched.
 - Treat all other text as guidance, especially branch names to keep and context such as "there is stashed work on X." Resolve and apply keeps before classification and before showing the listing.
 - In an interactive run, plain `go` confirms only the proposed Merged and Transient set. Deleting an Uncertain branch requires the user to name that branch explicitly during this run; invocation-time instructions such as `delete old-spike even if uncertain` count only when they are unambiguous.
@@ -26,15 +26,17 @@ Parse arguments leniently and let the inventory listing be the safety net:
 - Never delete any branch unless the initial `git fetch --prune origin` succeeded in this run.
 - Never delete the default branch under any name, the branch checked out in the invoking worktree, or a user-designated keep.
 - Never accept cached `origin/HEAD` without a successful refresh of the remote's HEAD advertisement in this run.
+- Never classify against a default tip that was not explicitly refreshed in this run. A successful `git fetch --prune origin` does not prove the default was refreshed, because a restricted fetch refspec can omit it.
 - Never guess the default branch from names such as `main` or `master`. If authoritative resolution fails, delete nothing.
 - Never let `GH_HOST`, `GH_REPO`, or the current checkout choose the repository for GitHub metadata. Resolve a canonical `HOST/OWNER/REPO` selector once from `origin`'s exact fetch URL and explicitly target it in every later default-branch or PR query. If that full identity cannot be resolved, make no PR-derived Merged classification; if it is also needed to resolve the default branch, delete nothing.
-- Never classify a non-ancestry branch as Merged unless a merged PR's `headRefOid` exactly equals the branch's current full tip OID.
+- Never classify a non-ancestry branch as Merged unless a merged PR based on the resolved default branch has a `headRefOid` that exactly equals the branch's current full tip OID.
 - Never delete an Uncertain branch in `hands-off` mode or merely because the user typed `go`.
 - Never delete a non-Merged branch until an unused recovery-ref name has been claimed atomically and verified at its exact tip.
 - Never use `git worktree remove --force`, force helper cleanup, auto-stash, reset, clean, or any operation that can discard uncommitted work. If a worktree cannot be removed cleanly, keep its branch.
 - Never remove the invoking/main worktree. Remove another linked worktree only when this run created it, the user approved its exact annotated canonical path and branch, or it is a confirmed Merged/Transient branch proven to belong to this container's exact helper root and is removed through `wt-remove` as defined in step 9. A clean or helper-looking path outside that exact current-container root, `hands-off`, and general confirmation are not ownership proof.
 - Never treat a `[gone]` upstream, a branch name, or a merge-looking commit subject as sufficient proof by itself.
-- Preserve the invoking checkout's branch or detached-HEAD state and all dirty state. Use `git -C <path>` and temporary linked worktrees rather than switching the invoking checkout.
+- Never interpolate a branch name, ref, or path into a command unquoted. Git accepts names containing shell metacharacters such as `topic;echo_PWN` or `topic$(echo_PWN)`, so pass every dynamic value as a separate argv element or shell-quote it — in commands you run and in commands you print for the user. `--` stops Git's own option parsing and does nothing about shell expansion.
+- Preserve the invoking checkout's branch or detached-HEAD state and all dirty state. Use `git -C "<path>"` and temporary linked worktrees rather than switching the invoking checkout.
 
 ## Procedure
 
@@ -63,10 +65,12 @@ Resolve the default branch by this exact order:
 1. Run `git remote set-head origin --auto` and capture its exit status. This re-reads the remote's symbolic HEAD advertisement and writes only the local `refs/remotes/origin/HEAD` symbolic ref.
 2. Only when `set-head` exited zero, read `git symbolic-ref --quiet refs/remotes/origin/HEAD`, require a target below `refs/remotes/origin/`, and verify that target resolves. Derive the default branch name from that target.
 3. If `set-head` failed, could not run, or produced an invalid target, completely ignore any existing `origin/HEAD`, even if it still resolves. Query `gh repo view "$origin_selector" --json defaultBranchRef --jq '.defaultBranchRef.name'`. If `origin_selector` was not resolved or the query fails, the fallback failed. Validate a returned branch name with `git check-ref-format --branch` and use it as the authoritative protected name.
-4. If the API supplied a name but neither `refs/remotes/origin/<name>` nor `refs/heads/<name>` resolves, make one read-only targeted fetch for that branch after the required initial fetch. If no commit ref can be obtained, stop without deleting.
+4. However the name was resolved, refresh that exact branch before it is used for anything: make one read-only targeted fetch, `git fetch origin "refs/heads/$default_name:refs/remotes/origin/$default_name"`, after the required initial fetch. Never skip it because the initial fetch succeeded or because a remote-tracking ref already resolves. If this fetch fails and no commit ref can be obtained for the default, stop without deleting.
 5. If neither the refreshed advertisement nor the API resolves a default, stop and delete nothing. Report the failed commands and suggest checking connectivity/authentication, then running `git fetch --prune origin && git remote set-head origin --auto`.
 
 A non-zero `set-head` is a hard boundary: never fall back to the cached symbolic ref. This covers the dangerous case where `origin/HEAD` still points to an old default while a restricted fetch refspec omitted the newly advertised default, causing `set-head --auto` to fail with `Not a valid ref` and leave the stale ref intact.
+
+The targeted refresh closes the mirror image of that hazard. When a restricted refspec omits the default but a stale `refs/remotes/origin/<default-name>` already exists, both the initial fetch and `set-head --auto` succeed, because the newly advertised default does have a local remote-tracking ref — merely an outdated one. The name is then correct while the tip is stale, so a branch whose commits a force-moved remote default has dropped still looks like an ancestor of it and would be deleted as Merged without a recovery ref. Only an explicit fetch of the resolved default proves the tip is current.
 
 Protect any local branch whose full ref is `refs/heads/<default-name>`. The resolved default is never a deletion candidate, whether its name is `main`, `master`, `develop`, `trunk`, or anything else.
 
@@ -74,15 +78,15 @@ Protect any local branch whose full ref is `refs/heads/<default-name>`. The reso
 
 Unless `no-pull` was supplied, update the local default with a fast-forward-only pull while preserving the invoking checkout:
 
-- If the default branch is checked out in a clean worktree, run `git -C <that-path> pull --ff-only origin refs/heads/<default-name>`.
+- If the default branch is checked out in a clean worktree, run `git -C "$worktree_path" pull --ff-only origin "refs/heads/$default_name"`.
 - If it is checked out in a dirty worktree, report that dirty state blocks only the pull; do not stash, reset, or clean it.
-- If it is not checked out and a local default branch exists, create a safely allocated temporary linked worktree for that branch, run `git -C <temporary-path> pull --ff-only origin refs/heads/<default-name>`, then remove the clean temporary worktree without `--force`.
+- If it is not checked out and a local default branch exists, create a safely allocated temporary linked worktree for that branch, run `git -C "$temporary_path" pull --ff-only origin "refs/heads/$default_name"`, then remove the clean temporary worktree without `--force`.
 - If only `origin/<default>` exists, create the local tracking branch in the temporary worktree from the freshly fetched `refs/remotes/origin/<default-name>`, run the same origin-and-ref-pinned pull, and retain the local default branch as a protected ref.
-- If the pull, temporary-worktree creation, or cleanup fails, report it and continue only with the last resolvable local or freshly fetched default ref. Never rewrite a divergent local default and never let a failed update make the protected default eligible.
+- If the pull, temporary-worktree creation, or cleanup fails, report it and continue; classification is unaffected, because the comparison OID below comes from the freshly fetched remote default ref rather than from the local branch. Never rewrite a divergent local default and never let a failed update make the protected default eligible.
 
-With `no-pull`, state that the comparison uses the current local default tip. The initial fetch remains mandatory.
+With `no-pull`, only the pull is skipped: the local default branch stays at its current tip. State that, and state that the comparison still uses origin's freshly fetched default tip. The initial fetch and step 3's targeted refresh both remain mandatory.
 
-Capture the exact full default comparison OID after this step. If no local or freshly fetched default commit resolves, stop without deleting.
+Capture the exact full default comparison OID from the freshly fetched `refs/remotes/origin/<default-name>`, never from the local default branch, so classification reflects origin's current default whether or not the pull ran. If that ref does not resolve to a commit, stop without deleting.
 
 ### Step 5 — Inventory local branches and worktrees
 
@@ -108,17 +112,19 @@ Classify each non-protected branch into exactly one bucket, in this order.
 
 A branch is Merged when either:
 
-1. Its snapshotted tip is an ancestor of the exact default comparison OID: `git merge-base --is-ancestor <tip> <default-oid>` exits zero; or
-2. A read-only lookup identifies a merged PR for this branch and that PR's non-empty full `headRefOid` equals the branch's snapshotted full tip OID byte-for-byte.
+1. Its snapshotted tip is an ancestor of the exact default comparison OID: `git merge-base --is-ancestor "$tip" "$default_oid"` exits zero; or
+2. A read-only lookup identifies a merged PR for this branch **whose base is the resolved default branch**, and that PR's non-empty full `headRefOid` equals the branch's snapshotted full tip OID byte-for-byte.
 
 For branches not merged by ancestry, use these fixed best-effort budgets:
 
 - Permit GitHub PR lookups only when Step 3 resolved `origin_selector`. Pass `--repo "$origin_selector"` to every `gh pr` command; the selector must still contain the verified origin host, so neither `GH_HOST`, `GH_REPO`, the current checkout, nor shared fork history can redirect the query.
-- In stable refname order, inspect at most 20 otherwise-unclassified branches with an upstream, including `[gone]`. Make at most one `gh pr list --repo "$origin_selector" --state merged --head <branch> --limit 10 --json number,headRefName,headRefOid,mergedAt` read per inspected branch; branches beyond the 20-lookup budget receive no head-name lookup.
-- Scan at most the newest 200 default-branch subjects once with `git log -n 200 --format='%H%x09%s' <default-oid>` for conventional PR-number references. Resolve metadata for at most 20 distinct referenced PR numbers, newest reference first, with at most one `gh pr view <number> --repo "$origin_selector" --json number,state,headRefName,headRefOid,mergedAt` read per number, and require both `state == MERGED`, the matching `headRefName`, and `headRefOid == <tip>`.
-- Treat the subject scan only as a way to identify a PR. The subject, PR number, merged state, or head name never replaces the exact head-OID gate.
+- In stable refname order, inspect at most 20 otherwise-unclassified branches with an upstream, including `[gone]`. Make at most one `gh pr list --repo "$origin_selector" --state merged --head "$branch" --base "$default_name" --limit 10 --json number,headRefName,headRefOid,baseRefName,mergedAt` read per inspected branch; branches beyond the 20-lookup budget receive no head-name lookup.
+- Scan at most the newest 200 default-branch subjects once with `git log -n 200 --format='%H%x09%s' "$default_oid"` for conventional PR-number references. Resolve metadata for at most 20 distinct referenced PR numbers, newest reference first, with at most one `gh pr view "$number" --repo "$origin_selector" --json number,state,headRefName,headRefOid,baseRefName,mergedAt` read per number, and require all of `state == MERGED`, the matching `headRefName`, `baseRefName == <default-name>`, and `headRefOid == <tip>`.
+- Treat the subject scan only as a way to identify a PR. The subject, PR number, merged state, or head name never replaces the exact base-and-head-OID gate.
 - If an identified historical PR has a missing OID or an OID different from the current tip, classify the branch as Uncertain immediately. Do not let another name-based signal or Transient heuristic override this. This is how a branch advanced after merge or a reused branch name remains safe.
 - If `origin_selector` could not be resolved, `gh` is unavailable, unauthenticated, or offline, a branch or PR falls beyond these budgets, or a query returns incomplete data, retain ancestry-based Merged results and conservatively classify affected branches with the local Transient rules or as Uncertain. Never query another repository, expand the budgets, or guess.
+
+A merged PR whose base is not the resolved default never establishes Merged, even on an exact head-OID match. Merged is the only bucket that deletes without a recovery ref, and that exemption rests on the commits living on the permanent default branch; a release or intermediate base carries no such guarantee and may itself disappear. Such a branch falls through to the Transient and Uncertain rules, where it is either preserved by a recovery ref or kept untouched. `--base` filters the list lookup by base branch, so the same gate must be re-checked on the `gh pr view` path, which is not filtered.
 
 #### Transient
 
@@ -166,7 +172,7 @@ Re-read every confirmed branch ref before any worktree removal or branch deletio
 For every confirmed branch not in Merged, reserve a recovery ref before deleting any branch:
 
 1. Start with `refs/pruned/<YYYYMMDD-UTC>/<branch>`, using one UTC date for the run.
-2. Atomically claim the candidate only if it does not exist, using `git update-ref --stdin` with the `create <ref> <tip>` command. Do not use a blind `git update-ref <ref> <tip>` write: that can repoint an earlier run's breadcrumb.
+2. Atomically claim the candidate only if it does not exist, using `git update-ref --stdin -z` with its `create SP <ref> NUL <tip> NUL` form. Use the `-z` form so a ref name derived from a branch containing a space, quote, or backslash is written literally instead of being re-parsed. Do not use a blind `git update-ref "<ref>" "<tip>"` write: that can repoint an earlier run's breadcrumb.
 3. Try at most 10 candidate names total: the base name, `refs/pruned/<date>/<branch>-<short-tip>`, then that short-tip form suffixed `-2` through `-9`. Existing refs are never overwritten or deleted.
 4. After a successful create, resolve the new ref as a commit and require its full OID to equal the expected snapshotted tip.
 5. If no name can be claimed or verification fails, drop that branch from the deletion set and report it. Continue best-effort for other branches.
@@ -179,9 +185,11 @@ For each still-confirmed branch checked out in a linked worktree:
 
 1. Re-read that worktree's branch and status. If it is detached, on another branch, missing, dirty, locked for an unclear reason, or has an in-progress operation, do not force anything; drop the branch from deletion and report it as Uncertain.
 2. Authorize removal only if this run created the worktree, the user explicitly approved its exact annotated canonical path and branch, or the still-confirmed branch is Merged/Transient and the worktree is attributable to this container under the next rule. `hands-off` reaches only the last category; an Uncertain or unattributed branch requires explicit path-and-branch approval.
-3. Automatic current-container attribution requires every condition: `CONTAINER_NAME` is available and a safe single path component; the canonical target is exactly a direct `<shared-repo-root>/.worktrees/$CONTAINER_NAME/<slug>` child for this repository; `wt-remove` is on PATH; and the branch/status checks above are clean and operation-free. Invoke `wt-remove <slug>` from outside the target worktree. Its refusal is authoritative. Never accept a worktree under another container/session root, and never fall back to plain Git on this automatic-attribution path.
-4. For a run-created or explicitly path-and-branch-approved worktree, prefer `wt-remove <slug>` when it matches the exact current-container helper root and the helper is available. Use `git worktree remove <canonical-path>` without `--force` for a candidate linked worktree only after the user explicitly approves its exact path and branch; run-created provenance and cleanliness do not waive that requirement. This does not change the separately specified cleanup of a clean temporary worktree created solely for step 4's default-branch pull.
+3. Automatic current-container attribution requires every condition: `CONTAINER_NAME` is available and a safe single path component; the canonical target is exactly a direct `<shared-repo-root>/.worktrees/$CONTAINER_NAME/<slug>` child for this repository; `wt-remove` is on PATH; and the branch/status checks above are clean and operation-free. Invoke `wt-remove "$slug"` from outside the target worktree. Its refusal is authoritative. Never accept a worktree under another container/session root, and never fall back to plain Git on this automatic-attribution path.
+4. For a run-created or explicitly path-and-branch-approved worktree, prefer `wt-remove "$slug"` when it matches the exact current-container helper root and the helper is available. Use `git worktree remove "$worktree_path"` without `--force` for a candidate linked worktree only after the user explicitly approves its exact path and branch; run-created provenance and cleanliness do not waive that requirement. This does not change the separately specified cleanup of a clean temporary worktree created solely for step 4's default-branch pull.
 5. If removal refuses or the path is the invoking/main checkout, keep the branch. Never follow up with a forced removal.
+
+Ignored untracked files — build artifacts, a local `.env`, generated output — do not count as dirty and do not block removal, even though `git worktree remove` deletes them without `--force`. `.gitignore` is the repository's own declaration that those paths are reconstructible, and treating them as blocking would keep almost every worktree that has ever been built. Anything valuable must be ferried out by another mechanism — a scratchpad path outside the worktree, a committed `.env.example`, or a returned report — rather than left as the only copy inside a disposable worktree.
 
 The skill must work outside powbox: `$CONTAINER_NAME`, `.worktrees`, `wt-bootstrap`, and `wt-remove` are opportunistic, never prerequisites.
 
@@ -189,7 +197,7 @@ The skill must work outside powbox: `$CONTAINER_NAME`, `.worktrees`, `wt-bootstr
 
 Immediately before each deletion, verify `refs/heads/<branch>` still equals the snapshotted tip. If it moved, keep it and report the race; retain and explicitly report any already-created recovery ref as a breadcrumb for a branch that was not deleted.
 
-Delete only the remaining confirmed local branches with `git branch -D -- <branch>`. Never run a remote-delete form and never push.
+Delete only the remaining confirmed local branches with `git branch -D -- "$branch"`. Never run a remote-delete form and never push.
 
 Record success or failure per branch. A failed deletion is non-fatal and must not lead to cleanup of its recovery ref.
 
@@ -206,23 +214,25 @@ Print:
 - Every linked or temporary worktree removed or preserved.
 - A clear statement that no remote refs or PRs were mutated.
 
+Shell-quote every substituted branch name, ref, and path in the printed commands below, so they stay safe to copy and paste whatever the branch was called.
+
 For every deletion, show direct restoration from the reported SHA:
 
 ```sh
-git branch <branch> <full-tip-sha>
+git branch "<branch>" <full-tip-sha>
 ```
 
 For non-Merged deletions, also show how to inspect and restore through the exact backup ref:
 
 ```sh
-git for-each-ref refs/pruned/<YYYYMMDD-UTC>/
-git branch <branch> <exact-refs/pruned/...-ref>
+git for-each-ref "refs/pruned/<YYYYMMDD-UTC>/"
+git branch "<branch>" "<exact-refs/pruned/...-ref>"
 ```
 
 Show cleanup only for the exact recovery refs created in this run, preferably with expected-old OIDs so a changed breadcrumb is not removed accidentally:
 
 ```sh
-git update-ref -d <exact-recovery-ref> <preserved-full-tip-sha>
+git update-ref -d "<exact-recovery-ref>" <preserved-full-tip-sha>
 ```
 
 Explain that refs keep commits advertised indefinitely until those refs are dropped. A deleted Merged branch has no automatic backup ref, but its printed SHA and reflogs or `git fsck --lost-found` may recover otherwise unreferenced commits until Git garbage collection removes them.
@@ -234,11 +244,13 @@ Explain that refs keep commits advertised indefinitely until those refs are drop
 - [ ] Origin's canonical `HOST/OWNER/REPO` selector was resolved once from its exact fetch URL before GitHub metadata use; every default/PR query explicitly targeted that full selector, or PR-derived classification was disabled and a needed default fallback stopped deletion.
 - [ ] `set-head --auto` succeeded before `origin/HEAD` was trusted, or an API query explicitly scoped to the resolved origin repository supplied the default; no name heuristic was used.
 - [ ] Default branch protected and pulled explicitly from `origin`'s resolved default ref unless `no-pull` or dirty/failed safely.
+- [ ] The resolved default was refreshed by an explicit targeted fetch, and the comparison OID came from that freshly fetched remote ref rather than a local or cached tip.
 - [ ] Inventory includes OIDs, upstream state, and worktree paths.
-- [ ] Every non-ancestry Merged result has an exact merged-PR `headRefOid == tip` proof.
+- [ ] Every non-ancestry Merged result has an exact merged-PR `headRefOid == tip` proof on a PR based on the resolved default.
 - [ ] Transient proofs name refs that survive the run; Uncertain branches remain untouched unless explicitly named interactively.
 - [ ] Audit listing printed; interactive confirmation or `hands-off` rules applied.
 - [ ] All non-Merged recovery refs atomically claimed at unused names and verified before any removal/deletion.
 - [ ] Tips rechecked; automatic cleanup covered only clean Merged/Transient worktrees attributed to this container's exact helper root and removed through `wt-remove`; every plain-Git candidate removal had exact path-and-branch approval.
 - [ ] Only local branches deleted; every deleted tip and every created recovery breadcrumb, including refs for branches that remained, reported.
+- [ ] Every dynamic branch, ref, and path was passed as argv or shell-quoted, in executed and printed commands alike.
 - [ ] Invoking checkout orientation and dirty work preserved; remote remained untouched.
