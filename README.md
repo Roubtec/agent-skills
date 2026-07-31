@@ -11,13 +11,16 @@ plugins/
     .claude-plugin/plugin.json
     bin/gh-review-threads          # hardened review-thread helper added to the plugin PATH
     skills/<name>/SKILL.md
+    workflows/wf-*.js              # Claude dynamic workflows
 codex/
   dev-skills/                     # Codex flavors of the same skills (SKILL.md + agents/openai.yaml)
     skills/<name>/...
+scripts/
+  test-checkout-cleanliness-report.mjs  # regression coverage for the batch workflow's checkout report
 ```
 
-- **`plugins/`** holds the Claude Code plugins. Each subdirectory is one independently installable plugin; `dev-skills` is the first (cross-repo software development workflow: planned task batches, review addressing, stacked-PR maintenance, open-question resolution, task authoring), and its `bin/` executables are available on the Bash tool's PATH while the plugin is enabled. Additional plugins for other domains get sibling directories here and an entry in `marketplace.json`.
-- **`codex/`** mirrors the plugin tree with the Codex CLI flavors of the same skills. The two flavors share most of their text but diverge deliberately where harness capabilities differ; a verbiage change is one PR touching both files side by side. This tree is *not* distributed through the marketplace — powbox bakes it into its agent image and seeds it onto the Codex config volume.
+- **`plugins/`** holds the Claude Code plugins. Each subdirectory is one independently installable plugin; `dev-skills` carries cross-repo software development skills, the `enable-worktrees` repository setup skill, the `session-learnings` retrospective skill, and Claude dynamic workflows for review addressing and planned task batches. Its `bin/` executables are available on the Bash tool's PATH while the plugin is enabled. Additional plugins for other domains get sibling directories here and an entry in `marketplace.json`.
+- **`codex/`** mirrors the plugin tree with the Codex CLI flavors of the same skills. The two flavors share most of their text but diverge deliberately where harness capabilities differ; a verbiage change is one PR touching both files side by side. Each Codex skill includes its `agents/openai.yaml` UI metadata. This tree is *not* installed by Claude's plugin runtime; powbox refreshes it onto the Codex config volume at container start from the same marketplace clone.
 
 ## Installing (Claude Code Users)
 
@@ -26,7 +29,9 @@ claude plugin marketplace add Roubtec/agent-skills
 claude plugin install dev-skills@roubtec
 ```
 
-Or from within Claude Code: `/plugin` → search for the `roubtec` marketplace. Skills then appear namespaced, e.g. `/dev-skills:address-review`.
+Or from within Claude Code: `/plugin` → search for the `roubtec` marketplace. Skills and workflows then appear namespaced, e.g. `/dev-skills:address-review` and `/dev-skills:wf-address-tasks`.
+
+The workflow names changed when ownership moved from powbox's config-volume seed to this plugin: the old bare `/wf-address-review` and `/wf-address-tasks` commands are now `/dev-skills:wf-address-review` and `/dev-skills:wf-address-tasks`. Existing seeded copies continue to answer the old names until powbox's `agent-update-skills --prune` retires them.
 
 Repos that use these skills carry a pointer in `.claude/settings.json` so collaborators are prompted to install on first trust:
 
@@ -65,9 +70,9 @@ Open PRs ready for review rather than as drafts. Agents in particular tend to op
 |---------------------------------|-----------------------------------------------------------------------|
 | Claude Code users (any machine) | plugin install from this marketplace                                  |
 | powbox containers (Claude)      | same plugin channel, pre-installed at image build                     |
-| powbox containers (Codex)       | `codex/` tree baked into the image, seeded to the Codex config volume |
+| powbox containers (Codex)       | `codex/` tree synced at start from the marketplace clone              |
 
-powbox-*specific* skills (those that only make sense inside its sandbox) do not live here — they remain in the `Roubtec/powbox` repo and reach containers through its image-bake + seed mechanism.
+The `enable-worktrees` and `session-learnings` skills intentionally describe powbox facilities but live here so both harness flavors refresh through the shared plugin channel. Container implementation details such as helper binaries, mount setup, and skill-sync machinery remain in the `Roubtec/powbox` repo.
 
 ## GitHub Automation
 

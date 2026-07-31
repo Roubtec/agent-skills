@@ -61,6 +61,7 @@ Out of scope:
 ## Implementation notes
 
 - Depends on 012 for the workflow home. The skill half can be drafted in parallel, but land together so consumers reference a complete block.
+- While replacing the imported workflows' inlined loops, normalize the legacy unnamespaced invocation references retained in their comments by 012's verbatim relocation; the plugin-namespaced commands documented beside the workflows are authoritative in the meantime.
 - Trimming is a goal: each consuming skill's protocol section should collapse to a reference plus deltas; if a consumer's text does not shrink, the extraction boundary is probably wrong.
 - The disposition rule costs one extra fixer turn per cycle; that is the accepted price for "no finding dropped unconsidered" on meaningful changes — hence the explicit `light` opt-out rather than a heuristic.
 - Escalated open questions must round-trip: `resolve-open-questions` with no arguments should be able to consume a completed cycle's `openQuestions[]` from context without re-derivation.

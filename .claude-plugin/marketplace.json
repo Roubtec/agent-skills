@@ -7,7 +7,7 @@
     {
       "name": "dev-skills",
       "source": "./plugins/dev-skills",
-      "description": "Cross-repo software development workflow skills: planned task batches, review addressing, stacked-PR maintenance, open-question resolution, and task authoring."
+      "description": "Cross-repo development skills and workflows for task batches, review addressing, stacked PRs, worktree setup, open questions, task authoring, and session retrospectives."
     }
   ]
 }

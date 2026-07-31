@@ -48,6 +48,7 @@ Out of scope:
 ## Validation
 
 - A three-task batch (one artificially slow, one dependent) run end to end: observe early PR creation, dependent start on prerequisite delivery, and a correct final summary.
+- Run `node scripts/test-checkout-cleanliness-report.mjs` after restructuring `wf-address-tasks.js`; if the extraction shape or `mainCheckoutSummary` semantics change, update the focused regression suite alongside the workflow.
 
 ## Review plan
 
