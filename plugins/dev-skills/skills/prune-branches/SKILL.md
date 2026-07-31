@@ -30,6 +30,7 @@ Parse arguments leniently and let the inventory listing be the safety net:
 - Never delete an Uncertain branch in `hands-off` mode or merely because the user typed `go`.
 - Never delete a non-Merged branch until an unused recovery-ref name has been claimed atomically and verified at its exact tip.
 - Never use `git worktree remove --force`, force helper cleanup, auto-stash, reset, clean, or any operation that can discard uncommitted work. If a worktree cannot be removed cleanly, keep its branch.
+- Never remove the invoking/main worktree or a pre-existing linked worktree that was not explicitly attributed to this cleanup run by its annotated path and branch. Clean status, a helper-managed path, generic `go`, and `hands-off` are not ownership proof.
 - Never treat a `[gone]` upstream, a branch name, or a merge-looking commit subject as sufficient proof by itself.
 - Preserve the invoking checkout's branch or detached-HEAD state and all dirty state. Use `git -C <path>` and temporary linked worktrees rather than switching the invoking checkout.
 
@@ -85,8 +86,9 @@ Build one stable snapshot before classification:
 
 - List every `refs/heads/*` ref with full tip OID, short tip OID, upstream ref, and upstream tracking state using `git for-each-ref`.
 - Parse `git worktree list --porcelain` and map each checked-out `branch refs/heads/<name>` to its canonical worktree path. Record detached worktrees separately.
+- Record whether each linked worktree was created by this run, is helper-managed below `.worktrees/$CONTAINER_NAME/`, or is otherwise pre-existing. These facts select a safe removal mechanism but do not by themselves authorize removal of a worktree that another session may be using.
 - Mark the invoking worktree's current branch, the default branch, and every user-designated keep as protected.
-- Keep a branch checked out in another worktree eligible for classification only as annotated `worktree: <path>`; it cannot be deleted unless step 9 safely removes that linked worktree first.
+- Keep a branch checked out in another worktree eligible for classification only as annotated `worktree: <canonical-path>`; it cannot be deleted unless the exact annotated path and branch are explicitly approved in this run and step 9 safely removes that linked worktree first.
 - Never offer removal of the invoking/main checkout itself. Its current branch remains protected.
 
 The post-fetch `[gone]` upstream state is useful evidence but never a bucket by itself.
@@ -104,22 +106,21 @@ A branch is Merged when either:
 1. Its snapshotted tip is an ancestor of the exact default comparison OID: `git merge-base --is-ancestor <tip> <default-oid>` exits zero; or
 2. A read-only lookup identifies a merged PR for this branch and that PR's non-empty full `headRefOid` equals the branch's snapshotted full tip OID byte-for-byte.
 
-For branches not merged by ancestry, use bounded best effort:
+For branches not merged by ancestry, use these fixed best-effort budgets:
 
-- For otherwise-unclassified branches with an upstream, including `[gone]`, make at most one capped `gh pr list --state merged --head <branch> --json number,headRefName,headRefOid,mergedAt` read per branch. Cap the total branch lookups and batch them where the available interface supports it.
-- Scan recent default-branch subjects once with a bounded `git log --format='%H%x09%s' <default-oid>` window for conventional PR-number references. Resolve only a capped set of those PR numbers with read-only `gh` metadata, batching when possible, and require both `state == MERGED`, the matching `headRefName`, and `headRefOid == <tip>`.
+- In stable refname order, inspect at most 20 otherwise-unclassified branches with an upstream, including `[gone]`. Make at most one `gh pr list --state merged --head <branch> --limit 10 --json number,headRefName,headRefOid,mergedAt` read per inspected branch; branches beyond the 20-lookup budget receive no head-name lookup.
+- Scan at most the newest 200 default-branch subjects once with `git log -n 200 --format='%H%x09%s' <default-oid>` for conventional PR-number references. Resolve metadata for at most 20 distinct referenced PR numbers, newest reference first, batching those read-only queries when the available interface supports it, and require both `state == MERGED`, the matching `headRefName`, and `headRefOid == <tip>`.
 - Treat the subject scan only as a way to identify a PR. The subject, PR number, merged state, or head name never replaces the exact head-OID gate.
 - If an identified historical PR has a missing OID or an OID different from the current tip, classify the branch as Uncertain immediately. Do not let another name-based signal or Transient heuristic override this. This is how a branch advanced after merge or a reused branch name remains safe.
-- If `gh` is unavailable, unauthenticated, offline, capped, or returns incomplete data, retain ancestry-based Merged results and conservatively classify affected branches with the local Transient rules or as Uncertain. Never guess.
+- If `gh` is unavailable, unauthenticated, offline, a branch or PR falls beyond these budgets, or a query returns incomplete data, retain ancestry-based Merged results and conservatively classify affected branches with the local Transient rules or as Uncertain. Never expand the budgets or guess.
 
 #### Transient
 
 A branch is Transient only when its snapshotted tip is fully recoverable from refs guaranteed to remain after this run and one cheap topology check proves one of these cases:
 
-- The tip is reachable from another protected or explicitly kept local branch.
+- The tip is reachable from a protected, explicitly kept, or other local branch already committed to the kept set. Establish that kept set before using it as proof; do not create circular proof where two branches slated for deletion are each other's only recovery source.
 - The tip is a local combination/test merge commit and every parent is reachable from the default or another ref guaranteed to remain. A parent preserved only by a squash-merged branch that will also be deleted is not enough.
 - It is a recognizable disposable rebase-stack snapshot and its tip is reachable from a surviving `refs/pre-rebase/...`, protected branch, default ref, or other kept ref. A snapshot-like name alone is not enough.
-- The tip is reachable from another local branch already committed to the kept set. Do not create circular proof where two branches slated for deletion are each other's only recovery source.
 
 Record the exact surviving ref(s) that prove recoverability in the one-line reason. A backup ref will still be created before deleting every Transient branch.
 
@@ -148,9 +149,9 @@ Non-Merged deletions will first be preserved under unused refs/pruned/<UTC-date>
 `go` deletes only the proposed Merged and Transient rows. Name any rows to keep/skip, or explicitly name an Uncertain branch to delete.
 ```
 
-In normal interactive mode, use Claude Code's native question mechanism to ask whether to proceed, keep/skip named branches, or give other instructions. Apply keep/skip changes, re-display the updated listing, and ask for final confirmation through the native question mechanism. If the user explicitly requests deletion of an Uncertain branch, mark that row `explicitly confirmed`, include it in the updated listing, and require final confirmation; it receives a recovery ref.
+In normal interactive mode, use Claude Code's native `AskUserQuestion` mechanism to ask whether to proceed, keep/skip named branches, or give other instructions. A pre-existing linked worktree requires explicit approval naming its exact annotated path and branch; generic `go` does not approve its removal. Apply changes, re-display the updated listing, and ask for final confirmation through `AskUserQuestion`. If the user explicitly requests deletion of an Uncertain branch, mark that row `explicitly confirmed`, include it in the updated listing, and require final confirmation; it receives a recovery ref.
 
-In `hands-off` mode, print the same listing for auditability and proceed immediately with only Merged and Transient rows. Invocation-time keeps still apply. Ignore any ambiguous delete guidance, and never include Uncertain rows.
+In `hands-off` mode, print the same listing for auditability and proceed immediately with only Merged and Transient rows that are not checked out in pre-existing linked worktrees. Invocation-time keeps still apply. Ignore any ambiguous delete guidance, never remove an unattributed worktree, and never include Uncertain rows.
 
 ### Step 8 — Revalidate tips and reserve recovery refs
 
@@ -160,26 +161,27 @@ For every confirmed branch not in Merged, reserve a recovery ref before deleting
 
 1. Start with `refs/pruned/<YYYYMMDD-UTC>/<branch>`, using one UTC date for the run.
 2. Atomically claim the candidate only if it does not exist, using `git update-ref --stdin` with the `create <ref> <tip>` command. Do not use a blind `git update-ref <ref> <tip>` write: that can repoint an earlier run's breadcrumb.
-3. If the base name is taken, try `refs/pruned/<date>/<branch>-<short-tip>`, then append `-2`, `-3`, and so on until a bounded number of valid unused candidates has been attempted. Existing refs are never overwritten or deleted.
+3. Try at most 10 candidate names total: the base name, `refs/pruned/<date>/<branch>-<short-tip>`, then that short-tip form suffixed `-2` through `-9`. Existing refs are never overwritten or deleted.
 4. After a successful create, resolve the new ref as a commit and require its full OID to equal the expected snapshotted tip.
 5. If no name can be claimed or verification fails, drop that branch from the deletion set and report it. Continue best-effort for other branches.
 
-Finish and verify reservation for all non-Merged deletions before removing any worktree or deleting any branch. Record the exact branch, tip, and recovery ref tuple for the final report.
+Finish and verify reservation for all non-Merged deletions before removing any worktree or deleting any branch. Record every exact branch, tip, and recovery ref tuple for the final report, including refs whose branches are later kept because a worktree removal or final tip check fails.
 
 ### Step 9 — Handle linked worktrees without losing work
 
 For each still-confirmed branch checked out in a linked worktree:
 
 1. Re-read that worktree's branch and status. If it is detached, on another branch, missing, dirty, locked for an unclear reason, or has an in-progress operation, do not force anything; drop the branch from deletion and report it as Uncertain.
-2. Prefer `wt-remove <slug>` when `wt-remove` is on PATH and the path is a helper-managed `.worktrees/$CONTAINER_NAME/<slug>` worktree. Invoke it from outside the target worktree. Its refusal to remove dirty work is authoritative.
-3. Otherwise run `git worktree remove <path>` without `--force`.
-4. If removal refuses or the path is the invoking/main checkout, keep the branch. Never follow up with a forced removal.
+2. Remove it only if this run created it, or the user explicitly approved its exact annotated canonical path and branch in the interactive listing. Generic confirmation and `hands-off` never authorize a pre-existing linked worktree; classify and report that branch as Uncertain instead.
+3. For an authorized helper-managed path below the current `.worktrees/$CONTAINER_NAME/<slug>` root, prefer `wt-remove <slug>` when it is on PATH. Invoke it from outside the target worktree. Its refusal to remove dirty work is authoritative.
+4. For any other authorized path, including an explicitly approved worktree outside powbox, run `git worktree remove <canonical-path>` without `--force`. This is the plain-Git fallback; never apply it merely because an arbitrary linked worktree is clean.
+5. If removal refuses or the path is the invoking/main checkout, keep the branch. Never follow up with a forced removal.
 
 The skill must work outside powbox: `$CONTAINER_NAME`, `.worktrees`, `wt-bootstrap`, and `wt-remove` are opportunistic, never prerequisites.
 
 ### Step 10 — Delete locally with exact-tip checks
 
-Immediately before each deletion, verify `refs/heads/<branch>` still equals the snapshotted tip. If it moved, keep it and report the race; an already-created recovery ref may remain as an extra breadcrumb.
+Immediately before each deletion, verify `refs/heads/<branch>` still equals the snapshotted tip. If it moved, keep it and report the race; retain and explicitly report any already-created recovery ref as a breadcrumb for a branch that was not deleted.
 
 Delete only the remaining confirmed local branches with `git branch -D -- <branch>`. Never run a remote-delete form and never push.
 
@@ -194,6 +196,7 @@ Print:
 - Fetch, default-resolution source, authoritative default name/OID, and pull or `no-pull` result.
 - Every deleted branch with bucket and full tip SHA. Include the exact recovery ref for each Transient or explicitly confirmed Uncertain deletion.
 - Every kept, skipped, changed, dirty-worktree, or failed branch with its reason.
+- Every recovery ref created in this run, separated into refs for deleted branches and refs reserved for branches that remained, with the reason each latter branch was not deleted.
 - Every linked or temporary worktree removed or preserved.
 - A clear statement that no remote refs or PRs were mutated.
 
@@ -229,6 +232,6 @@ Explain that refs keep commits advertised indefinitely until those refs are drop
 - [ ] Transient proofs name refs that survive the run; Uncertain branches remain untouched unless explicitly named interactively.
 - [ ] Audit listing printed; interactive confirmation or `hands-off` rules applied.
 - [ ] All non-Merged recovery refs atomically claimed at unused names and verified before any removal/deletion.
-- [ ] Tips rechecked; linked worktrees removed without force, preferring `wt-remove` where applicable.
-- [ ] Only local branches deleted; every deleted tip and recovery breadcrumb reported.
+- [ ] Tips rechecked; only run-created or exact-path-and-branch-approved linked worktrees removed without force, preferring `wt-remove` where applicable.
+- [ ] Only local branches deleted; every deleted tip and every created recovery breadcrumb, including refs for branches that remained, reported.
 - [ ] Invoking checkout orientation and dirty work preserved; remote remained untouched.
