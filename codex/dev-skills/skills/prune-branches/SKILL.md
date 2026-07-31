@@ -30,7 +30,7 @@ Parse arguments leniently and let the inventory listing be the safety net:
 - Never delete an Uncertain branch in `hands-off` mode or merely because the user typed `go`.
 - Never delete a non-Merged branch until an unused recovery-ref name has been claimed atomically and verified at its exact tip.
 - Never use `git worktree remove --force`, force helper cleanup, auto-stash, reset, clean, or any operation that can discard uncommitted work. If a worktree cannot be removed cleanly, keep its branch.
-- Never remove the invoking/main worktree or a pre-existing linked worktree that was not explicitly attributed to this cleanup run by its annotated path and branch. Clean status, a helper-managed path, generic `go`, and `hands-off` are not ownership proof.
+- Never remove the invoking/main worktree. Remove another linked worktree only when this run created it, the user approved its exact annotated canonical path and branch, or it is a confirmed Merged/Transient branch proven to belong to this container's exact helper root and is removed through `wt-remove` as defined in step 9. A clean or helper-looking path outside that exact current-container root, `hands-off`, and general confirmation are not ownership proof.
 - Never treat a `[gone]` upstream, a branch name, or a merge-looking commit subject as sufficient proof by itself.
 - Preserve the invoking checkout's branch or detached-HEAD state and all dirty state. Use `git -C <path>` and temporary linked worktrees rather than switching the invoking checkout.
 
@@ -86,9 +86,10 @@ Build one stable snapshot before classification:
 
 - List every `refs/heads/*` ref with full tip OID, short tip OID, upstream ref, and upstream tracking state using `git for-each-ref`.
 - Parse `git worktree list --porcelain` and map each checked-out `branch refs/heads/<name>` to its canonical worktree path. Record detached worktrees separately.
-- Record whether each linked worktree was created by this run, is helper-managed below `.worktrees/$CONTAINER_NAME/`, or is otherwise pre-existing. These facts select a safe removal mechanism but do not by themselves authorize removal of a worktree that another session may be using.
+- Derive the canonical shared repository root from Git's absolute common directory. When `$CONTAINER_NAME` is a non-empty single path component, derive this repo's exact canonical helper root as `<shared-repo-root>/.worktrees/$CONTAINER_NAME`; never substitute a similarly named root or another container/session component.
+- Record whether each linked worktree was created by this run, is a direct `<helper-root>/<slug>` child attributable to that exact current-container root, or is otherwise pre-existing. Current-container attribution is usable only when `wt-remove` is available and the target passes step 9's clean and operation-state checks.
 - Mark the invoking worktree's current branch, the default branch, and every user-designated keep as protected.
-- Keep a branch checked out in another worktree eligible for classification only as annotated `worktree: <canonical-path>`; it cannot be deleted unless the exact annotated path and branch are explicitly approved in this run and step 9 safely removes that linked worktree first.
+- Keep a branch checked out in another worktree eligible for classification only as annotated `worktree: <canonical-path>`; it cannot be deleted unless the exact annotated path and branch are explicitly approved, or it is a confirmed Merged/Transient branch in an attributable current-container helper worktree, and step 9 safely removes that worktree first.
 - Never offer removal of the invoking/main checkout itself. Its current branch remains protected.
 
 The post-fetch `[gone]` upstream state is useful evidence but never a bucket by itself.
@@ -149,9 +150,9 @@ Non-Merged deletions will first be preserved under unused refs/pruned/<UTC-date>
 `go` deletes only the proposed Merged and Transient rows. Name any rows to keep/skip, or explicitly name an Uncertain branch to delete.
 ```
 
-In normal interactive mode, wait for typed `go` or a branch list. A pre-existing linked worktree requires explicit approval naming its exact annotated path and branch; generic `go` does not approve its removal. Apply changes, re-display the updated listing, and require a final `go`. If the user explicitly requests deletion of an Uncertain branch, mark that row `explicitly confirmed`, include it in the updated listing, and require the final `go`; it receives a recovery ref.
+In normal interactive mode, wait for typed `go` or a branch list. Typed `go` covers proposed Merged/Transient rows in attributable current-container helper worktrees because step 9 removes those only through `wt-remove`; every unattributed/pre-existing worktree and every explicitly requested Uncertain deletion requires approval naming its exact annotated path and branch. Apply changes, re-display the updated listing, and require a final `go`. If the user explicitly requests deletion of an Uncertain branch, mark that row `explicitly confirmed`, include it in the updated listing, and require the final `go`; it receives a recovery ref.
 
-In `hands-off` mode, print the same listing for auditability and proceed immediately with only Merged and Transient rows that are not checked out in pre-existing linked worktrees. Invocation-time keeps still apply. Ignore any ambiguous delete guidance, never remove an unattributed worktree, and never include Uncertain rows.
+In `hands-off` mode, print the same listing for auditability and proceed immediately with only Merged and Transient rows that are not checked out in a linked worktree or whose linked worktree is attributable to this container's exact helper root and removable through `wt-remove`. Invocation-time keeps still apply. Ignore any ambiguous delete guidance, never remove an unattributed worktree, and never include Uncertain rows.
 
 ### Step 8 — Revalidate tips and reserve recovery refs
 
@@ -172,9 +173,9 @@ Finish and verify reservation for all non-Merged deletions before removing any w
 For each still-confirmed branch checked out in a linked worktree:
 
 1. Re-read that worktree's branch and status. If it is detached, on another branch, missing, dirty, locked for an unclear reason, or has an in-progress operation, do not force anything; drop the branch from deletion and report it as Uncertain.
-2. Remove it only if this run created it, or the user explicitly approved its exact annotated canonical path and branch in the interactive listing. Generic confirmation and `hands-off` never authorize a pre-existing linked worktree; classify and report that branch as Uncertain instead.
-3. For an authorized helper-managed path below the current `.worktrees/$CONTAINER_NAME/<slug>` root, prefer `wt-remove <slug>` when it is on PATH. Invoke it from outside the target worktree. Its refusal to remove dirty work is authoritative.
-4. For any other authorized path, including an explicitly approved worktree outside powbox, run `git worktree remove <canonical-path>` without `--force`. This is the plain-Git fallback; never apply it merely because an arbitrary linked worktree is clean.
+2. Authorize removal only if this run created the worktree, the user explicitly approved its exact annotated canonical path and branch, or the still-confirmed branch is Merged/Transient and the worktree is attributable to this container under the next rule. `hands-off` reaches only the last category; an Uncertain or unattributed branch requires explicit path-and-branch approval.
+3. Automatic current-container attribution requires every condition: `CONTAINER_NAME` is available and a safe single path component; the canonical target is exactly a direct `<shared-repo-root>/.worktrees/$CONTAINER_NAME/<slug>` child for this repository; `wt-remove` is on PATH; and the branch/status checks above are clean and operation-free. Invoke `wt-remove <slug>` from outside the target worktree. Its refusal is authoritative. Never accept a worktree under another container/session root, and never fall back to plain Git on this automatic-attribution path.
+4. For a run-created or explicitly path-and-branch-approved worktree, prefer `wt-remove <slug>` when it matches the exact current-container helper root and the helper is available. Use `git worktree remove <canonical-path>` without `--force` for a candidate linked worktree only after the user explicitly approves its exact path and branch; run-created provenance and cleanliness do not waive that requirement. This does not change the separately specified cleanup of a clean temporary worktree created solely for step 4's default-branch pull.
 5. If removal refuses or the path is the invoking/main checkout, keep the branch. Never follow up with a forced removal.
 
 The skill must work outside powbox: `$CONTAINER_NAME`, `.worktrees`, `wt-bootstrap`, and `wt-remove` are opportunistic, never prerequisites.
@@ -232,6 +233,6 @@ Explain that refs keep commits advertised indefinitely until those refs are drop
 - [ ] Transient proofs name refs that survive the run; Uncertain branches remain untouched unless explicitly named interactively.
 - [ ] Audit listing printed; interactive confirmation or `hands-off` rules applied.
 - [ ] All non-Merged recovery refs atomically claimed at unused names and verified before any removal/deletion.
-- [ ] Tips rechecked; only run-created or exact-path-and-branch-approved linked worktrees removed without force, preferring `wt-remove` where applicable.
+- [ ] Tips rechecked; automatic cleanup covered only clean Merged/Transient worktrees attributed to this container's exact helper root and removed through `wt-remove`; every plain-Git candidate removal had exact path-and-branch approval.
 - [ ] Only local branches deleted; every deleted tip and every created recovery breadcrumb, including refs for branches that remained, reported.
 - [ ] Invoking checkout orientation and dirty work preserved; remote remained untouched.
