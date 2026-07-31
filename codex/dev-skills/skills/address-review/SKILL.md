@@ -145,7 +145,7 @@ Fetch the **unresolved** review threads and enough context to judge them (see "G
 A maintainer reply on an unresolved thread is **authoritative**: if they said "skip this" or "do X instead," follow the maintainer over the original reviewer.
 The same authority extends to a **top-level decision comment** — a maintainer comment that walks the open feedback and records a verdict per item (often titled "Maintainer Decisions" or similar). Treat each recorded decision as the binding disposition for the thread(s) it covers — including "postpone to a follow-up task" and "keep as-is" — rather than re-triaging those threads from scratch.
 Treat `isOutdated` as context, not a disposition: inspect the current code and re-locate the concern rather than auto-dismissing an outdated thread.
-If there are no unresolved threads and no explicitly included standalone items, stop as a successful no-op: make no commits, do not push or ping, do not post a summary comment, and report that nothing actionable remains.
+If there are no unresolved threads and no explicitly included standalone items, first compare the current `HEAD`, the starting tip, and the recorded PR `headRefOid`. In `delegated-fix`, stop as a successful no-op only when all three are equal; otherwise return the complete zero-item packet through step 5 so the orchestrator can review and, when enabled, publish a rebase-changed or already-unpublished local tip. Outside `delegated-fix`, a requested rebase that changed `HEAD` likewise continues through the normal zero-item review/publication path; only an unchanged tip is a terminal no-op. A zero-item path makes no synthetic commit, and a terminal no-op makes no commits, push, ping, or summary comment.
 
 ### Step 4 — Triage every review item
 
