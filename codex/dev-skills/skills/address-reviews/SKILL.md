@@ -19,7 +19,7 @@ It borrows its worktree machinery (isolation model, Session Bootstrap, adaptive 
 Everything here follows from one fact: **the PRs already exist**, so we modify existing branches rather than create new ones.
 
 - **No new PR head lineage, no `gh pr create`.** Each worktree checks out an **existing PR head branch** (creating a local tracking branch only when needed); pushing is handled inside `address-review`.
-- **No dependency waves.** Distinct PR heads are independent review-addressing units, so they can run concurrently from the start (subject to throttling). Entries that resolve to the same head branch must be serialized; genuinely stacked but distinct branches can still run independently, with restacking left for later.
+- **No dependency waves for review addressing itself.** Distinct PR heads can run concurrently from the start (subject to throttling), and entries that resolve to the same head branch must still be serialized. The optional rebase path is the exception: stacked entries follow the base-before-dependent order below.
 - **Per-PR guidance comes from `address-review`, but the parallel orchestrator owns the phases.** A fix subagent runs `delegated-fix`; a separate fresh Reviewer and concurrent best-effort `claude` peer check the returned packet; fix-up/re-review rounds follow as needed; only an entry whose Reviewer passes and whose peer has no grounded findings or is explicitly forfeited, unavailable, or disabled gets a `publish-reviewed` subagent. The peer wiring in standalone `address-review` is not inherited because `delegated-fix` stops before review.
 - **A leafy branch stack is the expected outcome and is fine.** Parallel fixes leave the PR branches diverged. This skill does **not** build a restack guide — integrating the result is a deliberate follow-up via `rebase-stack` (or manual rebases). See "After the batch".
 
@@ -52,7 +52,10 @@ The top-level orchestrator (you) may still consult the user for **batch-level** 
 
 **Not user-facing (orchestrator may supply at its own discretion):** the per-PR `#N` (you always pass each subagent its assigned PR) and `rebase on top of <branch>`.
 The user has no reason to pass a rebase here — the leafy stack is resolved later — but if you detect a stacked PR that genuinely must be addressed against its near-final base, you may pass a rebase target to that one PR's `address-review`. Off by default.
-When you do pass one, **pin it to an exact commit**: resolve the target once, right after Bootstrap's `git fetch` (e.g. `git rev-parse origin/main`), and pass that SHA rather than the symbolic name. Remote-tracking refs can advance mid-batch (any later fetch moves them), so a name each entry resolves at its own time could rebase entries onto different bases; one recorded SHA keeps the whole batch deterministic.
+
+Detect a stack only when one entry's fully qualified `(base repository, baseRefName)` pair equals another entry's `(headRepository.nameWithOwner, headRefName)` pair; record the base repository as the current PR repository's `nameWithOwner`, and never infer a stack from matching short branch names alone. For a rebase-enabled stack, rebase the base entry first onto the pinned target, then pin the dependent's target to the exact rebased base tip — never rebase the dependent directly onto the original pinned target.
+
+For any rebase target that is not a just-rebased parent tip, **pin it to an exact commit** right after Bootstrap's `git fetch` (e.g. `git rev-parse origin/main`) rather than passing a symbolic name that a later fetch could move. If a parent PR merges during the batch, restacking every dependent onto the refreshed branch containing that merge is mandatory because the merge may rewrite the parent's commit SHAs; rely on patch-id dropping, then verify the dependent's diff no longer contains parent content and rerun its review gate before publication.
 
 **The default is to publish.** A bare batch (no push/ping argument) publishes every entry and re-pings its contributing bots, exactly as `ping-contributing` (resolution order and precedence are as in `address-review` → "Flag interactions"); `no-push` is the only way to run the whole batch local-only. Flag pass-through is otherwise **batch-uniform**: the same resolved `push`/`ping-*` set applies to every PR in the run. With `ping-contributing` (including the bare default), the *flag* is uniform but its *effect* is evaluated independently inside each PR's `address-review`, so each PR re-pings only the bots still contributing to it.
 
@@ -117,7 +120,7 @@ Shared setup, from the main tree: `$WT_BASE` is the worktree base dir chosen in 
 
 The local-control path (the rebased-locally / stale-origin case). Normalize an explicit `refs/heads/<name>` input to the bare `<name>`, then require `git show-ref --verify "refs/heads/<name>"` before doing anything else; skip if it is not a local branch. The bare local branch name must equal the PR's `headRefName` (which is the norm: a local rebase keeps the branch name). If your local copy has a different name than the PR head, this auto-pairing cannot see it; use that PR's number with `address-review` directly, or rename to match.
 
-1. **Pair to the PR by head:** `gh pr list --head <branch> --state open --json number,url,headRepositoryOwner`.
+1. **Pair to the PR by head:** `gh pr list --head <branch> --state open --json number,url,headRefName,headRefOid,headRepository,headRepositoryOwner,baseRefName,baseRefOid`; for the one match, record the same fully qualified head/base pairs and OIDs used by stack detection.
    - Exactly one open PR → that's the pairing.
    - Zero → skip-and-record: with no PR there are no review threads to address.
    - More than one → skip-and-record as ambiguous (or, interactive, ask which).
@@ -132,7 +135,7 @@ The local-control path (the rebased-locally / stale-origin case). Normalize an e
 
 The canonical path. Resolve the PR, then prefer a same-named local branch if you have one (so we still never bypass your local copy), else check out `origin`'s head.
 
-1. **Resolve and sanity-check:** `gh pr view N --json number,state,headRefName,headRepositoryOwner,baseRefName,url,title`. If `state` is not `OPEN`, skip-and-record. Note `headRefName` and whether `headRepositoryOwner` matches `origin`'s owner (same-repo) or differs (fork).
+1. **Resolve and sanity-check:** `gh pr view N --json number,state,headRefName,headRefOid,headRepository,headRepositoryOwner,baseRefName,baseRefOid,url,title`. If `state` is not `OPEN`, skip-and-record. Record the fully qualified head repository/ref, the current PR repository's `nameWithOwner` as the fully qualified base repository, and both OIDs; note whether `headRepositoryOwner` matches `origin`'s owner (same-repo) or differs (fork).
 2. **Same-repo:**
    - If local `<headRefName>` exists, compare it with `origin/<headRefName>` **before** considering checkout occupancy. If it is strictly behind with no unique local commits, skip-and-record rather than force-rewriting newer remote work; ask the user to fast-forward it or explicitly pass the branch if they truly intend the stale local state.
    - A usable local `<headRefName>` that is free → the plain attach (`git worktree add "$WT_BASE/pr-<N>" <headRefName>`) and **record any ahead/diverged state** in the summary.
@@ -151,6 +154,8 @@ The absolute worktree path, the checked-out branch name, the **paired PR number*
 
 Codex subagents must not be assumed to spawn their own subagents, so the top-level orchestrator owns every phase, including peer launch and triage.
 For each reviewer round, fan out one same-phase subagent per distinct worktree in one tool-call batch and launch that entry's peer beside it, wait for both outcomes for every entry, close the subagents, then advance the phase.
+
+At every apply boundary — immediately before Phase A and each fix-up — re-fetch each affected PR's current state and relevant remote refs, then re-verify its open/merged state, fully qualified head/base pairs, and OIDs. Recompute stack ordering and rebase targets from that fresh state instead of acting on the earlier resolution snapshot; a human may have merged a parent during the long-running batch.
 
 Every prompt starts with:
 
@@ -254,6 +259,7 @@ Allow at most 12 reviewer rounds total, counting every fix-up regardless of whic
 ### Publication
 
 Unless the run is `no-push` (local-only), spawn a fresh `worker` publisher only for an entry whose Reviewer passed and whose peer returned no grounded findings, forfeited/unavailable, or was disabled; pass its final packet, Reviewer Pass, and explicit peer outcome.
+Immediately before that launch, re-fetch the PR and relevant refs and re-verify the same state, pair, and OID facts again. If a parent merged or any fact changed, perform the required restack and repeat validation/review as needed rather than publishing the stale packet.
 Tell it to invoke `$address-review #N hands-off publish-reviewed <resolved push/ping tokens>` — pass the run's resolved push/ping set (a bare default batch resolves to `ping-contributing`; a `no-push` batch skips publication entirely).
 It edits no code and returns the full final report, including per-thread dispositions, push/ping outcome, and blockers.
 
@@ -298,8 +304,10 @@ Aggregate the per-PR `address-review` reports into one batch summary:
 
 - [ ] Session Bootstrap ran: worktree base prepared, stale worktree registrations pruned, GitHub/remote access confirmed, one-time peer preflight completed unless disabled, `git fetch origin` done.
 - [ ] Batch parsed into entries (each classified PR-number vs branch-name); pass-through flag set captured (the default — no push/ping argument — resolves to publish + `ping-contributing`; `no-push` makes the whole batch local-only); `hands-off` force-injected into every `address-review` invocation and equivalent unattended guidance given to reviewers/fix-ups; aliases for one PR de-duplicated and same-head PRs serialized.
+- [ ] Stacks detected only by matching fully qualified repository/ref pairs; any rebase ran base-before-dependent, and every dependent of a newly merged parent was restacked and checked for parent content in its diff.
 - [ ] Each entry resolved to a `(branch, PR#)` pair and checked out on the right ref — **branch entries use the local ref, never `origin`**; PR-number entries prefer a same-named local branch, else `origin` head; worktrees under the chosen base dir; un-setup-able / PR-less entries skipped-and-recorded.
+- [ ] PR/merge state and relevant refs refreshed and re-verified at every apply and publish boundary; changed state invalidated stale rebase targets and review packets.
 - [ ] Per-PR phases ran in order: `$address-review ... delegated-fix`, fresh `explorer` Reviewer plus concurrent best-effort peer, fresh `worker` fix-up/re-review as needed (12 reviewer rounds max), then `$address-review ... publish-reviewed` only after the Reviewer passed and the peer had no grounded findings or was explicitly forfeited, unavailable, or disabled unless the run is `no-push`; distinct heads fanned out concurrently but throttled only for objective or anticipated constraints; same-head entries serialized.
-- [ ] No new PR head lineage created, no `gh pr create`, no restack performed.
+- [ ] No new PR head lineage created and no `gh pr create`; restacks occurred only in the optional rebase path or when required after a parent merge.
 - [ ] Clean worktrees removed after each subagent returns; dirty/in-progress worktrees preserved and reported; **no PR branch deleted**; main checkout restored to its starting checkout mode after any temporary detach.
 - [ ] Batch summary aggregates outcomes, hands-off blockers (prominently), push-backs, peer outcomes/forfeits, no-push disposition maps, throttling notes, and the `rebase-stack` follow-up pointer.
