@@ -205,13 +205,53 @@ For each task file in the input set:
    - If the report says the branch is **empty / has no implementation / shows an empty diff**, do not trust it at face value — that is the signature of a race (reviewer started before the implementer committed) or a wrong-branch checkout, not a real gap. Verify with `git diff --name-only <base>...HEAD`; if the work is actually present, spawn a fresh reviewer and use that verdict instead.
    - If the own reviewer **passes** and the peer has no unaddressed grounded findings under the protocol below: proceed to step 8.
    - If either feedback source has issues: enter the feedback loop (see below).
-8. **Open a PR** against the recorded base branch.
+8. **Run the pre-PR collision guard below.** If this branch collides, do not open its PR; deconflict the flagged new claimant and send the changed branch through fresh review again. A held branch is not delivered and does not become the base of the next task.
+9. **Open a PR** against the recorded base branch.
    - **First push the task branch** (`git push -u origin HEAD`), and push the recorded base too if it exists only locally (e.g. a dependency's not-yet-pushed branch). `gh pr create` on an unpushed branch prompts interactively for a push target, which hangs a delegated/no-TTY run. If the remote is unavailable (see the local-only fallback), skip the PR and record the branch as pending push instead.
    - Reference the task file in the PR description for context.
    - Include any reviewer-relevant caveats (tradeoffs, intentional divergences, uncertainties surfaced by the implementer or reviewer).
    - Do not restate the entire task unless doing so adds real review value.
-9. **Continue to the next task** or, if this was the last one, produce the final summary.
+10. **Continue to the next task** or, if this was the last one, produce the final summary.
    If you hit a blocker that prevents responsible progress, stop and ask the user for clarification.
+
+## Pre-PR collision guard
+
+The task-number guard below can surface an identical-path add/add clash between task files. Hand only that already-identified case to this plain add/add procedure: hold the scanning branch, rename the flagged new claimant, regenerate derived files, and run fresh review again. If the task path is imperative, hold the branch and ask the maintainer instead of inventing an invalid alternative. The serialized flow does not add a second repo-wide scan of every open PR's other added paths, basenames, or exported symbols; the parallel skill retains its separate wave-local check for those surfaces.
+
+### Task-number collisions across in-flight branches
+
+Run this guard before opening any PR that adds task files. Parse the basename of every task file as a **full task number** (three digits plus an optional lowercase letter suffix, such as `001`, `001a`, or `042b`) followed by its slug. Two files collide whenever their full task numbers are identical, regardless of slug; `001`, `001a`, and `001b` are distinct and do not collide. Compare the scanning branch's unpaired additions with one another as well as with the comparison set, so two new files on that branch cannot claim one number before either reaches another member.
+
+Resolve the repository's task folder before scanning. The commands and examples below use the conventional `tasks/` folder required by this workflow; if the repository documents another task folder, substitute that resolved folder for **every** `tasks/` pathspec and folder reference in this guard. Never interpret an empty result from the conventional path as a clean scan when the resolved folder is elsewhere.
+
+The comparison set is defined here, once, as the union of two groups. **Always:** the base branch and every open PR head. **In a pipelined run, additionally:** branches delivered earlier in the same run, anything merged since the run started, numbers reserved by a task that cleared this guard but has not finished delivering, and currently-ready siblings awaiting the guard. Track these run-local members as the pipeline advances. First claimant wins; the second claimant renumbers, and never rewrite a delivered or reserved claimant. When two currently-ready siblings are both still unguarded, establish the first claimant in the run's deterministic delivery order (dependency or scheduling order, then task number) and reserve it before evaluating the other; the delivered-or-reserved rule decides every asymmetric case.
+
+What a member contributes is determined only by its kind, not by re-enumerating that membership list: the base branch contributes its entire recursive `tasks/` tree; any other tree-bearing member contributes only task files it adds relative to **its own** base; and a member already represented as a reserved number contributes that number directly. Never read a non-base head as a whole tree. It inherits its base's files without claiming them, and a whole-tree read would turn routine stacked work and task relocations into false collisions. Likewise, compute the scanning branch's additions and removals only against its own recorded base, never by diffing it against another head.
+
+Refresh the scanning branch's recorded base before reading it, with an explicit refspec, and use the remote-tracking name in every subsequent command; a bare local base name or `git fetch origin "$base"` can remain stale in a narrow clone:
+
+```bash
+git fetch origin "+refs/heads/${base}:refs/remotes/origin/${base}"
+git ls-tree -r --name-only "origin/${base}" -- tasks/
+git diff --no-renames --diff-filter=A --name-only "origin/${base}...${branch}" -- tasks/
+git diff --no-renames --diff-filter=D --name-only "origin/${base}...${branch}" -- tasks/
+```
+
+The recursive `ls-tree` is load-bearing: `tasks/done/`, `tasks/deferred/`, and any future nested folder retain their numbers. `--no-renames` is load-bearing on both diffs: a move must decompose into one removal and one addition, and a renumbering rename must expose its destination as a fresh claim.
+
+The explicit remote refresh remains the normal and required path. The only fallback is a recorded base that the remote cannot represent because it exists only locally (an unpushed dependency base) or the run is already known to be local-only: resolve that local base to an exact commit OID, use the OID — not the bare branch name — for the recursive tree read and both diffs, and report the base read as degraded under the note-and-proceed rule. Never turn a failed refresh into an empty additions list or a silent pass.
+
+Enumerate the point-in-time remote comparison data once with `gh pr list --state open --limit 200 --json number,headRefOid,baseRefName,baseRefOid`. The pinned bound avoids the CLI's silent default of 30; if the enumeration returns as many entries as the pinned limit, report the returned count (the limit), explain that any additional unreturned heads cannot be named, and mark the scan incomplete, then continue under the note-and-proceed rule rather than claiming a complete result. Do not add pagination to disguise that bound.
+
+Before diffing an enumerated head, fetch it from the base repository with `git fetch origin "refs/pull/${number}/head"`, then read the exact enumerated `headRefOid`, not a guessed local or fork branch name. Also collect each distinct `baseRefName` and refresh it **unconditionally once per name** with `git fetch origin "+refs/heads/${pr_base}:refs/remotes/origin/${pr_base}"` before any head uses it; mere ref presence says nothing about freshness. Take that head's contribution with `git diff --no-renames --diff-filter=A --name-only "origin/${pr_base}...${headRefOid}" -- tasks/`. The three-dot form uses the fetched history's merge base and prevents a stacked PR from claiming files inherited from its sibling base.
+
+If a PR's base no longer resolves by `baseRefName`, use its enumerated `baseRefOid` when that object is reachable; if neither base object can be read, or the exact enumerated head OID cannot be read after the PR-ref fetch, note that the named head (or at least PR number when that is all the enumeration supplied) was skipped and proceed without substituting a wrong base. Apply the same note-and-proceed behavior when the remote or `gh` is unavailable. Report every skipped head and the limit condition explicitly; a local-only run may still use its readable run-local members, but must not describe the remote scan as complete.
+
+Before comparing claims, exempt only relocations made by the scanning branch itself. Within each full-number group, pair each removed file with at most one added file and always consume an available same-number removal. Prefer an addition with the same slug as the removal; otherwise use the closest rename match only to choose among multiple same-number candidates. The slug or similarity heuristic never permits cross-number pairing. This makes an archive, deferral, promotion, or in-place slug rename a net-zero claim, and it also clears a two-file number swap; a single removal cannot exempt both a relocation and a second new claimant. Because the pairing uses only removals against this branch's own base, it never releases a number genuinely claimed by another member.
+
+For every unpaired addition, an identical full number is a collision. A differing slug is the cross-branch case this guard exists to catch. The same slug at a different path is also a collision: `tasks/done/024-foo.md` or `tasks/deferred/024-foo.md` still holds `024`, and the identical-path add/add guard cannot see that pair. Only an identical path may be handed to the existing add/add procedure. Otherwise hold the second claimant, renumber the **flagged new claimant**, and run fresh review again; never renumber a copy in `tasks/done/` or `tasks/deferred/`, because its stable number is part of the historical reference. If the new number is imperative, keep the branch held and ask the maintainer instead.
+
+This is a bounded snapshot, not a total guarantee. It establishes that no collision existed among heads at the OIDs returned by the single enumeration. A head can advance after that enumeration — before or after its fetch, or while this branch's own PR is being opened — and land a concurrent duplicate. Do not re-query or compare `FETCH_HEAD` in an attempt to close an unclosable race; the `review-tasks` recursive duplicate-number sweep is the backstop for that residual.
 
 ## Peer second opinion (best-effort)
 
