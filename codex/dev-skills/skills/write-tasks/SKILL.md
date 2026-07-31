@@ -66,19 +66,19 @@ Examples: `A-01-scaffold-project.md`, `02-12-hook-keyboard-shortcuts.md`.
 If there are existing task files in the target folder, continue the numbering sequence.
 Use numbering to reflect intended order, even if some tasks could later be parallelized.
 
-Before allocating a number, recursively inventory task filenames across the working tree's entire `tasks/` subtree, including `done/`, `deferred/`, and any future nested folders, and across every open PR head. Enumerate the heads, fetch each through the base repository's PR namespace, and read the exact enumerated OID as a recursive whole tree:
+Before allocating a number, resolve the repository's task folder (commonly `tasks/`), then recursively inventory task filenames across that entire working-tree subtree, including its `done/`, `deferred/`, and any future nested folders, and across every open PR head. Enumerate the heads, fetch each through the base repository's PR namespace, and read the exact enumerated OID as a recursive whole tree:
 
 ```bash
 gh pr list --state open --limit 200 --json number,headRefOid
 git fetch origin "refs/pull/${number}/head"
-git ls-tree -r --name-only "${headRefOid}" -- tasks/
+git ls-tree -r --name-only "${headRefOid}" -- "${task_folder}/"
 ```
 
-Do not replace the PR-ref fetch with a bare head branch name: fork heads and heads that exist only on the remote may not resolve locally. If the enumeration or a head fetch is unavailable, report that allocation could not be checked completely instead of silently treating the missing heads as free.
+Do not replace the PR-ref fetch with a bare head branch name: fork heads and heads that exist only on the remote may not resolve locally. If the enumeration returns as many entries as its pinned limit, report the returned count and mark the allocation scan incomplete because additional unreturned heads cannot be named. If the enumeration or a head fetch is unavailable, likewise report that allocation could not be checked completely instead of silently treating the missing heads as free.
 
-Two aspects of allocation deliberately differ from the pre-PR guard. The allocator compares the three-digit **numeric slot**, so a suffix such as `001a` occupies slot `001` when choosing the next primary; the guard compares full numbers and correctly allows `001` and `001a` to coexist. The allocator also reads every open head's **whole recursive task tree**, including inherited files, because it must avoid any number standing on that head; the guard reads a non-base head's additions only because it asks which numbers that head newly claims. Do not normalize either difference.
+Two aspects of allocation deliberately differ from the pre-PR guard. In a repository with the documented three-digit convention, the allocator compares the three-digit **numeric slot**, so a suffix such as `001a` occupies slot `001` when choosing the next primary; the guard compares full numbers and correctly allows `001` and `001a` to coexist. For another documented numbering style, apply the same principle to that style's primary allocation unit rather than imposing three digits. The allocator also reads every open head's **whole recursive task tree**, including inherited files, because it must avoid any number standing on that head; the guard reads a non-base head's additions only because it asks which numbers that head newly claims. Do not normalize either difference.
 
-When a collision risk is visible, or multiple task-bearing PRs are in flight, prefer the next numeric slot clear across all of these trees. If that requires skipping the otherwise-next number, record the deliberate skip and its collision reason in the task-writing commit message so the next allocator understands that the gap is intentional.
+When a collision risk is visible, or multiple task-bearing PRs are in flight, prefer the next allocation unit clear across all of these trees. If that requires skipping the otherwise-next number, record the deliberate skip and its collision reason in the task-writing commit message so the next allocator understands that the gap is intentional.
 
 ## Task file content
 
