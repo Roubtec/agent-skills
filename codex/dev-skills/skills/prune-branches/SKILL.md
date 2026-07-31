@@ -23,6 +23,7 @@ Parse arguments leniently and let the inventory listing be the safety net:
 ## Absolute safety rules
 
 - Never push, delete a remote branch, edit a PR, or otherwise mutate `origin`. Allowed remote access is read-only: `git fetch`, `git remote set-head origin --auto`, read-only `gh` queries, and the optional fast-forward-only pull of the local default branch. `set-head` changes only the local symbolic ref.
+- Never delete any branch unless the initial `git fetch --prune origin` succeeded in this run.
 - Never delete the default branch under any name, the branch checked out in the invoking worktree, or a user-designated keep.
 - Never accept cached `origin/HEAD` without a successful refresh of the remote's HEAD advertisement in this run.
 - Never guess the default branch from names such as `main` or `master`. If authoritative resolution fails, delete nothing.
@@ -46,7 +47,7 @@ Do not classify branches, inspect cached `origin/HEAD`, query PRs, or otherwise 
 
 ### Step 2 — Refresh before resolving anything remote-derived
 
-Run `git fetch --prune origin` as the run's first remote action. Record success or failure.
+Run `git fetch --prune origin` as the run's first remote action. If it fails, report the failure and stop without resolving the default, classifying branches, or deleting anything. Never continue from existing remote-tracking refs after a failed fetch.
 
 This both refreshes remote-tracking tips and removes stale ones. It must precede default-branch resolution because `git remote set-head origin --auto` can update `refs/remotes/origin/HEAD` only when the newly advertised default already has a local remote-tracking ref.
 
@@ -58,7 +59,7 @@ Resolve the default branch by this exact order:
 
 1. Run `git remote set-head origin --auto` and capture its exit status. This re-reads the remote's symbolic HEAD advertisement and writes only the local `refs/remotes/origin/HEAD` symbolic ref.
 2. Only when `set-head` exited zero, read `git symbolic-ref --quiet refs/remotes/origin/HEAD`, require a target below `refs/remotes/origin/`, and verify that target resolves. Derive the default branch name from that target.
-3. If `set-head` failed, could not run, or produced an invalid target, completely ignore any existing `origin/HEAD`, even if it still resolves. Query `gh repo view --json defaultBranchRef --jq '.defaultBranchRef.name'` instead. Validate the returned branch name with `git check-ref-format --branch` and use it as the authoritative protected name.
+3. If `set-head` failed, could not run, or produced an invalid target, completely ignore any existing `origin/HEAD`, even if it still resolves. Read the exact fetch URL with `origin_url="$(git remote get-url origin)"`, then query `gh repo view "$origin_url" --json defaultBranchRef --jq '.defaultBranchRef.name'` so `GH_REPO` or another repository context cannot redirect the fallback. If the URL cannot be read or `gh` cannot identify that origin repository, the fallback failed. Validate a returned branch name with `git check-ref-format --branch` and use it as the authoritative protected name.
 4. If the API supplied a name but neither `refs/remotes/origin/<name>` nor `refs/heads/<name>` resolves, make one read-only targeted fetch for that branch after the required initial fetch. If no commit ref can be obtained, stop without deleting.
 5. If neither the refreshed advertisement nor the API resolves a default, stop and delete nothing. Report the failed commands and suggest checking connectivity/authentication, then running `git fetch --prune origin && git remote set-head origin --auto`.
 
@@ -70,10 +71,10 @@ Protect any local branch whose full ref is `refs/heads/<default-name>`. The reso
 
 Unless `no-pull` was supplied, update the local default with a fast-forward-only pull while preserving the invoking checkout:
 
-- If the default branch is checked out in a clean worktree, run `git -C <that-path> pull --ff-only`.
+- If the default branch is checked out in a clean worktree, run `git -C <that-path> pull --ff-only origin refs/heads/<default-name>`.
 - If it is checked out in a dirty worktree, report that dirty state blocks only the pull; do not stash, reset, or clean it.
-- If it is not checked out and a local default branch exists, create a safely allocated temporary linked worktree for that branch, run `git -C <temporary-path> pull --ff-only`, then remove the clean temporary worktree without `--force`.
-- If only `origin/<default>` exists, create the local tracking branch in the temporary worktree, pull it fast-forward-only, and retain the local default branch as a protected ref.
+- If it is not checked out and a local default branch exists, create a safely allocated temporary linked worktree for that branch, run `git -C <temporary-path> pull --ff-only origin refs/heads/<default-name>`, then remove the clean temporary worktree without `--force`.
+- If only `origin/<default>` exists, create the local tracking branch in the temporary worktree from the freshly fetched `refs/remotes/origin/<default-name>`, run the same origin-and-ref-pinned pull, and retain the local default branch as a protected ref.
 - If the pull, temporary-worktree creation, or cleanup fails, report it and continue only with the last resolvable local or freshly fetched default ref. Never rewrite a divergent local default and never let a failed update make the protected default eligible.
 
 With `no-pull`, state that the comparison uses the current local default tip. The initial fetch remains mandatory.
@@ -225,9 +226,9 @@ Explain that refs keep commits advertised indefinitely until those refs are drop
 ## Checklist
 
 - [ ] Invocation guidance and keeps parsed before listing.
-- [ ] `git fetch --prune origin` was the first remote action.
-- [ ] `set-head --auto` succeeded before `origin/HEAD` was trusted, or the API supplied the default; no name heuristic was used.
-- [ ] Default branch protected and pulled by default unless `no-pull` or dirty/failed safely.
+- [ ] `git fetch --prune origin` was the first remote action and succeeded before any classification or deletion.
+- [ ] `set-head --auto` succeeded before `origin/HEAD` was trusted, or an API query explicitly scoped to the origin URL supplied the default; no name heuristic was used.
+- [ ] Default branch protected and pulled explicitly from `origin`'s resolved default ref unless `no-pull` or dirty/failed safely.
 - [ ] Inventory includes OIDs, upstream state, and worktree paths.
 - [ ] Every non-ancestry Merged result has an exact merged-PR `headRefOid == tip` proof.
 - [ ] Transient proofs name refs that survive the run; Uncertain branches remain untouched unless explicitly named interactively.
