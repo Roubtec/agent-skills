@@ -37,13 +37,16 @@
 # threads live on the base repo's PR, so the current-repo default is correct in a
 # fork-PR worktree checked out from the base repo; use `--repo` for the rest.
 #
-# Scope assertion: before emitting, every comment `url` must match
+# Response validation: before inspecting comments, every page must echo the
+# requested repository (case-insensitively) and exact PR number. Before emitting,
+# every comment `url` must match
 # `https://github.com/OWNER/REPO/pull/<N>` followed by `#`, `/`, `?`, or end (a
 # boundary-safe, repo-qualified match — so PR #12 never accepts a `/pull/123`
-# url, nor a same-number PR in another repo). On a mismatch the whole response is
-# discarded and the fetch retried ONCE from scratch; if the mismatch repeats the
-# helper fails closed — nothing on stdout, the offending url(s) on stderr, and
-# exit 3 (distinct from usage/auth errors) so callers can tell a contaminated
+# url, nor a same-number PR in another repo). A malformed comment shape also
+# fails validation. On any validation failure the whole response is discarded
+# and the fetch retried ONCE from scratch; if validation fails again the helper
+# fails closed — nothing on stdout, a diagnosis on stderr, and exit 3 (distinct
+# from usage/auth errors) so callers can tell a contaminated or malformed
 # response apart from a plain failure.
 #
 # Dependencies: `gh` (authenticated) and `jq`.
@@ -58,9 +61,9 @@ usage() {
 		echo
 		echo "  Prints the PR's inline review threads as a JSON array on stdout"
 		echo "  (unresolved only by default; --all includes resolved threads)."
-		echo "  Pages manually — never 'gh api graphql --paginate' — and asserts"
-		echo "  every comment url belongs to the requested PR, retrying once then"
-		echo "  failing closed (exit 3, nothing on stdout) on a contaminated response."
+		echo "  Pages manually — never 'gh api graphql --paginate' — and validates"
+		echo "  response identity, comment shape, and every comment url, retrying once"
+		echo "  then failing closed (exit 3, nothing on stdout) on validation failure."
 	} >&$((code == 0 ? 1 : 2))
 	exit "$code"
 }
@@ -213,30 +216,30 @@ complete_comments() {
 		return 0
 	fi
 	local count i node has_more tid after cresp cnodes merged out
-	count="$(jq 'length' <<<"$nodes")"
+	count="$(jq 'length' <<<"$nodes")" || return $?
 	out='[]'
 	for ((i = 0; i < count; i++)); do
-		node="$(jq -c ".[$i]" <<<"$nodes")"
-		has_more="$(jq -r '.comments.pageInfo.hasNextPage' <<<"$node")"
+		node="$(jq -c ".[$i]" <<<"$nodes")" || return $?
+		has_more="$(jq -r '.comments.pageInfo.hasNextPage' <<<"$node")" || return $?
 		if [ "$has_more" = true ]; then
-			tid="$(jq -r '.id' <<<"$node")"
-			after="$(jq -r '.comments.pageInfo.endCursor' <<<"$node")"
-			merged="$(jq -c '.comments.nodes' <<<"$node")"
+			tid="$(jq -r '.id' <<<"$node")" || return $?
+			after="$(jq -r '.comments.pageInfo.endCursor' <<<"$node")" || return $?
+			merged="$(jq -c '.comments.nodes' <<<"$node")" || return $?
 			while [ "$has_more" = true ]; do
 				cresp="$(comments_page "$tid" "$after")" ||
 					die "gh api graphql failed fetching comments for thread $tid"
-				cnodes="$(jq -c '.data.node.comments.nodes' <<<"$cresp")"
+				cnodes="$(jq -c '.data.node.comments.nodes' <<<"$cresp")" || return $?
 				# Merge via stdin, not `--argjson`: a large accumulated value blown
 				# onto jq's argv trips Linux's per-arg limit (E2BIG). printf is a
 				# shell builtin, so its args are exempt; jq slurps both from a pipe.
-				merged="$(printf '%s\n%s\n' "$merged" "$cnodes" | jq -cs '.[0] + .[1]')"
-				has_more="$(jq -r '.data.node.comments.pageInfo.hasNextPage' <<<"$cresp")"
-				after="$(jq -r '.data.node.comments.pageInfo.endCursor' <<<"$cresp")"
+				merged="$(printf '%s\n%s\n' "$merged" "$cnodes" | jq -cs '.[0] + .[1]')" || return $?
+				has_more="$(jq -r '.data.node.comments.pageInfo.hasNextPage' <<<"$cresp")" || return $?
+				after="$(jq -r '.data.node.comments.pageInfo.endCursor' <<<"$cresp")" || return $?
 			done
 			node="$(printf '%s\n%s\n' "$node" "$merged" |
-				jq -cs '.[1] as $m | .[0] | .comments.nodes = $m | .comments.pageInfo.hasNextPage = false')"
+				jq -cs '.[1] as $m | .[0] | .comments.nodes = $m | .comments.pageInfo.hasNextPage = false')" || return $?
 		fi
-		out="$(printf '%s\n%s\n' "$out" "$node" | jq -cs '.[0] + [.[1]]')"
+		out="$(printf '%s\n%s\n' "$out" "$node" | jq -cs '.[0] + [.[1]]')" || return $?
 	done
 	printf '%s\n' "$out"
 }
@@ -256,18 +259,18 @@ fetch_all() {
 		# instead of calling die (which would bypass the whole-fetch retry).
 		response_repo="$(jq -er '.data.repository.nameWithOwner | select(type == "string" and length > 0)' <<<"$resp")" || return 2
 		response_pr="$(jq -er '.data.repository.pullRequest.number | select(type == "number")' <<<"$resp")" || return 2
-		response_repo_lc="$(printf '%s' "$response_repo" | tr '[:upper:]' '[:lower:]')"
+		response_repo_lc="$(printf '%s' "$response_repo" | tr '[:upper:]' '[:lower:]')" || return $?
 		if [ "$response_repo_lc" != "$EXPECTED_REPO_LC" ] || [ "$response_pr" != "$PR" ]; then
 			return 2
 		fi
-		page_nodes="$(jq -c '.data.repository.pullRequest.reviewThreads.nodes' <<<"$resp")"
-		page_nodes="$(complete_comments "$page_nodes")"
+		page_nodes="$(jq -c '.data.repository.pullRequest.reviewThreads.nodes' <<<"$resp")" || return $?
+		page_nodes="$(complete_comments "$page_nodes")" || return $?
 		# stdin, not `--argjson`: the accumulated array can exceed jq's per-arg
 		# limit on a large PR (E2BIG). See the note in complete_comments.
-		all_nodes="$(printf '%s\n%s\n' "$all_nodes" "$page_nodes" | jq -cs '.[0] + .[1]')"
-		has_next="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"$resp")"
+		all_nodes="$(printf '%s\n%s\n' "$all_nodes" "$page_nodes" | jq -cs '.[0] + .[1]')" || return $?
+		has_next="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"$resp")" || return $?
 		[ "$has_next" = true ] || break
-		after="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor' <<<"$resp")"
+		after="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor' <<<"$resp")" || return $?
 	done
 	printf '%s\n' "$all_nodes"
 }
@@ -297,23 +300,12 @@ scope_offenders() {
 	done <<<"$urls"
 }
 
-# --- Fetch, scope-check (retry once), then emit ------------------------------
-response_failure=''
-offenders=''
-if combined="$(fetch_all)"; then
-	if ! offenders="$(scope_offenders "$combined")"; then
-		response_failure=extraction
-	elif [ -n "$offenders" ]; then
-		response_failure=scope
-	fi
-else
-	fetch_status=$?
-	[ "$fetch_status" -eq 2 ] || exit "$fetch_status"
-	response_failure=identity
-fi
-
-if [ -n "$response_failure" ]; then
-	# Contaminated — discard and retry the WHOLE fetch once from scratch.
+# Fetch and validate one complete attempt. Retryable validation failures return
+# non-zero and set response_failure; unrecoverable fetch/parser failures retain
+# their original status. Every command inside fetch_all/complete_comments carries
+# an explicit handler because this function is deliberately called in an `if`
+# condition, where Bash suppresses implicit `errexit` behavior transitively.
+fetch_and_validate() {
 	response_failure=''
 	offenders=''
 	if combined="$(fetch_all)"; then
@@ -327,8 +319,16 @@ if [ -n "$response_failure" ]; then
 		[ "$fetch_status" -eq 2 ] || exit "$fetch_status"
 		response_failure=identity
 	fi
+	[ -z "$response_failure" ]
+}
 
-	if [ -n "$response_failure" ]; then
+# --- Fetch, validate (retry once), then emit --------------------------------
+response_failure=''
+offenders=''
+if ! fetch_and_validate; then
+	# Invalid — discard and retry the WHOLE fetch once from scratch.
+	if ! fetch_and_validate; then
+
 		{
 			case "$response_failure" in
 			identity)
