@@ -42,15 +42,20 @@
 # every comment `url` must match
 # `https://github.com/OWNER/REPO/pull/<N>` followed by `#`, `/`, `?`, or end (a
 # boundary-safe, repo-qualified match — so PR #12 never accepts a `/pull/123`
-# url, nor a same-number PR in another repo). A malformed comment shape also
-# fails validation. On any validation failure the whole response is discarded
-# and the fetch retried ONCE from scratch; if validation fails again the helper
-# fails closed — nothing on stdout, a diagnosis on stderr, and exit 3 (distinct
-# from usage/auth errors) so callers can tell a contaminated or malformed
-# response apart from a plain failure.
+# url, nor a same-number PR in another repo). An identity mismatch, malformed
+# comment shape during url extraction, or scope mismatch discards the whole
+# response and retries the fetch ONCE from scratch; if that check fails again the
+# helper fails closed — nothing on stdout, a diagnosis on stderr, and exit 3
+# (distinct from usage/auth errors). Other API and parser failures retain their
+# ordinary fatal status.
 #
 # Dependencies: `gh` (authenticated) and `jq`.
 set -euo pipefail
+
+# Deliberately far from jq's normal low statuses and the shell's conventional
+# invocation statuses, so a retryable identity mismatch cannot plausibly be
+# confused with an ordinary parser or command failure.
+readonly RETRYABLE_IDENTITY_STATUS=86
 
 # Usage text goes to stdout for an explicit help request (exit 0, pipeable) and
 # to stderr when it is an error diagnosis (exit non-zero).
@@ -257,11 +262,11 @@ fetch_all() {
 		# Assert the positive response identity before inspecting any comments. A
 		# mismatch is retryable contamination, so return a distinguished status
 		# instead of calling die (which would bypass the whole-fetch retry).
-		response_repo="$(jq -er '.data.repository.nameWithOwner | select(type == "string" and length > 0)' <<<"$resp")" || return 2
-		response_pr="$(jq -er '.data.repository.pullRequest.number | select(type == "number")' <<<"$resp")" || return 2
+		response_repo="$(jq -er '.data.repository.nameWithOwner | select(type == "string" and length > 0)' <<<"$resp")" || return "$RETRYABLE_IDENTITY_STATUS"
+		response_pr="$(jq -er '.data.repository.pullRequest.number | select(type == "number")' <<<"$resp")" || return "$RETRYABLE_IDENTITY_STATUS"
 		response_repo_lc="$(printf '%s' "$response_repo" | tr '[:upper:]' '[:lower:]')" || return $?
 		if [ "$response_repo_lc" != "$EXPECTED_REPO_LC" ] || [ "$response_pr" != "$PR" ]; then
-			return 2
+			return "$RETRYABLE_IDENTITY_STATUS"
 		fi
 		page_nodes="$(jq -c '.data.repository.pullRequest.reviewThreads.nodes' <<<"$resp")" || return $?
 		page_nodes="$(complete_comments "$page_nodes")" || return $?
@@ -276,15 +281,17 @@ fetch_all() {
 }
 
 # Print any comment url in the merged nodes that is NOT boundary-safe-inside this
-# PR. Empty output ⇒ the whole response is in scope. The match is case-insensitive
-# on the owner/repo path: only OWNER/REPO vary in case (the host, `/pull/`, the PR
-# number, and the boundary chars have none), and GitHub forbids case-only owner/repo
-# collisions, so lowercasing both sides never widens the match to a different repo —
-# it just stops a non-canonically-cased `--repo` (roubtec/powbox vs Roubtec/powbox)
-# from reading every valid comment as contamination. `$EXPECTED_LC` is matched as a
-# literal (quoted) prefix; `[#/?]*` allows exactly the boundary characters after the
-# PR number, so `/pull/12` never matches `/pull/123`. The ORIGINAL (canonical-cased)
-# url is emitted on a mismatch so stderr diagnostics stay faithful.
+# PR. Empty output ⇒ the whole response is in scope; non-zero status means url
+# extraction failed and the caller must discard the response. The match is
+# case-insensitive on the owner/repo path: only OWNER/REPO vary in case (the
+# host, `/pull/`, the PR number, and the boundary chars have none), and GitHub
+# forbids case-only owner/repo collisions, so lowercasing both sides never widens
+# the match to a different repo — it just stops a non-canonically-cased `--repo`
+# (roubtec/powbox vs Roubtec/powbox) from reading every valid comment as
+# contamination. `$EXPECTED_LC` is matched as a literal (quoted) prefix;
+# `[#/?]*` allows exactly the boundary characters after the PR number, so
+# `/pull/12` never matches `/pull/123`. The ORIGINAL (canonical-cased) url is
+# emitted on a mismatch so stderr diagnostics stay faithful.
 scope_offenders() {
 	local combined="$1" url lc
 	local urls
@@ -316,7 +323,7 @@ fetch_and_validate() {
 		fi
 	else
 		fetch_status=$?
-		[ "$fetch_status" -eq 2 ] || exit "$fetch_status"
+		[ "$fetch_status" -eq "$RETRYABLE_IDENTITY_STATUS" ] || exit "$fetch_status"
 		response_failure=identity
 	fi
 	[ -z "$response_failure" ]
@@ -328,7 +335,6 @@ offenders=''
 if ! fetch_and_validate; then
 	# Invalid — discard and retry the WHOLE fetch once from scratch.
 	if ! fetch_and_validate; then
-
 		{
 			case "$response_failure" in
 			identity)
@@ -340,6 +346,9 @@ if ! fetch_and_validate; then
 			scope)
 				echo "gh-review-threads: contaminated response — comment url(s) do not belong to $OWNER/$REPO PR #$PR:"
 				printf '  %s\n' "$offenders"
+				;;
+			*)
+				echo "gh-review-threads: internal response validation failure for $OWNER/$REPO PR #$PR."
 				;;
 			esac
 			echo "Refusing to emit; a concurrent 'gh api graphql --paginate' or wrong-PR query likely crossed responses."
