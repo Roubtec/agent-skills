@@ -4,6 +4,8 @@ These are Claude-only dynamic-workflow counterparts to selected development skil
 
 The workflows are distributed by the `dev-skills` plugin and register in its namespace: invoke `/dev-skills:wf-address-review` or `/dev-skills:wf-address-tasks`.
 
+The JavaScript payloads remain byte-for-byte imports from powbox until their first behavior-editing follow-up, so comments inside them may still describe the legacy unnamespaced commands. Those comments are import history, not current invocation guidance; task 014 queues their normalization when it replaces the workflows' inlined review loops.
+
 ## Availability
 
 These runtime facts were verified on 2026-06-10 against the documentation and Claude Code 2.1.170:
@@ -35,3 +37,9 @@ The shared-filesystem assumption was verified on 2026-06-10 with Claude Code 2.1
 `wf-address-review.js` expresses the bounded verify loop and conditionally publishes based on its flags. With no mid-run input, it behaves like the skill's hands-off mode: agents decide low-stakes ambiguity and report high-stakes blockers.
 
 `rebase-stack` remains a skill because its value is sequential conflict judgment and user confirmation rather than agent fan-out.
+
+## Validation
+
+Run `node --check plugins/dev-skills/workflows/wf-address-review.js` and `node --check plugins/dev-skills/workflows/wf-address-tasks.js` from the repository root to parse-check the shipped workflow sources.
+
+Run `node scripts/test-checkout-cleanliness-report.mjs` for the focused regression suite covering `wf-address-tasks.js`'s `mainCheckoutSummary` function. The test extracts that function from the shipped workflow rather than maintaining a second copy.
