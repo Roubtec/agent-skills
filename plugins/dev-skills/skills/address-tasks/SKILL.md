@@ -157,7 +157,7 @@ For a wave of tasks `T1..Tn`:
 
 ### Guarding against pre-PR collisions
 
-Independent tasks in the same wave run in **separate worktrees**, so two of them can each *add* the same new file — or a file exporting the same top-level class/symbol — with no conflict at implementation time. The clash only surfaces later, when the branches linearize or merge (an add/add conflict, or a duplicate definition). It is rare, but it has happened; two cheap guards keep it from costing a fix-up round:
+Independent tasks in the same wave run in **separate worktrees**, so two of them can each *add* the same new file — or a file exporting the same top-level class/symbol — with no conflict at implementation time. The clash only surfaces later, when the branches linearize or merge (an add/add conflict, or a duplicate definition). It is rare, but it has happened; the preventive and wave-level checks below keep those clashes from costing a fix-up round. The task-number guard that follows extends the pre-PR check to task-number claims across the wider in-flight comparison set.
 
 - **Prevent it up front.** When you fan out two independent tasks that both introduce the same *kind* of new surface (a "reconciliation controller", a "work-list endpoint", a migration helper), assign each a **distinct file and class name** in its implementer prompt. The implementers can't see each other, so the disambiguation has to come from you.
 - **Catch it before the PRs.** After a wave's tasks pass review but **before** opening their PRs, compare what each sibling branch newly added:
@@ -188,6 +188,8 @@ Independent tasks in the same wave run in **separate worktrees**, so two of them
 #### Task-number collisions across in-flight branches
 
 Run this guard before opening any PR that adds task files. Parse the basename of every task file as a **full task number** (three digits plus an optional lowercase letter suffix, such as `001`, `001a`, or `042b`) followed by its slug. Two files collide whenever their full task numbers are identical, regardless of slug; `001`, `001a`, and `001b` are distinct and do not collide. Compare the scanning branch's unpaired additions with one another as well as with the comparison set, so two new files on that branch cannot claim one number before either reaches another member.
+
+Resolve the repository's task folder before scanning. The commands and examples below use the conventional `tasks/` folder required by this workflow; if the repository documents another task folder, substitute that resolved folder for **every** `tasks/` pathspec and folder reference in this guard. Never interpret an empty result from the conventional path as a clean scan when the resolved folder is elsewhere.
 
 The comparison set is defined here, once, as the union of two groups. **Always:** the base branch and every open PR head. **In a pipelined run, additionally:** branches delivered earlier in the same run, anything merged since the run started, numbers reserved by a task that cleared this guard but has not finished delivering, and currently-ready siblings awaiting the guard. Track these run-local members as the pipeline advances. First claimant wins; the second claimant renumbers, and never rewrite a delivered or reserved claimant. When two currently-ready siblings are both still unguarded, establish the first claimant in the wave's deterministic delivery order (dependency or scheduling order, then task number) and reserve it before evaluating the other; the delivered-or-reserved rule decides every asymmetric case.
 
