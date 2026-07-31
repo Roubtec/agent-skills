@@ -22,7 +22,7 @@ Out of scope:
 ## Context and references
 
 - 012 — prerequisite: the skill must live in this repo first (012 is a verbatim import; this behavior change deliberately rides separately so the relocation diff stays a pure move).
-- powbox `docker/claude/agent-container/skills/session-learnings/SKILL.md` step 3 — the current mode-selection logic being replaced (frontmatter description narrates the same heuristic).
+- `plugins/dev-skills/skills/session-learnings/SKILL.md` step 3 — the canonical mode-selection logic being replaced (frontmatter description narrates the same heuristic).
 
 ## Target files or areas
 
