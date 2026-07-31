@@ -1,0 +1,4 @@
+interface:
+  display_name: "Prune Branches"
+  short_description: "Safely prune merged local branches"
+  default_prompt: "Use $prune-branches to clean up merged and recoverable local branches."
