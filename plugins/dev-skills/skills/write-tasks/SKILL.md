@@ -15,7 +15,7 @@ The output should help a worker understand what to build, why it matters, what c
 
 ## Version control — commit on the current branch, never branch or push
 
-Writing the task files and committing them on the **current branch** is the entire git footprint of this skill. Whatever branch is checked out right now is where the task files land.
+Writing the task files and committing them on the **current branch** is the entire working-tree and deliverable footprint of this skill. Number allocation may query GitHub and fetch PR refs for read-only inspection, updating only Git metadata such as `FETCH_HEAD` or remote-tracking refs; it never changes another branch or adds another deliverable. Whatever branch is checked out right now is where the task files land.
 
 - **Never create a new branch** for the tasks — stay on the branch that is already checked out.
 - Follow-up tasks recorded for in-flight work (review follow-ups, decision records) belong **on the branch that prompted them** — being on a PR or task branch when invoked is intended, not a mistake: merging that branch then also lands the record of its loose ends. Do not relocate such tasks to a fresh branch off `main`; they would only need manual re-homing onto the real branch later.
