@@ -40,7 +40,7 @@ Out of scope:
 
 ## Target files or areas
 
-- `plugins/dev-skills/skills/review-cycle/SKILL.md` and `plugins/dev-skills/workflows/wf-review-cycle.js` (the canonical peer step, once 014 lands), `codex/dev-skills/skills/review-cycle/` mirror.
+- `plugins/dev-skills/skills/review-cycle/SKILL.md` and `plugins/dev-skills/workflows/wf-review-cycle.js` (the canonical peer step, once 014 lands), the `codex/dev-skills/skills/review-cycle/` mirror, and `plugins/dev-skills/workflows/wf-address-tasks.js`, which per 014a embeds its own copy of that peer step so its throttle owns the peer launches.
 - Pre-014 fallback: `plugins/dev-skills/skills/{address-review,address-reviews,address-tasks,address-tasks-serialized,resolve-open-questions}/SKILL.md` and `codex/dev-skills/skills/*` peer sections.
 
 ## Implementation notes
