@@ -70,7 +70,8 @@ usage() {
 		echo "  Prints the PR's inline review threads as a JSON array on stdout"
 		echo "  (unresolved only by default; --all includes resolved threads)."
 		echo "  Pages manually — never 'gh api graphql --paginate' — and validates"
-		echo "  response identity, comment shape, and every comment url, retrying once"
+		echo "  response identity, thread/comment shape, pagination metadata, and"
+		echo "  every comment url, retrying once"
 		echo "  then failing closed (exit 3, nothing on stdout) on validation failure."
 	} >&$((code == 0 ? 1 : 2))
 	exit "$code"

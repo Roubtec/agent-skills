@@ -691,6 +691,64 @@ assert_eq "h14: no stdout emitted" "$RUN_OUT" ""
 assert_contains "h14: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
 assert_eq "h14: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
 
+# h15: keep scope_offenders' own extraction-failure path bound. The comments
+# container is an array, but a scalar element makes `.url` extraction fail.
+SCALAR_COMMENT_NODE='[
+  {"id":"T_scalar_comment","isResolved":false,"isOutdated":false,"path":"h15.js","line":15,
+   "comments":{"nodes":[1],"pageInfo":{"hasNextPage":false,"endCursor":null}}}
+]'
+d="$(new_case)"
+threads_one_page "$SCALAR_COMMENT_NODE" >"$d/threads-1"
+threads_one_page "$SCALAR_COMMENT_NODE" >"$d/threads-2"
+run "$d" --repo acme/widgets 12
+assert_eq "h15: scalar comment node fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "h15: no stdout emitted" "$RUN_OUT" ""
+assert_contains "h15: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
+assert_eq "h15: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
+
+# h16: an overflowed thread needs a string id before a nested query can run.
+NULL_THREAD_ID='[
+  {"id":null,"isResolved":false,"isOutdated":false,"path":"h16.js","line":16,
+   "comments":{"nodes":[{"databaseId":834,"author":{"login":"codex","__typename":"Bot"},"body":"comment A","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r834"}],"pageInfo":{"hasNextPage":true,"endCursor":"CCUR_NULL_ID"}}}
+]'
+d="$(new_case)"
+threads_one_page "$NULL_THREAD_ID" >"$d/threads-1"
+threads_one_page "$NULL_THREAD_ID" >"$d/threads-2"
+run "$d" --repo acme/widgets 12
+assert_eq "h16: null overflow thread id fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "h16: no stdout emitted" "$RUN_OUT" ""
+assert_contains "h16: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
+assert_eq "h16: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
+assert_eq "h16: no nested request attempted" "$(count_matches "$d/log" '[threadId=')" 0
+
+# h17: the overflow thread id must also be non-empty.
+EMPTY_THREAD_ID='[
+  {"id":"","isResolved":false,"isOutdated":false,"path":"h17.js","line":17,
+   "comments":{"nodes":[{"databaseId":835,"author":{"login":"codex","__typename":"Bot"},"body":"comment A","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r835"}],"pageInfo":{"hasNextPage":true,"endCursor":"CCUR_EMPTY_ID"}}}
+]'
+d="$(new_case)"
+threads_one_page "$EMPTY_THREAD_ID" >"$d/threads-1"
+threads_one_page "$EMPTY_THREAD_ID" >"$d/threads-2"
+run "$d" --repo acme/widgets 12
+assert_eq "h17: empty overflow thread id fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "h17: no stdout emitted" "$RUN_OUT" ""
+assert_contains "h17: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
+assert_eq "h17: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
+assert_eq "h17: no nested request attempted" "$(count_matches "$d/log" '[threadId=')" 0
+
+# h18: an empty comments array is a valid boundary value, not malformed data.
+ZERO_COMMENTS='[
+  {"id":"T_zero_comments","isResolved":false,"isOutdated":false,"path":"h18.js","line":18,
+   "comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}
+]'
+d="$(new_case)"
+threads_one_page "$ZERO_COMMENTS" >"$d/threads-1"
+run "$d" --repo acme/widgets 12
+assert_eq "h18: zero-comment thread exits 0" "$RUN_RC" 0
+assert_eq "h18: emits one thread" "$(jqr 'length' "$RUN_OUT")" 1
+assert_eq "h18: preserves empty comments" "$(jqr '.[0].comments | length' "$RUN_OUT")" 0
+assert_eq "h18: no retry needed" "$(count_matches "$d/log" '[owner=')" 1
+
 # ============================================================================
 # (i) response-identity mismatch — fail closed after the single whole-fetch retry
 # ============================================================================
