@@ -63,7 +63,7 @@ Operate on the current repository only. Every step is idempotent and surgical �
 
 1. **Locate the repo root.** `ROOT="$(git rev-parse --show-toplevel)"`. If this is not a git repository, stop and tell the user.
 
-2. **Check for a local override first.** If `$ROOT/.powbox.local.yml` exists and has a top-level `shadow:` key, it **replaces the committed `.powbox.yml` list wholesale**. Anything you add to `.powbox.yml` would have no effect in this container until that override is removed or extended. Say so and confirm how to proceed before editing.
+2. **Check for a local override first.** If `$ROOT/.powbox.local.yml` exists and has a top-level `shadow:` key, it **replaces the committed `.powbox.yml` list wholesale** — that list, not the committed one, is what this container mounts. Audit it: a cache or database declared there is exactly as live as one in `.powbox.yml`, so carry its entries into step 3 as candidates and judge them by the same lists. Say so and confirm how to proceed before editing — the committed file stays the durable record of the agreed set, but nothing you write there takes effect while the override stands, so the user has to either retire the override or accept the same change in it.
 
 3. **Enumerate candidates.**
 
@@ -71,7 +71,7 @@ Operate on the current repository only. Every step is idempotent and surgical �
    git -C "$ROOT" ls-files --others --ignored --exclude-standard --directory
    ```
 
-   This lists ignored paths that currently exist. Note the gap: a project that has never been built shows nothing, so also read `$ROOT/.gitignore` (and nested ones) for directory patterns that have not materialized yet. Discard plain files — only directories can be shadowed — and of those keep only the ones ignored in their own right (`git -C "$ROOT" check-ignore -q <path>`): a directory whose entire content is ignored is listed even when no rule ignores the directory itself, and shadowing that parent would hide whatever is added to it later. Include every path already declared in the committed `shadow:` list as a candidate too — a review or fix run has to re-judge what is declared, not only what is missing.
+   This lists ignored paths that currently exist. Note the gap: a project that has never been built shows nothing, so also read `$ROOT/.gitignore` (and nested ones) for directory patterns that have not materialized yet. Discard plain files — only directories can be shadowed — and of those keep only the ones ignored in their own right (`git -C "$ROOT" check-ignore -q <path>`): a directory whose entire content is ignored is listed even when no rule ignores the directory itself, and shadowing that parent would hide whatever is added to it later. Include every path already declared in the effective `shadow:` list — the committed one, or an active override's per step 2 — as a candidate too: a review or fix run has to re-judge what is declared, not only what is missing.
 
 4. **Classify each candidate** against the three "do not shadow" lists above. For anything you are keeping, confirm it is not tracked: `git -C "$ROOT" ls-files -- <path>` must be empty. Judge an already-declared path by the same lists — one that now lands in a "do not shadow" list is a finding, not a fixture — but an entry another skill owns (the `enable-worktrees` worktree roots) is deliberate infrastructure, not a stray declaration: leave it alone.
 
@@ -86,6 +86,8 @@ Operate on the current repository only. Every step is idempotent and surgical �
    ```
 
    If the file has a `shadow:` key that is malformed or not a list, stop and report rather than rewriting it.
+
+   When step 2 found an active override, apply the same agreed additions and removals to `$ROOT/.powbox.local.yml`, or the fix stays theoretical — that file is user-local and gitignored, so it never joins the commit in step 8.
 
 7. **(Optional) Apply immediately in this session.** Committed declarations take effect at the next container start; to shadow the new paths now, without relaunching:
 
@@ -107,7 +109,7 @@ State concisely:
 - What you declared, and what regenerates each entry.
 - What you deliberately left undeclared, and why — especially caches and anything host-facing.
 - Any pre-existing declaration you removed or flagged as unsafe, and what it was costing.
-- Whether a `.powbox.local.yml` override is masking the committed list.
+- Whether a `.powbox.local.yml` override is masking the committed list, and which file each agreed change landed in.
 - Whether the shadows are live in this session (step 7) or pending the next container start.
 - Any blocker: not a git repo, a malformed `.powbox.yml`, or a candidate that turned out to be tracked.
 
