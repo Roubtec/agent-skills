@@ -15,6 +15,7 @@ In scope — refine the peer-prompt convention used by the CALLERS of `peer-revi
 - reason as much as it needs, but STRUCTURE its final message compactly;
 - emit the `VERDICT:` line exactly as today (first line, unchanged token contract);
 - THEN, when justified, list a few terse notes/nits as one-line bullets — `path:line — <=~15 words` — INCLUDING on a `PASS` (framed as "note, not necessarily fix");
+- keep the `PASS`/`ISSUES` bar exactly where it is: anything the peer thinks ought to be FIXED is a finding and still requires `VERDICT: ISSUES`, which 014/015 gate on whether it is tagged blocking or minor. A pass-note is by construction what fell BELOW that bar, so the notes section is a way to say the smaller thing the peer previously discarded — never a lighter channel for a finding it would otherwise have raised. Say this in the prompt itself: a peer told it may now write nits under a `PASS` will otherwise drift its minor findings there, and the gate quietly stops firing;
 - stay brief: cap the notes (a small handful), and OMIT the section entirely when there is nothing material to say.
 
 Apply the convention wherever a peer prompt is constructed. After 014 that is one site — the canonical `review-cycle` peer step and its `wf-review-cycle` rendering — and the Codex mirror; before 014 it is every skill that still carries its own peer section plus the two `wf-*` workflows. Prefer landing this after 014 so the convention is written once rather than swept across ten files; if it lands first, sweep every constructor and let 014 inherit the wording.
@@ -26,7 +27,7 @@ Out of scope (explicitly do NOT do):
 - any change to powbox's `docker/shared/peer-review-run` itself — it stays prompt-neutral, deterministic, and hermetically testable (its offline unit suite, 198 checks at time of writing, must keep passing untouched). The `verdict` enum and the result schema do NOT change;
 - a second LLM invocation to parse the peer's output;
 - extracting or structuring findings INTO the result JSON — notes stay free text in `artifactDir`, read by the consumer only when it wants them;
-- auto-acting on pass-notes — they are advisory; a clean pass must not be turned into a fix round.
+- auto-acting on pass-notes — they are advisory because of where the bar sits (above), not because the gate was relaxed; a clean pass must not be turned into a fix round.
 
 ## Context and references
 
