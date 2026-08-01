@@ -292,7 +292,7 @@ fetch_all() {
 		# Assert the positive response identity before inspecting any comments. A
 		# mismatch is retryable contamination, so return a distinguished status
 		# instead of calling die (which would bypass the whole-fetch retry).
-		response_repo="$(jq -er '.data.repository.nameWithOwner | select(type == "string" and length > 0)' <<<"$resp")" || return "$RETRYABLE_IDENTITY_STATUS"
+		response_repo="$(jq -er '.data.repository.nameWithOwner' <<<"$resp")" || return "$RETRYABLE_IDENTITY_STATUS"
 		response_pr="$(jq -er '.data.repository.pullRequest.number | select(type == "number")' <<<"$resp")" || return "$RETRYABLE_IDENTITY_STATUS"
 		response_repo_lc="$(printf '%s' "$response_repo" | tr '[:upper:]' '[:lower:]')" || return $?
 		if [ "$response_repo_lc" != "$EXPECTED_REPO_LC" ] || [ "$response_pr" != "$PR" ]; then

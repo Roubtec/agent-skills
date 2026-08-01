@@ -887,6 +887,81 @@ assert_contains "h27: extraction diagnosis on stderr" "$RUN_ERR" "malformed resp
 assert_eq "h27: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
 assert_eq "h27: both nested-page attempts ran" "$(count_matches "$d/log" '[threadId=')" 2
 
+# h28: bind the overflow thread-id type check with a positive-length object.
+NONSTRING_THREAD_ID='[
+  {"id":{"value":"T_nonstring_id"},"isResolved":false,"isOutdated":false,"path":"h28.js","line":28,
+   "comments":{"nodes":[{"databaseId":844,"author":{"login":"codex","__typename":"Bot"},"body":"comment A","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r844"}],"pageInfo":{"hasNextPage":true,"endCursor":"NONSTRING_ID_CURSOR"}}}
+]'
+d="$(new_case)"
+threads_one_page "$NONSTRING_THREAD_ID" >"$d/threads-1"
+threads_one_page "$NONSTRING_THREAD_ID" >"$d/threads-2"
+cat >"$d/comments-1" <<'JSON'
+{"data":{"node":{"comments":{"nodes":[{"databaseId":845,"author":{"login":"alice","__typename":"User"},"body":"comment B","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r845"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+JSON
+run "$d" --repo acme/widgets 12
+assert_eq "h28: non-string overflow thread id fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "h28: no stdout emitted" "$RUN_OUT" ""
+assert_contains "h28: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
+assert_eq "h28: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
+assert_eq "h28: no nested request attempted" "$(count_matches "$d/log" '[threadId=')" 0
+
+# h29: bind the initial cursor type check with a positive-length object.
+NONSTRING_INITIAL_CURSOR='[
+  {"id":"T_nonstring_initial_cursor","isResolved":false,"isOutdated":false,"path":"h29.js","line":29,
+   "comments":{"nodes":[{"databaseId":846,"author":{"login":"codex","__typename":"Bot"},"body":"comment A","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r846"}],"pageInfo":{"hasNextPage":true,"endCursor":{"value":"INITIAL_CURSOR"}}}}
+]'
+d="$(new_case)"
+threads_one_page "$NONSTRING_INITIAL_CURSOR" >"$d/threads-1"
+threads_one_page "$NONSTRING_INITIAL_CURSOR" >"$d/threads-2"
+cat >"$d/comments-1" <<'JSON'
+{"data":{"node":{"comments":{"nodes":[{"databaseId":847,"author":{"login":"alice","__typename":"User"},"body":"comment B","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r847"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+JSON
+run "$d" --repo acme/widgets 12
+assert_eq "h29: non-string initial cursor fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "h29: no stdout emitted" "$RUN_OUT" ""
+assert_contains "h29: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
+assert_eq "h29: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
+assert_eq "h29: no nested request attempted" "$(count_matches "$d/log" '[threadId=')" 0
+
+# h30: bind the fetched nested cursor type check with a positive-length object.
+d="$(new_case)"
+for n in 1 2; do
+	cat >"$d/threads-$n" <<'JSON'
+{"data":{"repository":{"nameWithOwner":"acme/widgets","pullRequest":{"number":12,"url":"https://github.com/acme/widgets/pull/12","reviewThreads":{"totalCount":1,"nodes":[
+  {"id":"T_nonstring_nested_cursor","isResolved":false,"isOutdated":false,"path":"h30.js","line":30,
+   "comments":{"nodes":[{"databaseId":848,"author":{"login":"codex","__typename":"Bot"},"body":"comment A","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r848"}],"pageInfo":{"hasNextPage":true,"endCursor":"NESTED_CURSOR_START"}}}
+],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
+JSON
+	cat >"$d/comments-$n" <<'JSON'
+{"data":{"node":{"comments":{"nodes":[{"databaseId":849,"author":{"login":"alice","__typename":"User"},"body":"comment B","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r849"}],"pageInfo":{"hasNextPage":true,"endCursor":{"value":"NESTED_CURSOR"}}}}}}
+JSON
+done
+cat >"$d/comments-3" <<'JSON'
+{"data":{"node":{"comments":{"nodes":[{"databaseId":850,"author":{"login":"bob","__typename":"User"},"body":"comment C","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r850"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+JSON
+run "$d" --repo acme/widgets 12
+assert_eq "h30: non-string nested cursor fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "h30: no stdout emitted" "$RUN_OUT" ""
+assert_contains "h30: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
+assert_eq "h30: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
+assert_eq "h30: both nested-page attempts ran" "$(count_matches "$d/log" '[threadId=')" 2
+
+# h31: bind the outer cursor type check with a positive-length object.
+d="$(new_case)"
+for n in 1 2; do
+	cat >"$d/threads-$n" <<'JSON'
+{"data":{"repository":{"nameWithOwner":"acme/widgets","pullRequest":{"number":12,"url":"https://github.com/acme/widgets/pull/12","reviewThreads":{"totalCount":0,"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":{"value":"OUTER_CURSOR"}}}}}}}
+JSON
+done
+cat >"$d/threads-3" <<'JSON'
+{"data":{"repository":{"nameWithOwner":"acme/widgets","pullRequest":{"number":12,"url":"https://github.com/acme/widgets/pull/12","reviewThreads":{"totalCount":0,"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
+JSON
+run "$d" --repo acme/widgets 12
+assert_eq "h31: non-string outer cursor fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "h31: no stdout emitted" "$RUN_OUT" ""
+assert_contains "h31: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
+assert_eq "h31: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
+
 # ============================================================================
 # (i) response-identity mismatch — fail closed after the single whole-fetch retry
 # ============================================================================
@@ -946,6 +1021,23 @@ assert_contains "i3: identity diagnosis on stderr" "$RUN_ERR" "response identity
 assert_eq "i3: both two-page attempts fetched" "$(count_matches "$d/log" '[owner=')" 4
 assert_not_contains "i3: retry restarts without cursor" "$(nth_match 3 "$d/log" '[owner=')" "[after="
 assert_contains "i3: retry reaches later page" "$(nth_match 4 "$d/log" '[owner=')" "[after=IDENTITY_CURSOR]"
+
+# i4: a stringified copy of the requested number must fail the numeric type gate
+# even though jq -r would otherwise render it identically to the CLI argument.
+d="$(new_case)"
+for n in 1 2; do
+	cat >"$d/threads-$n" <<'JSON'
+{"data":{"repository":{"nameWithOwner":"acme/widgets","pullRequest":{"number":"12","url":"https://github.com/acme/widgets/pull/12","reviewThreads":{"totalCount":1,"nodes":[
+  {"id":"T_string_pr","isResolved":false,"isOutdated":false,"path":"i4.js","line":4,
+   "comments":{"nodes":[{"databaseId":851,"author":{"login":"codex","__typename":"Bot"},"body":"in scope","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r851"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}
+],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
+JSON
+done
+run "$d" --repo acme/widgets 12
+assert_eq "i4: string PR number fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "i4: no stdout emitted" "$RUN_OUT" ""
+assert_contains "i4: identity diagnosis on stderr" "$RUN_ERR" "response identity does not match"
+assert_eq "i4: fetched twice (retry once)" "$(count_matches "$d/log" '[owner=')" 2
 
 # ============================================================================
 # usage / arg handling
