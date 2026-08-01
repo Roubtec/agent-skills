@@ -31,14 +31,17 @@ So the test is not "is this directory gitignored?" — it is **"is this director
 
 **Shadow — disposable output.** Regenerated from source by an ordinary build, no cross-run value:
 
-- Compiled/bundled output: `dist/`, `build/`, `out/`, `lib/` (when generated), `target/` (Rust, Maven)
+- Compiled/bundled output: `dist/`, `build/`, `out/`, `lib/` (when generated)
 - Generated code that a codegen step recreates: Prisma/GraphQL/OpenAPI client dirs
 - Platform-specific dependency trees the auto-detection misses: a Python `.venv/`, vendored native addons
+
+These are illustrations, not a catalogue.
+Judge each directory from what you know about this repo's toolchains: a build tree that also holds the compiler's incremental state is the mixed case below, not disposable output.
 
 **Do not shadow — caches.** Their entire value is surviving between runs. Shadowing one trades a real, repeated build slowdown for cleanliness you did not need, because a cache is already private-by-design and rarely host-incompatible:
 
 - Task/build caches: `.turbo/`, `.gradle/`, `.nx/`, `.mypy_cache/`, `.ruff_cache/`, `.pytest_cache/`
-- Mixed directories: `.next/` holds both output *and* `.next/cache/`.
+- Mixed directories — output and cache in one tree, such as `.next/` holding its build alongside `.next/cache/`.
   Prefer shadowing nothing here, or the output subpath only — never blanket-shadow the parent and silently discard the cache on every recreate.
 
 **Do not shadow — anything the auto-detection already covers.** Redundant entries are noise that future readers must re-derive:
@@ -71,7 +74,7 @@ Enumerate the projects.
 ## Procedure
 
 Operate on the current repository only.
-Every step is idempotent and surgical — preserve unrelated content, comments, and formatting, and never remove entries you did not add.
+Every step is idempotent and surgical — preserve unrelated content, comments, and formatting, and remove an entry you did not add only after the user confirms it in step 5.
 
 1. **Locate the repo root.** `ROOT="$(git rev-parse --show-toplevel)"`. If this is not a git repository, stop and tell the user.
 
@@ -84,15 +87,17 @@ Every step is idempotent and surgical — preserve unrelated content, comments, 
    ```
 
    This lists ignored paths that currently exist.
-Note the gap: a project that has never been built shows nothing, so also read `$ROOT/.gitignore` (and nested ones) for directory patterns that have not materialized yet.
-Discard plain files — only directories can be shadowed.
+   Note the gap: a project that has never been built shows nothing, so also read `$ROOT/.gitignore` (and nested ones) for directory patterns that have not materialized yet.
+   Discard plain files — only directories can be shadowed.
+   Include every path already declared in the committed `shadow:` list as a candidate too — a review or fix run has to re-judge what is declared, not only what is missing.
 
-4. **Classify each candidate** against the three "do not shadow" lists above. For anything you are keeping, confirm it is not tracked: `git -C "$ROOT" ls-files -- <path>` must be empty.
+4. **Classify each candidate** against the three "do not shadow" lists above. For anything you are keeping, confirm it is not tracked: `git -C "$ROOT" ls-files -- <path>` must be empty. Judge an already-declared path by the same lists — one that now lands in a "do not shadow" list is a finding, not a fixture.
 
-5. **Confirm the judgment calls with the user.** List what you propose to shadow and what you are deliberately leaving alone, each with a one-line reason.
-Caches and human-facing output are the entries most worth naming explicitly — a user who wants `.turbo/` shadowed anyway should get to say so.
+5. **Confirm the judgment calls with the user.** List what you propose to shadow, what you are deliberately leaving alone, and any existing declaration you propose to drop, each with a one-line reason.
+   Caches and human-facing output are the entries most worth naming explicitly — a user who wants `.turbo/` shadowed anyway should get to say so.
+   Never remove an existing entry without that confirmation; it may be deliberate.
 
-6. **Write `.powbox.yml`.** Add the agreed literal paths to the `shadow:` list, creating the file with a `shadow:` key if absent. Keep every existing entry untouched. Give each new entry a short trailing comment saying what regenerates it, so the next reader does not have to re-derive the decision:
+6. **Write `.powbox.yml`.** Add the agreed literal paths to the `shadow:` list, creating the file with a `shadow:` key if absent. Keep every existing entry that survived step 5, and drop only the ones the user agreed to remove. Give each new entry a short trailing comment saying what regenerates it, so the next reader does not have to re-derive the decision:
 
    ```yaml
    shadow:
@@ -106,11 +111,14 @@ Caches and human-facing output are the entries most worth naming explicitly — 
 
    ```bash
    shadow-refresh.sh "$ROOT"
-   mountpoint -q "$ROOT/<declared-path>" && echo "shadowed" || echo "NOT shadowed"
+   findmnt -no FSTYPE,SOURCE "$ROOT/<declared-path>"
    ```
 
+   Expect `tmpfs`.
+   A non-zero exit means nothing is mounted there; any other filesystem means an existing mount was left in place — powbox skips a path that is already a mountpoint, so a host bind would still be passing writes through to the host.
+
    A path that was non-empty before shadowing will appear **empty** afterwards — the tmpfs hides the previous host content, which is the intent.
-Warn the user before running this if any candidate held something they had not regenerated.
+   Warn the user before running this if any candidate held something they had not regenerated.
 
 8. **Commit the config.** `.powbox.yml` belongs in version control so every teammate and future container inherits it. Stage and commit following the repo's conventions, or leave it staged and say so if the user prefers to review.
 
@@ -120,6 +128,7 @@ State concisely:
 
 - What you declared, and what regenerates each entry.
 - What you deliberately left undeclared, and why — especially caches and anything host-facing.
+- Any pre-existing declaration you removed or flagged as unsafe, and what it was costing.
 - Whether a `.powbox.local.yml` override is masking the committed list.
 - Whether the shadows are live in this session (step 7) or pending the next container start.
 - Any blocker: not a git repo, a malformed `.powbox.yml`, or a candidate that turned out to be tracked.
