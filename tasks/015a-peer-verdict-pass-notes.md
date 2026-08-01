@@ -4,7 +4,7 @@
 
 ## Why this task exists
 
-`peer-review-run` (powbox task 029) reduces a peer reviewer's output to a coarse `verdict` (`pass | issues | none`) plus an `artifactDir` pointer; the full review prose stays on disk and is not surfaced by default. Today's peer-prompt convention only asks for findings on `ISSUES`, so a `VERDICT: PASS` is a dead end — any nits the reviewer noticed are generated and then discarded. That wastes the tokens already spent and is mildly lossy: a "pass, but consider X" is more useful to a maintainer than a blunt pass.
+`peer-review-run` (powbox task 029) reduces a peer reviewer's output to a coarse helper-side `verdict` field (`pass | issues | none`, alongside the fuller `outcome`) plus an `artifactDir` pointer; the peer itself still emits only `VERDICT: PASS` or `VERDICT: ISSUES`, and nothing here changes that. The full review prose stays on disk and is not surfaced by default. Today's peer-prompt convention only asks for findings on `ISSUES`, so a `VERDICT: PASS` is a dead end — any nits the reviewer noticed are generated and then discarded. That wastes the tokens already spent and is mildly lossy: a "pass, but consider X" is more useful to a maintainer than a blunt pass.
 
 The opportunity ("Lever 1" from the powbox PR #113 review discussion) is to shape the peer's OUTPUT so a pass can carry a few terse, optionally-actionable notes when justified, while keeping the orchestrator's context lean. This is a prompt-convention refinement, not new machinery: no second LLM to parse the first, and no change to the deterministic, hermetic helper.
 
