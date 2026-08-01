@@ -63,4 +63,6 @@ Out of scope:
 
 ## Review plan
 
-Reviewer enumerates every scratch-file mention across the four skills named above and checks each is either worktree-local or identity-namespaced, and that the cleanliness step cannot be read as license to clean the shared checkout.
+For items 1 to 3, reviewer enumerates every scratch-file mention across the four skills those items name and checks each is either worktree-local or identity-namespaced, and that the cleanliness step cannot be read as license to clean the shared checkout. For item 4, that the hypothesis-not-finding line is present in the batch skills.
+
+For item 5, reviewer checks that all five prompt-composing skills, their Codex mirrors, and both dynamic workflows carry the destroy boundary with its "not in a clone, not in a temp directory, not 'safely'" qualifier and the worktree-isolates-the-checkout-not-the-repository line; that empirical verification is directed to a disposable clone or an absolute path outside the repository rather than left to the subagent to place; and that neither `rebase-stack` nor `enable-worktrees` gained a prompt contract.
