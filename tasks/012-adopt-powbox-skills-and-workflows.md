@@ -25,7 +25,7 @@ Out of scope:
 - powbox `docker/claude/agent-container/workflows/` and `docker/{claude,codex}/agent-container/skills/` — the sources to import.
 - powbox `docker/shared/sync-codex-skills.sh` header — documents that the Codex sync channel follows the clone's contents.
 - powbox branch `forfeit-skills-and-workflows-to-agent-skills` (local, at `f10672d`) — the counterpart change; its task 051 lists the merge prerequisites this task satisfies. Merge ordering is strict: powbox's build hard-fails only on an EMPTY Codex skill palette, not an incomplete one, so a premature powbox merge would silently ship images missing the two skills — hence the completeness criterion below.
-- powbox open tasks re-homed here by the forfeit: its 041 (peer-review stage in the wf-* workflows) is covered by 014/015; its 047 `wf-check` fixtures and 029a workflow-side prompt changes will consume the copies this task creates.
+- powbox open tasks re-homed here by the forfeit, once its counterpart branch merged: its 041 (peer-review stage in the wf-* workflows) is substantially covered by 014/015, with the workflow-rendering residue those two do not state carried by 014a; its 029a (peer `VERDICT: PASS` notes) arrives intact as 015a; its 047 `wf-check` fixtures consume the workflow copies this task creates.
 - Claude Code plugin docs, "Distribute a workflow in a plugin" — the `workflows/` plugin dir and namespacing behavior.
 
 ## Target files or areas
