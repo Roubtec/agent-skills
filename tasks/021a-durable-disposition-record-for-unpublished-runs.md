@@ -1,4 +1,4 @@
-# 034 — A durable home for the disposition map of a run that does not publish
+# 021a — A durable home for the disposition map of a run that does not publish
 
 ## Why this task exists
 
@@ -34,7 +34,7 @@ Included:
               reply: "Fixed in <tip>: gate merged parents on ..."
   [push-back] SKILL.md:148  codex  thread=PRRT_kwDO...v1
               reply: "<full drafted rationale, verbatim>"
-  [task]      -> tasks/034-foo.md (queued)
+  [task]      -> tasks/0NNa-foo.md (queued)
 
   ## Summary comment (verbatim, ready to post)
   <full markdown body>
