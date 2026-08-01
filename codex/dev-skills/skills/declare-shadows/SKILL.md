@@ -44,12 +44,12 @@ Judge each directory from what you know about this repo's toolchains: a build tr
 - Mixed directories — output and cache in one tree, such as `.next/` holding its build alongside `.next/cache/`.
   Prefer shadowing nothing here, or the output subpath only — never blanket-shadow the parent and silently discard the cache on every recreate.
 
-**Do not shadow — anything the auto-detection already covers.** Redundant entries are noise that future readers must re-derive:
+**Do not shadow — anything another mechanism already handles.** Redundant entries are noise that future readers must re-derive:
 
 - Any workspace package's `node_modules` (from `pnpm-workspace.yaml` / `package.json` `workspaces`)
 - Any `bin`/`obj` beside a `*.csproj`/`*.fsproj`/`*.vbproj`
 - The root `node_modules` (the launcher mounts a Docker volume there)
-- `.worktrees`, `.claude/worktrees`, `.git/worktrees` (owned by `enable-worktrees`)
+- `.worktrees`, `.claude/worktrees`, `.git/worktrees` (declared by `enable-worktrees` itself, not derived by the auto-detection)
 
 **Do not shadow — anything with content a human might want.** Shadowing makes it invisible from the host and destroys it on recreate:
 
@@ -91,7 +91,7 @@ Every step is idempotent and surgical — preserve unrelated content, comments, 
    Discard plain files — only directories can be shadowed.
    Include every path already declared in the committed `shadow:` list as a candidate too — a review or fix run has to re-judge what is declared, not only what is missing.
 
-4. **Classify each candidate** against the three "do not shadow" lists above. For anything you are keeping, confirm it is not tracked: `git -C "$ROOT" ls-files -- <path>` must be empty. Judge an already-declared path by the same lists — one that now lands in a "do not shadow" list is a finding, not a fixture.
+4. **Classify each candidate** against the three "do not shadow" lists above. For anything you are keeping, confirm it is not tracked: `git -C "$ROOT" ls-files -- <path>` must be empty. Judge an already-declared path by the same lists — one that now lands in a "do not shadow" list is a finding, not a fixture — but an entry another skill owns (the `enable-worktrees` worktree roots) is deliberate infrastructure, not a stray declaration: leave it alone.
 
 5. **Confirm the judgment calls with the user.** List what you propose to shadow, what you are deliberately leaving alone, and any existing declaration you propose to drop, each with a one-line reason.
    Caches and human-facing output are the entries most worth naming explicitly — a user who wants `.turbo/` shadowed anyway should get to say so.
