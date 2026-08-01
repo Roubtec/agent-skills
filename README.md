@@ -19,7 +19,7 @@ scripts/
   test-checkout-cleanliness-report.mjs  # regression coverage for the batch workflow's checkout report
 ```
 
-- **`plugins/`** holds the Claude Code plugins. Each subdirectory is one independently installable plugin; `dev-skills` carries cross-repo software development skills, the `enable-worktrees` repository setup skill, the `session-learnings` retrospective skill, and Claude dynamic workflows for review addressing and planned task batches. Its `bin/` executables are available on the Bash tool's PATH while the plugin is enabled. Additional plugins for other domains get sibling directories here and an entry in `marketplace.json`.
+- **`plugins/`** holds the Claude Code plugins. Each subdirectory is one independently installable plugin; `dev-skills` carries cross-repo software development skills including safe post-batch local branch cleanup, the `enable-worktrees` repository setup skill, the `session-learnings` retrospective skill, and Claude dynamic workflows for review addressing and planned task batches. Its `bin/` executables are available on the Bash tool's PATH while the plugin is enabled. Additional plugins for other domains get sibling directories here and an entry in `marketplace.json`.
 - **`codex/`** mirrors the plugin tree with the Codex CLI flavors of the same skills. The two flavors share most of their text but diverge deliberately where harness capabilities differ; a verbiage change is one PR touching both files side by side. Each Codex skill includes its `agents/openai.yaml` UI metadata. This tree is *not* installed by Claude's plugin runtime; powbox refreshes it onto the Codex config volume at container start from the same marketplace clone.
 
 ## Installing (Claude Code Users)
