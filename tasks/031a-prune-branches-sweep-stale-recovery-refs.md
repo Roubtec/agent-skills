@@ -2,7 +2,7 @@
 
 ## Why this task exists
 
-`prune-branches` creates a `refs/pruned/<YYYYMMDD-UTC>/<branch>` breadcrumb before every non-Merged deletion, and step 11 prints the exact `git update-ref -d` cleanup command for the refs that run created. It never looks at the breadcrumbs left by *previous* runs. Those accumulate indefinitely, and unlike branches they are invisible to `git branch` — you only see them if you remember the `git for-each-ref refs/pruned/` incantation. Refs also keep their commits advertised forever, so the bytes never get garbage-collected either.
+`prune-branches` creates a breadcrumb before every non-Merged deletion — `refs/pruned/<YYYYMMDD-UTC>/<branch>` normally, or `refs/pruned/flat/<YYYYMMDD-UTC>/<percent-encoded-branch>` when a prefix conflict blocks the hierarchical family — and step 11 prints the exact `git update-ref -d` cleanup command for the refs that run created. It never looks at the breadcrumbs left by *previous* runs. Those accumulate indefinitely, and unlike branches they are invisible to `git branch` — you only see them if you remember the `git for-each-ref refs/pruned/` incantation. Refs also keep their commits advertised forever, so the bytes never get garbage-collected either.
 
 The maintainer raised this while vetting the review dispositions on PR #31, not in a thread on the PR itself: the point of pruning is to reduce the amount of scaffolding you carry around, and silently trading visible branches for invisible refs undercuts that. It surfaced specifically as the counter-argument to gating PR-derived Merged classification on the default base (the `--base` fix in #31), because that gate moves some branches from "deleted, no ref" into "deleted, with recovery ref". The gate was the right call on safety grounds, so the ref-accumulation cost is dealt with here instead.
 
@@ -10,7 +10,7 @@ The maintainer raised this while vetting the review dispositions on PR #31, not 
 
 Included:
 
-- Inventory the existing `refs/pruned/**` refs during the normal run, not just the ones this run creates, and surface them in the step 7 audit listing and the step 11 report with their date segment, branch name, and tip. This inventory is subject to the same budget discipline as the skill's other lookups (see the implementation notes); a truncated listing must say so rather than read as complete.
+- Inventory the existing `refs/pruned/**` refs during the normal run, not just the ones this run creates, and surface them in the step 7 audit listing and the step 11 report with their date segment, branch name, and tip. Both breadcrumb layouts count: the hierarchical `refs/pruned/<date>/<branch>` and the flat `refs/pruned/flat/<date>/<encoded>` fallback, whose date and branch sit in different positions and whose name must be percent-decoded before it is shown. Report the real branch name in both cases, so a flat breadcrumb is not listed under a date segment of `flat`. This inventory is subject to the same budget discipline as the skill's other lookups (see the implementation notes); a truncated listing must say so rather than read as complete.
 - Classify each pre-existing breadcrumb by whether it is still needed: a breadcrumb whose commit is now reachable from the resolved default (the work landed) is redundant and is a cleanup candidate; one holding otherwise-unreachable commits is still load-bearing and must be reported as such, never swept.
 - Offer removal of redundant breadcrumbs under the same confirmation model the skill already uses for branches — never delete a ref the run did not propose and the user did not confirm, and always use the expected-old-OID form (`git update-ref -d "$ref" "$old_oid"`) so a breadcrumb that moved since inventory is not removed by accident.
 - Decide and document the `hands-off` behaviour. The conservative default is to report redundant breadcrumbs without deleting them, matching how `hands-off` already refuses to touch Uncertain branches.
@@ -44,7 +44,7 @@ Out of scope:
 
 ## Acceptance criteria
 
-- A run in a repository containing breadcrumbs from earlier runs lists them, separated into redundant and still-load-bearing, in both the audit listing and the final report, up to whatever budget the implementation adopts and saying so plainly when that budget truncated the listing.
+- A run in a repository containing breadcrumbs from earlier runs lists them, separated into redundant and still-load-bearing, in both the audit listing and the final report, up to whatever budget the implementation adopts and saying so plainly when that budget truncated the listing. Breadcrumbs of both layouts appear, each under its real branch name and date.
 - No breadcrumb is ever deleted without an explicit confirmation covering it, and every deletion uses the expected-old-OID form.
 - A breadcrumb whose commits are unreachable from the resolved default is never proposed for deletion, whatever its age.
 - `hands-off` behaviour is stated explicitly in the skill text and matches whatever this task decides.
@@ -52,7 +52,7 @@ Out of scope:
 
 ## Validation
 
-- In a scratch repository, create breadcrumbs of both kinds — one pointing at a commit merged into the default, one at an orphaned commit — plus one dated to the current run, and confirm the classification, the confirmation gate, and the report wording.
+- In a scratch repository, create breadcrumbs of both kinds — one pointing at a commit merged into the default, one at an orphaned commit — plus one dated to the current run, and confirm the classification, the confirmation gate, and the report wording. Cover both layouts, including a flat breadcrumb for a branch whose name contains `/` and one whose name contains a literal `%`.
 - Confirm the expected-old-OID deletion refuses when the breadcrumb is repointed between inventory and cleanup.
 
 ## Review plan
