@@ -107,7 +107,7 @@ Every step is idempotent and surgical — preserve unrelated content, comments, 
 
    If the file has a `shadow:` key that is malformed or not a list, stop and report rather than rewriting it.
 
-   When step 2 found an active override, apply the same agreed additions and removals to `$ROOT/.powbox.local.yml`, or the fix stays theoretical — that file is user-local and gitignored, so it never joins the commit in step 8.
+   When step 2 found an active override, follow the resolution the user chose there. If they kept it, apply the same agreed additions and removals to `$ROOT/.powbox.local.yml` as well, or the fix stays theoretical; if they retired it, drop that file's `shadow:` key — leaving its other keys alone — so the committed list is what takes effect. Either way, never stage `.powbox.local.yml` in step 8: it is user-local, and powbox's launcher only *warns* when `git check-ignore -q -- .powbox.local.yml` does not ignore it, so run that check yourself and surface the gap to the user when the file is not ignored.
 
 7. **(Optional) Apply immediately in this session.** Committed declarations take effect at the next container start; to shadow the new paths now, without relaunching:
 
