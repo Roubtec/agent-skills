@@ -50,7 +50,7 @@ Out of scope:
 
 - `wf-check` (or the runtime-wrapped `node --check`) passes on every touched workflow.
 - A `/dev-skills:wf-address-review` run against a disposable PR in a powbox container exercises one peer round end to end: the stage appears under its own phase, the peer result is recorded, and `peer-opinions=off` on a second run suppresses it.
-- Force a peer failure (e.g. point the subagent at an unavailable provider) and confirm the round completes non-blocking.
+- Force a peer failure in each of the two shapes it takes, confirming the round completes non-blocking in both. Helper-side: point the subagent at an unavailable provider, which returns an ordinary schema-valid `unavailable` result while the subagent itself stays healthy. Subagent-side: make the peer `agent()` call die or come back with nothing, so the stage sees `null` or a schema-validation failure instead of a result, and let the stage throw. Only the second exercises that half of the criterion above — an implementation that still aborts the batch on a dead subagent passes the helper-side case unchanged.
 
 ## Review plan
 
