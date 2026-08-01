@@ -356,10 +356,21 @@ const lower = raw.toLowerCase();
 // not only the hyphenated/joined ones. A spelled-out `push` still means "publish,
 // but ping nobody"; pings imply push; only a negation (`no-push`, `no push`,
 // `do not push`, `don't push`, `without push`, `skip push`, `cannot push`) opts out.
+// (3) Negations are tested against a further-normalized copy in which the surviving
+// PRESENT-tense inflections collapse to the bare token, so `no pushing` and `without
+// pushing` opt out exactly like `no push` — an opt-out this explicit must never fall
+// through to a publish. `pushed` is deliberately NOT normalized: the past tense
+// describes what already happened rather than what to do, and it sits next to a
+// negation in ordinary prose that means the opposite of an opt-out ("the fixes are
+// not pushed yet, so push them when done") — collapsing it would turn an explicit
+// publish request into a local-only run. The positive token below reads the
+// un-normalized text for the same reason, so an incidental `I already pushed that
+// branch` cannot silently suppress the pings the way a deliberate `push` flag does.
 const pushWords = lower.replace(/\bpush(?:ed|es|ing)?[\s-]*back\b/g, " ");
+const pushNegWords = pushWords.replace(/\bpush(?:es|ing)\b/g, "push");
 const noPush =
-  /\bno[\s-]*push\b/.test(pushWords) ||
-  /\b(?:not|never|without|skip|cannot|can't|cant|dont|don't|do not)\b[\s-]*push\b/.test(pushWords);
+  /\bno[\s-]*push\b/.test(pushNegWords) ||
+  /\b(?:not|never|without|skip|cannot|can't|cant|dont|don't|do not)\b[\s-]*push\b/.test(pushNegWords);
 const pingCodexTok = /\bping[\s-]*codex\b/.test(lower);
 const pingClaudeTok = /\bping[\s-]*claude\b/.test(lower);
 const pingCopilotTok = /\bping[\s-]*copilot\b/.test(lower);
