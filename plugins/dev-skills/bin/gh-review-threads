@@ -45,12 +45,11 @@
 # `https://github.com/OWNER/REPO/pull/<N>` followed by `#`, `/`, `?`, or end (a
 # boundary-safe, repo-qualified match — so PR #12 never accepts a `/pull/123`
 # url, nor a same-number PR in another repo). An identity mismatch, malformed
-# comment or nested-pagination shape during extraction, or scope mismatch
-# discards the whole response and retries the fetch ONCE from scratch; if that
-# check fails again the helper fails closed — nothing on stdout, a diagnosis on
-# stderr, and exit 3
-# (distinct from usage/auth errors). Other API and parser failures retain their
-# ordinary fatal status.
+# thread/comment response shape or pagination metadata, comment-url extraction
+# failure, or scope mismatch discards the whole response and retries the fetch
+# ONCE from scratch. If that check fails again, the helper fails closed with
+# nothing on stdout, a diagnosis on stderr, and exit 3 (distinct from usage/auth
+# errors). Other API and parser failures retain their ordinary fatal status.
 #
 # Dependencies: `gh` (authenticated) and `jq`.
 set -euo pipefail
@@ -298,6 +297,9 @@ fetch_all() {
 		if [ "$response_repo_lc" != "$EXPECTED_REPO_LC" ] || [ "$response_pr" != "$PR" ]; then
 			return "$RETRYABLE_IDENTITY_STATUS"
 		fi
+		# Validate the outer page before merging it. Null/non-array nodes can be
+		# absorbed by jq array addition, while malformed pagination metadata can
+		# silently truncate the fetch or issue a query with an unusable cursor.
 		thread_page="$(jq -ce '
 			.data.repository.pullRequest.reviewThreads as $page
 			| select(($page.nodes | type) == "array")

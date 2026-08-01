@@ -29,11 +29,11 @@ set -euo pipefail
 #       right `after` values, no --paginate)
 #   (c) a contaminated response — fail closed on repeat, succeed on a clean retry
 #   (d) repo/PR scope boundaries (`#`, `/`, `?`, and end-of-string)
-#   (e) nested comment-page fetch-up and crossed-page fail-closed scope checks
+#   (e) nested comment fetch-up, scope validation, and multi-page cursor following
 #   (f) default repo resolution via `gh repo view` when --repo is omitted
 #   (g) case-insensitive response identity and owner/repo url scope matches
-#   (h) malformed thread and nested-page shapes — the comment-data PARSER fails,
-#       and the helper must still fail closed
+#   (h) malformed thread/comment shapes and pagination metadata at every layer —
+#       the helper must fail closed
 #   (i) response-identity mismatch (wrong nameWithOwner / wrong PR number,
 #       including a later-page mismatch) — fail closed after one whole-fetch retry
 #
@@ -349,7 +349,7 @@ assert_eq "d6: /pull/12?diff=split accepted (exit 0)" "$RUN_RC" 0
 assert_eq "d6: emits the thread" "$(jqr '.[0].id' "$RUN_OUT")" T_query
 
 # ============================================================================
-# (e) nested comment-page fetch-up
+# (e) nested comment fetch-up, scope validation, and multi-page cursor following
 # ============================================================================
 d="$(new_case)"
 cat >"$d/threads-1" <<'JSON'
@@ -642,6 +642,54 @@ assert_eq "h11: missing outer cursor fails closed (exit 3)" "$RUN_RC" 3
 assert_eq "h11: no stdout emitted" "$RUN_OUT" ""
 assert_contains "h11: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
 assert_eq "h11: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
+
+# h12: a fetched nested page also rejects an empty-string cursor.
+d="$(new_case)"
+for n in 1 2; do
+	cat >"$d/threads-$n" <<'JSON'
+{"data":{"repository":{"nameWithOwner":"acme/widgets","pullRequest":{"number":12,"url":"https://github.com/acme/widgets/pull/12","reviewThreads":{"totalCount":1,"nodes":[
+  {"id":"T_nested_empty_cursor","isResolved":false,"isOutdated":false,"path":"h12.js","line":12,
+   "comments":{"nodes":[{"databaseId":829,"author":{"login":"codex","__typename":"Bot"},"body":"comment A","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r829"}],"pageInfo":{"hasNextPage":true,"endCursor":"CCUR_EMPTY"}}}
+],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
+JSON
+	cat >"$d/comments-$n" <<'JSON'
+{"data":{"node":{"comments":{"nodes":[{"databaseId":830,"author":{"login":"alice","__typename":"User"},"body":"comment B","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r830"}],"pageInfo":{"hasNextPage":true,"endCursor":""}}}}}
+JSON
+done
+run "$d" --repo acme/widgets 12
+assert_eq "h12: empty nested cursor fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "h12: no stdout emitted" "$RUN_OUT" ""
+assert_contains "h12: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
+assert_eq "h12: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
+assert_eq "h12: both nested-page attempts ran" "$(count_matches "$d/log" '[threadId=')" 2
+
+# h13: initial comment metadata rejects an empty-string cursor before fetch-up.
+INITIAL_CURSOR_EMPTY='[
+  {"id":"T_initial_empty_cursor","isResolved":false,"isOutdated":false,"path":"h13.js","line":13,
+   "comments":{"nodes":[{"databaseId":833,"author":{"login":"codex","__typename":"Bot"},"body":"comment A","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r833"}],"pageInfo":{"hasNextPage":true,"endCursor":""}}}
+]'
+d="$(new_case)"
+threads_one_page "$INITIAL_CURSOR_EMPTY" >"$d/threads-1"
+threads_one_page "$INITIAL_CURSOR_EMPTY" >"$d/threads-2"
+run "$d" --repo acme/widgets 12
+assert_eq "h13: empty initial cursor fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "h13: no stdout emitted" "$RUN_OUT" ""
+assert_contains "h13: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
+assert_eq "h13: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
+assert_eq "h13: no nested request attempted" "$(count_matches "$d/log" '[threadId=')" 0
+
+# h14: outer reviewThreads metadata rejects an empty-string cursor.
+d="$(new_case)"
+for n in 1 2; do
+	cat >"$d/threads-$n" <<'JSON'
+{"data":{"repository":{"nameWithOwner":"acme/widgets","pullRequest":{"number":12,"url":"https://github.com/acme/widgets/pull/12","reviewThreads":{"totalCount":0,"nodes":[],"pageInfo":{"hasNextPage":true,"endCursor":""}}}}}}
+JSON
+done
+run "$d" --repo acme/widgets 12
+assert_eq "h14: empty outer cursor fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "h14: no stdout emitted" "$RUN_OUT" ""
+assert_contains "h14: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
+assert_eq "h14: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
 
 # ============================================================================
 # (i) response-identity mismatch — fail closed after the single whole-fetch retry
