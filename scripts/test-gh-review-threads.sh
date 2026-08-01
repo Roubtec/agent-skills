@@ -763,6 +763,36 @@ assert_eq "h19: no stdout emitted" "$RUN_OUT" ""
 assert_contains "h19: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
 assert_eq "h19: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
 
+# h20: a newline can split one malformed URL into separately in-scope lines, so
+# URL validation must reject it before the shell's line-oriented scope check.
+NEWLINE_COMMENT_URL='[
+  {"id":"T_newline_url","isResolved":false,"isOutdated":false,"path":"h20.js","line":20,
+   "comments":{"nodes":[{"databaseId":837,"author":{"login":"codex","__typename":"Bot"},"body":"split url","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#a\nhttps://github.com/acme/widgets/pull/12#b"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}
+]'
+d="$(new_case)"
+threads_one_page "$NEWLINE_COMMENT_URL" >"$d/threads-1"
+threads_one_page "$NEWLINE_COMMENT_URL" >"$d/threads-2"
+run "$d" --repo acme/widgets 12
+assert_eq "h20: newline comment url fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "h20: no stdout emitted" "$RUN_OUT" ""
+assert_contains "h20: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
+assert_eq "h20: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
+
+# h21: carriage returns are line-unsafe too, even though the shell pattern's
+# trailing wildcard would otherwise accept one inside an in-scope URL.
+CARRIAGE_RETURN_COMMENT_URL='[
+  {"id":"T_carriage_return_url","isResolved":false,"isOutdated":false,"path":"h21.js","line":21,
+   "comments":{"nodes":[{"databaseId":838,"author":{"login":"codex","__typename":"Bot"},"body":"carriage-return url","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#a\rhttps://github.com/acme/widgets/pull/12#b"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}
+]'
+d="$(new_case)"
+threads_one_page "$CARRIAGE_RETURN_COMMENT_URL" >"$d/threads-1"
+threads_one_page "$CARRIAGE_RETURN_COMMENT_URL" >"$d/threads-2"
+run "$d" --repo acme/widgets 12
+assert_eq "h21: carriage-return comment url fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "h21: no stdout emitted" "$RUN_OUT" ""
+assert_contains "h21: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
+assert_eq "h21: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
+
 # ============================================================================
 # (i) response-identity mismatch — fail closed after the single whole-fetch retry
 # ============================================================================
