@@ -121,7 +121,7 @@ serve() {
 	printf '%s\n' "$n" >"$GH_STUB_DIR/$counter"
 	f="$GH_STUB_DIR/$prefix-$n"
 	if [ ! -f "$f" ]; then
-		echo "gh-stub: no fixture $f for: $*" >&2
+		echo "gh-stub: no fixture $f" >&2
 		exit 90
 	fi
 	cat "$f"
@@ -166,9 +166,9 @@ run() {
 
 jqr() { jq -r "$1" <<<"$2"; }
 
-# Bash-3.2-safe log inspection (no mapfile/readarray/arrays). This test runs
-# directly on the host in commands/smoke-test.sh Stage 0b, where macOS ships
-# Bash 3.2, so these must stay portable.
+# Bash-3.2-safe log inspection (no mapfile/readarray/arrays). Powbox runs its
+# consumer copy directly on the downstream host in commands/smoke-test.sh Stage
+# 0b, where macOS ships Bash 3.2, so these must stay portable here too.
 count_matches() {
 	# count_matches <file> <fixed-string> — number of matching lines (0 if none).
 	# grep -c prints "0" and exits 1 on no match; `|| true` keeps set -e happy.
@@ -326,6 +326,28 @@ run "$d" --repo acme/widgets 12
 assert_eq "d4: other-repo /pull/12 rejected (exit 3)" "$RUN_RC" 3
 assert_contains "d4: names the other-repo url" "$RUN_ERR" "https://github.com/other/widgets/pull/12"
 
+# d5: slash boundary — a path below /pull/12 is in scope.
+BOUNDARY_SLASH='[
+  {"id":"T_slash","isResolved":false,"isOutdated":false,"path":"s.js","line":6,
+   "comments":{"nodes":[{"databaseId":702,"author":{"login":"codex","__typename":"Bot"},"body":"files url","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12/files"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}
+]'
+d="$(new_case)"
+threads_one_page "$BOUNDARY_SLASH" >"$d/threads-1"
+run "$d" --repo acme/widgets 12
+assert_eq "d5: /pull/12/files accepted (exit 0)" "$RUN_RC" 0
+assert_eq "d5: emits the thread" "$(jqr '.[0].id' "$RUN_OUT")" T_slash
+
+# d6: query boundary — a query string after /pull/12 is in scope.
+BOUNDARY_QUERY='[
+  {"id":"T_query","isResolved":false,"isOutdated":false,"path":"q.js","line":7,
+   "comments":{"nodes":[{"databaseId":703,"author":{"login":"codex","__typename":"Bot"},"body":"query url","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12?diff=split"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}
+]'
+d="$(new_case)"
+threads_one_page "$BOUNDARY_QUERY" >"$d/threads-1"
+run "$d" --repo acme/widgets 12
+assert_eq "d6: /pull/12?diff=split accepted (exit 0)" "$RUN_RC" 0
+assert_eq "d6: emits the thread" "$(jqr '.[0].id' "$RUN_OUT")" T_query
+
 # ============================================================================
 # (e) nested comment-page fetch-up
 # ============================================================================
@@ -349,6 +371,29 @@ cline1="$(nth_match 1 "$d/log" '[threadId=')"
 assert_contains "e: nested call targets the thread" "$cline1" "[threadId=T_nested]"
 assert_contains "e: nested call uses the comment endCursor" "$cline1" "[after=CCUR1]"
 assert_not_contains "e: never --paginate" "$RUN_LOG" "[--paginate]"
+
+# e2: a crossed nested-comments page is caught by the merged comment-url scope
+# check. Nested pages carry no response identity, so this is their fail-closed
+# guard; both whole-fetch attempts must restart the thread and nested queries.
+d="$(new_case)"
+for n in 1 2; do
+	cat >"$d/threads-$n" <<'JSON'
+{"data":{"repository":{"nameWithOwner":"acme/widgets","pullRequest":{"number":12,"url":"https://github.com/acme/widgets/pull/12","reviewThreads":{"totalCount":1,"nodes":[
+  {"id":"T_nested_bad","isResolved":false,"isOutdated":false,"path":"n.js","line":8,
+   "comments":{"nodes":[{"databaseId":313,"author":{"login":"codex","__typename":"Bot"},"body":"comment A","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r313"}],"pageInfo":{"hasNextPage":true,"endCursor":"CCUR_BAD"}}}
+],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
+JSON
+	cat >"$d/comments-$n" <<'JSON'
+{"data":{"node":{"comments":{"nodes":[{"databaseId":314,"author":{"login":"alice","__typename":"User"},"body":"crossed comment","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/999#discussion_r314"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}
+JSON
+done
+run "$d" --repo acme/widgets 12
+assert_eq "e2: crossed nested page fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "e2: no stdout emitted" "$RUN_OUT" ""
+assert_contains "e2: scope diagnosis on stderr" "$RUN_ERR" "comment url(s) do not belong"
+assert_contains "e2: names the nested-page offender" "$RUN_ERR" "https://github.com/acme/widgets/pull/999"
+assert_eq "e2: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
+assert_eq "e2: both nested-page attempts ran" "$(count_matches "$d/log" '[threadId=')" 2
 
 # ============================================================================
 # (f) default repo resolution via `gh repo view` when --repo is omitted
@@ -375,24 +420,27 @@ assert_not_contains "f: never --paginate" "$RUN_LOG" "[--paginate]"
 # ============================================================================
 # (g) case-insensitive owner/repo scope match
 # ============================================================================
-# GitHub owner/repo are case-insensitive, but comment urls carry canonical casing.
-# A --repo passed in non-canonical casing (Acme/Widgets) must still scope-match the
-# canonical urls (acme/widgets) and emit them, rather than read as contamination and
-# fail closed with exit 3 (which is what a case-sensitive prefix check would do).
-# The fixture echoes the CANONICAL-cased nameWithOwner (acme/widgets), so exit 0
-# also proves the response-identity compare is case-insensitive.
+# GitHub owner/repo are case-insensitive, but responses and comment urls carry
+# canonical casing. A lowercase --repo must scope-match mixed canonical casing;
+# a second cross-cased --repo proves both sides of each compare are normalized.
 NODES_G='[
   {"id":"T_case","isResolved":false,"isOutdated":false,"path":"g.js","line":1,
-   "comments":{"nodes":[{"databaseId":811,"author":{"login":"codex","__typename":"Bot"},"body":"canonical-cased url","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r811"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}
+   "comments":{"nodes":[{"databaseId":811,"author":{"login":"codex","__typename":"Bot"},"body":"canonical-cased url","diffHunk":"@@","url":"https://github.com/Acme/Widgets/pull/12#discussion_r811"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}
 ]'
 d="$(new_case)"
-threads_one_page "$NODES_G" >"$d/threads-1"
-run "$d" --repo Acme/Widgets 12
-assert_eq "g: mixed-case --repo accepted (exit 0)" "$RUN_RC" 0
+threads_one_page "$NODES_G" 12 Acme/Widgets >"$d/threads-1"
+run "$d" --repo acme/widgets 12
+assert_eq "g1: lowercase --repo accepted (exit 0)" "$RUN_RC" 0
 assert_eq "g: one thread" "$(jqr 'length' "$RUN_OUT")" 1
 assert_eq "g: emits the in-scope thread" "$(jqr '.[0].id' "$RUN_OUT")" T_case
-assert_eq "g: preserves canonical url casing" "$(jqr '.[0].comments[0].url' "$RUN_OUT")" "https://github.com/acme/widgets/pull/12#discussion_r811"
-assert_eq "g: no retry needed" "$(count_matches "$d/log" '[owner=')" 1
+assert_eq "g: preserves canonical url casing" "$(jqr '.[0].comments[0].url' "$RUN_OUT")" "https://github.com/Acme/Widgets/pull/12#discussion_r811"
+assert_eq "g1: no retry needed" "$(count_matches "$d/log" '[owner=')" 1
+
+d="$(new_case)"
+threads_one_page "$NODES_G" 12 Acme/Widgets >"$d/threads-1"
+run "$d" --repo aCME/wIDGETS 12
+assert_eq "g2: cross-cased --repo accepted (exit 0)" "$RUN_RC" 0
+assert_eq "g2: no retry needed" "$(count_matches "$d/log" '[owner=')" 1
 
 # ============================================================================
 # (h) malformed thread shapes — the url PARSER fails, and that must fail closed
