@@ -78,7 +78,7 @@ Every step is idempotent and surgical — preserve unrelated content, comments, 
 
 1. **Locate the repo root.** `ROOT="$(git rev-parse --show-toplevel)"`. If this is not a git repository, stop and tell the user.
 
-2. **Check for a local override first.** If `$ROOT/.powbox.local.yml` exists and has a top-level `shadow:` key, it **replaces the committed `.powbox.yml` list wholesale** — that list, not the committed one, is what this container mounts. Audit it: a cache or database declared there is exactly as live as one in `.powbox.yml`, so carry its entries into step 3 as candidates and judge them by the same lists. Say so and confirm how to proceed before editing — the committed file stays the durable record of the agreed set, but nothing you write there takes effect while the override stands, so the user has to either retire the override or accept the same change in it.
+2. **Check for a local override first.** If `$ROOT/.powbox.local.yml` exists and has a top-level `shadow:` key, it **replaces the committed `.powbox.yml` list wholesale** — the override's list, not the committed one, is what this container mounts. Audit it: a cache or database declared there is exactly as live as one in `.powbox.yml`, so carry its entries into step 3 as candidates too. Say so and confirm how to proceed before editing — the committed file stays the durable record of the agreed set, but nothing you write there takes effect while the override stands, so the user has to either retire the override or accept the same change in it.
 
 3. **Enumerate candidates.**
 
@@ -89,7 +89,7 @@ Every step is idempotent and surgical — preserve unrelated content, comments, 
    This lists ignored paths that currently exist.
    Note the gap: a project that has never been built shows nothing, so also read `$ROOT/.gitignore` (and nested ones) for directory patterns that have not materialized yet.
    Discard plain files — only directories can be shadowed — and of those keep only the ones ignored in their own right (`git -C "$ROOT" check-ignore -q <path>`): a directory whose entire content is ignored is listed even when no rule ignores the directory itself, and shadowing that parent would hide whatever is added to it later.
-   Include every path already declared in the effective `shadow:` list — the committed one, or an active override's, per step 2 — as a candidate too: a review or fix run has to re-judge what is declared, not only what is missing.
+   Include every path already declared in either `shadow:` list — the committed one and an active override's, per step 2 — as a candidate too: a review or fix run has to re-judge what is declared, not only what is missing, and either list can end up the effective one.
 
 4. **Classify each candidate** against the three "do not shadow" lists above. For anything you are keeping, confirm it is not tracked: `git -C "$ROOT" ls-files -- <path>` must be empty. Judge an already-declared path by the same lists — one that now lands in a "do not shadow" list is a finding, not a fixture — but an entry another skill owns (the `enable-worktrees` worktree roots) is deliberate infrastructure, not a stray declaration: leave it alone.
 
