@@ -326,7 +326,8 @@ fetch_all() {
 
 # Print any comment url in the merged nodes that is NOT boundary-safe-inside this
 # PR. Empty output ⇒ the whole response is in scope; non-zero status means url
-# extraction failed and the caller must discard the response. The match is
+# extraction or validation failed and the caller must discard the response. URLs
+# must be non-empty, line-safe strings before the shell inspects them. The match is
 # case-insensitive on the owner/repo path: only OWNER/REPO vary in case (the
 # host, `/pull/`, the PR number, and the boundary chars have none), and GitHub
 # forbids case-only owner/repo collisions, so lowercasing both sides never widens
@@ -339,7 +340,14 @@ fetch_all() {
 scope_offenders() {
 	local combined="$1" url lc
 	local urls
-	urls="$(jq -r '.[].comments.nodes[].url' <<<"$combined")" || return 1
+	urls="$(jq -r '
+		.[].comments.nodes[].url
+		| if ((type == "string") and (length > 0) and
+			(contains("\n") | not) and (contains("\r") | not))
+		  then .
+		  else error("invalid comment url")
+		  end
+	' <<<"$combined")" || return 1
 	while IFS= read -r url; do
 		[ -n "$url" ] || continue
 		lc="$(printf '%s' "$url" | tr '[:upper:]' '[:lower:]')"

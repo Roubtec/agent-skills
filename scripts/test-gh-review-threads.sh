@@ -749,6 +749,20 @@ assert_eq "h18: emits one thread" "$(jqr 'length' "$RUN_OUT")" 1
 assert_eq "h18: preserves empty comments" "$(jqr '.[0].comments | length' "$RUN_OUT")" 0
 assert_eq "h18: no retry needed" "$(count_matches "$d/log" '[owner=')" 1
 
+# h19: an empty comment URL is malformed, not an ignorable blank line.
+EMPTY_COMMENT_URL='[
+  {"id":"T_empty_url","isResolved":false,"isOutdated":false,"path":"h19.js","line":19,
+   "comments":{"nodes":[{"databaseId":836,"author":{"login":"codex","__typename":"Bot"},"body":"missing url","diffHunk":"@@","url":""}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}
+]'
+d="$(new_case)"
+threads_one_page "$EMPTY_COMMENT_URL" >"$d/threads-1"
+threads_one_page "$EMPTY_COMMENT_URL" >"$d/threads-2"
+run "$d" --repo acme/widgets 12
+assert_eq "h19: empty comment url fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "h19: no stdout emitted" "$RUN_OUT" ""
+assert_contains "h19: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
+assert_eq "h19: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
+
 # ============================================================================
 # (i) response-identity mismatch — fail closed after the single whole-fetch retry
 # ============================================================================
