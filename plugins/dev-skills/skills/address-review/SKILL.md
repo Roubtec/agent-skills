@@ -99,6 +99,15 @@ Precedence for identifying the PR:
 
 Record `owner`, `repo`, PR `number`, `baseRefName`, `headRefName`, `headRefOid`, and the head repository owner/name for the API calls and publication guard below.
 
+**Reconcile the local branch with the PR head before triaging anything.** The rule is *no work lost*, and ancestry decides it rather than a standing preference for either side. Fetch the PR's exact head ref without moving the local branch, then compare `HEAD` against `headRefOid`:
+
+- **Equal** → the two agree; proceed.
+- **`HEAD` is a proper ancestor of `headRefOid`** (local strictly behind, nothing unpushed) → fast-forward the local branch to the PR head and address the feedback from there. Someone advanced the branch on origin and you hold nothing it lacks. Never carry a strictly-behind tip into publication: a normal push cannot fast-forward it, and an exact-lease force-push from it would delete the newer remote commits.
+- **`headRefOid` is represented in `HEAD`** — either it is an ancestor, or every commit unique to it is present in `HEAD` by patch-id → keep the local branch and put the fixes on top. Test representation by patch-id rather than raw ancestry: a branch rebased onto a newer base carries the PR head's content forward while sharing no SHAs with it, so a raw-ancestry test would misread that routine case as divergence and stop a run that should simply proceed.
+- **Genuinely divergent** — each side holds commits the other lacks, and the remote's are not represented in `HEAD` by patch-id → **stop and ask the maintainer.** Do not pick a side, merge, or rebase on your own; report both tips and the commits unique to each. Two contributors fixing one branch unaware of each other, or a deliberately dropped commit, are a maintainer call every time — the likely answers (preserve both efforts, or choose between competing fixes) are judgments this skill must not encode. Hands-off: skip the entry and document exactly this.
+
+If a fast-forward moved the branch, re-record the starting tip from step 0; the pre-reconciliation value no longer describes what this run started from.
+
 ### Step 2 — Rebase first (only if `rebase on top of <branch>` was given)
 
 Rebasing brings the branch close to its final merged state, so address the feedback against the geometry the work will actually land in (essential when several stacked PRs are being fixed at once).
@@ -126,6 +135,7 @@ A maintainer reply on an unresolved thread is **authoritative**: if they said "s
 The same authority extends to a **top-level decision comment** — a maintainer comment that walks the open feedback and records a verdict per item (often titled "Maintainer Decisions" or similar). Treat each recorded decision as the binding disposition for the thread(s) it covers — including "postpone to a follow-up task" and "keep as-is" — rather than re-triaging those threads from scratch.
 Treat `isOutdated` as context, not a disposition: inspect the current code and re-locate the concern rather than auto-dismissing an outdated thread.
 If there are no unresolved threads and no explicitly included standalone items, first compare the current `HEAD`, the starting tip, and the recorded PR `headRefOid`. In every mode, stop as a successful terminal no-op only when `HEAD == starting tip == headRefOid`; an unchanged local tip that is already ahead of or divergent from the recorded PR head is not a no-op. Every other case follows the zero-item path: in `delegated-fix`, return the complete packet through step 5 so the orchestrator can review and, when enabled, publish it; outside `delegated-fix`, continue through the normal fresh review and, unless `no-push`, publication. This includes both a requested rebase that changed `HEAD` and any already-unpublished local tip. A zero-item path makes no synthetic commit, and a terminal no-op makes no commits, push, ping, or summary comment.
+Step 1's reconciliation has already fast-forwarded a strictly-behind branch, so `HEAD` cannot be a proper ancestor of `headRefOid` by the time you get here. If it somehow is, stop and report rather than entering the zero-item path: that tip has no unpublished work to publish, and the only push that could reach the recorded head is a force-push that deletes the newer remote commits.
 
 ### Step 4 — Triage every review item
 
@@ -308,7 +318,7 @@ gh pr edit NUMBER --add-reviewer @copilot
 ## Checklist
 
 - [ ] Working tree clean; no rebase in progress; `gh` authenticated.
-- [ ] PR resolved (explicit `PR#` precedence) and sanity-checked against the current branch.
+- [ ] PR resolved (explicit `PR#` precedence) and sanity-checked against the current branch; local branch reconciled against the PR head by ancestry — fast-forward when strictly behind, keep local when the head is represented by patch-id, ask the maintainer on genuine divergence.
 - [ ] If requested, single-branch rebase done first; non-trivial conflict handled (interactive loop-in / hands-off abort+stop); validated when conflicted.
 - [ ] All **unresolved** threads gathered via the GraphQL recipe (or the `gh-review-threads` helper where available) — single-shot queries, manual `endCursor` paging past 100, never GraphQL `--paginate` — and scope-checked with a repo-qualified, boundary-safe PR URL match; resolved ones ignored; maintainer replies and top-level decision comments treated as authoritative; only `HEAD == starting tip == recorded PR headRefOid` is a terminal zero-item no-op without publication, while every other zero-item case continues through review and, unless `no-push`, publication.
 - [ ] Each thread triaged: actionable / already-addressed / push-back / follow-up-task / ambiguous.
