@@ -119,7 +119,7 @@ Precedence for identifying the PR:
 
 Record `owner`, `repo`, PR `number`, `baseRefName`, `headRefName`, `headRefOid`, and the head repository owner/name for the API calls and publication guard below.
 
-**Reconcile the local branch with the PR head before triaging anything.** The rule is *no work lost*, and ancestry decides it rather than a standing preference for either side. Fetch the PR's exact head ref without moving the local branch, then compare `HEAD` against `headRefOid`:
+**Reconcile the local branch with the PR head before triaging anything.** The rule is *no work lost*, and ancestry decides it rather than a standing preference for either side. Fetch the PR's exact head ref without moving the local branch; a fetch brings whatever the ref names *now*, so confirm the recorded commit is a local object (`git cat-file -e <headRefOid>^{commit}`) first — a force-push landing in between leaves it undownloaded, which is a head that moved rather than a broken run: re-read the PR head, record the refreshed OID in place of the stale one, and reconcile against that. Then compare `HEAD` against `headRefOid`:
 
 - **Equal** → the two agree; proceed.
 - **`HEAD` is a proper ancestor of `headRefOid`** (local strictly behind, nothing unpushed) → fast-forward the local branch to the PR head and address the feedback from there. Someone advanced the branch on origin and you hold nothing it lacks. Never carry a strictly-behind tip into publication: a normal push cannot fast-forward it, and an exact-lease force-push from it would delete the newer remote commits.
