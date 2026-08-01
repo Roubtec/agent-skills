@@ -55,9 +55,10 @@
 set -euo pipefail
 
 # Deliberately far from jq's normal low statuses and the shell's conventional
-# invocation statuses, so a retryable identity mismatch cannot plausibly be
+# invocation statuses, so retryable response failures cannot plausibly be
 # confused with an ordinary parser or command failure.
 readonly RETRYABLE_IDENTITY_STATUS=86
+readonly RETRYABLE_EXTRACTION_STATUS=87
 
 # Usage text goes to stdout for an explicit help request (exit 0, pipeable) and
 # to stderr when it is an error diagnosis (exit non-zero).
@@ -235,13 +236,18 @@ complete_comments() {
 			while [ "$has_more" = true ]; do
 				cresp="$(comments_page "$tid" "$after")" ||
 					die "gh api graphql failed fetching comments for thread $tid"
-				cnodes="$(jq -c '.data.node.comments.nodes' <<<"$cresp")" || return $?
+				cnodes="$(jq -ce '.data.node.comments.nodes | select(type == "array")' <<<"$cresp")" ||
+					return "$RETRYABLE_EXTRACTION_STATUS"
 				# Merge via stdin, not `--argjson`: a large accumulated value blown
 				# onto jq's argv trips Linux's per-arg limit (E2BIG). printf is a
 				# shell builtin, so its args are exempt; jq slurps both from a pipe.
 				merged="$(printf '%s\n%s\n' "$merged" "$cnodes" | jq -cs '.[0] + .[1]')" || return $?
-				has_more="$(jq -r '.data.node.comments.pageInfo.hasNextPage' <<<"$cresp")" || return $?
-				after="$(jq -r '.data.node.comments.pageInfo.endCursor' <<<"$cresp")" || return $?
+				has_more="$(jq -er '.data.node.comments.pageInfo.hasNextPage | select(type == "boolean") | tostring' <<<"$cresp")" ||
+					return "$RETRYABLE_EXTRACTION_STATUS"
+				if [ "$has_more" = true ]; then
+					after="$(jq -er '.data.node.comments.pageInfo.endCursor | select(type == "string" and length > 0)' <<<"$cresp")" ||
+						return "$RETRYABLE_EXTRACTION_STATUS"
+				fi
 			done
 			node="$(printf '%s\n%s\n' "$node" "$merged" |
 				jq -cs '.[1] as $m | .[0] | .comments.nodes = $m | .comments.pageInfo.hasNextPage = false')" || return $?
@@ -325,8 +331,11 @@ fetch_and_validate() {
 		fi
 	else
 		fetch_status=$?
-		[ "$fetch_status" -eq "$RETRYABLE_IDENTITY_STATUS" ] || exit "$fetch_status"
-		response_failure=identity
+		case "$fetch_status" in
+		"$RETRYABLE_IDENTITY_STATUS") response_failure=identity ;;
+		"$RETRYABLE_EXTRACTION_STATUS") response_failure=extraction ;;
+		*) exit "$fetch_status" ;;
+		esac
 	fi
 	[ -z "$response_failure" ]
 }

@@ -32,8 +32,8 @@ set -euo pipefail
 #   (e) nested comment-page fetch-up and crossed-page fail-closed scope checks
 #   (f) default repo resolution via `gh repo view` when --repo is omitted
 #   (g) case-insensitive response identity and owner/repo url scope matches
-#   (h) malformed thread shapes (comments null / {} / absent) — the url PARSER
-#       fails, and the helper must still fail closed
+#   (h) malformed thread and nested-page shapes — the comment-data PARSER fails,
+#       and the helper must still fail closed
 #   (i) response-identity mismatch (wrong nameWithOwner / wrong PR number,
 #       including a later-page mismatch) — fail closed after one whole-fetch retry
 #
@@ -418,7 +418,7 @@ assert_contains "f: resolved repo via gh repo view" "$RUN_LOG" "[repo] [view]"
 assert_not_contains "f: never --paginate" "$RUN_LOG" "[--paginate]"
 
 # ============================================================================
-# (g) case-insensitive owner/repo scope match
+# (g) case-insensitive response identity and owner/repo url scope matches
 # ============================================================================
 # GitHub owner/repo are case-insensitive, but responses and comment urls carry
 # canonical casing. A lowercase --repo must scope-match mixed canonical casing;
@@ -443,7 +443,7 @@ assert_eq "g2: cross-cased --repo accepted (exit 0)" "$RUN_RC" 0
 assert_eq "g2: no retry needed" "$(count_matches "$d/log" '[owner=')" 1
 
 # ============================================================================
-# (h) malformed thread shapes — the url PARSER fails, and that must fail closed
+# (h) malformed comment shapes — the data PARSER fails, and that must fail closed
 # ============================================================================
 # Principle: every fail-closed guard needs at least one case where the input
 # PARSER fails, not only where the VALIDATION fails. The pre-013 helper passed
@@ -492,6 +492,47 @@ assert_eq "h3: absent comments fails closed (exit 3)" "$RUN_RC" 3
 assert_eq "h3: no stdout emitted" "$RUN_OUT" ""
 assert_contains "h3: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
 assert_eq "h3: fetched twice (retry once)" "$(count_matches "$d/log" '[owner=')" 2
+
+# h4: a nested-comments page whose node is null must not silently truncate the
+# thread's remaining comments. The malformed page is a retryable extraction
+# failure, so both attempts restart from the thread-list query and fail closed.
+d="$(new_case)"
+for n in 1 2; do
+	cat >"$d/threads-$n" <<'JSON'
+{"data":{"repository":{"nameWithOwner":"acme/widgets","pullRequest":{"number":12,"url":"https://github.com/acme/widgets/pull/12","reviewThreads":{"totalCount":1,"nodes":[
+  {"id":"T_nested_null","isResolved":false,"isOutdated":false,"path":"h4.js","line":5,
+   "comments":{"nodes":[{"databaseId":822,"author":{"login":"codex","__typename":"Bot"},"body":"comment A","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r822"}],"pageInfo":{"hasNextPage":true,"endCursor":"CCUR_NULL"}}}
+],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
+JSON
+	printf '%s\n' '{"data":{"node":null}}' >"$d/comments-$n"
+done
+run "$d" --repo acme/widgets 12
+assert_eq "h4: nested node:null fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "h4: no stdout emitted" "$RUN_OUT" ""
+assert_contains "h4: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
+assert_eq "h4: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
+assert_eq "h4: both nested-page attempts ran" "$(count_matches "$d/log" '[threadId=')" 2
+
+# h5: malformed nested pagination metadata must also fail closed. A string
+# "false" must not be treated as a valid boolean false and silently stop fetch-up.
+d="$(new_case)"
+for n in 1 2; do
+	cat >"$d/threads-$n" <<'JSON'
+{"data":{"repository":{"nameWithOwner":"acme/widgets","pullRequest":{"number":12,"url":"https://github.com/acme/widgets/pull/12","reviewThreads":{"totalCount":1,"nodes":[
+  {"id":"T_nested_metadata","isResolved":false,"isOutdated":false,"path":"h5.js","line":6,
+   "comments":{"nodes":[{"databaseId":823,"author":{"login":"codex","__typename":"Bot"},"body":"comment A","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r823"}],"pageInfo":{"hasNextPage":true,"endCursor":"CCUR_METADATA"}}}
+],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
+JSON
+	cat >"$d/comments-$n" <<'JSON'
+{"data":{"node":{"comments":{"nodes":[{"databaseId":824,"author":{"login":"alice","__typename":"User"},"body":"comment B","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r824"}],"pageInfo":{"hasNextPage":"false","endCursor":null}}}}}
+JSON
+done
+run "$d" --repo acme/widgets 12
+assert_eq "h5: malformed nested pageInfo fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "h5: no stdout emitted" "$RUN_OUT" ""
+assert_contains "h5: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
+assert_eq "h5: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
+assert_eq "h5: both nested-page attempts ran" "$(count_matches "$d/log" '[threadId=')" 2
 
 # ============================================================================
 # (i) response-identity mismatch — fail closed after the single whole-fetch retry
