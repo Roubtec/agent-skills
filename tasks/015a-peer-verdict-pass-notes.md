@@ -18,7 +18,7 @@ In scope — refine the peer-prompt convention used by the CALLERS of `peer-revi
 - keep the `PASS`/`ISSUES` bar exactly where it is: anything the peer thinks ought to be FIXED is a finding and still requires `VERDICT: ISSUES`, which 014/015 gate on regardless of whether it is tagged blocking or minor. A pass-note is by construction what fell BELOW that bar, so the notes section is a way to say the smaller thing the peer previously discarded — never a lighter channel for a finding it would otherwise have raised. Say this in the prompt itself: a peer told it may now write nits under a `PASS` will otherwise drift its minor findings there, and the gate quietly stops firing;
 - stay brief: cap the notes (a small handful), and OMIT the section entirely when there is nothing material to say.
 
-Apply the convention wherever a peer prompt is constructed. After 014 that is one site — the canonical `review-cycle` peer step and its `wf-review-cycle` rendering — and the Codex mirror; before 014 it is every skill that still carries its own peer section plus the two `wf-*` workflows. Prefer landing this after 014 so the convention is written once rather than swept across ten files; if it lands first, sweep every constructor and let 014 inherit the wording.
+Apply the convention wherever a peer prompt is constructed. After 014 it is authored once — in the canonical `review-cycle` peer step and its `wf-review-cycle` rendering — and then carried into every derived rendering: the Codex mirror, and each copy synthesized from that rendering's embeddable section, which per 014a includes the one `wf-address-tasks` embeds so its throttle owns the peer launches. Before 014 it is every skill that still carries its own peer section plus the two `wf-*` workflows. Prefer landing this after 014 so the convention is authored once and refreshed into its copies rather than swept across ten files; if it lands first, sweep every constructor and let 014 inherit the wording.
 
 Also: have the consuming skill/workflow surface a passing peer's notes COMPACTLY (e.g. one bullet each in the round summary), WITHOUT ingesting the full prose — a clean pass must stay a cheap one-line signal by default.
 
@@ -34,11 +34,11 @@ Out of scope (explicitly do NOT do):
 - powbox PR #113 (task 029 review-addressing) discussion: the verdict-parser hardening, and the "Lever 1 vs Lever 2" effort/cost analysis that motivated this task.
 - powbox `docs/architecture.md` → the `peer-review-run` bullet: the result contract (`verdict`/`outcome`, `artifactDir`) and the "agent-skills adoption boundary" that names this repo as the downstream consumer of the invocation/result contract.
 - The helper already feeds the prompt to the provider on stdin from `--prompt-file` (never argv), so shaping output is purely a prompt-wording change in the callers; the input surface is already confined.
-- Task 015 — the peer step's invocation contract, fallback pattern, and prompt guidance; this task adds one more prompt rule on that same surface. Task 014 — the extraction that collapses the constructors to one site.
+- Task 015 — the peer step's invocation contract, fallback pattern, and prompt guidance; this task adds one more prompt rule on that same surface. Task 014 — the extraction that collapses the constructors to a single canonical definition the remaining renderings are derived from.
 
 ## Target files or areas
 
-- After 014: `plugins/dev-skills/skills/review-cycle/SKILL.md`, `plugins/dev-skills/workflows/wf-review-cycle.js`, and the `codex/dev-skills/skills/review-cycle/` mirror.
+- After 014: `plugins/dev-skills/skills/review-cycle/SKILL.md`, `plugins/dev-skills/workflows/wf-review-cycle.js`, the `codex/dev-skills/skills/review-cycle/` mirror, and `plugins/dev-skills/workflows/wf-address-tasks.js`, which per 014a embeds its own copy of the cycle's peer step.
 - Before 014: the peer-prompt sketches in `plugins/dev-skills/skills/{address-review,address-reviews,address-tasks,address-tasks-serialized,resolve-open-questions}/SKILL.md`, their `codex/dev-skills/skills/` mirrors, and `plugins/dev-skills/workflows/{wf-address-review,wf-address-tasks}.js`.
 - Optionally a companion one-line note in powbox's `docs/architecture.md` recording the peer-prompt convention next to the contract — powbox-owned, not a prerequisite here.
 
