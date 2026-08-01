@@ -28,8 +28,8 @@ set -euo pipefail
 #   (b) a two-page thread list followed via endCursor (two separate gh calls,
 #       right `after` values, no --paginate)
 #   (c) a contaminated response — fail closed on repeat, succeed on a clean retry
-#   (d) the /pull/12 vs /pull/123 boundary (and end/`#` acceptance)
-#   (e) nested comment-page fetch-up
+#   (d) repo/PR scope boundaries (`#`, `/`, `?`, and end-of-string)
+#   (e) nested comment-page fetch-up and crossed-page fail-closed scope checks
 #   (f) default repo resolution via `gh repo view` when --repo is omitted
 #   (g) case-insensitive owner/repo scope match (non-canonical --repo casing)
 #   (h) malformed thread shapes (comments null / {} / absent) — the url PARSER
@@ -401,8 +401,8 @@ assert_eq "e2: both nested-page attempts ran" "$(count_matches "$d/log" '[thread
 # With no --repo, the helper resolves OWNER/REPO from `gh repo view --json
 # owner,name` and scopes against that. The stub serves $GH_STUB_DIR/repo for the
 # `gh repo view` call; a thread url under the resolved repo must pass. Exit 0
-# proves the .owner.login/.name parse (a misparse would build a wrong EXPECTED
-# prefix and the scope check would fail closed with exit 3).
+# proves the .owner.login/.name parse (a misparse would build a wrong
+# EXPECTED_REPO_LC and the response-identity gate would fail closed with exit 3).
 NODES_F='[
   {"id":"T_default","isResolved":false,"isOutdated":false,"path":"d.js","line":1,
    "comments":{"nodes":[{"databaseId":801,"author":{"login":"codex","__typename":"Bot"},"body":"default repo","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r801"}],"pageInfo":{"hasNextPage":false,"endCursor":null}}}
