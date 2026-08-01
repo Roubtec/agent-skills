@@ -102,7 +102,7 @@ The local-control path (the rebased-locally / stale-origin case). Normalize an e
    - Exactly one open PR → that's the pairing.
    - Zero → skip-and-record: with no PR there are no review threads to address.
    - More than one → skip-and-record as ambiguous (or, interactive, ask which).
-   - If the PR head is a fork, skip-and-record this branch-form entry and tell the user to pass the PR number instead; the unconditional `origin/<branch>` upstream used below is valid only for same-repository heads.
+   - If the PR head is a fork, skip-and-record this branch-form entry and tell the user to pass the PR number instead; the `origin/<branch>` upstream used below is valid only for same-repository heads.
 2. **Check out the verified local ref as-is** — never a reset that discards local commits. `address-review`'s step 1 then reconciles that ref against the PR head by ancestry: it fast-forwards only a strictly-behind branch, keeps the local tip whenever the PR head is represented in it by patch-id, and stops for a maintainer call on genuine divergence. The checkout below never pre-empts that decision:
    - Not checked out anywhere → the plain attach: `git worktree add "$WT_BASE/<slug>" <branch>`.
    - Occupied by the **main checkout** (it's the orchestrator's current branch) → free it by detaching the main `HEAD` (`git -C "$ROOT" switch --detach`) **when the main tree is clean**, then attach it with the plain attach; the starting checkout mode recorded in Bootstrap is restored in Cleanup. If the main tree is *dirty*, skip-and-record (commit/stash or move the main checkout off it first). If setup fails after detaching and no later entry needs that branch free, restore immediately before continuing.
