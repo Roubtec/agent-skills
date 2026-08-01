@@ -16,17 +16,17 @@ Included — the workflow-specific rules the `wf-review-cycle` peer step (and, t
 - **A peer subagent must never fail the stage.** `agent()` returns `null` when a subagent dies, and a thrown stage drops its item in `pipeline()`; both must land as a recorded non-blocking round outcome, exactly like the helper's own `unavailable` / `timeout` / `forfeited` results. The peer is never required for the cycle to conclude.
 - **Disclose the peer gate in the script's own text.** `meta.description` (and `whenToUse` where present) states that review is cross-harness, and `meta.phases` gains an entry whose `title` matches the exact string passed to `phase()` / `opts.phase` for the peer stage — mismatched titles silently split the progress display into an extra group.
 - **`peer-opinions=off` arrives through `args`,** not through prose the workflow cannot read; the parameter travels with the rest of the `wf-review-cycle` input contract (`{worktree, branch, base, scope, artifactType, maxRounds, peer, mode}` per 014) and is honoured by the consuming workflows passing it through.
-- **Concurrency is 015's adaptive throttle, rendered in JS.** 041 originally specified a fixed cap of 2–3 concurrent peer invocations; 015 supersedes that with an optimistic session-local throttle (start unbounded, step down 8 → 4 → floor 2 on trouble clusters, queue rather than forfeit, surface every step-down in the run summary). The workflow implements that policy as script state across its `parallel()` / `pipeline()` fan-outs; it must not re-introduce a fixed cap, and it must not lose the queueing behavior by simply chunking the fan-out.
+- **Peer concurrency policy belongs to 015 and is not restated here.** 041 carried a fixed cap of 2–3 concurrent peer invocations; that number is not adopted, and this task sets no cap, floor, or fan-out shape of its own — read 015's throttle bullet for the policy and implement exactly it. The only rendering-specific consequence, and all that is stated here: the workflow carries the throttle as script state across its `parallel()` / `pipeline()` fan-outs, so it must not degenerate into launching the peers in fixed-size chunks — chunking bounds concurrency but silently loses the queueing, the step-downs, and the summary reporting that 015 requires.
 
 Out of scope:
 
 - Changes to `peer-review-run` (powbox-owned).
-- The peer prompt's wording — 015 owns the no-network and executed-vs-static rules, 015a the pass-notes convention. This task covers only how the workflow rendering reaches the helper and reports the outcome.
+- The peer prompt's wording and the concurrency policy — 015 owns the no-network and executed-vs-static rules and the throttle, 015a the pass-notes convention. This task covers only how the workflow rendering reaches the helper and reports the outcome.
 - Restating the gate semantics (grounding spot-check, blocking + minor findings both gate, verbatim finding relay, 12-round cap) — 014 defines them once for every rendering.
 
 ## Context and references
 
-- Task 014 — the canonical `review-cycle` protocol, the `wf-review-cycle` script, and the conversion of `wf-address-review.js` / `wf-address-tasks.js` (which closes their missing-peer gap). Task 015 — the `peer-review-run` invocation contract, fallback, prompt guidance, and throttle. Task 015a — the pass-notes convention on the same prompts.
+- Task 014 — the canonical `review-cycle` protocol, the `wf-review-cycle` script, and the conversion of `wf-address-review.js` / `wf-address-tasks.js` (which closes their missing-peer gap). Task 015 — the `peer-review-run` invocation contract, fallback, prompt guidance, and the throttle; its concurrency bullet is the single source of that policy for every rendering, and this task depends on it rather than duplicating it. Task 015a — the pass-notes convention on the same prompts.
 - powbox `docker/shared/peer-review-run` header — invocation and result contract (`outcome ∈ passed | issues | unavailable | timeout | forfeited | failed`; final stdout line is one JSON object, schema `powbox.peer-review-run/v1`; exit 0 for any produced outcome). powbox `docs/architecture.md` peer-review-run bullet names this repo as the adoption boundary.
 - `plugins/dev-skills/workflows/README.md` — the authoring constraints these scripts live under (meta literal first, deterministic plain JS, no `Date.now()` / `Math.random()`).
 - `plugins/dev-skills/skills/address-review/SKILL.md` — the prose peer protocol whose semantics the workflow rendering must not drop.
@@ -43,7 +43,7 @@ Out of scope:
 - A peer subagent that dies, times out, or reports `unavailable` / `forfeited` leaves the round recorded and the cycle running; no path aborts a batch on a peer outcome.
 - `meta.description` discloses the cross-harness review, and every `phase()` / `opts.phase` string used by the stage has an exactly-matching `meta.phases` entry.
 - `peer-opinions=off` passed through `args` suppresses the peer stage end to end, including in the consuming workflows.
-- Peer concurrency follows 015's adaptive throttle with queueing and a floor of 2, and step-downs appear in the run summary.
+- Peer concurrency is governed solely by 015's throttle: the workflow carries it as script state, introduces no cap or floor of its own, and does not substitute a chunked fan-out for it.
 - A rule-by-rule read against `address-review/SKILL.md`'s peer section finds nothing dropped in the workflow rendering.
 
 ## Validation
@@ -54,4 +54,4 @@ Out of scope:
 
 ## Review plan
 
-Reviewer confirms the peer stage is subagent-mediated and schema-validated, that no peer outcome or subagent death can abort a stage or batch, that `meta` disclosure and phase titles match the code, and that the throttle is the adaptive one from 015 rather than a fixed cap.
+Reviewer confirms the peer stage is subagent-mediated and schema-validated, that no peer outcome or subagent death can abort a stage or batch, that `meta` disclosure and phase titles match the code, and that concurrency is 015's policy carried as script state rather than a cap or a chunked fan-out invented here.
