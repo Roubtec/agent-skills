@@ -14,7 +14,7 @@ The maintainer raised this on PR #29 while deciding the blocked-parent policy (t
 
 The maintainer's decision was explicit that this is a first cut, not a settled design: *"this is a similar issue that we have not seen through to nailing down a solid design. let's go with a top-level comment for now — better than nothing and even if local is lost, the next recovery implementer will have their path trailblazed."*
 
-It is filed rather than implemented on PR #29 because it is not a local edit. It changes the `no-push` contract, which is currently stated as *zero* PR mutations in the argument table, the flag-interactions table, step 7, step 8, and the checklist of `address-review`, is passed through by `address-reviews`, and is re-stated in both dynamic workflows. Quietly redefining a flag whose entire purpose is "mutate nothing" — across six files, inside a PR about stacked-PR rebase guidance — is the wrong way for that change to land.
+It is filed rather than implemented on PR #29 because it is not a local edit. It changes the `no-push` contract, which is currently stated as *zero* PR mutations in the argument table, the flag-interactions table, step 7, step 8, and the checklist of `address-review`, is passed through by `address-reviews` (argument table and checklist), and is re-stated in `wf-address-review.js`. `wf-address-tasks.js` carries no `no-push` contract at all and is out of scope for that part. Quietly redefining a flag whose entire purpose is "mutate nothing" — across five files, inside a PR about stacked-PR rebase guidance — is the wrong way for that change to land.
 
 ## Scope
 
@@ -40,11 +40,11 @@ Included:
   <full markdown body>
   ```
 
-- **Record SHAs as provenance, never as a replay gate.** This is the correctness requirement, not a detail. The maintainer's objection was that *"the branch may want a rebase before the final push"*, which invalidates any `final HEAD == branch tip` assertion while changing nothing about whether the work is still there. Replay must verify that every commit unique to the recorded final tip is still **represented in the branch by patch-id** — the same test PR #29 adopted for branch reconciliation and for the merged-parent guard — and must re-derive each `Fixed in <sha>` citation at replay time rather than replaying a stale SHA. A replay keyed on SHA equality is a failed implementation of this task however well it stores the record.
-- Decide and state plainly what `no-push` now means. It cannot both post this comment and promise zero PR mutations. Either carve out the record comment as the single documented exception (and say so in every one of the places listed above, not just one), or gate the comment behind something other than `no-push`. Pick one and make all six statements agree; a partial edit leaves the contract self-contradicting, which is worse than either choice.
+- **Record SHAs as provenance, never as a replay gate.** This is the correctness requirement, not a detail. The maintainer's objection was that *"the branch may want a rebase before the final push"*, which invalidates any `final HEAD == branch tip` assertion while changing nothing about whether the work is still there. Replay must verify that every commit unique to the recorded final tip is still **represented in the branch by patch-id** — the same test PR #29 adopted for branch reconciliation, and the fast path of its merged-parent content check — and must re-derive each `Fixed in <sha>` citation at replay time rather than replaying a stale SHA. A replay keyed on SHA equality is a failed implementation of this task however well it stores the record.
+- Decide and state plainly what `no-push` now means. It cannot both post this comment and promise zero PR mutations. Either carve out the record comment as the single documented exception (and say so in every one of the places listed above, not just one), or gate the comment behind something other than `no-push`. Pick one and make all of those statements agree; a partial edit leaves the contract self-contradicting, which is worse than either choice.
 - Apply the same record to a run that intended to publish and could not: an entry blocked at the round cap, holding a blocker, or awaiting a maintainer decision.
 - Post at most one such comment per PR per run, and make a later run recognize and supersede its own prior record rather than stacking near-duplicates — the same idempotence step 7 already requires of thread replies.
-- Cover both harness renderings of every affected skill, plus the inlined briefs in `plugins/dev-skills/workflows/wf-address-review.js` and `wf-address-tasks.js`.
+- Cover both harness renderings of every affected skill, plus the inlined briefs in `plugins/dev-skills/workflows/wf-address-review.js`. Audit `wf-address-tasks.js` rather than assuming it is affected: it states no `no-push` contract today, so it needs a change only if this task's record concept reaches it.
 
 Out of scope:
 
@@ -58,18 +58,18 @@ Out of scope:
 - `address-review` step 8, the "stable reference" bullet — the existing content requirement this task persists.
 - `address-review` argument table, flag-interactions table, step 7, step 8, checklist — the five places stating `no-push` means zero PR mutations.
 - `address-reviews` argument table (`no-push` pass-through) and its checklist.
-- `plugins/dev-skills/workflows/wf-address-review.js`, `wf-address-tasks.js` — inlined briefs restating the same contract.
+- `plugins/dev-skills/workflows/wf-address-review.js` — inlined brief restating the same contract. (`wf-address-tasks.js` does not state one; audit only.)
 - Task 031a — the visibility objection that ruled out the custom-ref home; read it before proposing a ref-based design.
 
 ## Target files or areas
 
 - `codex/dev-skills/skills/address-review/SKILL.md`, `plugins/dev-skills/skills/address-review/SKILL.md`
 - `codex/dev-skills/skills/address-reviews/SKILL.md`, `plugins/dev-skills/skills/address-reviews/SKILL.md`
-- `plugins/dev-skills/workflows/wf-address-review.js`, `plugins/dev-skills/workflows/wf-address-tasks.js`
+- `plugins/dev-skills/workflows/wf-address-review.js` (and `wf-address-tasks.js` for audit only)
 
 ## Implementation notes
 
-- Define the shape once and reference it. This skill family's failure mode is the same paragraph drifting between two mirrors and two workflows; a second verbatim copy of the record format is a third place to drift.
+- Define the shape once and reference it. This skill family's failure mode is the same paragraph drifting between two mirrors and a workflow; a second verbatim copy of the record format is one more place to drift.
 - The comment needs a stable machine-recognizable marker so a later run can find and supersede it without matching on prose.
 - State explicitly that the cited tip is local-only and not on origin. A reader who assumes otherwise will look for commits that are not there.
 
@@ -77,7 +77,7 @@ Out of scope:
 
 - A `no-push` run, and a run blocked before publication, leave a durable record on the PR containing every thread's stable reference, disposition, drafted reply body, and the ready-to-post Summary body.
 - Replay verifies by patch-id representation and re-derives SHA citations. A design asserting `final HEAD == branch tip` fails this criterion, because a pre-push rebase is the expected case rather than an edge case.
-- The `no-push` contract reads consistently in all of: `address-review`'s argument table, flag-interactions table, step 7, step 8, and checklist; `address-reviews`' argument table and checklist; and both workflows. A change landing in some of those and not the others fails.
+- The `no-push` contract reads consistently in all of: `address-review`'s argument table, flag-interactions table, step 7, step 8, and checklist; `address-reviews`' argument table and checklist; and `wf-address-review.js`. A change landing in some of those and not the others fails.
 - Re-running against the same PR supersedes the prior record instead of appending a second one.
 - Both mirrors of each skill stay in parity apart from their harness-specific lines.
 
