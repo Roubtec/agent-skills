@@ -19,8 +19,10 @@
 # codex/dev-skills/skills/address-review/SKILL.md. A drift between them is exactly
 # the inconsistency this helper exists to remove. Update all three together.
 #
-# This vendored plugin copy is canonical. Powbox's baked sibling syncs from this
-# copy; changes made to either copy must be carried to the other.
+# This vendored plugin copy is canonical. Any behavior change to this helper
+# must update scripts/test-gh-review-threads.sh in the same PR. Powbox keeps an
+# importable copy of that suite as its bake-time consumer-contract check and
+# bakes this helper from the canonical plugin copy.
 #
 # Usage: gh-review-threads [--all] [--repo <owner>/<repo>] <PR#>
 #

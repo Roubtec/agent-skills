@@ -1,7 +1,5 @@
 # 012c — Adopt the gh-review-threads hermetic suite so helper changes are validated upstream
 
-> **Ferry note (delete this block on adoption):** this spec was authored in `Roubtec/powbox` and ferried over on a throwaway powbox branch because the destination checkout had unrelated work in flight. It is written to agent-skills conventions and belongs at `tasks/012c-adopt-gh-review-threads-hermetic-suite.md`.
-
 ## Why this task exists
 
 `plugins/dev-skills/bin/gh-review-threads` is the safety-critical fetcher both address-review skills rely on, yet this repo carries **no executable test for it**. The only guard lives downstream: powbox's hermetic suite `scripts/test-gh-review-threads.sh`, which powbox smoke Stage 0b runs against the helper baked verbatim from this repo's clone. Task 013 changed the helper's observable contract (positive response-identity assertion via `repository { nameWithOwner }` / `pullRequest { number url }`, fail-closed extraction) and merged to `main` on 2026-07-31 with no test executed anywhere — and the downstream suite, still fixtured to the old contract, promptly went red on powbox Tier 1 CI (run 30568178025: 38/56 checks failed, every case rejected by the new identity gate). Task 013 even carried a "coordinate landing order" note; it could not be honored mechanically because nothing upstream runs a test before merge. The suite must live where the helper lives. Precedent: task 012 already imported powbox's `test-checkout-cleanliness-report.mjs` into `scripts/` alongside the workflow it exercises.
