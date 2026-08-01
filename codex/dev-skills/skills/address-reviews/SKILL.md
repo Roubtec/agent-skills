@@ -133,7 +133,7 @@ The local-control path (the rebased-locally / stale-origin case). Normalize an e
 
 ### PR-number entry — work the PR head
 
-The canonical path. Resolve the PR, then prefer a same-named local branch if you have one (so we still never bypass your local copy), else create the branch at the PR's **recorded exact `headRefOid`** — not at `origin/<headRefName>`, which Bootstrap's single fetch can leave stale in either direction.
+The canonical path. Resolve the PR, then prefer a same-named local branch if you have one (so we still never bypass your local copy), else create the branch at the PR's **recorded exact `headRefOid`** — not at `origin/<headRefName>`, which Bootstrap's single fetch can leave stale in either direction. Both paths fetch that exact head ref first, and a fetch brings whatever the ref names *now* — not necessarily the OID `gh pr view` just reported, so confirm the recorded commit is a local object (`git cat-file -e <headRefOid>^{commit}`) before anything names it. A force-push landing in between leaves it undownloaded, and that is a head that moved rather than an invalid entry: re-read the PR head, record the refreshed OID as this entry's head, and continue from it. Skip-and-record only if it keeps moving under you.
 
 1. **Resolve and sanity-check:** `gh pr view N --json number,state,headRefName,headRefOid,headRepository,headRepositoryOwner,baseRefName,baseRefOid,url,title`. If `state` is not `OPEN`, skip-and-record. Record the fully qualified head repository/ref, run `gh repo view --json nameWithOwner` to record the current PR repository as the fully qualified base repository, and record both OIDs; note whether `headRepositoryOwner` matches `origin`'s owner (same-repo) or differs (fork).
 2. **Same-repo:**
