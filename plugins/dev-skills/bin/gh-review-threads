@@ -219,12 +219,24 @@ comments_page() {
 # with fresh per-page calls, then return the nodes with full comment lists.
 complete_comments() {
 	local nodes="$1"
+	# Validate the initial comments shape and pagination metadata before the fast
+	# path. A non-boolean hasNextPage can otherwise look false and silently skip
+	# fetch-up; a true page requires a real cursor and thread id.
+	jq -e '
+		type == "array" and all(.[];
+			((.comments.nodes | type) == "array") and
+			((.comments.pageInfo.hasNextPage | type) == "boolean") and
+			((.comments.pageInfo.hasNextPage == false) or
+				(((.id | type) == "string") and (.id | length) > 0 and
+				 ((.comments.pageInfo.endCursor | type) == "string") and
+				 (.comments.pageInfo.endCursor | length) > 0)))
+	' <<<"$nodes" >/dev/null 2>&1 || return "$RETRYABLE_EXTRACTION_STATUS"
 	# Common case: no thread overflowed 100 comments — one jq call, no loop.
 	if ! jq -e 'any(.[]?; .comments.pageInfo.hasNextPage)' <<<"$nodes" >/dev/null; then
 		printf '%s\n' "$nodes"
 		return 0
 	fi
-	local count i node has_more tid after cresp cnodes merged out
+	local count i node has_more tid after cresp comment_page cnodes merged out
 	count="$(jq 'length' <<<"$nodes")" || return $?
 	out='[]'
 	for ((i = 0; i < count; i++)); do
@@ -237,17 +249,26 @@ complete_comments() {
 			while [ "$has_more" = true ]; do
 				cresp="$(comments_page "$tid" "$after")" ||
 					die "gh api graphql failed fetching comments for thread $tid"
-				cnodes="$(jq -ce '.data.node.comments.nodes | select(type == "array")' <<<"$cresp")" ||
+				comment_page="$(jq -ce '
+					.data.node.comments as $page
+					| select(($page.nodes | type) == "array")
+					| select(($page.pageInfo.hasNextPage | type) == "boolean")
+					| select(($page.pageInfo.hasNextPage == false) or
+						((($page.pageInfo.endCursor | type) == "string") and
+						 ($page.pageInfo.endCursor | length) > 0))
+					| { nodes: $page.nodes,
+						hasNextPage: $page.pageInfo.hasNextPage,
+						endCursor: $page.pageInfo.endCursor }
+				' <<<"$cresp")" ||
 					return "$RETRYABLE_EXTRACTION_STATUS"
+				cnodes="$(jq -c '.nodes' <<<"$comment_page")" || return $?
 				# Merge via stdin, not `--argjson`: a large accumulated value blown
 				# onto jq's argv trips Linux's per-arg limit (E2BIG). printf is a
 				# shell builtin, so its args are exempt; jq slurps both from a pipe.
 				merged="$(printf '%s\n%s\n' "$merged" "$cnodes" | jq -cs '.[0] + .[1]')" || return $?
-				has_more="$(jq -er '.data.node.comments.pageInfo.hasNextPage | select(type == "boolean") | tostring' <<<"$cresp")" ||
-					return "$RETRYABLE_EXTRACTION_STATUS"
+				has_more="$(jq -r '.hasNextPage' <<<"$comment_page")" || return $?
 				if [ "$has_more" = true ]; then
-					after="$(jq -er '.data.node.comments.pageInfo.endCursor | select(type == "string" and length > 0)' <<<"$cresp")" ||
-						return "$RETRYABLE_EXTRACTION_STATUS"
+					after="$(jq -r '.endCursor' <<<"$comment_page")" || return $?
 				fi
 			done
 			node="$(printf '%s\n%s\n' "$node" "$merged" |
@@ -262,7 +283,7 @@ complete_comments() {
 # `nodes` array with every thread's comments completed. Buffers everything: no
 # partial output escapes, so a later contaminated page can never leak to stdout.
 fetch_all() {
-	local after='' resp all_nodes page_nodes has_next response_repo response_repo_lc response_pr
+	local after='' resp all_nodes thread_page page_nodes has_next response_repo response_repo_lc response_pr
 	all_nodes='[]'
 	while :; do
 		resp="$(threads_page "$after")" || die "gh api graphql failed fetching review threads"
@@ -277,14 +298,25 @@ fetch_all() {
 		if [ "$response_repo_lc" != "$EXPECTED_REPO_LC" ] || [ "$response_pr" != "$PR" ]; then
 			return "$RETRYABLE_IDENTITY_STATUS"
 		fi
-		page_nodes="$(jq -c '.data.repository.pullRequest.reviewThreads.nodes' <<<"$resp")" || return $?
+		thread_page="$(jq -ce '
+			.data.repository.pullRequest.reviewThreads as $page
+			| select(($page.nodes | type) == "array")
+			| select(($page.pageInfo.hasNextPage | type) == "boolean")
+			| select(($page.pageInfo.hasNextPage == false) or
+				((($page.pageInfo.endCursor | type) == "string") and
+				 ($page.pageInfo.endCursor | length) > 0))
+			| { nodes: $page.nodes,
+				hasNextPage: $page.pageInfo.hasNextPage,
+				endCursor: $page.pageInfo.endCursor }
+		' <<<"$resp")" || return "$RETRYABLE_EXTRACTION_STATUS"
+		page_nodes="$(jq -c '.nodes' <<<"$thread_page")" || return $?
 		page_nodes="$(complete_comments "$page_nodes")" || return $?
 		# stdin, not `--argjson`: the accumulated array can exceed jq's per-arg
 		# limit on a large PR (E2BIG). See the note in complete_comments.
 		all_nodes="$(printf '%s\n%s\n' "$all_nodes" "$page_nodes" | jq -cs '.[0] + .[1]')" || return $?
-		has_next="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.hasNextPage' <<<"$resp")" || return $?
+		has_next="$(jq -r '.hasNextPage' <<<"$thread_page")" || return $?
 		[ "$has_next" = true ] || break
-		after="$(jq -r '.data.repository.pullRequest.reviewThreads.pageInfo.endCursor' <<<"$resp")" || return $?
+		after="$(jq -r '.endCursor' <<<"$thread_page")" || return $?
 	done
 	printf '%s\n' "$all_nodes"
 }
