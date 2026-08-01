@@ -100,6 +100,8 @@ Operate on the current repository only. Every step is idempotent and surgical �
 
    A path that was non-empty before shadowing will appear **empty** afterwards — the tmpfs hides the previous host content, which is the intent. Warn the user before running this if any candidate held something they had not regenerated.
 
+   Removal is not symmetrical, and this part applies even when you skip the refresh above. `shadow-refresh.sh` only adds mounts, and an unprivileged shell cannot unmount one, so a path you dropped from the config in step 6 keeps its tmpfs for the rest of the session. Run the same `findmnt` on every removed path: while it still reports `tmpfs`, writes there still land in the ephemeral mount and stay invisible from the host — which, for the database or upload directory that made the declaration unsafe in the first place, is the whole problem. Copy out anything that has to survive, and tell the user plainly that the removal itself only takes effect at the next container start.
+
 8. **Commit the config.** `.powbox.yml` belongs in version control so every teammate and future container inherits it. Stage and commit following the repo's conventions, or leave it staged and say so if the user prefers to review.
 
 ## Report
@@ -108,7 +110,7 @@ State concisely:
 
 - What you declared, and what regenerates each entry.
 - What you deliberately left undeclared, and why — especially caches and anything host-facing.
-- Any pre-existing declaration you removed or flagged as unsafe, and what it was costing.
+- Any pre-existing declaration you removed or flagged as unsafe, and what it was costing — for a removed one, whether its tmpfs is still mounted in this session, what you rescued from it, and that the removal lands only on the next container start.
 - Whether a `.powbox.local.yml` override is masking the committed list, and which file each agreed change landed in.
 - Whether the shadows are live in this session (step 7) or pending the next container start.
 - Any blocker: not a git repo, a malformed `.powbox.yml`, or a candidate that turned out to be tracked.
