@@ -298,12 +298,12 @@ fetch_all() {
 		if [ "$response_repo_lc" != "$EXPECTED_REPO_LC" ] || [ "$response_pr" != "$PR" ]; then
 			return "$RETRYABLE_IDENTITY_STATUS"
 		fi
-		# Validate the outer page before merging it. Null/non-array nodes can be
-		# absorbed by jq array addition, while malformed pagination metadata can
-		# silently truncate the fetch or issue a query with an unusable cursor.
+		# Validate outer pagination before merging it. complete_comments immediately
+		# validates that the projected nodes value is an array; duplicating that check
+		# here would leave two indistinguishable guards for the same failure contract.
+		# Malformed metadata can silently truncate or issue an unusable cursor.
 		thread_page="$(jq -ce '
 			.data.repository.pullRequest.reviewThreads as $page
-			| select(($page.nodes | type) == "array")
 			| select(($page.pageInfo.hasNextPage | type) == "boolean")
 			| select(($page.pageInfo.hasNextPage == false) or
 				((($page.pageInfo.endCursor | type) == "string") and

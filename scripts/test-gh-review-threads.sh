@@ -793,6 +793,100 @@ assert_eq "h21: no stdout emitted" "$RUN_OUT" ""
 assert_contains "h21: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
 assert_eq "h21: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
 
+# h22: bind the outer nodes-array check without relying on malformed pageInfo.
+d="$(new_case)"
+for n in 1 2; do
+	cat >"$d/threads-$n" <<'JSON'
+{"data":{"repository":{"nameWithOwner":"acme/widgets","pullRequest":{"number":12,"url":"https://github.com/acme/widgets/pull/12","reviewThreads":{"totalCount":1,"nodes":{"one":{"id":"T_outer_nodes","isResolved":false,"isOutdated":false,"path":"h22.js","line":22,"comments":{"nodes":[],"pageInfo":{"hasNextPage":false,"endCursor":null}}}},"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
+JSON
+done
+run "$d" --repo acme/widgets 12
+assert_eq "h22: non-array outer nodes fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "h22: no stdout emitted" "$RUN_OUT" ""
+assert_contains "h22: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
+assert_eq "h22: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
+
+# h23: bind the outer boolean check with an otherwise-usable cursor.
+d="$(new_case)"
+for n in 1 2; do
+	cat >"$d/threads-$n" <<'JSON'
+{"data":{"repository":{"nameWithOwner":"acme/widgets","pullRequest":{"number":12,"url":"https://github.com/acme/widgets/pull/12","reviewThreads":{"totalCount":0,"nodes":[],"pageInfo":{"hasNextPage":"false","endCursor":"OUTER_BOOL_CURSOR"}}}}}}
+JSON
+done
+run "$d" --repo acme/widgets 12
+assert_eq "h23: non-boolean outer hasNextPage fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "h23: no stdout emitted" "$RUN_OUT" ""
+assert_contains "h23: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
+assert_eq "h23: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
+
+# h24: bind the initial comments nodes-array check with valid pageInfo.
+INITIAL_NODES_OBJECT='[
+  {"id":"T_initial_nodes","isResolved":false,"isOutdated":false,"path":"h24.js","line":24,
+   "comments":{"nodes":{"one":{"databaseId":843,"author":{"login":"codex","__typename":"Bot"},"body":"comment A","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r843"}},"pageInfo":{"hasNextPage":false,"endCursor":null}}}
+]'
+d="$(new_case)"
+threads_one_page "$INITIAL_NODES_OBJECT" >"$d/threads-1"
+threads_one_page "$INITIAL_NODES_OBJECT" >"$d/threads-2"
+run "$d" --repo acme/widgets 12
+assert_eq "h24: non-array initial nodes fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "h24: no stdout emitted" "$RUN_OUT" ""
+assert_contains "h24: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
+assert_eq "h24: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
+assert_eq "h24: no nested request attempted" "$(count_matches "$d/log" '[threadId=')" 0
+
+# h25: bind the initial comments boolean check with an otherwise-usable cursor.
+INITIAL_BOOL_STRING='[
+  {"id":"T_initial_bool","isResolved":false,"isOutdated":false,"path":"h25.js","line":25,
+   "comments":{"nodes":[{"databaseId":839,"author":{"login":"codex","__typename":"Bot"},"body":"comment A","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r839"}],"pageInfo":{"hasNextPage":"false","endCursor":"INITIAL_BOOL_CURSOR"}}}
+]'
+d="$(new_case)"
+threads_one_page "$INITIAL_BOOL_STRING" >"$d/threads-1"
+threads_one_page "$INITIAL_BOOL_STRING" >"$d/threads-2"
+run "$d" --repo acme/widgets 12
+assert_eq "h25: non-boolean initial hasNextPage fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "h25: no stdout emitted" "$RUN_OUT" ""
+assert_contains "h25: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
+assert_eq "h25: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
+assert_eq "h25: no nested request attempted" "$(count_matches "$d/log" '[threadId=')" 0
+
+# h26: bind the fetched nested comments nodes-array check with valid pageInfo.
+d="$(new_case)"
+for n in 1 2; do
+	cat >"$d/threads-$n" <<'JSON'
+{"data":{"repository":{"nameWithOwner":"acme/widgets","pullRequest":{"number":12,"url":"https://github.com/acme/widgets/pull/12","reviewThreads":{"totalCount":1,"nodes":[
+  {"id":"T_nested_nodes","isResolved":false,"isOutdated":false,"path":"h26.js","line":26,
+   "comments":{"nodes":[{"databaseId":840,"author":{"login":"codex","__typename":"Bot"},"body":"comment A","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r840"}],"pageInfo":{"hasNextPage":true,"endCursor":"NESTED_NODES_CURSOR"}}}
+],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
+JSON
+	printf '%s\n' '{"data":{"node":{"comments":{"nodes":null,"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}' >"$d/comments-$n"
+done
+run "$d" --repo acme/widgets 12
+assert_eq "h26: non-array nested nodes fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "h26: no stdout emitted" "$RUN_OUT" ""
+assert_contains "h26: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
+assert_eq "h26: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
+assert_eq "h26: both nested-page attempts ran" "$(count_matches "$d/log" '[threadId=')" 2
+
+# h27: bind the fetched nested boolean check with an otherwise-usable cursor.
+d="$(new_case)"
+for n in 1 2; do
+	cat >"$d/threads-$n" <<'JSON'
+{"data":{"repository":{"nameWithOwner":"acme/widgets","pullRequest":{"number":12,"url":"https://github.com/acme/widgets/pull/12","reviewThreads":{"totalCount":1,"nodes":[
+  {"id":"T_nested_bool","isResolved":false,"isOutdated":false,"path":"h27.js","line":27,
+   "comments":{"nodes":[{"databaseId":841,"author":{"login":"codex","__typename":"Bot"},"body":"comment A","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r841"}],"pageInfo":{"hasNextPage":true,"endCursor":"NESTED_BOOL_START"}}}
+],"pageInfo":{"hasNextPage":false,"endCursor":null}}}}}}
+JSON
+	cat >"$d/comments-$n" <<'JSON'
+{"data":{"node":{"comments":{"nodes":[{"databaseId":842,"author":{"login":"alice","__typename":"User"},"body":"comment B","diffHunk":"@@","url":"https://github.com/acme/widgets/pull/12#discussion_r842"}],"pageInfo":{"hasNextPage":"false","endCursor":"NESTED_BOOL_CURSOR"}}}}}
+JSON
+done
+run "$d" --repo acme/widgets 12
+assert_eq "h27: non-boolean nested hasNextPage fails closed (exit 3)" "$RUN_RC" 3
+assert_eq "h27: no stdout emitted" "$RUN_OUT" ""
+assert_contains "h27: extraction diagnosis on stderr" "$RUN_ERR" "malformed response — could not extract comment urls"
+assert_eq "h27: both whole-fetch attempts ran" "$(count_matches "$d/log" '[owner=')" 2
+assert_eq "h27: both nested-page attempts ran" "$(count_matches "$d/log" '[threadId=')" 2
+
 # ============================================================================
 # (i) response-identity mismatch — fail closed after the single whole-fetch retry
 # ============================================================================
