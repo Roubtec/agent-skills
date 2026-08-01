@@ -26,7 +26,7 @@ Out of scope:
 
 ## Context and references
 
-- Task 014 — the canonical `review-cycle` protocol, the `wf-review-cycle` script, and the conversion of `wf-address-review.js` / `wf-address-tasks.js` (which closes their missing-peer gap). Task 015 — the `peer-review-run` invocation contract, fallback, prompt guidance, and the throttle; its concurrency bullet is the single source of that policy for every rendering, and this task depends on it rather than duplicating it. Task 015a — the pass-notes convention on the same prompts.
+- Task 014 — the canonical `review-cycle` protocol, the `wf-review-cycle` script, and the conversion of `wf-address-review.js` / `wf-address-tasks.js` (which closes their missing-peer gap). Task 015 — the `peer-review-run` invocation contract, fallback, prompt guidance, and the throttle; its concurrency bullet is the single source of that policy for every rendering, and this task defers to it for the policy's wording rather than duplicating it — deference, not a scheduling prerequisite, per the provenance note above. Task 015a — the pass-notes convention on the same prompts.
 - powbox `docker/shared/peer-review-run` header — invocation and result contract (`outcome ∈ passed | issues | unavailable | timeout | forfeited | failed`; final stdout line is one JSON object, schema `powbox.peer-review-run/v1`; exit 0 for any produced outcome). powbox `docs/architecture.md` peer-review-run bullet names this repo as the adoption boundary.
 - `plugins/dev-skills/workflows/README.md` — the authoring constraints these scripts live under (meta literal first, deterministic plain JS, no `Date.now()` / `Math.random()`).
 - `plugins/dev-skills/skills/address-review/SKILL.md` — the prose peer protocol whose semantics the workflow rendering must not drop.
@@ -43,7 +43,7 @@ Out of scope:
 - A peer subagent that dies, times out, or reports `unavailable` / `forfeited` leaves the round recorded and the cycle running; no path aborts a batch on a peer outcome.
 - `meta.description` discloses the cross-harness review, and every `phase()` / `opts.phase` string used by the stage has an exactly-matching `meta.phases` entry.
 - `peer-opinions=off` passed through `args` suppresses the peer stage end to end, including in the consuming workflows.
-- The seam 015's throttle needs exists: the script that owns the fan-out is also the one making every peer launch — `wf-address-tasks` embeds the cycle rather than nesting it — so no launch happens in a child a throttle could neither see nor delay, and the fan-out and its launches share one flat script's state for one to live in. The placement alone satisfies this criterion: the rendering invents no cap, floor, or chunked fan-out, and where 015's throttle has already landed it is carried in that same state, exactly as 015 specifies it and nowhere else.
+- The seam 015's throttle needs exists: the script that owns the fan-out is also the one making every peer launch — `wf-address-tasks` embeds the cycle rather than nesting it — so no launch happens in a child a throttle could neither see nor delay, and the fan-out and its launches share one flat script's state for one to live in. Placement is what this criterion asks for; beyond it, the rendering invents no cap, floor, or chunked fan-out, and where 015's throttle has already landed it is carried in that same state, exactly as 015 specifies it and nowhere else.
 - A rule-by-rule read against `address-review/SKILL.md`'s peer section finds nothing dropped in the workflow rendering.
 
 ## Validation
