@@ -233,6 +233,7 @@ When `git rebase` halts on a conflict:
 
 1. **Inspect the conflict.**
    Read the conflicting files, the offending commit (`git show REBASE_HEAD`), and the recent history of the affected hunks.
+   Resolve conflicts hunk by hunk in place, preserving cleanly auto-merged changes elsewhere in each file. Whole-file `git checkout --ours` or `--theirs` is safe only after inspecting the merged result and verifying that the file contains no cleanly auto-merged content from the other side; otherwise it can silently delete a sibling's already-shipped behavior with no conflict marker left behind.
 2. **Classify.**
    A conflict is **trivial** if any of:
    - It's a pure import-ordering or formatting collision.
