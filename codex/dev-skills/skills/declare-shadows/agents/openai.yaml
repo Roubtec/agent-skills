@@ -1,0 +1,4 @@
+interface:
+  display_name: "Declare Shadows"
+  short_description: "Declare gitignored artifact dirs as shadows"
+  default_prompt: "Use $declare-shadows to review this repo's gitignored artifact directories and declare the ones worth tmpfs-shadowing in .powbox.yml."
