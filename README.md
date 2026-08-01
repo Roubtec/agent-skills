@@ -16,6 +16,7 @@ codex/
   dev-skills/                     # Codex flavors of the same skills (SKILL.md + agents/openai.yaml)
     skills/<name>/...
 scripts/
+  test-gh-review-threads.sh             # hermetic contract coverage for the review-thread helper
   test-checkout-cleanliness-report.mjs  # regression coverage for the batch workflow's checkout report
 ```
 
@@ -64,6 +65,12 @@ Changes land through PRs, and every merge is a real merge commit: the repo enabl
 
 Open PRs ready for review rather than as drafts. Agents in particular tend to open drafts conservatively, and here a draft only withholds the automated review round the PR would otherwise trigger; mark one as draft when withholding is the actual intent, not by default.
 
+## Focused tests
+
+Run `bash scripts/test-gh-review-threads.sh` after any behavior change to `plugins/dev-skills/bin/gh-review-threads`; the hermetic suite stubs `gh` and needs only Bash and `jq`.
+
+Run `node scripts/test-checkout-cleanliness-report.mjs` after changing the batch workflow's checkout-report behavior.
+
 ## Consumers
 
 | Consumer                        | Channel                                                               |
@@ -76,7 +83,8 @@ The `enable-worktrees` and `session-learnings` skills intentionally describe pow
 
 ## GitHub Automation
 
-This repo runs Claude directly against its own PRs via two workflows in `.github/workflows/`. Both require a `CLAUDE_CODE_OAUTH_TOKEN` repo secret.
+This repo runs focused tests and Claude automation against its own PRs via three workflows in `.github/workflows/`. The two Claude workflows require a `CLAUDE_CODE_OAUTH_TOKEN` repo secret.
 
+- **`tests.yml`** — runs the hermetic `gh-review-threads` suite and checkout-cleanliness regression test on every PR.
 - **`claude.yml`** — a mention bot. Comment `@claude ...` on an issue or PR (or in a PR review) to summon it; only OWNER/MEMBER/COLLABORATOR authors can trigger it, since the job runs with write permissions.
 - **`claude-code-review.yml`** — runs Anthropic's `code-review` plugin automatically when a PR is opened (or reopened / marked ready for review) and posts inline review comments; later pushes are not auto-reviewed — ask for a re-review with an `@claude` mention. Skipped on PRs from forks, which don't receive the secret.
