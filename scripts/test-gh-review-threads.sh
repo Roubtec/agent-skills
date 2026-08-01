@@ -445,9 +445,9 @@ assert_eq "g2: no retry needed" "$(count_matches "$d/log" '[owner=')" 1
 # ============================================================================
 # (h) malformed comment shapes — the data PARSER fails, and that must fail closed
 # ============================================================================
-# Principle: every fail-closed guard needs at least one case where the input
-# PARSER fails, not only where the VALIDATION fails. The pre-013 helper passed
-# every wrong-URL (validation) case above yet failed OPEN on these shapes: its
+# These cases bind parser-failure paths, not only wrong-value validation paths.
+# The pre-013 helper passed every wrong-URL case above yet failed OPEN on these
+# shapes: its
 # url extraction ran in a process substitution, where a jq error under
 # `set -euo pipefail` went unnoticed, so an empty offender list read as "all
 # clean" and the contaminated payload was emitted with exit 0. Each fixture is

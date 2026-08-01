@@ -45,9 +45,10 @@
 # `https://github.com/OWNER/REPO/pull/<N>` followed by `#`, `/`, `?`, or end (a
 # boundary-safe, repo-qualified match — so PR #12 never accepts a `/pull/123`
 # url, nor a same-number PR in another repo). An identity mismatch, malformed
-# comment shape during url extraction, or scope mismatch discards the whole
-# response and retries the fetch ONCE from scratch; if that check fails again the
-# helper fails closed — nothing on stdout, a diagnosis on stderr, and exit 3
+# comment or nested-pagination shape during extraction, or scope mismatch
+# discards the whole response and retries the fetch ONCE from scratch; if that
+# check fails again the helper fails closed — nothing on stdout, a diagnosis on
+# stderr, and exit 3
 # (distinct from usage/auth errors). Other API and parser failures retain their
 # ordinary fatal status.
 #
@@ -315,11 +316,12 @@ scope_offenders() {
 	done <<<"$urls"
 }
 
-# Fetch and validate one complete attempt. Retryable validation failures return
-# non-zero and set response_failure; unrecoverable fetch/parser failures retain
-# their original status. Every command inside fetch_all/complete_comments carries
-# an explicit handler because this function is deliberately called in an `if`
-# condition, where Bash suppresses implicit `errexit` behavior transitively.
+# Fetch and validate one complete attempt. Retryable response
+# validation/extraction failures return a distinguished status and set
+# response_failure; unrecoverable fetch/parser failures retain their original
+# status. Every command inside fetch_all/complete_comments carries an explicit
+# handler because this function is deliberately called in an `if` condition,
+# where Bash suppresses implicit `errexit` behavior transitively.
 fetch_and_validate() {
 	response_failure=''
 	offenders=''
