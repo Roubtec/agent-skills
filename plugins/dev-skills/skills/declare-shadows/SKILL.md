@@ -91,7 +91,7 @@ Operate on the current repository only. Every step is idempotent and surgical â€
 
    ```bash
    shadow-refresh.sh "$ROOT"
-   findmnt -no FSTYPE,SOURCE "$ROOT/<declared-path>"
+   findmnt -no FSTYPE,SOURCE "$ROOT/<newly-declared-path>"
    ```
 
    Expect `tmpfs`. A non-zero exit means nothing is mounted there; any other filesystem means an existing mount was left in place â€” powbox skips a path that is already a mountpoint, so a host bind would still be passing writes through to the host.

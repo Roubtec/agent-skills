@@ -111,7 +111,7 @@ Every step is idempotent and surgical — preserve unrelated content, comments, 
 
    ```bash
    shadow-refresh.sh "$ROOT"
-   findmnt -no FSTYPE,SOURCE "$ROOT/<declared-path>"
+   findmnt -no FSTYPE,SOURCE "$ROOT/<newly-declared-path>"
    ```
 
    Expect `tmpfs`.
