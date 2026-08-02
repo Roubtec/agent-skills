@@ -50,7 +50,7 @@ Out of scope:
 
 - `plugins/dev-skills/skills/address-review/SKILL.md` — the richest current statement of the protocol (peer section, gates, round cap); the extraction's semantic baseline.
 - `plugins/dev-skills/workflows/wf-address-{review,tasks}.js` (after 012) — the inlined loops to replace; note `wf-address-tasks`'s `VERDICT_SCHEMA` as the seed of the result contract.
-- Tasks 015, 019, 025 — content that lands in (or is invoked by) the block; implement 014 first, then those three each edit ONE place.
+- Tasks 015, 019, 025 — content that lands in (or is invoked by) the block; implement 014 first, so each of those three authors its content once in the canonical definition and then refreshes the renderings derived from it (the Codex mirror, and any copy synthesized from the embeddable section) instead of fanning out across ten consumers.
 - `resolve-open-questions/SKILL.md` — the downstream consumer of `openQuestions[]`; its item format is the target shape for escalations.
 
 ## Target files or areas
