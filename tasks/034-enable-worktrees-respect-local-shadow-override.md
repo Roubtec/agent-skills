@@ -48,16 +48,16 @@ Out of scope:
 ## Acceptance criteria
 
 - Running the skill in a repo with a `.powbox.local.yml` carrying a top-level `shadow:` key reports that the committed list is overridden, and no run in that state reports the repo worktree-ready without qualification.
-- The three worktree roots end up in the list that is actually in effect, by whichever resolution the implementation adopts, and the durable record in `.powbox.yml` is written either way.
+- When the override's `shadow:` is a well-formed list, the three worktree roots end up in the list that is actually in effect, by whichever resolution the implementation adopts, and the durable record in `.powbox.yml` is written either way. A malformed `shadow:` instead stops the run with a report and writes nothing.
 - `.powbox.local.yml` is never staged or committed by the skill.
 - A `.powbox.local.yml` with only `ctx:` (no `shadow:` key) changes nothing about the run.
 - Both mirrors carry the change and differ only in harness-specific wording.
 
 ## Validation
 
-- In a scratch repo, exercise three states: no local file; a local file with `ctx:` only; a local file with `shadow:` (including the `shadow: []` case). Confirm the reported verdict and the files written in each.
-- Confirm with `detect-shadows.sh` that the resulting configuration actually emits the worktree roots in the override state — the point of the task is that the previous configuration did not.
+- In a scratch repo, exercise four states: no local file; a local file with `ctx:` only; a local file with a well-formed `shadow:` (including the `shadow: []` case); and a local file with a malformed `shadow:` (a scalar suffices). Confirm the reported verdict and the files written in each — the malformed state must write nothing at all.
+- Confirm with `detect-shadows.sh` that the resulting configuration actually emits the worktree roots in the well-formed override state — the point of the task is that the previous configuration did not.
 
 ## Review plan
 
-Reviewer checks that the override is detected by the same test powbox uses rather than by file presence, that no run can report worktree-ready while the declarations are inert, that `.powbox.local.yml` is never staged, that the `ctx:`-only case is a genuine no-op, and that the two mirrors stay in parity.
+Reviewer checks that the override is detected by the same test powbox uses rather than by file presence, that no run can report worktree-ready while the declarations are inert, that a malformed override `shadow:` fails closed instead of being rewritten, that `.powbox.local.yml` is never staged, that the `ctx:`-only case is a genuine no-op, and that the two mirrors stay in parity.
