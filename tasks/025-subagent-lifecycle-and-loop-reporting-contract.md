@@ -23,14 +23,14 @@ Out of scope: peer-launch mechanics (task 015), scratch hygiene (task 017).
 
 ## Context and references
 
-- **Sequencing**: implement AFTER 014. Items 1–3 and 5 are the review-cycle block's packet/loop contract and land ONCE there; item 4's report-don't-correct shape feeds the block's result contract directly (a reported deviation travels alongside `openQuestions[]` so the maintainer sees it at cycle end). The per-skill anchors below describe the pre-014 world.
+- **Sequencing**: implement AFTER 014. Items 1–3 and 5 are the review-cycle block's packet/loop contract and are authored ONCE there, then carried into every derived rendering — the Codex mirror, and each copy synthesized from the `wf-review-cycle` embeddable section, which per 014 includes the one `wf-address-tasks` embeds; a consumer that reaches the block by reference needs no edit. Item 4's report-don't-correct shape feeds the block's result contract directly (a reported deviation travels alongside `openQuestions[]` so the maintainer sees it at cycle end). The per-skill anchors below describe the pre-014 world.
 - `plugins/dev-skills/skills/address-review/SKILL.md` — the delegated-fix contract ("leave the worktree clean…") that items 1–3 harden.
 - `plugins/dev-skills/skills/address-tasks/SKILL.md` / `-serialized` — implementer contract and round-loop result assembly (items 1–5).
 - Codex-side mirrors.
 
 ## Target files or areas
 
-- `plugins/dev-skills/skills/review-cycle/SKILL.md` and `plugins/dev-skills/workflows/wf-review-cycle.js` (post-014 primary), `codex/dev-skills/skills/review-cycle/` mirror.
+- `plugins/dev-skills/skills/review-cycle/SKILL.md` and `plugins/dev-skills/workflows/wf-review-cycle.js` (post-014 primary), the `codex/dev-skills/skills/review-cycle/` mirror, and `plugins/dev-skills/workflows/wf-address-tasks.js`, which per 014 embeds its own copy of the `wf-review-cycle` embeddable section.
 - Pre-014 fallback: the four skill files above plus codex mirrors.
 
 ## Implementation notes
