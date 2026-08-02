@@ -30,7 +30,7 @@ Out of scope: peer-launch mechanics (task 015), scratch hygiene (task 017).
 
 ## Target files or areas
 
-- `plugins/dev-skills/skills/review-cycle/SKILL.md` and `plugins/dev-skills/workflows/wf-review-cycle.js` (post-014 primary), the `codex/dev-skills/skills/review-cycle/` mirror, and `plugins/dev-skills/workflows/wf-address-tasks.js`, which per 014a embeds its own copy of that rendering.
+- `plugins/dev-skills/skills/review-cycle/SKILL.md` and `plugins/dev-skills/workflows/wf-review-cycle.js` (post-014 primary), the `codex/dev-skills/skills/review-cycle/` mirror, and `plugins/dev-skills/workflows/wf-address-tasks.js`, which per 014a embeds its own copy of the `wf-review-cycle` embeddable section.
 - Pre-014 fallback: the four skill files above plus codex mirrors.
 
 ## Implementation notes
