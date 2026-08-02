@@ -19,14 +19,14 @@ Out of scope: gating-rule changes, peer-launch mechanics (task 015), scratch hyg
 
 ## Context and references
 
-- **Sequencing**: implement AFTER 014. All six heuristics are protocol content, authored ONCE in the canonical `review-cycle` block — the skill text and its `wf-review-cycle` prompt templates — and then carried into every derived rendering: the Codex mirror, and each copy synthesized from the `wf-review-cycle` embeddable section, which per 014a includes the one `wf-address-tasks` embeds. A consumer that reaches the block by reference needs no edit; a consumer holding a synthesized copy does. The per-skill anchors below describe the pre-014 world.
+- **Sequencing**: implement AFTER 014. All six heuristics are protocol content, authored ONCE in the canonical `review-cycle` block — the skill text and its `wf-review-cycle` prompt templates — and then carried into every derived rendering: the Codex mirror, and each copy synthesized from the `wf-review-cycle` embeddable section, which per 014 includes the one `wf-address-tasks` embeds. A consumer that reaches the block by reference needs no edit; a consumer holding a synthesized copy does. The per-skill anchors below describe the pre-014 world.
 - `plugins/dev-skills/skills/address-review/SKILL.md` — the fix/review loop section (round cap paragraph) is the anchor for items 1–4; the Fixer/Reviewer prompt-content specs anchor items 5–6.
 - `plugins/dev-skills/skills/address-reviews/SKILL.md` — inherits per-PR loops; add pointers, not duplication, where it references the single-PR protocol.
 - `codex/dev-skills/skills/*` mirrors.
 
 ## Target files or areas
 
-- `plugins/dev-skills/skills/review-cycle/SKILL.md` and `plugins/dev-skills/workflows/wf-review-cycle.js` (post-014 primary), the `codex/dev-skills/skills/review-cycle/` mirror, and `plugins/dev-skills/workflows/wf-address-tasks.js`, which per 014a embeds its own copy of the `wf-review-cycle` embeddable section.
+- `plugins/dev-skills/skills/review-cycle/SKILL.md` and `plugins/dev-skills/workflows/wf-review-cycle.js` (post-014 primary), the `codex/dev-skills/skills/review-cycle/` mirror, and `plugins/dev-skills/workflows/wf-address-tasks.js`, which per 014 embeds its own copy of the `wf-review-cycle` embeddable section.
 - Pre-014 fallback: `plugins/dev-skills/skills/address-review/SKILL.md` (primary), `plugins/dev-skills/skills/address-reviews/SKILL.md`, codex-side mirrors (pointers/mirrors)
 
 ## Implementation notes
