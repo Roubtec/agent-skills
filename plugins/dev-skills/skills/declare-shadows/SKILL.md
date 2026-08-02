@@ -113,7 +113,7 @@ State concisely:
 - Any pre-existing declaration you removed or flagged as unsafe, and what it was costing — for a removed one, whether its tmpfs is still mounted in this session, what you rescued from it, and that the removal lands only on the next container start.
 - Whether a `.powbox.local.yml` override is masking the committed list, and which file each agreed change landed in.
 - Whether the shadows are live in this session (step 7) or pending the next container start.
-- Any blocker: not a git repo, a malformed `.powbox.yml`, or a candidate that turned out to be tracked.
+- Any blocker: not a git repo, a malformed `shadow:` list in either `.powbox.yml` or an active override, or a candidate that turned out to be tracked.
 
 ## Notes
 
