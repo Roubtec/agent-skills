@@ -54,7 +54,7 @@ Included:
 
 Out of scope:
 
-- Peer-launch mechanics and the adaptive concurrency throttle (015). The workflow-rendering rules above cover only how the workflow reaches the helper and reports the outcome; the peer prompt's wording is 015's (no-network and executed-vs-static) and 015a's (pass notes).
+- The shell-level peer-launch mechanics and the adaptive concurrency throttle (015): the fallback pattern for a missing helper with its liveness and signalling hardening, and the cap itself. The workflow-rendering rules above are not an exception to this — they cover only how the workflow rendering reaches the helper and reports the outcome, and set no cap of their own. The peer prompt's wording is likewise 015's (no-network, executed-vs-static) and 015a's (pass notes).
 - Changes to `peer-review-run` itself (powbox-owned).
 - The convergence-heuristic and lifecycle-contract TEXT (019, 025 — those tasks now write their content INTO this block; see their amended targets).
 - Vertical pipelining of the batch flows (033).
@@ -63,7 +63,8 @@ Out of scope:
 
 - `plugins/dev-skills/skills/address-review/SKILL.md` — the richest current statement of the protocol (peer section, gates, round cap); the extraction's semantic baseline.
 - `plugins/dev-skills/workflows/wf-address-{review,tasks}.js` (after 012) — the inlined loops to replace; note `wf-address-tasks`'s `VERDICT_SCHEMA` as the seed of the result contract.
-- Tasks 015, 019, 025 — content that lands in (or is invoked by) the block; implement 014 first, so each of those three authors its content once in the canonical definition for each harness and then refreshes the renderings derived from it (the Codex mirror, and any copy synthesized from the embeddable section) instead of fanning out across ten consumers. 015's concurrency bullet is the single source of that policy for every rendering, and the workflow-rendering rules above defer to it for the policy's wording rather than duplicating it — deference, not a scheduling prerequisite, since what those rules require of the throttle is where its launches happen, not the throttle itself. Task 015a — the pass-notes convention on the same prompts.
+- Tasks 015, 019, 025 — content that lands in (or is invoked by) the block; implement 014 first, so each of those three authors its content once in the canonical definition for each harness and then refreshes the renderings derived from it (the Codex mirror, and any copy synthesized from the embeddable section) instead of fanning out across ten consumers. 015's concurrency bullet is the single source of that policy for every rendering, and the workflow-rendering rules above defer to it for the policy's wording rather than duplicating it — deference, not a scheduling prerequisite, since what those rules require of the throttle is where its launches happen, not the throttle itself.
+- Task 015a — the `VERDICT: PASS` pass-notes convention, carried by the same peer prompts 015's guidance touches.
 - `resolve-open-questions/SKILL.md` — the downstream consumer of `openQuestions[]`; its item format is the target shape for escalations.
 - powbox `docker/shared/peer-review-run` header — invocation and result contract (`outcome ∈ passed | issues | unavailable | timeout | forfeited | failed`; final stdout line is one JSON object, schema `powbox.peer-review-run/v1`; exit 0 for any produced outcome). powbox `docs/architecture.md` peer-review-run bullet names this repo as the adoption boundary.
 - `plugins/dev-skills/workflows/README.md` — the authoring constraints these scripts live under (meta literal first, deterministic plain JS, no `Date.now()` / `Math.random()`).
