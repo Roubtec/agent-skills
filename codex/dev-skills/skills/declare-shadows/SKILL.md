@@ -93,9 +93,13 @@ Every step is idempotent and surgical — preserve unrelated content, comments, 
 
 4. **Classify each candidate** against the three "do not shadow" lists above. For anything you are keeping, confirm it is not tracked: `git -C "$ROOT" ls-files -- <path>` must be empty.
 
-   Before trusting that root-index check for an existing candidate, apply one fail-closed path guard: require a real directory beneath `$ROOT` with no symlink in its path, and reject anything at or below a mode-`160000` gitlink boundary from `git -C "$ROOT" ls-files --stage` or whose path, ancestors below `$ROOT`, or descendants contain another `.git` file or directory. The root index cannot reveal files tracked by another worktree or owned by a symlink target, so leave any candidate that fails this guard undeclared and surface it.
+   Before trusting that root-index check, apply one fail-closed ownership guard to every candidate.
+   Require its literal path, after resolving `.` and `..` lexically without following symlinks, to remain beneath `$ROOT`; inspect every materialized path component below `$ROOT` (including a dangling symlink) and reject a symlink component, a candidate at or below a mode-`160000` gitlink boundary from `git -C "$ROOT" ls-files --stage`, an existing component that is named `.git` or has its own `.git` file or directory, or an existing leaf with a descendant `.git` boundary.
+   If the leaf exists, also require it to be a real directory; if it does not, let a literal path continue once its containment and materialized-component checks pass, because powbox supports declarations for output that has not been built yet.
+   The root index cannot reveal files owned by another index or a symlink target, so leave any candidate that fails this guard undeclared and surface it.
 
-   Judge an already-declared path by the same lists — one that now lands in a "do not shadow" list is a finding, not a fixture — but an entry another skill owns (the `enable-worktrees` worktree roots) is deliberate infrastructure, not a stray declaration: leave it alone.
+   Judge an already-declared path by the same lists — one that now lands in a "do not shadow" list is a finding, not a fixture.
+   Treat only the exact, already-declared `enable-worktrees` roots (`.worktrees`, `.claude/worktrees`, and `.git/worktrees`) as pre-authorized guard outcomes: preserve them exactly even when their worktree metadata trips the VCS-boundary check, and never propose removing them from either list in this audit.
 
 5. **Confirm the judgment calls with the user.** List what you propose to shadow, what you are deliberately leaving alone, and any existing declaration you propose to drop, each with a one-line reason.
    Caches and human-facing output are the entries most worth naming explicitly — a user who wants `.turbo/` shadowed anyway should get to say so.
