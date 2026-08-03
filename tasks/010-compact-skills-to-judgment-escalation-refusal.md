@@ -17,7 +17,7 @@ This is intended as the next PR, ahead of the queued work, so later tasks build 
 Included — all eleven skills in both mirrors, and a lighter pass over the two workflows:
 
 - `address-reviews` (10,234 words), `address-review` (8,529), `address-tasks` (6,991), `address-tasks-serialized` (5,640), `prune-branches` (5,399), `rebase-stack` (4,555), `resolve-open-questions` (4,517) — the primary targets.
-- `write-tasks` (1,398), `session-learnings` (1,303), `enable-worktrees` (1,229), `review-tasks` (1,079) — likely already close to right; verify rather than assume.
+- `write-tasks` (1,398), `session-learnings` (1,303), `enable-worktrees` (1,229), `reap-tasks` (1,191) — likely already close to right; verify rather than assume.
 - `wf-address-review.js` (589 lines), `wf-address-tasks.js` (1,010) — see "Workflows differ" below.
 
 Out of scope:

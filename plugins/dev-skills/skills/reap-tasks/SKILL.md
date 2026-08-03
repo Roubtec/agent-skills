@@ -1,18 +1,25 @@
 ---
-name: review-tasks
-description: Verify completed task files against the actual codebase, archive satisfied tasks into a done/ folder, and write follow-up task files for any concrete gaps. Trigger when the user asks to review delivered tasks, close out a batch, sweep finished work, or audit task acceptance after implementation. Do not trigger for unfinished work or for code review of an in-flight PR.
+name: reap-tasks
+description: Reap completed task files by verifying their acceptance criteria against the actual codebase, archiving satisfied tasks into a done/ folder, and writing follow-up task files for concrete gaps. Trigger when the user asks to reap completed tasks, close out a delivered batch, sweep finished work, or audit task acceptance after implementation. Do not trigger for unfinished work or for code review of an in-flight PR.
 ---
 
-Review the specified task files against the current state of the codebase and determine whether each task has been delivered satisfactorily.
+Reap the specified task files by checking them against the current state of the codebase and determining whether each task has been delivered satisfactorily.
 
-**Arguments:** `<glob-or-file-list of task files to review>`
+**Arguments:** `<glob-or-file-list of task files to reap>`
 
 ## Primary objective
 
-For each task file in the input set, perform a thorough review of the actual codebase to verify that the task's acceptance criteria, scope, and intent have been met.
+For each task file in the input set, verify against the actual codebase that the task's acceptance criteria, scope, and intent have been met.
 The goal is to close completed work cleanly and surface any remaining gaps as new, actionable follow-up tasks.
+Treat merged implementations as already covered by the project's normal code-review practices.
+Do not perform another general code review; inspect the implementation deeply enough to establish task acceptance and identify concrete gaps.
 
-## Review process
+Choose the execution shape that best fits the task set.
+Consider parallel subagents for disparate, independent tasks when their implementations and evidence do not overlap.
+Keep dependent tasks or a chain of dependent PRs in one analysis when acceptance depends on their combined end state or shared context.
+Base the choice on dependency structure, validation cost, and the risk of conflicting follow-up files; regardless of execution shape, synthesize one coherent result and perform shared cleanup checks once.
+
+## Reaping process
 
 For a sweep, if the repo's deferred task subfolder exists (for example, `tasks/deferred/`), inspect it and report entries whose recorded condition appears to have arrived; promotion into the active task folder remains a maintainer decision, so do not move them automatically.
 
@@ -25,7 +32,7 @@ For every task file:
 2. **Run a full build** and verify there are no type errors.
    A build failure is an automatic blocker regardless of whether the task's acceptance criteria mention it.
 
-3. **Inspect the codebase** to verify delivery.
+3. **Inspect the implementation** to verify delivery.
    Do not take file existence at face value — read the relevant source files, check route behavior, verify that tests exist and pass, confirm that types are sound, and validate that the implementation matches the task's stated intent.
 
 4. **Compare against legacy references** when the task cites them.
@@ -35,7 +42,7 @@ For every task file:
    - **Satisfied** — the task has been delivered as expected or better. All acceptance criteria are met. Minor stylistic preferences do not block closure.
    - **Needs follow-up** — the core delivery is present but there are concrete, actionable gaps: missing edge cases, incomplete validation, absent tests, broken behavior, accessibility issues, or deviations from the stated spec that were not flagged as intentional divergences.
 
-## Actions after review
+## Actions after verification
 
 ### For satisfied tasks
 
@@ -46,10 +53,10 @@ The work is done, but the file is preserved for future reference and lookback (g
 ### For tasks that need follow-up
 
 Do **not** modify the original task file.
-Instead, create one or more new follow-up task files in the same task folder using the `$write-tasks` skill conventions:
+Instead, create one or more new follow-up task files in the same task folder using the `write-tasks` skill conventions:
 
 - Continue the numbering sequence within the same phase.
-  For example, if reviewing six `01-*` tasks, a follow-up file might be `01-07-phase-01-follow-ups.md`.
+  For example, if reaping six `01-*` tasks, a follow-up file might be `01-07-phase-01-follow-ups.md`.
 - If the remaining items are small and span multiple original tasks, prefer a single consolidated follow-up task (e.g. "Phase 01 minor fixes and gaps") over one file per original task.
   Group by theme or proximity, not by origin.
 - If a gap is substantial enough to warrant its own task, give it its own file with a descriptive name.
@@ -60,7 +67,7 @@ Instead, create one or more new follow-up task files in the same task folder usi
 
 When grouping small items into a single follow-up task, structure it as:
 
-1. A brief summary of what was reviewed and why follow-up is needed.
+1. A brief summary of what was reaped and why follow-up is needed.
 2. A numbered or bulleted list of individual action items, each with:
    - what needs to change and where
    - why it matters (reference the original acceptance criterion or spec)
@@ -69,23 +76,23 @@ When grouping small items into a single follow-up task, structure it as:
 
 ### Committing the result
 
-Once every reviewed task has been resolved (moved into `done/` and/or replaced by a follow-up file), commit the changes locally with a single descriptive commit message that summarises what was archived and what follow-ups were created.
+Once every reaped task has been resolved (moved into `done/` and/or replaced by a follow-up file), commit the changes locally with a single descriptive commit message that summarises what was archived and what follow-ups were created.
 Do **not** push — leave that to the user.
 Skip this step only if the user has explicitly asked not to commit.
 
-## Review standards
+## Acceptance standards
 
 - Be thorough but fair. The goal is to catch real gaps, not to nitpick style.
 - A task is satisfied if its acceptance criteria are met, even if the implementation took a different structural approach than the task suggested.
 - Do not fail a task for work that is explicitly out of scope or deferred to a later phase.
 - Do not fail a task for missing test coverage unless the task's acceptance criteria specifically require tests.
 - Flag security, accessibility, and data-integrity issues even if the original task did not explicitly mention them — these are always in scope.
-- If you discover a problem that is clearly outside the scope of the tasks being reviewed, note it to the user but do not create a follow-up task for it unless asked.
+- If you discover a problem that is clearly outside the scope of the tasks being reaped, note it to the user but do not create a follow-up task for it unless asked.
 
 ## Output expectations
 
-After reviewing all tasks, provide a clear summary to the user:
+After reaping all tasks, provide a clear summary to the user:
 
 - Which tasks were closed (satisfied and moved into `done/`).
 - Which tasks produced follow-up work, with a brief description of what remains.
-- Any observations that fall outside the reviewed tasks but are worth flagging.
+- Any observations that fall outside the reaped tasks but are worth flagging.
