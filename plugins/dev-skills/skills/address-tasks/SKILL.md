@@ -134,12 +134,11 @@ For a wave of tasks `T1..Tn`:
      # "${prompt_file}" without shell interpolation before continuing.
      prompt="$(<"${prompt_file}")"
 
-     # Leave this empty when configured effort is already known to be high/xhigh.
-     effort_args=()
-     # Otherwise use: effort_args=(-c model_reasoning_effort=high)
+     # Pin peer effort per invocation; this never changes the container's configuration.
+     peer_args=(-c model_reasoning_effort=high)
 
      codex exec --sandbox read-only --cd "${worktree}" -o "${outfile}" \
-       -c mcp_servers={} "${effort_args[@]}" "${prompt}" \
+       -c mcp_servers={} "${peer_args[@]}" "${prompt}" \
        < /dev/null 2> "${stderr_file}" &
      ```
 

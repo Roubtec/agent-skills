@@ -174,16 +174,15 @@ For a wave of tasks `T1..Tn`:
      <the complete peer prompt, including verbatim task content>
      PEER_REVIEW_PROMPT
      )"
-     effort_args=()
-     # When the configured effort is not known to be high or xhigh:
-     # effort_args=(--effort high)
+     # Pin peer model and effort per invocation; this never changes the container's configuration.
+     peer_args=(--model opus --effort high)
 
      git -C "${worktree}" log --oneline "${base_ref}..HEAD" > "${artifact_dir}/commits.log"
      git -C "${worktree}" diff "${base_ref}...HEAD" > "${artifact_dir}/changes.diff"
      printf '%s\n' "${prompt}" > "${prompt_file}"
      (
        cd -- "${worktree}" || exit
-       claude -p --safe-mode --tools "Read,Glob,Grep" --disallowedTools "mcp__*" --add-dir "${artifact_dir}" --output-format json "${effort_args[@]}" < "${prompt_file}" > "${peer_out}" 2> "${peer_err}"
+       claude -p "${peer_args[@]}" --safe-mode --tools "Read,Glob,Grep" --disallowedTools "mcp__*" --add-dir "${artifact_dir}" --output-format json < "${prompt_file}" > "${peer_out}" 2> "${peer_err}"
      ) &
      ```
 
