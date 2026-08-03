@@ -93,7 +93,7 @@ Every step is idempotent and surgical — preserve unrelated content, comments, 
 
 4. **Classify each candidate** against the three "do not shadow" lists above.
    For anything you are keeping, require its literal path or every concrete glob match to remain ignored in its own right (`git -C "$ROOT" check-ignore -q -- <path>`, giving an absent directory candidate a trailing slash — a directory-only rule such as `dist/` matches only a pathname git knows is a directory) and confirm it is not tracked (`git -C "$ROOT" ls-files -- <path>` must be empty).
-   Because the declaration you would commit is shared, the ignore rule has to be shared too: `check-ignore -v` names the matching source, and a rule that lives only in a personal global excludes file or `.git/info/exclude` does not ignore the path for teammates, so treat such a candidate as unignored.
+   Because the declaration you would commit is shared, the ignore rule has to be shared too: `check-ignore -v` names the matching source, and a rule that is not part of the committed tree — a personal global excludes file, `.git/info/exclude`, or an uncommitted `.gitignore` edit — does not ignore the path for teammates, so treat such a candidate as unignored.
    Apply the ignored-path check to already-declared entries too: apart from the three exact pre-authorized `enable-worktrees` roots below, a declaration whose ignore rule was removed is a finding and must not be approved or retained.
 
    Before trusting those root-index checks, do not approve a glob as one literal path.
@@ -146,7 +146,7 @@ Every step is idempotent and surgical — preserve unrelated content, comments, 
 
    Removal is not symmetrical, and this part applies even when you skip the refresh above. `shadow-refresh.sh` only adds mounts, and an unprivileged shell cannot unmount one, so a path that step 6 leaves undeclared — whether you dropped it from a list or it fell out when the override carrying it was retired — keeps its tmpfs for the rest of the session. Run the same `findmnt` on every such path: while it still reports `tmpfs`, writes there still land in the ephemeral mount and stay invisible from the host — which, for the database or upload directory that made the declaration unsafe in the first place, is the whole problem. A removed **glob** has to be expanded first — `findmnt` takes a mountpoint, not a pattern, so testing `apps/*/dist` itself just exits non-zero and reads as a false all-clear while the concrete mounts powbox created from it stay live. Enumerate the directories it matched, or list every live mount under the repo with `findmnt -lno TARGET,FSTYPE | grep -F "$ROOT/"`. Copy out anything that has to survive, and tell the user plainly that the removal itself only takes effect at the next container start.
 
-8. **Commit the config.** `.powbox.yml` belongs in version control so every teammate and future container inherits it. Stage and commit following the repo's conventions, or leave it staged and say so if the user prefers to review.
+8. **Commit the config.** `.powbox.yml` belongs in version control so every teammate and future container inherits it. Stage and commit only this change — not unrelated edits the file may already carry — following the repo's conventions, or leave it staged and say so if the user prefers to review.
 
 ## Report
 
