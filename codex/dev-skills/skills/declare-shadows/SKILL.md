@@ -107,8 +107,8 @@ Every step is idempotent and surgical — preserve unrelated content, comments, 
 
    This deliberately surfaces a candidate with a nested `.git` anywhere below it even when that nested checkout is disposable, such as an editable package inside `.venv`; accept that conservative false negative rather than risk hiding human-owned repository content.
 
-   Before inspecting any candidate — newly enumerated or already declared — check whether it is an active mount with `findmnt -no FSTYPE,SOURCE "$ROOT/<path>"`.
-   If it reports any filesystem, the visible contents belong to that mount rather than the underlying host tree, so mark the host view unverifiable.
+   Before inspecting any candidate — newly enumerated or already declared — check whether it is an active mount with `findmnt -no FSTYPE,SOURCE "$ROOT/<path>"`, and whether any mount lies below it — `findmnt -lno TARGET,FSTYPE | grep -F "$ROOT/<path>/"` lists such descendants.
+   If it reports any filesystem, the visible contents belong to that mount rather than the underlying host tree, so mark the host view unverifiable; a mount below the candidate means part of its view is the child mount's, and a tmpfs over the parent would occlude that live mount.
    Except for the three exact pre-authorized `enable-worktrees` roots below, do not approve or retain a declaration for such a path, and do not propose removing an existing one, from this mounted view; ask the user to inspect the host path outside the container or restart in an environment where that mount is absent and rerun before deciding.
    When the reported filesystem is not `tmpfs`, also report that the path is not an active shadow: powbox skips an existing mountpoint, so a declaration there is ineffective and writes continue to the existing bind mount or volume.
 
