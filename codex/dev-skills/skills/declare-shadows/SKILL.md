@@ -78,7 +78,7 @@ Every step is idempotent and surgical — preserve unrelated content, comments, 
 
 1. **Locate the repo root.** `ROOT="$(git rev-parse --show-toplevel)"`. If this is not a git repository, stop and tell the user.
 
-2. **Check for a local override first.** If `$ROOT/.powbox.local.yml` exists and has a top-level `shadow:` key, it **replaces the committed `.powbox.yml` list wholesale** — the override's list, not the committed one, is what this container mounts. An active `shadow:` still has to be a list before you can act on it: null, a scalar, or a mapping is malformed, so stop and report rather than auditing or editing a list you would have to invent — the same fail-closed rule step 6 applies to `.powbox.yml`. An empty list is well-formed, and deliberately so: it disables the committed declarations. Audit it: a cache or database declared there is exactly as live as one in `.powbox.yml`, so carry its entries into step 3 as candidates too. Say so and confirm how to proceed before editing — the committed file stays the durable record of the agreed set, but nothing you write there takes effect while the override stands, so the user has to either retire the override or accept the same change in it.
+2. **Check for a local override first.** If `$ROOT/.powbox.local.yml` exists and has a top-level `shadow:` key, it **replaces the committed `.powbox.yml` list wholesale** — the override's list, not the committed one, is what this container mounts. An active `shadow:` still has to be a list of non-empty string paths before you can act on it: null, a scalar, a mapping, or a list containing a null, collection, or empty string is malformed, so stop and report rather than coercing a pathname or editing a list you would have to invent — the same fail-closed rule step 6 applies to `.powbox.yml`. An empty list is well-formed, and deliberately so: it disables the committed declarations. Audit it: a cache or database declared there is exactly as live as one in `.powbox.yml`, so carry its entries into step 3 as candidates too. Say so and confirm how to proceed before editing — the committed file stays the durable record of the agreed set, but nothing you write there takes effect while the override stands, so the user has to either retire the override or accept the same change in it.
 
 3. **Enumerate candidates.**
 
@@ -88,13 +88,15 @@ Every step is idempotent and surgical — preserve unrelated content, comments, 
 
    This lists ignored paths that currently exist.
    Note the gap: a project that has never been built shows nothing, so also read `$ROOT/.gitignore` (and nested ones) for directory patterns that have not materialized yet.
-   Discard plain files — only directories can be shadowed — and of those keep only the ones ignored in their own right (`git -C "$ROOT" check-ignore -q <path>`): a directory whose entire content is ignored is listed even when no rule ignores the directory itself, and shadowing that parent would hide whatever is added to it later.
+   Discard plain files — only directories can be shadowed — and of those keep only the ones ignored in their own right (`git -C "$ROOT" check-ignore -q -- <path>`): a directory whose entire content is ignored is listed even when no rule ignores the directory itself, and shadowing that parent would hide whatever is added to it later.
    Include every path already declared in either `shadow:` list — the committed one and an active override's, per step 2 — as a candidate too: a review or fix run has to re-judge what is declared, not only what is missing, and either list can end up the effective one.
 
-4. **Classify each candidate** against the three "do not shadow" lists above. For anything you are keeping, confirm it is not tracked: `git -C "$ROOT" ls-files -- <path>` must be empty.
+4. **Classify each candidate** against the three "do not shadow" lists above.
+   For anything you are keeping, require its literal path or every concrete glob match to remain ignored in its own right (`git -C "$ROOT" check-ignore -q -- <path>`) and confirm it is not tracked (`git -C "$ROOT" ls-files -- <path>` must be empty).
+   Apply the ignored-path check to already-declared entries too: apart from the three exact pre-authorized `enable-worktrees` roots below, a declaration whose ignore rule was removed is a finding and must not be approved or retained.
 
-   Before trusting that root-index check, do not approve a glob as one literal path.
-   Expand every directory it currently matches and apply both the tracked-content check and the ownership guard to each concrete match; surface the glob even when every match passes and propose replacing it with those audited literals in step 5.
+   Before trusting those root-index checks, do not approve a glob as one literal path.
+   Expand every directory it currently matches and apply the ignored-path check, tracked-content check, and ownership guard to each concrete match; surface the glob even when every match passes and propose replacing it with those audited literals in step 5.
    A glob with no current matches is unverifiable, so surface it too.
 
    Apply the fail-closed ownership guard to every literal candidate and concrete glob match.
@@ -105,7 +107,9 @@ Every step is idempotent and surgical — preserve unrelated content, comments, 
    This deliberately surfaces a candidate with a nested `.git` anywhere below it even when that nested checkout is disposable, such as an editable package inside `.venv`; accept that conservative false negative rather than risk hiding human-owned repository content.
 
    Before inspecting an already-declared literal or concrete glob match, check whether it is an active mount with `findmnt -no FSTYPE,SOURCE "$ROOT/<path>"`.
-   If it reports `tmpfs`, the visible contents are the shadow rather than the host tree: except for the three exact pre-authorized `enable-worktrees` roots below, mark the declaration unverifiable, do not approve it or propose removing it from this mounted view, and ask the user to inspect the host path outside the container or restart in an environment where that declaration is disabled and rerun before deciding.
+   If it reports any filesystem, the visible contents belong to that mount rather than the underlying host tree, so mark the host view unverifiable.
+   Except for the three exact pre-authorized `enable-worktrees` roots below, do not approve the declaration or propose removing it from this mounted view; ask the user to inspect the host path outside the container or restart in an environment where that declaration is disabled and rerun before deciding.
+   When the reported filesystem is not `tmpfs`, also report that the declaration is not the active shadow: powbox skips an existing mountpoint, so writes continue to the existing bind mount or volume.
 
    Judge an already-declared path by the same lists — one that now lands in a "do not shadow" list is a finding, not a fixture.
    Treat only the exact, already-declared `enable-worktrees` roots (`.worktrees`, `.claude/worktrees`, and `.git/worktrees`) as pre-authorized guard outcomes: preserve them exactly even when their worktree metadata trips the VCS-boundary check, and never propose removing them from either list in this audit.
@@ -122,7 +126,7 @@ Every step is idempotent and surgical — preserve unrelated content, comments, 
      - packages/db/generated # prisma client — regenerated by `prisma generate`
    ```
 
-   If the file has a `shadow:` key that is malformed or not a list, stop and report rather than rewriting it.
+   If the file has a `shadow:` key that is not a list of non-empty string paths, stop and report rather than coercing or rewriting it; the same invalid element types named in step 2 are malformed here too.
 
    When step 2 found an active override, follow the resolution the user chose there. If they kept it, apply the same agreed additions and removals to `$ROOT/.powbox.local.yml` as well, or the fix stays theoretical; if they retired it, drop that file's `shadow:` key — leaving its other keys alone — so the committed list is what takes effect. Either way, never stage `.powbox.local.yml` in step 8: it is user-local, and powbox's launcher only *warns* when `git -C "$ROOT" check-ignore -q -- .powbox.local.yml` does not ignore it, so run that check yourself and surface the gap to the user when the file is not ignored.
 
@@ -150,7 +154,7 @@ State concisely:
 - What you declared, and what regenerates each entry.
 - What you deliberately left undeclared, and why — especially caches and anything host-facing.
 - Any pre-existing declaration you removed or flagged as unsafe, and what it was costing — for a removed one, whether its tmpfs is still mounted in this session, what you rescued from it, and that the removal lands only on the next container start.
-- Any active pre-existing declaration that remains unverifiable until its host tree can be inspected.
+- Any active pre-existing declaration that remains unverifiable until its host tree can be inspected and, for a non-`tmpfs` mount, that its declaration is not the active shadow.
 - Whether a `.powbox.local.yml` override is masking the committed list, and which file each agreed change landed in.
 - Whether the shadows are live in this session (step 7) or pending the next container start.
 - Any blocker: not a git repo, a malformed `shadow:` list in either `.powbox.yml` or an active override, or a candidate that turned out to be tracked.
