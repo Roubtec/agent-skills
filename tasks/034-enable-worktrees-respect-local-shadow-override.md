@@ -16,7 +16,7 @@ Included:
 
 - Detect an active override in the reconcile step: `.powbox.local.yml` present *and* carrying a top-level `shadow:` key. Presence alone is not enough — a ctx-only local config does not override the shadow list.
 - Say plainly, in both the step output and the Report, that the committed declarations are inert while the override stands, so a "worktree-ready" verdict is never issued on a config that is not in effect.
-- Decide and encode what the skill does about it. The committed `.powbox.yml` must still gain the three entries (it is the durable, shared record), but the override needs the same three or the repo is not actually worktree-ready in this container. Mirror `declare-shadows`' resolution — add them to the override too, or have the user retire it — unless a better one is argued in the implementation. An override whose `shadow:` is not a list (null, a scalar, a mapping) is malformed: fail closed and report, as `declare-shadows` step 2 does, rather than writing an invented list into a user-local file. `shadow: []` is well-formed and is exactly the disabling case above.
+- Decide and encode what the skill does about it. The committed `.powbox.yml` must still gain the three entries (it is the durable, shared record), but the override needs the same three or the repo is not actually worktree-ready in this container. Mirror `declare-shadows`' resolution — add them to the override too, or have the user retire it — unless a better one is argued in the implementation. An override whose `shadow:` is not a list of non-empty string paths — including a list containing null, a collection, or an empty string — is malformed: fail closed and report, as `declare-shadows` step 2 does, rather than coercing a pathname or writing an invented list into a user-local file. `shadow: []` is well-formed and is exactly the disabling case above.
 - Keep `.powbox.local.yml` out of the commit step. It is user-local and expected to be gitignored; powbox's launcher warns when `git -C "$ROOT" check-ignore -q -- .powbox.local.yml` does not ignore it, so the skill must not stage it, and should surface that ignore gap if it exists.
 - Reconsider whether the mount verification should stay optional when an override was found. A repo whose declarations may be inert is the one case where skipping verification hides the failure entirely.
 - Apply to both harness renderings, which must stay in parity apart from harness-specific wording.
@@ -48,16 +48,16 @@ Out of scope:
 ## Acceptance criteria
 
 - Running the skill in a repo with a `.powbox.local.yml` carrying a top-level `shadow:` key reports that the committed list is overridden, and no run in that state reports the repo worktree-ready without qualification.
-- When the override's `shadow:` is a well-formed list, the three worktree roots end up in the list that is actually in effect, by whichever resolution the implementation adopts, and the durable record in `.powbox.yml` is written either way. A malformed `shadow:` instead stops the run with a report and writes nothing.
+- When the override's `shadow:` is a well-formed list of non-empty string paths, the three worktree roots end up in the list that is actually in effect, by whichever resolution the implementation adopts, and the durable record in `.powbox.yml` is written either way. A malformed `shadow:` instead stops the run with a report and writes nothing.
 - `.powbox.local.yml` is never staged or committed by the skill.
 - A `.powbox.local.yml` with only `ctx:` (no `shadow:` key) changes nothing about the run.
 - Both mirrors carry the change and differ only in harness-specific wording.
 
 ## Validation
 
-- In a scratch repo, exercise four states: no local file; a local file with `ctx:` only; a local file with a well-formed `shadow:` (including the `shadow: []` case); and a local file with a malformed `shadow:` (a scalar suffices). Confirm the reported verdict and the files written in each — the malformed state must write nothing at all.
+- In a scratch repo, exercise four states: no local file; a local file with `ctx:` only; a local file with a well-formed `shadow:` (including the `shadow: []` case); and local files with malformed `shadow:` values (cover both a scalar and a list containing a non-string or empty member). Confirm the reported verdict and the files written in each — every malformed state must write nothing at all.
 - Confirm with `detect-shadows.sh` that the resulting configuration actually emits the worktree roots in the well-formed override state — the point of the task is that the previous configuration did not.
 
 ## Review plan
 
-Reviewer checks that the override is detected by the same test powbox uses rather than by file presence, that no run can report worktree-ready while the declarations are inert, that a malformed override `shadow:` fails closed instead of being rewritten, that `.powbox.local.yml` is never staged, that the `ctx:`-only case is a genuine no-op, and that the two mirrors stay in parity.
+Reviewer checks that the override is detected by the same test powbox uses rather than by file presence, that no run can report worktree-ready while the declarations are inert, that a malformed override `shadow:` — including a list with a non-string or empty member — fails closed instead of being coerced or rewritten, that `.powbox.local.yml` is never staged, that the `ctx:`-only case is a genuine no-op, and that the two mirrors stay in parity.
