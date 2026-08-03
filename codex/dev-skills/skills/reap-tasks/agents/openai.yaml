@@ -1,4 +1,4 @@
 interface:
   display_name: "Reap Tasks"
-  short_description: "Audit completed task files"
-  default_prompt: "Use $reap-tasks to review the completed task files in <folder-or-glob>."
+  short_description: "Reap completed task files"
+  default_prompt: "Use $reap-tasks to verify and reap the completed task files in <folder-or-glob>."
