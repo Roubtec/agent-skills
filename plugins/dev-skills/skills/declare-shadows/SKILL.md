@@ -81,6 +81,8 @@ Operate on the current repository only. Every step is idempotent and surgical �
 
    This deliberately surfaces a candidate with a nested `.git` anywhere below it even when that nested checkout is disposable, such as an editable package inside `.venv`; accept that conservative false negative rather than risk hiding human-owned repository content.
 
+   Before inspecting an already-declared literal or concrete glob match, check whether it is an active mount with `findmnt -no FSTYPE,SOURCE "$ROOT/<path>"`. If it reports `tmpfs`, the visible contents are the shadow rather than the host tree: except for the three exact pre-authorized `enable-worktrees` roots below, mark the declaration unverifiable, do not approve it or propose removing it from this mounted view, and ask the user to inspect the host path outside the container or restart in an environment where that declaration is disabled and rerun before deciding.
+
    Judge an already-declared path by the same lists — one that now lands in a "do not shadow" list is a finding, not a fixture. Treat only the exact, already-declared `enable-worktrees` roots (`.worktrees`, `.claude/worktrees`, and `.git/worktrees`) as pre-authorized guard outcomes: preserve them exactly even when their worktree metadata trips the VCS-boundary check, and never propose removing them from either list in this audit.
 
 5. **Confirm the judgment calls with the user.** List what you propose to shadow, what you are deliberately leaving alone, and any existing declaration you propose to drop, each with a one-line reason. Caches and human-facing output are the entries most worth naming explicitly — a user who wants `.turbo/` shadowed anyway should get to say so. Never remove an existing entry without that confirmation; it may be deliberate.
@@ -119,6 +121,7 @@ State concisely:
 - What you declared, and what regenerates each entry.
 - What you deliberately left undeclared, and why — especially caches and anything host-facing.
 - Any pre-existing declaration you removed or flagged as unsafe, and what it was costing — for a removed one, whether its tmpfs is still mounted in this session, what you rescued from it, and that the removal lands only on the next container start.
+- Any active pre-existing declaration that remains unverifiable until its host tree can be inspected.
 - Whether a `.powbox.local.yml` override is masking the committed list, and which file each agreed change landed in.
 - Whether the shadows are live in this session (step 7) or pending the next container start.
 - Any blocker: not a git repo, a malformed `shadow:` list in either `.powbox.yml` or an active override, or a candidate that turned out to be tracked.
