@@ -563,10 +563,13 @@ async function runReviewCycle(cycle) {
       return result("pass", "reviewer passed; final confirmation pass disposed nothing new");
     }
 
-    // Anything else needs a (re-)review — bounded by the cap.
+    // Anything else needs a (re-)review — bounded by the cap. This check is
+    // reachable at the cap only through a confirmation pass that changed
+    // content (a FAILED round at the cap returns below, before another fixer
+    // could run and leave never-reviewed changes behind).
     if (rounds >= cap) {
       return result("review-cap", `hit the ${cap}-round cap without convergence`, {
-        outstanding: findings || { note: "final confirmation pass changed content that could not be re-reviewed within the cap" },
+        outstanding: { note: "final confirmation pass changed content that could not be re-reviewed within the cap" },
       });
     }
     rounds += 1;
@@ -617,6 +620,11 @@ async function runReviewCycle(cycle) {
         peer: peerGating,
         peerNotes: peer.notes || "",
       };
+      // A failed round at the cap stops HERE — no further fixer pass may run,
+      // or its changes would land committed but never reviewed.
+      if (rounds >= cap) {
+        return result("review-cap", `hit the ${cap}-round cap without convergence`, { outstanding: findings });
+      }
       continue;
     }
 

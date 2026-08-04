@@ -3,9 +3,10 @@
  *
  * Work through every UNRESOLVED review thread on one pull request: gather the
  * threads, fix what is right / push back on what is wrong, verify every
- * disposition with a fresh-eyes reviewer (max 12 rounds), then publish by default
- * (lease-safe push, reply + resolve threads, Summary comment, pings) — a `no-push`
- * run stays local-only and mutates nothing.
+ * disposition through the shared review cycle (fresh-eyes reviewer plus a
+ * best-effort cross-harness codex peer, bounded by the cycle's round cap),
+ * then publish by default (lease-safe push, reply + resolve threads, Summary
+ * comment, pings) — a `no-push` run stays local-only and mutates nothing.
  * The re-review pings fire ONLY when the push actually advanced the branch with
  * new commits/rewritten history; a no-op push (nothing new to review) skips them
  * so an automated review -> address -> review loop can terminate.
