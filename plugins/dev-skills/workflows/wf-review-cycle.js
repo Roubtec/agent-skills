@@ -59,11 +59,14 @@
  * ------------------------------------
  * A workflow cannot shell out — agent()/parallel()/pipeline()/log()/phase()
  * are its entire surface — so the peer invocation happens INSIDE a subagent
- * prompt, never in the script. The stage's agent() call is schema-validated,
- * and a peer subagent can never fail the stage: a null agent() return, a
- * schema-validation miss, a thrown stage, and every outcome that is not
- * passed/issues all land as a recorded non-blocking round outcome. The peer is
- * never required for the cycle to conclude.
+ * prompt, never in the script. The stage launches BESIDE the fresh reviewer
+ * through parallel(), the canonical concurrent launch (the examination-only
+ * peer is the protocol's sole same-checkout concurrency exception), and its
+ * install/login preflight runs once per run, not per round. The stage's
+ * agent() call is schema-validated, and a peer subagent can never fail the
+ * stage: a null agent() return, a schema-validation miss, a thrown stage, and
+ * every outcome that is not passed/issues all land as a recorded non-blocking
+ * round outcome. The peer is never required for the cycle to conclude.
  *
  * The peer's baseline interface is powbox's `peer-review-run` helper (result
  * schema powbox.peer-review-run/v1) — but NOT YET: as baked today the helper
@@ -95,7 +98,7 @@
 export const meta = {
   name: "wf-review-cycle",
   description: "Run the canonical review cycle on one change: implement/fix, verify with a fresh-eyes reviewer AND a best-effort cross-harness codex peer review each round, dispose every finding explicitly (fixed / declined / escalated to an open question), and loop to convergence (max 12 reviewer rounds; callers may lower the cap, never raise it). Peer outcomes never block.",
-  whenToUse: "Run a local fix->review->peer->fix cycle on a worktree, branch, diff, or drafted task file before a PR exists — or consume it from another workflow by nesting or by embedding its marked section. Not for addressing PR review threads (wf-address-review) or task batches (wf-address-tasks); those consume this cycle themselves.",
+  whenToUse: "Run a local fix->review->peer->fix cycle — review is cross-harness, a best-effort codex peer beside the fresh reviewer — on a worktree, branch, diff, or drafted task file before a PR exists, or consume it from another workflow by nesting or by embedding its marked section. Not for addressing PR review threads (wf-address-review) or task batches (wf-address-tasks); those consume this cycle themselves.",
   phases: [
     { title: "Scope", detail: "resolve the target worktree, branch, base, artifact type, and work items" },
     { title: "Review cycle", detail: "fixer -> fresh-eyes reviewer rounds with explicit finding dispositions" },
@@ -110,9 +113,9 @@ export const meta = {
 // A synthesized copy of this section MUST keep a header naming this canonical
 // section ("Synthesized from wf-review-cycle.js EMBEDDABLE SECTION
 // review-cycle-core") so edits here have a findable list of copies to refresh.
-// The section depends only on the workflow runtime globals (agent, log) plus
-// plain JS; it holds no module state, so a fan-out owner embedding it keeps
-// every launch it makes in that owner's own flat script state.
+// The section depends only on the workflow runtime globals (agent, parallel,
+// log) plus plain JS; it holds no module state, so a fan-out owner embedding
+// it keeps every launch it makes in that owner's own flat script state.
 // ============================================================================
 
 // The canonical convergence safeguard. Consumers may only LOWER it.
@@ -181,13 +184,14 @@ const CYCLE_FIX_SCHEMA = {
     summary: { type: "string", description: "One paragraph: what this pass did." },
     dispositions: {
       type: "array",
-      description: "One entry per reviewer/peer finding this pass was handed. EVERY handed finding must appear — none may be silently dropped.",
+      description: "One entry per reviewer/peer finding this pass was handed. EVERY handed finding must appear — coverage is checked structurally by `findingId`, and an uncovered finding is carried back to the next pass.",
       items: {
         type: "object",
         properties: {
+          findingId: { type: "string", description: "The handed finding's `id`, echoed exactly — this is how coverage is verified. Omit only for a spontaneous disposition (e.g. of a pass-note), which has no handed id." },
           finding: { type: "string", description: "The finding, verbatim or by precise reference." },
           origin: { type: "string", description: "reviewer | peer" },
-          disposition: { type: "string", description: "fixed | declined | escalated" },
+          disposition: { type: "string", description: "fixed | declined | escalated — nothing else counts as a disposition." },
           detail: { type: "string", description: "fixed: what changed + commit. declined: the reason (a decline is verified by the next fresh reviewer, never final here). escalated: one line naming the question." },
           questionId: { type: "string", description: "REQUIRED when disposition is `escalated`: the id of the openQuestions entry this raised." },
         },
@@ -200,9 +204,9 @@ const CYCLE_FIX_SCHEMA = {
     proactive: { type: "string", description: "Same-pattern fixes made beyond the literal items, or empty." },
     finalSha: { type: "string", description: "HEAD sha after this pass, with everything committed." },
     clean: { type: "boolean", description: "True only if `git status --porcelain` is empty with every intended change committed." },
-    artifactDir: { type: "string", description: "Absolute path of this cycle's unique artifact directory (round 1 creates it; later passes reuse it)." },
+    artifactDir: { type: "string", description: "Absolute path of this cycle's unique artifact directory — REQUIRED every pass: round 1 creates it (outside the worktree) and reports it, later passes echo the directory they were given. The result contract promises full round history reachable through it." },
   },
-  required: ["changed", "dispositions", "openQuestions", "deviations", "clean"],
+  required: ["changed", "dispositions", "openQuestions", "deviations", "clean", "artifactDir"],
 };
 
 const CYCLE_REVIEW_SCHEMA = {
@@ -298,6 +302,9 @@ function cycleItemsBlock(cycle) {
 function cycleFindingsBlock(findings) {
   if (!findings) return "";
   const parts = [];
+  if (Array.isArray(findings.carried) && findings.carried.length) {
+    parts.push(`### Findings carried forward — the previous pass gave these NO valid disposition (missing/unknown \`findingId\`, an unrecognized disposition value, or an \`escalated\` with no matching open question). Dispose EVERY one now, echoing its \`id\` as \`findingId\`.\n\n${JSON.stringify(findings.carried, null, 2)}`);
+  }
   if (Array.isArray(findings.reviewer) && findings.reviewer.length) {
     parts.push(`### Reviewer findings\n\n${JSON.stringify(findings.reviewer, null, 2)}`);
   }
@@ -318,11 +325,11 @@ function cycleFixPrompt(cycle, state) {
   const roundIntro = state.confirming
     ? `The fresh reviewer has PASSED this cycle. This is the FINAL CONFIRMATION PASS of the disposition rule: read the passing reports below and dispose anything in them still worth acting on (pass-notes, stray remarks) — \`fixed\`, \`declined\` (with reason), or \`escalated\`. If nothing needs acting on, return \`changed: false\` with an empty \`dispositions\` array; that ends the cycle. Anything you fix or dispute will go through another reviewer round.`
     : state.findings
-      ? `This is fix-up round ${state.round}. Address the findings below: dispose EVERY one explicitly — \`fixed\`, \`declined\` (with a reason; the next fresh reviewer verifies declines), or \`escalated\` to an open question in the pinned format. Never drop one silently, and never implement a fix you believe is wrong just to clear a finding.`
+      ? `This is fix-up round ${state.round}. Address the findings below: dispose EVERY one explicitly — \`fixed\`, \`declined\` (with a reason; the next fresh reviewer verifies declines), or \`escalated\` to an open question in the pinned format — echoing each finding's \`id\` as your disposition's \`findingId\` (coverage is checked structurally; an uncovered finding comes back to the next pass and blocks the round). Never drop one silently, and never implement a fix you believe is wrong just to clear a finding.`
       : `This is round 1: carry out the assignment below.`;
   const artifactLine = state.artifactDir
-    ? `This cycle's artifact directory is \`${state.artifactDir}\` — write this pass's packet prose (what you did, dispositions, question drafts) under it as \`round-${state.round}/\`.`
-    : `Create this cycle's UNIQUE artifact directory first — outside the worktree, e.g. \`mktemp -d "\${TMPDIR:-/tmp}/review-cycle-${cycle.slug || "cycle"}.XXXXXX"\` (never a fixed shared name: parallel cycles share scratch space) — report it as \`artifactDir\`, and write this pass's packet prose under it as \`round-${state.round}/\`.`;
+    ? `This cycle's artifact directory is \`${state.artifactDir}\` — report it back as \`artifactDir\` and write this pass's packet prose (what you did, dispositions, question drafts) under it as \`round-${state.round}/\`.`
+    : `Create this cycle's UNIQUE artifact directory first — outside the worktree, e.g. \`mktemp -d "\${TMPDIR:-/tmp}/review-cycle-${cycle.slug || "cycle"}.XXXXXX"\` (never a fixed shared name: parallel cycles share scratch space) — report it as \`artifactDir\` (REQUIRED: the cycle refuses to run rounds with no home for their history), and write this pass's packet prose under it as \`round-${state.round}/\`.`;
   return `You are the fixer for one review cycle (branch \`${cycle.branch}\`, review base \`${cycle.base}\`, artifact type ${cycle.artifactType}).
 
 ## WORKTREE CONTRACT (do this before anything else)
@@ -360,11 +367,20 @@ function cycleReviewChecks(artifactType) {
 }
 
 function cycleReviewPrompt(cycle, state) {
+  const handed = state.handedFindings
+    ? [...(state.handedFindings.carried || []), ...(state.handedFindings.reviewer || []), ...(state.handedFindings.peer || [])]
+    : [];
+  const handedBlock = handed.length
+    ? `\n## Findings handed to the fixer this round (verbatim, with ids — verify EVERY one received an explicit, justified disposition below; a finding with no disposition was silently dropped, itself a blocking issue)\n\n${JSON.stringify(handed, null, 2)}\n`
+    : "";
   const dispositionsBlock = state.packet && Array.isArray(state.packet.dispositions) && state.packet.dispositions.length
     ? `\n## Proposed finding dispositions (verify each; a \`declined\` must be technically justified, not a convenient dismissal — you may overrule it)\n\n${JSON.stringify(state.packet.dispositions, null, 2)}\n`
     : "";
   const workBlock = state.packet && Array.isArray(state.packet.workReport) && state.packet.workReport.length
     ? `\n## Fixer's per-item report (verify the claims hold in the committed state; you were NOT given its reasoning)\n\n${JSON.stringify(state.packet.workReport, null, 2)}\n`
+    : "";
+  const persistLine = state.artifactDir
+    ? `\nPersist your full report for the round history: write the same content you return (verdict, numbered issues, notes) to \`${state.artifactDir}/round-${state.round}/reviewer-report.md\`. That directory is OUTSIDE the worktree, and this one report file is the sole exception to the no-file-creation rule.\n`
     : "";
   return `You are an independent fresh-eyes reviewer for one review cycle (branch \`${cycle.branch}\`, review base \`${cycle.base}\`, artifact type ${cycle.artifactType}). You have no knowledge of how the work was built, and that is the point. Edit NOTHING; create, update, or delete no files; do not use the task-tracker tools.
 
@@ -377,7 +393,7 @@ Read the repository's agent-context files (\`AGENTS.md\` / \`CLAUDE.md\`) first 
 ${cycleReviewChecks(cycle.artifactType)}
 
 Scope with \`git diff --name-only ${JSON.stringify(cycle.base)}...HEAD\`, then read each touched file IN FULL — do not read commit messages or diff content (both anchor you to the fixer's intent); follow references into untouched files when needed. If the diff looks empty despite claimed work, set \`emptyDiffFlag\` and stop — that signals a wrong worktree/branch, not real absence.
-${cycle.scope && cycle.scope.reviewInstructions ? `\n## Consumer review criteria (verify each item against these too)\n\n${cycle.scope.reviewInstructions}\n` : ""}${cycleItemsBlock(cycle)}${dispositionsBlock}${workBlock}
+${persistLine}${cycle.scope && cycle.scope.reviewInstructions ? `\n## Consumer review criteria (verify each item against these too)\n\n${cycle.scope.reviewInstructions}\n` : ""}${cycleItemsBlock(cycle)}${handedBlock}${dispositionsBlock}${workBlock}
 Return \`pass: true\` only if everything holds and no material issue remains; else \`pass: false\` with numbered, actionable \`issues\`. Be strict but fair — real gaps and functional problems, not style nits. Put pass-worthy caveats in \`notes\` (the cycle disposes them rather than dropping them).`;
 }
 
@@ -399,17 +415,20 @@ function cyclePeerPrompt(cycle, state) {
     dispositions: (state.packet && state.packet.dispositions) || [],
     workReport: (state.packet && state.packet.workReport) || [],
   };
+  const preflightStep = state.peerPreflighted
+    ? `1. Preflight: already done this run — an earlier round verified the \`codex\` binary and login, so skip the probes. An auth/usage error from the launch itself still returns \`unavailable\`.`
+    : `1. Preflight: if \`command -v codex\` fails, return outcome \`unavailable\` (detail: missing binary). If \`codex login status\` exits non-zero and \`CODEX_API_KEY\` is unset, return \`unavailable\` (detail: logged out). An auth/usage error from the launch itself is also \`unavailable\`.`;
   return `You run the best-effort cross-harness PEER REVIEW stage for one review-cycle round. You launch a read-only \`codex\` review of the committed state, wait for it, and return its result structurally. You NEVER fail this stage: every problem becomes a non-blocking outcome in the schema (\`unavailable\`, \`timeout\`, \`forfeited\`, \`failed\`) with a one-line \`detail\` — never an error, never a refusal to answer.
 
 ## WORKTREE CONTRACT
 
 ${cycleContract(cycle, "peer")}
-The peer examines this worktree READ-ONLY; you edit nothing either.
+The peer examines this worktree READ-ONLY; you edit nothing either. The cycle's fresh reviewer is examining the same committed state concurrently — two readers are safe, and the reviewer alone owns builds/execution.
 
 ## Steps
 
-1. Preflight: if \`command -v codex\` fails, return outcome \`unavailable\` (detail: missing binary). If \`codex login status\` exits non-zero and \`CODEX_API_KEY\` is unset, return \`unavailable\` (detail: logged out). An auth/usage error from the launch itself is also \`unavailable\`.
-2. Prepare unique per-attempt paths under this cycle's artifact directory: \`round_dir="${state.artifactDir || "<artifactDir>"}/round-${state.round}"\`, \`mkdir -p "$round_dir"\`, with \`prompt_file\`, \`outfile\`, \`stderr_file\` inside it (suffix \`-attempt2\` on a retry; never reuse a path).
+${preflightStep}
+2. Prepare unique per-attempt paths under this cycle's artifact directory: \`round_dir="${state.artifactDir}/round-${state.round}"\`, \`mkdir -p "$round_dir"\`, with \`prompt_file\`, \`outfile\`, \`stderr_file\` inside it (suffix \`-attempt2\` on a retry; never reuse a path).
 3. Write the peer prompt below VERBATIM to \`$prompt_file\` with a quoted heredoc (\`<<'PEER_PROMPT'\`) — never assemble it through shell interpolation.
 4. Launch the peer as ONE supervised foreground call, bounded UNDER your own Bash tool limit so the tool can never kill it mid-run unaccounted (set the Bash tool timeout to 600000 ms and bound the peer tighter with \`timeout\`):
 
@@ -489,6 +508,30 @@ ${JSON.stringify(findings, null, 2)}
 Return a verdict per finding. Edit nothing.`;
 }
 
+// Structural enforcement of the disposition rule: every handed finding carries
+// a script-assigned `id`, and a pass's dispositions must name each id with a
+// recognized disposition (`escalated` additionally naming an open question
+// that exists). A finding left uncovered gates the round and is carried
+// forward VERBATIM to the next fixer pass, so no finding can vanish between
+// rounds on a fixer's silence. Matching is by id, never by finding text —
+// paraphrase-proof where text matching is not.
+function cycleUndisposedFindings(findings, fix, knownQuestionIds) {
+  const handed = findings
+    ? [...(findings.carried || []), ...(findings.reviewer || []), ...(findings.peer || [])]
+    : [];
+  if (!handed.length) return [];
+  const covered = new Set();
+  for (const d of fix.dispositions || []) {
+    if (!d || !d.findingId) continue;
+    const valid =
+      d.disposition === "fixed" ||
+      d.disposition === "declined" ||
+      (d.disposition === "escalated" && d.questionId && knownQuestionIds.has(d.questionId));
+    if (valid) covered.add(d.findingId);
+  }
+  return handed.filter((f) => !covered.has(f.id));
+}
+
 // runReviewCycle — the whole protocol as one awaitable function.
 //
 // cycle: {
@@ -521,6 +564,7 @@ async function runReviewCycle(cycle) {
   let findings = null; // findings block for the next fixer pass; null on round 1
   let confirming = false; // next fixer pass is the final confirmation pass
   let peerUnavailable = false; // sticky: an unavailable peer is not re-probed every round
+  let peerPreflighted = false; // run-level: the install/login preflight runs once per run, not per round
   let reviewerNotes = ""; // the latest reviewer's pass-notes (PR-body caveats for consumers)
 
   const result = (verdict, detail, extra) => ({
@@ -551,10 +595,29 @@ async function runReviewCycle(cycle) {
     if (fix.blocker) return result("error", `fixer blocked on pass ${fixerPasses}: ${fix.blocker}`);
     if (!fix.clean) return result("error", `fixer left an unclean worktree on pass ${fixerPasses}; refusing to review a partial state`);
     if (fix.artifactDir) artifactDir = fix.artifactDir;
+    // The result contract promises full round history reachable via
+    // artifactDir; a cycle with no home for its rounds may not run them.
+    if (!artifactDir) return result("error", `fixer reported no artifactDir on pass ${fixerPasses}; refusing to run rounds whose history has no home`);
     for (const d of fix.dispositions || []) findingDispositions.push({ ...d, pass: fixerPasses });
     for (const q of fix.openQuestions || []) openQuestions.push(q);
     for (const dev of fix.deviations || []) deviations.push(dev);
-    if (fix.workReport || fix.finalSha || fix.summary || fix.proactive) packet = { ...(packet || {}), ...fix };
+    // Accumulate the pass packet field-by-field. A later pass updates what it
+    // actually reports, and an explicitly EMPTY field never clobbers a
+    // populated one from an earlier pass: schema-driven agents commonly emit
+    // every declared property, and the confirming pass is even asked for an
+    // empty `dispositions` array — an empty `workReport` (or blank `finalSha`)
+    // alongside it would otherwise wipe the per-item report consumers replay
+    // (wf-address-review publishes thread replies/resolves from it).
+    packet = packet || {};
+    if (Array.isArray(fix.workReport) && fix.workReport.length) packet.workReport = fix.workReport;
+    if (typeof fix.summary === "string" && fix.summary) packet.summary = fix.summary;
+    if (typeof fix.proactive === "string" && fix.proactive) packet.proactive = fix.proactive;
+    if (typeof fix.finalSha === "string" && fix.finalSha) packet.finalSha = fix.finalSha;
+
+    // Disposition coverage: every handed finding must be validly disposed by
+    // id. Anything uncovered gates the round below and is carried forward.
+    const knownQuestionIds = new Set(openQuestions.map((q) => q && q.id).filter(Boolean));
+    const undisposed = cycleUndisposedFindings(findings, fix, knownQuestionIds);
 
     // Terminal condition of the disposition rule: the reviewer has passed and
     // the fixer's last pass disposed nothing new (and changed nothing that
@@ -574,16 +637,37 @@ async function runReviewCycle(cycle) {
     }
     rounds += 1;
 
-    const state = { round: rounds, packet: fix, artifactDir };
-    const review = await agent(cycleReviewPrompt(cycle, state), {
-      label: `${lp}review#${rounds}`,
-      schema: CYCLE_REVIEW_SCHEMA,
-    });
-    const peer = peerUnavailable
-      ? { outcome: "unavailable", findings: [], notes: "", detail: "peer marked unavailable earlier this cycle" }
-      : await runCyclePeerStage(cycle, state);
+    const state = {
+      round: rounds,
+      packet: { ...packet, dispositions: fix.dispositions || [] },
+      artifactDir,
+      handedFindings: findings,
+      peerPreflighted,
+    };
+    // The peer launches BESIDE the fresh reviewer — the canonical concurrent
+    // launch (the examination-only peer is the protocol's sole same-checkout
+    // concurrency exception: the reviewer alone owns builds/execution, and two
+    // readers are safe). runCyclePeerStage can neither throw nor block the
+    // round, so on any peer problem this degrades to the reviewer's verdict
+    // exactly as a sequential launch would.
+    const [review, rawPeer] = await parallel([
+      () =>
+        agent(cycleReviewPrompt(cycle, state), {
+          label: `${lp}review#${rounds}`,
+          schema: CYCLE_REVIEW_SCHEMA,
+        }),
+      async () =>
+        peerUnavailable
+          ? { outcome: "unavailable", findings: [], notes: "", detail: "peer marked unavailable earlier this cycle" }
+          : runCyclePeerStage(cycle, state),
+    ]);
+    // Re-normalizing is idempotent for the stage's own results and guards the
+    // one path it cannot: a runtime that hands back a null parallel slot. The
+    // cycle's `disabled` outcome is not helper vocabulary, so carry it as-is.
+    const peer = rawPeer && rawPeer.outcome === "disabled" ? rawPeer : normalizeCyclePeerResult(rawPeer);
     peerRounds.push({ round: rounds, outcome: peer.outcome, detail: peer.detail });
     if (peer.outcome === "unavailable") peerUnavailable = true;
+    else if (peer.outcome !== "disabled") peerPreflighted = true;
 
     if (!review) return result("error", `reviewer returned nothing on round ${rounds}`);
     if (review.emptyDiffFlag) return result("error", `reviewer saw an empty diff on round ${rounds} (likely wrong worktree/branch)`);
@@ -611,13 +695,18 @@ async function runReviewCycle(cycle) {
       }
     }
 
-    const roundPassed = !!review.pass && peerGating.length === 0;
+    // The round passes only when the reviewer passes, no grounded peer finding
+    // gates, AND every finding handed to this round's fixer was validly
+    // disposed — an uncovered finding fails the round and is carried forward,
+    // so the terminal pass can never leave a finding without a disposition.
+    const roundPassed = !!review.pass && peerGating.length === 0 && undisposed.length === 0;
     if (!roundPassed) {
       confirming = false;
       findings = {
-        reviewer: review.issues || [],
+        carried: undisposed,
+        reviewer: (review.issues || []).map((f, i) => ({ id: `r${rounds}-${i + 1}`, ...f })),
         reviewerNotes: review.notes || "",
-        peer: peerGating,
+        peer: peerGating.map((f, i) => ({ id: `p${rounds}-${i + 1}`, ...f })),
         peerNotes: peer.notes || "",
       };
       // A failed round at the cap stops HERE — no further fixer pass may run,
@@ -630,8 +719,9 @@ async function runReviewCycle(cycle) {
 
     // Round passed. light mode ends here, recording undisposed remarks as such.
     if (cycle.mode === "light") {
-      const undisposed = [review.notes, peer.notes].filter(Boolean);
-      return result("pass", "reviewer passed (light mode: final confirmation pass skipped)", { undisposed });
+      return result("pass", "reviewer passed (light mode: final confirmation pass skipped)", {
+        undisposed: [review.notes, peer.notes].filter(Boolean),
+      });
     }
 
     // Full mode: one final fixer confirmation pass over the passing reports, so
@@ -640,6 +730,7 @@ async function runReviewCycle(cycle) {
     // anything it fixes or disputes goes through another reviewer round.
     confirming = true;
     findings = {
+      carried: [],
       reviewer: [],
       reviewerNotes: review.notes || "(no notes — confirm nothing in the passing reports needs acting on)",
       peer: [],
@@ -692,8 +783,12 @@ const structured = args && typeof args === "object" && !Array.isArray(args) && (
 const rawArgs = structured ? "" : flattenCycleArgs(args);
 const lowerArgs = rawArgs.toLowerCase();
 
+// In structured mode trust ONLY the structured field, like the sibling flags
+// (mode, maxRounds): flattening the object would regex-scan scope.items —
+// verbatim third-party content such as PR review-thread bodies — where a
+// merely QUOTED `peer-opinions=off` token must not disable the peer.
 const peerOff = structured
-  ? args.peer === "off" || /\bpeer[\s-]*opinions?\s*=\s*off\b/.test(flattenCycleArgs(args).toLowerCase())
+  ? args.peer === "off"
   : /\bpeer[\s-]*opinions?\s*=\s*off\b/.test(lowerArgs);
 const lightMode = structured ? args.mode === "light" : /\blight\b/.test(lowerArgs);
 let requestedRounds = structured ? args.maxRounds : null;

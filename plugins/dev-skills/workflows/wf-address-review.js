@@ -75,7 +75,7 @@
 export const meta = {
   name: "wf-address-review",
   description: "Address every unresolved review thread on one PR: fix or push back, verify through the shared review cycle — a fresh-eyes reviewer plus a best-effort cross-harness codex peer review each round (review is cross-harness; peer outcomes never block; bounded round cap) — then publish by default (use no-push for a local-only dry run).",
-  whenToUse: "Work through maintainer-vetted review feedback on a single PR hands-off. Not for new task batches (wf-address-tasks) or stack rebases.",
+  whenToUse: "Work through maintainer-vetted review feedback on a single PR hands-off, with cross-harness verification (a best-effort codex peer beside the fresh reviewer). Not for new task batches (wf-address-tasks) or stack rebases.",
   phases: [
     { title: "Gather", detail: "resolve the PR, branch state, and unresolved threads" },
     { title: "Fix and verify", detail: "fix/push-back per thread through the nested wf-review-cycle" },
@@ -231,6 +231,7 @@ function reviewCriteria() {
 - \`push-back\` must be technically justified, not a convenient dismissal.
 - \`deferred-to-task\` must point at a committed task file that genuinely covers the concern, with the deferral itself justified (maintainer-directed, or genuinely scope-expanding while the branch builds and covers its main paths) — not an evasion of a cheap fix.
 - \`ambiguous-skipped\` must genuinely require an authoritative decision.
+Every gathered work item must have a \`workReport\` entry (a \`review-thread\` matched by its \`threadId\`, a \`standalone\` by its \`url\`) — an item with none was silently dropped, itself a blocking issue.
 You may reclassify any item. Confirm the claimed same-pattern sweep did not miss a sibling occurrence.`;
 }
 
@@ -404,6 +405,19 @@ const passed = cycle.verdict === "pass";
 const rounds = cycle.rounds;
 const workReport = cycle.workReport || [];
 
+// Per-item coverage: the cycle's `workReport` rides through it untyped (its
+// schema cannot require consumer fields), so this consumer enforces its own
+// one-entry-per-item contract — the publisher replies/resolves ONLY what the
+// report names, so an item with no entry would be silently left untouched
+// while a summary still posts. Review-threads match by threadId, standalone
+// items by url.
+const itemCovered = (item) =>
+  item.type === "review-thread"
+    ? workReport.some((d) => d && d.threadId && d.threadId === item.threadId)
+    : workReport.some((d) => d && d.url && d.url === item.url);
+const uncoveredItems = packet.items.filter((it) => !itemCovered(it));
+const uncoveredRefs = uncoveredItems.map((it) => it.threadId || it.url);
+
 if (!flags.push) {
   // Local-only run: make NO PR mutations. The disposition map is the deliverable
   // so a later "push" turn can replay replies/resolves precisely.
@@ -421,6 +435,9 @@ if (!flags.push) {
     peerRounds: cycle.peerRounds,
     artifactDir: cycle.artifactDir,
     outstanding: passed ? null : cycle.outstanding || null,
+    ...(uncoveredItems.length
+      ? { uncoveredItems: uncoveredRefs, coverageNote: `${uncoveredItems.length} gathered item(s) have no workReport entry; a later publish replay would skip them.` }
+      : {}),
     note: "Local-only run: no push, no replies/resolves, no comment. Re-run without `no-push` to publish with the default contributing-bot pings, or with `push` to publish quietly.",
   };
 }
@@ -442,11 +459,25 @@ if (!passed) {
   };
 }
 
-// Guard before any publication side effect: a `review-thread` disposition with
-// no threadId/commentId cannot be replied to or resolved, and the JSON schema
-// cannot make those conditionally required. Catch it here so we never push and
-// then fail mid-publish on a missing id (nothing has been pushed yet on a push
-// run — the publisher does the push — so aborting now leaves the remote clean).
+// Guards before any publication side effect (nothing has been pushed yet on a
+// push run — the publisher does the push — so aborting here leaves the remote
+// clean). First: every gathered item must be covered by a workReport entry, or
+// publication would push and post a summary while silently skipping the
+// uncovered thread(s).
+if (uncoveredItems.length) {
+  return {
+    status: "publish-aborted-incomplete-dispositions",
+    pr: packet.pr,
+    rounds,
+    dispositions: workReport,
+    uncoveredItems: uncoveredRefs,
+    note: `${uncoveredItems.length} gathered item(s) have no workReport entry; nothing was pushed. Re-run so every item carries its disposition.`,
+  };
+}
+
+// Second: a `review-thread` disposition with no threadId/commentId cannot be
+// replied to or resolved, and the JSON schema cannot make those conditionally
+// required.
 const badDisp = workReport.find(
   (d) => d.type === "review-thread" && (!d.threadId || !d.commentId)
 );
