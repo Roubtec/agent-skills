@@ -162,7 +162,7 @@ Give it the verbatim review items and proposed dispositions from that PR's packe
 Use `address-review` step 6's reviewer contract.
 It edits nothing and reports Pass or numbered Issues.
 
-Give the peer those same inputs verbatim, not the fixer's reasoning or the Reviewer's execution steps. Tell it to read the actual files, edit nothing, and verify dispositions in committed code: fixes hold, already-addressed claims are true, push-backs are technically justified, and follow-up-task items point to a committed task file that covers the concern. It may inspect code for quality but must not run builds/tests; the fresh Reviewer owns build/typecheck. Require `VERDICT: PASS | ISSUES`, followed for Issues by numbered findings tagged `blocking` or `minor`, each with `file:line` and a one-line rationale.
+Give the peer those same inputs verbatim, not the fixer's reasoning or the Reviewer's execution steps, under `address-review` step 6's peer contract: read the actual files, edit nothing, verify every disposition in the committed code, run no builds/tests (the fresh Reviewer owns build/typecheck), and report `VERDICT: PASS | ISSUES` with numbered findings tagged `blocking` or `minor`, each with `file:line` and a one-line rationale.
 
 Assign every per-entry/per-attempt value first. Always pass the reasoning-effort override so the peer runs at `high`; it is per-invocation and never changes the container's saved configuration, and without it review strength silently follows whichever effort a container most recently selected:
 
