@@ -10,12 +10,10 @@
  * new commits/rewritten history; a no-op push (nothing new to review) skips them
  * so an automated review -> address -> review loop can terminate.
  *
- * The `ping-contributing` modifier prunes that re-review set further: a bot is
- * re-pinged only when it brought a NEW finding this round (not a re-raise of a
- * deferred item or a re-argued push-back), so a multi-bot loop winds down
- * bot-by-bot as each reviewer goes quiet. Combined with explicit `ping-*` it
- * filters that named set; supplied alone it falls back to every known bot that
- * reviewed this round.
+ * The `ping-contributing` modifier prunes that re-review set further to the
+ * bots that brought a NEW finding this round — the disposition schema and the
+ * prompts below carry the operative definition — so a multi-bot loop winds
+ * down bot-by-bot as each reviewer goes quiet.
  *
  * Invoke as `/wf-address-review [PR#] [rebase on top of <branch>] [no-push]
  * [push] [ping-codex] [ping-claude] [ping-copilot] [ping-contributing]`.

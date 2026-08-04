@@ -119,11 +119,7 @@ git rev-list --right-only --cherry-mark --no-merges <target>...<source>
 The newest `=`-marked commit is `EF` (which is the **first** `=` line in the output, since `git rev-list` emits commits newest-first).
 If there are none, fall back to `EF = git merge-base <source> <target>` (the strict merge-base — same as `git rebase`'s default base in that case).
 
-This single change handles three otherwise-awkward geometries with one rule:
-
-- **Steady-state stack** (target hasn't moved since last rebase): `EF` ≈ `target`. Detection reduces to the simple "branches between target and source" case.
-- **Ancient fork** (source diverged early, target has progressed via rebased-and-merged PRs): `EF` advances to source's last commit that's patch-equivalent to anything on target. Branches sitting on the abandoned line past `EF` are correctly identified as chain candidates.
-- **Post-merge** (one chain branch was just merged into target via rebase-and-merge): `EF` advances to source's copy of the merged branch's tip. The remaining chain branches past `EF` are correctly identified.
+This single rule handles the otherwise-awkward geometries without special cases: the steady-state stack (`EF` ≈ `target`), the ancient fork (`EF` advances to source's last commit patch-equivalent to anything on target, exposing the abandoned line's branches as candidates), and the just-merged chain branch (`EF` advances past source's copy of its tip; see also "Detection corner cases").
 
 #### 2b. Identify chain candidates
 
@@ -241,7 +237,7 @@ When `git rebase` halts on a conflict:
    - One side is an addition only and the other side is empty.
    - It's a whitespace-only difference.
    - The resolution is clearly traceable to a fix already applied earlier in this same rebase run (i.e., the same hunk's resolution was just chosen on a predecessor branch).
-   - **Patch already represented in HEAD.** The incoming commit's content is *already on HEAD* — either literally (a true duplicate that patch-id should have skipped but didn't, because a predecessor's rebase mutated the patch-id — see Step 4's cascade caveat) or as a strict superset (HEAD has the same content plus refinements introduced by review-feedback fixups or by predecessor conflict resolutions). The resolution is `git rebase --skip`, **not** an in-file edit. Recognize this by inspecting `git show REBASE_HEAD` against HEAD's recent commits touching the same files: if every hunk REBASE_HEAD wants to add is already present in HEAD (with or without refinements), `--skip` is correct.
+   - **Patch already represented in HEAD.** The incoming commit's content is *already on HEAD* — either literally (a true duplicate that patch-id should have skipped but didn't, because a predecessor's rebase mutated the patch-id — see Step 4's cascade caveat) or as a strict superset (HEAD has the same content plus refinements introduced by review-feedback fixups or by predecessor conflict resolutions). The resolution is `git rebase --skip`, **not** an in-file edit; the recognition recipe below decides it.
 
      **Recognition recipe (concrete)**: (a) every new file `REBASE_HEAD` adds (`A` lines in `git show --name-status REBASE_HEAD`) already exists on HEAD; AND (b) for every modified file, every hunk's *post-image* (the `+` lines) is already present at the corresponding location on HEAD (literally or refined by a later commit). If both hold, `--skip`. If (b) holds only partially, this is **not** the patch-already-represented case — fall through to non-trivial.
 
@@ -251,7 +247,7 @@ When `git rebase` halts on a conflict:
    - **Patch already represented in HEAD**: run `git rebase --skip` (do *not* edit files). Narrate one line: "skipped redundant commit `<short-sha>` — content already on rebased base". Do not `git add` or `git rebase --continue` for this subtype; `--skip` advances the rebase by itself.
 4. **Non-trivial → stop unattended, otherwise propose and confirm.**
    In delegated unattended mode, record the conflicting files, offending commit, and why it is non-trivial; then run `git rebase --abort`, report the branch as the stop point, and return without touching subsequent branches.
-   The current disposable branch is restored to its pre-rebase tip; since `git rebase --abort` leaves untracked files behind, also run `git clean -fd` and confirm `git status --porcelain` is empty before returning (the parent's `git worktree remove` refuses untracked files without `--force`).
+   The current disposable branch is restored to its pre-rebase tip; then apply the delegated-mode clean-stop (`git clean -fd`, empty `git status --porcelain`) before returning.
    In normal interactive mode, present the conflict, the proposed resolution (with reasoning, including any traceable precedent), and ask the user to confirm before applying.
    On user "go": apply, `git add`, `git rebase --continue` (or `git rebase --skip` if the proposed resolution is "skip this commit").
    On user "no": stop the skill (see step 7 below).
@@ -288,7 +284,7 @@ When validation is required:
    The conflict resolution may have introduced a real issue (e.g., dropped a dependency, misnamed a symbol).
    Read the failure, attempt a focused fix, commit it as a follow-on commit on `<X>` (do not amend the rebased commits), re-run validation.
 4. **If the fix is ambiguous or attempts fail** — stop the skill at this branch.
-   In delegated unattended mode, record the exact failure and attempted fixes, run `git reset --hard <pre-rebase-ref>` on the disposable branch, then `git clean -fd` to drop untracked build/test outputs that `git reset --hard` leaves behind, confirm `git status --porcelain` is empty, and stop without touching subsequent branches.
+   In delegated unattended mode, record the exact failure and attempted fixes, run `git reset --hard <pre-rebase-ref>` on the disposable branch, apply the delegated-mode clean-stop (`git clean -fd`, empty `git status --porcelain`), and stop without touching subsequent branches.
    In normal interactive mode, tell the user:
    - The rebase succeeded but validation is failing.
    - The exact failure output.
@@ -346,27 +342,16 @@ Output:
 
 ### Why per-branch rebase instead of `git rebase --update-refs`
 
-Git 2.38+ supports `git rebase --update-refs <new-base> <tip-branch>`, which rebases an entire stack in one operation and automatically advances every intermediate local branch ref it encounters along the way.
-That's a great fast-path for clean stacks where you trust the rebase to produce sensible results without per-step inspection.
-
-This skill does **not** use `--update-refs` because:
-- Conflict resolution benefits from fresh shell state and per-branch reasoning.
-- Validation is per-branch — easier to gate behind "did this branch have a conflict?".
-- Stopping cleanly mid-chain is simpler when each branch is its own atomic step.
-
-If you have a stack that you're confident will rebase without conflicts and you want to skip the ceremony, `git rebase --update-refs <target> <source>` is the manual fast-path.
+Git 2.38+'s `git rebase --update-refs <target> <source>` rebases a whole stack in one operation, and it remains the manual fast-path for a stack you are confident will rebase without conflicts.
+This skill deliberately works branch-by-branch instead: conflict resolution benefits from fresh shell state and per-branch reasoning, validation gates on "did this branch have a conflict?", and stopping cleanly mid-chain is simpler when each branch is its own atomic step.
 
 ### Why no fetch
 
-Fetching is a side effect that influences which commits the rebase will see.
-Doing it implicitly inside this skill would surprise users who deliberately keep their local refs at a particular state.
-Keep ref hygiene in the user's hands.
+Fetching is a side effect that influences which commits the rebase will see; doing it implicitly would surprise users who deliberately keep their local refs at a particular state. Ref hygiene stays in the user's hands.
 
 ### Why keep pre-rebase refs
 
-They are cheap (just refs, no extra blobs) and trivial to bulk-delete.
-The cost of having them is near zero; the value if a rebase goes wrong is high.
-The user can clean them up with the one-liner in the final summary.
+They are cheap (just refs, no extra blobs), the value if a rebase goes wrong is high, and the final summary's one-liner cleans up this run's refs.
 
 ## Checklist for the agent
 
