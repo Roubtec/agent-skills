@@ -272,16 +272,15 @@ PEER_REVIEW_PROMPT
 
 mkdir -p "${artifact_dir}"
 
-# Leave this empty when configured effort is already known to be high/xhigh.
-effort_args=()
-# Otherwise use: effort_args=(-c model_reasoning_effort=high)
+# Pin peer effort per invocation; this never changes the container's configuration.
+peer_args=(-c model_reasoning_effort=high)
 
 codex exec --sandbox read-only --cd "${worktree}" -o "${outfile}" \
-  -c mcp_servers={} "${effort_args[@]}" "${prompt}" \
+  -c mcp_servers={} "${peer_args[@]}" "${prompt}" \
   < /dev/null 2> "${stderr_file}" &
 ```
 
-Keep the stderr file peekable because progress is emitted there, use the configured high-capability model, and populate `effort_args` with `-c model_reasoning_effort=high` when high/xhigh effort is not otherwise known. Allow a loose timeout of about 12 minutes with discretion to wait longer when progress is visible. On timeout or transient failure, retry once, then forfeit only that round; an auth or usage failure on a classify-at-first-invocation path disables the peer for the rest of the run.
+Keep the stderr file peekable because progress is emitted there, use the peer's configured high-capability model, and always pass `peer_args=(-c model_reasoning_effort=high)` so review strength never follows whichever effort a container most recently selected. Allow a loose timeout of about 12 minutes with discretion to wait longer when progress is visible. On timeout or transient failure, retry once, then forfeit only that round; an auth or usage failure on a classify-at-first-invocation path disables the peer for the rest of the run.
 
 The peer is **examination-only**: instruct it to read code and diffs, edit nothing, and run no builds or tests. Its prompt must include that checkout path, the base branch or commit range, the relevant task content verbatim, and this output contract: `VERDICT: PASS | ISSUES`, followed by numbered findings tagged `blocking` or `minor`, each with `file:line` and a one-line rationale. The own reviewer retains the full-build-first contract, which makes the parallel launch safe.
 
