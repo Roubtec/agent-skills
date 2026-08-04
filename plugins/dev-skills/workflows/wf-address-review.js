@@ -397,8 +397,16 @@ const cycle = await workflow("wf-review-cycle", {
 if (!cycle) {
   return { error: "Nested review cycle returned nothing.", pr: packet.pr };
 }
+// The cycle sets `artifactDirAnomalies` only when a later pass tried to move
+// the artifact directory — a warning that the round history may not ALL sit
+// under `artifactDir`. It is for-the-human data of the same class as
+// openQuestions/deviations, so every result that carries the pointer also
+// carries the anomaly record beside it.
+const anomalies = cycle.artifactDirAnomalies
+  ? { artifactDirAnomalies: cycle.artifactDirAnomalies }
+  : {};
 if (cycle.verdict === "error") {
-  return { error: `Review cycle failed: ${cycle.detail}`, pr: packet.pr, rounds: cycle.rounds, dispositions: cycle.workReport, openQuestions: cycle.openQuestions, artifactDir: cycle.artifactDir };
+  return { error: `Review cycle failed: ${cycle.detail}`, pr: packet.pr, rounds: cycle.rounds, dispositions: cycle.workReport, openQuestions: cycle.openQuestions, artifactDir: cycle.artifactDir, ...anomalies };
 }
 
 const passed = cycle.verdict === "pass";
@@ -420,24 +428,29 @@ const uncoveredItems = packet.items.filter((it) => !itemCovered(it));
 const uncoveredRefs = uncoveredItems.map((it) => it.threadId || it.url);
 
 // A gathered review-thread's covering entry must also be PUBLISHABLE as one:
-// the publisher routes on the ENTRY's `type` (replying/resolving only entries
-// typed `review-thread`, via their threadId/commentId), so an entry that
-// covers a thread while claiming another type — or one typed `review-thread`
-// without both identifiers — passes coverage yet would silently skip the
-// reply/resolve. The JSON schema cannot make fields conditionally required,
-// and the entry's own claim cannot be trusted for this check, so judge
-// against the gathered items: flag any entry typed `review-thread` that lacks
-// its identifiers, and any entry matching a gathered thread's threadId that
-// is not typed for it.
-const threadItemIds = new Set(
-  packet.items.filter((it) => it.type === "review-thread" && it.threadId).map((it) => it.threadId)
+// the publisher routes on the ENTRY's `type`, REPLIES via its `commentId`
+// (REST `.../comments/<id>/replies`), and RESOLVES via its `threadId` — so
+// the ids must be a gathered thread's actual pair, not merely nonempty. A
+// never-gathered threadId would resolve an unrelated thread by id, and a
+// wrong-but-nonempty commentId would thread the reply under one comment while
+// resolving another thread. The JSON schema cannot make fields conditionally
+// required, and the entry's own claim cannot be trusted for this check, so
+// judge against the gathered items (identity only — the reviewer judges
+// substance): flag any entry typed `review-thread` whose threadId is not a
+// gathered thread's or whose commentId is not that thread's top comment, and
+// any entry matching a gathered thread's threadId that is not typed for it.
+const threadItemById = new Map(
+  packet.items.filter((it) => it.type === "review-thread" && it.threadId).map((it) => [it.threadId, it])
 );
 const badDisp = workReport.find(
   (d) =>
     d &&
     (d.type === "review-thread"
-      ? !d.threadId || !d.commentId
-      : d.threadId && threadItemIds.has(d.threadId))
+      ? !d.threadId ||
+        !d.commentId ||
+        !threadItemById.has(d.threadId) ||
+        String(threadItemById.get(d.threadId).commentId) !== String(d.commentId)
+      : d.threadId && threadItemById.has(d.threadId))
 );
 const badDispRef = badDisp
   ? String(badDisp.ref || badDisp.threadId || badDisp.url || badDisp.kind || "(unidentified entry)")
@@ -462,12 +475,13 @@ if (!flags.push) {
     deviations: cycle.deviations,
     peerRounds: cycle.peerRounds,
     artifactDir: cycle.artifactDir,
+    ...anomalies,
     outstanding: passed ? null : cycle.outstanding || null,
     ...(uncoveredItems.length
       ? { uncoveredItems: uncoveredRefs, coverageNote: `${uncoveredItems.length} gathered item(s) have no workReport entry; a later publish replay would skip them.` }
       : {}),
     ...(badDisp
-      ? { malformedDisposition: badDispRef, dispositionNote: `Disposition "${badDispRef}" covers a review thread but is mistyped or missing threadId/commentId; a later publish replay would misroute or skip it.` }
+      ? { malformedDisposition: badDispRef, dispositionNote: `Disposition "${badDispRef}" covers a review thread but is mistyped, names a never-gathered thread, or carries a missing/mismatched threadId/commentId; a later publish replay would misroute or skip it.` }
       : {}),
     note: "Local-only run: no push, no replies/resolves, no comment. Re-run without `no-push` to publish with the default contributing-bot pings, or with `push` to publish quietly.",
   };
@@ -485,6 +499,7 @@ if (!passed) {
     deviations: cycle.deviations,
     peerRounds: cycle.peerRounds,
     artifactDir: cycle.artifactDir,
+    ...anomalies,
     outstanding: cycle.outstanding || null,
     note: "Hit the review cycle's round cap without a passing review; nothing was pushed.",
   };
@@ -507,15 +522,16 @@ if (uncoveredItems.length) {
 }
 
 // Second: a covering entry that cannot be published as its thread — mistyped,
-// or missing threadId/commentId (the tightened `badDisp` check above the
-// no-push branch, judged against the gathered items' identity).
+// naming a never-gathered thread, or missing/mismatching its identifiers (the
+// `badDisp` check above the no-push branch, judged against the gathered
+// items' identity).
 if (badDisp) {
   return {
     status: "publish-aborted-incomplete-dispositions",
     pr: packet.pr,
     rounds,
     dispositions: workReport,
-    note: `Disposition "${badDispRef}" covers a review thread but is mistyped or missing threadId/commentId; nothing was pushed. Re-run so every review thread's entry carries its type and identifiers.`,
+    note: `Disposition "${badDispRef}" covers a review thread but is mistyped, names a never-gathered thread, or carries a missing/mismatched threadId/commentId; nothing was pushed. Re-run so every review thread's entry carries its gathered type and identifiers.`,
   };
 }
 
@@ -604,6 +620,7 @@ return {
   deviations: cycle.deviations,
   peerRounds: cycle.peerRounds,
   artifactDir: cycle.artifactDir,
+  ...anomalies,
   publishReport: publishReport || { published: false, aborted: "publisher returned nothing" },
   note: published
     ? (notes.length ? notes.join(" ") : undefined)

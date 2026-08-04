@@ -546,7 +546,7 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds) {
       stray.set(`stray:${d.findingId}`, {
         id: `stray:${d.findingId}`,
         category: "disposition-error",
-        problem: `A disposition named findingId ${JSON.stringify(d.findingId)}, which matches no finding handed that round, so it covered nothing. Re-issue it against the correct handed id, or dispose this entry (e.g. declined) explaining the stray.`,
+        problem: `A disposition named findingId ${JSON.stringify(d.findingId)}, which matches no finding handed that round, so it covered nothing. Re-issue it against the correct handed id as needed, and dispose this entry (e.g. declined) explaining the stray.`,
       });
       continue;
     }

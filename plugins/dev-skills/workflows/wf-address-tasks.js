@@ -889,7 +889,7 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds) {
       stray.set(`stray:${d.findingId}`, {
         id: `stray:${d.findingId}`,
         category: "disposition-error",
-        problem: `A disposition named findingId ${JSON.stringify(d.findingId)}, which matches no finding handed that round, so it covered nothing. Re-issue it against the correct handed id, or dispose this entry (e.g. declined) explaining the stray.`,
+        problem: `A disposition named findingId ${JSON.stringify(d.findingId)}, which matches no finding handed that round, so it covered nothing. Re-issue it against the correct handed id as needed, and dispose this entry (e.g. declined) explaining the stray.`,
       });
       continue;
     }
@@ -1317,12 +1317,16 @@ async function implementTask(task, remote, peerMode) {
   // isolation; the examination-only peer beside each reviewer round is the
   // cycle's sole same-worktree concurrency exception.
   const result = await runReviewCycle(taskCycleConfig(task, remote, peerMode));
+  // `artifactDirAnomalies` is set only when a later pass tried to move the
+  // artifact directory — a warning that the round history may not ALL sit
+  // under `artifactDir`, so it rides beside the pointer wherever it goes.
   const carried = {
     rounds: result.rounds,
     openQuestions: result.openQuestions,
     deviations: result.deviations,
     peerRounds: result.peerRounds,
     artifactDir: result.artifactDir,
+    ...(result.artifactDirAnomalies ? { artifactDirAnomalies: result.artifactDirAnomalies } : {}),
   };
   if (result.verdict === "error") {
     return { slug: task.slug, branch: task.branch, status: "error", detail: result.detail, ...carried };
@@ -1345,14 +1349,16 @@ async function deliverTask(task, ready, remote) {
   // Best-effort cleanup once the work is durable (pushed/committed).
   await agent(cleanupNote(task), { label: `cleanup:${task.slug}` });
 
-  // Open questions, deviations, and the artifact pointer bubble up with the
-  // delivery result — they exist for the human and must survive to Summary.
+  // Open questions, deviations, and the artifact pointer (with any anomaly
+  // record beside it) bubble up with the delivery result — they exist for the
+  // human and must survive to Summary.
   const carried = {
     rounds: ready.rounds,
     openQuestions: ready.openQuestions,
     deviations: ready.deviations,
     peerRounds: ready.peerRounds,
     artifactDir: ready.artifactDir,
+    ...(ready.artifactDirAnomalies ? { artifactDirAnomalies: ready.artifactDirAnomalies } : {}),
   };
   if (pr && pr.opened && pr.url) {
     return { slug: task.slug, branch: task.branch, status: "done", prUrl: pr.url, ...carried };
