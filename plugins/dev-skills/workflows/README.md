@@ -42,6 +42,6 @@ The shared-filesystem assumption was verified on 2026-06-10 with Claude Code 2.1
 
 ## Validation
 
-Run `node --check` on `plugins/dev-skills/workflows/wf-review-cycle.js`, `wf-address-review.js`, and `wf-address-tasks.js` from the repository root to parse-check the shipped workflow sources.
+Run `node --check` on `plugins/dev-skills/workflows/wf-review-cycle.js`, `wf-address-review.js`, and `wf-address-tasks.js` from the repository root to parse-check the shipped workflow sources. The raw check parses these sources as-is because none uses a top-level `return`; a script that does (the runtime allows it inside its function wrapping) needs the runtime-wrapped form instead — powbox's `wf-check` where it has landed, else `node --check` on the body wrapped the way the runtime wraps it.
 
 Run `node scripts/test-checkout-cleanliness-report.mjs` for the focused regression suite covering `wf-address-tasks.js`'s `mainCheckoutSummary` function. The test extracts that function from the shipped workflow rather than maintaining a second copy.

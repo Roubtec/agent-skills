@@ -169,7 +169,7 @@ Collect decisions across the whole list, then apply. The mechanics depend on the
   the edit, leave nothing dangling, note where it landed.
 - **A decision that writes code** → delegate the locked decision to a fresh implementation subagent in the worktree that owns the change, under whatever verification the repo expects (tests, build/lint, isolated validation), and require a clean commit before review.
 
-For **every code-writing decision**, run a scoped `review-cycle` on the applied decision's diff (artifact type: applied-decision) before recording the item as applied or offering the change for delivery — the fresh-eyes reviewer, the best-effort peer with its pinned-strength launch and timeout, the gates, verbatim finding relay, and round cap are all that skill's and are not restated here. Deltas for this skill:
+For **every code-writing decision**, run a scoped `review-cycle` on the applied decision's diff (artifact type: decision) before recording the item as applied or offering the change for delivery — the fresh-eyes reviewer, the best-effort peer with its pinned-strength launch and timeout, the gates, verbatim finding relay, and round cap are all that skill's and are not restated here. Deltas for this skill:
 
 - The cycle's work item is the locked decision verbatim with its commit range; its reviewer verifies the diff implements exactly the locked option and nothing beyond it, under whatever verification the repo expects.
 - When a dispute is a judgment call rather than a factual claim, prefer surfacing the peer finding verbatim in the item's brief for the maintainer to decide instead of spending more subagent rounds. The peer informs; the maintainer still makes every judgment call.

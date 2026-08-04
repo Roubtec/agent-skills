@@ -234,7 +234,7 @@ Include in each implementer prompt:
 - **Coordination:** it must not revert unrelated or concurrent edits, and must accommodate that its base branch may itself be a sibling task's branch.
 - **Reporting:** when done, report what was implemented, decisions/tradeoffs/deviations, and any areas needing focused review.
 
-On a fix-up round, spawn a fresh `worker` implementer for the task; do not continue the prior implementer thread with `send_input`. Fresh context is intentional because the fix-up agent should read the committed worktree plus the findings without attachment to earlier choices. Paste both reports verbatim as separately labeled own-reviewer and peer blocks, omitting only a peer report that was unavailable, forfeited, or unintelligible that round, and instruct the implementer to address each finding specifically and report what changed (same branch, same worktree).
+On a fix-up round, spawn a fresh `worker` implementer for the task; do not continue the prior implementer thread with `send_input`. Fresh context is intentional because the fix-up agent should read the committed worktree plus the findings without attachment to earlier choices. Paste both reports verbatim as separately labeled own-reviewer and peer blocks, omitting only a peer report forfeited under the `review-cycle` protocol, and instruct the implementer to address each finding specifically and report what changed (same branch, same worktree).
 
 ## Reviewer Agent
 

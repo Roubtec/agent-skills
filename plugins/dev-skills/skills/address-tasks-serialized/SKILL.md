@@ -263,7 +263,7 @@ When either reviewer reports material issues:
 
 1. **Spawn a new implementer agent** (on its own, as in step 4) with:
    - The original task file content.
-   - Both the own reviewer's and peer's numbered findings verbatim as two labeled blocks; omit only a peer report that was unavailable, forfeited, or unintelligible that round.
+   - Both the own reviewer's and peer's numbered findings verbatim as two labeled blocks; omit only a peer report forfeited under the `review-cycle` protocol.
    - The branch name (same as before).
    - Instruction to address each finding specifically and report what was fixed.
    - The same project context and validation instructions as the original implementer prompt.
