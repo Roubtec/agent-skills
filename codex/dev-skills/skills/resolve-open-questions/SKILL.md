@@ -122,17 +122,12 @@ never the original agent's reasoning:
 
 For each item (or coupled group), present a tight brief, then ask.
 
-**Open each round with a one-line progress header** so the maintainer always knows how deep the
-queue still is — this matters most on long lists (20, 35, or more items), where the absence of any
-"how much is left" signal is exactly what makes wading through them tedious. State it as
-**resolved · pending · total**, counting individual open questions/items (a coupled round closes more
-than one at once), where *pending* **includes the item(s) you are about to serve** and *total* is the
-full count identified up front (call it out if coupling or a fresh discovery later shifts the total).
-For example: `Progress: 12 resolved · 23 pending · 35 total — this round: #13–14 (coupled).` Use
-judgment on cadence rather than a fixed threshold: always show it when the remaining count is large
-or a round closes several items, and you may fold it into the prose for a quick run of trivial single
-confirmations — but never let the maintainer lose the sense of how far along they are. Keep it to one
-compact line so it never buries the brief.
+**Open each round with a one-line progress header** — e.g. `Progress: 12 resolved · 23 pending · 35
+total — this round: #13–14 (coupled).` It counts individual items (*pending* includes the item(s)
+about to be served; call it out if coupling or a fresh discovery shifts the *total*). Use judgment on
+cadence: it matters most on long lists, may fold into the prose for a quick run of trivial
+confirmations, and must never let the maintainer lose the sense of how far along they are — nor
+bury the brief.
 
 Every brief has the same four parts:
 
@@ -338,9 +333,8 @@ In **pointed mode** for review work, re-derive these: for each PR read its commi
   `tasks/done/`" only when the commit actually archived it; a partially-satisfied task stays in
   `tasks/` and its thread is left as it stands — do **not** reopen a thread a prior run already
   resolved, since a re-review (codex especially) re-raises anything still unaddressed and rewriting
-  historical resolutions is needless and messy), a Summary comment, and re-ping bots if requested
-  (`@codex`/`@claude` via comment; Copilot via `gh pr edit <PR#> --add-reviewer @copilot`, never an
-  `@copilot review` comment; under `ping-contributing`, only the bots that brought a new finding this round).
+  historical resolutions is needless and messy), a Summary comment, and re-ping bots if requested, exactly per the
+  ping-flag definitions under Inputs.
 
 **Task-backed follow-up items → task-file hygiene** (no code, but leave nothing dangling):
 
@@ -391,8 +385,6 @@ file; preserve that target while applying the source-agnostic hygiene.
   still goes through review before publish).
 - Read `AGENTS.md` / `CLAUDE.md` for repo conventions (task layout, `tasks/done/`, test harness,
   isolated-DB story) before forming options.
-- Cross-branch reads use `git show <ref>:<path>` (or a `gitcat` helper where available); never
-  check a sibling branch out just to read it.
 
 ## Checklist
 
