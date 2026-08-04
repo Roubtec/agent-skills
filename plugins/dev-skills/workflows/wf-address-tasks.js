@@ -1308,6 +1308,26 @@ For each collision:
 Do NOT open any PR and do NOT remove any worktree — the workflow re-reviews each changed branch and handles delivery. Return one resolution entry per collision.`;
 }
 
+// Common carrier for every post-cycle terminal result. Whatever terminal
+// status a task reaches AFTER its review cycle completed — delivered, held by
+// the collision guard, capped, or errored — the cycle's for-the-human record
+// (open questions, deviations, peer rounds, and the artifact pointer) must
+// ride along so it survives to the Summary. `artifactDirAnomalies` is set
+// only when a later pass tried to move the artifact directory — a warning
+// that the round history may not ALL sit under `artifactDir` — so it rides
+// beside the pointer wherever it goes. Works on both the raw cycle result and
+// any task result derived from it: the field names are identical.
+function cycleCarried(result) {
+  return {
+    rounds: result.rounds,
+    openQuestions: result.openQuestions,
+    deviations: result.deviations,
+    peerRounds: result.peerRounds,
+    artifactDir: result.artifactDir,
+    ...(result.artifactDirAnomalies ? { artifactDirAnomalies: result.artifactDirAnomalies } : {}),
+  };
+}
+
 async function implementTask(task, remote, peerMode) {
   // The loop is the embedded runReviewCycle above. Sequential fixer -> reviewer
   // awaits inside the cycle plus a SHARED on-disk worktree mean the implementer
@@ -1317,17 +1337,7 @@ async function implementTask(task, remote, peerMode) {
   // isolation; the examination-only peer beside each reviewer round is the
   // cycle's sole same-worktree concurrency exception.
   const result = await runReviewCycle(taskCycleConfig(task, remote, peerMode));
-  // `artifactDirAnomalies` is set only when a later pass tried to move the
-  // artifact directory — a warning that the round history may not ALL sit
-  // under `artifactDir`, so it rides beside the pointer wherever it goes.
-  const carried = {
-    rounds: result.rounds,
-    openQuestions: result.openQuestions,
-    deviations: result.deviations,
-    peerRounds: result.peerRounds,
-    artifactDir: result.artifactDir,
-    ...(result.artifactDirAnomalies ? { artifactDirAnomalies: result.artifactDirAnomalies } : {}),
-  };
+  const carried = cycleCarried(result);
   if (result.verdict === "error") {
     return { slug: task.slug, branch: task.branch, status: "error", detail: result.detail, ...carried };
   }
@@ -1352,14 +1362,7 @@ async function deliverTask(task, ready, remote) {
   // Open questions, deviations, and the artifact pointer (with any anomaly
   // record beside it) bubble up with the delivery result — they exist for the
   // human and must survive to Summary.
-  const carried = {
-    rounds: ready.rounds,
-    openQuestions: ready.openQuestions,
-    deviations: ready.deviations,
-    peerRounds: ready.peerRounds,
-    artifactDir: ready.artifactDir,
-    ...(ready.artifactDirAnomalies ? { artifactDirAnomalies: ready.artifactDirAnomalies } : {}),
-  };
+  const carried = cycleCarried(ready);
   if (pr && pr.opened && pr.url) {
     return { slug: task.slug, branch: task.branch, status: "done", prUrl: pr.url, ...carried };
   }
@@ -1563,8 +1566,8 @@ for (let w = 0; w < plan.waves.length; w++) {
         slug: task.slug,
         branch: task.branch,
         status: "collision-scan-error",
-        rounds: result.rounds,
         detail: scanError,
+        ...cycleCarried(result),
       };
       statusBySlug.set(task.slug, held.status);
       results.push(held);
@@ -1658,17 +1661,17 @@ for (let w = 0; w < plan.waves.length; w++) {
       const isChanged = changedBranches.has(task.branch) || changedBranches.has(task.slug);
 
       if (!resolutions) {
-        const held = { slug: task.slug, branch: task.branch, status: "collision-hold", rounds: result.rounds, detail: "collision resolver returned no result; branch held before PR delivery — deconflict manually and re-review", collisions: related };
+        const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision resolver returned no result; branch held before PR delivery — deconflict manually and re-review", collisions: related, ...cycleCarried(result) };
         statusBySlug.set(task.slug, held.status);
         results.push(held);
       } else if (related.some(collisionBlocked)) {
         // An imperative shared name still clashes even if this branch was also
         // touched — keep it held for a human/design decision.
-        const held = { slug: task.slug, branch: task.branch, status: "collision-blocked", rounds: result.rounds, detail: "shared name must stay identical (imperative); resolver could not deconflict — needs a human/design decision", collisions: related };
+        const held = { slug: task.slug, branch: task.branch, status: "collision-blocked", detail: "shared name must stay identical (imperative); resolver could not deconflict — needs a human/design decision", collisions: related, ...cycleCarried(result) };
         statusBySlug.set(task.slug, held.status);
         results.push(held);
       } else if (related.some((c) => collisionStillIncludes(c, task))) {
-        const held = { slug: task.slug, branch: task.branch, status: "collision-hold", rounds: result.rounds, detail: "collision still has two or more unchanged branches after resolver ran; branch held before PR delivery — rename enough sides and re-review", collisions: related };
+        const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision still has two or more unchanged branches after resolver ran; branch held before PR delivery — rename enough sides and re-review", collisions: related, ...cycleCarried(result) };
         statusBySlug.set(task.slug, held.status);
         results.push(held);
       } else if (isChanged) {
@@ -1684,7 +1687,7 @@ for (let w = 0; w < plan.waves.length; w++) {
         if (verdict && verdict.pass && !verdict.emptyDiffFlag) {
           deliverable.push({ task, result: { ...result, notes: verdict.notes || result.notes } });
         } else {
-          const held = { slug: task.slug, branch: task.branch, status: "collision-hold", rounds: result.rounds, detail: "rename did not pass fresh re-review; held before PR delivery", outstanding: verdict ? verdict.issues : null, collisions: related };
+          const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "rename did not pass fresh re-review; held before PR delivery", outstanding: verdict ? verdict.issues : null, collisions: related, ...cycleCarried(result) };
           statusBySlug.set(task.slug, held.status);
           results.push(held);
         }
@@ -1694,7 +1697,7 @@ for (let w = 0; w < plan.waves.length; w++) {
       } else {
         // Resolver neither changed nor blocked this branch's clash — do not
         // re-introduce it by delivering; hold for a manual pass.
-        const held = { slug: task.slug, branch: task.branch, status: "collision-hold", rounds: result.rounds, detail: "collision left unresolved by the resolver; branch held before PR delivery — deconflict manually and re-review", collisions: related };
+        const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision left unresolved by the resolver; branch held before PR delivery — deconflict manually and re-review", collisions: related, ...cycleCarried(result) };
         statusBySlug.set(task.slug, held.status);
         results.push(held);
       }
@@ -1705,7 +1708,9 @@ for (let w = 0; w < plan.waves.length; w++) {
     const slice = deliverable.slice(i, i + widthCap);
     const delivered = await parallel(slice.map(({ task, result }) => () => deliverTask(task, result, remote)));
     delivered.forEach((r, j) => {
-      const res = r || { slug: slice[j].task.slug, branch: slice[j].task.branch, status: "error", detail: "delivery crashed" };
+      // Even on a delivery crash the cycle itself completed, so its record is
+      // still in hand — carry it rather than losing it with the crash.
+      const res = r || { slug: slice[j].task.slug, branch: slice[j].task.branch, status: "error", detail: "delivery crashed", ...cycleCarried(slice[j].result) };
       statusBySlug.set(res.slug, res.status);
       results.push(res);
     });

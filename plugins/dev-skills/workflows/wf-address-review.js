@@ -406,7 +406,7 @@ const anomalies = cycle.artifactDirAnomalies
   ? { artifactDirAnomalies: cycle.artifactDirAnomalies }
   : {};
 if (cycle.verdict === "error") {
-  return { error: `Review cycle failed: ${cycle.detail}`, pr: packet.pr, rounds: cycle.rounds, dispositions: cycle.workReport, openQuestions: cycle.openQuestions, artifactDir: cycle.artifactDir, ...anomalies };
+  return { error: `Review cycle failed: ${cycle.detail}`, pr: packet.pr, rounds: cycle.rounds, dispositions: cycle.workReport, openQuestions: cycle.openQuestions, deviations: cycle.deviations, peerRounds: cycle.peerRounds, artifactDir: cycle.artifactDir, ...anomalies };
 }
 
 const passed = cycle.verdict === "pass";
@@ -516,6 +516,11 @@ if (uncoveredItems.length) {
     pr: packet.pr,
     rounds,
     dispositions: workReport,
+    openQuestions: cycle.openQuestions,
+    deviations: cycle.deviations,
+    peerRounds: cycle.peerRounds,
+    artifactDir: cycle.artifactDir,
+    ...anomalies,
     uncoveredItems: uncoveredRefs,
     note: `${uncoveredItems.length} gathered item(s) have no workReport entry; nothing was pushed. Re-run so every item carries its disposition.`,
   };
@@ -531,6 +536,11 @@ if (badDisp) {
     pr: packet.pr,
     rounds,
     dispositions: workReport,
+    openQuestions: cycle.openQuestions,
+    deviations: cycle.deviations,
+    peerRounds: cycle.peerRounds,
+    artifactDir: cycle.artifactDir,
+    ...anomalies,
     note: `Disposition "${badDispRef}" covers a review thread but is mistyped, names a never-gathered thread, or carries a missing/mismatched threadId/commentId; nothing was pushed. Re-run so every review thread's entry carries its gathered type and identifiers.`,
   };
 }
