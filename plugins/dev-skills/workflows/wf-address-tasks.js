@@ -1,22 +1,34 @@
 /**
  * wf-address-tasks — dynamic-workflow form of the `address-tasks` skill.
  *
- * Resolve a batch of pre-planned task files into dependency waves, then for each
- * task run an implement -> review -> fix loop (max 12 rounds), scan reviewed
- * sibling branches for add/add collisions before delivery and deconflict them
- * (an orchestrator-deputy agent renames one side, regenerates derived files, and
- * the changed branch is re-reviewed) — or hold a name that must stay identical —
- * then open PRs for the delivered tasks and report. Invoke as
- * `/wf-address-tasks <glob-or-file-list>`.
+ * Resolve a batch of pre-planned task files into dependency waves, then run
+ * each task through the shared review cycle — implement -> fresh-eyes review
+ * plus a best-effort cross-harness codex peer review -> fix, bounded by the
+ * cycle's canonical round cap — scan reviewed sibling branches for add/add
+ * collisions before delivery and deconflict them (an orchestrator-deputy agent
+ * renames one side, regenerates derived files, and the changed branch is
+ * re-reviewed) — or hold a name that must stay identical — then open PRs for
+ * the delivered tasks and report. Invoke as
+ * `/dev-skills:wf-address-tasks <glob-or-file-list> [peer-opinions=off]`.
  *
  * Why a workflow rather than a skill
  * ----------------------------------
- * The control flow the skill spells out in prose — dependency waves, the bounded
- * implement -> review -> fix loop (12 rounds, matching the prose skill's cap),
- * dependent waves gated on their prerequisites, "the implementer finishes
- * before its reviewer starts" — becomes ordinary JavaScript here, run
- * deterministically instead of relying on the model to follow it. Independent
- * tasks fan out via `parallel()`.
+ * The control flow the skill spells out in prose — dependency waves, the
+ * bounded implement -> review -> fix loop, dependent waves gated on their
+ * prerequisites, "the implementer finishes before its reviewer starts" —
+ * becomes ordinary JavaScript here, run deterministically instead of relying
+ * on the model to follow it. Independent tasks fan out via `parallel()`.
+ *
+ * The per-task loop itself is NOT stated here: it is a synthesized copy of the
+ * canonical wf-review-cycle's marked embeddable section (see the section
+ * header below). EMBEDDED rather than nested deliberately: this script owns
+ * the task fan-out, so every peer launch must be made by this one flat script,
+ * whose module state is shared across the parallel() fan-out — the place
+ * where task 015's session-local peer throttle can live beside the wave
+ * throttling below and actually see every launch. A nested child would hold
+ * its own state, and a throttle there would count one peer, never see a
+ * sibling's, and cap nothing. No peer cap, floor, or fan-out shape is set
+ * here; that policy is 015's alone.
  *
  * Worktree model — why NOT `isolation: "worktree"`
  * ------------------------------------------------
@@ -56,24 +68,26 @@
  */
 
 // The runtime requires `export const meta = {...}` (a pure literal) as the
-// FIRST statement: it is how the script registers as the `/wf-address-tasks`
-// command and what the pre-run approval prompt shows. Wave phases are dynamic
-// (`Wave N (...)`), so only the fixed phases are declared here; undeclared
-// phase() titles still get their own progress group.
+// FIRST statement: it is how the script registers as the
+// `/dev-skills:wf-address-tasks` command and what the pre-run approval prompt
+// shows. Wave phases are dynamic (`Wave N (...)`), so only the fixed phases
+// are declared here; undeclared phase() titles still get their own progress
+// group. The "Peer review (codex)" title must stay byte-identical to
+// CYCLE_PEER_PHASE in the embedded review-cycle-core section below — a
+// mismatch silently splits the progress display into an extra group.
 export const meta = {
   name: "wf-address-tasks",
-  description: "Implement a batch of pre-planned task files: dependency waves, per-task worktree, implement->review->fix loop (max 12 rounds), pre-PR collision guard that deconflicts add/add clashes (rename one side + re-review) or holds an imperative name, one PR per delivered task.",
+  description: "Implement a batch of pre-planned task files: dependency waves, per-task worktree, and the shared review cycle per task — implement -> fresh-eyes review plus a best-effort cross-harness codex peer review -> fix (review is cross-harness; peer outcomes never block; bounded round cap) — with a pre-PR collision guard that deconflicts add/add clashes (rename one side + re-review) or holds an imperative name, one PR per delivered task.",
   whenToUse: "Execute a folder/glob of pre-planned task files end to end with per-task worktree isolation. Not for one-off coding requests or planning new tasks.",
   phases: [
     { title: "Bootstrap", detail: "wt-bootstrap: root-safety checks, orphan prune, remote probe" },
     { title: "Resolve batch", detail: "read task files, derive dependency waves and branches" },
+    { title: "Peer review (codex)", detail: "best-effort cross-harness second opinion beside each task's reviewer rounds; its outcome never blocks" },
     { title: "Collision scan", detail: "diff added files across sibling branches for add/add clashes" },
     { title: "Collision resolve", detail: "rename one side of each clash, regen, re-review, then deliver" },
     { title: "Summary" },
   ],
 };
-
-const MAX_ROUNDS = 12;
 
 // Conservative per-task estimate. On the volume-backed path pnpm packages are
 // hardlinked, so the real cost is build artifacts + package metadata; 1 GiB
@@ -119,30 +133,6 @@ const PLAN_SCHEMA = {
     },
   },
   required: ["defaultBase", "waves"],
-};
-
-const VERDICT_SCHEMA = {
-  type: "object",
-  properties: {
-    pass: { type: "boolean", description: "True only if every acceptance criterion is met, the build passes, and there are no material quality issues." },
-    issues: {
-      type: "array",
-      description: "Numbered, actionable findings when pass is false. Empty when pass is true.",
-      items: {
-        type: "object",
-        properties: {
-          category: { type: "string", description: "criteria-gap | logic | error-handling | edge-case | dead-code | consistency | duplication | types" },
-          location: { type: "string", description: "file:line of the gap." },
-          problem: { type: "string", description: "What is wrong." },
-          fix: { type: "string", description: "What should change instead." },
-        },
-        required: ["category", "location", "problem", "fix"],
-      },
-    },
-    emptyDiffFlag: { type: "boolean", description: "True if `git diff --name-only <base>...HEAD` looked empty despite an expected implementation — signals a race/wrong-worktree, not real absence." },
-    notes: { type: "string", description: "Caveats worth carrying into the PR body (tradeoffs, intentional divergences)." },
-  },
-  required: ["pass", "issues"],
 };
 
 const PR_SCHEMA = {
@@ -402,7 +392,7 @@ function resolvePrompt(input) {
 
 Read \`AGENTS.md\` / \`CLAUDE.md\` first for project conventions.
 
-Argument (a glob or file list): ${JSON.stringify(input)}
+Argument (a glob or file list; a \`peer-opinions=off\` token is a flag the loop already handled, not a task file — ignore it here): ${JSON.stringify(input)}
 
 Do this:
 1. Resolve the argument to the concrete set of task files and read each one in full.
@@ -450,55 +440,586 @@ Do ALL work inside WT only. Never \`cd\` to the repo root or touch sibling workt
 Scope every cleanup to WT (\`git -C "$WT" …\`) and commit checkpoints often. The container's main checkout and its \`.worktrees\` volume are SHARED — a peer harness or a sibling task may hold uncommitted work there — so never run \`git reset --hard\`, and especially not \`git clean -fdx\` (it ignores \`.gitignore\`, so it would also wipe the \`.worktrees\` scaffolding), against the shared main checkout to reclaim space.`;
 }
 
-function implementPrompt(task, round, findings, remote) {
-  const fixup = round > 1 && findings
-    ? `\n## Reviewer findings to address (round ${round})\n\nThe worktree already holds your prior commits. Address each finding specifically and report what you fixed:\n\n${JSON.stringify(findings, null, 2)}\n`
-    : "";
-  const upstream = task.upstream ? `\n## Upstream context\n\n${task.upstream}\n` : "";
-  const pushLine = remote
-    ? `- After every commit, push for durability: \`git push -u origin ${shq(task.branch)}\` first, \`git push\` thereafter. The reviewer reads your worktree directly, so a transient push failure is not fatal — keep committing and note it — but pushed commits are the backup if the worktree is lost.`
-    : `- Remote push is unavailable this run; commit locally (the shared \`.git\` persists). Do not fail on missing push.`;
-  return `You are implementing a single task on branch \`${task.branch}\` (base \`${task.base}\`).
+// ============================================================================
+// Synthesized from wf-review-cycle.js EMBEDDABLE SECTION "review-cycle-core".
+// Canonical home: plugins/dev-skills/workflows/wf-review-cycle.js — edit the
+// canonical section there first, then refresh this copy verbatim.
+// Embedded (not nested) DELIBERATELY: this script owns the task fan-out, so
+// the fan-out, every peer launch, and any cross-cycle policy (task 015's
+// session-local peer throttle) sit in this one flat script's state. A nested
+// child cycle would hold its own state, where a throttle counts one peer,
+// never sees a sibling's, and caps nothing. No peer cap, floor, or chunked
+// fan-out is introduced here; that policy is 015's alone.
+// ============================================================================
+// ============================================================================
+// BEGIN EMBEDDABLE SECTION: review-cycle-core
+// Canonical home: plugins/dev-skills/workflows/wf-review-cycle.js
+// A synthesized copy of this section MUST keep a header naming this canonical
+// section ("Synthesized from wf-review-cycle.js EMBEDDABLE SECTION
+// review-cycle-core") so edits here have a findable list of copies to refresh.
+// The section depends only on the workflow runtime globals (agent, log) plus
+// plain JS; it holds no module state, so a fan-out owner embedding it keeps
+// every launch it makes in that owner's own flat script state.
+// ============================================================================
 
-${worktreeContract(task, { mayCreate: true })}
+// The canonical convergence safeguard. Consumers may only LOWER it.
+const CYCLE_MAX_ROUNDS = 12;
 
-Read \`AGENTS.md\` / \`CLAUDE.md\` first for project conventions. The base branch already contains any dependency's work — build on it.
-${upstream}
-## Task
+// Exact phase title of the peer stage. Every script carrying this section MUST
+// declare a meta.phases entry whose `title` matches this string byte-for-byte.
+const CYCLE_PEER_PHASE = "Peer review (codex)";
 
-${task.content}
-${fixup}
-## Instructions
-
-- Implement the task to its description and acceptance criteria.
-- Commit at logical milestones; keep each commit buildable where practical.
-${pushLine}
-- Run the project build/lint periodically and a full build check before reporting done.
-- Do not revert unrelated edits.
-- Do NOT use the \`TaskCreate\`/\`TaskUpdate\`/\`TaskList\` tools.
-- When done, report: what you implemented, any decisions/tradeoffs/deviations, and anything that warrants focused review.`;
+// Bound a caller-supplied round cap. A larger value still stops at the
+// canonical 12 (no consumer can configure its way past the convergence
+// safeguard); 0, a negative, or a fractional value is a caller contract
+// violation rejected outright — silently accepting it would yield a cycle
+// that reviews nothing. Absent/undefined means the canonical cap.
+function cycleRoundCap(maxRounds) {
+  if (maxRounds == null) return CYCLE_MAX_ROUNDS;
+  const n = Number(maxRounds);
+  if (!Number.isInteger(n) || n <= 0) {
+    throw new Error(
+      `Invalid maxRounds ${JSON.stringify(maxRounds)}: must be a positive whole number of reviewer rounds (it may only lower the canonical cap of ${CYCLE_MAX_ROUNDS}).`
+    );
+  }
+  return Math.min(n, CYCLE_MAX_ROUNDS);
 }
 
-function reviewPrompt(task) {
-  return `You are reviewing a task implementation with fresh eyes — no knowledge of how it was built. Evaluate two orthogonal dimensions: (1) acceptance-criteria compliance and (2) implementation quality. Edit NOTHING; only read, search, and run validation.
+// Pinned wire format for escalated open questions. It maps one-to-one onto the
+// four-part brief `resolve-open-questions` serves (grounded context, concrete
+// trigger, distinct options, recommendation), so a completed cycle's questions
+// are consumable without re-derivation — that skill still re-verifies every
+// carried claim (reachability especially) against current state before serving.
+const CYCLE_OPEN_QUESTION_SCHEMA = {
+  type: "object",
+  properties: {
+    id: { type: "string", description: "Stable within the run (e.g. \"<cycle-slug>-q1\"); referenced by dispositions and coupledWith." },
+    question: { type: "string", description: "The decision itself, phrased as the fork — not a narrative." },
+    origin: { type: "string", description: "reviewer | peer | implementer | rebase" },
+    originRound: { type: "integer", description: "Cycle round it arose in." },
+    blocking: { type: "boolean", description: "True: the cycle could not pass without the answer; false: parked nit/deferral." },
+    artifacts: { type: "array", items: { type: "string" }, description: "Authoritative pointers only (\"file:line\", ref, PR/thread URL, task file) — never paraphrase." },
+    trigger: { type: "string", description: "The concrete situation that manifests the problem." },
+    reachability: { type: "string", description: "live | dormant | impossible-until | unknown — a CARRIED claim, re-derived before serving." },
+    reachabilityCondition: { type: "string", description: "The flag/prerequisite when dormant/impossible-until; empty otherwise." },
+    options: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          label: { type: "string" },
+          consequence: { type: "string", description: "What choosing it actually produces — blast radius, where it lands, what stays exposed." },
+        },
+        required: ["label", "consequence"],
+      },
+      description: "Drafted resolutions with blast radius; may be empty.",
+    },
+    recommendation: { type: "string", description: "Escalator's pick + one-line why; empty when the call turns on maintainer intent." },
+    coupledWith: { type: "array", items: { type: "string" }, description: "Ids of sibling questions sharing the one underlying decision." },
+  },
+  required: ["id", "question", "origin", "originRound", "blocking", "artifacts", "trigger", "reachability", "reachabilityCondition", "options", "recommendation", "coupledWith"],
+};
 
-${worktreeContract(task)}
+const CYCLE_FIX_SCHEMA = {
+  type: "object",
+  properties: {
+    blocker: { type: "string", description: "Why this pass cannot proceed responsibly (wrong worktree, unresolvable state). Empty when the pass completed." },
+    changed: { type: "boolean", description: "True if this pass changed the artifact (new commits / rewritten files); false for a disposition-only or no-op pass." },
+    summary: { type: "string", description: "One paragraph: what this pass did." },
+    dispositions: {
+      type: "array",
+      description: "One entry per reviewer/peer finding this pass was handed. EVERY handed finding must appear — none may be silently dropped.",
+      items: {
+        type: "object",
+        properties: {
+          finding: { type: "string", description: "The finding, verbatim or by precise reference." },
+          origin: { type: "string", description: "reviewer | peer" },
+          disposition: { type: "string", description: "fixed | declined | escalated" },
+          detail: { type: "string", description: "fixed: what changed + commit. declined: the reason (a decline is verified by the next fresh reviewer, never final here). escalated: one line naming the question." },
+          questionId: { type: "string", description: "REQUIRED when disposition is `escalated`: the id of the openQuestions entry this raised." },
+        },
+        required: ["finding", "origin", "disposition", "detail"],
+      },
+    },
+    openQuestions: { type: "array", items: CYCLE_OPEN_QUESTION_SCHEMA, description: "One entry per `escalated` disposition, in the pinned wire format." },
+    deviations: { type: "array", items: { type: "string" }, description: "Each: a deviation from a LOCKED maintainer decision — what was delivered instead and the constraint that forced it. Report, don't correct; the cycle surfaces these for the human." },
+    workReport: { type: "array", items: { type: "object" }, description: "One entry per work item in the scope, in the per-item shape the scope's instructions define (a consumer contract rides through here untyped); echoed into the cycle result." },
+    proactive: { type: "string", description: "Same-pattern fixes made beyond the literal items, or empty." },
+    finalSha: { type: "string", description: "HEAD sha after this pass, with everything committed." },
+    clean: { type: "boolean", description: "True only if `git status --porcelain` is empty with every intended change committed." },
+    artifactDir: { type: "string", description: "Absolute path of this cycle's unique artifact directory (round 1 creates it; later passes reuse it)." },
+  },
+  required: ["changed", "dispositions", "openQuestions", "deviations", "clean"],
+};
 
-Read \`AGENTS.md\` / \`CLAUDE.md\` first for conventions. The implementation is already committed on \`${task.branch}\` in WT — read the actual files. If \`git diff --name-only ${shq(task.base)}...HEAD\` looks empty, set \`emptyDiffFlag\` true and stop — that signals a wrong worktree/branch, not real absence.
+const CYCLE_REVIEW_SCHEMA = {
+  type: "object",
+  properties: {
+    pass: { type: "boolean", description: "True only if the artifact holds up per its type (build passes for code, every claim/disposition verified) and no material issue remains." },
+    issues: {
+      type: "array",
+      description: "Numbered, actionable findings when pass is false. Empty when pass is true.",
+      items: {
+        type: "object",
+        properties: {
+          category: { type: "string", description: "criteria-gap | logic | error-handling | edge-case | dead-code | consistency | duplication | types | verbiage | scoping | conventions" },
+          location: { type: "string", description: "file:line, or the item/section the finding concerns." },
+          problem: { type: "string" },
+          fix: { type: "string" },
+        },
+        required: ["category", "location", "problem", "fix"],
+      },
+    },
+    emptyDiffFlag: { type: "boolean", description: "True if the diff against the base looked empty despite claimed work — signals a race/wrong-worktree, not real absence." },
+    notes: { type: "string", description: "Pass-notes: caveats and stray remarks worth carrying. The cycle's final fixer pass disposes anything actionable here rather than letting it drop." },
+  },
+  required: ["pass", "issues"],
+};
 
-## Task
+// Peer-stage result. `outcome` uses the peer-review-run vocabulary
+// (powbox.peer-review-run/v1) so the eventual helper swap changes the prompt,
+// not this contract.
+const CYCLE_PEER_SCHEMA = {
+  type: "object",
+  properties: {
+    outcome: { type: "string", description: "passed | issues | unavailable | timeout | forfeited | failed. Anything else is normalized to forfeited by the stage." },
+    findings: {
+      type: "array",
+      description: "The peer's numbered findings when outcome is `issues`; empty otherwise.",
+      items: {
+        type: "object",
+        properties: {
+          severity: { type: "string", description: "blocking | minor — BOTH gate the round." },
+          location: { type: "string", description: "file:line" },
+          claim: { type: "string", description: "The finding with its one-line rationale, verbatim." },
+        },
+        required: ["severity", "claim"],
+      },
+    },
+    notes: { type: "string", description: "Anything after the verdict worth carrying (pass-notes), verbatim." },
+    detail: { type: "string", description: "For a non-passed/issues outcome: why (logged out, timed out after retry, empty output, provider crash...)." },
+  },
+  required: ["outcome", "findings"],
+};
 
-${task.content}
+const CYCLE_GROUNDING_SCHEMA = {
+  type: "object",
+  properties: {
+    verdicts: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          finding: { type: "string", description: "The finding checked, by its claim text." },
+          grounded: { type: "boolean", description: "False ONLY for a self-evidently false claim or a nonexistent file:line reference. When in doubt, true — discarding is the exception." },
+          why: { type: "string" },
+        },
+        required: ["finding", "grounded"],
+      },
+    },
+  },
+  required: ["verdicts"],
+};
 
-## How to review
+// Default worktree/branch contract when the consumer supplies none. A consumer
+// with its own worktree lifecycle (wt-enter etc.) passes richer per-role
+// contract text via cycle.contracts instead.
+function cycleDefaultContract(cycle) {
+  const where = cycle.worktree
+    ? `Your worktree is \`${cycle.worktree}\`. Before anything else, \`cd\` into it and verify \`git rev-parse --show-toplevel\` prints exactly that path; if not, STOP and report — do not run any git or edit command outside it. Other agents may be working in other worktrees concurrently; stay in yours.`
+    : `You work in the repository's current checkout — do NOT create a worktree and do NOT switch branches.`;
+  return `${where}
+You must be on branch \`${cycle.branch}\` — confirm with \`git branch --show-current\`; if it differs, STOP and report.`;
+}
 
-1. Run a full build / type-check first. A failure is an automatic blocker (\`pass: false\`).
-2. List touched files with \`git diff --name-only ${shq(task.base)}...HEAD\` to scope your quality pass. Do NOT read commit messages or \`git diff\` content — read each touched file in full. Follow references into untouched files when needed.
-3. Check each acceptance criterion against the actual code.
-4. Quality pass over the touched files: logic correctness, error handling, edge cases, dead code, consistency, duplication, type safety.
-5. Be strict but fair — flag real gaps and functional problems, not style nits. Do not write follow-up task files.
+function cycleContract(cycle, role) {
+  const contracts = cycle.contracts || {};
+  return contracts[role] || cycleDefaultContract(cycle);
+}
 
-Return \`pass: true\` only if every criterion is met, the build passes, and there are no material issues; otherwise \`pass: false\` with numbered, actionable \`issues\`. Put PR-worthy caveats in \`notes\`.`;
+function cycleItemsBlock(cycle) {
+  const items = cycle.scope && Array.isArray(cycle.scope.items) ? cycle.scope.items : [];
+  return items.length ? `\n## Work items (verbatim)\n\n${JSON.stringify(items, null, 2)}\n` : "";
+}
+
+function cycleFindingsBlock(findings) {
+  if (!findings) return "";
+  const parts = [];
+  if (Array.isArray(findings.reviewer) && findings.reviewer.length) {
+    parts.push(`### Reviewer findings\n\n${JSON.stringify(findings.reviewer, null, 2)}`);
+  }
+  if (findings.reviewerNotes) {
+    parts.push(`### Reviewer notes\n\n${findings.reviewerNotes}`);
+  }
+  if (Array.isArray(findings.peer) && findings.peer.length) {
+    parts.push(`### Peer (codex) findings\n\n${JSON.stringify(findings.peer, null, 2)}`);
+  }
+  if (findings.peerNotes) {
+    parts.push(`### Peer (codex) notes\n\n${findings.peerNotes}`);
+  }
+  return parts.length ? `\n## Findings to dispose (each given VERBATIM — reconcile overlap or conflict yourself)\n\n${parts.join("\n\n")}\n` : "";
+}
+
+function cycleFixPrompt(cycle, state) {
+  const scope = cycle.scope || {};
+  const roundIntro = state.confirming
+    ? `The fresh reviewer has PASSED this cycle. This is the FINAL CONFIRMATION PASS of the disposition rule: read the passing reports below and dispose anything in them still worth acting on (pass-notes, stray remarks) — \`fixed\`, \`declined\` (with reason), or \`escalated\`. If nothing needs acting on, return \`changed: false\` with an empty \`dispositions\` array; that ends the cycle. Anything you fix or dispute will go through another reviewer round.`
+    : state.findings
+      ? `This is fix-up round ${state.round}. Address the findings below: dispose EVERY one explicitly — \`fixed\`, \`declined\` (with a reason; the next fresh reviewer verifies declines), or \`escalated\` to an open question in the pinned format. Never drop one silently, and never implement a fix you believe is wrong just to clear a finding.`
+      : `This is round 1: carry out the assignment below.`;
+  const artifactLine = state.artifactDir
+    ? `This cycle's artifact directory is \`${state.artifactDir}\` — write this pass's packet prose (what you did, dispositions, question drafts) under it as \`round-${state.round}/\`.`
+    : `Create this cycle's UNIQUE artifact directory first — outside the worktree, e.g. \`mktemp -d "\${TMPDIR:-/tmp}/review-cycle-${cycle.slug || "cycle"}.XXXXXX"\` (never a fixed shared name: parallel cycles share scratch space) — report it as \`artifactDir\`, and write this pass's packet prose under it as \`round-${state.round}/\`.`;
+  return `You are the fixer for one review cycle (branch \`${cycle.branch}\`, review base \`${cycle.base}\`, artifact type ${cycle.artifactType}).
+
+## WORKTREE CONTRACT (do this before anything else)
+
+${cycleContract(cycle, "fixer")}
+
+Read the repository's agent-context files (\`AGENTS.md\` / \`CLAUDE.md\`) first for conventions.
+
+${roundIntro}
+
+## Assignment
+
+${scope.instructions || "Address the work items below."}
+${cycleItemsBlock(cycle)}${cycleFindingsBlock(state.findings)}
+## Rules
+
+- ${artifactLine}
+- Commit at logical milestones; run the project's build/lint before declaring done (code artifacts).
+- If you must deliver something other than a decision the maintainer LOCKED, do not silently conform or correct: report it in \`deviations\` — what you delivered instead and the constraint that forced it. The cycle surfaces it for the human (report, don't correct).
+- Every \`escalated\` disposition gets an \`openQuestions\` entry in the schema's pinned format, with authoritative artifact pointers (file:line, refs) — never paraphrase — and its \`questionId\` back-reference.
+- Before returning, \`git status --porcelain\` MUST be empty with every intended change committed; set \`clean\` and \`finalSha\` accordingly. An unclean tree is resolved or reported as a \`blocker\`, never handed to review.
+- Pushing is governed by the assignment above; do nothing PR-side, and do NOT use the \`TaskCreate\`/\`TaskUpdate\`/\`TaskList\` tools.
+
+Return the structured packet, including \`workReport\` per the assignment's per-item contract when it defines one.`;
+}
+
+function cycleReviewChecks(artifactType) {
+  if (artifactType === "prose") {
+    return `This is a PROSE artifact (a drafted task file or document); there is no build to run. Check verbiage, scoping, internal consistency, and the repository's house conventions — for task files, the documented numbering style (see the tasks folder's AGENTS.md where present). Read each drafted file in full.`;
+  }
+  if (artifactType === "decision") {
+    return `This is an APPLIED-DECISION diff. Verify the diff implements exactly the locked option and nothing beyond it, then do the quality pass (logic, error handling, edge cases, dead code, consistency, duplication, type safety) on the touched files. Run the build/type-check first; a failure is an automatic blocker.`;
+  }
+  return `This is a CODE artifact. Run the full build/type-check FIRST; a failure is an automatic blocker (\`pass: false\`). Check every acceptance criterion the work items state against the actual code, then do the quality pass (logic, error handling, edge cases, dead code, consistency, duplication, type safety) on the touched files, and confirm any claimed same-pattern sweep did not miss a sibling occurrence.`;
+}
+
+function cycleReviewPrompt(cycle, state) {
+  const dispositionsBlock = state.packet && Array.isArray(state.packet.dispositions) && state.packet.dispositions.length
+    ? `\n## Proposed finding dispositions (verify each; a \`declined\` must be technically justified, not a convenient dismissal — you may overrule it)\n\n${JSON.stringify(state.packet.dispositions, null, 2)}\n`
+    : "";
+  const workBlock = state.packet && Array.isArray(state.packet.workReport) && state.packet.workReport.length
+    ? `\n## Fixer's per-item report (verify the claims hold in the committed state; you were NOT given its reasoning)\n\n${JSON.stringify(state.packet.workReport, null, 2)}\n`
+    : "";
+  return `You are an independent fresh-eyes reviewer for one review cycle (branch \`${cycle.branch}\`, review base \`${cycle.base}\`, artifact type ${cycle.artifactType}). You have no knowledge of how the work was built, and that is the point. Edit NOTHING; create, update, or delete no files; do not use the task-tracker tools.
+
+## WORKTREE CONTRACT (do this before anything else)
+
+${cycleContract(cycle, "reviewer")}
+
+Read the repository's agent-context files (\`AGENTS.md\` / \`CLAUDE.md\`) first for conventions.
+
+${cycleReviewChecks(cycle.artifactType)}
+
+Scope with \`git diff --name-only ${JSON.stringify(cycle.base)}...HEAD\`, then read each touched file IN FULL — do not read commit messages or diff content (both anchor you to the fixer's intent); follow references into untouched files when needed. If the diff looks empty despite claimed work, set \`emptyDiffFlag\` and stop — that signals a wrong worktree/branch, not real absence.
+${cycle.scope && cycle.scope.reviewInstructions ? `\n## Consumer review criteria (verify each item against these too)\n\n${cycle.scope.reviewInstructions}\n` : ""}${cycleItemsBlock(cycle)}${dispositionsBlock}${workBlock}
+Return \`pass: true\` only if everything holds and no material issue remains; else \`pass: false\` with numbered, actionable \`issues\`. Be strict but fair — real gaps and functional problems, not style nits. Put pass-worthy caveats in \`notes\` (the cycle disposes them rather than dropping them).`;
+}
+
+// The peer invocation happens INSIDE this subagent prompt, never in the
+// script (a workflow cannot shell out). Baseline destination: the
+// `peer-review-run` helper (schema powbox.peer-review-run/v1) — retained
+// pinned raw launch until powbox's review-strength passthrough lands; see the
+// header comment. The launch pins review strength per invocation
+// (-c model_reasoning_effort=high; the model stays the peer's configured
+// high-capability default from ~/.codex/config.toml) and never writes back to
+// saved configuration.
+function cyclePeerPrompt(cycle, state) {
+  const evidence = {
+    branch: cycle.branch,
+    base: cycle.base,
+    artifactType: cycle.artifactType,
+    reviewCriteria: (cycle.scope && cycle.scope.reviewInstructions) || "",
+    items: (cycle.scope && cycle.scope.items) || [],
+    dispositions: (state.packet && state.packet.dispositions) || [],
+    workReport: (state.packet && state.packet.workReport) || [],
+  };
+  return `You run the best-effort cross-harness PEER REVIEW stage for one review-cycle round. You launch a read-only \`codex\` review of the committed state, wait for it, and return its result structurally. You NEVER fail this stage: every problem becomes a non-blocking outcome in the schema (\`unavailable\`, \`timeout\`, \`forfeited\`, \`failed\`) with a one-line \`detail\` — never an error, never a refusal to answer.
+
+## WORKTREE CONTRACT
+
+${cycleContract(cycle, "peer")}
+The peer examines this worktree READ-ONLY; you edit nothing either.
+
+## Steps
+
+1. Preflight: if \`command -v codex\` fails, return outcome \`unavailable\` (detail: missing binary). If \`codex login status\` exits non-zero and \`CODEX_API_KEY\` is unset, return \`unavailable\` (detail: logged out). An auth/usage error from the launch itself is also \`unavailable\`.
+2. Prepare unique per-attempt paths under this cycle's artifact directory: \`round_dir="${state.artifactDir || "<artifactDir>"}/round-${state.round}"\`, \`mkdir -p "$round_dir"\`, with \`prompt_file\`, \`outfile\`, \`stderr_file\` inside it (suffix \`-attempt2\` on a retry; never reuse a path).
+3. Write the peer prompt below VERBATIM to \`$prompt_file\` with a quoted heredoc (\`<<'PEER_PROMPT'\`) — never assemble it through shell interpolation.
+4. Launch the peer as ONE supervised foreground call, bounded UNDER your own Bash tool limit so the tool can never kill it mid-run unaccounted (set the Bash tool timeout to 600000 ms and bound the peer tighter with \`timeout\`):
+
+   \`\`\`bash
+   worktree="<the worktree path from the contract above>"
+   # Pin peer effort per invocation; never changes the container's saved config.
+   timeout 540 codex exec --sandbox read-only --cd "$worktree" -o "$outfile" \\
+     -c mcp_servers={} -c model_reasoning_effort=high "$(<"$prompt_file")" \\
+     < /dev/null 2> "$stderr_file"
+   \`\`\`
+
+   Exit 124 means the bounded timeout fired: retry ONCE with fresh attempt paths, then return outcome \`timeout\`. Any other failure (crash, non-zero exit with no usable output): retry once, then return \`failed\`. Auth/usage errors: \`unavailable\` without retry.
+5. Read \`$outfile\`. A \`VERDICT: PASS\` line → outcome \`passed\` (anything after it goes to \`notes\` verbatim). A \`VERDICT: ISSUES\` line → outcome \`issues\`, with every numbered finding mapped verbatim into \`findings\` (severity from its \`blocking\`/\`minor\` tag — default \`blocking\` when untagged — plus its \`file:line\` as \`location\` and the finding text as \`claim\`; do not summarize, merge, or rewrite). No verdict line, or empty/unintelligible output → \`forfeited\`.
+
+## Peer prompt (write this text to the prompt file verbatim, filling only the placeholders)
+
+You are an independent read-only peer reviewer. Review the committed state of branch ${JSON.stringify(cycle.branch)} against base ${JSON.stringify(cycle.base)} in the current directory (artifact type: ${cycle.artifactType}). Read the actual files; edit nothing; run no builds or tests. Verify the work items and any proposed dispositions below in the committed code; a declined finding must be technically justified. Evidence (verbatim):
+
+${JSON.stringify(evidence, null, 2)}
+
+Reply with exactly \`VERDICT: PASS\` or \`VERDICT: ISSUES\`, followed for issues by numbered findings each tagged \`blocking\` or \`minor\`, with \`file:line\` and a one-line rationale.
+
+## Output
+
+Return the structured result: \`outcome\`, \`findings\` (verbatim, tagged), \`notes\`, \`detail\`.`;
+}
+
+// The peer stage NEVER fails the round: a dead subagent (null return /
+// schema-validation miss), a thrown stage, and every helper-vocabulary outcome
+// that is not passed/issues all normalize to a recorded non-blocking outcome.
+// The normalization is written as a complement (anything not passed/issues is
+// non-blocking), so `failed` — and any future outcome — cannot fall through a
+// switch over the named ones.
+function normalizeCyclePeerResult(res) {
+  if (!res || typeof res !== "object") {
+    return { outcome: "forfeited", findings: [], notes: "", detail: "peer subagent returned nothing (died or failed schema validation); recorded non-blocking" };
+  }
+  const gating = res.outcome === "passed" || res.outcome === "issues";
+  const known = ["passed", "issues", "unavailable", "timeout", "forfeited", "failed"];
+  const outcome = known.includes(res.outcome) ? res.outcome : "forfeited";
+  return {
+    outcome,
+    findings: outcome === "issues" && Array.isArray(res.findings) ? res.findings : [],
+    notes: typeof res.notes === "string" ? res.notes : "",
+    detail: typeof res.detail === "string" && res.detail
+      ? res.detail
+      : (gating ? "" : `peer outcome ${JSON.stringify(res.outcome)} recorded non-blocking`),
+  };
+}
+
+async function runCyclePeerStage(cycle, state) {
+  if (cycle.peer === "off") {
+    return { outcome: "disabled", findings: [], notes: "", detail: "peer-opinions=off" };
+  }
+  try {
+    const res = await agent(cyclePeerPrompt(cycle, state), {
+      label: `${cycle.labelPrefix || ""}peer#${state.round}`,
+      schema: CYCLE_PEER_SCHEMA,
+      phase: CYCLE_PEER_PHASE,
+    });
+    return normalizeCyclePeerResult(res);
+  } catch (e) {
+    // A thrown stage must not drop the round (or, under pipeline(), the item).
+    return { outcome: "forfeited", findings: [], notes: "", detail: `peer stage threw (${e && e.message ? e.message : String(e)}); recorded non-blocking` };
+  }
+}
+
+function cycleGroundingPrompt(cycle, findings) {
+  return `Cheap grounding spot-check, read-only. The fresh reviewer PASSED this round; only the peer findings below would gate it. For each, check that its \`file:line\` (or referenced site) exists in the worktree and that the claim is not self-evidently false. Do NOT re-review or judge severity — discard is only for nonexistent references and self-evidently false claims; when in doubt, \`grounded: true\`.
+
+${cycleContract(cycle, "reviewer")}
+
+## Findings
+
+${JSON.stringify(findings, null, 2)}
+
+Return a verdict per finding. Edit nothing.`;
+}
+
+// runReviewCycle — the whole protocol as one awaitable function.
+//
+// cycle: {
+//   slug, worktree, branch, base, artifactType ("code"|"prose"|"decision"),
+//   scope: { title, instructions, items },
+//   maxRounds (validated through cycleRoundCap), peer ("on"|"off"),
+//   mode ("full"|"light"),
+//   contracts: { fixer, reviewer, peer } — optional per-role preamble text
+//     (a worktree-lifecycle consumer passes its own wt-enter contract here),
+//   labelPrefix — optional, prefixes agent labels for fan-out consumers.
+// }
+//
+// Returns the cycle result contract (lean; bulk prose stays behind artifactDir):
+// { verdict: "pass"|"review-cap"|"error", detail, rounds, findingDispositions,
+//   openQuestions, deviations, workReport, proactive, finalSha, notes,
+//   reviewerNotes, peerRounds, discardedPeerFindings, undisposed, outstanding,
+//   artifactDir }
+async function runReviewCycle(cycle) {
+  const cap = cycleRoundCap(cycle.maxRounds);
+  const lp = cycle.labelPrefix || "";
+  const findingDispositions = [];
+  const openQuestions = [];
+  const deviations = [];
+  const peerRounds = [];
+  const discardedPeerFindings = [];
+  let artifactDir = "";
+  let packet = null;
+  let rounds = 0;
+  let fixerPasses = 0;
+  let findings = null; // findings block for the next fixer pass; null on round 1
+  let confirming = false; // next fixer pass is the final confirmation pass
+  let peerUnavailable = false; // sticky: an unavailable peer is not re-probed every round
+  let reviewerNotes = ""; // the latest reviewer's pass-notes (PR-body caveats for consumers)
+
+  const result = (verdict, detail, extra) => ({
+    verdict,
+    detail: detail || "",
+    rounds,
+    findingDispositions,
+    openQuestions,
+    deviations,
+    workReport: (packet && packet.workReport) || [],
+    proactive: (packet && packet.proactive) || "",
+    finalSha: (packet && packet.finalSha) || "",
+    notes: (packet && packet.summary) || "",
+    reviewerNotes,
+    peerRounds,
+    discardedPeerFindings,
+    artifactDir,
+    ...(extra || {}),
+  });
+
+  while (true) {
+    fixerPasses += 1;
+    const fix = await agent(cycleFixPrompt(cycle, { round: fixerPasses, findings, confirming, artifactDir }), {
+      label: `${lp}fix#${fixerPasses}`,
+      schema: CYCLE_FIX_SCHEMA,
+    });
+    if (!fix) return result("error", `fixer returned nothing on pass ${fixerPasses}`);
+    if (fix.blocker) return result("error", `fixer blocked on pass ${fixerPasses}: ${fix.blocker}`);
+    if (!fix.clean) return result("error", `fixer left an unclean worktree on pass ${fixerPasses}; refusing to review a partial state`);
+    if (fix.artifactDir) artifactDir = fix.artifactDir;
+    for (const d of fix.dispositions || []) findingDispositions.push({ ...d, pass: fixerPasses });
+    for (const q of fix.openQuestions || []) openQuestions.push(q);
+    for (const dev of fix.deviations || []) deviations.push(dev);
+    if (fix.workReport || fix.finalSha || fix.summary || fix.proactive) packet = { ...(packet || {}), ...fix };
+
+    // Terminal condition of the disposition rule: the reviewer has passed and
+    // the fixer's last pass disposed nothing new (and changed nothing that
+    // would need a fresh review). Nothing left for a reviewer to look at.
+    if (confirming && !fix.changed && (fix.dispositions || []).length === 0) {
+      return result("pass", "reviewer passed; final confirmation pass disposed nothing new");
+    }
+
+    // Anything else needs a (re-)review — bounded by the cap.
+    if (rounds >= cap) {
+      return result("review-cap", `hit the ${cap}-round cap without convergence`, {
+        outstanding: findings || { note: "final confirmation pass changed content that could not be re-reviewed within the cap" },
+      });
+    }
+    rounds += 1;
+
+    const state = { round: rounds, packet: fix, artifactDir };
+    const review = await agent(cycleReviewPrompt(cycle, state), {
+      label: `${lp}review#${rounds}`,
+      schema: CYCLE_REVIEW_SCHEMA,
+    });
+    const peer = peerUnavailable
+      ? { outcome: "unavailable", findings: [], notes: "", detail: "peer marked unavailable earlier this cycle" }
+      : await runCyclePeerStage(cycle, state);
+    peerRounds.push({ round: rounds, outcome: peer.outcome, detail: peer.detail });
+    if (peer.outcome === "unavailable") peerUnavailable = true;
+
+    if (!review) return result("error", `reviewer returned nothing on round ${rounds}`);
+    if (review.emptyDiffFlag) return result("error", `reviewer saw an empty diff on round ${rounds} (likely wrong worktree/branch)`);
+    reviewerNotes = review.notes || "";
+
+    // Gate: reviewer must pass, and BOTH blocking and minor grounded peer
+    // findings gate. Every non-passed/issues peer outcome is non-blocking.
+    let peerGating = peer.outcome === "issues" ? peer.findings : [];
+    if (review.pass && peerGating.length) {
+      // Grounding spot-check — only when the reviewer passed and peer findings
+      // alone would gate. Discard is the one path a finding leaves the cycle
+      // without a fixer disposition, and it is noted.
+      const ground = await agent(cycleGroundingPrompt(cycle, peerGating), {
+        label: `${lp}ground#${rounds}`,
+        schema: CYCLE_GROUNDING_SCHEMA,
+        effort: "low",
+      });
+      if (ground && Array.isArray(ground.verdicts)) {
+        const ungrounded = ground.verdicts.filter((v) => v && v.grounded === false);
+        if (ungrounded.length) {
+          for (const u of ungrounded) discardedPeerFindings.push({ round: rounds, finding: u.finding, why: u.why || "" });
+          const dropped = new Set(ungrounded.map((v) => v.finding));
+          peerGating = peerGating.filter((f) => !dropped.has(f.claim));
+        }
+      }
+    }
+
+    const roundPassed = !!review.pass && peerGating.length === 0;
+    if (!roundPassed) {
+      confirming = false;
+      findings = {
+        reviewer: review.issues || [],
+        reviewerNotes: review.notes || "",
+        peer: peerGating,
+        peerNotes: peer.notes || "",
+      };
+      continue;
+    }
+
+    // Round passed. light mode ends here, recording undisposed remarks as such.
+    if (cycle.mode === "light") {
+      const undisposed = [review.notes, peer.notes].filter(Boolean);
+      return result("pass", "reviewer passed (light mode: final confirmation pass skipped)", { undisposed });
+    }
+
+    // Full mode: one final fixer confirmation pass over the passing reports, so
+    // pass-notes get considered by an agent with full context, never dropped by
+    // the orchestrator. If it disposes nothing new, the loop terminates above;
+    // anything it fixes or disputes goes through another reviewer round.
+    confirming = true;
+    findings = {
+      reviewer: [],
+      reviewerNotes: review.notes || "(no notes — confirm nothing in the passing reports needs acting on)",
+      peer: [],
+      peerNotes: peer.notes || "",
+    };
+  }
+}
+
+// ============================================================================
+// END EMBEDDABLE SECTION: review-cycle-core
+// ============================================================================
+
+// Build one task's cycle config for the embedded runReviewCycle. The worktree
+// lifecycle stays with the wt-* helpers via worktreeContract (per-role
+// contracts below); the task-specific assignment — task content, upstream
+// context, the push-for-durability policy — rides the cycle's scope.
+function taskCycleConfig(task, remote, peerMode) {
+  const upstream = task.upstream ? `\n\n## Upstream context\n\n${task.upstream}` : "";
+  const pushLine = remote
+    ? `After every commit, push for durability: \`git push -u origin ${shq(task.branch)}\` first, \`git push\` thereafter. The reviewer reads your worktree directly, so a transient push failure is not fatal — keep committing and note it — but pushed commits are the backup if the worktree is lost.`
+    : `Remote push is unavailable this run; commit locally (the shared \`.git\` persists). Do not fail on missing push.`;
+  return {
+    slug: task.slug,
+    worktree: "",
+    branch: task.branch,
+    base: task.base,
+    artifactType: "code",
+    peer: peerMode,
+    mode: "full",
+    labelPrefix: `${task.slug}:`,
+    contracts: {
+      fixer: worktreeContract(task, { mayCreate: true }),
+      reviewer: worktreeContract(task),
+      peer: worktreeContract(task),
+    },
+    scope: {
+      title: task.slug,
+      instructions: `Implement the task below to its description and acceptance criteria. The base branch already contains any dependency's work — build on it.${upstream}\n\n${pushLine}\nDo not revert unrelated edits.`,
+      items: [{ taskFile: task.path, taskContent: task.content }],
+    },
+  };
 }
 
 function prPrompt(task, notes, remote) {
@@ -599,47 +1120,32 @@ For each collision:
 Do NOT open any PR and do NOT remove any worktree — the workflow re-reviews each changed branch and handles delivery. Return one resolution entry per collision.`;
 }
 
-async function implementTask(task, remote) {
-  let findings = null;
-  let verdict = null;
-  let rounds = 0;
-
-  for (let round = 1; round <= MAX_ROUNDS; round++) {
-    rounds = round;
-
-    const report = await agent(implementPrompt(task, round, findings, remote), {
-      label: `implement:${task.slug}#${round}`,
-    });
-    if (!report) {
-      return { slug: task.slug, branch: task.branch, status: "error", detail: `implementer failed on round ${round}` };
-    }
-
-    // Sequential await + a SHARED on-disk worktree: the implementer has fully
-    // finished and committed in WT before the reviewer cd's into the same WT, so
-    // the reviewer always sees the commits. Cross-task concurrency comes from
-    // parallel() over distinct WTs, not from per-agent runtime isolation.
-    verdict = await agent(reviewPrompt(task), {
-      label: `review:${task.slug}#${round}`,
-      schema: VERDICT_SCHEMA,
-    });
-    if (!verdict) {
-      return { slug: task.slug, branch: task.branch, status: "error", detail: `reviewer failed on round ${round}` };
-    }
-    if (verdict.emptyDiffFlag) {
-      return { slug: task.slug, branch: task.branch, status: "error", detail: `reviewer saw an empty diff on round ${round} (likely wrong worktree/branch)` };
-    }
-    if (verdict.pass) break;
-    findings = verdict.issues;
+async function implementTask(task, remote, peerMode) {
+  // The loop is the embedded runReviewCycle above. Sequential fixer -> reviewer
+  // awaits inside the cycle plus a SHARED on-disk worktree mean the implementer
+  // has fully finished and committed in WT before the reviewer cd's into the
+  // same WT, so the reviewer always sees the commits. Cross-task concurrency
+  // comes from parallel() over distinct WTs, not from per-agent runtime
+  // isolation; the examination-only peer beside each reviewer round is the
+  // cycle's sole same-worktree concurrency exception.
+  const result = await runReviewCycle(taskCycleConfig(task, remote, peerMode));
+  const carried = {
+    rounds: result.rounds,
+    openQuestions: result.openQuestions,
+    deviations: result.deviations,
+    peerRounds: result.peerRounds,
+    artifactDir: result.artifactDir,
+  };
+  if (result.verdict === "error") {
+    return { slug: task.slug, branch: task.branch, status: "error", detail: result.detail, ...carried };
   }
-
-  if (!verdict || !verdict.pass) {
+  if (result.verdict !== "pass") {
     // Leave the worktree for inspection on a cap-out; commits are durable.
-    return { slug: task.slug, branch: task.branch, status: "review-cap", rounds, outstanding: verdict ? verdict.issues : null };
+    return { slug: task.slug, branch: task.branch, status: "review-cap", outstanding: result.outstanding || null, ...carried };
   }
-
   // Reviewed and ready, but not delivered yet: the wave-level collision guard
   // runs before any PR is opened or worktree is cleaned up.
-  return { slug: task.slug, branch: task.branch, status: "ready", rounds, notes: verdict.notes || "" };
+  return { slug: task.slug, branch: task.branch, status: "ready", notes: result.reviewerNotes || "", ...carried };
 }
 
 async function deliverTask(task, ready, remote) {
@@ -651,19 +1157,41 @@ async function deliverTask(task, ready, remote) {
   // Best-effort cleanup once the work is durable (pushed/committed).
   await agent(cleanupNote(task), { label: `cleanup:${task.slug}` });
 
+  // Open questions, deviations, and the artifact pointer bubble up with the
+  // delivery result — they exist for the human and must survive to Summary.
+  const carried = {
+    rounds: ready.rounds,
+    openQuestions: ready.openQuestions,
+    deviations: ready.deviations,
+    peerRounds: ready.peerRounds,
+    artifactDir: ready.artifactDir,
+  };
   if (pr && pr.opened && pr.url) {
-    return { slug: task.slug, branch: task.branch, status: "done", rounds: ready.rounds, prUrl: pr.url };
+    return { slug: task.slug, branch: task.branch, status: "done", prUrl: pr.url, ...carried };
   }
   // Reviewed and (usually) pushed, but no PR — do NOT count this as a landed PR.
   return {
     slug: task.slug,
     branch: task.branch,
     status: remote ? "pushed-no-pr" : "local-only",
-    rounds: ready.rounds,
     pushed: pr ? pr.pushed : false,
     reason: pr ? pr.reason : "PR agent returned nothing",
+    ...carried,
   };
 }
+
+// --- Flag parsing: `peer-opinions=off` must arrive through args (a workflow
+// cannot read prose elsewhere) and suppresses the embedded cycle's peer stage
+// for every task in the batch. Flatten any args shape first — structured
+// delivery would otherwise stringify to "[object Object]".
+function flattenBatchArgs(a) {
+  if (a == null) return "";
+  if (typeof a === "string") return a;
+  if (Array.isArray(a)) return a.map(flattenBatchArgs).join(" ");
+  if (typeof a === "object") return Object.values(a).map(flattenBatchArgs).join(" ");
+  return String(a);
+}
+const peerMode = /\bpeer[\s-]*opinions?\s*=\s*off\b/.test(flattenBatchArgs(args).toLowerCase()) ? "off" : "on";
 
 phase("Bootstrap");
 const boot = await agent(bootstrapPrompt(), { label: "bootstrap", schema: BOOTSTRAP_SCHEMA });
@@ -791,7 +1319,7 @@ for (let w = 0; w < plan.waves.length; w++) {
   const subBatched = runnable.length > widthCap;
   for (let i = 0; i < runnable.length; i += widthCap) {
     const slice = runnable.slice(i, i + widthCap);
-    const sliceResults = await parallel(slice.map((task) => () => implementTask(task, remote)));
+    const sliceResults = await parallel(slice.map((task) => () => implementTask(task, remote, peerMode)));
     const sliceReady = [];
     sliceResults.forEach((r, j) => {
       const res = r || { slug: slice[j].slug, branch: slice[j].branch, status: "error", detail: "task crashed" };
@@ -950,8 +1478,9 @@ for (let w = 0; w < plan.waves.length; w++) {
         statusBySlug.set(task.slug, held.status);
         results.push(held);
       } else if (isChanged) {
-        // Fresh re-review of the rename — one pass; hold on failure rather than loop.
-        const verdict = await agent(reviewPrompt(task), { label: `re-review:${task.slug}`, schema: VERDICT_SCHEMA });
+        // Fresh re-review of the rename — one pass (the embedded cycle's
+        // reviewer brief, without a fixer loop); hold on failure rather than loop.
+        const verdict = await agent(cycleReviewPrompt(taskCycleConfig(task, remote, peerMode), { round: 1, packet: null, artifactDir: "" }), { label: `re-review:${task.slug}`, schema: CYCLE_REVIEW_SCHEMA });
         if (verdict && verdict.pass && !verdict.emptyDiffFlag) {
           deliverable.push({ task, result: { ...result, notes: verdict.notes || result.notes } });
         } else {
@@ -1007,4 +1536,9 @@ if (mainCheckout.flagged || !mainCheckout.measured) {
 }
 const landed = results.filter((r) => r.status === "done").length;
 log(`Batch complete: ${landed}/${results.length} tasks landed a PR.`);
-return { batch: args, defaultBase: plan.defaultBase, remote, waves: plan.waves.length, throttled, collisions, mainCheckout, results };
+// Open questions and locked-decision deviations bubble up structurally — they
+// exist for the human; each task's full round history stays behind its
+// artifactDir pointer.
+const openQuestions = results.flatMap((r) => (Array.isArray(r.openQuestions) ? r.openQuestions : []));
+const deviations = results.flatMap((r) => (Array.isArray(r.deviations) ? r.deviations : []));
+return { batch: args, defaultBase: plan.defaultBase, remote, peer: peerMode, waves: plan.waves.length, throttled, collisions, mainCheckout, openQuestions, deviations, results };

@@ -15,8 +15,9 @@
  * prompts below carry the operative definition — so a multi-bot loop winds
  * down bot-by-bot as each reviewer goes quiet.
  *
- * Invoke as `/wf-address-review [PR#] [rebase on top of <branch>] [no-push]
- * [push] [ping-codex] [ping-claude] [ping-copilot] [ping-contributing]`.
+ * Invoke as `/dev-skills:wf-address-review [PR#] [rebase on top of <branch>]
+ * [no-push] [push] [peer-opinions=off] [ping-codex] [ping-claude]
+ * [ping-copilot] [ping-contributing]`.
  *
  * Why a workflow rather than a skill
  * ----------------------------------
@@ -24,6 +25,16 @@
  * cycle with a hard round cap, followed by a conditional publish stage gated on
  * flags. That sequencing is exactly what a workflow expresses as code instead of
  * prose, and the verifier is a textbook fresh-`Agent` spawn.
+ *
+ * The fix -> review -> fix loop itself is NOT stated here: this workflow nests
+ * the canonical cycle (`workflow("wf-review-cycle", ...)`) for its verification
+ * loop — roles, gates, disposition rule, best-effort cross-harness codex peer
+ * review, and the round cap are all wf-review-cycle's, and this script only
+ * supplies the PR-specific scope (triage kinds, per-thread report contract,
+ * disposition-verification criteria). Nesting is the right consumption mode
+ * here because this pipeline does not fan out; a fan-out owner embeds the
+ * cycle's marked section instead (see wf-address-tasks.js). `peer-opinions=off`
+ * passes through args into the nested cycle.
  *
  * Workflows have no mid-run user input, so this is structurally the skill's
  * `hands-off` mode: low-stakes ambiguity is decided best-effort by the agents
@@ -53,22 +64,25 @@
  */
 
 // The runtime requires `export const meta = {...}` (a pure literal) as the
-// FIRST statement: it is how the script registers as the `/wf-address-review`
-// command and what the pre-run approval prompt shows. The conditional report
-// phases are not declared; undeclared phase() titles get their own group.
+// FIRST statement: it is how the script registers as the
+// `/dev-skills:wf-address-review` command and what the pre-run approval prompt
+// shows. The conditional report phases are not declared; undeclared phase()
+// titles get their own group. The "Peer review (codex)" title must stay
+// byte-identical to the peer stage's phase string in the nested
+// wf-review-cycle (its CYCLE_PEER_PHASE) — a mismatch silently splits the
+// progress display into an extra group.
 export const meta = {
   name: "wf-address-review",
-  description: "Address every unresolved review thread on one PR: fix or push back, verify with a fresh-eyes reviewer (max 12 rounds), then publish by default (use no-push for a local-only dry run).",
+  description: "Address every unresolved review thread on one PR: fix or push back, verify through the shared review cycle — a fresh-eyes reviewer plus a best-effort cross-harness codex peer review each round (review is cross-harness; peer outcomes never block; bounded round cap) — then publish by default (use no-push for a local-only dry run).",
   whenToUse: "Work through maintainer-vetted review feedback on a single PR hands-off. Not for new task batches (wf-address-tasks) or stack rebases.",
   phases: [
     { title: "Gather", detail: "resolve the PR, branch state, and unresolved threads" },
-    { title: "Fix and verify", detail: "fix/push-back per thread, fresh-eyes verification loop" },
+    { title: "Fix and verify", detail: "fix/push-back per thread through the nested wf-review-cycle" },
+    { title: "Peer review (codex)", detail: "best-effort cross-harness second opinion beside each reviewer round; its outcome never blocks" },
     { title: "Publish", detail: "lease-safe push, thread replies, summary comment, pings" },
     { title: "Summary" },
   ],
 };
-
-const MAX_ROUNDS = 12;
 
 const PACKET_SCHEMA = {
   type: "object",
@@ -110,55 +124,6 @@ const PACKET_SCHEMA = {
     },
   },
   required: ["ok", "items"],
-};
-
-const DISPOSITION_SCHEMA = {
-  type: "object",
-  properties: {
-    dispositions: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          type: { type: "string", description: "`review-thread` or `standalone`, echoed from the gathered item." },
-          threadId: { type: "string", description: "The review-thread node id — REQUIRED for type `review-thread` (publication resolves it); omit for `standalone`." },
-          commentId: { type: "string", description: "The comment databaseId — REQUIRED for type `review-thread` (publication replies to it); omit for `standalone`." },
-          authorIsBot: { type: "boolean", description: "Echoed from the gathered item; lets publication decide whether a push-back or deferred thread may be auto-resolved (bot) or must stay open (human). REQUIRED — if the gathered item somehow lacked it, re-derive from GraphQL author `__typename`, or use false (human), the safe value that keeps the thread open." },
-          url: { type: "string", description: "Permalink — the stable reference, especially for `standalone` items." },
-          ref: { type: "string", description: "file:line + author, a human-readable reference." },
-          kind: { type: "string", description: "actionable-fixed | already-addressed | push-back | deferred-to-task | ambiguous-skipped" },
-          detail: { type: "string", description: "For fixed: the one-line summary + commit sha. For already-addressed: where it's handled. For push-back: the rationale. For deferred: the committed task file path + one-line scope, and whether the deferral was maintainer-directed or agent-proposed. For ambiguous: what decision is needed." },
-          author: { type: "string", description: "Comment author login, echoed from the gathered item (include for `standalone` items too). Lets `ping-contributing` attribute a new finding to a specific reviewer bot." },
-          newFinding: { type: "boolean", description: "True ONLY if this thread surfaces a real concern not previously raised on this PR — typically `actionable-fixed`, or a genuinely new `deferred-to-task`/`already-addressed`. FALSE for a `push-back` (the comment was wrong), a re-raise of a concern already deferred to a committed task, or a bot re-arguing a push-back it already lost — UNLESS the thread carries a genuinely new angle this round. Drives `ping-contributing`: a bot is re-pinged only when it authored at least one newFinding this round. Set it honestly even if no ping was requested." },
-        },
-        required: ["type", "kind", "detail", "authorIsBot", "author", "newFinding"],
-      },
-    },
-    proactiveFixes: { type: "string", description: "Same-pattern fixes made beyond the literal comments, or empty." },
-    finalSha: { type: "string", description: "HEAD sha after all fixes are committed." },
-    clean: { type: "boolean", description: "True only if `git status --porcelain` is empty with every intended change committed." },
-  },
-  required: ["dispositions", "clean"],
-};
-
-const VERDICT_SCHEMA = {
-  type: "object",
-  properties: {
-    pass: { type: "boolean", description: "True only if every disposition holds in the committed code, the build passes, and no material quality issue remains." },
-    issues: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          threadRef: { type: "string", description: "Which disposition or file:line this concerns." },
-          problem: { type: "string" },
-          fix: { type: "string" },
-        },
-        required: ["problem", "fix"],
-      },
-    },
-  },
-  required: ["pass", "issues"],
 };
 
 const PUBLISH_SCHEMA = {
@@ -214,7 +179,7 @@ function gatherPrompt(input) {
   return `You are preparing a pull request for review-addressing. Read \`AGENTS.md\` / \`CLAUDE.md\` first.
 
 Request (lenient parsing — commas, &, free word order): ${JSON.stringify(input)}
-Possible tokens: a PR number (e.g. #38), \`rebase on top of <branch>\`, \`no-push\`, \`push\`, \`ping-codex\`, \`ping-claude\`, \`ping-copilot\`, \`ping-contributing\`. You only act on the PR# and the rebase here; the push/ping flags are handled later.
+Possible tokens: a PR number (e.g. #38), \`rebase on top of <branch>\`, \`no-push\`, \`push\`, \`peer-opinions=off\`, \`ping-codex\`, \`ping-claude\`, \`ping-copilot\`, \`ping-contributing\`. You only act on the PR# and the rebase here; the push/ping/peer flags are handled later.
 
 Preflight (set \`ok: false\` with a \`blocker\` and stop on any failure):
 1. Working tree clean (\`git status --porcelain\` empty). Do not auto-stash.
@@ -235,60 +200,37 @@ If there are no unresolved threads and no included standalone item, return \`ok:
 Edit NO files here; this is gather-only.`;
 }
 
-function fixPrompt(packet, findings) {
-  const fixup = findings
-    ? `\n## Reviewer findings to address\n\nThe previous fix round did not fully pass. Address each finding, then re-confirm every disposition:\n\n${JSON.stringify(findings, null, 2)}\n`
-    : "";
-  return `You are addressing review feedback on PR #${packet.pr.number} (base \`${packet.pr.base}\`). You are on branch \`${packet.pr.workingBranch}\` in the working tree — confirm with \`git branch --show-current\` and do NOT switch branches. (The PR's remote head ref is \`${packet.pr.branch}\`; that is the push target, which may be a different name for a local off-shoot — edit the checked-out \`${packet.pr.workingBranch}\`, not the remote ref name.) Read \`AGENTS.md\` / \`CLAUDE.md\` first.
+// The fix -> review -> fix loop is the nested wf-review-cycle's, not this
+// script's. These two builders supply only the PR-specific scope: the round-1
+// assignment with its per-thread report contract (which rides the cycle's
+// untyped `workReport` — hence the explicit field list; the cycle's own
+// schemas cannot require consumer fields), and the disposition-verification
+// criteria the cycle hands verbatim to its reviewer AND its codex peer.
+function fixInstructions(packet) {
+  return `You are addressing review feedback on PR #${packet.pr.number} (base \`${packet.pr.base}\`). The PR's remote head ref is \`${packet.pr.branch}\`; that is the push target, which may be a different name for a local off-shoot — edit only the checked-out branch named in the contract above, never the remote ref name.
 
 This run is unattended (hands-off): decide low-stakes ambiguity best-effort and record it; for high-stakes ambiguity that needs an authoritative decision, do NOT guess — mark the item \`ambiguous-skipped\` and leave it open.
 
-## Items to address (verbatim)
-
-${JSON.stringify(packet.items, null, 2)}
-${fixup}
-## Instructions
-
-Triage each item into exactly one kind and act:
-- \`actionable-fixed\` — implement the fix. Commit at logical milestones.
+Triage each work item into exactly one kind and act:
+- \`actionable-fixed\` — implement the fix. Commit at logical milestones; keep commits buildable where practical.
 - \`already-addressed\` — current code already satisfies it; note where.
 - \`push-back\` (should be rare) — the comment is wrong/misunderstands context. Do NOT implement; draft a respectful, specific rationale. Never implement a fix you believe is wrong just to clear a comment.
 - \`deferred-to-task\` — the concern is real but fixing it here would expand the PR's scope considerably while the branch is defendable as it stands (builds, covers its main paths), or a maintainer reply/decision comment defers it. Do NOT implement; write a standalone follow-up task file instead, per the write-tasks skill conventions: place it in the repo's task folder (commonly \`tasks/\`; parked work in its deferred subfolder, e.g. \`tasks/deferred/\` — follow the repo's existing layout), number it to continue the existing sequence, restate the concern with file/line references and the PR thread link, and commit it on this branch SEPARATELY from code-fix commits. Never use this to dodge a cheap fix.
 - \`ambiguous-skipped\` — needs an authoritative decision you cannot make here.
 
-- Preclude repeat comments: for each pattern you fix, grep the PR's changed files and closely related code for the SAME offending pattern and fix those too; report them in \`proactiveFixes\`.
-- Keep commits buildable where practical; run build/lint before declaring done.
-- Before returning, \`git status --porcelain\` MUST be empty with every intended change committed — set \`clean\` accordingly and set \`finalSha\` to HEAD.
-- Do NOT push, reply, resolve, or comment on the PR — publication is a separate, later step.
-- Do NOT use the \`TaskCreate\`/\`TaskUpdate\`/\`TaskList\` tools.
+Preclude repeat comments: for each pattern you fix, grep the PR's changed files and closely related code for the SAME offending pattern and fix those too; report them in \`proactive\`.
+Do NOT push, reply, resolve, or comment on the PR — publication is a separate, later step.
 
-For each disposition, echo the item's \`type\` and \`authorIsBot\` (both MANDATORY — publication uses \`authorIsBot\` to decide whether a push-back/deferred thread may be auto-resolved, so never omit it; if the gathered item lacked it, use false, the safe human default), and carry its identifiers: for \`review-thread\` items \`threadId\` and \`commentId\` are MANDATORY (publication cannot reply/resolve without them); for \`standalone\` items include \`url\`. Also set \`author\` (the comment author's login, echoed from the gathered item — include it for \`standalone\` items too) and \`newFinding\` per disposition: \`newFinding: true\` ONLY when the item surfaces a real concern not previously raised on this PR (typically an \`actionable-fixed\`, or a genuinely new \`deferred-to-task\`/\`already-addressed\`); \`false\` for a \`push-back\` (the comment was wrong), a re-raise of a concern already deferred to a committed task file, or a bot re-arguing a push-back it already lost — UNLESS the thread carries a genuinely new angle this round. (This drives the \`ping-contributing\` flag, which re-pings a bot only when it brought a new finding this round; set it honestly even if no ping was requested.) Return the structured dispositions.`;
+Per-item report contract: return one \`workReport\` entry per work item carrying — \`type\` (echoed from the item); \`threadId\` and \`commentId\` (MANDATORY for \`review-thread\` items; publication cannot reply/resolve without them); \`url\` (the stable reference, especially for \`standalone\` items); \`ref\` (file:line + author, human-readable); \`kind\` (the disposition kind above); \`detail\` (for fixed: one line + commit sha; for already-addressed: where it's handled; for push-back: the rationale; for deferred: the committed task file path + one-line scope, and whether the deferral was maintainer-directed or agent-proposed; for ambiguous: what decision is needed); \`authorIsBot\` (echoed; MANDATORY — publication uses it to decide whether a push-back/deferred thread may be auto-resolved, so never omit it; if the gathered item lacked it, use false, the safe human default); \`author\` (the comment author's login, echoed — include it for \`standalone\` items too); and \`newFinding\` — true ONLY when the item surfaces a real concern not previously raised on this PR (typically an \`actionable-fixed\`, or a genuinely new \`deferred-to-task\`/\`already-addressed\`); false for a \`push-back\` (the comment was wrong), a re-raise of a concern already deferred to a committed task file, or a bot re-arguing a push-back it already lost — UNLESS the thread carries a genuinely new angle this round. (\`newFinding\` drives the \`ping-contributing\` flag, which re-pings a bot only when it brought a new finding this round; set it honestly even if no ping was requested.)`;
 }
 
-function reviewPrompt(packet, dispositions) {
-  return `You are an independent fresh-eyes reviewer for PR #${packet.pr.number} (branch \`${packet.pr.workingBranch}\`, base \`${packet.pr.base}\`). You are on that branch with the fixer's commits already in the working tree. Verify every proposed disposition against the committed code. Edit NOTHING. Read \`AGENTS.md\` / \`CLAUDE.md\` first.
-
-You are given the unresolved items and the proposed dispositions — but NOT the fixer's reasoning. Independently confirm each:
+function reviewCriteria() {
+  return `The work items are unresolved PR review threads (plus any explicitly included standalone items), and the fixer's \`workReport\` proposes a disposition \`kind\` per item. Independently confirm each:
 - \`actionable-fixed\` / \`already-addressed\` claims must actually hold in the committed code.
 - \`push-back\` must be technically justified, not a convenient dismissal.
 - \`deferred-to-task\` must point at a committed task file that genuinely covers the concern, with the deferral itself justified (maintainer-directed, or genuinely scope-expanding while the branch builds and covers its main paths) — not an evasion of a cheap fix.
 - \`ambiguous-skipped\` must genuinely require an authoritative decision.
-You may reclassify any item.
-
-## Items
-
-${JSON.stringify(packet.items, null, 2)}
-
-## Proposed dispositions
-
-${JSON.stringify(dispositions, null, 2)}
-
-How to verify:
-1. Run the build / type-check first; a failure is an automatic blocker (\`pass: false\`).
-2. Read the actual files. If \`git diff --name-only ${shq(packet.pr.base)}...HEAD\` looks empty despite claimed fixes, report a likely race/wrong-branch in \`issues\` rather than reviewing nothing.
-3. Quality pass on changed files (logic, error handling, edge cases, dead code, consistency, duplication, type safety) and confirm the same-pattern sweep did not miss a sibling occurrence.
-
-Return \`pass: true\` only if every disposition holds, the build passes, and no material issue remains; else \`pass: false\` with numbered, actionable \`issues\`. Do not use the task-tracker tools.`;
+You may reclassify any item. Confirm the claimed same-pattern sweep did not miss a sibling occurrence.`;
 }
 
 function publishPrompt(packet, dispositions, flags) {
@@ -323,8 +265,9 @@ Record each item's outcome with its stable reference (file:line, author, threadI
 // --- Flag parsing (the only logic the script does itself; no shell needed) ---
 // `args` may arrive as a string OR, per the workflow docs, as structured data
 // (array / object). Flatten any shape into the words it contains so `push` /
-// `ping-codex` / `ping-claude` / `ping-copilot` survive `Run /wf-address-review on
-// #38 with push` being delivered as an object — `String(args)` would yield "[object Object]".
+// `ping-codex` / `ping-claude` / `ping-copilot` survive `Run
+// /dev-skills:wf-address-review on #38 with push` being delivered as an
+// object — `String(args)` would yield "[object Object]".
 function flattenArgs(a) {
   if (a == null) return "";
   if (typeof a === "string") return a;
@@ -369,6 +312,9 @@ const pushNegWords = pushWords.replace(/\bpush(?:es|ing)\b/g, "push");
 const noPush =
   /\bno[\s-]*push\b/.test(pushNegWords) ||
   /\b(?:not|never|without|skip|cannot|can't|cant|dont|don't|do not)\b[\s-]*push\b/.test(pushNegWords);
+// `peer-opinions=off` suppresses the nested cycle's cross-harness peer stage;
+// it must arrive through args (the workflow cannot read prose elsewhere).
+const peerOffTok = /\bpeer[\s-]*opinions?\s*=\s*off\b/.test(lower);
 const pingCodexTok = /\bping[\s-]*codex\b/.test(lower);
 const pingClaudeTok = /\bping[\s-]*claude\b/.test(lower);
 const pingCopilotTok = /\bping[\s-]*copilot\b/.test(lower);
@@ -385,6 +331,7 @@ const pingContributing =
   wantPush && (pingContribTok || (!anyNamedPing && !explicitPushToken));
 const flags = {
   push: wantPush,
+  peerOff: peerOffTok,
   pingCodex: wantPush && pingCodexTok,
   pingClaude: wantPush && pingClaudeTok,
   pingCopilot: wantPush && pingCopilotTok,
@@ -417,41 +364,44 @@ if (!packet.items || packet.items.length === 0) {
 }
 
 phase("Fix and verify");
-let dispositions = null;
-let verdict = null;
-let rounds = 0;
-let findings = null;
-
-for (let round = 1; round <= MAX_ROUNDS; round++) {
-  rounds = round;
-
-  // No worktree isolation: the fixer commits on the PR branch in the shared
-  // working tree, so the reviewer below sees those commits directly.
-  const fixResult = await agent(fixPrompt(packet, findings), {
-    label: `fix#${round}`,
-    schema: DISPOSITION_SCHEMA,
-  });
-  if (!fixResult) {
-    return { error: `Fixer failed on round ${round}.`, pr: packet.pr, rounds };
-  }
-  if (!fixResult.clean) {
-    return { error: `Fixer left an unclean worktree on round ${round}; refusing to review a partial state.`, pr: packet.pr, rounds, dispositions: fixResult.dispositions };
-  }
-  dispositions = fixResult;
-
-  // Fresh-eyes reviewer, only after the fixer has committed everything.
-  verdict = await agent(reviewPrompt(packet, dispositions.dispositions), {
-    label: `review#${round}`,
-    schema: VERDICT_SCHEMA,
-  });
-  if (!verdict) {
-    return { error: `Reviewer failed on round ${round}.`, pr: packet.pr, rounds, dispositions: dispositions.dispositions };
-  }
-  if (verdict.pass) break;
-  findings = verdict.issues;
+// The loop lives in the canonical wf-review-cycle, consumed by NESTING: this
+// pipeline runs one cycle with no fan-out, so there is no cross-cycle state a
+// parent would need to own (a fan-out owner embeds the cycle's marked section
+// instead — see wf-address-tasks.js and wf-review-cycle.js "Consumption
+// modes"). No worktree isolation: the cycle's agents share the current
+// checkout on the PR branch, so the reviewer sees the fixer's commits
+// directly. A runtime without child-workflow support cannot run the shared
+// cycle at all — report that as a blocker rather than silently reviewing less.
+if (typeof workflow !== "function") {
+  return {
+    error: "This workflow runtime does not support nested workflows (`workflow()` is unavailable), and wf-address-review consumes the shared review cycle by nesting. Update the runtime, or use the `address-review` skill.",
+    pr: packet.pr,
+  };
+}
+const cycle = await workflow("wf-review-cycle", {
+  worktree: "",
+  branch: packet.pr.workingBranch,
+  base: packet.pr.base,
+  artifactType: "code",
+  peer: flags.peerOff ? "off" : "on",
+  mode: "full",
+  scope: {
+    title: `pr-${packet.pr.number}`,
+    instructions: fixInstructions(packet),
+    reviewInstructions: reviewCriteria(),
+    items: packet.items,
+  },
+});
+if (!cycle) {
+  return { error: "Nested review cycle returned nothing.", pr: packet.pr };
+}
+if (cycle.verdict === "error") {
+  return { error: `Review cycle failed: ${cycle.detail}`, pr: packet.pr, rounds: cycle.rounds, dispositions: cycle.workReport, openQuestions: cycle.openQuestions, artifactDir: cycle.artifactDir };
 }
 
-const passed = verdict && verdict.pass;
+const passed = cycle.verdict === "pass";
+const rounds = cycle.rounds;
+const workReport = cycle.workReport || [];
 
 if (!flags.push) {
   // Local-only run: make NO PR mutations. The disposition map is the deliverable
@@ -462,9 +412,14 @@ if (!flags.push) {
     pr: packet.pr,
     rounds,
     reviewerPassed: !!passed,
-    dispositions: dispositions.dispositions,
-    proactiveFixes: dispositions.proactiveFixes,
-    outstanding: passed ? null : (verdict ? verdict.issues : null),
+    dispositions: workReport,
+    proactiveFixes: cycle.proactive,
+    findingDispositions: cycle.findingDispositions,
+    openQuestions: cycle.openQuestions,
+    deviations: cycle.deviations,
+    peerRounds: cycle.peerRounds,
+    artifactDir: cycle.artifactDir,
+    outstanding: passed ? null : cycle.outstanding || null,
     note: "Local-only run: no push, no replies/resolves, no comment. Re-run without `no-push` to publish with the default contributing-bot pings, or with `push` to publish quietly.",
   };
 }
@@ -476,9 +431,13 @@ if (!passed) {
     status: "review-cap-not-published",
     pr: packet.pr,
     rounds,
-    dispositions: dispositions.dispositions,
-    outstanding: verdict ? verdict.issues : null,
-    note: `Hit the ${MAX_ROUNDS}-round cap without a passing review; nothing was pushed.`,
+    dispositions: workReport,
+    openQuestions: cycle.openQuestions,
+    deviations: cycle.deviations,
+    peerRounds: cycle.peerRounds,
+    artifactDir: cycle.artifactDir,
+    outstanding: cycle.outstanding || null,
+    note: "Hit the review cycle's round cap without a passing review; nothing was pushed.",
   };
 }
 
@@ -487,7 +446,7 @@ if (!passed) {
 // cannot make those conditionally required. Catch it here so we never push and
 // then fail mid-publish on a missing id (nothing has been pushed yet on a push
 // run — the publisher does the push — so aborting now leaves the remote clean).
-const badDisp = dispositions.dispositions.find(
+const badDisp = workReport.find(
   (d) => d.type === "review-thread" && (!d.threadId || !d.commentId)
 );
 if (badDisp) {
@@ -495,7 +454,7 @@ if (badDisp) {
     status: "publish-aborted-incomplete-dispositions",
     pr: packet.pr,
     rounds,
-    dispositions: dispositions.dispositions,
+    dispositions: workReport,
     note: `Review-thread disposition "${badDisp.ref || badDisp.kind}" is missing threadId/commentId; nothing was pushed. Re-run so every review thread carries its identifiers.`,
   };
 }
@@ -510,8 +469,8 @@ if (badDisp) {
 // the publisher's own git check, which the prompt also gates on a no-op push.
 const knownNoNewCommits =
   !packet.pr.rebased &&
-  !!dispositions.finalSha &&
-  dispositions.finalSha === packet.pr.headOid;
+  !!cycle.finalSha &&
+  cycle.finalSha === packet.pr.headOid;
 
 // `ping-contributing`: re-ping a bot only when it authored at least one NEW
 // finding this round, attributed by the disposition author's login. A bot that
@@ -520,7 +479,7 @@ const knownNoNewCommits =
 // multi-bot review->address loop winds down reviewer-by-reviewer.
 const reviewingBots = new Set();
 const contributingBots = new Set();
-for (const d of dispositions.dispositions) {
+for (const d of workReport) {
   const bot = botKindOf(d && d.author, d && d.authorIsBot);
   if (!bot) continue;
   reviewingBots.add(bot);
@@ -547,7 +506,7 @@ const publishFlags = {
 };
 
 phase("Publish");
-const publishReport = await agent(publishPrompt(packet, dispositions.dispositions, publishFlags), {
+const publishReport = await agent(publishPrompt(packet, workReport, publishFlags), {
   label: "publish",
   schema: PUBLISH_SCHEMA,
 });
@@ -578,8 +537,13 @@ return {
   flags: publishFlags,
   reviewingBots: [...reviewingBots],
   contributingBots: [...contributingBots],
-  dispositions: dispositions.dispositions,
-  proactiveFixes: dispositions.proactiveFixes,
+  dispositions: workReport,
+  proactiveFixes: cycle.proactive,
+  findingDispositions: cycle.findingDispositions,
+  openQuestions: cycle.openQuestions,
+  deviations: cycle.deviations,
+  peerRounds: cycle.peerRounds,
+  artifactDir: cycle.artifactDir,
   publishReport: publishReport || { published: false, aborted: "publisher returned nothing" },
   note: published
     ? (notes.length ? notes.join(" ") : undefined)
