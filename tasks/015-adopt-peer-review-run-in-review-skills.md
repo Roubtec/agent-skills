@@ -43,6 +43,7 @@ Out of scope:
 
 - `plugins/dev-skills/skills/review-cycle/SKILL.md` and `plugins/dev-skills/workflows/wf-review-cycle.js` (the canonical peer step, once 014 lands), the `codex/dev-skills/skills/review-cycle/` mirror, and `plugins/dev-skills/workflows/wf-address-tasks.js`, which per 014 embeds its own copy of that peer step so its throttle owns the peer launches.
 - Pre-014 fallback: `plugins/dev-skills/skills/{address-review,address-reviews,address-tasks,address-tasks-serialized,resolve-open-questions}/SKILL.md` and `codex/dev-skills/skills/*` peer sections.
+- `scripts/` — the committed harness-neutral prompt file the Validation section requires, named for this task.
 
 ## Implementation notes
 
@@ -64,7 +65,8 @@ Out of scope:
 ## Validation
 
 - Dry-run one `address-review` round in a powbox container against a disposable PR: peer launches via the helper, outcome JSON parses, an `unavailable` (e.g. codex logged out) round proceeds non-blocking.
-- On that same dry run, confirm the effective model and reasoning effort from the peer's own session header or result metadata (codex prints `model:` and `reasoning effort:` in its header; `claude --output-format json` reports `modelUsage`). Anything other than the pinned baseline — in particular `reasoning effort: none` — fails this task. The model reading has something to fail against on each side: the claude peer must report `opus`, and the codex peer the container's configured high-capability model rather than a bare default — carried through the passthrough on the helper path, and by an untouched `config.toml` on a retained raw launch.
+- Confirm the effective model and reasoning effort from the peer's own session header or result metadata (codex prints `model:` and `reasoning effort:` in its header; `claude --output-format json` reports `modelUsage`). Anything other than the pinned baseline — in particular `reasoning effort: none` — fails this task. The model reading has something to fail against on each side: the claude peer must report `opus`, and the codex peer the container's configured high-capability model rather than a bare default — carried through the passthrough on the helper path, and by an untouched `config.toml` on a retained raw launch. Both sides therefore need reading, which takes **one run per harness** rather than the single `address-review` round above: that round launches only the codex peer, and only the `codex/` mirrors launch the claude peer, so completing it alone leaves the claude half of the pin unexercised, free to be broken while every prescribed step still passes.
+- Emit that check as a **committed, harness-neutral prompt file** — the shape 014's validation states, scoped here to the converted peer steps of the five skills and their mirrors rather than to the canonical block: one text either harness may be pointed at, instructing the runner to exercise the peer step of its own tree and report the model and effort its own peer reported against the pin, whether that peer was reached through the helper's passthrough or a retained raw launch. Same home and lifetime — `scripts/`, named for this task, shipped with the branch at least until both readings are recorded.
 - Grep check both providers' raw forms — `codex exec` in the Claude-led skills and `claude -p` in the codex-side mirrors — with no launch instruction for either outside the fallback paragraphs. Grepping only `codex exec` cannot see a lingering raw launch on the mirror side, which is half of what this task changes.
 
 ## Review plan
