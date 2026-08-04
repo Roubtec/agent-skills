@@ -248,40 +248,12 @@ This is a bounded snapshot, not a total guarantee. It establishes that no collis
 
 ## Peer second opinion (best-effort)
 
-Unless `peer-opinions=off`, preflight `codex` once per skill run in the main working tree before the first review: require `command -v codex`, then run `codex login status`. A missing binary or failed login makes the peer unavailable, except that a set `CODEX_API_KEY` downgrades a failed login probe to classify-at-first-invocation; an auth or usage failure on that invocation then makes it unavailable for the rest of the run. Unavailability never fails or delays the own-harness review; record the reason and mention the peer forfeit once in the final summary.
+Unless `peer-opinions=off`, run the `review-cycle` skill's peer step beside every review round: its preflight-once probe, pinned-strength launch, loose timeout with one retry, examination-only contract and `VERDICT: PASS | ISSUES` format, outcome vocabulary, grounding spot-check, blocking-and-minor gating, verbatim finding relay, and next-reviewer adjudication of disputes are all defined there and are not restated here.
 
-On every review round while available, launch the peer in the background at the same moment as the own reviewer, from the committed task checkout. In this serialized skill, `worktree` means the orchestrator's single shared repository checkout path, not a separately created git worktree. Prepare a distinct artifact directory for the invocation, then launch it with this shell-safe form:
+Deltas for this serialized skill:
 
-```bash
-worktree="/absolute/path/to/committed-task-checkout"
-artifact_dir="/absolute/path/to/peer-artifacts/task-slug/round-1"
-outfile="${artifact_dir}/peer-review.out"
-stderr_file="${artifact_dir}/peer-review.stderr"
-prompt="$(
-  cat <<'PEER_REVIEW_PROMPT'
-<the complete peer prompt, including verbatim task content>
-PEER_REVIEW_PROMPT
-)"
-
-mkdir -p "${artifact_dir}"
-
-# Pin peer effort per invocation; this never changes the container's configuration.
-peer_args=(-c model_reasoning_effort=high)
-
-codex exec --sandbox read-only --cd "${worktree}" -o "${outfile}" \
-  -c mcp_servers={} "${peer_args[@]}" "${prompt}" \
-  < /dev/null 2> "${stderr_file}" &
-```
-
-Keep the stderr file peekable because progress is emitted there, use the peer's configured high-capability model, and always pass `peer_args=(-c model_reasoning_effort=high)` so review strength never follows whichever effort a container most recently selected. Allow a loose timeout of about 12 minutes with discretion to wait longer when progress is visible. On timeout or transient failure, retry once, then forfeit only that round; an auth or usage failure on a classify-at-first-invocation path disables the peer for the rest of the run.
-
-The peer is **examination-only**: instruct it to read code and diffs, edit nothing, and run no builds or tests. Its prompt must include that checkout path, the base branch or commit range, the relevant task content verbatim, and this output contract: `VERDICT: PASS | ISSUES`, followed by numbered findings tagged `blocking` or `minor`, each with `file:line` and a one-line rationale. The own reviewer retains the full-build-first contract, which makes the parallel launch safe.
-
-Always wait for the own reviewer before deciding the round, and also wait for the peer when one was launched. Use only their verdict lines to decide whether the round passes, but retain the full reports unchanged; do not summarize, merge, or rewrite them. Unintelligible peer output forfeits that round. When either reviewer reports issues, give the next fresh implementer both reports verbatim as separately labeled **Reviewer findings** and **Peer (codex) findings** blocks.
-
-A round passes only when the own reviewer passes and the peer, when it delivered an intelligible report, has no unaddressed grounded findings, whether `blocking` or `minor`. Only when a passing own review would otherwise be overturned by peer findings, cheaply spot-check that each gate-deciding `file:line` exists and its claim is not self-evidently false; discard and record ungrounded findings, but pass all other feedback through verbatim. Pure noise or stylistic churn against repository conventions may be pushed back with evidence; the next round's fresh own reviewer adjudicates disputes, and a rejected peer claim stops gating when that reviewer confirms it is not real.
-
-Every implementer round counts toward the feedback-loop cap, whichever reviewer triggered it. Invoke the peer on every round while it remains available.
+- The peer's worktree is the orchestrator's single shared repository checkout path, not a separately created git worktree; launch it from the committed task checkout at the same moment as the own reviewer, with the relevant task content verbatim and the base branch or commit range in its prompt.
+- Every implementer round counts toward the feedback-loop cap, whichever reviewer triggered it; invoke the peer on every round while it remains available, and mention an unavailable or forfeited peer once in the final summary.
 
 ## Feedback Loop
 
@@ -297,7 +269,7 @@ When either reviewer reports material issues:
    - The same project context and validation instructions as the original implementer prompt.
 2. After the fix-up implementer completes — and only then, in a later turn — **spawn a new reviewer agent** and launch the peer per the protocol above to re-check (same fresh prompt structure as before; never concurrent with the fix-up implementer).
 3. Repeat until the own reviewer passes and the peer has no unaddressed grounded findings under the protocol above.
-4. **Cap the feedback loop at 12 iterations.** This is a runaway-loop guard against arcane token bloat, not a quality dial; more legitimate rounds are expected with another reviewer. If issues persist after 12 rounds, stop iterating and do not open a PR for this task. Surface the outstanding findings clearly to the user in the final summary and ask for guidance on how to proceed.
+4. **Cap the feedback loop at the `review-cycle` skill's round cap.** If issues persist at the cap, stop iterating and do not open a PR for this task. Surface the outstanding findings clearly to the user in the final summary and ask for guidance on how to proceed.
 
 ## Hints
 

@@ -10,8 +10,8 @@ Implement a set of pre-planned task files using a **parallel, worktree-isolated*
 `peer-opinions=off` is the only accepted explicit peer-opinion setting. Omit it to use the default, which enables best-effort peer opinions.
 
 This skill is the parallel sibling of `address-tasks-serialized`.
-The roles (orchestrator / implementer / reviewer), the implementer and reviewer prompt contracts, the code-quality review checklist, and the full peer second-opinion protocol are all inherited from that skill — read it for those contracts and their rationale.
-**What changes here is the execution model:** instead of one branch on one shared working tree processed strictly sequentially, each task gets its **own git worktree** so independent tasks can run **concurrently**, while each individual task still runs its implement→review→fix loop **sequentially** (up to 12 iterations).
+The roles (orchestrator / implementer / reviewer), the implementer and reviewer prompt contracts, and the code-quality review checklist are inherited from that skill, and the peer second-opinion protocol is the `review-cycle` skill's — read those for the contracts and their rationale.
+**What changes here is the execution model:** instead of one branch on one shared working tree processed strictly sequentially, each task gets its **own git worktree** so independent tasks can run **concurrently**, while each individual task still runs its implement→review→fix loop **sequentially**, bounded by the `review-cycle` round cap.
 
 ## Why worktrees change the rules
 
@@ -47,7 +47,7 @@ The same bootstrap serves this skill and `address-reviews`:
 
 4. **Measure free disk space** on the base directory's filesystem (`df -k "$WT_BASE"`) — the starting input for Adaptive throttling below.
 
-5. **Preflight the peer once** unless `peer-opinions=off`: if `command -v claude` fails, mark the peer unavailable and proceed with own reviewers; otherwise run `claude auth status`. Treat a failed authentication probe as unavailable unless `ANTHROPIC_API_KEY` is set, in which case classify auth or usage availability on the first real invocation. An older CLI that lacks the `auth status` subcommand also defers classification to the first invocation. Peer unavailability is never an error; proceed with own reviewers and note the reason once in the final summary, as specified by the inherited protocol.
+5. **Preflight the peer once** unless `peer-opinions=off`, per the `review-cycle` skill's peer preflight. Peer unavailability is never an error; proceed with own reviewers and note the reason once in the final summary.
 
 If a `wt-bootstrap` helper is on PATH, prefer it for steps 1–4 — it performs those worktree checks, prunes orphans, and prints the base dir (`wtBase`) and free space (`availBytes`) as JSON. Still run the peer preflight in step 5 separately.
 
@@ -156,39 +156,9 @@ For a wave of tasks `T1..Tn`:
 2. **Run each task's loop, fanned out by phase.** Each task runs its own implement→review→fix loop, but you advance all of the wave's tasks **in lockstep by phase** so that same-phase subagents (which live in different worktrees) can be spawned **together in one natural-language turn or tool-call batch and run concurrently**:
 
    - **Phase A — implement:** spawn one `worker` per still-unfinished task in the wave, each pointed at its own worktree path, all together. Wait until every implementer has completed, then close the finished implementer threads.
-   - **Phase B — review:** only after *all* Phase-A implementers have returned, spawn one fresh `explorer` reviewer per task, each in its task's worktree, all together. At the same moment, unless `peer-opinions=off` or the peer is unavailable, launch one plain-shell background peer per task. For each peer, run the following pattern with that task's values (the Bootstrap contract keeps `$WT_BASE` ignored or outside the repository; never place artifacts inside a task worktree):
-
-     ```bash
-     wt_base="/absolute/path/to/worktree-root"
-     worktree="/absolute/path/to/task-worktree"
-     base_ref="main"
-     artifact_root="${wt_base}/.peer-artifacts"
-     mkdir -p -- "${artifact_root}"
-     artifact_dir="$(mktemp -d "${artifact_root}/address-tasks-peer.XXXXXX")"
-     peer_out="${artifact_dir}/peer.out"
-     peer_err="${artifact_dir}/peer.err"
-     prompt_file="${artifact_dir}/prompt"
-     prompt="$(
-       printf '%s\n' "Review ${worktree} against ${base_ref}; read ${artifact_dir}/commits.log and ${artifact_dir}/changes.diff, then follow the inherited prompt contract."
-       cat <<'PEER_REVIEW_PROMPT'
-     <the complete peer prompt, including verbatim task content>
-     PEER_REVIEW_PROMPT
-     )"
-     # Pin peer model and effort per invocation; this never changes the container's configuration.
-     peer_args=(--model opus --effort high)
-
-     git -C "${worktree}" log --oneline "${base_ref}..HEAD" > "${artifact_dir}/commits.log"
-     git -C "${worktree}" diff "${base_ref}...HEAD" > "${artifact_dir}/changes.diff"
-     printf '%s\n' "${prompt}" > "${prompt_file}"
-     (
-       cd -- "${worktree}" || exit
-       claude -p "${peer_args[@]}" --safe-mode --tools "Read,Glob,Grep" --disallowedTools "mcp__*" --add-dir "${artifact_dir}" --output-format json < "${prompt_file}" > "${peer_out}" 2> "${peer_err}"
-     ) &
-     ```
-
-     Replace the example values with the task's actual worktree, base, and complete prompt; the prompt must name both exact artifact paths. Use a separate artifact directory, prompt file, stdout file, and stderr file per invocation so JSON stdout stays parseable while diagnostics remain available. Feeding the prompt through stdin keeps review-controlled shell syntax inert, while `--safe-mode` and the examination-only tool guards prevent lifecycle commands or worktree mutation. The peers run no builds or tests. Always wait for every own reviewer; for each task whose peer was actually launched, also wait for its peer output, read it into the feedback set, and remove its artifact directory, including both capture files. Then triage and close the finished own-reviewer threads.
-   - A task exits the loop only when its own reviewer passes and the peer, when it delivered an intelligible report, has no unaddressed grounded findings. Tasks with issues carry the own-reviewer report and any available peer report verbatim as separately labeled blocks into the next round's Phase A; apply the inherited grounding, blocking-and-minor gating, dispute, timeout/retry, and forfeit rules without re-summarizing either report.
-   - Repeat A→B for up to **12 rounds** total. The cap is a runaway-loop guard against arcane token bloat, not a quality dial. After round 12, any task still failing review does **not** get a PR; surface its outstanding findings to the user.
+   - **Phase B — review:** only after *all* Phase-A implementers have returned, spawn one fresh `explorer` reviewer per task, each in its task's worktree, all together. At the same moment, unless `peer-opinions=off`, launch one background peer per task while the peer remains available, per the `review-cycle` skill's peer step — its pinned-strength launch, unique per-invocation prompt/output/stderr paths under each task's own artifact directory (never a shared filename, never inside a task worktree), timeout-and-retry, and examination-only contract are defined there and are not restated here. Before triage, wait for every task's own reviewer and for every peer actually launched; then close the finished own-reviewer threads.
+   - A task exits the loop only when its round passes the `review-cycle` gate; tasks with issues carry both reports verbatim as separately labeled blocks into the next round's Phase A, under that skill's grounding, blocking-and-minor gating, dispute, timeout/retry, and forfeit rules — never re-summarized.
+   - Repeat A→B until each task converges or hits the `review-cycle` round cap; a task still failing at the cap does **not** get a PR — surface its outstanding findings to the user.
 
    > Phase ordering is what preserves the per-task discipline: a task's reviewer never starts until that task's implementer (and every sibling implementer) has finished and committed. You get cross-task parallelism without ever running a task's own implementer and reviewer at the same time.
 
@@ -360,7 +330,7 @@ If the restack stops partway, the canonical order remains the review recommendat
 After the batch, provide a concise summary:
 
 - Each task: its PR link (or "local branch only" if PRs were skipped) and which wave it ran in.
-- How many review rounds each task needed, and any task that hit the 12-round cap without passing (with its outstanding findings).
+- How many review rounds each task needed, and any task that hit the `review-cycle` round cap without passing (with its outstanding findings).
 - Whether the peer participated; if it was unavailable or forfeited any rounds, note the reason once without treating it as a failure.
 - The dependency/wave structure actually used, and any base-branch/stacking choices worth flagging.
 - The **recommended merge order** using canonical PR branch names — `b1 → … → bN`, merge `b1` first — plus the corresponding local `review-stack/...` guide refs, the integration-checked prefix, any stop point or merge-history guard, reproducible conflict notes, and any empty guide branch. Make clear the guide stack is local only and not pushed; the canonical PR branches were not rewritten, and independent-branch tie ordering is advisory.

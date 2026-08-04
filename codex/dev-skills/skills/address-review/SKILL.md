@@ -60,13 +60,13 @@ Then hand verification to a **fresh, independent reviewer subagent** and, by def
 Two top-level subagent roles plus one CLI peer:
 
 - **Fixer** (optional) — a fresh `worker` subagent that handles a large, multi-file, or exploratory fix for one or more related comments. Skip it for small surgical fixes you can do directly.
-- **Reviewer** (default before any push) — a fresh `explorer` subagent that receives every unresolved thread and explicitly included standalone item verbatim, plus the proposed disposition labels, but **not** your implementation reasoning; it independently confirms that each disposition is sound in the committed code and performs a quality pass on the changed files. This is the `address-tasks-serialized` reviewer pattern.
-- **Peer (`claude`, best-effort)** — a read-only CLI review launched in the background at the same moment as the Reviewer. It receives the same disposition context but no implementation reasoning, examines code without running builds/tests, and returns an independent verdict. `peer-opinions=off`, unavailability, timeout, or unintelligible output forfeits only that opinion; a coherent, grounded finding is first-class.
+- **Reviewer** (default before any push) — a fresh `explorer` subagent that receives every unresolved thread and explicitly included standalone item verbatim, plus the proposed disposition labels, but **not** your implementation reasoning; it independently confirms that each disposition is sound in the committed code and performs a quality pass on the changed files. This is the `review-cycle` skill's Reviewer role.
+- **Peer (`claude`, best-effort)** — the `review-cycle` skill's cross-harness peer step: a read-only CLI review launched beside the Reviewer with the same disposition context but no implementation reasoning. Its preflight, pinned-strength launch, outcome vocabulary, and gating are defined in that skill; a coherent, grounded finding is first-class.
 
 > **Critical — one checkout-dependent agent at a time; Codex subagents share your working tree.**
 > Unless explicitly assigned distinct git worktrees, subagents operate on the same checked-out branch as the orchestrator. Never spawn two checkout-dependent subagents in the same natural-language turn or tool-call batch, and never spawn the reviewer until the fixer's commits have landed. Spawn one, wait for it, close it, then spawn the next. A reviewer racing unfinished work can inspect an empty or partial branch and falsely pass it. The sole concurrency exception is the examination-only `claude` peer launched beside the Reviewer after the tree is clean and committed: two readers are safe, while the Reviewer alone owns build/typecheck execution.
 
-> **Fix-ups and re-reviews always use a fresh subagent spawn**, never `send_input` to continue a prior worker or reviewer. Fresh context with no attachment to the earlier fix is intentional.
+> Fix-up and re-review spawns follow the `review-cycle` skill's fresh-spawn rule — always a fresh subagent spawn, never `send_input` to continue a prior worker or reviewer.
 
 ### Codex subagent execution
 
@@ -88,7 +88,7 @@ Codex subagents must not be assumed to spawn nested subagents.
 `address-reviews` therefore uses this skill in two internal modes; these are orchestrator controls, not normal user flags:
 
 - **`delegated-fix`** — run steps 0–5 directly in the assigned worktree, without spawning helpers, then stop before review/publication and return a complete review packet: PR/head metadata, starting/final SHAs, every item verbatim with stable refs and proposed disposition, validation run, and any blocker.
-- **`publish-reviewed`** — receive that packet plus a fresh external reviewer's Pass verdict and the peer outcome (no grounded findings, explicit forfeit/unavailability, or disabled), verify the packet still matches the clean committed `HEAD`, then run only step 7 and return step 8's report. Refuse to edit code, re-triage, or publish without this complete passing review gate.
+- **`publish-reviewed`** — receive that packet plus a fresh external reviewer's Pass verdict and the peer outcome (satisfying the `review-cycle` gate), verify the packet still matches the clean committed `HEAD`, then run only step 7 and return step 8's report. Refuse to edit code, re-triage, or publish without this complete passing review gate.
 
 The worktree orchestrator owns the fresh reviewer, peer invocation, and any fix-up rounds between these modes.
 
@@ -100,13 +100,7 @@ The worktree orchestrator owns the fresh reviewer, peer invocation, and any fix-
 2. **No rebase already in progress** — check `git rev-parse --git-path rebase-merge` and `--git-path rebase-apply`. If either exists, stop and ask the user to finish or abort it first.
 3. **Confirm `gh` is authenticated** (`gh auth status`). Without it you cannot read threads, reply, resolve, or comment.
 4. **Record the starting branch and tip SHA** so you can describe exactly what changed in the final report and recover if needed.
-5. **Preflight the peer once for a standalone run, unless `peer-opinions=off`.** Classify the probe explicitly:
-   - If `command -v claude` fails, mark the peer unavailable.
-   - If `claude auth status` succeeds, mark the peer available.
-   - If `claude auth status` fails while `ANTHROPIC_API_KEY` is set, defer classification to the first real invocation because the environment key may authenticate it without a saved login.
-   - If the failure says this older CLI does not support the `auth status` subcommand, likewise defer classification to the first real invocation because no probe is available.
-   - For any other `claude auth status` failure, mark the peer unavailable and retain the failure reason.
-   In either deferred-classification path, an auth/usage failure at the first real invocation marks the peer unavailable for the rest of the run. Unavailability never blocks; record its reason for one final-summary note. Skip this probe in `delegated-fix` and `publish-reviewed`: `address-reviews` preflights once in its shared bootstrap and supplies the peer outcome.
+5. **Preflight the peer once for a standalone run, unless `peer-opinions=off`,** per the `review-cycle` skill's peer preflight. Skip this probe in `delegated-fix` and `publish-reviewed`: `address-reviews` preflights once in its shared bootstrap and supplies the peer outcome.
 
 ### Step 1 — Resolve and verify the PR
 
@@ -192,87 +186,14 @@ Perform the fixes directly, leave the worktree clean with all intended changes c
 
 ### Step 6 — Verify with a fresh reviewer
 
-Once fixes are committed and the worktree is clean, spawn **one fresh `explorer` Reviewer subagent** (never concurrently with a fixer; only after commits land) and, unless disabled or unavailable, launch the `claude` peer in the background at that same moment. Wait for both outcomes, then close the Reviewer after recording them.
+Once fixes are committed and the worktree is clean, run the `review-cycle` skill's verification loop on this branch (artifact type `code`). Its roles — the fresh Reviewer spawn and the best-effort `claude` peer launched beside it — plus the peer's pinned-strength launch and outcome vocabulary, the gates (grounding spot-check, blocking and minor peer findings, verbatim finding relay), the disposition rule, and the round cap are all defined there and are not restated here. The peer preflight outcome from step 0 and `peer-opinions=off` carry into the cycle.
 
-Give it: every unresolved thread and explicitly included standalone item verbatim, each proposed disposition label (actionable-fixed / already-addressed / push-back / follow-up-task / ambiguous), the effective review base, and the current branch. The effective review base is the requested rebase target when step 2 ran; otherwise it is `baseRefName`. Do **not** give it your implementation reasoning, drafted rationale, or the fixer's report. Tell it to:
+This skill's deltas on the cycle:
 
-- Independently verify every disposition: fixes and already-addressed claims must hold in the committed code; push-backs must be technically justified rather than convenient dismissals; follow-up-task items must point at a committed task file that genuinely covers the concern, with the follow-up itself justified under step 4's conditions — never an evasion of a cheap fix — and its queued or deferred placement consistent with step 5; ambiguous items must genuinely require an authoritative decision. It may reclassify any item.
-- Read the actual files; if `git diff --name-only <base>...HEAD` looks empty despite claimed fixes, report a likely race/wrong-branch flag rather than reviewing nothing.
-- Run the build/typecheck; a failure is an automatic blocker.
-- Do a quality pass on the changed files (logic correctness, error handling, edge cases, dead code, consistency, duplication, type safety) and check the same-pattern sweep did not miss a sibling occurrence.
-- Report **Pass** or a numbered, actionable **Issues** list. Edit nothing; write to no shared task/plan tracker.
-
-Give the peer the worktree path, effective review base, current branch, and every review item plus proposed disposition verbatim — the same evidence as the Reviewer, but not the fixer's report, your reasoning, drafted rationales, or the Reviewer's execution steps. Its prompt must instruct it to read the actual files, edit nothing, and verify every disposition in the committed code against the same criteria the Reviewer verifies above. It may do a read-only quality pass, but must not run builds/tests; that remains the Reviewer's job. Require exactly `VERDICT: PASS | ISSUES`, followed for Issues by numbered findings tagged `blocking` or `minor`, each with `file:line` and a one-line rationale.
-
-Before launching the peer CLI process, create a unique directory outside the worktree for this invocation and attempt; never reuse or share that directory. Write the prompt verbatim to a file there without evaluating it, and write `git -C <worktree> log --oneline <base>..HEAD` plus `git -C <worktree> diff <base>...HEAD` from this exact worktree to a read-only diff artifact in that same directory. Include the artifact path in the prompt and grant only this invocation directory with `--add-dir`; without that grant an out-of-cwd Read can be auto-denied, while granting a shared parent directory would let concurrent peers cross-read another invocation. Managed hooks and organization settings policy can still apply under `--safe-mode`, so an operator in a managed environment must disable peer opinions or first ensure those hooks cannot mutate the worktree before launching a peer concurrently with the Reviewer. The canonical launch below pins `--model opus --effort high`. Keep both flags exactly as written on every invocation, and never swap in another alias or drop one because the current configuration looks adequate: they are per-invocation and never change the container's saved configuration, and without them the peer silently inherits whichever model and effort a container most recently selected — including an economy tier that has no business deciding review strength. Never put bracketed optional tokens in the command. Shell-quote every generated path when replacing the placeholders, keep `--safe-mode` and both read-only tool guard flags, and never pass permission-bypass flags.
-
-Launch the peer in a dedicated session and process group; do not use a plain background subshell, because killing that subshell can orphan `claude` or its descendants. Require `setsid` for this path (otherwise disable/forfeit the peer), assign the worktree, invocation directory, prompt, JSON `outfile`, and diagnostic `errfile` paths to shell variables, require both output paths to be inside the invocation directory, and use this launch shape; `--fork --wait` keeps a waitable supervisor alive, while the inner shell records the distinct session/process-group leader before it becomes `claude`:
-
-```sh
-peer_session_file="$invocation_dir/session.pid"
-if (umask 077 && : > "$peer_session_file"); then
-  setsid --fork --wait sh -c '
-    session_file=$1
-    worktree=$2
-    shift 2
-    printf "%s\n" "$$" > "$session_file" || exit 125
-    cd "$worktree" || exit 125
-    exec "$@"
-  ' peer-launch "$peer_session_file" "$worktree" \
-    claude -p --model opus --effort high --safe-mode --tools "Read,Glob,Grep" --disallowedTools "mcp__*" \
-    --add-dir "$invocation_dir" --output-format json \
-    < "$prompt_file" > "$outfile" 2> "$errfile" &
-  peer_wait_pid=$!
-else
-  peer_wait_pid=
-  peer_launch_status=125
-fi
-```
-
-Create `peer_session_file` as an empty, owner-only regular file before the launch and do not launch if that preparation fails. Poll for it to become non-empty, require its contents to be a positive decimal PID, and save that value as `peer_pgid`; do not infer it from `peer_wait_pid`, because `setsid --fork` deliberately makes the wait supervisor and session leader different processes. The PID-file write is the first operation in the session and is checked, so `claude` cannot start unless the handoff succeeds. If the supervisor exits before a valid handoff, immediately `wait "$peer_wait_pid"` to reap it, record the launch failure (normally status 125 for the write or `cd` guard), and never advance or retry from that attempt. Use a loose roughly 12-minute timeout, extending it when review size warrants.
-
-After `peer_pgid` passes the numeric/positive check, use the following helpers. The negative PID operand targets the validated process group; omitting `--` is intentional because the Dash `kill` builtin rejects it. Keep this form for TERM, KILL, and every death probe:
-
-```sh
-peer_group_alive() {
-  kill -0 "-$peer_pgid" 2>/dev/null
-}
-
-peer_stop_group() {
-  kill -TERM "-$peer_pgid" 2>/dev/null || :
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    peer_group_alive || break
-    sleep 1
-  done
-  if peer_group_alive; then
-    kill -KILL "-$peer_pgid" 2>/dev/null || :
-  fi
-  wait "$peer_wait_pid" 2>/dev/null || :
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    peer_group_alive || break
-    sleep 1
-  done
-  ! peer_group_alive
-}
-
-peer_finish_group() {
-  if wait "$peer_wait_pid"; then
-    peer_wait_status=0
-  else
-    peer_wait_status=$?
-  fi
-  if peer_group_alive; then
-    peer_stop_group || return 1
-  fi
-  ! peer_group_alive
-}
-```
-
-On timeout, call `peer_stop_group`; on observed supervisor completion, call `peer_finish_group` and interpret its saved `peer_wait_status` only after it succeeds. The final command on either path must succeed. `peer_stop_group` always performs TERM → bounded wait → KILL when needed → supervisor `wait` → bounded death check, and failure means a group member survived: do not retry or advance until it is gone. Apply this verification on every completion path, not only timeouts. Keep `outfile` reserved for parseable JSON and use `errfile` only for diagnostics and the retained failure reason. Retry a timeout or transient failure once with an entirely new invocation directory, prompt, outfile, errfile, artifact, session file, and process group, then forfeit that round. An auth/usage failure on a classify-at-first-invocation attempt marks the peer unavailable for later rounds. `claude -p` may print nothing until completion; wait for both Reviewer and peer before deciding the round.
-
-Parse the peer's captured JSON only far enough to extract its final message, then read only the two verdict lines for orchestration. Unintelligible peer output is a non-blocking forfeit. A round clears the review gate when the Reviewer passes and the peer either reports no unaddressed grounded findings or has an explicit forfeited, unavailable, or disabled outcome; both `blocking` and `minor` grounded peer findings gate. Only when the Reviewer passed and peer findings alone would gate, cheaply spot-check each finding's `file:line` and factual claim; discard self-evidently false or nonexistent references and note that discard. Do not summarize, merge, or rewrite feedback: when another fix round is needed, give the fresh Fixer the complete results verbatim as labeled `Reviewer findings` and `Peer (claude) findings` blocks so it can reconcile overlap or conflict. A pushed-back peer claim is adjudicated by the next fresh Reviewer.
-
-If either result leaves material gaps, re-triage the affected comments, then loop: a fresh `worker` Fixer with both verbatim finding blocks when code must change, followed by a fresh `explorer` Reviewer and peer round. Wait for and close each subagent before spawning the next. Allow at most **12 reviewer rounds total**, including the initial review; every fix-up round counts regardless of which reviewer triggered it. If issues persist after round 12, stop iterating, do **not** push, and surface both outstanding finding sets in the final report (and to the user if interactive).
+- The work items are every unresolved thread and explicitly included standalone item verbatim, each with its proposed disposition label (actionable-fixed / already-addressed / push-back / follow-up-task / ambiguous), plus the effective review base and the current branch. The effective review base is the requested rebase target when step 2 ran; otherwise it is `baseRefName`. Neither the Reviewer nor the peer gets your implementation reasoning, drafted rationale, or the fixer's report.
+- The Reviewer independently verifies every disposition: fixes and already-addressed claims must hold in the committed code; push-backs must be technically justified rather than convenient dismissals; follow-up-task items must point at a committed task file that genuinely covers the concern, with the follow-up itself justified under step 4's conditions — never an evasion of a cheap fix — and its queued or deferred placement consistent with step 5; ambiguous items must genuinely require an authoritative decision. It may reclassify any item, and it checks that the same-pattern sweep did not miss a sibling occurrence.
+- When a round fails, re-triage the affected comments before the cycle's next fresh Fixer round.
+- If the cycle stops at its round cap, do **not** push; surface every outstanding finding set in the final report (and to the user if interactive).
 
 ### Step 7 — Publish after the review gate (every run except `no-push`)
 
@@ -280,7 +201,7 @@ If `no-push` was given this is a local-only run: **skip this entire step** — d
 
 Otherwise:
 
-Do not enter publication unless the fresh Reviewer passed and the peer either returned no grounded findings, forfeited/unavailable, or was explicitly disabled. Any outstanding grounded peer finding — `blocking` or `minor` — returns to step 6 while rounds remain, or stops publication at the cap.
+Do not enter publication unless step 6's review cycle passed its gate. An outstanding grounded peer finding returns to step 6 while rounds remain, or stops publication at the cap.
 
 In `publish-reviewed` mode, first require the supplied review packet, a fresh external reviewer Pass, the peer outcome satisfying that same gate, and a clean committed `HEAD` equal to the packet's final SHA. If any differ or the peer outcome is missing, stop; do not re-triage or publish stale work.
 
@@ -397,7 +318,7 @@ gh pr edit NUMBER --add-reviewer @copilot
 - [ ] Fixes done inline or via a fixer subagent (one checkout-dependent agent at a time); same-pattern sweep done in changed/related code.
 - [ ] Follow-up-task items recorded as standalone task files per `write-tasks` conventions, placed under step 5's queued-vs-deferred rule, and committed on the current branch separately from code fixes.
 - [ ] Worktree clean and every intended change committed before review and publication.
-- [ ] Fresh independent Reviewer and best-effort `claude` peer checked every disposition after commits landed; both outcomes were recorded before deciding each round (including any explicit peer forfeit, unavailability, or disablement); grounded blocking and minor findings gated publication; feedback loop capped at 12 reviewer rounds.
+- [ ] Step 6 ran the `review-cycle` verification loop to a pass — every disposition checked by the fresh Reviewer and best-effort peer under that skill's gates, non-blocking peer outcomes recorded — or stopped at its round cap without pushing.
 - [ ] Publish run (the default; suppressed only by `no-push`): step 7 followed — PR head and exact push target re-verified; normal push for a fast-forward or explicit expected-OID lease for a rewrite (never bare `--force`); threads re-read after push; replies + resolves applied idempotently per disposition; Summary comment posted without stray `@` mentions; pings fired per "Flag interactions", only after summary success and only when new commits were actually pushed.
 - [ ] `no-push` run: zero PR mutations; final report maps every thread to its disposition for a later push turn.
 - [ ] Final report covers rebase outcome, dispositions with stable refs, push-backs, proactive fixes, Reviewer and peer outcomes, and blocked/skipped items.
