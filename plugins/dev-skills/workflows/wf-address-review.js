@@ -410,7 +410,8 @@ const workReport = cycle.workReport || [];
 // one-entry-per-item contract — the publisher replies/resolves ONLY what the
 // report names, so an item with no entry would be silently left untouched
 // while a summary still posts. Review-threads match by threadId, standalone
-// items by url.
+// items by url — keyed off the GATHERED item's identity, never the report
+// entry's own claimed `type`, so a mistyped entry cannot dodge the check.
 const itemCovered = (item) =>
   item.type === "review-thread"
     ? workReport.some((d) => d && d.threadId && d.threadId === item.threadId)
@@ -418,12 +419,39 @@ const itemCovered = (item) =>
 const uncoveredItems = packet.items.filter((it) => !itemCovered(it));
 const uncoveredRefs = uncoveredItems.map((it) => it.threadId || it.url);
 
+// A gathered review-thread's covering entry must also be PUBLISHABLE as one:
+// the publisher routes on the ENTRY's `type` (replying/resolving only entries
+// typed `review-thread`, via their threadId/commentId), so an entry that
+// covers a thread while claiming another type — or one typed `review-thread`
+// without both identifiers — passes coverage yet would silently skip the
+// reply/resolve. The JSON schema cannot make fields conditionally required,
+// and the entry's own claim cannot be trusted for this check, so judge
+// against the gathered items: flag any entry typed `review-thread` that lacks
+// its identifiers, and any entry matching a gathered thread's threadId that
+// is not typed for it.
+const threadItemIds = new Set(
+  packet.items.filter((it) => it.type === "review-thread" && it.threadId).map((it) => it.threadId)
+);
+const badDisp = workReport.find(
+  (d) =>
+    d &&
+    (d.type === "review-thread"
+      ? !d.threadId || !d.commentId
+      : d.threadId && threadItemIds.has(d.threadId))
+);
+const badDispRef = badDisp
+  ? String(badDisp.ref || badDisp.threadId || badDisp.url || badDisp.kind || "(unidentified entry)")
+  : "";
+
 if (!flags.push) {
   // Local-only run: make NO PR mutations. The disposition map is the deliverable
-  // so a later "push" turn can replay replies/resolves precisely.
+  // so a later "push" turn can replay replies/resolves precisely — which is why
+  // an uncovered item or a malformed covering entry downgrades the verdict to
+  // `fixed-local-incomplete`: a replay from this map would skip or misroute
+  // those threads, so the result must not read as a clean local fix.
   phase("Report (no-push)");
   return {
-    status: passed ? "fixed-local" : "review-cap",
+    status: passed ? (uncoveredItems.length || badDisp ? "fixed-local-incomplete" : "fixed-local") : "review-cap",
     pr: packet.pr,
     rounds,
     reviewerPassed: !!passed,
@@ -437,6 +465,9 @@ if (!flags.push) {
     outstanding: passed ? null : cycle.outstanding || null,
     ...(uncoveredItems.length
       ? { uncoveredItems: uncoveredRefs, coverageNote: `${uncoveredItems.length} gathered item(s) have no workReport entry; a later publish replay would skip them.` }
+      : {}),
+    ...(badDisp
+      ? { malformedDisposition: badDispRef, dispositionNote: `Disposition "${badDispRef}" covers a review thread but is mistyped or missing threadId/commentId; a later publish replay would misroute or skip it.` }
       : {}),
     note: "Local-only run: no push, no replies/resolves, no comment. Re-run without `no-push` to publish with the default contributing-bot pings, or with `push` to publish quietly.",
   };
@@ -475,19 +506,16 @@ if (uncoveredItems.length) {
   };
 }
 
-// Second: a `review-thread` disposition with no threadId/commentId cannot be
-// replied to or resolved, and the JSON schema cannot make those conditionally
-// required.
-const badDisp = workReport.find(
-  (d) => d.type === "review-thread" && (!d.threadId || !d.commentId)
-);
+// Second: a covering entry that cannot be published as its thread — mistyped,
+// or missing threadId/commentId (the tightened `badDisp` check above the
+// no-push branch, judged against the gathered items' identity).
 if (badDisp) {
   return {
     status: "publish-aborted-incomplete-dispositions",
     pr: packet.pr,
     rounds,
     dispositions: workReport,
-    note: `Review-thread disposition "${badDisp.ref || badDisp.kind}" is missing threadId/commentId; nothing was pushed. Re-run so every review thread carries its identifiers.`,
+    note: `Disposition "${badDispRef}" covers a review thread but is mistyped or missing threadId/commentId; nothing was pushed. Re-run so every review thread's entry carries its type and identifiers.`,
   };
 }
 

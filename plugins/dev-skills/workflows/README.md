@@ -34,7 +34,7 @@ The shared-filesystem assumption was verified on 2026-06-10 with Claude Code 2.1
 
 `wf-review-cycle.js` is the canonical review cycle for workflows: fixer -> fresh-eyes reviewer -> best-effort cross-harness codex peer -> fix, with explicit finding dispositions, escalated open questions in a pinned wire format, and the canonical round cap. Its cycle logic sits in a marked embeddable section (`review-cycle-core`) with two documented consumption modes — nesting via `workflow("wf-review-cycle", ...)`, and synthesis of the marked section into a flat consumer script.
 
-`wf-address-tasks.js` expresses dependency waves, storage-aware throttling, sibling collision handling, and per-task PR creation, running each task through an embedded copy of `review-cycle-core` (embedded rather than nested so the fan-out owner makes every peer launch in its own flat state — where task 015's throttle will live). It does not build the post-batch local review stack produced by the `address-tasks` skill.
+`wf-address-tasks.js` expresses dependency waves, storage-aware throttling, sibling collision handling, and per-task PR creation, running each task through an embedded copy of `review-cycle-core` (embedded rather than nested so the fan-out owner makes every peer launch in its own flat state — where task 015's throttle will live — and hands every per-task cycle one shared batch-wide peer preflight/availability state). It does not build the post-batch local review stack produced by the `address-tasks` skill.
 
 `wf-address-review.js` nests `wf-review-cycle` for its verify loop and conditionally publishes based on its flags. With no mid-run input, it behaves like the skill's hands-off mode: agents decide low-stakes ambiguity and report high-stakes blockers.
 
@@ -42,6 +42,6 @@ The shared-filesystem assumption was verified on 2026-06-10 with Claude Code 2.1
 
 ## Validation
 
-Run `node --check` on `plugins/dev-skills/workflows/wf-review-cycle.js`, `wf-address-review.js`, and `wf-address-tasks.js` from the repository root to parse-check the shipped workflow sources. The raw check parses these sources as-is because none uses a top-level `return`; a script that does (the runtime allows it inside its function wrapping) needs the runtime-wrapped form instead — powbox's `wf-check` where it has landed, else `node --check` on the body wrapped the way the runtime wraps it.
+Run `node --check` on `plugins/dev-skills/workflows/wf-review-cycle.js`, `wf-address-review.js`, and `wf-address-tasks.js` from the repository root to parse-check the shipped workflow sources. The raw check passes these sources despite their top-level `return`s because `node --check` parses a `.js` file with CommonJS-wrapper semantics, which permit the same top-level `return` the workflow runtime's own function wrapping allows; to parse against the runtime's exact wrapping, use powbox's `wf-check` where it has landed, else `node --check` on the body wrapped the way the runtime wraps it.
 
 Run `node scripts/test-checkout-cleanliness-report.mjs` for the focused regression suite covering `wf-address-tasks.js`'s `mainCheckoutSummary` function. The test extracts that function from the shipped workflow rather than maintaining a second copy.

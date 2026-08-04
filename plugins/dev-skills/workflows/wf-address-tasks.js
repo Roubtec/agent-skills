@@ -448,8 +448,10 @@ Scope every cleanup to WT (\`git -C "$WT" …\`) and commit checkpoints often. T
 // the fan-out, every peer launch, and any cross-cycle policy (task 015's
 // session-local peer throttle) sit in this one flat script's state. A nested
 // child cycle would hold its own state, where a throttle counts one peer,
-// never sees a sibling's, and caps nothing. No peer cap, floor, or chunked
-// fan-out is introduced here; that policy is 015's alone.
+// never sees a sibling's, and caps nothing. The shared batchPeerState below
+// the section is the first such cross-cycle state: one batch-wide peer
+// preflight/availability object handed to every per-task cycle. No peer cap,
+// floor, or chunked fan-out is introduced here; that policy is 015's alone.
 // ============================================================================
 // ============================================================================
 // BEGIN EMBEDDABLE SECTION: review-cycle-core
@@ -528,7 +530,7 @@ const CYCLE_FIX_SCHEMA = {
     summary: { type: "string", description: "One paragraph: what this pass did." },
     dispositions: {
       type: "array",
-      description: "One entry per reviewer/peer finding this pass was handed. EVERY handed finding must appear — coverage is checked structurally by `findingId`, and an uncovered finding is carried back to the next pass.",
+      description: "EXACTLY one entry per reviewer/peer finding this pass was handed. EVERY handed finding must appear once — coverage is checked structurally by `findingId`; an uncovered finding, a finding given duplicate dispositions, and a disposition naming an id that was never handed all carry back to the next pass.",
       items: {
         type: "object",
         properties: {
@@ -647,7 +649,7 @@ function cycleFindingsBlock(findings) {
   if (!findings) return "";
   const parts = [];
   if (Array.isArray(findings.carried) && findings.carried.length) {
-    parts.push(`### Findings carried forward — the previous pass gave these NO valid disposition (missing/unknown \`findingId\`, an unrecognized disposition value, or an \`escalated\` with no matching open question). Dispose EVERY one now, echoing its \`id\` as \`findingId\`.\n\n${JSON.stringify(findings.carried, null, 2)}`);
+    parts.push(`### Findings carried forward — the previous pass gave these NO single valid disposition (missing \`findingId\`, duplicate dispositions for one id, an unrecognized disposition value, an \`escalated\` with no matching open question — or, for a \`disposition-error\` entry, a disposition naming an id never handed). Dispose EVERY one now, exactly one disposition each, echoing its \`id\` as \`findingId\`.\n\n${JSON.stringify(findings.carried, null, 2)}`);
   }
   if (Array.isArray(findings.reviewer) && findings.reviewer.length) {
     parts.push(`### Reviewer findings\n\n${JSON.stringify(findings.reviewer, null, 2)}`);
@@ -669,7 +671,7 @@ function cycleFixPrompt(cycle, state) {
   const roundIntro = state.confirming
     ? `The fresh reviewer has PASSED this cycle. This is the FINAL CONFIRMATION PASS of the disposition rule: read the passing reports below and dispose anything in them still worth acting on (pass-notes, stray remarks) — \`fixed\`, \`declined\` (with reason), or \`escalated\`. If nothing needs acting on, return \`changed: false\` with an empty \`dispositions\` array; that ends the cycle. Anything you fix or dispute will go through another reviewer round.`
     : state.findings
-      ? `This is fix-up round ${state.round}. Address the findings below: dispose EVERY one explicitly — \`fixed\`, \`declined\` (with a reason; the next fresh reviewer verifies declines), or \`escalated\` to an open question in the pinned format — echoing each finding's \`id\` as your disposition's \`findingId\` (coverage is checked structurally; an uncovered finding comes back to the next pass and blocks the round). Never drop one silently, and never implement a fix you believe is wrong just to clear a finding.`
+      ? `This is fix-up round ${state.round}. Address the findings below: dispose EVERY one explicitly — \`fixed\`, \`declined\` (with a reason; the next fresh reviewer verifies declines), or \`escalated\` to an open question in the pinned format — echoing each finding's \`id\` as your disposition's \`findingId\`, exactly ONE disposition per finding (coverage is checked structurally; an uncovered or double-disposed finding comes back to the next pass and blocks the round). Never drop one silently, and never implement a fix you believe is wrong just to clear a finding.`
       : `This is round 1: carry out the assignment below.`;
   const artifactLine = state.artifactDir
     ? `This cycle's artifact directory is \`${state.artifactDir}\` — report it back as \`artifactDir\` and write this pass's packet prose (what you did, dispositions, question drafts) under it as \`round-${state.round}/\`.`
@@ -808,7 +810,7 @@ Return the structured result: \`outcome\`, \`findings\` (verbatim, tagged), \`no
 // switch over the named ones.
 function normalizeCyclePeerResult(res) {
   if (!res || typeof res !== "object") {
-    return { outcome: "forfeited", findings: [], notes: "", detail: "peer subagent returned nothing (died or failed schema validation); recorded non-blocking" };
+    return { outcome: "forfeited", findings: [], notes: "", detail: "peer subagent returned nothing (died or failed schema validation); recorded non-blocking", synthesized: true };
   }
   const gating = res.outcome === "passed" || res.outcome === "issues";
   const known = ["passed", "issues", "unavailable", "timeout", "forfeited", "failed"];
@@ -820,6 +822,11 @@ function normalizeCyclePeerResult(res) {
     detail: typeof res.detail === "string" && res.detail
       ? res.detail
       : (gating ? "" : `peer outcome ${JSON.stringify(res.outcome)} recorded non-blocking`),
+    // Script-synthesized results (dead/schema-failed subagent, thrown stage)
+    // carry this marker: no peer subagent demonstrably ran, so the run-level
+    // preflight must not be considered done on their account. A real agent
+    // result never sets it (the field is not in CYCLE_PEER_SCHEMA).
+    synthesized: res.synthesized === true,
   };
 }
 
@@ -836,7 +843,7 @@ async function runCyclePeerStage(cycle, state) {
     return normalizeCyclePeerResult(res);
   } catch (e) {
     // A thrown stage must not drop the round (or, under pipeline(), the item).
-    return { outcome: "forfeited", findings: [], notes: "", detail: `peer stage threw (${e && e.message ? e.message : String(e)}); recorded non-blocking` };
+    return { outcome: "forfeited", findings: [], notes: "", detail: `peer stage threw (${e && e.message ? e.message : String(e)}); recorded non-blocking`, synthesized: true };
   }
 }
 
@@ -853,27 +860,50 @@ Return a verdict per finding. Edit nothing.`;
 }
 
 // Structural enforcement of the disposition rule: every handed finding carries
-// a script-assigned `id`, and a pass's dispositions must name each id with a
-// recognized disposition (`escalated` additionally naming an open question
-// that exists). A finding left uncovered gates the round and is carried
-// forward VERBATIM to the next fixer pass, so no finding can vanish between
-// rounds on a fixer's silence. Matching is by id, never by finding text —
-// paraphrase-proof where text matching is not.
+// a script-assigned `id`, and a pass's dispositions must name each id with
+// EXACTLY ONE recognized disposition (`escalated` additionally naming an open
+// question that exists). A finding left uncovered — including one whose id
+// drew duplicate, possibly conflicting, dispositions — gates the round and is
+// carried forward VERBATIM to the next fixer pass, so no finding can vanish
+// between rounds on a fixer's silence. A disposition naming an id that matches
+// no handed finding covered nothing and is rejected: it comes back as a
+// synthesized `disposition-error` carried entry (id prefixed `stray:` so it
+// can never collide with a real round-scoped id) the next pass must dispose,
+// so a mis-aimed disposition cannot pass silently either. When NOTHING was
+// handed there is no coverage contract to enforce: every disposition is then
+// spontaneous (e.g. of a pass-note) and carries no findingId requirement.
+// Matching is by id, never by finding text — paraphrase-proof where text
+// matching is not.
 function cycleUndisposedFindings(findings, fix, knownQuestionIds) {
   const handed = findings
     ? [...(findings.carried || []), ...(findings.reviewer || []), ...(findings.peer || [])]
     : [];
   if (!handed.length) return [];
+  const handedIds = new Set(handed.map((f) => f && f.id).filter(Boolean));
+  const counts = new Map(); // handed id -> how many dispositions named it
   const covered = new Set();
+  const stray = new Map(); // synthesized-entry id -> one carried entry per unknown findingId
   for (const d of fix.dispositions || []) {
-    if (!d || !d.findingId) continue;
+    if (!d || !d.findingId) continue; // spontaneous disposition (no handed id)
+    if (!handedIds.has(d.findingId)) {
+      stray.set(`stray:${d.findingId}`, {
+        id: `stray:${d.findingId}`,
+        category: "disposition-error",
+        problem: `A disposition named findingId ${JSON.stringify(d.findingId)}, which matches no finding handed that round, so it covered nothing. Re-issue it against the correct handed id, or dispose this entry (e.g. declined) explaining the stray.`,
+      });
+      continue;
+    }
+    counts.set(d.findingId, (counts.get(d.findingId) || 0) + 1);
     const valid =
       d.disposition === "fixed" ||
       d.disposition === "declined" ||
       (d.disposition === "escalated" && d.questionId && knownQuestionIds.has(d.questionId));
     if (valid) covered.add(d.findingId);
   }
-  return handed.filter((f) => !covered.has(f.id));
+  // Exactly one disposition per id: duplicates — conflicting or not — collapse
+  // to "not validly disposed", carrying the finding forward.
+  for (const [id, n] of counts) if (n > 1) covered.delete(id);
+  return [...handed.filter((f) => !covered.has(f.id)), ...stray.values()];
 }
 
 // runReviewCycle — the whole protocol as one awaitable function.
@@ -885,14 +915,23 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds) {
 //   mode ("full"|"light"),
 //   contracts: { fixer, reviewer, peer } — optional per-role preamble text
 //     (a worktree-lifecycle consumer passes its own wt-enter contract here),
-//   labelPrefix — optional, prefixes agent labels for fan-out consumers.
+//   labelPrefix — optional, prefixes agent labels for fan-out consumers,
+//   peerState — optional SHARED peer-availability state for a fan-out owner
+//     embedding many cycles: hand every cycle ONE object of the shape
+//     { preflighted: false, unavailable: false, unavailableDetail: "" } and
+//     the install/login preflight runs once for the whole batch, with an
+//     unavailable peer sticking batch-wide (the canonical batch rule).
+//     Availability state ONLY — no peer cap, queue, or fan-out shape lives
+//     here (that policy is task 015's). Omitted, each cycle keeps its own
+//     (the standalone behavior).
 // }
 //
 // Returns the cycle result contract (lean; bulk prose stays behind artifactDir):
 // { verdict: "pass"|"review-cap"|"error", detail, rounds, findingDispositions,
 //   openQuestions, deviations, workReport, proactive, finalSha, notes,
 //   reviewerNotes, peerRounds, discardedPeerFindings, undisposed, outstanding,
-//   artifactDir }
+//   artifactDir, artifactDirAnomalies (present only when a later pass tried
+//   to move the artifact directory) }
 async function runReviewCycle(cycle) {
   const cap = cycleRoundCap(cycle.maxRounds);
   const lp = cycle.labelPrefix || "";
@@ -901,14 +940,21 @@ async function runReviewCycle(cycle) {
   const deviations = [];
   const peerRounds = [];
   const discardedPeerFindings = [];
+  const artifactDirAnomalies = [];
   let artifactDir = "";
   let packet = null;
   let rounds = 0;
   let fixerPasses = 0;
   let findings = null; // findings block for the next fixer pass; null on round 1
   let confirming = false; // next fixer pass is the final confirmation pass
-  let peerUnavailable = false; // sticky: an unavailable peer is not re-probed every round
-  let peerPreflighted = false; // run-level: the install/login preflight runs once per run, not per round
+  // Peer availability state: `preflighted` (the install/login preflight runs
+  // once, never per round) and sticky `unavailable` (an unavailable peer is
+  // not re-probed). A fan-out owner embedding many cycles passes ONE shared
+  // object as cycle.peerState so the whole batch preflights once and
+  // unavailability sticks batch-wide; a standalone cycle gets its own. (The
+  // runtime is single-threaded JS, so sibling cycles mutate a shared object
+  // safely between awaits.)
+  const peerState = cycle.peerState || { preflighted: false, unavailable: false, unavailableDetail: "" };
   let reviewerNotes = ""; // the latest reviewer's pass-notes (PR-body caveats for consumers)
 
   const result = (verdict, detail, extra) => ({
@@ -926,6 +972,7 @@ async function runReviewCycle(cycle) {
     peerRounds,
     discardedPeerFindings,
     artifactDir,
+    ...(artifactDirAnomalies.length ? { artifactDirAnomalies } : {}),
     ...(extra || {}),
   });
 
@@ -938,9 +985,28 @@ async function runReviewCycle(cycle) {
     if (!fix) return result("error", `fixer returned nothing on pass ${fixerPasses}`);
     if (fix.blocker) return result("error", `fixer blocked on pass ${fixerPasses}: ${fix.blocker}`);
     if (!fix.clean) return result("error", `fixer left an unclean worktree on pass ${fixerPasses}; refusing to review a partial state`);
-    if (fix.artifactDir) artifactDir = fix.artifactDir;
-    // The result contract promises full round history reachable via
-    // artifactDir; a cycle with no home for its rounds may not run them.
+    // The result contract promises the FULL round history reachable through
+    // ONE pointer, so the FIRST reported artifactDir is authoritative, and it
+    // is validated once here: absolute, and outside the worktree when the
+    // cycle knows that path (a consumer whose agents resolve the worktree
+    // themselves passes worktree: "", where only the fixer prompt's
+    // outside-the-worktree instruction applies). A later pass echoing a
+    // DIFFERENT directory does not move the pointer — earlier rounds would
+    // become unreachable through it — but the anomaly is logged and recorded.
+    if (fix.artifactDir && !artifactDir) {
+      const wt = (cycle.worktree || "").replace(/\/+$/, "");
+      if (!fix.artifactDir.startsWith("/")) {
+        return result("error", `fixer reported a non-absolute artifactDir ${JSON.stringify(fix.artifactDir)} on pass ${fixerPasses}; the round-history home must be an absolute path outside the worktree`);
+      }
+      if (wt && (fix.artifactDir === wt || fix.artifactDir.startsWith(`${wt}/`))) {
+        return result("error", `fixer placed artifactDir ${JSON.stringify(fix.artifactDir)} inside the worktree on pass ${fixerPasses}; the round-history home must live outside it`);
+      }
+      artifactDir = fix.artifactDir;
+    } else if (fix.artifactDir && fix.artifactDir !== artifactDir) {
+      artifactDirAnomalies.push({ pass: fixerPasses, reported: fix.artifactDir, kept: artifactDir });
+      log(`fixer pass ${fixerPasses} reported artifactDir ${JSON.stringify(fix.artifactDir)}; keeping the first-captured ${JSON.stringify(artifactDir)} so the round history stays reachable through one pointer.`);
+    }
+    // A cycle with no home for its rounds' history may not run them.
     if (!artifactDir) return result("error", `fixer reported no artifactDir on pass ${fixerPasses}; refusing to run rounds whose history has no home`);
     for (const d of fix.dispositions || []) findingDispositions.push({ ...d, pass: fixerPasses });
     for (const q of fix.openQuestions || []) openQuestions.push(q);
@@ -986,7 +1052,7 @@ async function runReviewCycle(cycle) {
       packet: { ...packet, dispositions: fix.dispositions || [] },
       artifactDir,
       handedFindings: findings,
-      peerPreflighted,
+      peerPreflighted: peerState.preflighted,
     };
     // The peer launches BESIDE the fresh reviewer — the canonical concurrent
     // launch (the examination-only peer is the protocol's sole same-checkout
@@ -1001,8 +1067,10 @@ async function runReviewCycle(cycle) {
           schema: CYCLE_REVIEW_SCHEMA,
         }),
       async () =>
-        peerUnavailable
-          ? { outcome: "unavailable", findings: [], notes: "", detail: "peer marked unavailable earlier this cycle" }
+        // `disabled` wins over sticky unavailability: under a SHARED peerState
+        // a sibling's `unavailable` must not relabel a peer-off cycle's rounds.
+        cycle.peer !== "off" && peerState.unavailable
+          ? { outcome: "unavailable", findings: [], notes: "", detail: peerState.unavailableDetail || "peer marked unavailable earlier this run" }
           : runCyclePeerStage(cycle, state),
     ]);
     // Re-normalizing is idempotent for the stage's own results and guards the
@@ -1010,8 +1078,17 @@ async function runReviewCycle(cycle) {
     // cycle's `disabled` outcome is not helper vocabulary, so carry it as-is.
     const peer = rawPeer && rawPeer.outcome === "disabled" ? rawPeer : normalizeCyclePeerResult(rawPeer);
     peerRounds.push({ round: rounds, outcome: peer.outcome, detail: peer.detail });
-    if (peer.outcome === "unavailable") peerUnavailable = true;
-    else if (peer.outcome !== "disabled") peerPreflighted = true;
+    if (peer.outcome === "unavailable") {
+      peerState.unavailable = true;
+      if (peer.detail && !peerState.unavailableDetail) peerState.unavailableDetail = peer.detail;
+    } else if (peer.outcome !== "disabled" && !peer.synthesized) {
+      // The preflight is demonstrably done only when a peer SUBAGENT actually
+      // reported back. A script-synthesized forfeit (dead/schema-failed
+      // subagent, thrown stage, null parallel slot) proves nothing ran, so the
+      // next round must still probe rather than skip on a false "an earlier
+      // round verified the binary and login".
+      peerState.preflighted = true;
+    }
 
     if (!review) return result("error", `reviewer returned nothing on round ${rounds}`);
     if (review.emptyDiffFlag) return result("error", `reviewer saw an empty diff on round ${rounds} (likely wrong worktree/branch)`);
@@ -1048,9 +1125,13 @@ async function runReviewCycle(cycle) {
       confirming = false;
       findings = {
         carried: undisposed,
-        reviewer: (review.issues || []).map((f, i) => ({ id: `r${rounds}-${i + 1}`, ...f })),
+        // `id` is spread LAST so the script-assigned, round-scoped id stays
+        // authoritative even when an agent's finding object volunteers its own
+        // `id` field (coverage matching depends on these exact string ids; an
+        // agent-supplied one — a number, say — would be uncoverable).
+        reviewer: (review.issues || []).map((f, i) => ({ ...f, id: `r${rounds}-${i + 1}` })),
         reviewerNotes: review.notes || "",
-        peer: peerGating.map((f, i) => ({ id: `p${rounds}-${i + 1}`, ...f })),
+        peer: peerGating.map((f, i) => ({ ...f, id: `p${rounds}-${i + 1}` })),
         peerNotes: peer.notes || "",
       };
       // A failed round at the cap stops HERE — no further fixer pass may run,
@@ -1087,6 +1168,16 @@ async function runReviewCycle(cycle) {
 // END EMBEDDABLE SECTION: review-cycle-core
 // ============================================================================
 
+// ONE shared peer-availability state for the whole batch (the embedded
+// cycle's `cycle.peerState` contract — see runReviewCycle above): every
+// per-task cycle gets this same object, so the codex install/login preflight
+// runs once for the batch and an unavailable peer sticks batch-wide, per the
+// canonical batch rule, instead of each task's cycle re-probing. This is the
+// fan-out owner's cross-cycle state the embedding mode exists for.
+// Availability state ONLY — task 015's peer-launch throttle policy does not
+// live here.
+const batchPeerState = { preflighted: false, unavailable: false, unavailableDetail: "" };
+
 // Build one task's cycle config for the embedded runReviewCycle. The worktree
 // lifecycle stays with the wt-* helpers via worktreeContract (per-role
 // contracts below); the task-specific assignment — task content, upstream
@@ -1104,6 +1195,7 @@ function taskCycleConfig(task, remote, peerMode) {
     artifactType: "code",
     peer: peerMode,
     mode: "full",
+    peerState: batchPeerState,
     labelPrefix: `${task.slug}:`,
     contracts: {
       fixer: worktreeContract(task, { mayCreate: true }),
