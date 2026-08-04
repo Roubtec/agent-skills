@@ -175,17 +175,10 @@ The PR base branch for this task is `<base-branch>`. The current branch is `<tas
 
 - Run a full build and verify there are no type errors before checking anything else. A build failure is an automatic blocker.
 - Identify the touched files with `git diff --name-only <base-branch>...HEAD`. Use this list to scope your code quality review. If no base branch was provided above, fall back to `main` and mention the fallback in your report.
-- Do NOT read commit messages (`git log`) and do NOT read diffs (`git diff` with content). Read each touched file in full instead — diff-only review hides issues that span the boundary between changed and unchanged code, and commit messages anchor you to the implementer's intent.
-- You may follow references from touched files into untouched files when needed to evaluate consistency, call sites, or downstream effects.
+- Do NOT read commit messages (`git log`) and do NOT read diffs (`git diff` with content); read each touched file in full instead. You may follow references from touched files into untouched files when needed to evaluate consistency, call sites, or downstream effects.
 - Read the relevant areas of the codebase and check each acceptance criterion.
-- Perform a code quality pass on the touched files using the following checklist:
-  - **Logic**: are conditionals, branching, and control flow correct? Any off-by-one, inverted conditions, or silent wrong-result paths?
-  - **Error handling**: are errors caught and propagated with context? Anything silently swallowed?
-  - **Edge cases**: are null/undefined, empty collections, and boundary values handled or explicitly rejected?
-  - **Dead code**: any unreachable branches, unused parameters, or defensive guards for impossible conditions?
-  - **Consistency**: do naming, patterns, and idioms match the surrounding codebase?
-  - **Duplication**: any non-trivial patterns duplicated that could be shared instead?
-  - **Type safety**: are types precise? Flag unnecessary widening, `any`, or unsafe casts.
+- Perform a code quality pass on the touched files:
+  <paste the "Code quality dimensions to check" list from above>
 - Report either:
   - **Pass**: all criteria met, build passes, no material quality issues.
   - **Issues**: numbered list. For each: category (criteria gap / logic / error-handling / edge-case / dead-code / consistency / duplication / types), file and line, what is wrong, and what should change instead.
