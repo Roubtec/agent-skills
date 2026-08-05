@@ -45,6 +45,7 @@ guess, this skill is where those parked questions get answered.
   blocker", "ambiguous / needs-a-decision" item, and "discovered finding" note. This is the common
   case and the richest — the candidate options are often already drafted.
   A completed `review-cycle`'s open questions are already in this skill's four-part brief shape (grounded context, concrete trigger, distinct options, recommendation) — consume them without re-derivation; step 2's grounding still re-verifies every carried claim (reachability especially) against current state before serving.
+  Pass over any entry that cycle marked **retired**: a later pass settled the issue behind it, and the mark names the pass and disposition that did, so the decision is no longer the maintainer's to make. It rides along in the result for auditing, not for serving — raise one only to question the cycle's own call, never as a live decision.
 - **Pointed mode (a pointer to the list).** No prior context. The user hands you where the questions
   live — PR numbers, a task/issues file, a doc, or a free-form description. **Re-derive** the
   work-list from that source (for the review case, see the review layer), then proceed identically.
