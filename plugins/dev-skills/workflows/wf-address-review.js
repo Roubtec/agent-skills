@@ -439,21 +439,60 @@ const uncoveredRefs = uncoveredItems.map((it) => it.threadId || it.url);
 // substance): flag any entry typed `review-thread` whose threadId is not a
 // gathered thread's or whose commentId is not that thread's top comment, and
 // any entry matching a gathered thread's threadId that is not typed for it.
+//
+// Identity alone is not enough to publish from, though. Every remaining field
+// `fixInstructions` marks mandatory is consumed by a publish side effect, and
+// the untyped `workReport` cannot require any of them: `kind` routes the whole
+// per-item hygiene step (a missing one leaves the publisher guessing which
+// reply to write and whether to resolve), `detail` IS the reply body,
+// `authorIsBot` decides whether a push-back or deferred thread may be
+// auto-resolved, and `author` + `newFinding` decide which bots the
+// contributing-ping set keeps — an absent one silently drops a bot that did
+// bring a new finding. So a schema-valid but incomplete entry has to be
+// rejected here, before anything is pushed, rather than reaching the publisher
+// as an ambiguous instruction. `author` may be the empty string (the contract's
+// value for an unavailable author, e.g. a deleted account); absent is not the
+// same thing and is a violation.
+const TRIAGE_KINDS = new Set([
+  "actionable-fixed",
+  "already-addressed",
+  "push-back",
+  "deferred-to-task",
+  "ambiguous-skipped",
+]);
 const threadItemById = new Map(
   packet.items.filter((it) => it.type === "review-thread" && it.threadId).map((it) => [it.threadId, it])
 );
-const badDisp = workReport.find(
-  (d) =>
-    d &&
-    (d.type === "review-thread"
-      ? !d.threadId ||
-        !d.commentId ||
-        !threadItemById.has(d.threadId) ||
-        String(threadItemById.get(d.threadId).commentId) !== String(d.commentId)
-      : d.threadId && threadItemById.has(d.threadId))
-);
-const badDispRef = badDisp
-  ? String(badDisp.ref || badDisp.threadId || badDisp.url || badDisp.kind || "(unidentified entry)")
+// Returns why this entry cannot be published, or "" when it carries the full
+// per-item contract.
+function dispositionDefect(d) {
+  if (!d) return "the entry is empty";
+  if (d.type === "review-thread") {
+    if (!d.threadId || !d.commentId) return "it is a review-thread entry with no threadId/commentId to resolve and reply through";
+    if (!threadItemById.has(d.threadId)) return "its threadId was never gathered on this PR, so resolving it would close an unrelated thread";
+    if (String(threadItemById.get(d.threadId).commentId) !== String(d.commentId)) return "its commentId is not that gathered thread's top comment, so the reply would thread under one comment while another thread is resolved";
+  } else if (d.type === "standalone") {
+    if (typeof d.url !== "string" || !d.url) return "it is a standalone entry with no url, the only stable reference its outcome can be recorded against";
+    if (d.threadId && threadItemById.has(d.threadId)) return "it is typed standalone but names a gathered review thread, so publication would skip the thread's reply/resolve";
+  } else {
+    return `its type ${JSON.stringify(d.type)} is neither review-thread nor standalone, so publication cannot route it`;
+  }
+  if (!TRIAGE_KINDS.has(d.kind)) return `its kind ${JSON.stringify(d.kind)} is not one of the triage kinds, so publication cannot tell what to reply or whether to resolve`;
+  if (typeof d.detail !== "string" || !d.detail.trim()) return "it carries no detail, which is the body of the reply publication would post";
+  if (typeof d.author !== "string") return "it has no author, so a bot that brought a new finding would silently drop out of the ping set";
+  if (typeof d.authorIsBot !== "boolean") return "it has no authorIsBot, which decides whether a push-back or deferred thread may be auto-resolved";
+  if (typeof d.newFinding !== "boolean") return "it has no newFinding, which decides whether its author bot is re-pinged this round";
+  return "";
+}
+// Index, not `find`: a defective entry can itself be null/empty, and `find`
+// would hand that back as a falsy "no defect found". `badDispDefect` is the
+// non-empty reason exactly when an entry is unpublishable, so the guards below
+// key off it rather than off the entry.
+const badDispIndex = workReport.findIndex((d) => dispositionDefect(d));
+const badDisp = badDispIndex >= 0 ? workReport[badDispIndex] : null;
+const badDispDefect = badDispIndex >= 0 ? dispositionDefect(badDisp) : "";
+const badDispRef = badDispIndex >= 0
+  ? String((badDisp && (badDisp.ref || badDisp.threadId || badDisp.url || badDisp.kind)) || `entry #${badDispIndex + 1}`)
   : "";
 
 if (!flags.push) {
@@ -464,7 +503,7 @@ if (!flags.push) {
   // those threads, so the result must not read as a clean local fix.
   phase("Report (no-push)");
   return {
-    status: passed ? (uncoveredItems.length || badDisp ? "fixed-local-incomplete" : "fixed-local") : "review-cap",
+    status: passed ? (uncoveredItems.length || badDispDefect ? "fixed-local-incomplete" : "fixed-local") : "review-cap",
     pr: packet.pr,
     rounds,
     reviewerPassed: !!passed,
@@ -480,8 +519,8 @@ if (!flags.push) {
     ...(uncoveredItems.length
       ? { uncoveredItems: uncoveredRefs, coverageNote: `${uncoveredItems.length} gathered item(s) have no workReport entry; a later publish replay would skip them.` }
       : {}),
-    ...(badDisp
-      ? { malformedDisposition: badDispRef, dispositionNote: `Disposition "${badDispRef}" covers a review thread but is mistyped, names a never-gathered thread, or carries a missing/mismatched threadId/commentId; a later publish replay would misroute or skip it.` }
+    ...(badDispDefect
+      ? { malformedDisposition: badDispRef, dispositionNote: `Disposition "${badDispRef}" is not publishable: ${badDispDefect}. A later publish replay would misroute or skip it.` }
       : {}),
     note: "Local-only run: no push, no replies/resolves, no comment. Re-run without `no-push` to publish with the default contributing-bot pings, or with `push` to publish quietly.",
   };
@@ -526,11 +565,11 @@ if (uncoveredItems.length) {
   };
 }
 
-// Second: a covering entry that cannot be published as its thread — mistyped,
-// naming a never-gathered thread, or missing/mismatching its identifiers (the
-// `badDisp` check above the no-push branch, judged against the gathered
-// items' identity).
-if (badDisp) {
+// Second: a covering entry that cannot be published — mistyped, naming a
+// never-gathered thread, missing/mismatching its identifiers, or missing a
+// publish-critical field (the `badDispDefect` check above the no-push branch,
+// judged against the gathered items' identity and the per-item report contract).
+if (badDispDefect) {
   return {
     status: "publish-aborted-incomplete-dispositions",
     pr: packet.pr,
@@ -541,7 +580,7 @@ if (badDisp) {
     peerRounds: cycle.peerRounds,
     artifactDir: cycle.artifactDir,
     ...anomalies,
-    note: `Disposition "${badDispRef}" covers a review thread but is mistyped, names a never-gathered thread, or carries a missing/mismatched threadId/commentId; nothing was pushed. Re-run so every review thread's entry carries its gathered type and identifiers.`,
+    note: `Disposition "${badDispRef}" is not publishable: ${badDispDefect}. Nothing was pushed. Re-run so every entry carries its gathered type and identifiers plus the full per-item report contract (kind, detail, author, authorIsBot, newFinding).`,
   };
 }
 
