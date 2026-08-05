@@ -2,9 +2,9 @@
 
 These are Claude-only dynamic-workflow counterparts to selected development skills: deterministic JavaScript orchestration scripts that spawn and sequence agents while leaving judgment and side effects to those agents. Codex has no workflow runtime, so this directory has no Codex sibling.
 
-The workflows are distributed by the `dev-skills` plugin and register in its namespace: invoke `/dev-skills:wf-address-review` or `/dev-skills:wf-address-tasks`.
+The workflows are distributed by the `dev-skills` plugin and register in its namespace: invoke `/dev-skills:wf-address-review`, `/dev-skills:wf-address-tasks`, or `/dev-skills:wf-review-cycle`.
 
-The JavaScript payloads remain byte-for-byte imports from powbox until their first behavior-editing follow-up, so comments inside them may still describe the legacy unnamespaced commands. Those comments are import history, not current invocation guidance; task 014 queues their normalization when it replaces the workflows' inlined review loops.
+Task 014 replaced the imported workflows' inlined review loops with the shared `wf-review-cycle` and normalized the legacy unnamespaced invocation references their comments carried from the powbox import; the plugin-namespaced commands above are the invocation guidance.
 
 ## Availability
 
@@ -32,14 +32,38 @@ The shared-filesystem assumption was verified on 2026-06-10 with Claude Code 2.1
 
 ## Current scope
 
-`wf-address-tasks.js` expresses dependency waves, storage-aware throttling, the bounded implement-review-fix loop, sibling collision handling, and per-task PR creation. It does not build the post-batch local review stack produced by the `address-tasks` skill.
+`wf-review-cycle.js` is the canonical review cycle for workflows: fixer -> fresh-eyes reviewer -> best-effort cross-harness codex peer -> fix, with explicit finding dispositions, escalated open questions in a pinned wire format, and the canonical round cap. Its cycle logic sits in a marked embeddable section (`review-cycle-core`) with two documented consumption modes — nesting via `workflow("wf-review-cycle", ...)`, and synthesis of the marked section into a flat consumer script.
 
-`wf-address-review.js` expresses the bounded verify loop and conditionally publishes based on its flags. With no mid-run input, it behaves like the skill's hands-off mode: agents decide low-stakes ambiguity and report high-stakes blockers.
+`wf-address-tasks.js` expresses dependency waves, storage-aware throttling, sibling collision handling, and per-task PR creation, running each task through an embedded copy of `review-cycle-core` (embedded rather than nested so the fan-out owner makes every peer launch in its own flat state — where task 015's throttle will live — and hands every per-task cycle one shared batch-wide peer preflight/availability state). It does not build the post-batch local review stack produced by the `address-tasks` skill.
+
+`wf-address-review.js` nests `wf-review-cycle` for its verify loop and conditionally publishes based on its flags. With no mid-run input, it behaves like the skill's hands-off mode: agents decide low-stakes ambiguity and report high-stakes blockers.
 
 `rebase-stack` remains a skill because its value is sequential conflict judgment and user confirmation rather than agent fan-out.
 
 ## Validation
 
-Run `node --check plugins/dev-skills/workflows/wf-address-review.js` and `node --check plugins/dev-skills/workflows/wf-address-tasks.js` from the repository root to parse-check the shipped workflow sources.
+Parse-check the shipped workflow sources — `plugins/dev-skills/workflows/wf-review-cycle.js`, `wf-address-review.js`, and `wf-address-tasks.js` — with powbox's `wf-check` where it has landed: it is built against the runtime's own loading, which nothing in this repo can speak for. It is not on PATH in this repo's powbox image (checked 2026-08-05), so until it lands, stand in for it with a hand-rolled wrapper — from the repository root, once per file:
+
+```
+D="$(mktemp -d "${TMPDIR:-/tmp}/wf-check.XXXXXX")" \
+  && sed '1,/^export const meta/s/^export const meta/const meta/' <file> > "$D/body.js" \
+  && { echo '(async function(args, agent, phase, workflow, parallel, pipeline, log){"use strict";'; cat "$D/body.js"; echo '});'; } > "$D/w.cjs" \
+  && node --check "$D/w.cjs" && rm -rf "$D"
+```
+
+Do NOT substitute a bare `node --check <file>`: the first statement in these sources is `export const meta`, and Node's module-syntax detection swallows every parse error after that token, so a bare check can fail only on an error ahead of it, up in the header comment.
+
+The two moves the parse turns on: `export const meta` becomes a plain `const`, so the file is no longer module syntax, and the `async` function body makes the top-level `await` these scripts use legal — not their top-level `return`, which the CommonJS parse the `.cjs` extension selects admits anyway. `sed` writes to a file rather than piping into the brace group so its own exit status gates the chain — piped, an unreadable `<file>` is masked, because the shell reports the pipeline's *last* status and the brace group wraps empty input happily. `"use strict";` is ours, not an observed runtime property: it only ever rejects more, and a module-loading runtime parses strictly anyway. `mktemp -d` keeps concurrent checks apart (`wf-address-tasks` fans out task worktrees whose agents may each run one, the rule in `wf-review-cycle.js`'s artifact-directory instruction), and a failing run leaves the directory behind: a parse error's line numbers refer to the wrapped file, and an empty `body.js` with no `w.cjs` means `sed` never read the source.
+
+These behaviors were verified on 2026-08-05 with GNU sed 4.9 and Node v24.18.1, under both `bash` and `dash`:
+
+- Exit 0 on each of the three sources, run from the repository root.
+- Exit 2 — `sed`'s own status, before `node` runs — from a wrong cwd or a typo'd path.
+- Exit 1 on all three with `let OBVIOUSLY_BROKEN = ;` appended.
+- A bare `node --check` exits 0 on all three both unchanged and with that same error appended, and fails only when the error is placed before the `export`.
+- Both halves of the wrapper are load-bearing: without the `sed`, all three fail with `SyntaxError: Unexpected token 'export'`; without the function body, or with a non-`async` one, all three fail with `SyntaxError: await is only valid in async functions and the top level bodies of modules`. Neither half is what admits their top-level `return` — `printf 'return 1;\n' > r.cjs && node --check r.cjs` exits 0.
+- A parameter name colliding with a top-level `const`, `let`, or `class` is itself a parse error — `(async function(args, agent, meta, log){"use strict"; const meta = 1; });` → `SyntaxError: Identifier 'meta' has already been declared` — and after the `sed` all three sources declare exactly such a top-level `const meta`.
+
+A pass is not a promise that the runtime will accept the file: this wrapper stands in for the runtime's wrapping rather than reproducing it. The real parameter list is not derivable here, and by the last measurement that guess is not neutral — a real list containing `meta` would reject what this stand-in accepts. Nothing past parsing is covered either (the `meta`-literal and determinism rules under *Authoring constraints*), so a pass means only that the source is syntactically valid in a shape that admits its top-level `await`.
 
 Run `node scripts/test-checkout-cleanliness-report.mjs` for the focused regression suite covering `wf-address-tasks.js`'s `mainCheckoutSummary` function. The test extracts that function from the shipped workflow rather than maintaining a second copy.

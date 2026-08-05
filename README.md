@@ -18,9 +18,10 @@ codex/
 scripts/
   test-gh-review-threads.sh             # hermetic contract coverage for the review-thread helper
   test-checkout-cleanliness-report.mjs  # regression coverage for the batch workflow's checkout report
+  verify-014-peer-strength-pin.md       # harness-neutral prompt: observe the peer step's pinned review strength (task 014)
 ```
 
-- **`plugins/`** holds the Claude Code plugins. Each subdirectory is one independently installable plugin; `dev-skills` carries cross-repo software development skills including safe post-batch local branch cleanup, the `enable-worktrees` and `declare-shadows` repository setup skills, the `session-learnings` retrospective skill, and Claude dynamic workflows for review addressing and planned task batches. Its `bin/` executables are available on the Bash tool's PATH while the plugin is enabled. Additional plugins for other domains get sibling directories here and an entry in `marketplace.json`.
+- **`plugins/`** holds the Claude Code plugins. Each subdirectory is one independently installable plugin; `dev-skills` carries cross-repo software development skills including the shared `review-cycle` building block (the canonical fix → fresh-eyes review → best-effort cross-harness peer review → fix protocol the other skills reference), safe post-batch local branch cleanup, the `enable-worktrees` and `declare-shadows` repository setup skills, the `session-learnings` retrospective skill, and Claude dynamic workflows for review addressing, planned task batches, and the review cycle itself. Its `bin/` executables are available on the Bash tool's PATH while the plugin is enabled. Additional plugins for other domains get sibling directories here and an entry in `marketplace.json`.
 - **`codex/`** mirrors the plugin tree with the Codex CLI flavors of the same skills. The two flavors share most of their text but diverge deliberately where harness capabilities differ; a verbiage change is one PR touching both files side by side. Each Codex skill includes its `agents/openai.yaml` UI metadata. This tree is *not* installed by Claude's plugin runtime; powbox refreshes it onto the Codex config volume at container start from the same marketplace clone.
 
 ## Installing (Claude Code Users)
@@ -70,6 +71,8 @@ Open PRs ready for review rather than as drafts. Agents in particular tend to op
 Run `bash scripts/test-gh-review-threads.sh` after any behavior change to `plugins/dev-skills/bin/gh-review-threads`; the hermetic suite stubs `gh` and needs only Bash and `jq`.
 
 Run `node scripts/test-checkout-cleanliness-report.mjs` after changing the batch workflow's checkout-report behavior.
+
+Parse-check any changed dynamic workflow under `plugins/dev-skills/workflows/`. That check is not a `scripts/` suite: the command, and what a pass does and does not establish, live in `plugins/dev-skills/workflows/README.md`'s Validation section rather than here.
 
 ## Consumers
 

@@ -262,46 +262,12 @@ This is a bounded snapshot, not a total guarantee. It establishes that no collis
 
 ## Peer second opinion (best-effort)
 
-Unless `peer-opinions=off`, preflight `claude` once per skill run in the main working tree before the first review: require `command -v claude`, then run `claude auth status`. A missing binary or failed authentication makes the peer unavailable, except that a set `ANTHROPIC_API_KEY` downgrades a failed probe to classify-at-first-invocation. If the failure indicates an older CLI without the `auth status` subcommand, also classify at the first real invocation rather than marking the peer unavailable. On either classify-at-first-invocation path, an auth or usage failure on that invocation makes the peer unavailable for the rest of the run. Unavailability never fails or delays the own reviewer; record the reason and mention the peer forfeit once in the final summary.
+Unless `peer-opinions=off`, run the `review-cycle` skill's peer step beside every review round: its preflight-once probe, pinned-strength launch, loose timeout with one retry, examination-only contract and `VERDICT: PASS | ISSUES` format, outcome vocabulary, grounding spot-check, blocking-and-minor gating, verbatim finding relay, and next-reviewer adjudication of disputes are all defined there and are not restated here.
 
-On every review round while available, use named variables and quoted expansions to create the artifacts and launch the peer as a plain background shell process from the committed task working tree at the same moment as the own reviewer:
+Deltas for this serialized skill:
 
-```bash
-working_tree="/absolute/path/to/task-working-tree"
-base_ref="main"
-artifact_dir="$(mktemp -d "${TMPDIR:-/tmp}/address-tasks-peer.XXXXXX")"
-peer_out="${artifact_dir}/peer.out"
-peer_err="${artifact_dir}/peer.err"
-prompt_file="${artifact_dir}/prompt"
-prompt="$(
-  printf '%s\n' "Review ${working_tree} against ${base_ref}; read ${artifact_dir}/commits.log and ${artifact_dir}/changes.diff, then follow the full prompt contract below."
-  cat <<'PEER_REVIEW_PROMPT'
-<the complete peer prompt, including verbatim task content>
-PEER_REVIEW_PROMPT
-)"
-# Pin peer model and effort per invocation; this never changes the container's configuration.
-peer_args=(--model opus --effort high)
-
-git -C "${working_tree}" log --oneline "${base_ref}..HEAD" > "${artifact_dir}/commits.log"
-git -C "${working_tree}" diff "${base_ref}...HEAD" > "${artifact_dir}/changes.diff"
-printf '%s\n' "${prompt}" > "${prompt_file}"
-(
-  cd -- "${working_tree}" || exit
-  claude -p "${peer_args[@]}" --safe-mode --tools "Read,Glob,Grep" --disallowedTools "mcp__*" --add-dir "${artifact_dir}" --output-format json < "${prompt_file}" > "${peer_out}" 2> "${peer_err}"
-) &
-```
-
-Replace the example values with the round's actual working tree, base, and complete prompt; the prompt must name both exact artifact paths. Writing the safely constructed prompt to a unique invocation file and feeding it through stdin keeps review-controlled backticks and `$()` out of shell evaluation. The redirects are the capture contract: every invocation gets separate stdout and stderr files, so JSON stdout stays parseable while diagnostics remain available. Keep `--safe-mode` and both examination-only tool guards; never pass permission-bypass or autonomy flags.
-
-Always pass `peer_args=(--model opus --effort high)`; both flags are per-invocation and never change the container's saved configuration, and without them the peer silently inherits whichever model and effort a container most recently selected. Allow a loose timeout of about 12 minutes, with discretion to wait longer for an expected wide review. After each attempt's output has been read or the attempt has been classified as timed out or failed, remove its artifact directory, including both capture files, before retrying or continuing. On timeout or transient failure, retry once (two attempts total), then forfeit only that round. An auth or usage failure on a classify-at-first-invocation path disables the peer for the rest of the run.
-
-The peer is **examination-only**: it may use only `Read`, `Glob`, and `Grep`, with all MCP tools denied; it must edit nothing and run no builds or tests. Its prompt must include the working-tree path, base branch or commit range, the exact `<artifact-dir>/commits.log` and `<artifact-dir>/changes.diff` paths, the relevant task content verbatim, an instruction to read the actual files, and this output contract: `VERDICT: PASS | ISSUES`, followed by numbered findings tagged `blocking` or `minor`, each with `file:line` and a one-line rationale. The own reviewer retains the full-build-first contract, which makes the parallel launch safe.
-
-Always wait for the own reviewer before deciding the round, and wait for the peer only when it was actually launched. Read only the available verdict lines for triage; do not summarize, merge, or rewrite their reports. Unintelligible peer output that lacks a parseable verdict and findings forfeits that round. When either reviewer reports issues, give the next fresh implementer the own-reviewer report and any available peer report verbatim as separately labeled **Reviewer findings** and **Peer (claude) findings** blocks.
-
-A round passes only when the own reviewer passes and the peer, when it delivered an intelligible report, has no unaddressed grounded findings, whether `blocking` or `minor`. Only when a passing own review would otherwise be overturned by peer findings, cheaply spot-check that each gate-deciding `file:line` exists and its claim is not self-evidently false; discard and record ungrounded findings, but pass all other feedback through verbatim. Pure noise or stylistic churn against repository conventions may be pushed back with evidence; the next round's fresh own reviewer adjudicates disputes, and a rejected peer claim stops gating when that reviewer confirms it is not real.
-
-Every implementer round counts toward the feedback-loop cap, whichever reviewer triggered it. Invoke the peer on every round while it remains available.
+- The peer's worktree is the orchestrator's single shared repository checkout path, not a separately created git worktree; launch it from the committed task checkout at the same moment as the own reviewer, with the relevant task content verbatim and the base branch or commit range in its prompt.
+- Every implementer round counts toward the feedback-loop cap, whichever reviewer triggered it; invoke the peer on every round while it remains available, and mention an unavailable or forfeited peer once in the final summary.
 
 ## Feedback Loop
 
@@ -311,13 +277,13 @@ When either reviewer reports issues:
 
 1. **Spawn a fresh `worker` implementer** (on its own, as in step 4). Do not continue the prior implementer thread with `send_input`; fresh context is intentional because the fix-up agent should read the committed branch plus the reviewers' findings without attachment to earlier choices. Include:
    - The original task file content.
-   - Both the own reviewer's and peer's numbered findings verbatim as two labeled blocks; omit only a peer report that was unavailable, forfeited, or unintelligible that round.
+   - Both the own reviewer's and peer's numbered findings verbatim as two labeled blocks; omit only a peer report forfeited under the `review-cycle` protocol.
    - The branch name (same as before).
    - Instruction to address each finding specifically and report what was fixed.
    - The same project context and validation instructions as the original implementer prompt.
 2. After the fix-up implementer completes — and only then, in a later turn — **spawn a new reviewer agent** and launch the peer per the protocol above to re-check (same fresh prompt structure as before; never concurrent with the fix-up implementer).
 3. Repeat until the own reviewer passes and the peer has no unaddressed grounded findings under the protocol above.
-4. **Cap the feedback loop at 12 iterations.** This is a runaway-loop guard against arcane token bloat, not a quality dial; more legitimate rounds are expected with another reviewer. If issues persist after 12 rounds, stop iterating and do not open a PR for this task. Surface the outstanding findings clearly to the user in the final summary and ask for guidance on how to proceed.
+4. **Cap the feedback loop at the `review-cycle` skill's round cap.** If issues persist at the cap, stop iterating and do not open a PR for this task. Surface the outstanding findings clearly to the user in the final summary and ask for guidance on how to proceed.
 
 ## Hints
 

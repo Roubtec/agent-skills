@@ -25,9 +25,11 @@ Out of scope:
 
 ## Context and references
 
-- `plugins/dev-skills/workflows/wf-address-tasks.js:84-94` defines `BOOTSTRAP_SCHEMA`; `wtBase` is described as absolute but is not required.
-- `plugins/dev-skills/workflows/wf-address-tasks.js:204-225` defines the bootstrap and storage-probe prompts.
-- `plugins/dev-skills/workflows/wf-address-tasks.js:668-678` accepts the bootstrap result, and `plugins/dev-skills/workflows/wf-address-tasks.js:719-775` derives wave width and performs later probes.
+Every line number below is as of PR #39, which moved all four spans: it embedded the `review-cycle-core` section above the last two, and its other edits shifted the first two. Re-derive them if the file has moved on again.
+
+- `plugins/dev-skills/workflows/wf-address-tasks.js:98-108` defines `BOOTSTRAP_SCHEMA`; `wtBase` is described as absolute but is not required.
+- `plugins/dev-skills/workflows/wf-address-tasks.js:194-215` defines the bootstrap and storage-probe prompts.
+- `plugins/dev-skills/workflows/wf-address-tasks.js:1430-1440` accepts the bootstrap result, and `plugins/dev-skills/workflows/wf-address-tasks.js:1481-1537` derives wave width and performs later probes.
 - Task 012 is the prerequisite relocation and must land first; its byte-faithfulness constraint is why this behavior fix is separate.
 - Task 033 later replaces wave-boundary re-probes as part of vertical pipelining, so complete this hardening before that scheduler rewrite or carry its acceptance criteria into task 033 explicitly.
 
@@ -57,7 +59,7 @@ Prefer a small pure validation/helper seam that the test can extract without exe
 
 - Run the focused storage-probe regression test.
 - Run `node scripts/test-checkout-cleanliness-report.mjs`.
-- Run the workflow syntax validation documented in `plugins/dev-skills/workflows/README.md` for both workflow files.
+- Run the workflow syntax validation documented in `plugins/dev-skills/workflows/README.md` for every workflow source it names (three since PR #39 added `wf-review-cycle.js`).
 
 ## Review plan
 

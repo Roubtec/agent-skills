@@ -1,0 +1,4 @@
+interface:
+  display_name: "Review Cycle"
+  short_description: "Run the fix-review-peer-fix cycle"
+  default_prompt: "Use $review-cycle to run the review cycle on this change."

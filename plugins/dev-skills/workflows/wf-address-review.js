@@ -3,9 +3,10 @@
  *
  * Work through every UNRESOLVED review thread on one pull request: gather the
  * threads, fix what is right / push back on what is wrong, verify every
- * disposition with a fresh-eyes reviewer (max 12 rounds), then publish by default
- * (lease-safe push, reply + resolve threads, Summary comment, pings) — a `no-push`
- * run stays local-only and mutates nothing.
+ * disposition through the shared review cycle (fresh-eyes reviewer plus a
+ * best-effort cross-harness codex peer, bounded by the cycle's round cap),
+ * then publish by default (lease-safe push, reply + resolve threads, Summary
+ * comment, pings) — a `no-push` run stays local-only and mutates nothing.
  * The re-review pings fire ONLY when the push actually advanced the branch with
  * new commits/rewritten history; a no-op push (nothing new to review) skips them
  * so an automated review -> address -> review loop can terminate.
@@ -15,8 +16,9 @@
  * prompts below carry the operative definition — so a multi-bot loop winds
  * down bot-by-bot as each reviewer goes quiet.
  *
- * Invoke as `/wf-address-review [PR#] [rebase on top of <branch>] [no-push]
- * [push] [ping-codex] [ping-claude] [ping-copilot] [ping-contributing]`.
+ * Invoke as `/dev-skills:wf-address-review [PR#] [rebase on top of <branch>]
+ * [no-push] [push] [peer-opinions=off] [ping-codex] [ping-claude]
+ * [ping-copilot] [ping-contributing]`.
  *
  * Why a workflow rather than a skill
  * ----------------------------------
@@ -24,6 +26,16 @@
  * cycle with a hard round cap, followed by a conditional publish stage gated on
  * flags. That sequencing is exactly what a workflow expresses as code instead of
  * prose, and the verifier is a textbook fresh-`Agent` spawn.
+ *
+ * The fix -> review -> fix loop itself is NOT stated here: this workflow nests
+ * the canonical cycle (`workflow("wf-review-cycle", ...)`) for its verification
+ * loop — roles, gates, disposition rule, best-effort cross-harness codex peer
+ * review, and the round cap are all wf-review-cycle's, and this script only
+ * supplies the PR-specific scope (triage kinds, per-thread report contract,
+ * disposition-verification criteria). Nesting is the right consumption mode
+ * here because this pipeline does not fan out; a fan-out owner embeds the
+ * cycle's marked section instead (see wf-address-tasks.js). `peer-opinions=off`
+ * passes through args into the nested cycle.
  *
  * Workflows have no mid-run user input, so this is structurally the skill's
  * `hands-off` mode: low-stakes ambiguity is decided best-effort by the agents
@@ -53,22 +65,25 @@
  */
 
 // The runtime requires `export const meta = {...}` (a pure literal) as the
-// FIRST statement: it is how the script registers as the `/wf-address-review`
-// command and what the pre-run approval prompt shows. The conditional report
-// phases are not declared; undeclared phase() titles get their own group.
+// FIRST statement: it is how the script registers as the
+// `/dev-skills:wf-address-review` command and what the pre-run approval prompt
+// shows. The conditional report phases are not declared; undeclared phase()
+// titles get their own group. The "Peer review (codex)" title must stay
+// byte-identical to the peer stage's phase string in the nested
+// wf-review-cycle (its CYCLE_PEER_PHASE) — a mismatch silently splits the
+// progress display into an extra group.
 export const meta = {
   name: "wf-address-review",
-  description: "Address every unresolved review thread on one PR: fix or push back, verify with a fresh-eyes reviewer (max 12 rounds), then publish by default (use no-push for a local-only dry run).",
-  whenToUse: "Work through maintainer-vetted review feedback on a single PR hands-off. Not for new task batches (wf-address-tasks) or stack rebases.",
+  description: "Address every unresolved review thread on one PR: fix or push back, verify through the shared review cycle — a fresh-eyes reviewer plus a best-effort cross-harness codex peer review each round (review is cross-harness; peer outcomes never block; bounded round cap) — then publish by default (use no-push for a local-only dry run).",
+  whenToUse: "Work through maintainer-vetted review feedback on a single PR hands-off, with cross-harness verification (a best-effort codex peer beside the fresh reviewer). Not for new task batches (wf-address-tasks) or stack rebases.",
   phases: [
     { title: "Gather", detail: "resolve the PR, branch state, and unresolved threads" },
-    { title: "Fix and verify", detail: "fix/push-back per thread, fresh-eyes verification loop" },
+    { title: "Fix and verify", detail: "fix/push-back per thread through the nested wf-review-cycle" },
+    { title: "Peer review (codex)", detail: "best-effort cross-harness second opinion beside each reviewer round; its outcome never blocks" },
     { title: "Publish", detail: "lease-safe push, thread replies, summary comment, pings" },
     { title: "Summary" },
   ],
 };
-
-const MAX_ROUNDS = 12;
 
 const PACKET_SCHEMA = {
   type: "object",
@@ -112,55 +127,6 @@ const PACKET_SCHEMA = {
   required: ["ok", "items"],
 };
 
-const DISPOSITION_SCHEMA = {
-  type: "object",
-  properties: {
-    dispositions: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          type: { type: "string", description: "`review-thread` or `standalone`, echoed from the gathered item." },
-          threadId: { type: "string", description: "The review-thread node id — REQUIRED for type `review-thread` (publication resolves it); omit for `standalone`." },
-          commentId: { type: "string", description: "The comment databaseId — REQUIRED for type `review-thread` (publication replies to it); omit for `standalone`." },
-          authorIsBot: { type: "boolean", description: "Echoed from the gathered item; lets publication decide whether a push-back or deferred thread may be auto-resolved (bot) or must stay open (human). REQUIRED — if the gathered item somehow lacked it, re-derive from GraphQL author `__typename`, or use false (human), the safe value that keeps the thread open." },
-          url: { type: "string", description: "Permalink — the stable reference, especially for `standalone` items." },
-          ref: { type: "string", description: "file:line + author, a human-readable reference." },
-          kind: { type: "string", description: "actionable-fixed | already-addressed | push-back | deferred-to-task | ambiguous-skipped" },
-          detail: { type: "string", description: "For fixed: the one-line summary + commit sha. For already-addressed: where it's handled. For push-back: the rationale. For deferred: the committed task file path + one-line scope, and whether the deferral was maintainer-directed or agent-proposed. For ambiguous: what decision is needed." },
-          author: { type: "string", description: "Comment author login, echoed from the gathered item (include for `standalone` items too). Lets `ping-contributing` attribute a new finding to a specific reviewer bot." },
-          newFinding: { type: "boolean", description: "True ONLY if this thread surfaces a real concern not previously raised on this PR — typically `actionable-fixed`, or a genuinely new `deferred-to-task`/`already-addressed`. FALSE for a `push-back` (the comment was wrong), a re-raise of a concern already deferred to a committed task, or a bot re-arguing a push-back it already lost — UNLESS the thread carries a genuinely new angle this round. Drives `ping-contributing`: a bot is re-pinged only when it authored at least one newFinding this round. Set it honestly even if no ping was requested." },
-        },
-        required: ["type", "kind", "detail", "authorIsBot", "author", "newFinding"],
-      },
-    },
-    proactiveFixes: { type: "string", description: "Same-pattern fixes made beyond the literal comments, or empty." },
-    finalSha: { type: "string", description: "HEAD sha after all fixes are committed." },
-    clean: { type: "boolean", description: "True only if `git status --porcelain` is empty with every intended change committed." },
-  },
-  required: ["dispositions", "clean"],
-};
-
-const VERDICT_SCHEMA = {
-  type: "object",
-  properties: {
-    pass: { type: "boolean", description: "True only if every disposition holds in the committed code, the build passes, and no material quality issue remains." },
-    issues: {
-      type: "array",
-      items: {
-        type: "object",
-        properties: {
-          threadRef: { type: "string", description: "Which disposition or file:line this concerns." },
-          problem: { type: "string" },
-          fix: { type: "string" },
-        },
-        required: ["problem", "fix"],
-      },
-    },
-  },
-  required: ["pass", "issues"],
-};
-
 const PUBLISH_SCHEMA = {
   type: "object",
   properties: {
@@ -186,12 +152,21 @@ const PUBLISH_SCHEMA = {
   required: ["published", "pushed", "pushedNewCommits"],
 };
 
-// Shell-quote a ref before embedding it in a copy-paste command these prompts
-// emit. A PR head/base ref name (from `gh pr view`) may legally contain shell
-// metacharacters (`;`, `$`, backticks — git ref names forbid spaces but little
-// else), so an unquoted ref could run the rest of the line or act on the wrong
-// thing. Single-quote and escape embedded quotes; adjacent quoted spans like
-// `refs/heads/'b'` concatenate into one shell word, so the path still resolves.
+// Shell-quote EVERY gather-supplied value before embedding it in a copy-paste
+// command these prompts emit — ref names and the head OID alike. Both reach
+// this script as free text from an agent's `gh pr view` reading rather than as
+// validated git syntax, and a ref name may legally carry shell metacharacters
+// (`;`, `$`, backticks — git ref names forbid spaces but little else), so an
+// unquoted one could run the rest of the line or act on the wrong thing.
+// Single-quote and escape embedded quotes; adjacent quoted spans like
+// `refs/heads/'b'` concatenate into one shell word, so the path still resolves,
+// and so does a quoted `<ref>:<oid>` lease pair.
+//
+// The rule is scoped to command text on purpose. The head OID also appears once
+// as a value the agent is asked to COMPARE against what it re-fetches ("Expected
+// head OID to replace"), not to run; quoting it there would have the agent match
+// the fetched OID against a quoted rendering of itself, so that occurrence is
+// deliberately bare and is not an omission.
 function shq(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
 }
@@ -214,7 +189,7 @@ function gatherPrompt(input) {
   return `You are preparing a pull request for review-addressing. Read \`AGENTS.md\` / \`CLAUDE.md\` first.
 
 Request (lenient parsing — commas, &, free word order): ${JSON.stringify(input)}
-Possible tokens: a PR number (e.g. #38), \`rebase on top of <branch>\`, \`no-push\`, \`push\`, \`ping-codex\`, \`ping-claude\`, \`ping-copilot\`, \`ping-contributing\`. You only act on the PR# and the rebase here; the push/ping flags are handled later.
+Possible tokens: a PR number (e.g. #38), \`rebase on top of <branch>\`, \`no-push\`, \`push\`, \`peer-opinions=off\`, \`ping-codex\`, \`ping-claude\`, \`ping-copilot\`, \`ping-contributing\`. You only act on the PR# and the rebase here; the push/ping/peer flags are handled later.
 
 Preflight (set \`ok: false\` with a \`blocker\` and stop on any failure):
 1. Working tree clean (\`git status --porcelain\` empty). Do not auto-stash.
@@ -235,60 +210,41 @@ If there are no unresolved threads and no included standalone item, return \`ok:
 Edit NO files here; this is gather-only.`;
 }
 
-function fixPrompt(packet, findings) {
-  const fixup = findings
-    ? `\n## Reviewer findings to address\n\nThe previous fix round did not fully pass. Address each finding, then re-confirm every disposition:\n\n${JSON.stringify(findings, null, 2)}\n`
-    : "";
-  return `You are addressing review feedback on PR #${packet.pr.number} (base \`${packet.pr.base}\`). You are on branch \`${packet.pr.workingBranch}\` in the working tree — confirm with \`git branch --show-current\` and do NOT switch branches. (The PR's remote head ref is \`${packet.pr.branch}\`; that is the push target, which may be a different name for a local off-shoot — edit the checked-out \`${packet.pr.workingBranch}\`, not the remote ref name.) Read \`AGENTS.md\` / \`CLAUDE.md\` first.
+// The fix -> review -> fix loop is the nested wf-review-cycle's, not this
+// script's. These two builders supply only the PR-specific scope: the round-1
+// assignment with its per-thread report contract (which rides the cycle's
+// untyped `workReport` — hence the explicit field list; the cycle's own
+// schemas cannot require consumer fields), and the disposition-verification
+// criteria the cycle hands verbatim to its reviewer AND its codex peer.
+function fixInstructions(packet) {
+  return `You are addressing review feedback on PR #${packet.pr.number} (base \`${packet.pr.base}\`). The PR's remote head ref is \`${packet.pr.branch}\`; that is the push target, which may be a different name for a local off-shoot — edit only the checked-out branch named in the contract above, never the remote ref name.
 
 This run is unattended (hands-off): decide low-stakes ambiguity best-effort and record it; for high-stakes ambiguity that needs an authoritative decision, do NOT guess — mark the item \`ambiguous-skipped\` and leave it open.
 
-## Items to address (verbatim)
-
-${JSON.stringify(packet.items, null, 2)}
-${fixup}
-## Instructions
-
-Triage each item into exactly one kind and act:
-- \`actionable-fixed\` — implement the fix. Commit at logical milestones.
+Triage each work item into exactly one kind and act:
+- \`actionable-fixed\` — implement the fix. Commit at logical milestones; keep commits buildable where practical.
 - \`already-addressed\` — current code already satisfies it; note where.
 - \`push-back\` (should be rare) — the comment is wrong/misunderstands context. Do NOT implement; draft a respectful, specific rationale. Never implement a fix you believe is wrong just to clear a comment.
 - \`deferred-to-task\` — the concern is real but fixing it here would expand the PR's scope considerably while the branch is defendable as it stands (builds, covers its main paths), or a maintainer reply/decision comment defers it. Do NOT implement; write a standalone follow-up task file instead, per the write-tasks skill conventions: place it in the repo's task folder (commonly \`tasks/\`; parked work in its deferred subfolder, e.g. \`tasks/deferred/\` — follow the repo's existing layout), number it to continue the existing sequence, restate the concern with file/line references and the PR thread link, and commit it on this branch SEPARATELY from code-fix commits. Never use this to dodge a cheap fix.
 - \`ambiguous-skipped\` — needs an authoritative decision you cannot make here.
 
-- Preclude repeat comments: for each pattern you fix, grep the PR's changed files and closely related code for the SAME offending pattern and fix those too; report them in \`proactiveFixes\`.
-- Keep commits buildable where practical; run build/lint before declaring done.
-- Before returning, \`git status --porcelain\` MUST be empty with every intended change committed — set \`clean\` accordingly and set \`finalSha\` to HEAD.
-- Do NOT push, reply, resolve, or comment on the PR — publication is a separate, later step.
-- Do NOT use the \`TaskCreate\`/\`TaskUpdate\`/\`TaskList\` tools.
+Preclude repeat comments: for each pattern you fix, grep the PR's changed files and closely related code for the SAME offending pattern and fix those too; report them in \`proactive\`.
+Do NOT push, reply, resolve, or comment on the PR — publication is a separate, later step.
 
-For each disposition, echo the item's \`type\` and \`authorIsBot\` (both MANDATORY — publication uses \`authorIsBot\` to decide whether a push-back/deferred thread may be auto-resolved, so never omit it; if the gathered item lacked it, use false, the safe human default), and carry its identifiers: for \`review-thread\` items \`threadId\` and \`commentId\` are MANDATORY (publication cannot reply/resolve without them); for \`standalone\` items include \`url\`. Also set \`author\` (the comment author's login, echoed from the gathered item — include it for \`standalone\` items too) and \`newFinding\` per disposition: \`newFinding: true\` ONLY when the item surfaces a real concern not previously raised on this PR (typically an \`actionable-fixed\`, or a genuinely new \`deferred-to-task\`/\`already-addressed\`); \`false\` for a \`push-back\` (the comment was wrong), a re-raise of a concern already deferred to a committed task file, or a bot re-arguing a push-back it already lost — UNLESS the thread carries a genuinely new angle this round. (This drives the \`ping-contributing\` flag, which re-pings a bot only when it brought a new finding this round; set it honestly even if no ping was requested.) Return the structured dispositions.`;
+Per-item report contract: return EXACTLY ONE \`workReport\` entry per work item — never a second entry for a thread you already reported, since publication would post both replies and resolve on whichever it routed first. Each entry carries: \`type\` (echoed from the item, so \`review-thread\` or \`standalone\`; publication can route no other value, and an entry typed anything else is rejected before publication); \`threadId\` and \`commentId\` (MANDATORY for \`review-thread\` items; publication cannot reply/resolve without them); \`url\` (a \`standalone\` entry's identity, MANDATORY there — echo the gathered item's url VERBATIM; an entry naming a url that was never gathered is untriaged work and is rejected before publication. On a \`review-thread\` entry it is the thread's permalink, for the record); \`ref\` (file:line + author, human-readable); \`kind\` (the disposition kind above); \`detail\` (for fixed: one line + commit sha; for already-addressed: where it's handled; for push-back: the rationale; for deferred: the committed task file path + one-line scope, and whether the deferral was maintainer-directed or agent-proposed; for ambiguous: what decision is needed); \`authorIsBot\` (echoed VERBATIM from the gathered item; MANDATORY — publication uses it to decide whether a push-back/deferred thread may be auto-resolved, so never omit it; if the gathered item lacked it, use false, the safe human default); \`author\` (the comment author's login, echoed VERBATIM — include it for \`standalone\` items too); and \`newFinding\` — true ONLY when the item surfaces a real concern not previously raised on this PR (typically an \`actionable-fixed\`, or a genuinely new \`deferred-to-task\`/\`already-addressed\`); false for a \`push-back\` (the comment was wrong), a re-raise of a concern already deferred to a committed task file, or a bot re-arguing a push-back it already lost — UNLESS the thread carries a genuinely new angle this round. (\`newFinding\` drives the \`ping-contributing\` flag, which re-pings a bot only when it brought a new finding this round; set it honestly even if no ping was requested.)
+
+Which of those fields are structurally enforced: every field publication acts on is re-checked before anything is pushed, and one bad entry aborts the whole publication — \`type\`, \`kind\`, \`detail\`, \`author\`, \`authorIsBot\`, \`newFinding\`, a \`review-thread\` entry's \`threadId\`/\`commentId\`, and a \`standalone\` entry's \`url\`. The identifying ids are matched against the gathered items, and the two echoed fields (\`author\`, \`authorIsBot\`) are compared against the item they came from — so echo what you were handed rather than what you judge to be more accurate. \`ref\` is not required at all, and neither is a \`review-thread\` entry's \`url\` nor a \`standalone\` entry's \`threadId\` — those two are only checked for not naming some OTHER gathered item, which would make one entry read as covering two. Write them anyway: \`ref\` is what names an entry in the run's own report, including when some other field gets that entry rejected.`;
 }
 
-function reviewPrompt(packet, dispositions) {
-  return `You are an independent fresh-eyes reviewer for PR #${packet.pr.number} (branch \`${packet.pr.workingBranch}\`, base \`${packet.pr.base}\`). You are on that branch with the fixer's commits already in the working tree. Verify every proposed disposition against the committed code. Edit NOTHING. Read \`AGENTS.md\` / \`CLAUDE.md\` first.
-
-You are given the unresolved items and the proposed dispositions — but NOT the fixer's reasoning. Independently confirm each:
+function reviewCriteria() {
+  return `The work items are unresolved PR review threads (plus any explicitly included standalone items), and the fixer's \`workReport\` proposes a disposition \`kind\` per item. Independently confirm each:
 - \`actionable-fixed\` / \`already-addressed\` claims must actually hold in the committed code.
 - \`push-back\` must be technically justified, not a convenient dismissal.
 - \`deferred-to-task\` must point at a committed task file that genuinely covers the concern, with the deferral itself justified (maintainer-directed, or genuinely scope-expanding while the branch builds and covers its main paths) — not an evasion of a cheap fix.
 - \`ambiguous-skipped\` must genuinely require an authoritative decision.
-You may reclassify any item.
-
-## Items
-
-${JSON.stringify(packet.items, null, 2)}
-
-## Proposed dispositions
-
-${JSON.stringify(dispositions, null, 2)}
-
-How to verify:
-1. Run the build / type-check first; a failure is an automatic blocker (\`pass: false\`).
-2. Read the actual files. If \`git diff --name-only ${shq(packet.pr.base)}...HEAD\` looks empty despite claimed fixes, report a likely race/wrong-branch in \`issues\` rather than reviewing nothing.
-3. Quality pass on changed files (logic, error handling, edge cases, dead code, consistency, duplication, type safety) and confirm the same-pattern sweep did not miss a sibling occurrence.
-
-Return \`pass: true\` only if every disposition holds, the build passes, and no material issue remains; else \`pass: false\` with numbered, actionable \`issues\`. Do not use the task-tracker tools.`;
+Every gathered work item must have EXACTLY ONE \`workReport\` entry (a \`review-thread\` matched by its \`threadId\`, a \`standalone\` by its \`url\`): an item with none was silently dropped, and an item named by two entries carries dispositions publication cannot choose between — it would post a reply per entry and resolve on whichever it routed first. Either is a blocking issue. So is one entry naming TWO gathered items — a \`review-thread\` entry that also carries a gathered standalone's \`url\`, or a \`standalone\` entry that also carries a gathered \`threadId\` — since that reads as covering both while publication only ever serves one.
+Each entry's \`author\` and \`authorIsBot\` must match the gathered item they are echoed from — they decide which bot is re-pinged and whether a thread may be auto-resolved, so a "corrected" value is a blocking issue even when it looks more accurate.
+You may reclassify any item. Confirm the claimed same-pattern sweep did not miss a sibling occurrence.`;
 }
 
 function publishPrompt(packet, dispositions, flags) {
@@ -299,7 +255,7 @@ Flags for this publication: ${JSON.stringify(flags)}.
 Report a STRUCTURED result: set \`published: true\` ONLY if the push and every required reply/resolve/summary/ping below succeeded. If any guard aborts you, set \`published: false\` and \`aborted: "<reason>"\` and report what (if anything) was pushed — never claim success on an aborted publication.
 
 1. Re-check before publication: clean worktree, no rebase in progress; re-fetch the PR and confirm it is still open and still points at the expected head repo/ref. Resolve the branch's exact push remote/ref and verify it matches the PR head (never assume \`origin\`, especially for forks). Expected head OID to replace: \`${packet.pr.headOid}\`. If the head moved or the target can't be matched, set \`published: false\`, \`aborted\`, and STOP — do not guess.
-2. Push: if the expected tip is an ancestor of HEAD, normal push (\`git push <remote> HEAD:refs/heads/${shq(packet.pr.branch)}\`). If history was rewritten (rebased: ${packet.pr.rebased ? "yes" : "no"}), use an exact lease: \`git push <remote> --force-with-lease=refs/heads/${shq(packet.pr.branch)}:${packet.pr.headOid} HEAD:refs/heads/${shq(packet.pr.branch)}\`. If the lease is rejected, NEVER escalate to bare \`--force\`; set \`published: false\`, \`aborted: "lease rejected"\`, and stop.
+2. Push: if the expected tip is an ancestor of HEAD, normal push (\`git push <remote> HEAD:refs/heads/${shq(packet.pr.branch)}\`). If history was rewritten (rebased: ${packet.pr.rebased ? "yes" : "no"}), use an exact lease: \`git push <remote> --force-with-lease=refs/heads/${shq(packet.pr.branch)}:${shq(packet.pr.headOid)} HEAD:refs/heads/${shq(packet.pr.branch)}\`. If the lease is rejected, NEVER escalate to bare \`--force\`; set \`published: false\`, \`aborted: "lease rejected"\`, and stop.
 3. Re-read unresolved threads after the push. Do not mutate newly-arrived feedback that was not triaged this run — leave it open and call it out.
 4. Per-item hygiene for each disposition:
    - \`review-thread\` items: reply via REST \`pulls/.../comments/<commentId>/replies\`, resolve via GraphQL \`resolveReviewThread\` on \`threadId\`:
@@ -323,8 +279,9 @@ Record each item's outcome with its stable reference (file:line, author, threadI
 // --- Flag parsing (the only logic the script does itself; no shell needed) ---
 // `args` may arrive as a string OR, per the workflow docs, as structured data
 // (array / object). Flatten any shape into the words it contains so `push` /
-// `ping-codex` / `ping-claude` / `ping-copilot` survive `Run /wf-address-review on
-// #38 with push` being delivered as an object — `String(args)` would yield "[object Object]".
+// `ping-codex` / `ping-claude` / `ping-copilot` survive `Run
+// /dev-skills:wf-address-review on #38 with push` being delivered as an
+// object — `String(args)` would yield "[object Object]".
 function flattenArgs(a) {
   if (a == null) return "";
   if (typeof a === "string") return a;
@@ -369,6 +326,9 @@ const pushNegWords = pushWords.replace(/\bpush(?:es|ing)\b/g, "push");
 const noPush =
   /\bno[\s-]*push\b/.test(pushNegWords) ||
   /\b(?:not|never|without|skip|cannot|can't|cant|dont|don't|do not)\b[\s-]*push\b/.test(pushNegWords);
+// `peer-opinions=off` suppresses the nested cycle's cross-harness peer stage;
+// it must arrive through args (the workflow cannot read prose elsewhere).
+const peerOffTok = /\bpeer[\s-]*opinions?\s*=\s*off\b/.test(lower);
 const pingCodexTok = /\bping[\s-]*codex\b/.test(lower);
 const pingClaudeTok = /\bping[\s-]*claude\b/.test(lower);
 const pingCopilotTok = /\bping[\s-]*copilot\b/.test(lower);
@@ -385,6 +345,7 @@ const pingContributing =
   wantPush && (pingContribTok || (!anyNamedPing && !explicitPushToken));
 const flags = {
   push: wantPush,
+  peerOff: peerOffTok,
   pingCodex: wantPush && pingCodexTok,
   pingClaude: wantPush && pingClaudeTok,
   pingCopilot: wantPush && pingCopilotTok,
@@ -417,54 +378,254 @@ if (!packet.items || packet.items.length === 0) {
 }
 
 phase("Fix and verify");
-let dispositions = null;
-let verdict = null;
-let rounds = 0;
-let findings = null;
-
-for (let round = 1; round <= MAX_ROUNDS; round++) {
-  rounds = round;
-
-  // No worktree isolation: the fixer commits on the PR branch in the shared
-  // working tree, so the reviewer below sees those commits directly.
-  const fixResult = await agent(fixPrompt(packet, findings), {
-    label: `fix#${round}`,
-    schema: DISPOSITION_SCHEMA,
-  });
-  if (!fixResult) {
-    return { error: `Fixer failed on round ${round}.`, pr: packet.pr, rounds };
-  }
-  if (!fixResult.clean) {
-    return { error: `Fixer left an unclean worktree on round ${round}; refusing to review a partial state.`, pr: packet.pr, rounds, dispositions: fixResult.dispositions };
-  }
-  dispositions = fixResult;
-
-  // Fresh-eyes reviewer, only after the fixer has committed everything.
-  verdict = await agent(reviewPrompt(packet, dispositions.dispositions), {
-    label: `review#${round}`,
-    schema: VERDICT_SCHEMA,
-  });
-  if (!verdict) {
-    return { error: `Reviewer failed on round ${round}.`, pr: packet.pr, rounds, dispositions: dispositions.dispositions };
-  }
-  if (verdict.pass) break;
-  findings = verdict.issues;
+// The loop lives in the canonical wf-review-cycle, consumed by NESTING: this
+// pipeline runs one cycle with no fan-out, so there is no cross-cycle state a
+// parent would need to own (a fan-out owner embeds the cycle's marked section
+// instead — see wf-address-tasks.js and wf-review-cycle.js "Consumption
+// modes"). No worktree isolation: the cycle's agents share the current
+// checkout on the PR branch, so the reviewer sees the fixer's commits
+// directly. A runtime without child-workflow support cannot run the shared
+// cycle at all — report that as a blocker rather than silently reviewing less.
+if (typeof workflow !== "function") {
+  return {
+    error: "This workflow runtime does not support nested workflows (`workflow()` is unavailable), and wf-address-review consumes the shared review cycle by nesting. Update the runtime, or use the `address-review` skill.",
+    pr: packet.pr,
+  };
+}
+const cycle = await workflow("wf-review-cycle", {
+  worktree: "",
+  branch: packet.pr.workingBranch,
+  base: packet.pr.base,
+  artifactType: "code",
+  peer: flags.peerOff ? "off" : "on",
+  mode: "full",
+  scope: {
+    title: `pr-${packet.pr.number}`,
+    instructions: fixInstructions(packet),
+    reviewInstructions: reviewCriteria(),
+    items: packet.items,
+  },
+});
+if (!cycle) {
+  return { error: "Nested review cycle returned nothing.", pr: packet.pr };
+}
+// The cycle sets `artifactDirAnomalies` only when a later pass tried to move
+// the artifact directory — a warning that the round history may not ALL sit
+// under `artifactDir`. It is for-the-human data of the same class as
+// openQuestions/deviations, so every result that carries the pointer also
+// carries the anomaly record beside it.
+const anomalies = cycle.artifactDirAnomalies
+  ? { artifactDirAnomalies: cycle.artifactDirAnomalies }
+  : {};
+if (cycle.verdict === "error") {
+  return { error: `Review cycle failed: ${cycle.detail}`, pr: packet.pr, rounds: cycle.rounds, dispositions: cycle.workReport, openQuestions: cycle.openQuestions, deviations: cycle.deviations, peerRounds: cycle.peerRounds, artifactDir: cycle.artifactDir, ...anomalies };
 }
 
-const passed = verdict && verdict.pass;
+const passed = cycle.verdict === "pass";
+const rounds = cycle.rounds;
+const workReport = cycle.workReport || [];
+
+// Per-item coverage: the cycle's `workReport` rides through it untyped (its
+// schema cannot require consumer fields), so this consumer enforces its own
+// EXACTLY-one-entry-per-item contract — count the covering entries rather than
+// asking whether any exists, because both directions publish wrongly. Zero:
+// the publisher replies/resolves ONLY what the report names, so the item is
+// silently left untouched while a summary still posts. Two or more: a thread
+// named twice with different kinds (say `actionable-fixed` and `push-back`)
+// draws two contradictory replies, and its resolve is decided by whichever
+// entry the publisher happens to route first. Review-threads match by
+// threadId, standalone items by url — keyed off the GATHERED item's identity,
+// never the report entry's own claimed `type`, so a mistyped entry cannot
+// dodge the check. What type-blindness costs is that ONE entry carrying both a
+// gathered thread's threadId and a gathered standalone's url counts for both
+// items while publication routes it to one; `dispositionDefect` below rejects
+// such an entry from either side, so the two checks together still admit
+// exactly one entry per item.
+const entriesForItem = (item) =>
+  item.type === "review-thread"
+    ? workReport.filter((d) => d && d.threadId && d.threadId === item.threadId)
+    : workReport.filter((d) => d && d.url && d.url === item.url);
+const itemRef = (it) => String(it.threadId || it.url || "(item with no threadId or url)");
+const uncoveredItems = packet.items.filter((it) => entriesForItem(it).length === 0);
+const uncoveredRefs = uncoveredItems.map(itemRef);
+const duplicatedItems = packet.items.filter((it) => entriesForItem(it).length > 1);
+const duplicatedRefs = duplicatedItems.map(
+  (it) => `${itemRef(it)} [${entriesForItem(it).map((d) => String((d && d.kind) || "no kind")).join(", ")}]`
+);
+
+// A gathered review-thread's covering entry must also be PUBLISHABLE as one:
+// the publisher routes on the ENTRY's `type`, REPLIES via its `commentId`
+// (REST `.../comments/<id>/replies`), and RESOLVES via its `threadId` — so
+// the ids must be a gathered thread's actual pair, not merely nonempty. A
+// never-gathered threadId would resolve an unrelated thread by id, and a
+// wrong-but-nonempty commentId would thread the reply under one comment while
+// resolving another thread. The JSON schema cannot make fields conditionally
+// required, and the entry's own claim cannot be trusted for this check, so
+// judge against the gathered items (their identity here, their echoed author
+// fields further down — which `reviewCriteria` also puts to the cycle's
+// reviewer, deliberately: the reviewer catches a mismatch in-cycle where the
+// fixer can still correct it, while this check is the last structural backstop
+// and can only abort publication): flag any entry typed `review-thread` whose
+// threadId is not a gathered thread's or whose commentId is not that thread's
+// top comment, and any entry matching a gathered thread's threadId that is not
+// typed for it.
+//
+// Identity alone is not enough to publish from, though. Every remaining field
+// `fixInstructions` marks mandatory is consumed by a publish side effect, and
+// the untyped `workReport` cannot require any of them: `kind` routes the whole
+// per-item hygiene step (a missing one leaves the publisher guessing which
+// reply to write and whether to resolve), `detail` IS the reply body,
+// `authorIsBot` decides whether a push-back or deferred thread may be
+// auto-resolved, and `author` + `newFinding` decide which bots the
+// contributing-ping set keeps — an absent one silently drops a bot that did
+// bring a new finding. So a schema-valid but incomplete entry has to be
+// rejected here, before anything is pushed, rather than reaching the publisher
+// as an ambiguous instruction. `author` may be the empty string (the contract's
+// value for an unavailable author, e.g. a deleted account); absent is not the
+// same thing and is a violation.
+//
+// The converse is deliberate: `ref` — and a thread entry's own `url`, and a
+// standalone entry's own `threadId` — is NOT required here, because none of
+// them drives a publish action (`ref` only labels an entry in the run's report,
+// where `threadId`/`url`/`kind` already stand in for it), and every extra
+// required field is one more way a finished run aborts at the last step over a
+// field a provider dropped. `fixInstructions` states that split rather than
+// listing every field as equally mandatory, so the two texts agree on which
+// ones publication actually enforces.
+//
+// Two of those fields are ECHOES of the gathered item rather than the fixer's
+// own judgment, so type-checking them is not enough either — the same "judge
+// against the gathered items, never the entry's own claim" rule that governs
+// the ids governs them: `authorIsBot` decides whether a push-back or deferred
+// thread may be auto-resolved, so an entry flipping it to true auto-resolves a
+// HUMAN thread the run was told to leave open (and flipping it to false
+// suppresses the bot resolution), while `author` is what `botKindOf` attributes
+// a round's new findings to, so an altered login re-pings the wrong bot or
+// drops the one that actually contributed. Both are therefore compared against
+// the gathered item for EVERY entry, which is why identity is required in both
+// branches below: a `review-thread` entry's threadId must be a gathered
+// thread's, and a `standalone` entry's url must be a gathered item's. Requiring
+// the url makes the two symmetric — an entry naming a url that was never
+// gathered is untriaged work, and while it has no thread to resolve it still
+// reaches the summary comment and, through `author`/`newFinding`, the default
+// contributing-bot ping set. Neither branch may name a gathered item of the
+// OTHER kind on top of its own, since coverage would then count the entry for
+// both while publication serves one. (The coverage check above runs the other
+// direction, so between them every gathered item has exactly one entry and
+// every entry names exactly one gathered item.) Logins are compared
+// case-insensitively: `botKindOf` already lowercases, so case cannot change
+// any routing, and failing publication over it would be brittle rather than
+// protective.
+const TRIAGE_KINDS = new Set([
+  "actionable-fixed",
+  "already-addressed",
+  "push-back",
+  "deferred-to-task",
+  "ambiguous-skipped",
+]);
+const threadItemById = new Map(
+  packet.items.filter((it) => it.type === "review-thread" && it.threadId).map((it) => [it.threadId, it])
+);
+const standaloneItemByUrl = new Map(
+  packet.items.filter((it) => it.type !== "review-thread" && it.url).map((it) => [it.url, it])
+);
+const sameLogin = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
+// Returns why this entry cannot be published, or "" when it carries the full
+// per-item contract.
+function dispositionDefect(d) {
+  if (!d) return "the entry is empty";
+  // The gathered item this entry speaks for, once identity checks out — the
+  // authority for the echoed fields below. Both branches return a defect when
+  // they cannot name one, so past the routing block it is always set.
+  let gathered;
+  if (d.type === "review-thread") {
+    if (!d.threadId || !d.commentId) return "it is a review-thread entry with no threadId/commentId to resolve and reply through";
+    if (!threadItemById.has(d.threadId)) return "its threadId was never gathered on this PR, so resolving it would close an unrelated thread";
+    gathered = threadItemById.get(d.threadId);
+    // A gathered thread with no commentId is a GATHER defect, not this entry's:
+    // nothing can be replied through it whatever the entry says. Still fatal to
+    // publication, but named as what it is so the re-run fixes the right stage.
+    if (gathered.commentId == null || gathered.commentId === "") return "the gathered thread it names carries no commentId of its own, so no reply can be threaded under it — the gather step, not this entry, is what has to be re-run";
+    if (String(gathered.commentId) !== String(d.commentId)) return "its commentId is not that gathered thread's top comment, so the reply would thread under one comment while another thread is resolved";
+    // Mirror of the standalone branch's gathered-threadId rejection below, and
+    // the reason the coverage check above can stay type-blind: coverage matches
+    // a standalone item on url alone, so an entry typed `review-thread` that
+    // ALSO carries a gathered standalone's url covers two items at once while
+    // publication routes it to the thread only — the standalone would then be
+    // silently left untouched under a posted summary, the exact failure the
+    // coverage check exists to prevent. A thread entry's own `url` is the
+    // thread's permalink and is otherwise unenforced; it just may not be
+    // another gathered item's identity.
+    if (typeof d.url === "string" && standaloneItemByUrl.has(d.url)) return "it is typed review-thread but carries a gathered standalone item's url, so that standalone would read as covered while publication only ever replies to the thread";
+  } else if (d.type === "standalone") {
+    if (typeof d.url !== "string" || !d.url) return "it is a standalone entry with no url, the only stable reference its outcome can be recorded against";
+    if (d.threadId && threadItemById.has(d.threadId)) return "it is typed standalone but names a gathered review thread, so publication would skip the thread's reply/resolve";
+    if (!standaloneItemByUrl.has(d.url)) return "its url was never gathered on this PR, so it is untriaged work that no reviewer disposition covers — it would still be written up in the summary comment and counted toward the contributing-bot pings";
+    gathered = standaloneItemByUrl.get(d.url);
+  } else {
+    return `its type ${JSON.stringify(d.type)} is neither review-thread nor standalone, so publication cannot route it`;
+  }
+  if (!TRIAGE_KINDS.has(d.kind)) return `its kind ${JSON.stringify(d.kind)} is not one of the triage kinds, so publication cannot tell what to reply or whether to resolve`;
+  if (typeof d.detail !== "string" || !d.detail.trim()) return "it carries no detail, which is the body of the reply publication would post";
+  if (typeof d.author !== "string") return "it has no author, so a bot that brought a new finding would silently drop out of the ping set";
+  if (typeof d.authorIsBot !== "boolean") return "it has no authorIsBot, which decides whether a push-back or deferred thread may be auto-resolved";
+  if (typeof d.newFinding !== "boolean") return "it has no newFinding, which decides whether its author bot is re-pinged this round";
+  // `authorIsBot` absent from the gathered item means `false` — the contract's
+  // safe human default, the same one `fixInstructions` tells the fixer to use
+  // — so the comparison holds either way.
+  const gatheredIsBot = gathered.authorIsBot === true;
+  if (d.authorIsBot !== gatheredIsBot) return `its authorIsBot ${d.authorIsBot} contradicts the gathered item's ${gatheredIsBot}, and that flag alone decides whether a push-back or deferred thread is auto-resolved or left open`;
+  // A gathered item carrying no author string at all is a gather defect that
+  // has already broken ping attribution upstream; there is nothing to judge
+  // the echo against, so leave it to the type check above rather than
+  // reporting a defect this entry did not cause.
+  if (typeof gathered.author === "string" && !sameLogin(d.author, gathered.author)) return `its author ${JSON.stringify(d.author)} is not the gathered item's ${JSON.stringify(gathered.author)}, so the re-review ping would follow the wrong login`;
+  return "";
+}
+// Every defective entry, not just the first: a run with several would otherwise
+// need one cycle per defect to surface them all. Compute the defect once per
+// entry and keep it beside its ref — the entry itself can be null/empty, so a
+// `find`-style search on the entry would hand that back as a falsy "no defect".
+const dispDefects = workReport
+  .map((d, i) => ({ ref: String((d && (d.ref || d.threadId || d.url || d.kind)) || `entry #${i + 1}`), defect: dispositionDefect(d) }))
+  .filter((x) => x.defect);
+// Non-empty exactly when at least one entry is unpublishable, so the guards
+// below key off it rather than off any entry.
+const badDispDefect = dispDefects.length ? dispDefects[0].defect : "";
+const badDispRef = dispDefects.length ? dispDefects[0].ref : "";
+const moreDefects = dispDefects.length > 1 ? ` ${dispDefects.length - 1} further entr${dispDefects.length === 2 ? "y is" : "ies are"} unpublishable too — see malformedDispositions.` : "";
 
 if (!flags.push) {
   // Local-only run: make NO PR mutations. The disposition map is the deliverable
-  // so a later "push" turn can replay replies/resolves precisely.
+  // so a later "push" turn can replay replies/resolves precisely — which is why
+  // an uncovered item, a doubly-covered one, or a malformed covering entry
+  // downgrades the verdict to `fixed-local-incomplete`: a replay from this map
+  // would skip, double-post, or misroute those threads, so the result must not
+  // read as a clean local fix.
   phase("Report (no-push)");
   return {
-    status: passed ? "fixed-local" : "review-cap",
+    status: passed ? (uncoveredItems.length || duplicatedItems.length || badDispDefect ? "fixed-local-incomplete" : "fixed-local") : "review-cap",
     pr: packet.pr,
     rounds,
     reviewerPassed: !!passed,
-    dispositions: dispositions.dispositions,
-    proactiveFixes: dispositions.proactiveFixes,
-    outstanding: passed ? null : (verdict ? verdict.issues : null),
+    dispositions: workReport,
+    proactiveFixes: cycle.proactive,
+    findingDispositions: cycle.findingDispositions,
+    openQuestions: cycle.openQuestions,
+    deviations: cycle.deviations,
+    peerRounds: cycle.peerRounds,
+    artifactDir: cycle.artifactDir,
+    ...anomalies,
+    outstanding: passed ? null : cycle.outstanding || null,
+    ...(uncoveredItems.length
+      ? { uncoveredItems: uncoveredRefs, coverageNote: `${uncoveredItems.length} gathered item(s) have no workReport entry; a later publish replay would skip them.` }
+      : {}),
+    ...(duplicatedItems.length
+      ? { duplicatedItems: duplicatedRefs, duplicateNote: `${duplicatedItems.length} gathered item(s) carry more than one workReport entry; a later publish replay would post a reply per entry and resolve on whichever it routed first.` }
+      : {}),
+    ...(badDispDefect
+      ? { malformedDisposition: badDispRef, malformedDispositions: dispDefects, dispositionNote: `Disposition "${badDispRef}" is not publishable: ${badDispDefect}. A later publish replay would misroute or skip it.${moreDefects}` }
+      : {}),
     note: "Local-only run: no push, no replies/resolves, no comment. Re-run without `no-push` to publish with the default contributing-bot pings, or with `push` to publish quietly.",
   };
 }
@@ -476,27 +637,78 @@ if (!passed) {
     status: "review-cap-not-published",
     pr: packet.pr,
     rounds,
-    dispositions: dispositions.dispositions,
-    outstanding: verdict ? verdict.issues : null,
-    note: `Hit the ${MAX_ROUNDS}-round cap without a passing review; nothing was pushed.`,
+    dispositions: workReport,
+    openQuestions: cycle.openQuestions,
+    deviations: cycle.deviations,
+    peerRounds: cycle.peerRounds,
+    artifactDir: cycle.artifactDir,
+    ...anomalies,
+    outstanding: cycle.outstanding || null,
+    note: "Hit the review cycle's round cap without a passing review; nothing was pushed.",
   };
 }
 
-// Guard before any publication side effect: a `review-thread` disposition with
-// no threadId/commentId cannot be replied to or resolved, and the JSON schema
-// cannot make those conditionally required. Catch it here so we never push and
-// then fail mid-publish on a missing id (nothing has been pushed yet on a push
-// run — the publisher does the push — so aborting now leaves the remote clean).
-const badDisp = dispositions.dispositions.find(
-  (d) => d.type === "review-thread" && (!d.threadId || !d.commentId)
-);
-if (badDisp) {
+// Guards before any publication side effect (nothing has been pushed yet on a
+// push run — the publisher does the push — so aborting here leaves the remote
+// clean). First: every gathered item must be covered by a workReport entry, or
+// publication would push and post a summary while silently skipping the
+// uncovered thread(s).
+if (uncoveredItems.length) {
   return {
     status: "publish-aborted-incomplete-dispositions",
     pr: packet.pr,
     rounds,
-    dispositions: dispositions.dispositions,
-    note: `Review-thread disposition "${badDisp.ref || badDisp.kind}" is missing threadId/commentId; nothing was pushed. Re-run so every review thread carries its identifiers.`,
+    dispositions: workReport,
+    openQuestions: cycle.openQuestions,
+    deviations: cycle.deviations,
+    peerRounds: cycle.peerRounds,
+    artifactDir: cycle.artifactDir,
+    ...anomalies,
+    uncoveredItems: uncoveredRefs,
+    note: `${uncoveredItems.length} gathered item(s) have no workReport entry; nothing was pushed. Re-run so every item carries its disposition.`,
+  };
+}
+
+// Second: an item covered MORE than once. The entries disagree by construction
+// (one item, several dispositions), so publication would reply once per entry
+// and resolve the thread on whichever it routed first — a wrong reply left
+// standing beside a right one. There is no safe way to pick between them here;
+// only the cycle that produced them can say which disposition it meant.
+if (duplicatedItems.length) {
+  return {
+    status: "publish-aborted-conflicting-dispositions",
+    pr: packet.pr,
+    rounds,
+    dispositions: workReport,
+    openQuestions: cycle.openQuestions,
+    deviations: cycle.deviations,
+    peerRounds: cycle.peerRounds,
+    artifactDir: cycle.artifactDir,
+    ...anomalies,
+    duplicatedItems: duplicatedRefs,
+    note: `${duplicatedItems.length} gathered item(s) carry more than one workReport entry (listed with the kinds that clash); nothing was pushed. Re-run so every item carries exactly one disposition.`,
+  };
+}
+
+// Third: a covering entry that cannot be published — mistyped, naming a
+// never-gathered thread, missing/mismatching its identifiers, or missing or
+// contradicting a publish-critical field (the `badDispDefect` check above the
+// no-push branch, judged against the gathered items and the per-item report
+// contract).
+if (badDispDefect) {
+  return {
+    status: "publish-aborted-incomplete-dispositions",
+    pr: packet.pr,
+    rounds,
+    dispositions: workReport,
+    openQuestions: cycle.openQuestions,
+    deviations: cycle.deviations,
+    peerRounds: cycle.peerRounds,
+    artifactDir: cycle.artifactDir,
+    ...anomalies,
+    malformedDisposition: badDispRef,
+    malformedDispositions: dispDefects,
+    note: `Disposition "${badDispRef}" is not publishable: ${badDispDefect}. Nothing was pushed.${moreDefects} Re-run so every entry carries its gathered type, identifiers, and echoed author fields plus the full per-item report contract (kind, detail, author, authorIsBot, newFinding).`,
   };
 }
 
@@ -510,8 +722,8 @@ if (badDisp) {
 // the publisher's own git check, which the prompt also gates on a no-op push.
 const knownNoNewCommits =
   !packet.pr.rebased &&
-  !!dispositions.finalSha &&
-  dispositions.finalSha === packet.pr.headOid;
+  !!cycle.finalSha &&
+  cycle.finalSha === packet.pr.headOid;
 
 // `ping-contributing`: re-ping a bot only when it authored at least one NEW
 // finding this round, attributed by the disposition author's login. A bot that
@@ -520,7 +732,7 @@ const knownNoNewCommits =
 // multi-bot review->address loop winds down reviewer-by-reviewer.
 const reviewingBots = new Set();
 const contributingBots = new Set();
-for (const d of dispositions.dispositions) {
+for (const d of workReport) {
   const bot = botKindOf(d && d.author, d && d.authorIsBot);
   if (!bot) continue;
   reviewingBots.add(bot);
@@ -547,7 +759,7 @@ const publishFlags = {
 };
 
 phase("Publish");
-const publishReport = await agent(publishPrompt(packet, dispositions.dispositions, publishFlags), {
+const publishReport = await agent(publishPrompt(packet, workReport, publishFlags), {
   label: "publish",
   schema: PUBLISH_SCHEMA,
 });
@@ -578,8 +790,14 @@ return {
   flags: publishFlags,
   reviewingBots: [...reviewingBots],
   contributingBots: [...contributingBots],
-  dispositions: dispositions.dispositions,
-  proactiveFixes: dispositions.proactiveFixes,
+  dispositions: workReport,
+  proactiveFixes: cycle.proactive,
+  findingDispositions: cycle.findingDispositions,
+  openQuestions: cycle.openQuestions,
+  deviations: cycle.deviations,
+  peerRounds: cycle.peerRounds,
+  artifactDir: cycle.artifactDir,
+  ...anomalies,
   publishReport: publishReport || { published: false, aborted: "publisher returned nothing" },
   note: published
     ? (notes.length ? notes.join(" ") : undefined)

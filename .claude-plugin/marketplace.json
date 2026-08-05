@@ -7,7 +7,7 @@
     {
       "name": "dev-skills",
       "source": "./plugins/dev-skills",
-      "description": "Cross-repo development skills and workflows for task batches, review addressing, stacked PRs, local branch cleanup, worktree setup, shadow-mount declarations, open questions, task authoring, and session retrospectives."
+      "description": "Cross-repo development skills and workflows for task batches, review addressing, the shared review cycle, stacked PRs, local branch cleanup, worktree setup, shadow-mount declarations, open questions, task authoring, and session retrospectives."
     }
   ]
 }

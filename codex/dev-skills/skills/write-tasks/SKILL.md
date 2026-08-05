@@ -5,7 +5,7 @@ description: Turn a plan, design doc, or free-form description into a sequence o
 
 Write one or more actionable task files based on the input.
 
-**Arguments:** `<plan-reference-or-description> [target-folder]`
+**Arguments:** `<plan-reference-or-description> [target-folder] [no-review] [peer-opinions=off]`
 
 ## Primary objective
 
@@ -150,6 +150,12 @@ Encourage:
 - Accessible and responsive UX where relevant
 - Thoughtful implementation instead of quick patchwork
 - Reviewable commits at meaningful milestones
+
+## Review the drafted tasks (the verbiage cycle)
+
+By default, after the task files are drafted and committed, run the `review-cycle` skill on them with artifact type `prose` — a fresh-eyes self-review plus that skill's best-effort cross-harness peer — checking verbiage, scoping, self-containedness, and the repo's documented numbering house style against the sections this skill requires.
+Findings follow the cycle's disposition rule; commit the fixes on the current branch so the reviewed text is what an implementer picks up.
+Suppress the cycle per invocation in prose — `no-review`, or any clear request to skip it — and pass `peer-opinions=off` through to the cycle when given. Skipping is the exception for throwaway drafts, not the default.
 
 ## Output expectations
 
