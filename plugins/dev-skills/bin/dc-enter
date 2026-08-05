@@ -754,7 +754,15 @@ collect_worktree_paths() {
 		die "'git worktree list --porcelain -z' succeeded but reported no worktrees; a repository always has at least its main worktree, so this listing cannot be trusted"
 }
 
-capture_path git -C "$SRC_TOP" rev-parse --git-common-dir ||
+# `--path-format=absolute` because `--git-common-dir` alone answers RELATIVE to
+# the git process's own working directory (`.git`, `../../.git`), while
+# add_repo_path canonicalizes against THIS script's `$PWD` — which `git -C` moved
+# away from. Run from a nested subdirectory the two disagree, and the path added
+# to the refuse-list is one that does not exist. It happens to be harmless here,
+# since a non-linked worktree's common dir always sits under `$SRC_TOP`, which is
+# on the list already; asking for an absolute answer costs nothing and removes
+# the need to know that.
+capture_path git -C "$SRC_TOP" rev-parse --path-format=absolute --git-common-dir ||
 	die "could not resolve this repository's shared git directory"
 add_repo_path "$CAPTURED_PATH"
 add_repo_path "$SRC_GIT_DIR"
