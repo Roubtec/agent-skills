@@ -134,6 +134,39 @@ in_repo() {
 
 g() { git -c user.email=test@invalid -c user.name=Test "$@"; }
 
+# Carry the path dc-enter printed into a named variable, ABORTING the run rather
+# than letting an unusable one flow onward. An empty $OUT is the danger: `git -C
+# ''` is documented to leave the working directory unchanged, so it does not fail
+# — it silently addresses whatever repository the suite is running in, which is
+# THIS one, and the mutating assertions in sections (b), (f), (h) and (j) would
+# then delete refs, force branches, and run `gc --prune=now` against a `.git`
+# shared with every sibling worktree. `dirname ""` is the same trap one step on:
+# it yields ".", which is how an empty path becomes `rm -rf .`. Both are the
+# incident's own shape — an unchecked path from a step that did not do what the
+# script assumed — so a suite about destructive-command safety fails closed here
+# instead of asserting and carrying on.
+# Every path this suite CARRIES FORWARD goes through here. The few places that
+# use "$OUT" inline, in sections (c) and (d), are single read-only comparisons:
+# an empty path there can only make an assertion fail, never mutate or remove
+# anything.
+require_clone() {
+	local var="$1" label="$2"
+	case "$OUT" in
+	"$WORK"/*) ;;
+	*)
+		printf 'test-dc-helpers: %s: expected a clone path under %q, got %q — aborting before it reaches git -C or rm\n' \
+			"$label" "$WORK" "$OUT" >&2
+		exit 1
+		;;
+	esac
+	[ -d "$OUT/.git" ] || {
+		printf 'test-dc-helpers: %s: %q is not a clone — aborting before it reaches git -C or rm\n' \
+			"$label" "$OUT" >&2
+		exit 1
+	}
+	printf -v "$var" '%s' "$OUT"
+}
+
 # Inode number of a path, GNU stat first and BSD stat as the fallback.
 inode_of() {
 	local path="$1"
@@ -190,7 +223,7 @@ case "$OUT" in
 *) assert_eq "a: stdout is an absolute path" "$OUT" "<absolute path>" ;;
 esac
 assert_eq "a: stdout is exactly one line" "$(wc -l <<<"$OUT")" 1
-CLONE_A="$OUT"
+require_clone CLONE_A "a: probe"
 assert_true "a: clone is a git repository" "$([ -d "$CLONE_A/.git" ] && echo true || echo false)"
 assert_true "a: clone is outside the source" "$(case "$CLONE_A" in "$SRC1"/*) echo false ;; *) echo true ;; esac)"
 assert_eq "a: clone tree is clean" "$(git -C "$CLONE_A" status --porcelain)" ""
@@ -260,7 +293,7 @@ assert_ne "c: fixture worktree HEAD differs from the main worktree's" \
 	"$(git -C "$WT2" rev-parse HEAD)" "$(git -C "$SRC2" rev-parse HEAD)"
 in_repo "$WT2" "$DC_ENTER" fromwt
 assert_eq "c: dc-enter from a linked worktree exits 0" "$RC" 0
-CLONE_C="$OUT"
+require_clone CLONE_C "c: fromwt"
 assert_eq "c: default ref is the INVOKING worktree's HEAD" \
 	"$(git -C "$CLONE_C" rev-parse HEAD)" "$(git -C "$WT2" rev-parse HEAD)"
 assert_eq "c: default ref keeps the invoking worktree's branch" \
@@ -328,7 +361,7 @@ echo "== (d) the ref namespace is an exact mirror =="
 git -C "$SRC2" symbolic-ref refs/dangling/sym refs/heads/does-not-exist
 in_repo "$SRC2" "$DC_ENTER" mirror
 assert_eq "d: exits 0" "$RC" 0
-CLONE_D="$OUT"
+require_clone CLONE_D "d: mirror"
 assert_eq "d: every ref mirrored at its original name" "$(refs_of "$CLONE_D")" "$(refs_of "$SRC2")"
 assert_contains "d: a non-standard namespace is present" "$(refs_of "$CLONE_D")" "refs/pruned/reserved"
 assert_contains "d: pre-rebase reservations are present" "$(refs_of "$CLONE_D")" "refs/pre-rebase/main"
@@ -408,7 +441,8 @@ assert_eq "e: symlinked-root refusal is silent on stdout" "$OUT" ""
 # clone is placed — the root check above is lexical, so resolving this component
 # is what makes it binding.
 in_repo "$SRC3" env "DC_ROOT=$WORK/e/root" "$DC_ENTER" scoped
-SCOPE_E="$(dirname "$(dirname "$OUT")")"
+require_clone CLONE_E "e: scoped"
+SCOPE_E="$(dirname "$(dirname "$CLONE_E")")"
 in_repo "$SRC3" env "DC_ROOT=$WORK/e/root" "$DC_REMOVE" scoped
 rm -rf "$SCOPE_E"
 mkdir -p "$SRC3/decoy"
@@ -509,7 +543,7 @@ mkdir -p "$WORK/f"
 make_source "$SRC4"
 in_repo "$SRC4" "$DC_ENTER" reuse
 assert_eq "f: first call exits 0" "$RC" 0
-CLONE_F="$OUT"
+require_clone CLONE_F "f: reuse"
 # Wreck it the way an experiment would: delete refs, collect objects, dirty and
 # litter the tree, and remove a tracked file.
 git -C "$CLONE_F" update-ref -d refs/pruned/reserved
@@ -549,7 +583,7 @@ assert_eq "f: re-derived clone is a repository again" \
 # carrying the right magic but recording another clone path, or another source
 # repository, is not this invocation's to discard even with --replace.
 in_repo "$SRC4" "$DC_ENTER" mismatched
-CLONE_MM="$OUT"
+require_clone CLONE_MM "f: mismatched"
 SESSION_MM="$(dirname "$CLONE_MM")"
 printf 'precious\n' >"$SESSION_MM/precious.txt"
 printf 'dc-clone-v2\0helper=dc-enter\0clone=/somewhere/else/repo\0source=%s\0' "$SRC4" \
@@ -593,16 +627,16 @@ rm -f "$SCOPE_DIR_F/linked"
 
 echo "== (g) per-agent and per-worktree scoping =="
 in_repo "$SRC4" env "DC_AGENT=agent-one" "$DC_ENTER" shared
-PATH_ONE="$OUT"
+require_clone PATH_ONE "g: shared/agent-one"
 in_repo "$SRC4" env "DC_AGENT=agent-two" "$DC_ENTER" shared
-PATH_TWO="$OUT"
+require_clone PATH_TWO "g: shared/agent-two"
 assert_ne "g: two agents do not collide on one slug" "$PATH_ONE" "$PATH_TWO"
 assert_true "g: both agents' clones exist at once" \
 	"$([ -d "$PATH_ONE/.git" ] && [ -d "$PATH_TWO/.git" ] && echo true || echo false)"
 in_repo "$WORK/f/src-wt" "$DC_ENTER" shared
 assert_ne "g: two worktrees of one repository do not collide on a slug" "$OUT" "$PATH_ONE"
 in_repo "$SRC4" "$DC_ENTER" stable
-FIRST_STABLE="$OUT"
+require_clone FIRST_STABLE "g: stable"
 in_repo "$SRC4" "$DC_REMOVE" stable
 in_repo "$SRC4" "$DC_ENTER" stable
 assert_eq "g: the same agent, worktree, and slug resolve to one path" "$OUT" "$FIRST_STABLE"
@@ -612,7 +646,7 @@ assert_eq "g: the same agent, worktree, and slug resolve to one path" "$OUT" "$F
 # is the case a per-agent path component alone cannot separate.
 in_repo "$SRC4" env "DC_AGENT=" "CONTAINER_NAME=one-container" "$DC_ENTER" sibling
 assert_eq "g: the first sibling gets a clone" "$RC" 0
-SIBLING_ONE="$OUT"
+require_clone SIBLING_ONE "g: sibling"
 git -C "$SIBLING_ONE" update-ref refs/heads/mid-verification HEAD
 in_repo "$SRC4" env "DC_AGENT=" "CONTAINER_NAME=one-container" "$DC_ENTER" sibling
 assert_ne "g: an indistinguishable sibling is refused, not served" "$RC" 0
@@ -630,7 +664,7 @@ assert_ne "g: ... at a different path" "$OUT" "$SIBLING_ONE"
 
 echo "== (h) dc-remove =="
 in_repo "$SRC4" "$DC_ENTER" doomed
-CLONE_H="$OUT"
+require_clone CLONE_H "h: doomed"
 # Dirty in every way dc-remove promises not to care about.
 printf 'dirty\n' >"$CLONE_H/file.txt"
 printf 'litter\n' >"$CLONE_H/untracked.txt"
@@ -660,7 +694,7 @@ assert_eq "h: the foreign directory survives" "$(cat "$FOREIGN_DIR/keep.txt")" "
 # A marker whose recorded clone path is not the one this invocation derived is
 # bookkeeping that does not match, so it is refused.
 in_repo "$SRC4" "$DC_ENTER" mismarked
-CLONE_MIS="$OUT"
+require_clone CLONE_MIS "h: mismarked"
 MIS_SESSION="$(dirname "$CLONE_MIS")"
 printf 'dc-clone-v2\0clone=/somewhere/else/repo\0source=%s\0' "$SRC4" >"$MIS_SESSION/dc-clone-meta"
 in_repo "$SRC4" "$DC_REMOVE" mismarked
@@ -670,7 +704,7 @@ assert_true "h: the mis-marked directory survives" "$([ -d "$CLONE_MIS" ] && ech
 # The two helpers' path derivations agree: dc-remove removes exactly the path
 # dc-enter printed.
 in_repo "$SRC4" "$DC_ENTER" pinned
-CLONE_PINNED="$OUT"
+require_clone CLONE_PINNED "h: pinned"
 in_repo "$SRC4" "$DC_REMOVE" pinned
 assert_eq "h: dc-remove removes what dc-enter printed" "$RC" 0
 assert_true "h: dc-enter's printed path is gone" "$([ ! -e "$CLONE_PINNED" ] && echo true || echo false)"
@@ -733,12 +767,12 @@ LOOSE_PATH=".git/objects/${LOOSE_REL:0:2}/${LOOSE_REL:2}"
 assert_true "j: fixture has the commit as a loose object" \
 	"$([ -f "$SRC6/$LOOSE_PATH" ] && echo true || echo false)"
 in_repo "$SRC6" "$DC_ENTER" nolinks
-CLONE_J="$OUT"
+require_clone CLONE_J "j: nolinks"
 SRC_INODE="$(inode_of "$SRC6/$LOOSE_PATH")"
 CLONE_INODE="$(inode_of "$CLONE_J/$LOOSE_PATH")"
 assert_ne "j: objects are copied, not hardlinked, by default" "$SRC_INODE" "$CLONE_INODE"
 in_repo "$SRC6" env "DC_HARDLINKS=1" "$DC_ENTER" links
-CLONE_JL="$OUT"
+require_clone CLONE_JL "j: links"
 LINK_INODE="$(inode_of "$CLONE_JL/$LOOSE_PATH")"
 assert_eq "j: DC_HARDLINKS=1 takes the hardlinked fast path" "$LINK_INODE" "$SRC_INODE"
 # The isolation guarantee holds on the hardlinked path too.
@@ -763,7 +797,7 @@ in_repo "$SRC7" env "DC_ROOT=$WORK/k//root" "$DC_ENTER" seps
 assert_eq "k: a doubled separator in the root is accepted" "$RC" 0
 assert_contains "k: ... and collapses to a single one" "$OUT" "$WORK/k/root/"
 assert_true "k: ... with the clone really there" "$([ -d "$OUT/.git" ] && echo true || echo false)"
-CLONE_K="$OUT"
+require_clone CLONE_K "k: seps"
 in_repo "$SRC7" env "DC_ROOT=$WORK/k///root/" "$DC_REMOVE" seps
 assert_eq "k: dc-remove collapses separators identically" "$RC" 0
 assert_true "k: ... and removed the clone dc-enter printed" "$([ ! -e "$CLONE_K" ] && echo true || echo false)"
@@ -840,7 +874,7 @@ make_source "$NL_SRC"
 in_repo "$NL_SRC" env "DC_ROOT=$WORK/k/root" "$DC_ENTER" nlsource
 assert_eq "k: a source path containing a newline is fine" "$RC" 0
 assert_eq "k: ... and mirrors exactly" "$(refs_of "$OUT")" "$(refs_of "$NL_SRC")"
-CLONE_NL="$OUT"
+require_clone CLONE_NL "k: nlsource"
 in_repo "$NL_SRC" env "DC_ROOT=$WORK/k/root" "$DC_REMOVE" nlsource
 assert_eq "k: ... and dc-remove parses its marker and removes it" "$RC" 0
 assert_true "k: ... leaving nothing" "$([ ! -e "$CLONE_NL" ] && echo true || echo false)"
@@ -859,7 +893,7 @@ g -C "$DECOY_SRC" commit -q --allow-empty -m "decoy only"
 g -C "$DECOY_SRC" branch -q decoy-only
 in_repo "$TRAIL_SRC" env "DC_ROOT=$WORK/k/root" "$DC_ENTER" trailsrc
 assert_eq "k: a source path ENDING in a newline is fine" "$RC" 0
-CLONE_TRAIL="$OUT"
+require_clone CLONE_TRAIL "k: trailsrc"
 assert_eq "k: ... and mirrors that source exactly" "$(refs_of "$CLONE_TRAIL")" "$(refs_of "$TRAIL_SRC")"
 assert_eq "k: ... at that source's HEAD" \
 	"$(git -C "$CLONE_TRAIL" rev-parse HEAD)" "$(git -C "$TRAIL_SRC" rev-parse HEAD)"
