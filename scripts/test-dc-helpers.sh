@@ -25,7 +25,8 @@ set -euo pipefail
 #       takes a commit where nothing has configured an identity
 #   (c) the <ref> interface: default is the INVOKING worktree's HEAD (not the
 #       main worktree's), branch/tag/sha/rev forms, a short name that is both a
-#       branch and a tag resolving to the branch, and refusal on a bad ref
+#       branch and a tag resolving to the branch, a qualified ref still winning
+#       over a branch named literally like it, and refusal on a bad ref
 #   (d) the ref namespace: an exact mirror of the source's refs, demonstrated on
 #       a source carrying refs outside refs/heads/ and refs/tags/ — including one
 #       hiding a namespace from upload-pack, which a refspec fetch would drop
@@ -409,6 +410,33 @@ assert_eq "c: the qualified tag form still detaches" \
 	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "DETACHED"
 assert_eq "c: the qualified tag form is at the tag's commit" \
 	"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$SRC2" rev-parse "refs/tags/ambig^{commit}")"
+# ... including in the pathological repository where a LOCAL BRANCH is named
+# literally `refs/tags/ambig` or `tags/ambig`. Both are legal branch names, and
+# both make the qualified form the caller wrote ALSO look like the short name of
+# a branch. git resolves the caller's string first as a full ref name and then as
+# `refs/<name>`, reaching the tag either way, so the helper must too: checking the
+# branch out instead would verify a commit the caller's own ref does not point at
+# — the wrong-commit conclusion the <ref> interface exists to prevent — and no
+# refusal or warning would say so.
+g -C "$SRC2" branch -q "refs/tags/ambig" main~1
+g -C "$SRC2" branch -q "tags/ambig" main~1
+assert_ne "c: the same-named branches sit at a different commit from the tag" \
+	"$(git -C "$SRC2" rev-parse "refs/heads/refs/tags/ambig")" \
+	"$(git -C "$SRC2" rev-parse "refs/tags/ambig^{commit}")"
+in_repo "$WT2" "$DC_ENTER" qualtagbranch refs/tags/ambig
+assert_eq "c: a branch named like the qualified tag exits 0" "$RC" 0
+assert_eq "c: a branch named like the qualified tag does not win: HEAD detaches" \
+	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "DETACHED"
+assert_eq "c: ... at the tag's commit, not that branch's" \
+	"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$SRC2" rev-parse "refs/tags/ambig^{commit}")"
+in_repo "$WT2" "$DC_ENTER" halfqualbranch tags/ambig
+assert_eq "c: a branch named like the refs/-relative tag exits 0" "$RC" 0
+assert_eq "c: a branch named like the refs/-relative tag does not win: HEAD detaches" \
+	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "DETACHED"
+assert_eq "c: ... also at the tag's commit" \
+	"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$SRC2" rev-parse "refs/tags/ambig^{commit}")"
+g -C "$SRC2" branch -q -D "refs/tags/ambig"
+g -C "$SRC2" branch -q -D "tags/ambig"
 in_repo "$WT2" "$DC_ENTER" byrev "HEAD~1"
 assert_eq "c: explicit revision exits 0" "$RC" 0
 assert_eq "c: explicit revision resolves in the INVOKING worktree" \

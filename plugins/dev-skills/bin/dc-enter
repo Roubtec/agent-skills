@@ -54,12 +54,18 @@
 # (`refs/heads/main`) counts as naming that branch — it resolves as a commit like
 # any other revision, so without that normalization it would silently detach
 # despite naming a branch. No other qualified form is normalized: `heads/main`,
-# a tag, and a remote-tracking ref all detach. A short name that is BOTH a local
-# branch and a tag resolves to the BRANCH: gitrevisions disambiguates the other
-# way (`refs/tags/<name>` is tried before `refs/heads/<name>`), so the commit is
-# looked up through the branch's full ref name rather than through the bare
-# name, and `dc-enter probe release` verifies the branch the caller asked for
-# instead of a same-named tag. The default is the invoking worktree's own HEAD —
+# a tag, and a remote-tracking ref all detach — and they detach even in the
+# pathological repository that carries a local branch named literally
+# `refs/tags/v1` or `tags/v1`, because a string git's own rules already resolve
+# to an existing ref is that ref rather than a short branch name to look up.
+# A SHORT name that is both a local branch and a tag resolves to the BRANCH:
+# gitrevisions disambiguates the other way (`refs/tags/<name>` is tried before
+# `refs/heads/<name>`), so the commit is looked up through the branch's full ref
+# name rather than through the bare name, and `dc-enter probe release` verifies
+# the branch the caller asked for instead of a same-named tag. That preference
+# is the one deliberate departure from git's resolution, and it is confined to
+# the short form.
+# The default is the invoking worktree's own HEAD —
 # a branch checkout when HEAD is on a branch, detached when it is detached — NOT
 # the repository's or the main worktree's HEAD. That distinction is
 # load-bearing: `git rev-parse --git-common-dir` resolves to the
@@ -457,7 +463,24 @@ else
 	# detach, contradicting the documented "names a local branch" behavior.
 	case "$REF" in
 	refs/heads/*) BRANCH_CANDIDATE="${REF#refs/heads/}" ;;
-	*) BRANCH_CANDIDATE="$REF" ;;
+	*)
+		BRANCH_CANDIDATE="$REF"
+		# ... but only where the caller's string is a SHORT name in the first
+		# place. git's own rev-parse rules try it as a full ref name, then as
+		# `refs/<name>`, BEFORE they reach `refs/heads/<name>`; where either of
+		# those already exists the caller named THAT ref. Without this, a
+		# repository carrying a local branch literally named `refs/tags/v1` — a
+		# legal branch name — would answer `dc-enter probe refs/tags/v1` with that
+		# branch checked out, while `git rev-parse refs/tags/v1` in the same
+		# repository names the tag: the helper would verify a commit the caller's
+		# own ref does not point at. The branch-over-tag preference below is
+		# deliberate and unaffected, because it applies to the short form, which is
+		# the one place gitrevisions' tags-first rule surprises the caller.
+		if git show-ref --verify --quiet -- "$REF" 2>/dev/null ||
+			git show-ref --verify --quiet -- "refs/$REF" 2>/dev/null; then
+			BRANCH_CANDIDATE=""
+		fi
+		;;
 	esac
 	if [ -n "$BRANCH_CANDIDATE" ] &&
 		git show-ref --verify --quiet "refs/heads/$BRANCH_CANDIDATE" 2>/dev/null; then
