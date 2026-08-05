@@ -67,8 +67,19 @@ trap 'rm -rf "$WORK"' EXIT
 
 # Hermetic git: no user or system config leaks in, so the helpers' behavior does
 # not depend on the machine running the suite.
+# A fresh HOME does not achieve that on its own. `GIT_CONFIG_GLOBAL` and
+# `XDG_CONFIG_HOME` both redirect git's "global" config away from $HOME, and the
+# GIT_AUTHOR_*/GIT_COMMITTER_*/EMAIL variables supply a committer identity with
+# no config file involved at all. A development container setting any of them —
+# powbox sets GIT_CONFIG_GLOBAL — would hand this suite the identity a clean CI
+# runner does not have, so a fixture step that forgot the `g` wrapper below would
+# pass locally and exit 128 in CI. Clearing them makes a local run reproduce the
+# runner.
 export HOME="$WORK/home"
 export GIT_CONFIG_NOSYSTEM=1
+unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_COUNT
+unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL EMAIL
+export XDG_CONFIG_HOME="$WORK/home/.config"
 mkdir -p "$HOME"
 export DC_AGENT=testagent
 unset DC_ROOT DC_HARDLINKS
@@ -202,7 +213,9 @@ make_source() {
 	git -C "$dir" update-ref refs/pruned/reserved HEAD
 	g -C "$dir" reset -q --hard HEAD~1
 	git -C "$dir" update-ref refs/pre-rebase/main HEAD
-	git -C "$dir" notes add -f -m "a note" HEAD >/dev/null 2>&1
+	# Through the `g` wrapper: `notes add` writes a notes COMMIT, so it needs an
+	# identity the hermetic environment above deliberately withholds.
+	g -C "$dir" notes add -f -m "a note" HEAD >/dev/null 2>&1
 	printf 'stashed\n' >"$dir/file.txt"
 	g -C "$dir" stash -q
 	g -C "$dir" branch -q other HEAD~1
