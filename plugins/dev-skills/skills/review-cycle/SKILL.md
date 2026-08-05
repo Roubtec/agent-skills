@@ -94,7 +94,7 @@ The cycle reviews more than code; the invoker names the type and the Reviewer an
 ## Artifacts and hygiene
 
 Every cycle uses its own unique artifact directory outside the worktree — suffix the cycle slug, reduced first to a single path segment, or create it with `mktemp -d` — never a fixed shared filename: parallel cycles share one scratchpad, and fixed names have crossed review streams between concurrent runs before.
-A slug is routinely a branch name, and the `/` in one turns the suffix into a parent directory that does not exist, which `mktemp` refuses outright.
+A slug is routinely a branch name, and the `/` in one splits the suffix into a parent directory: `mktemp` refuses that outright, and a `mkdir -p` path takes it silently, nesting the round history where nobody will look for it.
 The full round history (reviewer reports, peer output, fixer packets) lives there; the cycle's result carries the pointer, not the prose.
 
 ## Running it as a drop-in

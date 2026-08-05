@@ -5,7 +5,7 @@
 The review cycle accumulates escalated open questions by unconditional append:
 
 ```js
-// plugins/dev-skills/workflows/wf-review-cycle.js:682
+// plugins/dev-skills/workflows/wf-review-cycle.js:702
 for (const q of fix.openQuestions || []) openQuestions.push(q);
 ```
 
@@ -44,29 +44,29 @@ Out of scope:
 
 Every line-number citation in this file, in this section and outside it alike, is as of task 014 (PR #39), which introduces the marked section they point into; re-derive them before editing if the section has moved since.
 
-**Why supersession cannot be decided from the data the cycle has today.** It needs a link from a later disposition back to the question an earlier pass raised. The cycle has exactly one such link, and it points the wrong way: a disposition carries `questionId` only when its own `disposition` is `escalated` (`plugins/dev-skills/workflows/wf-review-cycle.js:212`), naming the question it *creates*.
+**Why supersession cannot be decided from the data the cycle has today.** It needs a link from a later disposition back to the question an earlier pass raised. The cycle has exactly one such link, and it points the wrong way: a disposition carries `questionId` only when its own `disposition` is `escalated` (`plugins/dev-skills/workflows/wf-review-cycle.js:232`), naming the question it *creates*.
 
 Follow the failing path through the existing structure:
 
-1. Pass N escalates finding `F` and raises question `q1`. Because `escalated` + a known `questionId` is a valid disposition (`wf-review-cycle.js:567-570`), `F` is covered and is **not** carried forward.
+1. Pass N escalates finding `F` and raises question `q1`. Because `escalated` + a known `questionId` is a valid disposition (`wf-review-cycle.js:587-590`), `F` is covered and is **not** carried forward.
 2. The next reviewer rejects the escalation. It comes back as a **new** finding with a **new** round-scoped id — not as `F`.
 3. Pass N+1 disposes that new finding `fixed`. Nothing in that disposition names `q1`.
 
-So `q1` is stale and no field says so. Matching the two findings by text is not an option either — `cycleUndisposedFindings` deliberately matches by id, never by text ("paraphrase-proof where text matching is not", `wf-review-cycle.js:545-546`), and reintroducing text matching to solve this would undo that.
+So `q1` is stale and no field says so. Matching the two findings by text is not an option either — `cycleUndisposedFindings` deliberately matches by id, never by text ("paraphrase-proof where text matching is not", `wf-review-cycle.js:565-566`), and reintroducing text matching to solve this would undo that.
 
 Closing the loop therefore means extending the pinned wire format, which is what makes this its own change rather than a line in PR #39:
 
-- `CYCLE_FIX_SCHEMA`'s disposition item needs a way to name questions a `fixed`/`declined` disposition retires (`wf-review-cycle.js:204-215`).
-- The fixer prompt must show the currently-open questions, or the fixer has no ids to name — `cycleFixPrompt` (`wf-review-cycle.js:339`) does not pass them today.
-- The rule belongs in the fixer's `## Rules` block (`wf-review-cycle.js:363-370`) beside the existing "Every `escalated` disposition gets an `openQuestions` entry" line at `wf-review-cycle.js:368`.
-- Every edit has to be mirrored byte-for-byte into `wf-address-tasks.js`'s embedded copy of `review-cycle-core` (the same append sits at `wf-address-tasks.js:1029`).
+- `CYCLE_FIX_SCHEMA`'s disposition item needs a way to name questions a `fixed`/`declined` disposition retires (`wf-review-cycle.js:224-235`).
+- The fixer prompt must show the currently-open questions, or the fixer has no ids to name — `cycleFixPrompt` (`wf-review-cycle.js:359`) does not pass them today.
+- The rule belongs in the fixer's `## Rules` block (`wf-review-cycle.js:383-390`) beside the existing "Every `escalated` disposition gets an `openQuestions` entry" line at `wf-review-cycle.js:388`.
+- Every edit has to be mirrored byte-for-byte into `wf-address-tasks.js`'s embedded copy of `review-cycle-core` (the same append sits at `wf-address-tasks.js:1049`).
 - The wire format is documented prose in **both** skill mirrors — `plugins/dev-skills/skills/review-cycle/SKILL.md:78-84` and `codex/dev-skills/skills/review-cycle/SKILL.md:129-135` — which must move in lockstep.
 
 That is a pinned-contract change spanning both workflow scripts and both `review-cycle` skill mirrors, with `resolve-open-questions` to check as a consumer, landing in a PR whose subject is the extraction itself.
 
 ## Target files or areas
 
-- `plugins/dev-skills/workflows/wf-review-cycle.js` — the canonical `review-cycle-core` section: `CYCLE_FIX_SCHEMA`, `cycleFixPrompt`, `cycleUndisposedFindings`, the `knownQuestionIds` construction (`wf-review-cycle.js:699`), and the append itself.
+- `plugins/dev-skills/workflows/wf-review-cycle.js` — the canonical `review-cycle-core` section: `CYCLE_FIX_SCHEMA`, `cycleFixPrompt`, `cycleUndisposedFindings`, the `knownQuestionIds` construction (`wf-review-cycle.js:719`), and the append itself.
 - `plugins/dev-skills/workflows/wf-address-tasks.js` — the synthesized copy of that section, which must stay byte-identical to the canonical one.
 - `plugins/dev-skills/skills/review-cycle/SKILL.md` and `codex/dev-skills/skills/review-cycle/SKILL.md` — the wire-format prose mirrors.
 - `plugins/dev-skills/skills/resolve-open-questions/SKILL.md` — the consumer; check whether it needs a line about skipping retired questions.
@@ -79,7 +79,7 @@ Reusing `questionId` (widening its description beyond `escalated`) and adding a 
 
 **Mark vs. remove** is a genuine open decision, not a detail to settle silently. Marking (e.g. a `supersededBy`/`superseded` field on the question) preserves the round history and lets `resolve-open-questions` skip it knowingly; removing keeps the result lean and matches how the cycle already treats its result as lean-with-bulk-behind-`artifactDir`. Removal is the weaker choice if anything downstream still needs to see that the question existed — the artifact directory keeps the full history either way. State the reasoning for whichever is chosen.
 
-Guard the retirement structurally: a retirement naming an unknown question id must not silently no-op. Treat it like the existing `stray:` disposition-error handling (`wf-review-cycle.js:558-562`) rather than ignoring it.
+Guard the retirement structurally: a retirement naming an unknown question id must not silently no-op. Treat it like the existing `stray:` disposition-error handling (`wf-review-cycle.js:578-582`) rather than ignoring it.
 
 Keep `knownQuestionIds` correct under the new rule: a question retired in pass N must not make a later `escalated` disposition that names it read as valid.
 
