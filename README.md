@@ -72,6 +72,8 @@ Run `bash scripts/test-gh-review-threads.sh` after any behavior change to `plugi
 
 Run `node scripts/test-checkout-cleanliness-report.mjs` after changing the batch workflow's checkout-report behavior.
 
+Parse-check any changed dynamic workflow under `plugins/dev-skills/workflows/`. That check is not a `scripts/` suite: the command, and what a pass does and does not establish, live in `plugins/dev-skills/workflows/README.md`'s Validation section rather than here.
+
 ## Consumers
 
 | Consumer                        | Channel                                                               |
