@@ -21,11 +21,22 @@
 #   running `gc`/`repack`/`prune` inside the clone CANNOT change the invoking
 #   repository's refs or its reachable objects.
 #   The clone is never made with `--shared` or `--reference`, and no option
-#   exposes them — those genuinely do couple the object stores.
+#   exposes them — those genuinely do couple the object stores. It is made WITH
+#   `--dissociate`, which is what keeps that true when the SOURCE is itself a
+#   borrowing clone: a local clone copies the source's `objects/info/alternates`
+#   verbatim, and without dissociation the clone would go on borrowing from the
+#   same third repository.
 #   The remote `git clone` created, and the upstream configuration pointing at
-#   it, are both removed after the clone is populated, so a stray `git push` in
-#   the clone has nowhere to go. (Remote-tracking refs survive as ordinary refs;
-#   see the ref-namespace note below.)
+#   it, are both removed after the clone is populated, and the clone's MERGED
+#   remote list is then checked to be empty — a remote the caller's own global or
+#   system configuration defines survives a `--local` removal, and this helper
+#   refuses rather than hand back a clone whose stray `git push` still has
+#   somewhere to go. (Remote-tracking refs survive as ordinary refs; see the
+#   ref-namespace note below.)
+#   The caller's repository-targeting git environment is dropped once the source
+#   has been chosen. `GIT_DIR` and its relatives override `git -C`, so an
+#   inherited one would aim the clone's own ref surgery at the source; see the
+#   sanitize block below.
 #   Object hardlinking would not violate the guarantee either way — git objects
 #   are immutable and content-addressed, created with O_EXCL and never modified
 #   in place, and `gc` only unlinks the clone's own directory entries — but this
@@ -60,7 +71,8 @@
 # to an existing ref is that ref rather than a short branch name to look up.
 # A `$GIT_DIR` PSEUDO-REF is the same story one rule earlier: git reaches
 # `ORIG_HEAD`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD` and `BISECT_HEAD`
-# in `$GIT_DIR` before `refs/heads/<name>`, so in a repository stopped mid-rebase
+# in `$GIT_DIR` before `refs/heads/<name>` (detected across the whole supported
+# git range — see source_pseudo_ref_exists), so in a repository stopped mid-rebase
 # or mid-merge that also carries a branch of that name, `dc-enter probe ORIG_HEAD`
 # detaches at the pseudo-ref — the commit the caller's own `git rev-parse` names —
 # rather than checking the branch out. Pseudo-refs are per-worktree, and it is
@@ -462,11 +474,80 @@ SRC_TOP="$CAPTURED_PATH"
 canon "$SRC_TOP" || die "could not canonicalize the invoking worktree path"
 SRC_TOP="$CANON_RESULT"
 
+# --- Drop the caller's repository-targeting environment -----------------------
+# The source has been chosen; from here on every git command either targets the
+# CLONE or names the source explicitly with `git -C "$SRC_TOP"`. An inherited
+# `GIT_DIR` (or `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, …)
+# would override both, and `-C` does NOT win over it: with `GIT_DIR` exported at
+# the invoking repository, `git -C "$CLONE_DIR" update-ref --stdin` runs the
+# ref-clearing transaction below against the SOURCE and deletes every ref it
+# has. That is this helper's central promise exactly inverted, so the variables
+# go rather than being overridden at each call site — the same conclusion, for
+# the same reason, that `unset GIT_CONFIG` reaches at the top of the file.
+# `git rev-parse --local-env-vars` is git's OWN list of the variables that pin an
+# invocation to one specific repository, and the same set git clears before it
+# runs a command in another repository — which is precisely what this helper
+# does. It is therefore asked rather than hardcoded, and an unanswerable or
+# empty list stops the run instead of leaving the environment quietly in place.
+# Choosing the source FIRST is deliberate: a caller who pointed `GIT_DIR` at the
+# repository they meant to clone still gets that repository cloned. What they no
+# longer get is its refs rewritten.
+LOCAL_ENV_VARS="$(git rev-parse --local-env-vars)" ||
+	die "could not ask git which environment variables target a specific repository ('git rev-parse --local-env-vars')"
+[ -n "$LOCAL_ENV_VARS" ] ||
+	die "'git rev-parse --local-env-vars' named no variables; refusing to run the clone's git commands under an environment that may still point at the invoking repository"
+# `GIT_CONFIG_COUNT`/`GIT_CONFIG_PARAMETERS` are on that list, and dropping them
+# is right for the helper's own commands — but they carry command-scope config,
+# which is part of what a caller's later `git push` inside the clone will see. So
+# their values are kept for exactly one read: the surviving-remote check below,
+# which has to answer "what remotes will this clone actually have?" rather than
+# "what remotes does it have with the caller's environment taken away?".
+SAVED_CONFIG_ENV=()
+[ -z "${GIT_CONFIG_COUNT+x}" ] || SAVED_CONFIG_ENV+=("GIT_CONFIG_COUNT=$GIT_CONFIG_COUNT")
+[ -z "${GIT_CONFIG_PARAMETERS+x}" ] || SAVED_CONFIG_ENV+=("GIT_CONFIG_PARAMETERS=$GIT_CONFIG_PARAMETERS")
+while IFS= read -r env_var; do
+	[ -n "$env_var" ] || continue
+	unset "$env_var"
+done <<<"$LOCAL_ENV_VARS"
+
+# This worktree's own git directory, resolved once now that the environment can
+# no longer redirect it. Pseudo-refs live here (they are per-worktree, so this is
+# the worktree's `.git/worktrees/<name>` rather than the shared directory), and
+# the clone-root guard needs the same path further down.
+capture_path git -C "$SRC_TOP" rev-parse --absolute-git-dir ||
+	die "could not resolve this worktree's git directory"
+SRC_GIT_DIR="$CAPTURED_PATH"
+
 if [ -n "$REF_SEEN" ]; then REF_ARG="$REF"; else REF_ARG="HEAD"; fi
 # What the caller actually wrote, kept for diagnostics: REF_ARG is rewritten to a
 # branch's full ref name below, and reporting that back would name something the
 # caller never typed.
 REF_DISPLAY="$REF_ARG"
+
+# Does the caller's string name a `$GIT_DIR` PSEUDO-REF — `ORIG_HEAD`,
+# `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_HEAD` and their kin —
+# that actually exists in the invoking worktree? Git's revision rules reach one
+# BEFORE `refs/heads/<name>`, so a string that names one is not a short branch
+# name, however plainly a same-named branch also exists.
+# This is the one existence probe here that cannot be a plain `git show-ref
+# --verify`. That command only learned to report a bare root ref in git 2.45,
+# and this helper supports 2.36+: on 2.43 it answers "no" for every pseudo-ref
+# above, the candidate survives, and the BRANCH gets checked out while the
+# caller's own `git rev-parse ORIG_HEAD` names the other commit — the exact
+# wrong-baseline conclusion this helper exists to prevent.
+# So both forms are asked, and they cover the whole supported range between
+# them. `show-ref --verify` is backend-agnostic, which matters under the
+# reftable backend where a pseudo-ref is a ref rather than a file; the
+# `$GIT_DIR/<name>` file covers every git old enough to lack that support, all
+# of which predate reftable and so keep root refs in exactly that file.
+# Restricted to the shape git itself resolves at the root of `$GIT_DIR` — all
+# caps, no slash — so no other string is ever turned into a path and probed.
+source_pseudo_ref_exists() {
+	local name="$1"
+	[[ "$name" =~ ^[A-Z][A-Z0-9_]*$ ]] || return 1
+	git -C "$SRC_TOP" show-ref --verify --quiet -- "$name" 2>/dev/null && return 0
+	[ -f "$SRC_GIT_DIR/$name" ]
+}
 
 # Which branch (if any) the clone should check out. With no <ref> this follows
 # the INVOKING worktree's HEAD; with one it follows the ref only when that ref
@@ -475,7 +556,7 @@ REF_DISPLAY="$REF_ARG"
 # also decides WHICH commit is resolved — see the REF_ARG rewrite below.
 BRANCH=""
 if [ -z "$REF_SEEN" ]; then
-	if HEAD_SYMREF="$(git symbolic-ref --quiet HEAD 2>/dev/null)"; then
+	if HEAD_SYMREF="$(git -C "$SRC_TOP" symbolic-ref --quiet HEAD 2>/dev/null)"; then
 		case "$HEAD_SYMREF" in
 		refs/heads/*) BRANCH="${HEAD_SYMREF#refs/heads/}" ;;
 		esac
@@ -489,24 +570,26 @@ else
 	*)
 		BRANCH_CANDIDATE="$REF"
 		# ... but only where the caller's string is a SHORT name in the first
-		# place. git's own rev-parse rules try it as a full ref name, then as
-		# `refs/<name>`, BEFORE they reach `refs/heads/<name>`; where either of
-		# those already exists the caller named THAT ref. Without this, a
-		# repository carrying a local branch literally named `refs/tags/v1` — a
-		# legal branch name — would answer `dc-enter probe refs/tags/v1` with that
-		# branch checked out, while `git rev-parse refs/tags/v1` in the same
-		# repository names the tag: the helper would verify a commit the caller's
-		# own ref does not point at. The branch-over-tag preference below is
-		# deliberate and unaffected, because it applies to the short form, which is
-		# the one place gitrevisions' tags-first rule surprises the caller.
-		if git show-ref --verify --quiet -- "$REF" 2>/dev/null ||
-			git show-ref --verify --quiet -- "refs/$REF" 2>/dev/null; then
+		# place. git's own rev-parse rules try it as a `$GIT_DIR` pseudo-ref, then
+		# as a full ref name, then as `refs/<name>`, BEFORE they reach
+		# `refs/heads/<name>`; where any of those already exists the caller named
+		# THAT ref. Without this, a repository carrying a local branch literally
+		# named `refs/tags/v1` — a legal branch name — would answer `dc-enter probe
+		# refs/tags/v1` with that branch checked out, while `git rev-parse
+		# refs/tags/v1` in the same repository names the tag: the helper would
+		# verify a commit the caller's own ref does not point at. The
+		# branch-over-tag preference below is deliberate and unaffected, because it
+		# applies to the short form, which is the one place gitrevisions' tags-first
+		# rule surprises the caller.
+		if source_pseudo_ref_exists "$REF" ||
+			git -C "$SRC_TOP" show-ref --verify --quiet -- "$REF" 2>/dev/null ||
+			git -C "$SRC_TOP" show-ref --verify --quiet -- "refs/$REF" 2>/dev/null; then
 			BRANCH_CANDIDATE=""
 		fi
 		;;
 	esac
 	if [ -n "$BRANCH_CANDIDATE" ] &&
-		git show-ref --verify --quiet "refs/heads/$BRANCH_CANDIDATE" 2>/dev/null; then
+		git -C "$SRC_TOP" show-ref --verify --quiet "refs/heads/$BRANCH_CANDIDATE" 2>/dev/null; then
 		BRANCH="$BRANCH_CANDIDATE"
 		# Resolve the COMMIT through that branch's full ref name too. A bare
 		# short name is disambiguated by gitrevisions in favour of
@@ -520,7 +603,7 @@ else
 	fi
 fi
 
-SHA="$(git rev-parse --verify --quiet "${REF_ARG}^{commit}" 2>/dev/null)" ||
+SHA="$(git -C "$SRC_TOP" rev-parse --verify --quiet "${REF_ARG}^{commit}" 2>/dev/null)" ||
 	die "'$REF_DISPLAY' does not resolve to a commit in the invoking worktree"
 [ -n "$SHA" ] || die "'$REF_DISPLAY' does not resolve to a commit in the invoking worktree"
 
@@ -567,7 +650,7 @@ collect_worktree_paths() {
 	# git's own stderr is reported rather than swallowed: an old git, a corrupt
 	# repository, and an unreadable .git/worktrees entry all fail here, and
 	# blaming the version for all three sends the reader after the wrong bug.
-	if ! git worktree list --porcelain -z >"$WT_LIST_FILE" 2>"$WT_ERR_FILE"; then
+	if ! git -C "$SRC_TOP" worktree list --porcelain -z >"$WT_LIST_FILE" 2>"$WT_ERR_FILE"; then
 		IFS= read -r -d '' git_err <"$WT_ERR_FILE" || true
 		die "could not enumerate this repository's worktrees with 'git worktree list --porcelain -z' (needs git 2.36+, but any repository error fails here too — git said: ${git_err:-nothing}). Refusing to place a clone without knowing where the worktrees are: the newline form cannot report a path containing a newline unambiguously."
 	fi
@@ -591,12 +674,10 @@ collect_worktree_paths() {
 		die "'git worktree list --porcelain -z' succeeded but reported no worktrees; a repository always has at least its main worktree, so this listing cannot be trusted"
 }
 
-capture_path git rev-parse --git-common-dir ||
+capture_path git -C "$SRC_TOP" rev-parse --git-common-dir ||
 	die "could not resolve this repository's shared git directory"
 add_repo_path "$CAPTURED_PATH"
-capture_path git rev-parse --absolute-git-dir ||
-	die "could not resolve this worktree's git directory"
-add_repo_path "$CAPTURED_PATH"
+add_repo_path "$SRC_GIT_DIR"
 collect_worktree_paths
 
 # --- Clone root --------------------------------------------------------------
@@ -764,7 +845,19 @@ MARKER_TMP="$SESSION_DIR/.$MARKER_NAME.tmp"
 } >"$MARKER_TMP" || die "could not write the clone marker: $MARKER_TMP"
 mv -f -- "$MARKER_TMP" "$MARKER" || die "could not put the clone marker in place: $MARKER"
 
-CLONE_ARGS=(--quiet --no-checkout --origin "$SRC_REMOTE")
+# `--dissociate` is what makes "independent object store" true for a source that
+# is ITSELF a borrowing clone. A local clone copies the source's
+# `.git/objects/info/alternates` verbatim, so cloning a `--shared`/`--reference`
+# repository hands back a clone still borrowing from that third repository —
+# holding no local copy of the borrowed objects and breaking outright the moment
+# the external store is pruned or removed. `git clone` documents `--dissociate`
+# for exactly this case ("can also be used when cloning locally from a repository
+# that already borrows objects from another repository"): the borrowed objects
+# are copied in and the alternates file is dropped. It costs nothing on the
+# ordinary source that borrows from nobody.
+# Note this is orthogonal to `DC_HARDLINKS` below, which is about the source's
+# OWN object store rather than a third repository's.
+CLONE_ARGS=(--quiet --no-checkout --dissociate --origin "$SRC_REMOTE")
 if [ "${DC_HARDLINKS:-}" != "1" ]; then
 	CLONE_ARGS+=(--no-hardlinks)
 fi
@@ -814,7 +907,7 @@ done <"$CLONE_REFS_FILE"
 git -C "$CLONE_DIR" update-ref --stdin -z <"$REF_UPDATES_FILE" >&2 ||
 	die "could not clear the refs git clone created in the clone"
 
-git for-each-ref --format='%(refname) %(objectname) %(symref)' >"$SRC_REFS_FILE" ||
+git -C "$SRC_TOP" for-each-ref --format='%(refname) %(objectname) %(symref)' >"$SRC_REFS_FILE" ||
 	die "could not enumerate the source's refs"
 : >"$REF_UPDATES_FILE" || die "could not stage the clone's ref updates"
 while IFS= read -r ref_line; do
@@ -854,6 +947,26 @@ rm -f -- "$CLONE_REFS_FILE" "$SRC_REFS_FILE" "$REF_UPDATES_FILE"
 git -C "$CLONE_DIR" config --local --remove-section "remote.$SRC_REMOTE" >&2 ||
 	die "could not detach the clone from its source remote"
 
+# ... and then verified, because `--local` can only remove what this helper's own
+# `git clone` wrote. A remote of the SAME NAME already defined in the caller's
+# system, global, or command-scope configuration survives that removal untouched
+# and is still live in the clone: `git push dc-source HEAD:leaked` then creates a
+# branch in the invoking repository, which is the "nowhere to go" invariant of
+# the header defeated by a setting on the machine. No local write can delete an
+# outer section — `--unset` in the clone cannot reach the caller's file — so the
+# honest answer to a survivor is to hand back no clone at all rather than one
+# whose isolation is quietly weaker than promised.
+# The whole merged list is checked rather than just this helper's own remote
+# name: any surviving remote is a push target the clone was promised not to have.
+# Read with the caller's command-scope config restored, so this answers what the
+# clone's own user will see rather than what it looks like with their environment
+# stripped away.
+SURVIVING_REMOTES="$(env ${SAVED_CONFIG_ENV[@]+"${SAVED_CONFIG_ENV[@]}"} git -C "$CLONE_DIR" remote)" ||
+	die "could not list the clone's remotes to confirm none survived"
+if [ -n "$SURVIVING_REMOTES" ]; then
+	die "refusing: the clone would still have the remote(s) $(tr '\n' ' ' <<<"$SURVIVING_REMOTES")— defined outside its own configuration (your system, global, or command-scope git config), where this helper cannot remove them. A stray 'git push' in the clone would reach them, so the clone is not the isolated place it promises to be. Unset them, or run dc-enter with a configuration that does not define remotes."
+fi
+
 # `git clone` also wrote branch.<name>.remote/.merge pointing at that remote.
 # Left behind they name a remote the clone no longer has, so `git push` in the
 # clone fails with a confusing "does not appear to be a git repository" instead
@@ -877,12 +990,24 @@ while IFS= read -r cfg_key; do
 done <"$CLONE_BRANCH_CFG_FILE"
 rm -f -- "$CLONE_BRANCH_CFG_FILE"
 
+# The working tree is always materialized by detaching at the commit resolved up
+# front, and a branch checkout is then made by pointing HEAD at the branch — not
+# by `git checkout "$BRANCH"`. A branch operand shares git's option-parsing
+# position, so a local head whose name begins with a dash — `refs/heads/-foo`
+# passes `git check-ref-format`, and the qualified-form normalization above
+# correctly derives `-foo` from it — is read as a bundle of switches and the run
+# dies with `unknown switch 'o'`. A trailing `--` cannot rescue it: that
+# separates PATHS, and the operand is already parsed by the time git reaches it.
+# Both commands here take the name only where it cannot be mistaken for an
+# option: an object id, and `symbolic-ref`'s value argument in its full
+# `refs/heads/...` form. `git reset --hard` would do the same job, but it also
+# writes `ORIG_HEAD`, which is bookkeeping this helper has no reason to leave in
+# a clone that has no history to return to.
+git -C "$CLONE_DIR" checkout --quiet --force --detach "$SHA" >&2 ||
+	die "could not check out $SHA in the clone"
 if [ -n "$BRANCH" ] && git -C "$CLONE_DIR" show-ref --verify --quiet "refs/heads/$BRANCH"; then
-	git -C "$CLONE_DIR" checkout --quiet --force "$BRANCH" -- >&2 ||
+	git -C "$CLONE_DIR" symbolic-ref HEAD "refs/heads/$BRANCH" >&2 ||
 		die "could not check out '$BRANCH' in the clone"
-else
-	git -C "$CLONE_DIR" checkout --quiet --force --detach "$SHA" >&2 ||
-		die "could not check out $SHA in the clone"
 fi
 
 CLONE_HEAD="$(git -C "$CLONE_DIR" rev-parse --verify HEAD)" ||

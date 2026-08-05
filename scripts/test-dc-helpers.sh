@@ -22,14 +22,19 @@ set -euo pipefail
 #   (a) stdout purity and the DC="$(dc-enter probe)" calling convention
 #   (b) the isolation guarantee — refs, commits, and gc --prune=now in the clone
 #       leave the source's refs and reachable objects untouched, the clone takes
-#       a commit where nothing has configured an identity, and neither an
-#       inherited GIT_CONFIG nor a caller's own global branch.<name>.* setting
-#       breaks the run or lets the clone's config surgery reach outside it
+#       a commit where nothing has configured an identity, neither an inherited
+#       GIT_CONFIG nor a caller's own global branch.<name>.* setting breaks the
+#       run or lets the clone's config surgery reach outside it, an inherited
+#       GIT_DIR does not aim that surgery at the source, a remote surviving in
+#       the caller's global or command-scope config is refused rather than left
+#       live in the clone, and an alternate-backed source yields a clone that
+#       outlives the deletion of the store it borrowed from
 #   (c) the <ref> interface: default is the INVOKING worktree's HEAD (not the
 #       main worktree's), branch/tag/sha/rev forms, a short name that is both a
 #       branch and a tag resolving to the branch, a qualified ref and a
 #       $GIT_DIR pseudo-ref each still winning over a branch named literally
-#       like it, and refusal on a bad ref
+#       like it, a local head whose name begins with a dash checked out rather
+#       than parsed as options, and refusal on a bad ref
 #   (d) the ref namespace: an exact mirror of the source's refs, demonstrated on
 #       a source carrying refs outside refs/heads/ and refs/tags/ — including one
 #       hiding a namespace from upload-pack, which a refspec fetch would drop
@@ -386,6 +391,76 @@ assert_eq "b: ... with no remote or upstream config of its own left behind" \
 assert_eq "b: ... and the caller's global config untouched" \
 	"$(git config --file "$GLOBAL_BRANCH_CFG" --get branch.main.rebase)" "true"
 
+# A caller carrying `GIT_DIR`, the variable that BEATS `git -C`. dc-enter aims
+# its ref surgery at the clone with `git -C "$CLONE_DIR"`, and an inherited
+# GIT_DIR overrides that for every one of those commands — so the transaction
+# that clears the refs `git clone` created runs against the SOURCE and empties
+# it, the isolation guarantee inverted by one variable in the environment.
+# On a fixture of its own: the assertion here is precisely "the source still has
+# its refs", and a regression would otherwise take the rest of the run's
+# fixtures with it and bury the cause. The sanitize is driven by git's own `git
+# rev-parse --local-env-vars` list, so GIT_DIR's siblings (GIT_WORK_TREE,
+# GIT_INDEX_FILE, GIT_OBJECT_DIRECTORY, …) go with it rather than one at a time.
+GITDIR_SRC="$WORK/b/gitdir-src"
+git init -q -b main "$GITDIR_SRC"
+g -C "$GITDIR_SRC" commit -q --allow-empty -m one
+g -C "$GITDIR_SRC" branch -q other
+GITDIR_REFS_BEFORE="$(refs_of "$GITDIR_SRC")"
+in_repo "$GITDIR_SRC" env "GIT_DIR=$GITDIR_SRC/.git" "$DC_ENTER" gitdirenv
+assert_eq "b: an inherited GIT_DIR still yields a clone" "$RC" 0
+require_clone CLONE_GITDIR "b: gitdirenv"
+assert_eq "b: ... with the source's refs untouched" \
+	"$(refs_of "$GITDIR_SRC")" "$GITDIR_REFS_BEFORE"
+assert_eq "b: ... and the clone mirroring them rather than inheriting the source" \
+	"$(refs_of "$CLONE_GITDIR")" "$GITDIR_REFS_BEFORE"
+assert_ne "b: ... in a directory that is not the source's" "$CLONE_GITDIR" "$GITDIR_SRC"
+
+# A remote defined under dc-enter's own remote name OUTSIDE the clone's config.
+# `git config --local --remove-section` can only remove what this helper's `git
+# clone` wrote, so an outer definition survives it and stays live in the clone:
+# `git push dc-source HEAD:leaked` then creates a branch in the invoking
+# repository, which is the one thing the header promises has nowhere to go. No
+# local write deletes an outer section, so the clone is refused rather than
+# handed back with quietly weaker isolation than it claims.
+GLOBAL_REMOTE_CFG="$WORK/b/global-remote.gitconfig"
+printf '[user]\n\tuseConfigOnly = true\n[remote "dc-source"]\n\turl = %s\n' "$SRC1" >"$GLOBAL_REMOTE_CFG"
+in_repo "$SRC1" env "GIT_CONFIG_GLOBAL=$GLOBAL_REMOTE_CFG" "$DC_ENTER" survivingremote
+assert_ne "b: a remote surviving in the caller's global config is refused" "$RC" 0
+assert_eq "b: ... silently on stdout" "$OUT" ""
+assert_contains "b: ... naming the remote that survived" "$ERR" "dc-source"
+# The same from COMMAND-SCOPE configuration, which `git -c` exports to every
+# subprocess and which therefore reaches the clone's later user too. Any
+# surviving remote counts, not just the name this helper happens to use.
+in_repo "$SRC1" env "GIT_CONFIG_COUNT=1" "GIT_CONFIG_KEY_0=remote.elsewhere.url" \
+	"GIT_CONFIG_VALUE_0=$SRC1" "$DC_ENTER" survivingremote2
+assert_ne "b: a remote surviving in command-scope config is refused" "$RC" 0
+assert_eq "b: ... silently on stdout too" "$OUT" ""
+assert_contains "b: ... naming that one as well" "$ERR" "elsewhere"
+
+# A source that is ITSELF a borrowing clone. `git clone` of a local path copies
+# `objects/info/alternates` verbatim, so without `--dissociate` the disposable
+# clone goes on borrowing from a third repository: it holds no copy of the
+# objects it is supposed to own and breaks outright when that store is pruned.
+# The check that settles it is the destructive one — the external store is
+# DELETED and the clone must still be whole.
+ALT_BASE="$WORK/b/alt-base"
+git init -q -b main "$ALT_BASE"
+g -C "$ALT_BASE" commit -q --allow-empty -m one
+ALT_SRC="$WORK/b/alt-src"
+git clone -q --shared "$ALT_BASE" "$ALT_SRC"
+assert_true "b: the alternate-backed fixture really does borrow" \
+	"$([ -f "$ALT_SRC/.git/objects/info/alternates" ] && echo true || echo false)"
+in_repo "$ALT_SRC" "$DC_ENTER" alternates
+assert_eq "b: an alternate-backed source still yields a clone" "$RC" 0
+require_clone CLONE_ALT "b: alternates"
+assert_true "b: ... which borrows from nobody" \
+	"$([ -e "$CLONE_ALT/.git/objects/info/alternates" ] && echo false || echo true)"
+rm -rf "$ALT_BASE"
+assert_eq "b: ... and still holds its history once the external store is deleted" \
+	"$(git -C "$CLONE_ALT" rev-list --count --all)" "1"
+in_repo "$CLONE_ALT" git fsck --no-progress --no-dangling --connectivity-only
+assert_eq "b: ... passing fsck without it" "$RC" 0
+
 echo "== (c) the <ref> interface =="
 SRC2="$WORK/c/src"
 mkdir -p "$WORK/c"
@@ -488,12 +563,14 @@ g -C "$SRC2" branch -q -D "tags/ambig"
 # live in `$GIT_DIR`, and git's rules reach them BEFORE `refs/heads/<name>` — so
 # in a repository stopped mid-rebase, mid-merge or mid-cherry-pick that also
 # carries a branch called `ORIG_HEAD`, the caller's `ORIG_HEAD` is the pseudo-ref.
-# The same guard that handles the qualified forms above already covers this,
-# because `git show-ref --verify` reports a pseudo-ref that exists and stays
-# silent when it does not — but that agreement is the whole reason the guard is
-# correct here and nothing in its own text says so, so it is pinned rather than
-# reasoned about. Getting it wrong hands back the branch's commit while the
-# caller's own `git rev-parse ORIG_HEAD` names the other one.
+# Detecting them is the one existence probe dc-enter cannot make with a plain
+# `git show-ref --verify`: that command only learned to report a bare root ref in
+# git 2.45, and the helper supports 2.36+, so on 2.43 it answers "no" for every
+# pseudo-ref here. The helper therefore asks both that way and by the
+# `$GIT_DIR/<name>` file, which is where every git old enough to lack the support
+# keeps them. This suite runs on one git at a time and so pins the BEHAVIOR
+# rather than either mechanism; getting it wrong hands back the branch's commit
+# while the caller's own `git rev-parse ORIG_HEAD` names the other one.
 # These are per-WORKTREE, which is the shape that matters: dc-enter resolves in
 # the INVOKING worktree, so the fixture writes them into that worktree's own git
 # directory rather than the shared one.
@@ -521,6 +598,33 @@ for pseudo in ORIG_HEAD MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_HEAD; do
 		"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "refs/heads/$pseudo"
 	g -C "$SRC2" branch -q -D "$pseudo"
 done
+# A local head whose name begins with a DASH. `refs/heads/-foo` passes `git
+# check-ref-format`, so it is a legal branch, and the qualified-form
+# normalization above correctly derives `-foo` from it — which git's own option
+# parser then reads as a bundle of switches wherever it lands in an operand
+# position, failing with `unknown switch 'o'`. A trailing `--` cannot rescue it:
+# that separates paths, and the operand is parsed before git reaches it. Created
+# with `update-ref`, because `git branch` refuses the name outright.
+DASH_COMMIT="$(git -C "$SRC2" rev-parse main)"
+git -C "$SRC2" update-ref "refs/heads/-foo" "$DASH_COMMIT"
+in_repo "$WT2" "$DC_ENTER" dashbranch "refs/heads/-foo"
+assert_eq "c: a qualified head whose name begins with a dash exits 0" "$RC" 0
+require_clone CLONE_DASH "c: dashbranch"
+assert_eq "c: ... with that branch checked out rather than parsed as options" \
+	"$(git -C "$CLONE_DASH" symbolic-ref -q HEAD || echo DETACHED)" "refs/heads/-foo"
+assert_eq "c: ... at its commit" "$(git -C "$CLONE_DASH" rev-parse HEAD)" "$DASH_COMMIT"
+assert_eq "c: ... with a populated, clean working tree" \
+	"$(git -C "$CLONE_DASH" status --porcelain)" ""
+assert_eq "c: ... and the tracked file materialized" "$(cat "$CLONE_DASH/file.txt")" "tracked"
+# The short form of the same name, reachable only past `--` because the argument
+# parser refuses a leading dash before it.
+in_repo "$WT2" "$DC_ENTER" dashbranchshort -- "-foo"
+assert_eq "c: the same branch by short name after -- exits 0" "$RC" 0
+require_clone CLONE_DASH_SHORT "c: dashbranchshort"
+assert_eq "c: ... is checked out too" \
+	"$(git -C "$CLONE_DASH_SHORT" symbolic-ref -q HEAD || echo DETACHED)" "refs/heads/-foo"
+git -C "$SRC2" update-ref -d "refs/heads/-foo"
+
 in_repo "$WT2" "$DC_ENTER" byrev "HEAD~1"
 assert_eq "c: explicit revision exits 0" "$RC" 0
 assert_eq "c: explicit revision resolves in the INVOKING worktree" \
