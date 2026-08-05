@@ -18,6 +18,7 @@ codex/
 scripts/
   test-gh-review-threads.sh             # hermetic contract coverage for the review-thread helper
   test-checkout-cleanliness-report.mjs  # regression coverage for the batch workflow's checkout report
+  test-review-cycle-retirement.mjs      # behavior coverage for the review cycle's open-question retirement lifecycle
   verify-014-peer-strength-pin.md       # harness-neutral prompt: observe the peer step's pinned review strength (task 014)
 ```
 
@@ -71,6 +72,8 @@ Open PRs ready for review rather than as drafts. Agents in particular tend to op
 Run `bash scripts/test-gh-review-threads.sh` after any behavior change to `plugins/dev-skills/bin/gh-review-threads`; the hermetic suite stubs `gh` and needs only Bash and `jq`.
 
 Run `node scripts/test-checkout-cleanliness-report.mjs` after changing the batch workflow's checkout-report behavior.
+
+Run `node scripts/test-review-cycle-retirement.mjs` after changing how the review cycle raises, retires, or serves open questions; it drives the shipped `review-cycle-core` section of both workflows through scripted rounds.
 
 Parse-check any changed dynamic workflow under `plugins/dev-skills/workflows/`. That check is not a `scripts/` suite: the command, and what a pass does and does not establish, live in `plugins/dev-skills/workflows/README.md`'s Validation section rather than here.
 

@@ -12,3 +12,4 @@ jobs:
       - uses: actions/checkout@v4
       - run: bash scripts/test-gh-review-threads.sh
       - run: node scripts/test-checkout-cleanliness-report.mjs
+      - run: node scripts/test-review-cycle-retirement.mjs
