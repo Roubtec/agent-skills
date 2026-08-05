@@ -211,7 +211,7 @@ const STORAGE_PROBE_SCHEMA = {
 function storageProbePrompt(wtBase) {
   return `Measure free storage for wave-width throttling. This is measurement only — edit nothing, create nothing.
 
-Run \`df -B1 --output=avail ${JSON.stringify(wtBase)}\` (POSIX fallback: \`df -kP\`, avail column, times 1024) and return the mount's free bytes as \`availBytes\`. If the path is missing or \`df\` fails, return \`availBytes: 0\`.`;
+Run \`df -B1 --output=avail ${shq(wtBase)}\` (POSIX fallback: \`df -kP\`, avail column, times 1024) and return the mount's free bytes as \`availBytes\`. If the path is missing or \`df\` fails, return \`availBytes: 0\`.`;
 }
 
 // Non-destructive cleanliness report for the SHARED main checkout. Every task
@@ -409,12 +409,16 @@ Do this:
 Return the structured plan. Paste each task file's FULL content verbatim into \`content\` — downstream agents have no other access to it.`;
 }
 
-// Shell-quote a ref/slug before embedding it in a copy-paste command these
-// prompts emit. `slug`/`branch`/`base` come from the plan agent's reading of
-// task files, so a stray space or shell metacharacter (a git ref name forbids
-// spaces but little else) could push/PR the wrong ref or run the rest of the
-// line. Single-quote and escape embedded quotes; adjacent quoted spans like
-// `'a'..'b'` concatenate into one shell word, so `base..branch` still works.
+// Shell-quote a ref/slug/path before embedding it in a copy-paste command
+// these prompts emit. `slug`/`branch`/`base` come from the plan agent's reading
+// of task files and `wtBase` from the bootstrap agent's reading of
+// `wt-bootstrap`, so a stray space or shell metacharacter (a git ref name
+// forbids spaces but little else; a path forbids neither) could push/PR the
+// wrong ref, measure the wrong mount, or run the rest of the line. Quoting via
+// `JSON.stringify` is not equivalent — its DOUBLE quotes still expand `$…` and
+// backticks. Single-quote and escape embedded quotes instead; adjacent quoted
+// spans like `'a'..'b'` concatenate into one shell word, so `base..branch`
+// still works. Declared here but hoisted, so the earlier storage probe uses it.
 function shq(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
 }

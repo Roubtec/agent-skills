@@ -152,12 +152,15 @@ const PUBLISH_SCHEMA = {
   required: ["published", "pushed", "pushedNewCommits"],
 };
 
-// Shell-quote a ref before embedding it in a copy-paste command these prompts
-// emit. A PR head/base ref name (from `gh pr view`) may legally contain shell
-// metacharacters (`;`, `$`, backticks — git ref names forbid spaces but little
-// else), so an unquoted ref could run the rest of the line or act on the wrong
-// thing. Single-quote and escape embedded quotes; adjacent quoted spans like
-// `refs/heads/'b'` concatenate into one shell word, so the path still resolves.
+// Shell-quote EVERY gather-supplied value before embedding it in a copy-paste
+// command these prompts emit — ref names and the head OID alike. Both reach
+// this script as free text from an agent's `gh pr view` reading rather than as
+// validated git syntax, and a ref name may legally carry shell metacharacters
+// (`;`, `$`, backticks — git ref names forbid spaces but little else), so an
+// unquoted one could run the rest of the line or act on the wrong thing.
+// Single-quote and escape embedded quotes; adjacent quoted spans like
+// `refs/heads/'b'` concatenate into one shell word, so the path still resolves,
+// and so does a quoted `<ref>:<oid>` lease pair.
 function shq(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
 }
@@ -243,7 +246,7 @@ Flags for this publication: ${JSON.stringify(flags)}.
 Report a STRUCTURED result: set \`published: true\` ONLY if the push and every required reply/resolve/summary/ping below succeeded. If any guard aborts you, set \`published: false\` and \`aborted: "<reason>"\` and report what (if anything) was pushed — never claim success on an aborted publication.
 
 1. Re-check before publication: clean worktree, no rebase in progress; re-fetch the PR and confirm it is still open and still points at the expected head repo/ref. Resolve the branch's exact push remote/ref and verify it matches the PR head (never assume \`origin\`, especially for forks). Expected head OID to replace: \`${packet.pr.headOid}\`. If the head moved or the target can't be matched, set \`published: false\`, \`aborted\`, and STOP — do not guess.
-2. Push: if the expected tip is an ancestor of HEAD, normal push (\`git push <remote> HEAD:refs/heads/${shq(packet.pr.branch)}\`). If history was rewritten (rebased: ${packet.pr.rebased ? "yes" : "no"}), use an exact lease: \`git push <remote> --force-with-lease=refs/heads/${shq(packet.pr.branch)}:${packet.pr.headOid} HEAD:refs/heads/${shq(packet.pr.branch)}\`. If the lease is rejected, NEVER escalate to bare \`--force\`; set \`published: false\`, \`aborted: "lease rejected"\`, and stop.
+2. Push: if the expected tip is an ancestor of HEAD, normal push (\`git push <remote> HEAD:refs/heads/${shq(packet.pr.branch)}\`). If history was rewritten (rebased: ${packet.pr.rebased ? "yes" : "no"}), use an exact lease: \`git push <remote> --force-with-lease=refs/heads/${shq(packet.pr.branch)}:${shq(packet.pr.headOid)} HEAD:refs/heads/${shq(packet.pr.branch)}\`. If the lease is rejected, NEVER escalate to bare \`--force\`; set \`published: false\`, \`aborted: "lease rejected"\`, and stop.
 3. Re-read unresolved threads after the push. Do not mutate newly-arrived feedback that was not triaged this run — leave it open and call it out.
 4. Per-item hygiene for each disposition:
    - \`review-thread\` items: reply via REST \`pulls/.../comments/<commentId>/replies\`, resolve via GraphQL \`resolveReviewThread\` on \`threadId\`:
