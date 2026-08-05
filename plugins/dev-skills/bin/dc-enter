@@ -100,10 +100,13 @@
 # tarball landing on `.git/objects/ab/cdef…` writes THROUGH a hardlink and
 # corrupts the source repository's copy of that object. Copying the object store
 # costs disk and clone time proportional to repository size and buys defence in
-# depth against exactly that. Set `DC_HARDLINKS=1` to take the fast path on a
-# large repository; the isolation guarantee above holds either way. Both paths
-# use git's local-clone optimization, so both carry the source's unreachable
-# objects as well as its reachable ones.
+# depth against exactly that. `DC_HARDLINKS=1` takes the fast path on a large
+# repository and gives that defence up: the isolation guarantee above still holds
+# there — it is stated over git operations, and no git operation writes into an
+# existing object — but a NON-git write into the clone's `.git/objects` then
+# reaches the source, so set it only where clone cost actually bites and the
+# clone's user is git. Both paths use git's local-clone optimization, so both
+# carry the source's unreachable objects as well as its reachable ones.
 #
 # Sync discipline: this plugin copy is canonical and net-new here — unlike
 # `gh-review-threads` there is no powbox-baked original to vendor or checksum
@@ -133,7 +136,11 @@ readonly MARKER_NAME='dc-clone-meta'
 # source's OWN refs/remotes/origin/* if the clone had claimed that namespace.
 readonly SRC_REMOTE='dc-source'
 
+# Also clears the worktree-listing temp file, so no fatal path leaks one. Set
+# before any code that can create it, so `set -u` never sees it unset.
+WT_LIST_FILE=""
 die() {
+	[ -z "$WT_LIST_FILE" ] || rm -f -- "$WT_LIST_FILE"
 	printf '%s: %s\n' "$PROG" "$*" >&2
 	exit 1
 }
@@ -300,32 +307,64 @@ fi
 # Everything the clone root must stay out of: the invoking worktree, the shared
 # git directory, and every other worktree registered against this repository.
 REPO_PATHS=("$SRC_TOP")
-GIT_COMMON="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-if [ -n "$GIT_COMMON" ]; then
-	if GIT_COMMON_CANON="$(canon "$GIT_COMMON")"; then
-		REPO_PATHS+=("$GIT_COMMON_CANON")
+
+# Every step of this enumeration fails closed. A path this helper does not learn
+# about is one the clone root could then be placed inside, which is the single
+# failure the root check exists to prevent — so "could not tell" must stop the
+# run, never degrade into a shorter list.
+add_repo_path() {
+	local raw="$1" canonical
+	[ -n "$raw" ] || die "git reported an empty repository path; refusing to guess where the repository is"
+	canonical="$(canon "$raw")" ||
+		die "could not canonicalize the repository path '$raw'; refusing to guess where the repository is"
+	REPO_PATHS+=("$canonical")
+}
+
+# Enumerate every worktree registered against this repository. `-z` (git 2.36+)
+# is unambiguous, but its NUL delimiters cannot survive command substitution, so
+# it is read from a temporary file. Older git gets the newline form plus a
+# refusal on any line this parse does not recognize: `git worktree list
+# --porcelain` prints a path containing a newline RAW rather than quoting it, so
+# an unrecognized line is the signature of a record split across lines, and
+# guessing there could silently omit a worktree.
+collect_worktree_paths() {
+	local line unparsed=""
+	WT_LIST_FILE="$(mktemp "${TMPDIR:-/tmp}/dc-worktrees.XXXXXX")" ||
+		die "could not create a temporary file to enumerate this repository's worktrees"
+	if git worktree list --porcelain -z >"$WT_LIST_FILE" 2>/dev/null; then
+		while IFS= read -r -d '' line; do
+			case "$line" in
+			"worktree "*) add_repo_path "${line#worktree }" ;;
+			esac
+		done <"$WT_LIST_FILE"
+	elif git worktree list --porcelain >"$WT_LIST_FILE"; then
+		while IFS= read -r line; do
+			case "$line" in
+			"") ;;
+			"worktree "*) add_repo_path "${line#worktree }" ;;
+			"HEAD "* | "branch "* | bare | detached | locked* | prunable*) ;;
+			*)
+				unparsed="$line"
+				break
+				;;
+			esac
+		done <"$WT_LIST_FILE"
+		[ -z "$unparsed" ] ||
+			die "this git cannot list worktrees unambiguously (no 'worktree list -z') and printed a line this parse does not recognize, so a worktree could be missed: '$unparsed'"
+	else
+		die "could not enumerate this repository's worktrees; refusing to place a clone without knowing where they are"
 	fi
-fi
-GIT_DIR_OWN="$(git rev-parse --absolute-git-dir 2>/dev/null || true)"
-if [ -n "$GIT_DIR_OWN" ]; then
-	if GIT_DIR_CANON="$(canon "$GIT_DIR_OWN")"; then
-		REPO_PATHS+=("$GIT_DIR_CANON")
-	fi
-fi
-# Captured into a variable, never piped: a failure here must stop the script.
-WORKTREE_LIST="$(git worktree list --porcelain 2>/dev/null || true)"
-if [ -n "$WORKTREE_LIST" ]; then
-	while IFS= read -r line; do
-		case "$line" in
-		"worktree "*)
-			wt_path="${line#worktree }"
-			if wt_canon="$(canon "$wt_path")"; then
-				REPO_PATHS+=("$wt_canon")
-			fi
-			;;
-		esac
-	done <<<"$WORKTREE_LIST"
-fi
+	rm -f -- "$WT_LIST_FILE"
+	WT_LIST_FILE=""
+}
+
+GIT_COMMON="$(git rev-parse --git-common-dir)" ||
+	die "could not resolve this repository's shared git directory"
+add_repo_path "$GIT_COMMON"
+GIT_DIR_OWN="$(git rev-parse --absolute-git-dir)" ||
+	die "could not resolve this worktree's git directory"
+add_repo_path "$GIT_DIR_OWN"
+collect_worktree_paths
 
 # --- Clone root --------------------------------------------------------------
 if [ -n "${DC_ROOT:-}" ]; then
@@ -396,6 +435,19 @@ safe_rm_session() {
 	rm -rf -- "$resolved"
 }
 
+# The containment check above is lexical, and `$SCOPE_DIR` is the one component
+# appended to an already-canonical root — so resolving it is what makes that
+# check binding. A pre-existing symlink there would otherwise be followed by the
+# mkdir below and land the clone wherever it points, including back inside the
+# repository. Checked BEFORE anything is created, so a refusal leaves no trace.
+if [ -L "$SCOPE_DIR" ]; then
+	die "refusing: '$SCOPE_DIR' is a symlink, so the clone would not land where it was derived. Remove it, or point $ROOT_SRC elsewhere."
+fi
+SCOPE_DIR_REAL="$(canon "$SCOPE_DIR")" || die "could not canonicalize the clone scope directory: $SCOPE_DIR"
+if [ "$SCOPE_DIR_REAL" != "$SCOPE_DIR" ]; then
+	die "refusing: '$SCOPE_DIR' resolves to '$SCOPE_DIR_REAL', so the clone would not land where it was derived. Point $ROOT_SRC at a path with no symlinked components."
+fi
+
 # --- Re-derive the slug's clone from scratch ---------------------------------
 mkdir -p -- "$SCOPE_DIR" >&2 || die "could not create the clone scope directory: $SCOPE_DIR"
 
@@ -446,6 +498,13 @@ fi
 git clone "${CLONE_ARGS[@]}" -- "$SRC_TOP" "$CLONE_DIR" >&2 ||
 	die "git clone failed: $SRC_TOP -> $CLONE_DIR"
 
+# Drop the remote-tracking HEAD `git clone` invents. The mirror below prunes
+# every ref the source does not have, but a SYMBOLIC ref survives that pass, and
+# it is invisible to `for-each-ref` only while it dangles — the moment the source
+# genuinely owns refs under this remote's name it resolves again and the clone
+# carries a ref the source never had. Deleting it here keeps the mirror exact.
+git -C "$CLONE_DIR" update-ref --no-deref -d "refs/remotes/$SRC_REMOTE/HEAD" >/dev/null 2>&1 || true
+
 # Detach before mirroring: `git fetch` refuses to update a branch that is
 # checked out, and the mirror below rewrites every branch.
 git -C "$CLONE_DIR" update-ref --no-deref HEAD "$SHA" >&2 ||
@@ -457,8 +516,12 @@ git -C "$CLONE_DIR" fetch --quiet --prune --prune-tags \
 	"$SRC_REMOTE" '+refs/*:refs/*' >&2 ||
 	die "could not mirror the source's refs into the clone"
 
-# No remote means a stray `git push` in the clone has nowhere to go.
-git -C "$CLONE_DIR" remote remove "$SRC_REMOTE" >&2 ||
+# No remote means a stray `git push` in the clone has nowhere to go. The remote's
+# CONFIG is dropped rather than `git remote remove`, which would also delete
+# refs/remotes/$SRC_REMOTE/* — the mirror fetch above already pruned the ones the
+# clone invented, so anything left under that name is the source's own and part
+# of the exact mirror this helper promises.
+git -C "$CLONE_DIR" config --remove-section "remote.$SRC_REMOTE" >&2 ||
 	die "could not detach the clone from its source remote"
 
 if [ -n "$BRANCH" ] && git -C "$CLONE_DIR" show-ref --verify --quiet "refs/heads/$BRANCH"; then

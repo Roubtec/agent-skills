@@ -294,6 +294,19 @@ assert_eq "d: the object behind an unreachable ref came across" \
 # is exact rather than exact-plus-leftovers.
 assert_eq "d: no leftover remote-tracking refs from the clone step" \
 	"$(git -C "$CLONE_D" for-each-ref --format='%(refname)' 'refs/remotes/dc-source')" ""
+# for-each-ref hides a DANGLING symbolic ref, so check the ref store directly too.
+in_repo "$CLONE_D" git symbolic-ref -q "refs/remotes/dc-source/HEAD"
+assert_ne "d: not even a dangling remote-tracking HEAD is left behind" "$RC" 0
+# ... and a source that genuinely owns refs under the clone step's remote name
+# keeps them: dropping the remote must not take mirrored refs with it.
+git -C "$SRC2" update-ref refs/remotes/dc-source/main "$(git -C "$SRC2" rev-parse HEAD)"
+git -C "$SRC2" update-ref refs/remotes/origin/main "$(git -C "$SRC2" rev-parse HEAD)"
+in_repo "$SRC2" "$DC_ENTER" mirror2
+assert_eq "d: a source owning the clone remote's namespace mirrors exactly" \
+	"$(refs_of "$OUT")" "$(refs_of "$SRC2")"
+assert_contains "d: the source's own dc-source refs survive" "$(refs_of "$OUT")" "refs/remotes/dc-source/main"
+assert_contains "d: the source's own origin refs survive" "$(refs_of "$OUT")" "refs/remotes/origin/main"
+assert_eq "d: the clone still has no remote to push to" "$(git -C "$OUT" remote)" ""
 # The source's reflog is documented as absent — the clone keeps a fresh reflog of
 # its own, so reflog-only recovery of the source's history is unavailable in it.
 in_repo "$SRC2" git rev-parse --verify "HEAD@{4}"
@@ -320,6 +333,24 @@ ln -s "$SRC3" "$WORK/e/link-to-repo"
 in_repo "$SRC3" env "DC_ROOT=$WORK/e/link-to-repo/viaLink" "$DC_ENTER" vialink
 assert_ne "e: refuses a symlinked root inside the repository" "$RC" 0
 assert_eq "e: symlinked-root refusal is silent on stdout" "$OUT" ""
+# A scope directory that is a symlink into the repository is refused before the
+# clone is placed — the root check above is lexical, so resolving this component
+# is what makes it binding.
+in_repo "$SRC3" env "DC_ROOT=$WORK/e/root" "$DC_ENTER" scoped
+SCOPE_E="$(dirname "$(dirname "$OUT")")"
+in_repo "$SRC3" env "DC_ROOT=$WORK/e/root" "$DC_REMOVE" scoped
+rm -rf "$SCOPE_E"
+mkdir -p "$SRC3/decoy"
+ln -s "$SRC3/decoy" "$SCOPE_E"
+in_repo "$SRC3" env "DC_ROOT=$WORK/e/root" "$DC_ENTER" scoped
+assert_ne "e: refuses a symlinked scope directory" "$RC" 0
+assert_eq "e: the symlinked-scope refusal is silent on stdout" "$OUT" ""
+assert_contains "e: the symlinked-scope refusal says why" "$ERR" "symlink"
+assert_eq "e: nothing was created inside the repository through the symlink" "$(ls -A "$SRC3/decoy")" ""
+assert_eq "e: the repository is still clean" "$(git -C "$SRC3" status --porcelain)" ""
+rm -f "$SCOPE_E"
+rm -rf "$SRC3/decoy"
+
 # A malformed slug never reaches the filesystem.
 for badslug in "../escape" "a/b" "" "-x" ".hidden"; do
 	in_repo "$SRC3" env "DC_ROOT=$WORK/e/root" "$DC_ENTER" "$badslug"
@@ -465,7 +496,17 @@ DC="$("$DC_ENTER_BIN" probe 2>&1 | tail -n 1)"
 cd "$DC" || exit 1
 rm -rf ./*
 SCRIPT
-for variant in guarded piped; do
+cat >"$WORK/i/piped-nopipefail.sh" <<'SCRIPT'
+# The incident's exact configuration: `set -e` WITHOUT pipefail, so the pipeline
+# reports tail's success and the failed clone step is invisible to the shell.
+# The explicit path guard is then the only thing between it and the repo root.
+set -eu
+DC="$("$DC_ENTER_BIN" probe 2>&1 | tail -n 1)"
+[ -n "$DC" ] && [ -d "$DC/.git" ] || exit 1
+cd "$DC" || exit 1
+rm -rf ./*
+SCRIPT
+for variant in guarded piped piped-nopipefail; do
 	in_repo "$SRC5" env "DC_ENTER_BIN=$DC_ENTER" "DC_ROOT=$SRC5/inside" bash "$WORK/i/$variant.sh"
 	assert_ne "i: the $variant script stops when the clone step fails" "$RC" 0
 	assert_true "i: the $variant script did not delete the repository's files" \

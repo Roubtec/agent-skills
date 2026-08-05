@@ -18,6 +18,12 @@
 # path this helper derived, or it refuses rather than deleting a stranger's
 # directory that happens to sit at the same place.
 #
+# The marker is an accident guard, not an authentication token: a process running
+# as this user could forge one, but such a process can already call `rm -rf`
+# itself, so nothing is gained by hardening against it. What the marker rules out
+# is the case that actually happens — a slug resolving onto a directory that was
+# put there for some other purpose.
+#
 # Usage: dc-remove <slug>
 #
 #   dc-remove probe        # remove the clone dc-enter created for slug `probe`
@@ -52,7 +58,11 @@ readonly PROG
 readonly MARKER_MAGIC='dc-clone-v1'
 readonly MARKER_NAME='dc-clone-meta'
 
+# Also clears the worktree-listing temp file, so no fatal path leaks one. Set
+# before any code that can create it, so `set -u` never sees it unset.
+WT_LIST_FILE=""
 die() {
+	[ -z "$WT_LIST_FILE" ] || rm -f -- "$WT_LIST_FILE"
 	printf '%s: %s\n' "$PROG" "$*" >&2
 	exit 1
 }
@@ -173,31 +183,64 @@ SRC_TOP="$(git rev-parse --show-toplevel 2>/dev/null)" ||
 SRC_TOP="$(canon "$SRC_TOP")" || die "could not canonicalize the invoking worktree path"
 
 REPO_PATHS=("$SRC_TOP")
-GIT_COMMON="$(git rev-parse --git-common-dir 2>/dev/null || true)"
-if [ -n "$GIT_COMMON" ]; then
-	if GIT_COMMON_CANON="$(canon "$GIT_COMMON")"; then
-		REPO_PATHS+=("$GIT_COMMON_CANON")
+
+# Every step of this enumeration fails closed. A path this helper does not learn
+# about is one the clone root could then be placed inside, which is the single
+# failure the root check exists to prevent — so "could not tell" must stop the
+# run, never degrade into a shorter list.
+add_repo_path() {
+	local raw="$1" canonical
+	[ -n "$raw" ] || die "git reported an empty repository path; refusing to guess where the repository is"
+	canonical="$(canon "$raw")" ||
+		die "could not canonicalize the repository path '$raw'; refusing to guess where the repository is"
+	REPO_PATHS+=("$canonical")
+}
+
+# Enumerate every worktree registered against this repository. `-z` (git 2.36+)
+# is unambiguous, but its NUL delimiters cannot survive command substitution, so
+# it is read from a temporary file. Older git gets the newline form plus a
+# refusal on any line this parse does not recognize: `git worktree list
+# --porcelain` prints a path containing a newline RAW rather than quoting it, so
+# an unrecognized line is the signature of a record split across lines, and
+# guessing there could silently omit a worktree.
+collect_worktree_paths() {
+	local line unparsed=""
+	WT_LIST_FILE="$(mktemp "${TMPDIR:-/tmp}/dc-worktrees.XXXXXX")" ||
+		die "could not create a temporary file to enumerate this repository's worktrees"
+	if git worktree list --porcelain -z >"$WT_LIST_FILE" 2>/dev/null; then
+		while IFS= read -r -d '' line; do
+			case "$line" in
+			"worktree "*) add_repo_path "${line#worktree }" ;;
+			esac
+		done <"$WT_LIST_FILE"
+	elif git worktree list --porcelain >"$WT_LIST_FILE"; then
+		while IFS= read -r line; do
+			case "$line" in
+			"") ;;
+			"worktree "*) add_repo_path "${line#worktree }" ;;
+			"HEAD "* | "branch "* | bare | detached | locked* | prunable*) ;;
+			*)
+				unparsed="$line"
+				break
+				;;
+			esac
+		done <"$WT_LIST_FILE"
+		[ -z "$unparsed" ] ||
+			die "this git cannot list worktrees unambiguously (no 'worktree list -z') and printed a line this parse does not recognize, so a worktree could be missed: '$unparsed'"
+	else
+		die "could not enumerate this repository's worktrees; refusing to place a clone without knowing where they are"
 	fi
-fi
-GIT_DIR_OWN="$(git rev-parse --absolute-git-dir 2>/dev/null || true)"
-if [ -n "$GIT_DIR_OWN" ]; then
-	if GIT_DIR_CANON="$(canon "$GIT_DIR_OWN")"; then
-		REPO_PATHS+=("$GIT_DIR_CANON")
-	fi
-fi
-WORKTREE_LIST="$(git worktree list --porcelain 2>/dev/null || true)"
-if [ -n "$WORKTREE_LIST" ]; then
-	while IFS= read -r line; do
-		case "$line" in
-		"worktree "*)
-			wt_path="${line#worktree }"
-			if wt_canon="$(canon "$wt_path")"; then
-				REPO_PATHS+=("$wt_canon")
-			fi
-			;;
-		esac
-	done <<<"$WORKTREE_LIST"
-fi
+	rm -f -- "$WT_LIST_FILE"
+	WT_LIST_FILE=""
+}
+
+GIT_COMMON="$(git rev-parse --git-common-dir)" ||
+	die "could not resolve this repository's shared git directory"
+add_repo_path "$GIT_COMMON"
+GIT_DIR_OWN="$(git rev-parse --absolute-git-dir)" ||
+	die "could not resolve this worktree's git directory"
+add_repo_path "$GIT_DIR_OWN"
+collect_worktree_paths
 
 # --- Clone root and slug path ------------------------------------------------
 if [ -n "${DC_ROOT:-}" ]; then
