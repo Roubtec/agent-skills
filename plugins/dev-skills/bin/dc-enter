@@ -20,6 +20,13 @@
 #   Creating, moving, and deleting refs, committing, rewriting history, and
 #   running `gc`/`repack`/`prune` inside the clone CANNOT change the invoking
 #   repository's refs or its reachable objects.
+#   "Inside the clone" means a git command whose git actually addresses the
+#   clone, which is not the same thing as one that mentions its path: `GIT_DIR`
+#   and its relatives beat `git -C`, so a CALLER whose own shell still exports
+#   one gets `git -C "$DC" …` aimed at the invoking repository however the path
+#   reads. This helper drops those variables from its own process and warns on
+#   stderr when it had to, but `unset` is process-local and cannot reach the
+#   shell that invoked it — see the environment paragraph below.
 #   The clone is never made with `--shared` or `--reference`, and no option
 #   exposes them — those genuinely do couple the object stores. It is made WITH
 #   `--dissociate`, which is what keeps that true when the SOURCE is itself a
@@ -33,10 +40,22 @@
 #   refuses rather than hand back a clone whose stray `git push` still has
 #   somewhere to go. (Remote-tracking refs survive as ordinary refs; see the
 #   ref-namespace note below.)
-#   The caller's repository-targeting git environment is dropped once the source
-#   has been chosen. `GIT_DIR` and its relatives override `git -C`, so an
-#   inherited one would aim the clone's own ref surgery at the source; see the
-#   sanitize block below.
+#   A remote NAME is not the only way to name a push target, so the clone's
+#   MERGED `remote.pushDefault`, `branch.<name>.pushRemote` and
+#   `branch.<name>.remote` are checked to be absent as well. Git accepts a bare
+#   path or URL in all three and pushes to it as an ANONYMOUS remote, which
+#   `git remote` never lists — so one of them left standing in the caller's own
+#   configuration is a live push target the remote check above cannot see, and a
+#   bare `git push` in the clone writes branches into whatever it names, the
+#   invoking repository included. A survivor is refused for exactly the reason a
+#   surviving remote is; see the push-target check below.
+#   The caller's repository-targeting git environment is dropped, once the source
+#   has been chosen, from the commands THIS HELPER runs. `GIT_DIR` and its
+#   relatives override `git -C`, so an inherited one would aim the clone's own ref
+#   surgery at the source; see the sanitize block below. That drop is process-
+#   local and so protects the helper only: the caller's shell keeps its
+#   variables, and clearing them there before using `$DC` is the caller's job.
+#   The helper cannot do it for them, so it names on stderr what it dropped.
 #   Object hardlinking would not violate the guarantee either way — git objects
 #   are immutable and content-addressed, created with O_EXCL and never modified
 #   in place, and `gc` only unlinks the clone's own directory entries — but this
@@ -59,6 +78,14 @@
 #   DC="$(dc-enter probe)"
 #   [ -n "$DC" ] && [ -d "$DC/.git" ] || exit 1
 #
+# ... and clear `GIT_DIR` and its relatives in YOUR shell before using `$DC`,
+# because they override `git -C` and this helper can only drop them from its own
+# process. It warns on stderr, naming them, whenever it had to drop any — so an
+# unguarded `git -C "$DC" update-ref -d refs/heads/keepme` reaching the invoking
+# repository instead of the clone is announced rather than silent. `unset GIT_DIR
+# GIT_WORK_TREE GIT_INDEX_FILE …`, or `env -u GIT_DIR … your-script`, settles it;
+# `git rev-parse --local-env-vars` prints the whole set.
+#
 # <ref> (optional): any revision the INVOKING WORKTREE can resolve to a commit.
 # If it names a local branch, the clone checks that branch out; otherwise the
 # clone's HEAD is detached at the resolved commit. A fully qualified local head
@@ -70,13 +97,17 @@
 # `refs/tags/v1` or `tags/v1`, because a string git's own rules already resolve
 # to an existing ref is that ref rather than a short branch name to look up.
 # A `$GIT_DIR` PSEUDO-REF is the same story one rule earlier: git reaches
-# `ORIG_HEAD`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD` and `BISECT_HEAD`
-# in `$GIT_DIR` before `refs/heads/<name>` (detected across the whole supported
-# git range — see source_pseudo_ref_exists), so in a repository stopped mid-rebase
+# `ORIG_HEAD`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_HEAD`,
+# `REBASE_HEAD`, `AUTO_MERGE` and `FETCH_HEAD` in `$GIT_DIR` before
+# `refs/heads/<name>` (that exact set, detected across the whole supported git
+# range — see source_pseudo_ref_exists), so in a repository stopped mid-rebase
 # or mid-merge that also carries a branch of that name, `dc-enter probe ORIG_HEAD`
 # detaches at the pseudo-ref — the commit the caller's own `git rev-parse` names —
 # rather than checking the branch out. Pseudo-refs are per-worktree, and it is
 # the INVOKING worktree's that is read, like everything else here.
+# Every OTHER all-caps file `$GIT_DIR` holds — `COMMIT_EDITMSG`, `MERGE_MSG`,
+# `SQUASH_MSG`, `MERGE_MODE` — is not a ref and does not take part: a branch
+# named after one is checked out like any other branch.
 # A SHORT name that is both a local branch and a tag resolves to the BRANCH:
 # gitrevisions disambiguates the other way (`refs/tags/<name>` is tried before
 # `refs/heads/<name>`), so the commit is looked up through the branch's full ref
@@ -227,6 +258,12 @@ set -euo pipefail
 # identity fallback would WRITE into the caller's file. A helper whose whole
 # promise is that it touches nothing outside the clone cannot honour a variable
 # that aims its only writes elsewhere.
+# Whether it was set is remembered, because the caller's shell keeps it and their
+# own `git -C "$DC" config` is redirected by it exactly as this helper's would
+# have been. It is one of the names the warning below reports; the unset has to
+# happen here, ahead of git's own list, so the set-ness is recorded here too.
+GIT_CONFIG_WAS_SET=""
+[ -z "${GIT_CONFIG+x}" ] || GIT_CONFIG_WAS_SET=GIT_CONFIG
 unset GIT_CONFIG
 
 PROG=dc-enter
@@ -505,10 +542,37 @@ LOCAL_ENV_VARS="$(git rev-parse --local-env-vars)" ||
 SAVED_CONFIG_ENV=()
 [ -z "${GIT_CONFIG_COUNT+x}" ] || SAVED_CONFIG_ENV+=("GIT_CONFIG_COUNT=$GIT_CONFIG_COUNT")
 [ -z "${GIT_CONFIG_PARAMETERS+x}" ] || SAVED_CONFIG_ENV+=("GIT_CONFIG_PARAMETERS=$GIT_CONFIG_PARAMETERS")
+# Which of them were actually SET is collected as it goes, because `unset` is
+# process-local and this is the only moment the helper can still see them. The
+# caller's shell keeps every one of them, and `git -C "$DC" …` run there is
+# redirected by `GIT_DIR` just as this helper's would have been — so a caller
+# handed a path back would delete refs in the INVOKING repository while believing
+# they were "inside the clone". The helper cannot fix that environment, and it
+# will not refuse over it either: git itself exports `GIT_DIR` to hooks and to
+# `submodule foreach`, so refusing would lock the helper out of the very
+# scripted contexts it is for, and the deliberate choice above — clone the
+# repository the caller pointed at, just do not rewrite it — would be undone. So
+# it says so, once, on stderr. The clone path stays the only thing on stdout.
+DROPPED_ENV_VARS="$GIT_CONFIG_WAS_SET"
 while IFS= read -r env_var; do
 	[ -n "$env_var" ] || continue
+	if [ -n "${!env_var+x}" ]; then
+		case "$env_var" in
+		# The two saved above are deliberately not reported. They inject config
+		# rather than aim git at another repository, the clone's later user is
+		# MEANT to see them (that is what the surviving-remote check reads them
+		# for), and naming them in a warning whose advice is "clear these or your
+		# commands reach the invoking repository" would be untrue of them.
+		GIT_CONFIG_COUNT | GIT_CONFIG_PARAMETERS) ;;
+		*) DROPPED_ENV_VARS="${DROPPED_ENV_VARS:+$DROPPED_ENV_VARS }$env_var" ;;
+		esac
+	fi
 	unset "$env_var"
 done <<<"$LOCAL_ENV_VARS"
+if [ -n "$DROPPED_ENV_VARS" ]; then
+	printf '%s: warning: dropped %s from this run, but that unset cannot reach your shell: they are still set there, they override "git -C", and until you clear them your own git commands against the clone path will act on whatever those variables name — the invoking repository, if that is where they point — rather than on the clone. Clear them before using the path this prints.\n' \
+		"$PROG" "$DROPPED_ENV_VARS" >&2
+fi
 
 # This worktree's own git directory, resolved once now that the environment can
 # no longer redirect it. Pseudo-refs live here (they are per-worktree, so this is
@@ -540,13 +604,29 @@ REF_DISPLAY="$REF_ARG"
 # reftable backend where a pseudo-ref is a ref rather than a file; the
 # `$GIT_DIR/<name>` file covers every git old enough to lack that support, all
 # of which predate reftable and so keep root refs in exactly that file.
-# Restricted to the shape git itself resolves at the root of `$GIT_DIR` — all
-# caps, no slash — so no other string is ever turned into a path and probed.
+# Restricted to the NAMES git itself resolves at the root of `$GIT_DIR`, listed
+# rather than matched by shape, so no other string is ever turned into a path and
+# probed. A shape rule (all caps, no slash) is what this used to be and it is
+# wrong in the file half: `$GIT_DIR` is full of all-caps files that are not refs
+# — `COMMIT_EDITMSG` exists in every repository that has ever committed, and
+# `MERGE_MSG`, `SQUASH_MSG` and `MERGE_MODE` are the same shape — so a branch
+# named after one was answered with a detached HEAD instead of the checkout the
+# `<ref>` contract above documents. The list is git's own set of root refs
+# (`is_root_ref`), minus `HEAD`, which the caller's string reaches through the
+# plain `show-ref --verify` beside this probe.
+# `-s` rather than `-f`: an EMPTY root-ref file is one git's rules fall straight
+# through, on to `refs/heads/<name>`. `FETCH_HEAD` is left empty by a fetch that
+# had nothing to fetch, and treating that as a pseudo-ref would detach a
+# repository whose own `git rev-parse FETCH_HEAD` names the branch.
+readonly SRC_PSEUDO_REFS='ORIG_HEAD MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_HEAD REBASE_HEAD AUTO_MERGE FETCH_HEAD'
 source_pseudo_ref_exists() {
 	local name="$1"
-	[[ "$name" =~ ^[A-Z][A-Z0-9_]*$ ]] || return 1
+	case " $SRC_PSEUDO_REFS " in
+	*" $name "*) ;;
+	*) return 1 ;;
+	esac
 	git -C "$SRC_TOP" show-ref --verify --quiet -- "$name" 2>/dev/null && return 0
-	[ -f "$SRC_GIT_DIR/$name" ]
+	[ -s "$SRC_GIT_DIR/$name" ]
 }
 
 # Which branch (if any) the clone should check out. With no <ref> this follows
@@ -989,6 +1069,42 @@ while IFS= read -r cfg_key; do
 		die "could not clear the clone's stale upstream configuration ($cfg_key)"
 done <"$CLONE_BRANCH_CFG_FILE"
 rm -f -- "$CLONE_BRANCH_CFG_FILE"
+
+# ... and now the same question the surviving-remote check asked, for the push
+# targets that are not remotes. With no `<repository>` argument, `git push` takes
+# `branch.<current>.pushRemote`, else `remote.pushDefault`, else
+# `branch.<current>.remote`, else `origin` — and a value that is not a configured
+# remote is used as a URL or path DIRECTLY, an anonymous remote that `git remote`
+# never lists. So a caller whose own global config carries
+# `remote.pushDefault = /path/to/this/repo`, or a `branch.<name>.pushRemote` or
+# `branch.<name>.remote` naming one, hands the clone a live push target the check
+# above cannot see: a bare `git push` in the clone then writes a branch straight
+# into the invoking repository. (Measured, not theorized — with `push.default =
+# current`, or with `branch.<name>.merge` alongside, or with
+# `push.autoSetupRemote = true`, the push simply succeeds.)
+# Read MERGED and only after the `--local` clearing above, so what is left is
+# exactly what the clone's own user will see AND is defined outside the clone's
+# own configuration, where no local write can reach it. Command-scope config is
+# restored for the read for the same reason it is restored for `git remote`.
+# Refused rather than repaired, and for the same reason a surviving remote is:
+# the honest answer to a push target this helper cannot remove is no clone at
+# all, not one whose isolation is quietly weaker than the header promises.
+SURVIVING_PUSH_CFG=""
+push_cfg_status=0
+SURVIVING_PUSH_CFG="$(env ${SAVED_CONFIG_ENV[@]+"${SAVED_CONFIG_ENV[@]}"} git -C "$CLONE_DIR" config \
+	--name-only --get-regexp '^(remote\.pushdefault|branch\..*\.(pushremote|remote))$')" ||
+	push_cfg_status=$?
+# git config exits 1 for "no key matched", which is the answer this check wants.
+# Anything else means the question could not be asked, and a check that cannot be
+# made must not pass — the same fail-closed rule the rest of this helper follows.
+# The pattern is lowercase because git normalizes a key's section and variable to
+# lowercase (only a subsection keeps its case), so `remote.pushDefault` is
+# reported and matched as `remote.pushdefault`.
+[ "$push_cfg_status" -eq 0 ] || [ "$push_cfg_status" -eq 1 ] ||
+	die "could not list the clone's push-target configuration to confirm none survived ('git config --get-regexp' exited $push_cfg_status)"
+if [ -n "$SURVIVING_PUSH_CFG" ]; then
+	die "refusing: the clone would still have the push-target setting(s) $(tr '\n' ' ' <<<"$SURVIVING_PUSH_CFG")— defined outside its own configuration (your system, global, or command-scope git config), where this helper cannot remove them. git accepts a path or a URL in those settings and pushes to it as an anonymous remote that 'git remote' never lists, so a bare 'git push' in the clone would reach whatever they name — the invoking repository included. The clone is not the isolated place it promises to be. Unset them, or run dc-enter with a configuration that sets no default push destination."
+fi
 
 # The working tree is always materialized by detaching at the commit resolved up
 # front, and a branch checkout is then made by pointing HEAD at the branch — not

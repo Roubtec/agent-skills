@@ -46,6 +46,11 @@
 # derivation is duplicated here rather than sourced, because each helper has to
 # stand alone on a container PATH; scripts/test-dc-helpers.sh pins the two
 # derivations together by removing exactly the path dc-enter printed.
+# The caller's repository-targeting git environment is dropped here too, at the
+# same point dc-enter drops it — once `git rev-parse --show-toplevel` has chosen
+# the source. `GIT_DIR` and its relatives beat `git -C`, and "both helpers derive
+# the same paths from the same repository" cannot be true while one of them reads
+# that environment and the other does not.
 # The root rules are part of that derivation and are therefore identical too: an
 # absolute path, containing no newline, checked on the RAW value before it is
 # canonicalized. A relative root is what makes "same repository, same DC_ROOT,
@@ -252,6 +257,29 @@ SRC_TOP="$CAPTURED_PATH"
 canon "$SRC_TOP" || die "could not canonicalize the invoking worktree path"
 SRC_TOP="$CANON_RESULT"
 
+# --- Drop the caller's repository-targeting environment -----------------------
+# The same drop dc-enter makes, at the same point and for the same reason: the
+# source has been chosen, and every git command from here on asks about THAT
+# repository with `git -C "$SRC_TOP"`. `GIT_DIR` and its relatives beat `-C`, so
+# an inherited one would build this helper's REPO_PATHS refusal list — the paths
+# it must never delete — from wherever the caller's environment points instead of
+# from the repository dc-enter was run in. The ownership proof below binds the
+# target either way (the marker's clone= and source= must both match), so this is
+# alignment rather than a hole being closed: the two helpers' derivations are
+# claimed to be identical, and one of them reading the environment while the
+# other does not is what would make that claim false.
+# Unlike dc-enter this helper does NOT warn about what it dropped. dc-enter warns
+# because it hands back a path its caller then runs git against; dc-remove hands
+# back nothing to go on using, so there is nothing for a caller to get wrong.
+LOCAL_ENV_VARS="$(git rev-parse --local-env-vars)" ||
+	die "could not ask git which environment variables target a specific repository ('git rev-parse --local-env-vars')"
+[ -n "$LOCAL_ENV_VARS" ] ||
+	die "'git rev-parse --local-env-vars' named no variables; refusing to derive this repository's paths under an environment that may still point somewhere else"
+while IFS= read -r env_var; do
+	[ -n "$env_var" ] || continue
+	unset "$env_var"
+done <<<"$LOCAL_ENV_VARS"
+
 REPO_PATHS=("$SRC_TOP")
 
 # Every step of this enumeration fails closed. A path this helper does not learn
@@ -292,7 +320,7 @@ collect_worktree_paths() {
 	# git's own stderr is reported rather than swallowed: an old git, a corrupt
 	# repository, and an unreadable .git/worktrees entry all fail here, and
 	# blaming the version for all three sends the reader after the wrong bug.
-	if ! git worktree list --porcelain -z >"$WT_LIST_FILE" 2>"$WT_ERR_FILE"; then
+	if ! git -C "$SRC_TOP" worktree list --porcelain -z >"$WT_LIST_FILE" 2>"$WT_ERR_FILE"; then
 		IFS= read -r -d '' git_err <"$WT_ERR_FILE" || true
 		die "could not enumerate this repository's worktrees with 'git worktree list --porcelain -z' (needs git 2.36+, but any repository error fails here too — git said: ${git_err:-nothing}). Refusing to place a clone without knowing where the worktrees are: the newline form cannot report a path containing a newline unambiguously."
 	fi
@@ -316,10 +344,15 @@ collect_worktree_paths() {
 		die "'git worktree list --porcelain -z' succeeded but reported no worktrees; a repository always has at least its main worktree, so this listing cannot be trusted"
 }
 
-capture_path git rev-parse --git-common-dir ||
+# `--path-format=absolute` because bare `--git-common-dir` answers RELATIVE to
+# the git process's own working directory, which `git -C` has just moved away
+# from this script's `$PWD` — and add_repo_path canonicalizes against `$PWD`. Run
+# from a nested subdirectory the two would disagree and the path added to the
+# refuse-list would be one that does not exist.
+capture_path git -C "$SRC_TOP" rev-parse --path-format=absolute --git-common-dir ||
 	die "could not resolve this repository's shared git directory"
 add_repo_path "$CAPTURED_PATH"
-capture_path git rev-parse --absolute-git-dir ||
+capture_path git -C "$SRC_TOP" rev-parse --absolute-git-dir ||
 	die "could not resolve this worktree's git directory"
 add_repo_path "$CAPTURED_PATH"
 collect_worktree_paths

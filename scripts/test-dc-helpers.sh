@@ -25,15 +25,21 @@ set -euo pipefail
 #       a commit where nothing has configured an identity, neither an inherited
 #       GIT_CONFIG nor a caller's own global branch.<name>.* setting breaks the
 #       run or lets the clone's config surgery reach outside it, an inherited
-#       GIT_DIR does not aim that surgery at the source, a remote surviving in
-#       the caller's global or command-scope config is refused rather than left
-#       live in the clone, and an alternate-backed source yields a clone that
-#       outlives the deletion of the store it borrowed from
+#       GIT_DIR does not aim that surgery at the source but IS reported on stderr
+#       (the helper's unset cannot reach the caller's shell) without joining the
+#       path on stdout, a remote surviving in the caller's global or command-scope
+#       config is refused rather than left live in the clone, an anonymous push
+#       target surviving there as remote.pushDefault or branch.<name>.pushRemote
+#       /.remote is refused for the same reason while a branch.<name>.rebase is
+#       not, and an alternate-backed source yields a clone that outlives the
+#       deletion of the store it borrowed from
 #   (c) the <ref> interface: default is the INVOKING worktree's HEAD (not the
 #       main worktree's), branch/tag/sha/rev forms, a short name that is both a
 #       branch and a tag resolving to the branch, a qualified ref and a
 #       $GIT_DIR pseudo-ref each still winning over a branch named literally
-#       like it, a local head whose name begins with a dash checked out rather
+#       like it while a same-named NON-ref file in $GIT_DIR (COMMIT_EDITMSG and
+#       its all-caps kin, and an empty root-ref file) leaves the branch checked
+#       out, a local head whose name begins with a dash checked out rather
 #       than parsed as options, and refusal on a bad ref
 #   (d) the ref namespace: an exact mirror of the source's refs, demonstrated on
 #       a source carrying refs outside refs/heads/ and refs/tags/ — including one
@@ -49,7 +55,9 @@ set -euo pipefail
 #   (h) dc-remove: removes a dirty clone, refuses a path, refuses an empty slug
 #       even when another argument follows, refuses a foreign or mis-marked
 #       directory, no-ops on an unknown slug, and removes exactly the path
-#       dc-enter printed (which pins the two path derivations together)
+#       dc-enter printed (which pins the two path derivations together) —
+#       including under an inherited GIT_DIR, which it drops exactly as dc-enter
+#       does so both helpers derive their paths from the same repository
 #   (i) the incident's shape: a failed clone step must not let a script proceed
 #       to operate in the repository root, even when piped as the original was
 #   (j) hardlink policy: --no-hardlinks by default, DC_HARDLINKS=1 opt-in, with
@@ -414,6 +422,35 @@ assert_eq "b: ... with the source's refs untouched" \
 assert_eq "b: ... and the clone mirroring them rather than inheriting the source" \
 	"$(refs_of "$CLONE_GITDIR")" "$GITDIR_REFS_BEFORE"
 assert_ne "b: ... in a directory that is not the source's" "$CLONE_GITDIR" "$GITDIR_SRC"
+# ... and the caller is TOLD, because that unset reached this helper's process
+# and nothing else. The caller's own shell still exports GIT_DIR, it still beats
+# `git -C`, and their `git -C "$DC" update-ref -d refs/heads/keepme` therefore
+# deletes a ref in the SOURCE while the path they were handed says otherwise.
+# dc-enter cannot fix that environment and does not refuse over it — git exports
+# GIT_DIR to hooks and to `submodule foreach`, so refusing would lock the helper
+# out of scripted contexts it is meant for — so the warning is the whole
+# mitigation and its absence would be the bug.
+assert_contains "b: ... and the caller is warned, on stderr, naming the variable" "$ERR" "GIT_DIR"
+assert_contains "b: ... told the unset cannot reach their shell" "$ERR" "cannot reach your shell"
+# The warning goes to stderr and NOTHING joins the path on stdout: the whole
+# calling convention is DC="$(dc-enter probe)", and a warning that leaked there
+# would be appended to the path a caller then hands to git or rm.
+assert_eq "b: ... while stdout stays exactly the one clone path" \
+	"$(wc -l <<<"$OUT" | tr -d '[:space:]')" 1
+assert_eq "b: ... which is the path require_clone accepted" "$OUT" "$CLONE_GITDIR"
+# The same convention end to end, under the hostile environment: the documented
+# DC="$(dc-enter …)" must still yield a usable path, not a path with a warning
+# glued to it.
+in_repo "$GITDIR_SRC" env "GIT_DIR=$GITDIR_SRC/.git" "DC_ENTER_BIN=$DC_ENTER" \
+	bash "$WORK/convention.sh"
+assert_eq "b: ... so DC=\$(dc-enter …) still succeeds under an inherited GIT_DIR" "$RC" 0
+assert_true "b: ... yielding a usable path uncontaminated by the warning" \
+	"$([ -d "$OUT/.git" ] && echo true || echo false)"
+# And no false alarm: a caller carrying none of those variables gets no warning
+# at all, so the one above means what it says.
+in_repo "$GITDIR_SRC" "$DC_ENTER" cleanenv
+assert_eq "b: a clean environment still yields a clone" "$RC" 0
+assert_eq "b: ... with no environment warning on stderr" "$ERR" ""
 
 # A remote defined under dc-enter's own remote name OUTSIDE the clone's config.
 # `git config --local --remove-section` can only remove what this helper's `git
@@ -436,6 +473,46 @@ in_repo "$SRC1" env "GIT_CONFIG_COUNT=1" "GIT_CONFIG_KEY_0=remote.elsewhere.url"
 assert_ne "b: a remote surviving in command-scope config is refused" "$RC" 0
 assert_eq "b: ... silently on stdout too" "$OUT" ""
 assert_contains "b: ... naming that one as well" "$ERR" "elsewhere"
+
+# A push target that is not a REMOTE at all, and so is invisible to the check
+# above. With no <repository> argument `git push` consults
+# branch.<current>.pushRemote, then remote.pushDefault, then
+# branch.<current>.remote — and a value that names no configured remote is used
+# as a path or URL directly, an anonymous remote `git remote` never lists. Each
+# of the three, defined in the caller's own configuration where no `--local`
+# write can reach it, leaves a bare `git push` in the clone writing branches
+# straight into the invoking repository (measured with push.default=current, with
+# branch.<name>.merge alongside, and with push.autoSetupRemote=true). Refused
+# exactly as a surviving remote is.
+PUSH_CFG_SRC="$WORK/b/push-src"
+git init -q -b main "$PUSH_CFG_SRC"
+g -C "$PUSH_CFG_SRC" commit -q --allow-empty -m one
+PUSH_CFG_FILE="$WORK/b/push-target.gitconfig"
+for push_entry in 'remote|pushDefault' 'branch "main"|pushRemote' 'branch "main"|remote'; do
+	push_section="${push_entry%%|*}"
+	push_var="${push_entry##*|}"
+	push_slug="$(printf '%s' "$push_entry" | tr -dc 'A-Za-z' | tr '[:upper:]' '[:lower:]')"
+	printf '[user]\n\tuseConfigOnly = true\n[%s]\n\t%s = %s\n' \
+		"$push_section" "$push_var" "$PUSH_CFG_SRC" >"$PUSH_CFG_FILE"
+	in_repo "$PUSH_CFG_SRC" env "GIT_CONFIG_GLOBAL=$PUSH_CFG_FILE" "$DC_ENTER" "pt-$push_slug"
+	assert_ne "b: a push target surviving as [$push_section] $push_var is refused" "$RC" 0
+	assert_eq "b: ... silently on stdout ($push_slug)" "$OUT" ""
+	assert_contains "b: ... naming the setting that survived ($push_slug)" "$ERR" "push-target setting"
+done
+# ... and from COMMAND-SCOPE configuration too, which `git -c` exports to every
+# subprocess and which the clone's later user therefore also sees.
+in_repo "$PUSH_CFG_SRC" env "GIT_CONFIG_COUNT=1" "GIT_CONFIG_KEY_0=remote.pushDefault" \
+	"GIT_CONFIG_VALUE_0=$PUSH_CFG_SRC" "$DC_ENTER" pt-cmdscope
+assert_ne "b: a push target surviving in command-scope config is refused" "$RC" 0
+assert_eq "b: ... silently on stdout as well" "$OUT" ""
+assert_contains "b: ... naming remote.pushdefault" "$ERR" "remote.pushdefault"
+# Not over-broad: `branch.<name>.rebase` is an everyday global setting and names
+# no push destination, so the clone it produces is still handed back. That is the
+# globalbranchcfg case above, which shares this boundary.
+in_repo "$PUSH_CFG_SRC" env "GIT_CONFIG_GLOBAL=$GLOBAL_BRANCH_CFG" "$DC_ENTER" pt-notatarget
+assert_eq "b: a global branch.<name>.rebase is not read as a push target" "$RC" 0
+require_clone CLONE_NOTATARGET "b: pt-notatarget"
+assert_eq "b: ... and that clone has no remote either" "$(git -C "$CLONE_NOTATARGET" remote)" ""
 
 # A source that is ITSELF a borrowing clone. `git clone` of a local path copies
 # `objects/info/alternates` verbatim, so without `--dissociate` the disposable
@@ -575,7 +652,7 @@ g -C "$SRC2" branch -q -D "tags/ambig"
 # the INVOKING worktree, so the fixture writes them into that worktree's own git
 # directory rather than the shared one.
 WT2_GIT_DIR="$(git -C "$WT2" rev-parse --absolute-git-dir)"
-for pseudo in ORIG_HEAD MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_HEAD; do
+for pseudo in ORIG_HEAD MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_HEAD REBASE_HEAD AUTO_MERGE FETCH_HEAD; do
 	pseudo_slug="$(printf '%s' "$pseudo" | tr 'A-Z_' 'a-z-')"
 	g -C "$SRC2" branch -q "$pseudo" main
 	git -C "$WT2" rev-parse --verify main~1 >"$WT2_GIT_DIR/$pseudo"
@@ -598,6 +675,43 @@ for pseudo in ORIG_HEAD MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_HEAD; do
 		"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "refs/heads/$pseudo"
 	g -C "$SRC2" branch -q -D "$pseudo"
 done
+# The boundary on the other side of that list: `$GIT_DIR` is full of ALL-CAPS
+# files that are not refs at all. `COMMIT_EDITMSG` exists in every repository
+# that has ever committed, and `MERGE_MSG`, `SQUASH_MSG` and `MERGE_MODE` share
+# its shape — so a probe that admitted every all-caps name would answer a branch
+# named after one with a detached HEAD, contradicting the documented "if it names
+# a local branch, the clone checks that branch out" while `git rev-parse` in the
+# source names the branch too. The commit would still be right; the branch
+# attachment is what goes missing.
+for nonref in COMMIT_EDITMSG MERGE_MSG SQUASH_MSG MERGE_MODE; do
+	nonref_slug="$(printf '%s' "$nonref" | tr 'A-Z_' 'a-z-')"
+	g -C "$SRC2" branch -q "$nonref" main~1
+	printf 'not a ref\n' >"$WT2_GIT_DIR/$nonref"
+	assert_eq "c: the $nonref fixture resolves to the branch in the source" \
+		"$(git -C "$WT2" rev-parse --verify "$nonref")" \
+		"$(git -C "$WT2" rev-parse --verify "refs/heads/$nonref")"
+	in_repo "$WT2" "$DC_ENTER" "nonref-$nonref_slug" "$nonref"
+	assert_eq "c: a branch named $nonref exits 0" "$RC" 0
+	assert_eq "c: ... and is CHECKED OUT, not detached at its commit" \
+		"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "refs/heads/$nonref"
+	rm -f -- "$WT2_GIT_DIR/$nonref"
+	g -C "$SRC2" branch -q -D "$nonref"
+done
+# And an EMPTY root-ref file is not a pseudo-ref either: git's rules fall through
+# it to `refs/heads/<name>`. A fetch with nothing to fetch leaves `FETCH_HEAD`
+# exactly like that, so a presence-only probe would detach a repository whose own
+# `git rev-parse FETCH_HEAD` names the branch.
+g -C "$SRC2" branch -q FETCH_HEAD main~1
+: >"$WT2_GIT_DIR/FETCH_HEAD"
+assert_eq "c: an empty FETCH_HEAD resolves to the branch in the source" \
+	"$(git -C "$WT2" rev-parse --verify FETCH_HEAD)" \
+	"$(git -C "$WT2" rev-parse --verify refs/heads/FETCH_HEAD)"
+in_repo "$WT2" "$DC_ENTER" emptyfetchhead FETCH_HEAD
+assert_eq "c: an empty FETCH_HEAD beside a same-named branch exits 0" "$RC" 0
+assert_eq "c: ... and the branch is checked out, not detached" \
+	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "refs/heads/FETCH_HEAD"
+rm -f -- "$WT2_GIT_DIR/FETCH_HEAD"
+g -C "$SRC2" branch -q -D FETCH_HEAD
 # A local head whose name begins with a DASH. `refs/heads/-foo` passes `git
 # check-ref-format`, so it is a legal branch, and the qualified-form
 # normalization above correctly derives `-foo` from it — which git's own option
@@ -1017,6 +1131,24 @@ require_clone CLONE_PINNED "h: pinned"
 in_repo "$SRC4" "$DC_REMOVE" pinned
 assert_eq "h: dc-remove removes what dc-enter printed" "$RC" 0
 assert_true "h: dc-enter's printed path is gone" "$([ ! -e "$CLONE_PINNED" ] && echo true || echo false)"
+# ... and they agree under the environment dc-enter drops. dc-remove drops the
+# same set at the same point, so the repository paths it builds its refuse-list
+# from come from the repository dc-enter was run in rather than from wherever the
+# caller's `GIT_DIR` happens to point. The clone still goes; nothing else does.
+in_repo "$SRC4" "$DC_ENTER" gitdirremove
+require_clone CLONE_GITDIRREMOVE "h: gitdirremove"
+in_repo "$SRC4" env "GIT_DIR=$SRC4/.git" "$DC_REMOVE" gitdirremove
+assert_eq "h: dc-remove works under an inherited GIT_DIR" "$RC" 0
+assert_eq "h: ... still writing nothing to stdout" "$OUT" ""
+assert_true "h: ... and the clone is gone" \
+	"$([ ! -e "$CLONE_GITDIRREMOVE" ] && echo true || echo false)"
+assert_true "h: ... while the invoking repository is intact" \
+	"$([ -d "$SRC4/.git" ] && [ -f "$SRC4/file.txt" ] && echo true || echo false)"
+# The refusals still hold there, so the sanitize did not cost the ownership proof
+# its teeth: a path argument is a malformed slug whatever the environment says.
+in_repo "$SRC4" env "GIT_DIR=$SRC4/.git" "$DC_REMOVE" "$SRC4"
+assert_ne "h: ... and a path argument is still refused under it" "$RC" 0
+assert_contains "h: ... as a path, not a slug" "$ERR" "expected a slug, not a path"
 
 echo "== (i) the incident's shape =="
 SRC5="$WORK/i/src"
