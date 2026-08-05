@@ -487,6 +487,19 @@ function cycleRoundCap(maxRounds) {
   return Math.min(n, CYCLE_MAX_ROUNDS);
 }
 
+// Shell-quote a ref before embedding it in a copy-paste command these prompts
+// emit. Git ref names forbid spaces but little else, so a branch or base
+// carrying `$`, a backtick, or `;` — legal, and reachable from a task-derived
+// name — would still expand or run inside the DOUBLE quotes `JSON.stringify`
+// produces, scoping the review against the wrong ref or executing something
+// unintended. Single-quote instead and escape embedded quotes; adjacent quoted
+// spans like `feat/'b'` concatenate into one shell word, so the ref resolves.
+// Prefixed `cycle` like the rest of this section: a consumer synthesizing the
+// section into its own flat script may already define its own `shq`.
+function cycleShq(s) {
+  return `'${String(s).replace(/'/g, `'\\''`)}'`;
+}
+
 // Pinned wire format for escalated open questions. It maps one-to-one onto the
 // four-part brief `resolve-open-questions` serves (grounded context, concrete
 // trigger, distinct options, recommendation), so a completed cycle's questions
@@ -675,7 +688,7 @@ function cycleFixPrompt(cycle, state) {
       : `This is round 1: carry out the assignment below.`;
   const artifactLine = state.artifactDir
     ? `This cycle's artifact directory is \`${state.artifactDir}\` — report it back as \`artifactDir\` and write this pass's packet prose (what you did, dispositions, question drafts) under it as \`round-${state.round}/\`.`
-    : `Create this cycle's UNIQUE artifact directory first — outside the worktree, e.g. \`mktemp -d "\${TMPDIR:-/tmp}/review-cycle-${cycle.slug || "cycle"}.XXXXXX"\` (never a fixed shared name: parallel cycles share scratch space) — report it as \`artifactDir\` (REQUIRED: the cycle refuses to run rounds with no home for their history), and write this pass's packet prose under it as \`round-${state.round}/\`.`;
+    : `Create this cycle's UNIQUE artifact directory first — outside the worktree, e.g. \`mktemp -d "\${TMPDIR:-/tmp}/review-cycle-"${cycleShq(cycle.slug || "cycle")}".XXXXXX"\` (never a fixed shared name: parallel cycles share scratch space) — report it as \`artifactDir\` (REQUIRED: the cycle refuses to run rounds with no home for their history), and write this pass's packet prose under it as \`round-${state.round}/\`.`;
   return `You are the fixer for one review cycle (branch \`${cycle.branch}\`, review base \`${cycle.base}\`, artifact type ${cycle.artifactType}).
 
 ## WORKTREE CONTRACT (do this before anything else)
@@ -738,7 +751,7 @@ Read the repository's agent-context files (\`AGENTS.md\` / \`CLAUDE.md\`) first 
 
 ${cycleReviewChecks(cycle.artifactType)}
 
-Scope with \`git diff --name-only ${JSON.stringify(cycle.base)}...HEAD\`, then read each touched file IN FULL — do not read commit messages or diff content (both anchor you to the fixer's intent); follow references into untouched files when needed. If the diff looks empty despite claimed work, set \`emptyDiffFlag\` and stop — that signals a wrong worktree/branch, not real absence.
+Scope with \`git diff --name-only ${cycleShq(cycle.base)}...HEAD\`, then read each touched file IN FULL — do not read commit messages or diff content (both anchor you to the fixer's intent); follow references into untouched files when needed. If the diff looks empty despite claimed work, set \`emptyDiffFlag\` and stop — that signals a wrong worktree/branch, not real absence.
 ${persistLine}${cycle.scope && cycle.scope.reviewInstructions ? `\n## Consumer review criteria (verify each item against these too)\n\n${cycle.scope.reviewInstructions}\n` : ""}${cycleItemsBlock(cycle)}${handedBlock}${dispositionsBlock}${workBlock}
 Return \`pass: true\` only if everything holds and no material issue remains; else \`pass: false\` with numbered, actionable \`issues\`. Be strict but fair — real gaps and functional problems, not style nits. Put pass-worthy caveats in \`notes\` (the cycle disposes them rather than dropping them).`;
 }
@@ -774,7 +787,7 @@ The peer examines this worktree READ-ONLY; you edit nothing either. The cycle's 
 ## Steps
 
 ${preflightStep}
-2. Prepare unique per-attempt paths under this cycle's artifact directory: \`round_dir="${state.artifactDir}/round-${state.round}"\`, \`mkdir -p "$round_dir"\`, with \`prompt_file\`, \`outfile\`, \`stderr_file\` inside it (suffix \`-attempt2\` on a retry; never reuse a path).
+2. Prepare unique per-attempt paths under this cycle's artifact directory: \`round_dir=${cycleShq(`${state.artifactDir}/round-${state.round}`)}\`, \`mkdir -p "$round_dir"\`, with \`prompt_file\`, \`outfile\`, \`stderr_file\` inside it (suffix \`-attempt2\` on a retry; never reuse a path).
 3. Write the peer prompt below VERBATIM to \`$prompt_file\` with a quoted heredoc (\`<<'PEER_PROMPT'\`) — never assemble it through shell interpolation.
 4. Launch the peer as ONE supervised foreground call, bounded UNDER your own Bash tool limit so the tool can never kill it mid-run unaccounted (set the Bash tool timeout to 600000 ms and bound the peer tighter with \`timeout\`):
 
