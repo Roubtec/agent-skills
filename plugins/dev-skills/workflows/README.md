@@ -42,14 +42,16 @@ The shared-filesystem assumption was verified on 2026-06-10 with Claude Code 2.1
 
 ## Validation
 
-Parse-check the shipped workflow sources — `plugins/dev-skills/workflows/wf-review-cycle.js`, `wf-address-review.js`, and `wf-address-tasks.js` — with powbox's `wf-check` where it has landed, since it applies the runtime's exact wrapping. It is not on PATH in the powbox image this repo is developed in (checked 2026-08-05), so until it lands, apply that wrapping yourself and check the result — from the repository root, once per file:
+Parse-check the shipped workflow sources — `plugins/dev-skills/workflows/wf-review-cycle.js`, `wf-address-review.js`, and `wf-address-tasks.js` — with powbox's `wf-check` where it has landed: it is built against the runtime's own loading, which nothing in this repo can speak for. It is not on PATH in the powbox image this repo is developed in (checked 2026-08-05), so until it lands, stand in for it with a hand-rolled wrapper — from the repository root, once per file:
 
 ```
 D="$(mktemp -d "${TMPDIR:-/tmp}/wf-check.XXXXXX")" \
   && sed '1,/^export const meta/s/^export const meta/const meta/' <file> \
-  | { echo '(async function(args, agent, phase, workflow, parallel, pipeline, log){'; cat; echo '});'; } > "$D/w.cjs" \
+  | { echo '(async function(args, agent, phase, workflow, parallel, pipeline, log){"use strict";'; cat; echo '});'; } > "$D/w.cjs" \
   && node --check "$D/w.cjs" && rm -rf "$D"
 ```
+
+That wrapper is a stand-in, not a reproduction of the runtime's wrapping, and it is worth knowing which half is which. What it does reproduce is the two things the parse turns on: `export const meta` becomes a plain `const`, so the file is no longer module syntax whose detection swallows later errors (see below), and a function body makes the top-level `return` these scripts use legal. `"use strict";` is ours rather than an observed runtime property — included because it only ever rejects more: all three shipped sources pass with it, while it catches syntax sloppy mode accepts (`with(Math){}` — exit 1 strict, exit 0 sloppy), and a runtime that reads `export const meta` by loading the file as a module parses strictly anyway (verified 2026-08-05, Node v24.18.1). What it does NOT reproduce is anything past parsing: the runtime's real parameter list is not derivable from this repo — harmless, since parameter names cannot change parse validity — and neither is whatever else the runtime enforces when it loads a workflow (the `meta`-literal and determinism rules under *Authoring constraints*, for two). So a pass here means the source is syntactically valid in a shape that admits its top-level `return`, not that the runtime will accept it.
 
 The wrapper lands in an `mktemp -d` directory rather than a fixed path because `wf-address-tasks` gives each task its own worktree, so several agents can be running this same check concurrently — the rule the cycle already applies to its own scratch ("never a fixed shared name: parallel cycles share scratch space", in `wf-review-cycle.js`'s artifact-directory instruction). A failing run leaves the directory behind on purpose: the reported line number refers to the wrapped file, not the source.
 
