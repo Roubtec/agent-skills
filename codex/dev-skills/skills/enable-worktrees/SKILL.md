@@ -41,6 +41,8 @@ For worktree-based parallelism a repo needs two committed things.
 
    `.git/worktrees` needs **no** gitignore entry — it lives inside the untracked `.git/` directory.
 
+Those two are necessary, not sufficient. A `$ROOT/.powbox.local.yml` carrying its own top-level `shadow:` key replaces the committed list **wholesale**, so a repo can hold both files in perfect shape and still mount none of what they declare. Step 2 detects that case; until it is resolved the repo is not worktree-ready, whatever `.powbox.yml` says.
+
 Why this is safe and durable: the common `.git` (objects + refs) is *not* shadowed, so committed work persists on the host and survives container recycle. The powbox launcher backs `.worktrees` with a **persistent per-project volume** (which also holds the pnpm store, so worktree `pnpm install` hardlinks from it), and `.git/worktrees` is bind-mounted from `.worktrees/.gitworktrees` inside that same volume — so per-worktree git metadata is durable too, and a worktree (including its uncommitted changes) survives a container stop/recreate with `git status` still working. Only `.claude/worktrees` (harness-native working trees) stays ephemeral tmpfs. Container registrations never leak onto the host: the bind hides the host's own `.git/worktrees` and keeps ours inside the container-local volume. The `.worktrees` entry below is then a harmless **fallback** — skipped when the volume is mounted, used only if the container is launched without it (in which case `.git/worktrees` falls back to tmpfs).
 powbox's README "Workspace Shadow Mounts → Git Worktree Parallel Development" has the full model (readable under `/ctx/<mount-name>` if the powbox repo is mounted as context, but this skill ships the contract so that is optional).
 
@@ -51,9 +53,17 @@ Every step is idempotent and surgical — preserve unrelated content, comments, 
 
 1. **Locate the repo root.** `ROOT="$(git rev-parse --show-toplevel)"`. If this is not a git repository, stop and tell the user — worktrees require git.
 
-2. **Reconcile `.powbox.yml`.** Read `$ROOT/.powbox.yml` if it exists.
+2. **Reconcile `.powbox.yml` — checking for a local override first.** A `$ROOT/.powbox.local.yml` that exists *and* carries a top-level `shadow:` key **replaces the committed list wholesale**: `detect-shadows.sh` reads that file instead and logs `detect-shadows: shadow list overridden by .powbox.local.yml`. Use powbox's own test rather than a variant of it — the override counts only when `yq -r 'has("shadow")' "$ROOT/.powbox.local.yml"` prints `true`. Presence alone is not enough: a local file with only `ctx:` and no `shadow:` key overrides nothing and changes nothing about this run.
+
+   An active `shadow:` has to be a list of non-empty string paths before you act on it. Null, a scalar, a mapping, or a list containing a null, a collection, or an empty string is malformed: stop, report, and write **nothing at all** — not `.powbox.yml`, not `.gitignore` — rather than coercing a pathname or inventing a list inside a user-local file. An empty list is well-formed, and deliberately so: it disables the committed declarations, which is exactly the case this step exists to catch.
+
+   Then read `$ROOT/.powbox.yml` if it exists.
    - Absent → create it with a `shadow:` list containing the three literal entries above.
-   - Present → ensure the `shadow:` list contains each of the three entries and add any that are missing. **Keep every existing entry** (other shadow paths, monorepo `node_modules` globs, etc.) untouched. If the file has a `shadow:` key that is malformed or not a list, stop and report rather than rewriting it.
+   - Present → ensure the `shadow:` list contains each of the three entries and add any that are missing. **Keep every existing entry** (other shadow paths, monorepo `node_modules` globs, etc.) untouched. If the file has a `shadow:` key that is malformed by the same rule, stop and report rather than rewriting it.
+
+   `.powbox.yml` gets the three entries either way — it is the durable, shared record every teammate and future container inherits. But while an override stands, nothing you wrote there takes effect, so say so plainly and resolve it: either add the same three entries to the override's `shadow:` list (keeping its existing entries and its other keys untouched), or have the user retire the override by dropping its `shadow:` key so the committed list takes effect. Confirm which before editing a user-local file. The entry that actually breaks is `.claude/worktrees`: no launcher volume backs it, so it depends entirely on the declaration for its tmpfs, and while the effective list omits it, harness-native worktrees silently land on the host bind mount. That is also what `wt-bootstrap` fails closed on — it refuses to start when a worktree root is not a container-local mountpoint, and its remedy points back at this skill, so an unresolved override reads as this skill failing at the very thing it reported fixing.
+
+   Never stage or commit `.powbox.local.yml` (see step 6): it is user-local and expected to be gitignored. powbox's launcher only *warns* when `git -C "$ROOT" check-ignore -q -- .powbox.local.yml` does not ignore it, so run that check yourself and surface the gap to the user.
 
 3. **Reconcile `.gitignore`.** Ensure `$ROOT/.gitignore` ignores `.worktrees/` and `.claude/worktrees/`.
    - Accept an existing equivalent entry (`.worktrees` without a trailing slash also matches the directory). Only add what is missing, under a short comment such as `# powbox git worktrees (container-local; never commit working trees)`.
@@ -61,7 +71,7 @@ Every step is idempotent and surgical — preserve unrelated content, comments, 
 
 4. **Guard against leaked tracking.** Run `git -C "$ROOT" ls-files -- .worktrees .claude/worktrees`. If anything is tracked, `git -C "$ROOT" rm -r --cached` it (keeping the working copy) so worktree contents stop being committed. Report what you untracked.
 
-5. **(Optional) Apply immediately in this session.** Committed declarations take effect automatically at the *next* container start. To shadow the directories now, in the running container, without relaunching:
+5. **Apply immediately in this session — optional, except after an override.** Committed declarations take effect automatically at the *next* container start. To shadow the directories now, in the running container, without relaunching:
 
    ```bash
    shadow-refresh.sh "$ROOT"
@@ -87,16 +97,20 @@ Every step is idempotent and surgical — preserve unrelated content, comments, 
 
    `.worktrees` is healthy when it is its own mount on any container-local filesystem — normally the per-project volume, or tmpfs as a fallback. `.git/worktrees` must be a mountpoint and, when `.worktrees` is the persistent volume, durable (non-tmpfs, bound from it); `.claude/worktrees` must be tmpfs. If a check fails, tell the user to rebuild the powbox image on the host (`./build.sh all`) and relaunch; the repo config you wrote is still correct.
 
-6. **Commit the config.** These files belong in version control so every teammate and every future container inherits a worktree-ready repo. Stage `.powbox.yml` and `.gitignore` and commit them following the repo's commit conventions — or, if the user prefers to review first, leave them staged and say so.
+   Skip this step only when step 2 found no override. A repo whose declarations may be inert is the one case where skipping the verification hides the failure completely — so once the override resolution is applied, run these checks rather than deferring them to the next container start, and treat a failure as the run's outcome. Until they pass, the effective list is unproven and the repo must not be called worktree-ready.
+
+6. **Commit the config.** These files belong in version control so every teammate and every future container inherits a worktree-ready repo. Stage and commit only this change — `.powbox.yml` and `.gitignore`, and not unrelated edits those files may already carry — following the repo's commit conventions, or, if the user prefers to review first, leave it staged and say so. Never stage `.powbox.local.yml`, whatever you agreed to write in it.
 
 ## Report
 
 State concisely:
 
 - Whether the repo was already compliant, or what you changed, per file.
+- Whether a `.powbox.local.yml` override is masking the committed list — and if so, that the `.powbox.yml` entries are inert until it is resolved, which resolution the user chose, and which file each change landed in. Never report the repo worktree-ready while an override's effective list still omits the three roots.
+- Whether `.powbox.local.yml` is gitignored, if it exists and is not.
 - Anything you untracked in step 4.
 - Whether the container-local mounts are live in the current session (step 5) or pending the next container start.
-- Any blocker: not a git repo, a malformed `.powbox.yml`, or a stale image.
+- Any blocker: not a git repo, a malformed `shadow:` list in `.powbox.yml` or in an active override, or a stale image.
 
 ## Notes
 
