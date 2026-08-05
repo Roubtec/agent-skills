@@ -57,7 +57,7 @@ Prefer a small pure validation/helper seam that the test can extract without exe
 
 - Run the focused storage-probe regression test.
 - Run `node scripts/test-checkout-cleanliness-report.mjs`.
-- Run the workflow syntax validation documented in `plugins/dev-skills/workflows/README.md` for both workflow files.
+- Run the workflow syntax validation documented in `plugins/dev-skills/workflows/README.md` for every workflow source it names (three since PR #39 added `wf-review-cycle.js`).
 
 ## Review plan
 
