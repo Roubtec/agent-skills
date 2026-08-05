@@ -346,7 +346,7 @@ function cycleFindingsBlock(findings) {
   if (!findings) return "";
   const parts = [];
   if (Array.isArray(findings.carried) && findings.carried.length) {
-    parts.push(`### Findings carried forward — the previous pass gave these NO single valid disposition (missing \`findingId\`, duplicate dispositions for one id, an unrecognized disposition value, an \`escalated\` with no matching open question — or, for a \`disposition-error\` entry, a disposition naming a finding id never handed, or a retirement naming no live open question). Dispose EVERY one now, exactly one disposition each, echoing its \`id\` as \`findingId\`.\n\n${JSON.stringify(findings.carried, null, 2)}`);
+    parts.push(`### Findings carried forward — the previous pass gave these NO single valid disposition (missing \`findingId\`, duplicate dispositions for one id, an unrecognized disposition value, an \`escalated\` with no matching open question — or, for a \`disposition-error\` entry, a disposition naming a finding id never handed, or a retirement that settled nothing). Dispose EVERY one now, exactly one disposition each, echoing its \`id\` as \`findingId\`.\n\n${JSON.stringify(findings.carried, null, 2)}`);
   }
   if (Array.isArray(findings.reviewer) && findings.reviewer.length) {
     parts.push(`### Reviewer findings\n\n${JSON.stringify(findings.reviewer, null, 2)}`);
@@ -429,6 +429,13 @@ function cycleReviewPrompt(cycle, state) {
   const dispositionsBlock = state.packet && Array.isArray(state.packet.dispositions) && state.packet.dispositions.length
     ? `\n## Proposed finding dispositions (verify each; a \`declined\` must be technically justified, not a convenient dismissal — you may overrule it)\n\n${JSON.stringify(state.packet.dispositions, null, 2)}\n`
     : "";
+  // A retirement is the fixer asserting a queued maintainer decision is
+  // settled, so it goes to the same fresh reviewer that adjudicates a decline:
+  // it is the only disposition that can take a question OFF the human's list,
+  // and the dispositions block alone shows the id, never what was asked.
+  const retiredBlock = Array.isArray(state.retiredQuestions) && state.retiredQuestions.length
+    ? `\n## Open questions this pass RETIRED (the fixer claims each is now SETTLED, so the maintainer will not be asked it — verify that claim against the committed state, exactly as you would a \`declined\`; a question retired without being genuinely settled silently drops a decision the human should have made, itself a blocking issue)\n\n${JSON.stringify(state.retiredQuestions, null, 2)}\n`
+    : "";
   const workBlock = state.packet && Array.isArray(state.packet.workReport) && state.packet.workReport.length
     ? `\n## Fixer's per-item report (verify the claims hold in the committed state; you were NOT given its reasoning)\n\n${JSON.stringify(state.packet.workReport, null, 2)}\n`
     : "";
@@ -446,7 +453,7 @@ Read the repository's agent-context files (\`AGENTS.md\` / \`CLAUDE.md\`) first 
 ${cycleReviewChecks(cycle.artifactType)}
 
 Scope with \`git diff --name-only ${cycleShq(cycle.base)}...HEAD\`, then read each touched file IN FULL — do not read commit messages or diff content (both anchor you to the fixer's intent); follow references into untouched files when needed. If the diff looks empty despite claimed work, set \`emptyDiffFlag\` and stop — that signals a wrong worktree/branch, not real absence.
-${persistLine}${cycle.scope && cycle.scope.reviewInstructions ? `\n## Consumer review criteria (verify each item against these too)\n\n${cycle.scope.reviewInstructions}\n` : ""}${cycleItemsBlock(cycle)}${handedBlock}${dispositionsBlock}${workBlock}
+${persistLine}${cycle.scope && cycle.scope.reviewInstructions ? `\n## Consumer review criteria (verify each item against these too)\n\n${cycle.scope.reviewInstructions}\n` : ""}${cycleItemsBlock(cycle)}${handedBlock}${dispositionsBlock}${retiredBlock}${workBlock}
 Return \`pass: true\` only if everything holds and no material issue remains; else \`pass: false\` with numbered, actionable \`issues\`. Be strict but fair — real gaps and functional problems, not style nits. Put pass-worthy caveats in \`notes\` (the cycle disposes them rather than dropping them).`;
 }
 
@@ -615,7 +622,7 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds) {
           category: "disposition-error",
           problem: settles
             ? `A ${d.disposition} disposition claimed to retire open question ${JSON.stringify(qid)}, which this cycle does not carry as a live open question — it was never raised, or an earlier pass already retired it — so the retirement settled nothing. Re-issue it against the correct live question id as needed, and dispose this entry (e.g. declined) explaining the stray.`
-            : `A ${JSON.stringify(d.disposition)} disposition claimed to retire open question ${JSON.stringify(qid)}, but only a \`fixed\` or \`declined\` disposition retires one (an \`escalated\` disposition raises a question rather than settling one), so the retirement was not applied. Re-issue it on the disposition that actually settles the question, and dispose this entry (e.g. declined) explaining the stray.`,
+            : `A disposition claimed to retire open question ${JSON.stringify(qid)}, but its \`disposition\` is ${JSON.stringify(d.disposition || "")} — only a \`fixed\` or \`declined\` disposition retires a question (an \`escalated\` one raises a question rather than settling it) — so the retirement was not applied. Re-issue it on the disposition that actually settles the question, and dispose this entry (e.g. declined) explaining the stray.`,
         });
       }
     }
@@ -791,12 +798,16 @@ async function runReviewCycle(cycle) {
     // consumer skips it knowingly and a WRONG retirement is visible in the same
     // lean result as the disposition that made it, not only in the artifact
     // directory. A retirement naming an unknown id already came back above as a
-    // carried `disposition-error`, so nothing is dropped here silently.
+    // carried `disposition-error`, so nothing is dropped here silently. What
+    // WAS retired goes to this round's reviewer, which adjudicates the claim.
+    const retiredThisPass = [];
     for (const d of fix.dispositions || []) {
       if (!d || (d.disposition !== "fixed" && d.disposition !== "declined")) continue;
       for (const qid of cycleRetiredQuestionIds(d)) {
         const q = openQuestions.find((x) => x && x.id === qid && !x.retired);
-        if (q) q.retired = { pass: fixerPasses, disposition: d.disposition, findingId: d.findingId || "", detail: d.detail || "" };
+        if (!q) continue;
+        q.retired = { pass: fixerPasses, disposition: d.disposition, findingId: d.findingId || "", detail: d.detail || "" };
+        retiredThisPass.push(q);
       }
     }
 
@@ -823,6 +834,7 @@ async function runReviewCycle(cycle) {
       packet: { ...packet, dispositions: fix.dispositions || [] },
       artifactDir,
       handedFindings: findings,
+      retiredQuestions: retiredThisPass,
       peerPreflighted: peerState.preflighted,
     };
     // The peer launches BESIDE the fresh reviewer — the canonical concurrent
