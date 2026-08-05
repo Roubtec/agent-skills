@@ -68,19 +68,37 @@ trap 'rm -rf "$WORK"' EXIT
 # Hermetic git: no user or system config leaks in, so the helpers' behavior does
 # not depend on the machine running the suite.
 # A fresh HOME does not achieve that on its own. `GIT_CONFIG_GLOBAL` and
-# `XDG_CONFIG_HOME` both redirect git's "global" config away from $HOME, and the
-# GIT_AUTHOR_*/GIT_COMMITTER_*/EMAIL variables supply a committer identity with
-# no config file involved at all. A development container setting any of them —
+# `XDG_CONFIG_HOME` both redirect git's "global" config away from $HOME;
+# `GIT_CONFIG_COUNT` and `GIT_CONFIG_PARAMETERS` inject config settings with no
+# file involved at all — git exports the latter to every subprocess of a `git -c`
+# invocation, so a suite run from inside a hook, an alias, or `submodule foreach`
+# inherits one; and the GIT_AUTHOR_*/GIT_COMMITTER_*/EMAIL variables supply a
+# committer identity directly. A development container setting any of them —
 # powbox sets GIT_CONFIG_GLOBAL — would hand this suite the identity a clean CI
 # runner does not have, so a fixture step that forgot the `g` wrapper below would
 # pass locally and exit 128 in CI. Clearing them makes a local run reproduce the
-# runner.
+# runner, and the probe below asserts that it does rather than trusting this list
+# to stay complete.
+# `GIT_CONFIG` is cleared for a different reason: it does not supply an identity
+# to git as a whole, but it does redirect `git config` reads AND writes at that
+# file, so dc-enter's fallback `git config user.name` would land outside the
+# clone and the clone would be left without the identity it just set.
 export HOME="$WORK/home"
 export GIT_CONFIG_NOSYSTEM=1
-unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_COUNT
+unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG
 unset GIT_AUTHOR_NAME GIT_AUTHOR_EMAIL GIT_COMMITTER_NAME GIT_COMMITTER_EMAIL EMAIL
 export XDG_CONFIG_HOME="$WORK/home/.config"
 mkdir -p "$HOME"
+# Scrubbing the environment is still not enough on its own: with nothing
+# configured at all, git INVENTS an identity from the account's gecos name and
+# the hostname, and accepts the invented one wherever that hostname carries a
+# domain. On such a host a fixture step missing the `g` wrapper would commit
+# happily and section (b)'s check of dc-enter's own identity fallback would pass
+# without the fallback ever running. `user.useConfigOnly` forbids the invention,
+# so "no identity unless something configured one" holds everywhere rather than
+# only where the hostname happens to be bare. This is the one setting the suite
+# deliberately puts in its throwaway HOME; everything else stays scrubbed.
+printf '[user]\n\tuseConfigOnly = true\n' >"$HOME/.gitconfig"
 export DC_AGENT=testagent
 unset DC_ROOT DC_HARDLINKS
 
@@ -145,6 +163,17 @@ in_repo() {
 }
 
 g() { git -c user.email=test@invalid -c user.name=Test "$@"; }
+
+# The environment block above, asserted rather than assumed. `g` exists because
+# the fixtures must commit where nothing offers an identity, and section (b)
+# proves dc-enter fills that gap inside the clone — both are vacuous if some
+# variable this list does not know about still supplies one. A leak makes those
+# checks pass here and exit 128 on a clean runner, which is the single failure
+# mode the environment block exists to prevent, so it is caught at the top of the
+# run rather than diagnosed from a CI log.
+git init -q -b main "$WORK/hermetic-probe"
+assert_eq "env: no committer identity reaches git from the host" \
+	"$(git -C "$WORK/hermetic-probe" var GIT_COMMITTER_IDENT 2>/dev/null || echo none)" "none"
 
 # Carry the path dc-enter printed into a named variable, ABORTING the run rather
 # than letting an unusable one flow onward. An empty $OUT is the danger: `git -C
@@ -214,8 +243,12 @@ make_source() {
 	g -C "$dir" reset -q --hard HEAD~1
 	git -C "$dir" update-ref refs/pre-rebase/main HEAD
 	# Through the `g` wrapper: `notes add` writes a notes COMMIT, so it needs an
-	# identity the hermetic environment above deliberately withholds.
-	g -C "$dir" notes add -f -m "a note" HEAD >/dev/null 2>&1
+	# identity the hermetic environment above deliberately withholds. Its stderr is
+	# NOT swallowed: `set -e` aborts the whole run if this fails, and a run that
+	# dies with no diagnostic at all is the "why did this die?" experience the
+	# missing wrapper produced. Adding a fresh note prints nothing on stdout, so
+	# only that side needs quieting.
+	g -C "$dir" notes add -f -m "a note" HEAD >/dev/null
 	printf 'stashed\n' >"$dir/file.txt"
 	g -C "$dir" stash -q
 	g -C "$dir" branch -q other HEAD~1
