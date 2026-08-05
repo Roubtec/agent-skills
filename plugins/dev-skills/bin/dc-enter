@@ -1,0 +1,479 @@
+#!/usr/bin/env bash
+# dc-enter — make a DISPOSABLE CLONE of the invoking repository and print only
+# its absolute path, so a subagent can verify a claim empirically somewhere it
+# is safe to wreck.
+#
+# Why this exists: a reviewer subagent asked to verify a claim empirically ran
+# `rm -rf ./*` in the shared main checkout. It had tried to build a throwaway
+# clone first; the clone step was piped to `tail`, so `set -e` never saw it fail,
+# and execution continued in the repo root. The root cause was not carelessness —
+# the prompt authorized empirical verification while the environment offered no
+# safe place to do it, so every agent hand-rolls its own clone-and-cd and each
+# one is a fresh chance to get it wrong. This helper is that safe place.
+#
+# A worktree is NOT that place and is actively misleading here: a linked
+# worktree isolates the working tree but shares `.git`, so `branch -f`, `reset`,
+# `update-ref`, `gc`, and `push` all reach every sibling worktree. Only a real
+# clone isolates refs and objects.
+#
+# ISOLATION GUARANTEE — the whole contract:
+#   Creating, moving, and deleting refs, committing, rewriting history, and
+#   running `gc`/`repack`/`prune` inside the clone CANNOT change the invoking
+#   repository's refs or its reachable objects.
+#   The clone is never made with `--shared` or `--reference`, and no option
+#   exposes them — those genuinely do couple the object stores.
+#   The `origin` remote is removed after the clone is populated, so a stray
+#   `git push` in the clone has nowhere to go. (Remote-tracking refs survive as
+#   ordinary refs; see the ref-namespace note below.)
+#   Object hardlinking would not violate the guarantee either way — git objects
+#   are immutable and content-addressed, created with O_EXCL and never modified
+#   in place, and `gc` only unlinks the clone's own directory entries — but this
+#   helper still clones with `--no-hardlinks` by default. See "Hardlinks" below.
+#
+# Usage: dc-enter <slug> [<ref>]
+#
+#   DC="$(dc-enter probe)"          # clone at the INVOKING WORKTREE's HEAD
+#   DC="$(dc-enter probe main)"     # clone with branch `main` checked out
+#   DC="$(dc-enter probe HEAD~3)"   # clone detached at that commit
+#
+# Calling convention: the ONLY thing this helper writes to stdout is the clone's
+# absolute path. Every diagnostic goes to stderr, so `DC="$(dc-enter probe)"`
+# always yields either a usable path or an empty string plus a non-zero status.
+# Check it before using it — an unguarded empty `$DC` in `rm -rf "$DC"/*` is the
+# incident this helper exists to prevent:
+#
+#   set -euo pipefail
+#   DC="$(dc-enter probe)"
+#   [ -n "$DC" ] && [ -d "$DC/.git" ] || exit 1
+#
+# <ref> (optional): any revision the INVOKING WORKTREE can resolve to a commit.
+# If it names a local branch, the clone checks that branch out; otherwise the
+# clone's HEAD is detached at the resolved commit. The default is the invoking
+# worktree's own HEAD — a branch checkout when HEAD is on a branch, detached
+# when it is detached — NOT the repository's or the main worktree's HEAD. That
+# distinction is load-bearing: `git rev-parse --git-common-dir` resolves to the
+# main worktree, so the natural implementation would silently verify a linked
+# worktree's claim against the main worktree's commit, which is exactly the
+# class of wrong-branch conclusion this helper exists to prevent. The source is
+# therefore derived from `git rev-parse --show-toplevel` (the invoking worktree,
+# including from a nested subdirectory) and the target commit is resolved there.
+#
+# REF NAMESPACE: the clone mirrors the source's refs EXACTLY — every ref at its
+# original full name, including `refs/pruned/*`, `refs/pre-rebase/*`,
+# `refs/notes/*`, `refs/stash`, `refs/replace/*`, and `refs/remotes/*`. A plain
+# `git clone` would instead rewrite branches to `refs/remotes/origin/*` and drop
+# every other namespace, and a subagent handed a clone silently missing the
+# namespace under test can conclude a reservation worked or vanished for
+# entirely the wrong reason. NOT carried: the source's reflogs — the clone keeps
+# a fresh reflog of its own, so the source's `HEAD@{n}`, `stash@{n}`, and
+# reflog-only recovery are unavailable in it — uncommitted and untracked working
+# tree state, and the source's local config and hooks.
+#
+# CLONE ROOT: `$DC_ROOT` if set, else `$TMPDIR`, else `/tmp`. Never a path
+# inside the invoking repository or any of its worktrees — the helper refuses,
+# non-zero and silent on stdout, rather than falling back somewhere convenient.
+# Powbox expresses its "outside /workspace" placement by setting `DC_ROOT`, so
+# that name is the interface between this repository and the container image;
+# do not rename it on one side only.
+#
+# PATH LAYOUT: <root>/dc-<agent>-<repo-hash>/<slug>/repo
+# The `<agent>-<repo-hash>` component scopes clones per agent AND per invoking
+# worktree, so two agents sharing one temp root on a plain machine never resolve
+# slug `probe` to the same directory. `<agent>` is `$DC_AGENT` if set, else
+# `$CONTAINER_NAME`, else the login name; set `DC_AGENT` explicitly when two
+# agents share both a machine account and a worktree.
+#
+# REUSE: a slug's clone is re-derived from scratch on every call. A disposable
+# clone exists to be wrecked, so handing back whatever survived the last
+# experiment — refs deleted, objects collected — would run the next
+# verification against a corrupted baseline. If the slug's directory exists and
+# this helper created it, it is removed and rebuilt; if it exists and this
+# helper did NOT create it, the call is refused rather than deleting a stranger's
+# directory. The printed path is deterministic for a given agent, worktree, and
+# slug, so carry `$DC` forward within a script instead of re-running dc-enter,
+# which throws away what is there.
+#
+# Hardlinks: `git clone` of a local path hardlinks `.git/objects` by default,
+# which is safe for every git operation. The default here is nonetheless
+# `--no-hardlinks`, because the accidents a disposable clone exists to absorb
+# are precisely the non-git ones: a shell redirect, `sed -i`, or an unpacked
+# tarball landing on `.git/objects/ab/cdef…` writes THROUGH a hardlink and
+# corrupts the source repository's copy of that object. Copying the object store
+# costs disk and clone time proportional to repository size and buys defence in
+# depth against exactly that. Set `DC_HARDLINKS=1` to take the fast path on a
+# large repository; the isolation guarantee above holds either way. Both paths
+# use git's local-clone optimization, so both carry the source's unreachable
+# objects as well as its reachable ones.
+#
+# Sync discipline: this plugin copy is canonical and net-new here — unlike
+# `gh-review-threads` there is no powbox-baked original to vendor or checksum
+# against, so nothing is pinned. If powbox later bakes `dc-enter`/`dc-remove`
+# onto the container PATH, it must bake from this copy and keep `DC_ROOT` as the
+# placement interface. Any behavior change to either helper must update
+# scripts/test-dc-helpers.sh in the same PR.
+#
+# This script must not repeat the trap that caused the incident it exists to
+# prevent: `set -euo pipefail` is on, no load-bearing command is piped, and the
+# script NEVER changes its own working directory — the only `cd` is inside a
+# command-substitution subshell in canon(), whose arrival is verified by the
+# `pwd -P` it must print.
+#
+# Dependencies: `git` and coreutils. Nothing heavier survives being baked into a
+# container image.
+set -euo pipefail
+
+PROG=dc-enter
+readonly PROG
+# Bumping this magic invalidates every older marker: dc-remove and dc-enter then
+# refuse to touch directories a previous layout created, instead of guessing.
+readonly MARKER_MAGIC='dc-clone-v1'
+readonly MARKER_NAME='dc-clone-meta'
+# The clone's transient remote name. Deliberately not `origin`: the ref mirror
+# below prunes every ref the source does not have, which would delete the
+# source's OWN refs/remotes/origin/* if the clone had claimed that namespace.
+readonly SRC_REMOTE='dc-source'
+
+die() {
+	printf '%s: %s\n' "$PROG" "$*" >&2
+	exit 1
+}
+
+usage() {
+	local code="${1:-1}"
+	{
+		echo "usage: dc-enter <slug> [<ref>]"
+		echo
+		echo "  Prints the absolute path of a disposable clone of the invoking"
+		echo "  repository, and nothing else, on stdout. <ref> defaults to the"
+		echo "  invoking worktree's HEAD. The clone's refs and objects are fully"
+		echo "  independent of the invoking repository; wreck it freely and drop it"
+		echo "  with 'dc-remove <slug>'. Root: \$DC_ROOT, else \$TMPDIR, else /tmp —"
+		echo "  never inside the repository."
+	} >&$((code == 0 ? 1 : 2))
+	exit "$code"
+}
+
+# --- Path helpers ------------------------------------------------------------
+
+# Canonicalize a path that need not exist yet: resolve the deepest EXISTING
+# ancestor for real (symlinks and all) and re-append the rest lexically.
+# `cd` runs only inside this command-substitution subshell, so the script's own
+# working directory never moves, and arrival is verified rather than assumed —
+# a failed `cd` yields a non-zero status AND an empty result, both of which are
+# checked. Refuses `.`/`..` in the non-existent tail rather than guessing what
+# they would resolve to.
+canon() {
+	local path="$1" head tail_part out comp
+	[ -n "$path" ] || return 1
+	case "$path" in
+	/*) ;;
+	*) path="$PWD/$path" ;;
+	esac
+	# Collapse duplicate slashes and drop a trailing one (but keep a bare "/").
+	while [ "$path" != "${path//\/\///}" ]; do path="${path//\/\///}"; done
+	while [ "${#path}" -gt 1 ] && [ "${path%/}" != "$path" ]; do path="${path%/}"; done
+	head="$path"
+	tail_part=""
+	while [ ! -d "$head" ]; do
+		comp="${head##*/}"
+		case "$comp" in
+		. | ..) return 1 ;;
+		esac
+		tail_part="${comp}${tail_part:+/$tail_part}"
+		head="${head%/*}"
+		[ -n "$head" ] || head=/
+		[ "$head" != "$path" ] || return 1
+	done
+	out="$(cd -P -- "$head" >/dev/null 2>&1 && pwd -P)" || return 1
+	[ -n "$out" ] || return 1
+	case "$out" in
+	/*) ;;
+	*) return 1 ;;
+	esac
+	if [ -n "$tail_part" ]; then
+		if [ "$out" = "/" ]; then
+			out="/$tail_part"
+		else
+			out="$out/$tail_part"
+		fi
+	fi
+	printf '%s\n' "$out"
+}
+
+# True when $1 is $2 or lives underneath it. Both must already be canonical.
+path_within() {
+	local candidate="$1" ancestor="$2"
+	[ -n "$candidate" ] && [ -n "$ancestor" ] || return 1
+	if [ "$ancestor" = "/" ]; then
+		return 0
+	fi
+	case "$candidate" in
+	"$ancestor") return 0 ;;
+	"$ancestor"/*) return 0 ;;
+	esac
+	return 1
+}
+
+# Reduce a string to a safe single path component.
+sanitize_component() {
+	local value="${1//[^A-Za-z0-9._-]/_}"
+	value="${value:0:40}"
+	printf '%s' "$value"
+}
+
+# --- Arguments ---------------------------------------------------------------
+SLUG=""
+REF=""
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-h | --help) usage 0 ;;
+	--)
+		shift
+		break
+		;;
+	-*) usage 1 ;;
+	*)
+		if [ -z "$SLUG" ]; then
+			SLUG="$1"
+		elif [ -z "$REF" ]; then
+			REF="$1"
+		else
+			usage 1
+		fi
+		shift
+		;;
+	esac
+done
+while [ $# -gt 0 ]; do
+	if [ -z "$SLUG" ]; then
+		SLUG="$1"
+	elif [ -z "$REF" ]; then
+		REF="$1"
+	else
+		usage 1
+	fi
+	shift
+done
+
+[ -n "$SLUG" ] || usage 1
+# A slug is one path component the helper controls, never a caller-supplied
+# path: that is what makes "dc-remove can only reach what dc-enter created" hold.
+if [ "${#SLUG}" -gt 64 ] || [[ ! "$SLUG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+	die "slug must be 1-64 chars matching [A-Za-z0-9][A-Za-z0-9._-]*: '$SLUG'"
+fi
+
+# --- The invoking repository -------------------------------------------------
+SRC_TOP="$(git rev-parse --show-toplevel 2>/dev/null)" ||
+	die "not inside a git working tree (run this from the repository you want to clone)"
+[ -n "$SRC_TOP" ] || die "could not resolve the invoking worktree (bare repository?)"
+SRC_TOP="$(canon "$SRC_TOP")" || die "could not canonicalize the invoking worktree path"
+
+REF_ARG="${REF:-HEAD}"
+SHA="$(git rev-parse --verify --quiet "${REF_ARG}^{commit}" 2>/dev/null)" ||
+	die "'$REF_ARG' does not resolve to a commit in the invoking worktree"
+[ -n "$SHA" ] || die "'$REF_ARG' does not resolve to a commit in the invoking worktree"
+
+# Which branch (if any) the clone should check out. With no <ref> this follows
+# the INVOKING worktree's HEAD; with one it follows the ref only when that ref
+# is a local branch.
+BRANCH=""
+if [ -z "$REF" ]; then
+	if HEAD_SYMREF="$(git symbolic-ref --quiet HEAD 2>/dev/null)"; then
+		case "$HEAD_SYMREF" in
+		refs/heads/*) BRANCH="${HEAD_SYMREF#refs/heads/}" ;;
+		esac
+	fi
+elif git show-ref --verify --quiet "refs/heads/$REF" 2>/dev/null; then
+	BRANCH="$REF"
+fi
+
+# Everything the clone root must stay out of: the invoking worktree, the shared
+# git directory, and every other worktree registered against this repository.
+REPO_PATHS=("$SRC_TOP")
+GIT_COMMON="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+if [ -n "$GIT_COMMON" ]; then
+	if GIT_COMMON_CANON="$(canon "$GIT_COMMON")"; then
+		REPO_PATHS+=("$GIT_COMMON_CANON")
+	fi
+fi
+GIT_DIR_OWN="$(git rev-parse --absolute-git-dir 2>/dev/null || true)"
+if [ -n "$GIT_DIR_OWN" ]; then
+	if GIT_DIR_CANON="$(canon "$GIT_DIR_OWN")"; then
+		REPO_PATHS+=("$GIT_DIR_CANON")
+	fi
+fi
+# Captured into a variable, never piped: a failure here must stop the script.
+WORKTREE_LIST="$(git worktree list --porcelain 2>/dev/null || true)"
+if [ -n "$WORKTREE_LIST" ]; then
+	while IFS= read -r line; do
+		case "$line" in
+		"worktree "*)
+			wt_path="${line#worktree }"
+			if wt_canon="$(canon "$wt_path")"; then
+				REPO_PATHS+=("$wt_canon")
+			fi
+			;;
+		esac
+	done <<<"$WORKTREE_LIST"
+fi
+
+# --- Clone root --------------------------------------------------------------
+if [ -n "${DC_ROOT:-}" ]; then
+	ROOT_RAW="$DC_ROOT"
+	ROOT_SRC="DC_ROOT"
+else
+	ROOT_RAW="${TMPDIR:-/tmp}"
+	ROOT_SRC="${TMPDIR:+TMPDIR}"
+	ROOT_SRC="${ROOT_SRC:-the /tmp default}"
+fi
+ROOT="$(canon "$ROOT_RAW")" || die "could not canonicalize the clone root ($ROOT_SRC): '$ROOT_RAW'"
+case "$ROOT" in
+/*) ;;
+*) die "the clone root ($ROOT_SRC) must be an absolute path: '$ROOT_RAW'" ;;
+esac
+[ "$ROOT" != "/" ] || die "the clone root ($ROOT_SRC) must not be the filesystem root"
+
+AGENT_RAW="${DC_AGENT:-}"
+if [ -z "$AGENT_RAW" ]; then AGENT_RAW="${CONTAINER_NAME:-}"; fi
+if [ -z "$AGENT_RAW" ]; then AGENT_RAW="${USER:-}"; fi
+if [ -z "$AGENT_RAW" ]; then AGENT_RAW="${LOGNAME:-}"; fi
+if [ -z "$AGENT_RAW" ]; then AGENT_RAW="$(id -un 2>/dev/null || true)"; fi
+if [ -z "$AGENT_RAW" ]; then AGENT_RAW="agent"; fi
+AGENT="$(sanitize_component "$AGENT_RAW")"
+[ -n "$AGENT" ] || AGENT="agent"
+
+# Per-worktree component: two agents in different worktrees of one repository
+# must not collide on a slug even when they share an account and a temp root.
+HASH_LINE="$(cksum <<<"$SRC_TOP")" || die "could not hash the invoking worktree path"
+REPO_HASH="${HASH_LINE%% *}"
+[ -n "$REPO_HASH" ] || die "could not hash the invoking worktree path"
+
+SCOPE_DIR="$ROOT/dc-$AGENT-$REPO_HASH"
+SESSION_DIR="$SCOPE_DIR/$SLUG"
+CLONE_DIR="$SESSION_DIR/repo"
+MARKER="$SESSION_DIR/$MARKER_NAME"
+
+# Refuse — non-zero, nothing on stdout — rather than falling back somewhere
+# convenient. Checked on the fully resolved target, so a symlinked root that
+# lands inside the repository is caught too.
+for repo_path in "${REPO_PATHS[@]}"; do
+	if path_within "$SESSION_DIR" "$repo_path"; then
+		die "refusing: the clone root ($ROOT_SRC='$ROOT_RAW') resolves inside the invoking repository ($repo_path). A clone inside the repository is not isolation; point $ROOT_SRC somewhere outside it."
+	fi
+done
+
+# --- Removal guard -----------------------------------------------------------
+# The only rm -rf in this helper. It runs solely against paths this helper
+# derived and owns, re-verified at the moment of use.
+safe_rm_session() {
+	local target="$1" resolved
+	[ -n "$target" ] || die "internal error: empty removal target"
+	resolved="$(canon "$target")" || die "internal error: cannot canonicalize '$target'"
+	[ "$resolved" = "$target" ] || die "internal error: '$target' is not canonical"
+	path_within "$resolved" "$SCOPE_DIR" ||
+		die "internal error: refusing to remove '$resolved' — outside the clone scope"
+	[ "$resolved" != "$SCOPE_DIR" ] ||
+		die "internal error: refusing to remove the clone scope directory itself"
+	[ "$resolved" != "$ROOT" ] ||
+		die "internal error: refusing to remove the clone root itself"
+	local repo_path
+	for repo_path in "${REPO_PATHS[@]}"; do
+		if path_within "$resolved" "$repo_path"; then
+			die "internal error: refusing to remove '$resolved' — inside the invoking repository"
+		fi
+	done
+	rm -rf -- "$resolved"
+}
+
+# --- Re-derive the slug's clone from scratch ---------------------------------
+mkdir -p -- "$SCOPE_DIR" >&2 || die "could not create the clone scope directory: $SCOPE_DIR"
+
+if [ -e "$SESSION_DIR" ] || [ -L "$SESSION_DIR" ]; then
+	if [ -f "$MARKER" ] && [ "$(head -n 1 -- "$MARKER" 2>/dev/null || true)" = "$MARKER_MAGIC" ]; then
+		printf '%s: re-deriving disposable clone for slug %s (previous contents discarded)\n' \
+			"$PROG" "$SLUG" >&2
+		safe_rm_session "$SESSION_DIR"
+	else
+		die "refusing: '$SESSION_DIR' exists but was not created by $PROG (no $MARKER_NAME marker). Remove it yourself if it is yours, or pick another slug."
+	fi
+fi
+
+CREATED_SESSION=""
+cleanup_failed_session() {
+	local status=$?
+	if [ -n "$CREATED_SESSION" ]; then
+		safe_rm_session "$CREATED_SESSION" || true
+	fi
+	exit "$status"
+}
+mkdir -- "$SESSION_DIR" >&2 || die "could not create the clone directory: $SESSION_DIR"
+CREATED_SESSION="$SESSION_DIR"
+trap cleanup_failed_session EXIT
+
+# Marker first: a clone that dies halfway must still be recognizable as ours, so
+# the next call re-derives it instead of refusing to touch a stranger's leftovers.
+{
+	printf '%s\n' "$MARKER_MAGIC"
+	printf 'helper=%s\n' "$PROG"
+	printf 'agent=%s\n' "$AGENT"
+	printf 'source=%s\n' "$SRC_TOP"
+	printf 'ref=%s\n' "$REF_ARG"
+	printf 'commit=%s\n' "$SHA"
+	printf 'clone=%s\n' "$CLONE_DIR"
+	printf 'created=%s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+} >"$MARKER" || die "could not write the clone marker: $MARKER"
+
+CLONE_ARGS=(--quiet --no-checkout --origin "$SRC_REMOTE")
+if [ "${DC_HARDLINKS:-}" != "1" ]; then
+	CLONE_ARGS+=(--no-hardlinks)
+fi
+# Every git stdout below is redirected to stderr: the only thing this helper is
+# allowed to print on stdout is the final path.
+git clone "${CLONE_ARGS[@]}" -- "$SRC_TOP" "$CLONE_DIR" >&2 ||
+	die "git clone failed: $SRC_TOP -> $CLONE_DIR"
+
+# Detach before mirroring: `git fetch` refuses to update a branch that is
+# checked out, and the mirror below rewrites every branch.
+git -C "$CLONE_DIR" update-ref --no-deref HEAD "$SHA" >&2 ||
+	die "could not point the clone's HEAD at $SHA"
+
+# Mirror the source's refs exactly, at their original names, and prune the
+# remote-tracking refs `git clone` invented. See REF NAMESPACE in the header.
+git -C "$CLONE_DIR" fetch --quiet --prune --prune-tags --no-write-fetch-head \
+	"$SRC_REMOTE" '+refs/*:refs/*' >&2 ||
+	die "could not mirror the source's refs into the clone"
+
+# No remote means a stray `git push` in the clone has nowhere to go.
+git -C "$CLONE_DIR" remote remove "$SRC_REMOTE" >&2 ||
+	die "could not detach the clone from its source remote"
+
+if [ -n "$BRANCH" ] && git -C "$CLONE_DIR" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+	git -C "$CLONE_DIR" checkout --quiet --force "$BRANCH" -- >&2 ||
+		die "could not check out '$BRANCH' in the clone"
+else
+	git -C "$CLONE_DIR" checkout --quiet --force --detach "$SHA" >&2 ||
+		die "could not check out $SHA in the clone"
+fi
+
+CLONE_HEAD="$(git -C "$CLONE_DIR" rev-parse --verify HEAD)" ||
+	die "could not read the clone's HEAD"
+if [ "$CLONE_HEAD" != "$SHA" ]; then
+	# The source ref moved between the clone and the checkout. Honour the commit
+	# that was resolved up front rather than silently verifying another one.
+	printf '%s: source ref moved during the clone; detaching at the originally resolved %s\n' \
+		"$PROG" "$SHA" >&2
+	git -C "$CLONE_DIR" checkout --quiet --force --detach "$SHA" >&2 ||
+		die "could not check out $SHA in the clone"
+fi
+
+# A disposable clone should be able to take a verification commit even where no
+# identity is configured (a bare container account, CI). Only fills a gap.
+if ! git -C "$CLONE_DIR" var GIT_COMMITTER_IDENT >/dev/null 2>&1; then
+	git -C "$CLONE_DIR" config user.name "dc-enter disposable clone" >&2 || true
+	git -C "$CLONE_DIR" config user.email "dc-enter@invalid" >&2 || true
+fi
+
+CREATED_SESSION=""
+trap - EXIT
+
+printf '%s\n' "$CLONE_DIR"

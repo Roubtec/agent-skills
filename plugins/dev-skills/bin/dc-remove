@@ -1,0 +1,264 @@
+#!/usr/bin/env bash
+# dc-remove — delete a disposable clone that `dc-enter` created.
+#
+# Its safety bar is deliberately the INVERSE of `wt-remove`'s. A worktree holds
+# the only copy of the work in it, so `wt-remove` refuses to remove a dirty or
+# mid-operation one even with `--force`. A disposable clone exists to be
+# wrecked: a dirty tree, deleted refs, a half-finished rebase, and a corrupted
+# object store are all expected states, and removing them destroys nothing that
+# was not already disposable. So dc-remove removes a wrecked clone without
+# complaint — and in exchange guarantees the other direction absolutely:
+#
+#   It can only ever delete a directory `dc-enter` created.
+#
+# Two mechanics enforce that. The signature is slug-only, so a caller cannot
+# hand it a path at all — anything with a slash is rejected as a malformed slug,
+# including the invoking repository's own path. And the directory it derives
+# must carry dc-enter's marker file, whose recorded clone path must match the
+# path this helper derived, or it refuses rather than deleting a stranger's
+# directory that happens to sit at the same place.
+#
+# Usage: dc-remove <slug>
+#
+#   dc-remove probe        # remove the clone dc-enter created for slug `probe`
+#
+# Removing a slug that has no clone is a no-op and succeeds, so a cleanup trap
+# can call it unconditionally. Nothing is ever written to stdout; diagnostics go
+# to stderr, and the exit status is the whole result.
+#
+# The clone root and per-agent/per-worktree path layout are derived exactly as
+# `dc-enter` derives them (`$DC_ROOT`, else `$TMPDIR`, else `/tmp`; then
+# `dc-<agent>-<repo-hash>/<slug>`), so both helpers must be invoked from the same
+# repository with the same `DC_ROOT`/`DC_AGENT` to resolve the same clone. That
+# derivation is duplicated here rather than sourced, because each helper has to
+# stand alone on a container PATH; scripts/test-dc-helpers.sh pins the two
+# derivations together by removing exactly the path dc-enter printed.
+#
+# Sync discipline: see the header of `dc-enter` — this plugin copy is canonical
+# and net-new here, with no powbox-baked original to pin against, and any
+# behavior change to either helper must update scripts/test-dc-helpers.sh in the
+# same PR.
+#
+# This script keeps the same discipline as dc-enter: `set -euo pipefail`, no
+# load-bearing command piped, and it never changes its own working directory —
+# the only `cd` is inside a command-substitution subshell in canon(), whose
+# arrival is verified by the `pwd -P` it must print.
+#
+# Dependencies: `git` and coreutils.
+set -euo pipefail
+
+PROG=dc-remove
+readonly PROG
+readonly MARKER_MAGIC='dc-clone-v1'
+readonly MARKER_NAME='dc-clone-meta'
+
+die() {
+	printf '%s: %s\n' "$PROG" "$*" >&2
+	exit 1
+}
+
+usage() {
+	local code="${1:-1}"
+	{
+		echo "usage: dc-remove <slug>"
+		echo
+		echo "  Removes the disposable clone 'dc-enter <slug>' created, however"
+		echo "  wrecked it is. Takes a slug, never a path: it can only reach a"
+		echo "  directory dc-enter created and marked. An unknown slug is a no-op."
+	} >&$((code == 0 ? 1 : 2))
+	exit "$code"
+}
+
+# --- Path helpers (identical to dc-enter's; see the note above) --------------
+
+canon() {
+	local path="$1" head tail_part out comp
+	[ -n "$path" ] || return 1
+	case "$path" in
+	/*) ;;
+	*) path="$PWD/$path" ;;
+	esac
+	while [ "$path" != "${path//\/\///}" ]; do path="${path//\/\///}"; done
+	while [ "${#path}" -gt 1 ] && [ "${path%/}" != "$path" ]; do path="${path%/}"; done
+	head="$path"
+	tail_part=""
+	while [ ! -d "$head" ]; do
+		comp="${head##*/}"
+		case "$comp" in
+		. | ..) return 1 ;;
+		esac
+		tail_part="${comp}${tail_part:+/$tail_part}"
+		head="${head%/*}"
+		[ -n "$head" ] || head=/
+		[ "$head" != "$path" ] || return 1
+	done
+	out="$(cd -P -- "$head" >/dev/null 2>&1 && pwd -P)" || return 1
+	[ -n "$out" ] || return 1
+	case "$out" in
+	/*) ;;
+	*) return 1 ;;
+	esac
+	if [ -n "$tail_part" ]; then
+		if [ "$out" = "/" ]; then
+			out="/$tail_part"
+		else
+			out="$out/$tail_part"
+		fi
+	fi
+	printf '%s\n' "$out"
+}
+
+path_within() {
+	local candidate="$1" ancestor="$2"
+	[ -n "$candidate" ] && [ -n "$ancestor" ] || return 1
+	if [ "$ancestor" = "/" ]; then
+		return 0
+	fi
+	case "$candidate" in
+	"$ancestor") return 0 ;;
+	"$ancestor"/*) return 0 ;;
+	esac
+	return 1
+}
+
+sanitize_component() {
+	local value="${1//[^A-Za-z0-9._-]/_}"
+	value="${value:0:40}"
+	printf '%s' "$value"
+}
+
+# --- Arguments ---------------------------------------------------------------
+SLUG=""
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-h | --help) usage 0 ;;
+	--)
+		shift
+		break
+		;;
+	-*) usage 1 ;;
+	*)
+		[ -z "$SLUG" ] || usage 1
+		SLUG="$1"
+		shift
+		;;
+	esac
+done
+while [ $# -gt 0 ]; do
+	[ -z "$SLUG" ] || usage 1
+	SLUG="$1"
+	shift
+done
+
+[ -n "$SLUG" ] || usage 1
+# The guarantee starts here: a slug is one path component, so no caller can
+# steer this helper at an arbitrary directory — a path, absolute or relative,
+# fails this check before anything is resolved, let alone removed.
+if [ "${#SLUG}" -gt 64 ] || [[ ! "$SLUG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+	die "expected a slug, not a path: '$SLUG' (slugs are 1-64 chars matching [A-Za-z0-9][A-Za-z0-9._-]*)"
+fi
+
+# --- The invoking repository -------------------------------------------------
+SRC_TOP="$(git rev-parse --show-toplevel 2>/dev/null)" ||
+	die "not inside a git working tree (run this from the repository dc-enter was run in)"
+[ -n "$SRC_TOP" ] || die "could not resolve the invoking worktree (bare repository?)"
+SRC_TOP="$(canon "$SRC_TOP")" || die "could not canonicalize the invoking worktree path"
+
+REPO_PATHS=("$SRC_TOP")
+GIT_COMMON="$(git rev-parse --git-common-dir 2>/dev/null || true)"
+if [ -n "$GIT_COMMON" ]; then
+	if GIT_COMMON_CANON="$(canon "$GIT_COMMON")"; then
+		REPO_PATHS+=("$GIT_COMMON_CANON")
+	fi
+fi
+GIT_DIR_OWN="$(git rev-parse --absolute-git-dir 2>/dev/null || true)"
+if [ -n "$GIT_DIR_OWN" ]; then
+	if GIT_DIR_CANON="$(canon "$GIT_DIR_OWN")"; then
+		REPO_PATHS+=("$GIT_DIR_CANON")
+	fi
+fi
+WORKTREE_LIST="$(git worktree list --porcelain 2>/dev/null || true)"
+if [ -n "$WORKTREE_LIST" ]; then
+	while IFS= read -r line; do
+		case "$line" in
+		"worktree "*)
+			wt_path="${line#worktree }"
+			if wt_canon="$(canon "$wt_path")"; then
+				REPO_PATHS+=("$wt_canon")
+			fi
+			;;
+		esac
+	done <<<"$WORKTREE_LIST"
+fi
+
+# --- Clone root and slug path ------------------------------------------------
+if [ -n "${DC_ROOT:-}" ]; then
+	ROOT_RAW="$DC_ROOT"
+	ROOT_SRC="DC_ROOT"
+else
+	ROOT_RAW="${TMPDIR:-/tmp}"
+	ROOT_SRC="${TMPDIR:+TMPDIR}"
+	ROOT_SRC="${ROOT_SRC:-the /tmp default}"
+fi
+ROOT="$(canon "$ROOT_RAW")" || die "could not canonicalize the clone root ($ROOT_SRC): '$ROOT_RAW'"
+[ "$ROOT" != "/" ] || die "the clone root ($ROOT_SRC) must not be the filesystem root"
+
+AGENT_RAW="${DC_AGENT:-}"
+if [ -z "$AGENT_RAW" ]; then AGENT_RAW="${CONTAINER_NAME:-}"; fi
+if [ -z "$AGENT_RAW" ]; then AGENT_RAW="${USER:-}"; fi
+if [ -z "$AGENT_RAW" ]; then AGENT_RAW="${LOGNAME:-}"; fi
+if [ -z "$AGENT_RAW" ]; then AGENT_RAW="$(id -un 2>/dev/null || true)"; fi
+if [ -z "$AGENT_RAW" ]; then AGENT_RAW="agent"; fi
+AGENT="$(sanitize_component "$AGENT_RAW")"
+[ -n "$AGENT" ] || AGENT="agent"
+
+HASH_LINE="$(cksum <<<"$SRC_TOP")" || die "could not hash the invoking worktree path"
+REPO_HASH="${HASH_LINE%% *}"
+[ -n "$REPO_HASH" ] || die "could not hash the invoking worktree path"
+
+SCOPE_DIR="$ROOT/dc-$AGENT-$REPO_HASH"
+SESSION_DIR="$SCOPE_DIR/$SLUG"
+CLONE_DIR="$SESSION_DIR/repo"
+MARKER="$SESSION_DIR/$MARKER_NAME"
+
+if [ ! -e "$SESSION_DIR" ] && [ ! -L "$SESSION_DIR" ]; then
+	printf '%s: nothing to remove for slug %s (%s does not exist)\n' "$PROG" "$SLUG" "$SESSION_DIR" >&2
+	exit 0
+fi
+
+# --- Ownership proof ---------------------------------------------------------
+[ -d "$SESSION_DIR" ] ||
+	die "refusing: '$SESSION_DIR' is not a directory"
+[ -f "$MARKER" ] ||
+	die "refusing: '$SESSION_DIR' carries no $MARKER_NAME marker, so dc-enter did not create it"
+MARKER_HEAD="$(head -n 1 -- "$MARKER" 2>/dev/null || true)"
+[ "$MARKER_HEAD" = "$MARKER_MAGIC" ] ||
+	die "refusing: '$MARKER' is not a $MARKER_MAGIC marker"
+MARKER_CLONE=""
+while IFS= read -r line; do
+	case "$line" in
+	"clone="*) MARKER_CLONE="${line#clone=}" ;;
+	esac
+done <"$MARKER"
+[ "$MARKER_CLONE" = "$CLONE_DIR" ] ||
+	die "refusing: '$MARKER' records clone path '$MARKER_CLONE', not the '$CLONE_DIR' this invocation derived"
+
+RESOLVED="$(canon "$SESSION_DIR")" || die "could not canonicalize '$SESSION_DIR'"
+[ "$RESOLVED" = "$SESSION_DIR" ] ||
+	die "refusing: '$SESSION_DIR' resolves to '$RESOLVED' (symlinked out of the clone root)"
+path_within "$RESOLVED" "$SCOPE_DIR" ||
+	die "refusing: '$RESOLVED' is outside the clone scope '$SCOPE_DIR'"
+if [ "$RESOLVED" = "$SCOPE_DIR" ] || [ "$RESOLVED" = "$ROOT" ]; then
+	die "refusing: '$RESOLVED' is the clone scope or root directory, not a slug's clone"
+fi
+for repo_path in "${REPO_PATHS[@]}"; do
+	if path_within "$RESOLVED" "$repo_path"; then
+		die "refusing: '$RESOLVED' is inside the invoking repository ($repo_path)"
+	fi
+	if [ "$RESOLVED" -ef "$repo_path" ] 2>/dev/null; then
+		die "refusing: '$RESOLVED' is the invoking repository ($repo_path)"
+	fi
+done
+
+rm -rf -- "$RESOLVED"
+printf '%s: removed %s\n' "$PROG" "$RESOLVED" >&2

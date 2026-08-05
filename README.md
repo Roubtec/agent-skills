@@ -10,6 +10,8 @@ plugins/
   dev-skills/                     # Claude Code plugin: software development workflow skills
     .claude-plugin/plugin.json
     bin/gh-review-threads          # hardened review-thread helper added to the plugin PATH
+    bin/dc-enter                   # makes a disposable clone to verify claims in, printing only its path
+    bin/dc-remove                  # drops one, and can reach nothing else
     skills/<name>/SKILL.md
     workflows/wf-*.js              # Claude dynamic workflows
 codex/
@@ -17,13 +19,15 @@ codex/
     skills/<name>/...
 scripts/
   test-gh-review-threads.sh             # hermetic contract coverage for the review-thread helper
+  test-dc-helpers.sh                    # hermetic contract coverage for the disposable-clone helpers
   test-checkout-cleanliness-report.mjs  # regression coverage for the batch workflow's checkout report
   test-review-cycle-retirement.mjs      # behavior coverage for the review cycle's open-question retirement lifecycle
   verify-014-peer-strength-pin.md       # harness-neutral prompt: observe the peer step's pinned review strength (task 014)
 ```
 
 - **`plugins/`** holds the Claude Code plugins. Each subdirectory is one independently installable plugin; `dev-skills` carries cross-repo software development skills including the shared `review-cycle` building block (the canonical fix → fresh-eyes review → best-effort cross-harness peer review → fix protocol the other skills reference), safe post-batch local branch cleanup, the `enable-worktrees` and `declare-shadows` repository setup skills, the `session-learnings` retrospective skill, and Claude dynamic workflows for review addressing, planned task batches, and the review cycle itself. Its `bin/` executables are available on the Bash tool's PATH while the plugin is enabled. Additional plugins for other domains get sibling directories here and an entry in `marketplace.json`.
-- **`codex/`** mirrors the plugin tree with the Codex CLI flavors of the same skills. The two flavors share most of their text but diverge deliberately where harness capabilities differ; a verbiage change is one PR touching both files side by side. Each Codex skill includes its `agents/openai.yaml` UI metadata. This tree is *not* installed by Claude's plugin runtime; powbox refreshes it onto the Codex config volume at container start from the same marketplace clone.
+- **`bin/dc-enter` and `bin/dc-remove`** give empirical verification somewhere safe to happen. `dc-enter <slug> [<ref>]` prints the absolute path of a disposable clone of the invoking repository — a real clone, so deleting refs, committing, rewriting history, or running `gc` inside it cannot reach the repository you are working in — and `dc-remove <slug>` drops it however wrecked it is, while being unable to reach anything it did not create. A worktree is not a substitute: it isolates the working tree but shares `.git`, so `branch -f`, `reset`, `update-ref`, and `gc` all reach every sibling worktree. Powbox points the clones outside `/workspace` by setting `DC_ROOT`; elsewhere they land under `$TMPDIR`.
+- **`codex/`** mirrors the plugin tree with the Codex CLI flavors of the same skills. The two flavors share most of their text but diverge deliberately where harness capabilities differ; a verbiage change is one PR touching both files side by side. Each Codex skill includes its `agents/openai.yaml` UI metadata. This tree is *not* installed by Claude's plugin runtime; powbox refreshes it onto the Codex config volume at container start from the same marketplace clone. Because that tree carries no `bin/`, a Codex user not on powbox puts the disposable-clone helpers on their own PATH: `install -m 755 plugins/dev-skills/bin/dc-enter plugins/dev-skills/bin/dc-remove ~/.local/bin/`. Without them the mirrored skills' `command -v dc-enter` check never resolves and the guidance degrades to its no-helper fallback for good.
 
 ## Installing (Claude Code Users)
 
@@ -83,6 +87,8 @@ Open PRs ready for review rather than as drafts. Agents in particular tend to op
 
 Run `bash scripts/test-gh-review-threads.sh` after any behavior change to `plugins/dev-skills/bin/gh-review-threads`; the hermetic suite stubs `gh` and needs only Bash and `jq`.
 
+Run `bash scripts/test-dc-helpers.sh` after any behavior change to `plugins/dev-skills/bin/dc-enter` or `plugins/dev-skills/bin/dc-remove`; the hermetic suite builds throwaway repositories under one `mktemp -d` root, never touches this repository, and needs only Bash, git, and coreutils.
+
 Run `node scripts/test-checkout-cleanliness-report.mjs` after changing the batch workflow's checkout-report behavior.
 
 Run `node scripts/test-review-cycle-retirement.mjs` after changing how the review cycle raises, retires, or serves open questions; it drives the shipped `review-cycle-core` section of both workflows through scripted rounds.
@@ -103,6 +109,6 @@ The `enable-worktrees`, `declare-shadows`, and `session-learnings` skills intent
 
 This repo runs focused tests and Claude automation against its own PRs via three workflows in `.github/workflows/`. The two Claude workflows require a `CLAUDE_CODE_OAUTH_TOKEN` repo secret.
 
-- **`tests.yml`** — runs three regression suites on every PR: the hermetic `gh-review-threads` suite, the checkout-cleanliness report test, and the review-cycle open-question retirement lifecycle test.
+- **`tests.yml`** — runs four regression suites on every PR: the hermetic `gh-review-threads` and disposable-clone helper suites, the checkout-cleanliness report test, and the review-cycle open-question retirement lifecycle test.
 - **`claude.yml`** — a mention bot. Comment `@claude ...` on an issue or PR (or in a PR review) to summon it; only OWNER/MEMBER/COLLABORATOR authors can trigger it, since the job runs with write permissions.
 - **`claude-code-review.yml`** — runs Anthropic's `code-review` plugin automatically when a PR is opened (or reopened / marked ready for review) and posts inline review comments; later pushes are not auto-reviewed — ask for a re-review with an `@claude` mention. Skipped on PRs from forks, which don't receive the secret.
