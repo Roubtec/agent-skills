@@ -14,9 +14,11 @@
 # Two mechanics enforce that. The signature is slug-only, so a caller cannot
 # hand it a path at all — anything with a slash is rejected as a malformed slug,
 # including the invoking repository's own path. And the directory it derives
-# must carry dc-enter's marker file, whose recorded clone path must match the
-# path this helper derived, or it refuses rather than deleting a stranger's
-# directory that happens to sit at the same place.
+# must carry dc-enter's marker file, whose recorded clone path AND source
+# repository must both match what this invocation derived, or it refuses rather
+# than deleting a stranger's directory that happens to sit at the same place.
+# dc-enter applies the identical proof before it discards anything, so the
+# destructive helper is never the more permissive of the two.
 #
 # The marker is an accident guard, not an authentication token: a process running
 # as this user could forge one, but such a process can already call `rm -rf`
@@ -31,6 +33,11 @@
 # Removing a slug that has no clone is a no-op and succeeds, so a cleanup trap
 # can call it unconditionally. Nothing is ever written to stdout; diagnostics go
 # to stderr, and the exit status is the whole result.
+#
+# This is also how a slug is freed: `dc-enter` refuses a slug that already has a
+# clone, because a concurrent sibling may be using it. Calling dc-remove when a
+# verification is finished — ideally from the caller's own cleanup trap — is what
+# keeps the next `dc-enter <slug>` from having to refuse.
 #
 # The clone root and per-agent/per-worktree path layout are derived exactly as
 # `dc-enter` derives them (`$DC_ROOT`, else `$TMPDIR`, else `/tmp`; then
@@ -56,14 +63,16 @@ set -euo pipefail
 
 PROG=dc-remove
 readonly PROG
-readonly MARKER_MAGIC='dc-clone-v1'
+readonly MARKER_MAGIC='dc-clone-v2'
 readonly MARKER_NAME='dc-clone-meta'
 
-# Also clears the worktree-listing temp file, so no fatal path leaks one. Set
-# before any code that can create it, so `set -u` never sees it unset.
+# Also clears the worktree-listing temp files, so no fatal path leaks one. Set
+# before any code that can create them, so `set -u` never sees them unset.
 WT_LIST_FILE=""
+WT_ERR_FILE=""
 die() {
 	[ -z "$WT_LIST_FILE" ] || rm -f -- "$WT_LIST_FILE"
+	[ -z "$WT_ERR_FILE" ] || rm -f -- "$WT_ERR_FILE"
 	printf '%s: %s\n' "$PROG" "$*" >&2
 	exit 1
 }
@@ -132,12 +141,31 @@ path_within() {
 	return 1
 }
 
-# Read with the shell's own `read` rather than `head`: the ownership proof
-# should not depend on a tool beyond git and a POSIX-ish coreutils.
-read_first_line() {
-	local file="$1" first=""
-	IFS= read -r first <"$file" || true
-	printf '%s' "$first"
+# The marker is NUL-delimited, not line-delimited: a repository path may legally
+# contain a newline, so a line-oriented `key=value` file could not record
+# `source=` unambiguously — the first embedded newline would truncate the value,
+# and the remainder could impersonate another key. dc-enter writes it; this is
+# the reader. Parsed with the shell's own `read` rather than a text tool, so the
+# ownership proof depends on nothing beyond git and a POSIX-ish coreutils.
+MARKER_SOURCE=""
+MARKER_CLONE=""
+read_marker() {
+	local file="$1" rec magic_seen=""
+	MARKER_SOURCE=""
+	MARKER_CLONE=""
+	[ -f "$file" ] || return 1
+	while IFS= read -r -d '' rec; do
+		if [ -z "$magic_seen" ]; then
+			[ "$rec" = "$MARKER_MAGIC" ] || return 1
+			magic_seen=1
+			continue
+		fi
+		case "$rec" in
+		"source="*) MARKER_SOURCE="${rec#source=}" ;;
+		"clone="*) MARKER_CLONE="${rec#clone=}" ;;
+		esac
+	done <"$file"
+	[ -n "$magic_seen" ]
 }
 
 sanitize_component() {
@@ -210,18 +238,36 @@ add_repo_path() {
 # does not learn about is one the clone root could then be placed inside, so an
 # older git is refused rather than guessed at.
 collect_worktree_paths() {
-	local line
+	local line records=0 git_err=""
 	WT_LIST_FILE="$(mktemp "${TMPDIR:-/tmp}/dc-worktrees.XXXXXX")" ||
 		die "could not create a temporary file to enumerate this repository's worktrees"
-	git worktree list --porcelain -z >"$WT_LIST_FILE" 2>/dev/null ||
-		die "could not enumerate this repository's worktrees with 'git worktree list --porcelain -z' (git 2.36+). Refusing to place a clone without knowing where the worktrees are: the newline form cannot report a path containing a newline unambiguously."
+	WT_ERR_FILE="$(mktemp "${TMPDIR:-/tmp}/dc-worktrees-err.XXXXXX")" ||
+		die "could not create a temporary file to capture git's diagnostics"
+	# git's own stderr is reported rather than swallowed: an old git, a corrupt
+	# repository, and an unreadable .git/worktrees entry all fail here, and
+	# blaming the version for all three sends the reader after the wrong bug.
+	if ! git worktree list --porcelain -z >"$WT_LIST_FILE" 2>"$WT_ERR_FILE"; then
+		IFS= read -r -d '' git_err <"$WT_ERR_FILE" || true
+		die "could not enumerate this repository's worktrees with 'git worktree list --porcelain -z' (needs git 2.36+, but any repository error fails here too — git said: ${git_err:-nothing}). Refusing to place a clone without knowing where the worktrees are: the newline form cannot report a path containing a newline unambiguously."
+	fi
+	rm -f -- "$WT_ERR_FILE"
+	WT_ERR_FILE=""
 	while IFS= read -r -d '' line; do
 		case "$line" in
-		"worktree "*) add_repo_path "${line#worktree }" ;;
+		"worktree "*)
+			add_repo_path "${line#worktree }"
+			records=$((records + 1))
+			;;
 		esac
 	done <"$WT_LIST_FILE"
 	rm -f -- "$WT_LIST_FILE"
 	WT_LIST_FILE=""
+	# A successful listing with no records at all is not "this repository has no
+	# worktrees" — every repository has at least its main one. It is a listing
+	# this helper cannot trust, and trusting it would leave a worktree it never
+	# heard of out of the paths it refuses to delete. Fail closed.
+	[ "$records" -gt 0 ] ||
+		die "'git worktree list --porcelain -z' succeeded but reported no worktrees; a repository always has at least its main worktree, so this listing cannot be trusted"
 }
 
 GIT_COMMON="$(git rev-parse --git-common-dir)" ||
@@ -243,6 +289,15 @@ else
 fi
 ROOT="$(canon "$ROOT_RAW")" || die "could not canonicalize the clone root ($ROOT_SRC): '$ROOT_RAW'"
 [ "$ROOT" != "/" ] || die "the clone root ($ROOT_SRC) must not be the filesystem root"
+# Refused for the same reason dc-enter refuses it, so the two helpers agree on
+# which roots exist at all: dc-enter cannot create a clone under a
+# newline-containing root, so there is never one here to remove.
+case "$ROOT" in
+*"
+"*)
+	die "the clone root ($ROOT_SRC) must not contain a newline; dc-enter refuses to create a clone under one, so there is nothing here to remove."
+	;;
+esac
 
 AGENT_RAW="${DC_AGENT:-}"
 if [ -z "$AGENT_RAW" ]; then AGENT_RAW="${CONTAINER_NAME:-}"; fi
@@ -275,17 +330,16 @@ fi
 	die "refusing: '$SESSION_DIR' is not a directory"
 [ -f "$MARKER" ] ||
 	die "refusing: '$SESSION_DIR' carries no $MARKER_NAME marker, so dc-enter did not create it"
-MARKER_HEAD="$(read_first_line "$MARKER")"
-[ "$MARKER_HEAD" = "$MARKER_MAGIC" ] ||
+read_marker "$MARKER" ||
 	die "refusing: '$MARKER' is not a $MARKER_MAGIC marker"
-MARKER_CLONE=""
-while IFS= read -r line; do
-	case "$line" in
-	"clone="*) MARKER_CLONE="${line#clone=}" ;;
-	esac
-done <"$MARKER"
 [ "$MARKER_CLONE" = "$CLONE_DIR" ] ||
 	die "refusing: '$MARKER' records clone path '$MARKER_CLONE', not the '$CLONE_DIR' this invocation derived"
+# The source repository is checked as well as the clone path: the scope
+# component is a CRC32 of the invoking worktree's path, so two worktrees whose
+# paths collide on that hash would otherwise share a scope silently. Recording
+# and comparing the path itself turns that collision into a refusal.
+[ "$MARKER_SOURCE" = "$SRC_TOP" ] ||
+	die "refusing: '$MARKER' records source repository '$MARKER_SOURCE', not the '$SRC_TOP' this invocation was run from"
 
 RESOLVED="$(canon "$SESSION_DIR")" || die "could not canonicalize '$SESSION_DIR'"
 [ "$RESOLVED" = "$SESSION_DIR" ] ||

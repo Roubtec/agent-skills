@@ -25,12 +25,16 @@ set -euo pipefail
 #   (c) the <ref> interface: default is the INVOKING worktree's HEAD (not the
 #       main worktree's), branch/tag/sha/rev forms, and refusal on a bad ref
 #   (d) the ref namespace: an exact mirror of the source's refs, demonstrated on
-#       a source carrying refs outside refs/heads/ and refs/tags/
+#       a source carrying refs outside refs/heads/ and refs/tags/ — including one
+#       hiding a namespace from upload-pack, which a refspec fetch would drop
 #   (e) clone-root refusals: inside the worktree, the git dir, another worktree,
-#       or reached through a symlink — non-zero with an empty stdout
-#   (f) reuse: a wrecked slug is re-derived pristine, and a directory the helper
-#       did not create is refused rather than deleted
-#   (g) per-agent and per-worktree path scoping
+#       or reached through a symlink — non-zero with an empty stdout — plus the
+#       worktree enumeration failing closed on every shape of bad listing
+#   (f) reuse: an existing clone is refused (a concurrent sibling may be in it),
+#       --replace re-derives it pristine, and neither a stranger's directory nor
+#       one whose marker records another clone is ever discarded
+#   (g) per-agent and per-worktree path scoping, and the sibling case where two
+#       callers share both
 #   (h) dc-remove: removes a dirty clone, refuses a path, refuses a foreign or
 #       mis-marked directory, no-ops on an unknown slug, and removes exactly the
 #       path dc-enter printed (which pins the two path derivations together)
@@ -38,6 +42,8 @@ set -euo pipefail
 #       to operate in the repository root, even when piped as the original was
 #   (j) hardlink policy: --no-hardlinks by default, DC_HARDLINKS=1 opt-in, with
 #       the isolation guarantee holding either way
+#   (k) clone-root hygiene: repeated separators collapse, a newline in the root
+#       is refused by both helpers, and a newline in the SOURCE's path still works
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -185,7 +191,20 @@ assert_true "a: clone is a git repository" "$([ -d "$CLONE_A/.git" ] && echo tru
 assert_true "a: clone is outside the source" "$(case "$CLONE_A" in "$SRC1"/*) echo false ;; *) echo true ;; esac)"
 assert_eq "a: clone tree is clean" "$(git -C "$CLONE_A" status --porcelain)" ""
 assert_eq "a: no remote points back at the source" "$(git -C "$CLONE_A" remote)" ""
+# ... and no config left naming the remote the clone no longer has, which would
+# make a stray push fail with "does not appear to be a git repository" rather
+# than the honest "no upstream".
+assert_eq "a: no stale remote or upstream config survives" \
+	"$(git -C "$CLONE_A" config --get-regexp '^(remote|branch)\.' || true)" ""
 assert_eq "a: uncommitted source changes are not carried" "$(cat "$CLONE_A/file.txt")" "tracked"
+# An empty first argument is rejected as the empty SLUG it is, rather than
+# sliding the next argument into the slug's place.
+in_repo "$SRC1" "$DC_ENTER" "" probe
+assert_ne "a: an empty slug is refused even with a second argument" "$RC" 0
+assert_eq "a: the empty-slug refusal is silent on stdout" "$OUT" ""
+in_repo "$SRC1" "$DC_ENTER" probe ""
+assert_ne "a: an empty <ref> is refused" "$RC" 0
+assert_eq "a: the empty-ref refusal is silent on stdout" "$OUT" ""
 # The documented convention: command substitution yields a usable path.
 cat >"$WORK/convention.sh" <<'SCRIPT'
 set -euo pipefail
@@ -254,6 +273,19 @@ assert_eq "c: explicit branch exits 0" "$RC" 0
 assert_eq "c: explicit branch is checked out" "$(git -C "$OUT" symbolic-ref HEAD)" "refs/heads/other"
 assert_eq "c: explicit branch is at the source's commit" \
 	"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$SRC2" rev-parse other)"
+# A fully qualified local head names its branch just as plainly as the short
+# form: it resolves as a commit like any other revision, so without normalization
+# it would detach despite naming a branch.
+in_repo "$WT2" "$DC_ENTER" byfullref refs/heads/other
+assert_eq "c: a fully qualified refs/heads/ ref exits 0" "$RC" 0
+assert_eq "c: a fully qualified refs/heads/ ref checks that branch out" \
+	"$(git -C "$OUT" symbolic-ref HEAD)" "refs/heads/other"
+# No other qualified form is normalized — a remote-tracking ref is not a local
+# branch and detaches, which is what the header promises.
+in_repo "$WT2" "$DC_ENTER" byremoteref refs/remotes/origin/main
+assert_eq "c: a remote-tracking ref exits 0" "$RC" 0
+assert_eq "c: a remote-tracking ref detaches" \
+	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "DETACHED"
 # A non-branch revision detaches at the resolved commit.
 in_repo "$WT2" "$DC_ENTER" bytag v1
 assert_eq "c: explicit tag exits 0" "$RC" 0
@@ -285,9 +317,10 @@ assert_ne "c: outside a git worktree exits non-zero" "$RC" 0
 assert_eq "c: outside a git worktree writes nothing to stdout" "$OUT" ""
 
 echo "== (d) the ref namespace is an exact mirror =="
-# A symbolic ref whose target does not exist: the source cannot advertise it, so
-# it is the one documented gap in the mirror. Added only here, because `git fsck`
-# reports it as a broken ref and sections (b) and (j) assert a clean source.
+# A symbolic ref whose target does not exist: `for-each-ref` does not report one,
+# so the enumeration cannot see it and it is the one documented gap in the
+# mirror. Added only here, because `git fsck` reports it as a broken ref and
+# sections (b) and (j) assert a clean source.
 git -C "$SRC2" symbolic-ref refs/dangling/sym refs/heads/does-not-exist
 in_repo "$SRC2" "$DC_ENTER" mirror
 assert_eq "d: exits 0" "$RC" 0
@@ -302,7 +335,7 @@ assert_eq "d: a symbolic source ref arrives symbolic, not flattened" \
 in_repo "$SRC2" git symbolic-ref --quiet "refs/dangling/sym"
 assert_eq "d: the source really does hold a dangling symref" "$RC" 0
 in_repo "$CLONE_D" git symbolic-ref --quiet "refs/dangling/sym"
-assert_ne "d: a dangling source symref cannot come across (it is never advertised)" "$RC" 0
+assert_ne "d: a dangling source symref cannot come across (for-each-ref hides it)" "$RC" 0
 assert_eq "d: the object behind an unreachable ref came across" \
 	"$(git -C "$CLONE_D" cat-file -t "$(git -C "$SRC2" rev-parse refs/pruned/reserved)")" "commit"
 # git clone's invented remote-tracking namespace is pruned away, so the mirror
@@ -328,8 +361,27 @@ in_repo "$SRC2" git rev-parse --verify "HEAD@{4}"
 assert_eq "d: the source's reflog reaches back several entries" "$RC" 0
 in_repo "$CLONE_D" git rev-parse --verify "HEAD@{4}"
 assert_ne "d: the source's reflog history is not carried" "$RC" 0
+# A source that hides a namespace from upload-pack still mirrors exactly. This is
+# what makes "exact" a property of the ref store rather than of what the source
+# chooses to advertise: a `+refs/*:refs/*` fetch would silently drop these, and a
+# subagent verifying behaviour IN refs/pruned/ would conclude the reservation
+# vanished for entirely the wrong reason.
+SRC_HIDDEN="$WORK/d/hidden"
+mkdir -p "$WORK/d"
+make_source "$SRC_HIDDEN"
+git -C "$SRC_HIDDEN" config uploadpack.hideRefs refs/pruned
+git -C "$SRC_HIDDEN" config transfer.hideRefs refs/pre-rebase
+export DC_ROOT="$WORK/d/root"
+assert_eq "d: the fixture really does hide those refs from upload-pack" \
+	"$(git ls-remote "$SRC_HIDDEN" 'refs/pruned/*' 'refs/pre-rebase/*')" ""
+in_repo "$SRC_HIDDEN" "$DC_ENTER" hidden
+assert_eq "d: a source hiding refs from upload-pack exits 0" "$RC" 0
+assert_eq "d: ... and still mirrors exactly" "$(refs_of "$OUT")" "$(refs_of "$SRC_HIDDEN")"
+assert_contains "d: ... including the hidden namespace" "$(refs_of "$OUT")" "refs/pruned/reserved"
+assert_eq "d: ... with the hidden ref's object present" \
+	"$(git -C "$OUT" cat-file -t "$(git -C "$SRC_HIDDEN" rev-parse refs/pruned/reserved)")" "commit"
 
-echo "== (e) clone-root refusals =="
+echo "== (e) clone-root refusals and a worktree listing that fails closed =="
 SRC3="$WORK/e/src"
 mkdir -p "$WORK/e"
 make_source "$SRC3"
@@ -393,6 +445,52 @@ assert_contains "e: that refusal names the missing capability" "$ERR" "worktree 
 in_repo "$SRC3" env "REAL_GIT=$(command -v git)" "PATH=$WORK/e/nozbin:$PATH" "DC_ROOT=$WORK/e/root" "$DC_REMOVE" noz
 assert_ne "e: dc-remove refuses the same git" "$RC" 0
 
+# A listing that SUCCEEDS but reports no worktree records at all is not "this
+# repository has no worktrees" — every repository has at least its main one. It
+# is a listing that cannot be trusted, and trusting it would leave the clone free
+# to land inside a worktree the helper never heard of.
+mkdir -p "$WORK/e/emptybin"
+cat >"$WORK/e/emptybin/git" <<'SHIM'
+#!/usr/bin/env bash
+# Pretends to be a git whose worktree listing comes back empty.
+prev=""
+for a in "$@"; do
+	if [ "$prev" = "worktree" ] && [ "$a" = "list" ]; then exit 0; fi
+	prev="$a"
+done
+exec "$REAL_GIT" "$@"
+SHIM
+chmod +x "$WORK/e/emptybin/git"
+in_repo "$SRC3" env "REAL_GIT=$(command -v git)" "PATH=$WORK/e/emptybin:$PATH" "DC_ROOT=$WORK/e/root" "$DC_ENTER" nowt
+assert_ne "e: refuses a worktree listing carrying no records" "$RC" 0
+assert_eq "e: that refusal is silent on stdout" "$OUT" ""
+assert_contains "e: that refusal says the listing cannot be trusted" "$ERR" "reported no worktrees"
+in_repo "$SRC3" env "REAL_GIT=$(command -v git)" "PATH=$WORK/e/emptybin:$PATH" "DC_ROOT=$WORK/e/root" "$DC_REMOVE" nowt
+assert_ne "e: dc-remove refuses an empty listing too" "$RC" 0
+
+# A listing that fails for a reason other than an old git must not be reported as
+# a version problem: git's own message is carried through, or the reader chases
+# the wrong bug.
+mkdir -p "$WORK/e/errbin"
+cat >"$WORK/e/errbin/git" <<'SHIM'
+#!/usr/bin/env bash
+# Pretends to be a current git tripping over a broken worktree registration.
+prev=""
+for a in "$@"; do
+	if [ "$prev" = "worktree" ] && [ "$a" = "list" ]; then
+		echo "fatal: could not read '.git/worktrees/broken/gitdir'" >&2
+		exit 128
+	fi
+	prev="$a"
+done
+exec "$REAL_GIT" "$@"
+SHIM
+chmod +x "$WORK/e/errbin/git"
+in_repo "$SRC3" env "REAL_GIT=$(command -v git)" "PATH=$WORK/e/errbin:$PATH" "DC_ROOT=$WORK/e/root" "$DC_ENTER" brokenwt
+assert_ne "e: refuses a worktree listing that errors" "$RC" 0
+assert_eq "e: that refusal is silent on stdout" "$OUT" ""
+assert_contains "e: that refusal carries git's own diagnosis" "$ERR" ".git/worktrees/broken/gitdir"
+
 # A malformed slug never reaches the filesystem.
 for badslug in "../escape" "a/b" "" "-x" ".hidden"; do
 	in_repo "$SRC3" env "DC_ROOT=$WORK/e/root" "$DC_ENTER" "$badslug"
@@ -400,7 +498,7 @@ for badslug in "../escape" "a/b" "" "-x" ".hidden"; do
 	assert_eq "e: refuses slug '$badslug' silently on stdout" "$OUT" ""
 done
 
-echo "== (f) reuse re-derives, and never adopts a stranger's directory =="
+echo "== (f) an existing clone is refused; --replace re-derives it pristine =="
 export DC_ROOT="$WORK/f/root"
 SRC4="$WORK/f/src"
 mkdir -p "$WORK/f"
@@ -415,22 +513,59 @@ git -C "$CLONE_F" update-ref -d refs/pre-rebase/main
 git -C "$CLONE_F" gc --prune=now --quiet
 printf 'wrecked\n' >"$CLONE_F/file.txt"
 printf 'litter\n' >"$CLONE_F/untracked.txt"
+# A second call REFUSES rather than discarding it. That is what makes the helper
+# safe for concurrent siblings: sibling subagents of one container share both an
+# identity and a worktree, so they derive this very path, and a re-derivation
+# would pull the refs and objects out from under one mid-verification.
 in_repo "$SRC4" "$DC_ENTER" reuse
-assert_eq "f: second call exits 0" "$RC" 0
-assert_eq "f: second call returns the same deterministic path" "$OUT" "$CLONE_F"
+assert_ne "f: a second call on an existing clone exits non-zero" "$RC" 0
+assert_eq "f: that refusal is silent on stdout" "$OUT" ""
+assert_contains "f: that refusal says the slug is taken" "$ERR" "already has a clone"
+assert_contains "f: that refusal offers --replace" "$ERR" "--replace"
+assert_eq "f: the existing clone is left exactly as it was" "$(cat "$CLONE_F/file.txt")" "wrecked"
+assert_true "f: including its litter" "$([ -e "$CLONE_F/untracked.txt" ] && echo true || echo false)"
+# --replace is the explicit "that clone is mine and I am done with it".
+in_repo "$SRC4" "$DC_ENTER" --replace reuse
+assert_eq "f: --replace exits 0" "$RC" 0
+assert_eq "f: --replace returns the same deterministic path" "$OUT" "$CLONE_F"
 assert_eq "f: the wreckage is gone — refs are pristine again" "$(refs_of "$CLONE_F")" "$(refs_of "$SRC4")"
 assert_eq "f: the wreckage is gone — tree is clean" "$(git -C "$CLONE_F" status --porcelain)" ""
 assert_eq "f: the wreckage is gone — tracked content restored" "$(cat "$CLONE_F/file.txt")" "tracked"
 assert_true "f: the wreckage is gone — litter removed" \
 	"$([ ! -e "$CLONE_F/untracked.txt" ] && echo true || echo false)"
-assert_contains "f: re-derivation is announced on stderr" "$ERR" "re-deriving"
-# Even a clone whose .git was destroyed is re-derived rather than refused: the
-# marker that proves ownership lives beside the clone, not inside it.
+assert_contains "f: the discard is announced on stderr" "$ERR" "discarding the existing clone"
+# Even a clone whose .git was destroyed is re-derived by --replace rather than
+# refused: the marker that proves ownership lives beside the clone, not inside it.
 rm -rf "$CLONE_F/.git"
-in_repo "$SRC4" "$DC_ENTER" reuse
+in_repo "$SRC4" "$DC_ENTER" --replace reuse
 assert_eq "f: a clone whose .git was destroyed is re-derived" "$RC" 0
 assert_eq "f: re-derived clone is a repository again" \
 	"$(git -C "$CLONE_F" rev-parse --is-inside-work-tree)" "true"
+# The destructive helper applies the SAME ownership proof as dc-remove: a marker
+# carrying the right magic but recording another clone path, or another source
+# repository, is not this invocation's to discard even with --replace.
+in_repo "$SRC4" "$DC_ENTER" mismatched
+CLONE_MM="$OUT"
+SESSION_MM="$(dirname "$CLONE_MM")"
+printf 'precious\n' >"$SESSION_MM/precious.txt"
+printf 'dc-clone-v2\0helper=dc-enter\0clone=/somewhere/else/repo\0source=%s\0' "$SRC4" \
+	>"$SESSION_MM/dc-clone-meta"
+in_repo "$SRC4" "$DC_ENTER" --replace mismatched
+assert_ne "f: --replace refuses a marker recording another clone path" "$RC" 0
+assert_eq "f: that refusal is silent on stdout" "$OUT" ""
+assert_eq "f: the mis-marked directory's contents survive" "$(cat "$SESSION_MM/precious.txt")" "precious"
+printf 'dc-clone-v2\0helper=dc-enter\0clone=%s\0source=/somewhere/else\0' "$CLONE_MM" \
+	>"$SESSION_MM/dc-clone-meta"
+in_repo "$SRC4" "$DC_ENTER" --replace mismatched
+assert_ne "f: --replace refuses a marker recording another source repository" "$RC" 0
+assert_eq "f: the mis-marked directory still survives" "$(cat "$SESSION_MM/precious.txt")" "precious"
+# dc-remove refuses the source mismatch for the same reason: the scope component
+# is a CRC32 of the worktree path, so comparing the path itself turns a hash
+# collision between two worktrees into a refusal rather than a silent merge.
+in_repo "$SRC4" "$DC_REMOVE" mismatched
+assert_ne "f: dc-remove refuses the same source mismatch" "$RC" 0
+assert_contains "f: and says which source it expected" "$ERR" "records source repository"
+rm -rf "$SESSION_MM"
 # A directory the helper did not create is refused, not deleted.
 FOREIGN_DIR="$(dirname "$CLONE_F")/../foreign"
 mkdir -p "$FOREIGN_DIR"
@@ -464,8 +599,30 @@ in_repo "$WORK/f/src-wt" "$DC_ENTER" shared
 assert_ne "g: two worktrees of one repository do not collide on a slug" "$OUT" "$PATH_ONE"
 in_repo "$SRC4" "$DC_ENTER" stable
 FIRST_STABLE="$OUT"
+in_repo "$SRC4" "$DC_REMOVE" stable
 in_repo "$SRC4" "$DC_ENTER" stable
 assert_eq "g: the same agent, worktree, and slug resolve to one path" "$OUT" "$FIRST_STABLE"
+# This repository's own fan-out model: several subagents of ONE container share
+# $CONTAINER_NAME and a worktree, so nothing distinguishes them and they derive
+# the same path. The second must refuse, leaving the first's clone whole — this
+# is the case a per-agent path component alone cannot separate.
+in_repo "$SRC4" env "DC_AGENT=" "CONTAINER_NAME=one-container" "$DC_ENTER" sibling
+assert_eq "g: the first sibling gets a clone" "$RC" 0
+SIBLING_ONE="$OUT"
+git -C "$SIBLING_ONE" update-ref refs/heads/mid-verification HEAD
+in_repo "$SRC4" env "DC_AGENT=" "CONTAINER_NAME=one-container" "$DC_ENTER" sibling
+assert_ne "g: an indistinguishable sibling is refused, not served" "$RC" 0
+assert_eq "g: that refusal is silent on stdout" "$OUT" ""
+assert_contains "g: that refusal warns about a concurrent sibling" "$ERR" "concurrent sibling"
+assert_true "g: the first sibling's clone survives intact" \
+	"$([ -d "$SIBLING_ONE/.git" ] && echo true || echo false)"
+assert_eq "g: including the ref it was working on" \
+	"$(git -C "$SIBLING_ONE" rev-parse --verify refs/heads/mid-verification)" \
+	"$(git -C "$SIBLING_ONE" rev-parse HEAD)"
+# Distinguishing them with DC_AGENT avoids the contention entirely.
+in_repo "$SRC4" env "DC_AGENT=sibling-two" "CONTAINER_NAME=one-container" "$DC_ENTER" sibling
+assert_eq "g: a sibling setting DC_AGENT gets its own clone" "$RC" 0
+assert_ne "g: ... at a different path" "$OUT" "$SIBLING_ONE"
 
 echo "== (h) dc-remove =="
 in_repo "$SRC4" "$DC_ENTER" doomed
@@ -501,7 +658,7 @@ assert_eq "h: the foreign directory survives" "$(cat "$FOREIGN_DIR/keep.txt")" "
 in_repo "$SRC4" "$DC_ENTER" mismarked
 CLONE_MIS="$OUT"
 MIS_SESSION="$(dirname "$CLONE_MIS")"
-printf 'dc-clone-v1\nclone=/somewhere/else/repo\n' >"$MIS_SESSION/dc-clone-meta"
+printf 'dc-clone-v2\0clone=/somewhere/else/repo\0source=%s\0' "$SRC4" >"$MIS_SESSION/dc-clone-meta"
 in_repo "$SRC4" "$DC_REMOVE" mismarked
 assert_ne "h: refuses a marker that records another clone path" "$RC" 0
 assert_contains "h: the mismatch is explained" "$ERR" "records clone path"
@@ -590,6 +747,49 @@ assert_eq "j: hardlinked clone's gc leaves the source's refs alone" "$(refs_of "
 assert_eq "j: hardlinked clone's gc leaves the source's objects alone" "$(objects_of "$SRC6")" "$OBJS_BEFORE_J"
 in_repo "$SRC6" git fsck --no-progress --no-dangling --connectivity-only
 assert_eq "j: the source still passes fsck after the hardlinked clone's gc" "$RC" 0
+
+echo "== (k) clone-root hygiene: separators and newlines =="
+SRC7="$WORK/k/src"
+mkdir -p "$WORK/k/root"
+make_source "$SRC7"
+unset DC_ROOT
+# A repeated separator must COLLAPSE, not vanish: a root of "<work>/k//root"
+# resolves to "<work>/k/root", never "<work>/kroot".
+in_repo "$SRC7" env "DC_ROOT=$WORK/k//root" "$DC_ENTER" seps
+assert_eq "k: a doubled separator in the root is accepted" "$RC" 0
+assert_contains "k: ... and collapses to a single one" "$OUT" "$WORK/k/root/"
+assert_true "k: ... with the clone really there" "$([ -d "$OUT/.git" ] && echo true || echo false)"
+CLONE_K="$OUT"
+in_repo "$SRC7" env "DC_ROOT=$WORK/k///root/" "$DC_REMOVE" seps
+assert_eq "k: dc-remove collapses separators identically" "$RC" 0
+assert_true "k: ... and removed the clone dc-enter printed" "$([ ! -e "$CLONE_K" ] && echo true || echo false)"
+# A newline in the root is refused by BOTH helpers. dc-enter's whole calling
+# convention is one path on one line of stdout — the incident's own script ended
+# its clone step with `| tail -n 1` — and a clone created under such a root would
+# be unusable through that convention.
+NL_ROOT="$WORK/k/ro
+ot"
+mkdir -p "$NL_ROOT"
+in_repo "$SRC7" env "DC_ROOT=$NL_ROOT" "$DC_ENTER" newline
+assert_ne "k: dc-enter refuses a root containing a newline" "$RC" 0
+assert_eq "k: ... silently on stdout" "$OUT" ""
+assert_contains "k: ... saying why" "$ERR" "newline"
+assert_eq "k: ... and leaves nothing behind under it" "$(ls -A "$NL_ROOT")" ""
+in_repo "$SRC7" env "DC_ROOT=$NL_ROOT" "$DC_REMOVE" newline
+assert_ne "k: dc-remove refuses the same root" "$RC" 0
+# The SOURCE repository's path is not the helper's to choose, so a newline there
+# still works: the marker is NUL-delimited, so it records such a path
+# unambiguously and dc-remove can still prove ownership from it.
+NL_SRC="$WORK/k/sr
+c"
+make_source "$NL_SRC"
+in_repo "$NL_SRC" env "DC_ROOT=$WORK/k/root" "$DC_ENTER" nlsource
+assert_eq "k: a source path containing a newline is fine" "$RC" 0
+assert_eq "k: ... and mirrors exactly" "$(refs_of "$OUT")" "$(refs_of "$NL_SRC")"
+CLONE_NL="$OUT"
+in_repo "$NL_SRC" env "DC_ROOT=$WORK/k/root" "$DC_REMOVE" nlsource
+assert_eq "k: ... and dc-remove parses its marker and removes it" "$RC" 0
+assert_true "k: ... leaving nothing" "$([ ! -e "$CLONE_NL" ] && echo true || echo false)"
 
 if [ "$fails" -eq 0 ]; then
 	printf 'test-dc-helpers: %d checks passed\n' "$checks"
