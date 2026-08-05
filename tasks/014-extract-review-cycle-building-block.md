@@ -68,7 +68,7 @@ Out of scope:
 - `resolve-open-questions/SKILL.md` — the downstream consumer of `openQuestions[]`; its item format is the target shape for escalations.
 - powbox `docker/shared/peer-review-run` header — invocation and result contract (`outcome ∈ passed | issues | unavailable | timeout | forfeited | failed`; final stdout line is one JSON object, schema `powbox.peer-review-run/v1`; exit 0 for any produced outcome). powbox `docs/architecture.md` peer-review-run bullet names this repo as the adoption boundary.
 - `plugins/dev-skills/workflows/README.md` — the authoring constraints these scripts live under (meta literal first, deterministic plain JS, no `Date.now()` / `Math.random()`).
-- powbox task 047 — the `wf-check` / `wf-status` helpers; `wf-check` applies the runtime's exact wrapping so a script with a top-level `return` validates properly. Use it if it has landed; otherwise the wrapped `node --check` documented in `plugins/dev-skills/workflows/README.md`'s Validation section — a stand-in for that wrapping rather than a reproduction of it, since the runtime's wrapping is not derivable from this repo.
+- powbox task 047 — the `wf-check` / `wf-status` helpers; `wf-check` applies the runtime's exact wrapping, so a script that only parses inside that wrapping validates properly. Use it if it has landed; otherwise the wrapped `node --check` documented in `plugins/dev-skills/workflows/README.md`'s Validation section — a stand-in for that wrapping rather than a reproduction of it, since the runtime's wrapping is not derivable from this repo.
 
 ## Target files or areas
 
