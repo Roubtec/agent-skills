@@ -13,7 +13,7 @@ This skill is a retrospective capture and transport tool, not a repair workflow.
 
 - Create a report only when there is at least one concrete learning, unless the user explicitly asks for a no-issue report.
 - Never stage or commit the report on the session's current branch or checkout.
-- Ferry whenever ferrying is possible or explicitly requested: a working directory inside a Git repository with an `origin` remote defaults to ferry mode, because a throwaway branch is cheap and pulling a stray untracked file off a remote box or a container-local checkout is not. Everywhere else defaults to local mode (an untracked report file, zero git mutations).
+- Ferry by default whenever ferrying is possible, and always when explicitly requested: a working directory inside a Git repository with an `origin` remote defaults to ferry mode, because a throwaway branch is cheap and pulling a stray untracked file off a remote box or a container-local checkout is not. Everywhere else defaults to local mode (an untracked report file, zero git mutations). An explicit `local` request forces local mode anywhere.
 - In ferry mode, publish the report through an isolated temporary worktree on a dedicated throwaway branch based on the remote default branch.
 - In ferry mode, add exactly one report-only commit, push the branch to `origin`, and do not open a pull request.
 - Do not switch, stash, clean, reset, or alter the session's current branch, tracked files, or pre-existing uncommitted changes.
