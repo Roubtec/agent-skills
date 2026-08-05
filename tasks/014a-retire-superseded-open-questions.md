@@ -33,17 +33,17 @@ Follow the failing path through the existing structure:
 2. The next reviewer rejects the escalation. It comes back as a **new** finding with a **new** round-scoped id — not as `F`.
 3. Pass N+1 disposes that new finding `fixed`. Nothing in that disposition names `q1`.
 
-So `q1` is stale and no field says so. Matching the two findings by text is not an option either — `cycleUndisposedFindings` deliberately matches by id, never by text ("paraphrase-proof where text matching is not", `wf-review-cycle.js:544-546`), and reintroducing text matching to solve this would undo that.
+So `q1` is stale and no field says so. Matching the two findings by text is not an option either — `cycleUndisposedFindings` deliberately matches by id, never by text ("paraphrase-proof where text matching is not", `wf-review-cycle.js:545-546`), and reintroducing text matching to solve this would undo that.
 
 Closing the loop therefore means extending the pinned wire format, which is what makes this its own change rather than a line in PR #39:
 
 - `CYCLE_FIX_SCHEMA`'s disposition item needs a way to name questions a `fixed`/`declined` disposition retires (`wf-review-cycle.js:206-213`).
 - The fixer prompt must show the currently-open questions, or the fixer has no ids to name — `cycleFixPrompt` does not pass them today.
 - The rule belongs in the fixer's `## Rules` block beside the existing "every `escalated` disposition gets an `openQuestions` entry" line.
-- Every edit has to be mirrored byte-for-byte into `wf-address-tasks.js`'s embedded copy of `review-cycle-core` (the same append sits at `wf-address-tasks.js:1025`).
+- Every edit has to be mirrored byte-for-byte into `wf-address-tasks.js`'s embedded copy of `review-cycle-core` (the same append sits at `wf-address-tasks.js:1029`).
 - The wire format is documented prose in **both** skill mirrors — `plugins/dev-skills/skills/review-cycle/SKILL.md:78-84` and `codex/dev-skills/skills/review-cycle/SKILL.md:129-…` — which must move in lockstep.
 
-That is a pinned-contract change across five files, consumed by a sixth skill, landing inside a 23-file PR whose subject is the extraction itself.
+That is a pinned-contract change across five files, consumed by a sixth skill, landing inside a 24-file PR whose subject is the extraction itself.
 
 ## Scope
 
@@ -67,7 +67,7 @@ Excluded:
 - A cycle in which a pass escalates a finding and a later pass retires that question does not surface the question in its terminal `openQuestions`, or surfaces it explicitly marked, per the decision above.
 - A retirement naming an unknown question id is reported, not silently dropped.
 - The `review-cycle-core` sections in `wf-review-cycle.js` and `wf-address-tasks.js` are byte-identical.
-- `node --check` (or `wf-check` where it has landed) passes on every touched workflow script.
+- `wf-check` (or the runtime-wrapped `node --check`) passes on every touched workflow script — a bare `node --check` on these sources cannot fail, so it is not the gate; see `plugins/dev-skills/workflows/README.md`'s Validation section for the wrapping.
 - Both `review-cycle` SKILL.md mirrors document the retirement rule, and their divergence is unchanged apart from it.
 
 ## Prerequisites

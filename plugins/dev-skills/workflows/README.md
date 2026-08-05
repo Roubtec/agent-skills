@@ -42,6 +42,13 @@ The shared-filesystem assumption was verified on 2026-06-10 with Claude Code 2.1
 
 ## Validation
 
-Run `node --check` on `plugins/dev-skills/workflows/wf-review-cycle.js`, `wf-address-review.js`, and `wf-address-tasks.js` from the repository root to parse-check the shipped workflow sources. The raw check accepts these mixed `export` + top-level-`return` sources as-is — verified 2026-08-05 on Node v24.18.1, where it rests on Node's module-syntax detection: the same files fail under `--no-experimental-detect-module`, or renamed to `.mjs`/`.cjs`. It is weaker than the runtime's exact wrapping; to parse against that wrapping, use powbox's `wf-check` where it has landed, else `node --check` on the body wrapped the way the runtime wraps it.
+Parse-check the shipped workflow sources — `plugins/dev-skills/workflows/wf-review-cycle.js`, `wf-address-review.js`, and `wf-address-tasks.js` — with powbox's `wf-check` where it has landed, since it applies the runtime's exact wrapping. It is not on PATH in the powbox image this repo is developed in (checked 2026-08-05), so until it lands, apply that wrapping yourself and check the result — from the repository root, once per file:
+
+```
+sed '1,/^export const meta/s/^export const meta/const meta/' <file> \
+  | { echo '(async function(args, agent, phase, workflow, parallel, pipeline, log){'; cat; echo '});'; } > /tmp/w.cjs && node --check /tmp/w.cjs
+```
+
+Do NOT substitute a bare `node --check <file>` on these `.js` sources: it cannot fail on them, so it distinguishes nothing. Verified 2026-08-05 on Node v24.18.1 — all three pass it unchanged AND still pass it with `let OBVIOUSLY_BROKEN = ;` appended; once a `.js` file contains a top-level `export`, an error after it is swallowed, and only an error placed *before* that first module-syntax token is still caught. The wrapped form above passes on all three files and does exit 1 on that same appended error, which is why it is the instruction here. (The bare check's exit 0 rests on Node's module-syntax detection: the same source fails under `--no-experimental-detect-module`, or renamed to `.mjs`/`.cjs`, on the top-level `return` the runtime's wrapping makes legal.)
 
 Run `node scripts/test-checkout-cleanliness-report.mjs` for the focused regression suite covering `wf-address-tasks.js`'s `mainCheckoutSummary` function. The test extracts that function from the shipped workflow rather than maintaining a second copy.
