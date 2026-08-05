@@ -42,7 +42,7 @@ Out of scope:
 
 ## Context and references
 
-Line numbers below are as of task 014 (PR #39), which introduces the marked section they point into; re-derive them before editing if the section has moved since.
+Every line-number citation in this file — in this section and in *Why this task exists* and *Target files or areas* alike — is as of task 014 (PR #39), which introduces the marked section they point into; re-derive them before editing if the section has moved since.
 
 **Why supersession cannot be decided from the data the cycle has today.** It needs a link from a later disposition back to the question an earlier pass raised. The cycle has exactly one such link, and it points the wrong way: a disposition carries `questionId` only when its own `disposition` is `escalated` (`plugins/dev-skills/workflows/wf-review-cycle.js:212`), naming the question it *creates*.
 
