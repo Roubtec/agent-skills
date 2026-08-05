@@ -504,6 +504,26 @@ function cycleShq(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
 }
 
+// Reduce a slug to ONE filesystem path segment before it lands in the artifact
+// directory template. The slug is routinely a branch name — the fallback on
+// both entry paths (`args.branch` structured, `scoped.branch` from scoping),
+// and "ref-safe" admits `/` — which `mktemp -d ".../review-cycle-<slug>.XXXXXX"`
+// reads as a parent directory that does not exist, failing the pass outright.
+// Quoting cannot help here: `cycleShq` stops the shell mangling the value, not
+// the path splitting on it. Everything outside `[A-Za-z0-9._-]` collapses for
+// the same reason, the length is bounded so the directory name stays readable
+// and well inside NAME_MAX, and an all-punctuation slug falls back to `cycle`.
+// The `cycleShq` wrapper stays around the result: quoting every interpolated
+// value is this section's uniform rule, so a later loosening of this filter
+// cannot silently reintroduce an injection.
+function cycleSlugSegment(s) {
+  const seg = String(s == null ? "" : s)
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .slice(0, 48)
+    .replace(/^[-._]+|[-._]+$/g, "");
+  return seg || "cycle";
+}
+
 // Pinned wire format for escalated open questions. It maps one-to-one onto the
 // four-part brief `resolve-open-questions` serves (grounded context, concrete
 // trigger, distinct options, recommendation), so a completed cycle's questions
@@ -692,7 +712,7 @@ function cycleFixPrompt(cycle, state) {
       : `This is round 1: carry out the assignment below.`;
   const artifactLine = state.artifactDir
     ? `This cycle's artifact directory is \`${state.artifactDir}\` — report it back as \`artifactDir\` and write this pass's packet prose (what you did, dispositions, question drafts) under it as \`round-${state.round}/\`.`
-    : `Create this cycle's UNIQUE artifact directory first — outside the worktree, e.g. \`mktemp -d "\${TMPDIR:-/tmp}/review-cycle-"${cycleShq(cycle.slug || "cycle")}".XXXXXX"\` (never a fixed shared name: parallel cycles share scratch space) — report it as \`artifactDir\` (REQUIRED: the cycle refuses to run rounds with no home for their history), and write this pass's packet prose under it as \`round-${state.round}/\`.`;
+    : `Create this cycle's UNIQUE artifact directory first — outside the worktree, e.g. \`mktemp -d "\${TMPDIR:-/tmp}/review-cycle-"${cycleShq(cycleSlugSegment(cycle.slug))}".XXXXXX"\` (never a fixed shared name: parallel cycles share scratch space) — report it as \`artifactDir\` (REQUIRED: the cycle refuses to run rounds with no home for their history), and write this pass's packet prose under it as \`round-${state.round}/\`.`;
   return `You are the fixer for one review cycle (branch \`${cycle.branch}\`, review base \`${cycle.base}\`, artifact type ${cycle.artifactType}).
 
 ## WORKTREE CONTRACT (do this before anything else)
