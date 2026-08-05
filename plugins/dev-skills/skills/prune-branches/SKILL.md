@@ -16,9 +16,9 @@ Explicit Claude Code invocation uses `/dev-skills:prune-branches`; natural-langu
 Parse arguments leniently and let the inventory listing be the safety net:
 
 - `no-pull` skips the local-default update entirely: an existing local default stays at its current tip, and an absent one is not created. The initial `git fetch --prune` and the targeted refresh of the remote default ref still run, so classification still compares against origin's current default.
-- `hands-off` prints the listing and then performs a best-effort purge without waiting: delete only Merged and Transient branches, reserve recovery refs for every Transient deletion, and leave every Uncertain branch untouched.
+- `hands-off` prints the listing and then performs a best-effort purge without waiting: delete only Merged and Transient branches, reserve recovery refs for every Transient deletion, and leave every Uncertain branch untouched. It sweeps no recovery breadcrumb from an earlier run either: those are inventoried and reported, with their cleanup commands, and left in place.
 - Treat all other text as guidance, especially branch names to keep and context such as "there is stashed work on X." Resolve and apply keeps before classification and before showing the listing.
-- In an interactive run, selecting Proceed through `AskUserQuestion` confirms only the proposed Merged and Transient set. Deleting an Uncertain branch requires the user to name that branch explicitly during this run; invocation-time instructions such as `delete old-spike even if uncertain` count only when they are unambiguous.
+- In an interactive run, selecting Proceed through `AskUserQuestion` confirms only the proposed Merged and Transient set plus the breadcrumb rows the listing marked `sweep`. Deleting an Uncertain branch requires the user to name that branch explicitly during this run; invocation-time instructions such as `delete old-spike even if uncertain` count only when they are unambiguous.
 
 ## Absolute safety rules
 
@@ -32,6 +32,7 @@ Parse arguments leniently and let the inventory listing be the safety net:
 - Never classify a non-ancestry branch as Merged unless a merged PR based on the resolved default branch has a `headRefOid` that exactly equals the branch's current full tip OID.
 - Never delete an Uncertain branch in `hands-off` mode or merely because the user selected Proceed.
 - Never delete a non-Merged branch until an unused recovery-ref name has been claimed atomically and verified at its exact tip.
+- Never delete a recovery breadcrumb under `refs/pruned/**` outside step 10's confirmed sweep, and never sweep one unless this run proposed it, a confirmation covered it, its commit is reachable from the resolved default, its date segment clears the age threshold, and the deletion passes the inventoried OID as the expected old value. Step 8's rule that reservation never overwrites or deletes an existing ref still holds in full; it constrains the claim loop, which must never disturb a breadcrumb it happens to collide with, and says nothing about this separate, deliberate, confirmed removal of refs the run inventoried and reported first.
 - Never use `git worktree remove --force`, force helper cleanup, auto-stash, reset, clean, or any operation that can discard tracked modifications or non-ignored untracked files. If a worktree cannot be removed cleanly, keep its branch. Ignored untracked files are the one deliberate exception, defined in step 9.
 - Never remove the invoking/main worktree. Remove another linked worktree only when this run created it, the user approved its exact annotated canonical path and branch, or it is a confirmed Merged/Transient branch proven to belong to this container's exact helper root and is removed through `wt-remove` as defined in step 9. A clean or helper-looking path outside that exact current-container root, `hands-off`, and general confirmation are not ownership proof.
 - Never treat a `[gone]` upstream, a branch name, or a merge-looking commit subject as sufficient proof by itself.
@@ -102,6 +103,13 @@ Build one stable snapshot before classification:
 
 The post-fetch `[gone]` upstream state is useful evidence but never a bucket by itself.
 
+Inventory the recovery breadcrumbs earlier runs left behind as part of the same snapshot. They accumulate indefinitely, they are invisible to `git branch`, and every one of them keeps its commits advertised forever, so a skill whose purpose is to reduce carried scaffolding must account for them rather than only for branches. Taking the snapshot here, before step 8 reserves anything, also keeps this run's own breadcrumbs out of the inventory by construction.
+
+- Read each layout with its own capped query, NUL-delimited so no name needs quoting: `git for-each-ref --count=201 --format='%(refname)%00%(objectname)%00' refs/pruned/flat/` for the flat fallback layout, and the same command against `refs/pruned/` for the hierarchical one, discarding the rows that second query returns under `refs/pruned/flat/` because the first already covers them under its own budget. Two queries rather than one because refname order sorts every `YYYYMMDD` date segment ahead of `flat`, so a single shared budget would let a crowded hierarchical family hide the flat family entirely.
+- The inventory budget is 200 breadcrumbs per layout, in the same spirit as step 6's lookup budgets. Asking for 201 is how truncation is detected: a query that returned more rows than its budget means that layout's listing is incomplete, and steps 7 and 11 must say so plainly, naming the layout and the cap, rather than letting a partial listing read as the whole picture.
+- Recover the date segment and the real branch name from the layout, never from the ref's shape alone. `refs/pruned/<YYYYMMDD-UTC>/<branch>` carries both directly, while `refs/pruned/flat/<YYYYMMDD-UTC>/<encoded>` puts the date one segment deeper and holds a percent-encoded name. Decode `<encoded>` by undoing step 8's two substitutions in the opposite order: `%2F` to `/` first, then `%25` to `%`. That order is load-bearing — decoding `%25` first turns `a%252Fb`, the encoding of a branch literally named `a%2Fb`, into `a/b`. Never present a flat breadcrumb under a date segment of `flat` or under its encoded name.
+- Treat any ref under `refs/pruned/` matching neither layout, or whose date segment is not eight digits, as unrecognized: report it and never propose it for removal. A ref that does not resolve to a commit needs no separate probe, because step 6's reachability queries silently drop it from both answers, so a ref in neither answer is unrecognized by construction.
+
 ### Step 6 — Classify with minimal effort
 
 Use only the following cheap checks. Do not add patch-id analysis, tree-diff equivalence, reflog archaeology, or other squash-merge forensics.
@@ -146,6 +154,16 @@ Everything else is Uncertain: unique or unpushed commits, unclear provenance, a 
 
 Spend no extra effort proving hypotheticals. Give each Uncertain branch one concise reason and leave it untouched unless the user explicitly names it for deletion in this run.
 
+#### Pre-existing recovery breadcrumbs
+
+Breadcrumbs from earlier runs are not branches and do not enter the buckets above. Sort each inventoried breadcrumb by reachability from the same default comparison OID the branch buckets use — two queries per layout rather than a process per ref:
+
+- **Redundant** — returned by `git for-each-ref --merged="$default_oid" <prefix>`. The work the breadcrumb preserves landed in the resolved default, so the ref now only keeps bytes advertised. `git merge-base --is-ancestor "$ref" "$default_oid"` is the per-ref equivalent when a single breadcrumb needs re-checking.
+- **Load-bearing** — returned by `git for-each-ref --no-merged="$default_oid" <prefix>`. Its commits are reachable from nothing else guaranteed to remain, so the breadcrumb is the only thing keeping them alive. Report it with that reason and never propose it for removal. Age is irrelevant here: an old load-bearing breadcrumb is precisely the one worth keeping.
+- A Redundant breadcrumb becomes a sweep candidate only when its date segment is at least 7 days before the run's UTC date. Anything newer is reported as `too recent to sweep` and kept. The threshold protects a user still orienting after a recent prune, and it is deliberately generous because the costs are asymmetric: a stale ref costs bytes, while a breadcrumb swept out from under someone costs the recovery they were about to make.
+
+Restrict the reachability queries to the same prefixes the inventory read, and use them only to classify the rows the inventory already captured — they are a classification lookup, not a second, unbudgeted inventory that could reintroduce the rows the budget deliberately excluded.
+
 ### Step 7 — Present one audit listing and confirm
 
 Print a single scannable listing with bucket, branch, full or unambiguous short tip, worktree annotation when applicable, proposed action, and one-line reason. Also list protected branches separately so the resolved default, current branch, and user keeps are visibly excluded.
@@ -161,13 +179,24 @@ Local branch cleanup against origin's default `develop` at a03ab1f:
   Protected  develop        a03ab1f  keep    authoritative default branch
   Protected  feature/live   c133bbe  keep    current branch in invoking worktree
 
+Recovery breadcrumbs from earlier runs (both layouts inventoried in full):
+
+  Redundant     20260112  task/007  refs/pruned/20260112/task/007         1c0ffee  sweep  landed in develop; 205 days old
+  Redundant     20260112  spike/a   refs/pruned/flat/20260112/spike%2Fa   b0bab1e  sweep  landed in develop; 205 days old
+  Load-bearing  20260130  spike/kv  refs/pruned/flat/20260130/spike%2Fkv  55ac0de  keep   commits unreachable from develop
+  Redundant     20260803  task/011  refs/pruned/20260803/task/011         3d4e5f6  keep   landed, but only 2 days old
+
 Non-Merged deletions will first be preserved under unused refs/pruned/... names.
-Choosing Proceed deletes only the proposed Merged and Transient rows. Choose other instructions to keep/skip rows or explicitly name an Uncertain branch to delete.
+Choosing Proceed deletes only the proposed Merged and Transient rows and sweeps only the breadcrumb rows marked `sweep`. Choose other instructions to keep/skip rows or explicitly name an Uncertain branch to delete.
 ```
+
+List every inventoried breadcrumb, not only the sweep candidates, with its date segment, decoded branch name, exact ref, and tip, so the refs someone would otherwise have to remember a `git for-each-ref refs/pruned/` incantation to see are on screen next to the branches. When a layout's budget truncated the inventory, say so on its own line — `flat layout truncated at the 200-breadcrumb budget` — because a listing that silently omits breadcrumbs reads as an all-clear it has not earned.
 
 In normal interactive mode, use Claude Code's native `AskUserQuestion` mechanism to ask whether to proceed, keep/skip named branches, or give other instructions. Proceed confirmation covers proposed Merged/Transient rows in attributable current-container helper worktrees because step 9 removes those only through `wt-remove`; every unattributed/pre-existing worktree and every explicitly requested Uncertain deletion requires approval naming its exact annotated path and branch. Apply changes, re-display the updated listing, and ask for final confirmation through `AskUserQuestion`. If the user explicitly requests deletion of an Uncertain branch, mark that row `explicitly confirmed`, include it in the updated listing, and require final confirmation; it receives a recovery ref.
 
 In `hands-off` mode, print the same listing for auditability and proceed immediately with only Merged and Transient rows that are not checked out in a linked worktree or whose linked worktree is attributable to this container's exact helper root and removable through `wt-remove`. Invocation-time keeps still apply. Ignore any ambiguous delete guidance, never remove an unattributed worktree, and never include Uncertain rows.
+
+`hands-off` prints the breadcrumb inventory in full but sweeps nothing, for the same reason it refuses to touch Uncertain branches: an unattended run should not make a removal decision the user has not had the chance to see first. Report the redundant breadcrumbs, mark them `report only (hands-off)` rather than `sweep`, and print their cleanup commands in step 11 so the user can finish the job in one paste.
 
 ### Step 8 — Revalidate tips and reserve recovery refs
 
@@ -177,7 +206,7 @@ For every confirmed branch not in Merged, reserve a recovery ref before deleting
 
 1. Start with `refs/pruned/<YYYYMMDD-UTC>/<branch>`, using one UTC date for the run.
 2. Atomically claim the candidate only if it does not exist, using `git update-ref --stdin -z` with its `create SP <ref> NUL <tip> NUL` form. The `-z` form delimits the ref by NUL instead of parsing it under the newline format's C-quoting rules, so a branch name containing a quote needs no reasoning about escaping. Do not use a blind `git update-ref "<ref>" "<tip>"` write: that can repoint an earlier run's breadcrumb.
-3. Try at most 10 hierarchical candidates: the base name, `refs/pruned/<date>/<branch>-<short-tip>`, then that short-tip form suffixed `-2` through `-9`. Existing refs are never overwritten or deleted.
+3. Try at most 10 hierarchical candidates: the base name, `refs/pruned/<date>/<branch>-<short-tip>`, then that short-tip form suffixed `-2` through `-9`. The claim loop never overwrites or deletes an existing ref; it only ever creates a name nothing holds, and a breadcrumb it collides with is left exactly as it was. The single place any breadcrumb is removed is step 10's sweep of earlier runs' redundant refs, which acts only on refs this run inventoried, reported, and had confirmed.
 4. When none of those 10 can be claimed, fall back to the flat namespace below. The usual cause is a directory/file conflict rather than a taken name: a same-date breadcrumb whose branch name is a path prefix of this branch (an earlier-pruned `foo` sitting where every `refs/pruned/<date>/foo/bar` candidate must live) blocks the whole hierarchical family at once.
 5. Claim up to 10 flat candidates under `refs/pruned/flat/<YYYYMMDD-UTC>/`, the same atomic way: `<encoded>`, `<encoded>-<short-tip>`, then that short-tip form suffixed `-2` through `-9`. `<encoded>` is the branch name percent-encoded into a single path component — `%` to `%25` first, then `/` to `%2F`; that order keeps the mapping reversible, so two branches never share a base flat name. Two properties make this subtree conflict-free rather than merely less conflict-prone: `flat` sits where a date segment goes, and a date segment is always `YYYYMMDD`, so no branch-derived name can reach into it; and every name inside it is a leaf, so nothing there creates a directory for a later breadcrumb to collide with. A taken name is the ordinary case the counters already cover. Only a branch that exhausts all ten is stuck — percent-encoding expands as well as joins, and a literal `%` triples, so a long or `%`-dense branch can exceed the filesystem's limit on a single name — and that needs no further naming scheme; it lands on the drop-and-report rule below, which keeps the branch.
 6. After a successful create, resolve the new ref as a commit and require its full OID to equal the expected snapshotted tip.
@@ -207,6 +236,12 @@ Delete only the remaining confirmed local branches with `git branch -D -- "$bran
 
 Record success or failure per branch. A failed deletion is non-fatal and must not lead to cleanup of its recovery ref.
 
+Then, and only then, sweep the confirmed redundant breadcrumbs from earlier runs. Doing it after the branch deletions keeps the refs this run reserved out of the set by ordering as well as by age.
+
+- Delete each with `git update-ref -d "$ref" "$old_oid"`, passing the OID step 5 inventoried as the expected old value. Git refuses, reporting where the ref actually is, when the breadcrumb moved or vanished in between; that refusal is the entire reason for the form, so record it as a skip and never retry without the expected old value.
+- Sweep only rows the listing marked `sweep` and a confirmation covered. Never sweep in `hands-off` mode, never sweep a load-bearing or unrecognized breadcrumb whatever its age, and never sweep one inside the age threshold.
+- Record swept, refused, and failed breadcrumbs separately. A failed sweep is non-fatal and changes nothing about the branch results.
+
 ### Step 11 — Report and restore orientation
 
 Confirm that the invoking checkout still has its original branch or detached-HEAD orientation and untouched dirty-state entries. Do not attempt destructive restoration if another process changed it; report the difference instead. Remove only clean temporary worktrees created for the default-branch pull, without force; preserve and report any that cannot be removed safely.
@@ -217,6 +252,7 @@ Print:
 - Every deleted branch with bucket and full tip SHA. Include the exact recovery ref for each Transient or explicitly confirmed Uncertain deletion.
 - Every kept, skipped, changed, dirty-worktree, or failed branch with its reason.
 - Every recovery ref created in this run, separated into refs for deleted branches and refs reserved for branches that remained, with the reason each latter branch was not deleted.
+- Every pre-existing breadcrumb inventoried, separated into swept, kept as load-bearing, kept as too recent, kept because the user or `hands-off` declined the sweep, refused by the expected-old-OID check, and unrecognized — each with its date segment, decoded branch name, exact ref, and tip. When either layout's budget truncated the inventory, state that in the report too, naming the layout and the cap, so the listing is never read as the complete set.
 - Every linked or temporary worktree removed or preserved.
 - A clear statement that no remote refs or PRs were mutated.
 
@@ -235,11 +271,13 @@ git for-each-ref 'refs/pruned/<YYYYMMDD-UTC>/' 'refs/pruned/flat/<YYYYMMDD-UTC>/
 git branch '<branch>' '<exact-refs/pruned/...-ref>'
 ```
 
-Show cleanup only for the exact recovery refs created in this run, preferably with expected-old OIDs so a changed breadcrumb is not removed accidentally:
+Show cleanup for the exact recovery refs this run created, never for a ref it did not report, and always with expected-old OIDs so a changed breadcrumb is not removed accidentally:
 
 ```sh
 git update-ref -d '<exact-recovery-ref>' <preserved-full-tip-sha>
 ```
+
+Print the same form for every redundant breadcrumb from an earlier run that was reported but not swept — under `hands-off`, because the user kept it, or because the expected-old-OID deletion refused — so the cleanup this run declined to perform stays one paste away. Never print a removal command for a load-bearing breadcrumb; say instead that it is the only ref still keeping its commits advertised. Report an unrecognized ref as it stands, with no removal command and no claim about what it holds.
 
 Explain that refs keep commits advertised indefinitely until those refs are dropped. A deleted Merged branch has no automatic backup ref, but its printed SHA and reflogs or `git fsck --lost-found` may recover otherwise unreferenced commits until Git garbage collection removes them.
 
@@ -256,6 +294,8 @@ Explain that refs keep commits advertised indefinitely until those refs are drop
 - [ ] Transient proofs name refs that survive the run; Uncertain branches remain untouched unless explicitly named interactively.
 - [ ] Audit listing printed; interactive confirmation or `hands-off` rules applied.
 - [ ] All non-Merged recovery refs atomically claimed at unused names and verified before any removal/deletion.
+- [ ] Earlier runs' `refs/pruned/**` breadcrumbs inventoried under both layouts within budget, flat names decoded to their real branch names, split into redundant and load-bearing, and any truncation stated plainly in listing and report.
+- [ ] No breadcrumb swept without a confirmation covering it; every sweep used the expected-old-OID `git update-ref -d` form; load-bearing, recent, and unrecognized breadcrumbs kept, and `hands-off` swept none.
 - [ ] Tips rechecked; automatic cleanup covered only clean Merged/Transient worktrees attributed to this container's exact helper root and removed through `wt-remove`; every plain-Git candidate removal had exact path-and-branch approval.
 - [ ] Only local branches deleted; every deleted tip and every created recovery breadcrumb, including refs for branches that remained, reported.
 - [ ] Every dynamic branch, ref, and path was passed as argv or shell-quoted, in executed and printed commands alike, with literals in printed commands single-quoted.
