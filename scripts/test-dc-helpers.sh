@@ -21,7 +21,8 @@ set -euo pipefail
 # Covers:
 #   (a) stdout purity and the DC="$(dc-enter probe)" calling convention
 #   (b) the isolation guarantee — refs, commits, and gc --prune=now in the clone
-#       leave the source's refs and reachable objects untouched
+#       leave the source's refs and reachable objects untouched, and the clone
+#       takes a commit where nothing has configured an identity
 #   (c) the <ref> interface: default is the INVOKING worktree's HEAD (not the
 #       main worktree's), branch/tag/sha/rev forms, a short name that is both a
 #       branch and a tag resolving to the branch, and refusal on a bad ref
@@ -320,7 +321,14 @@ git -C "$CLONE_A" update-ref -d refs/stash
 git -C "$CLONE_A" update-ref -d refs/tags/v1
 git -C "$CLONE_A" checkout -q --detach HEAD
 git -C "$CLONE_A" branch -q -D main
-g -C "$CLONE_A" commit -q --allow-empty -m "clone-only commit"
+# Deliberately NOT through the `g` wrapper, which every other fixture commit
+# uses: the wrapper supplies an identity of its own, so a clone whose fallback
+# identity dc-enter failed to configure would commit just the same and the check
+# below would prove nothing. Nothing else in this environment offers one — the
+# probe at the top of the run asserts that — so this succeeds only because
+# dc-enter filled the gap itself.
+in_repo "$CLONE_A" git commit -q --allow-empty -m "clone-only commit"
+assert_eq "b: the clone can commit with no identity available anywhere" "$RC" 0
 git -C "$CLONE_A" reflog expire --expire=now --all
 git -C "$CLONE_A" gc --prune=now --quiet
 assert_eq "b: source refs unchanged" "$(refs_of "$SRC1")" "$REFS_BEFORE"
@@ -329,7 +337,6 @@ in_repo "$SRC1" git fsck --no-progress --no-dangling --connectivity-only
 assert_eq "b: source still passes fsck" "$RC" 0
 assert_eq "b: the unreachable ref's commit survives in the source" \
 	"$(git -C "$SRC1" cat-file -t "$(git -C "$SRC1" rev-parse refs/pruned/reserved)")" "commit"
-# A commit inside the clone works even with no user identity configured.
 assert_contains "b: clone accepted a commit" "$(git -C "$CLONE_A" log -1 --format=%s)" "clone-only commit"
 
 echo "== (c) the <ref> interface =="
