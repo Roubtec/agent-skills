@@ -908,12 +908,24 @@ async function runReviewCycle(cycle) {
     }
 
     // Anything else needs a (re-)review — bounded by the cap. This check is
-    // reachable at the cap only through a confirmation pass that changed
-    // content (a FAILED round at the cap returns below, before another fixer
-    // could run and leave never-reviewed changes behind).
+    // reachable at the cap only through a confirmation pass that produced new
+    // work: changed content, or dispositions of its own (a FAILED round at the
+    // cap returns below, before another fixer could run and leave
+    // never-reviewed changes behind).
+    //
+    // Those dispositions can themselves breach a contract, and the retirement
+    // guard binds on a pass handed nothing — so a confirmation pass that names
+    // an unknown (or already-claimed) question id lands its `retire:<id>` entry
+    // in `undisposed` on exactly this path. Carrying it out under the SAME
+    // `outstanding.carried` key the failed-round cap exit below uses is what
+    // makes the breach structurally reportable rather than a generic note; a
+    // consumer reading one exit's shape reads this one's.
     if (rounds >= cap) {
       return result("review-cap", `hit the ${cap}-round cap without convergence`, {
-        outstanding: { note: "final confirmation pass changed content that could not be re-reviewed within the cap" },
+        outstanding: {
+          note: "final confirmation pass produced work (content changes, dispositions, or both) that could not be re-reviewed within the cap",
+          ...(undisposed.length ? { carried: undisposed } : {}),
+        },
       });
     }
     rounds += 1;

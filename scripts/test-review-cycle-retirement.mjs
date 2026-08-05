@@ -23,14 +23,28 @@ const here = dirname(fileURLToPath(import.meta.url));
 const WORKFLOWS = ["wf-review-cycle.js", "wf-address-tasks.js"];
 
 let failures = 0;
+// Per-leg tallies of BOTH outcomes. The suite gates on failures, so a check
+// that stops running is invisible to it — an edit that drops a scenario, or a
+// `scenario()` guard that swallows one silently, would pass. Counting the oks
+// too lets each leg assert it ran the whole suite (see CHECKS_PER_LEG).
+let legOk = 0;
+let legFail = 0;
 function check(name, cond, detail) {
   if (cond) {
+    legOk++;
     console.log(`ok  - ${name}`);
   } else {
     failures++;
+    legFail++;
     console.error(`NOT ok - ${name}${detail ? `: ${detail}` : ""}`);
   }
 }
+
+// How many scenario checks each workflow leg must run (the tally is read
+// BEFORE the assertion itself, so it does not count). Bump it deliberately
+// when adding or removing one — that is the point: the number is the
+// assertion.
+const CHECKS_PER_LEG = 29;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -147,6 +161,20 @@ const escalateRetiring = {
   dispositions: [{ findingId: "r1-1", finding: "f", origin: "reviewer", disposition: "escalated", detail: "d", questionId: "q2", retiresQuestionIds: ["q1"] }],
   openQuestions: [Q2],
 };
+// One packet whose TWO `fixed` dispositions each claim to retire the same
+// still-live `q1` (scenario 14). Only the first claimer may take effect: the
+// question is spoken for the moment it is claimed.
+const twoRetirementsSameQuestion = {
+  ...PASS_PACKET,
+  dispositions: [
+    { findingId: "r1-1", finding: "f", origin: "reviewer", disposition: "fixed", detail: "first claimer", retiresQuestionIds: ["q1"] },
+    { findingId: "r1-2", finding: "g", origin: "reviewer", disposition: "fixed", detail: "second claimer", retiresQuestionIds: ["q1"] },
+  ],
+};
+// A confirmation pass that re-reports an already-retired `q1` verbatim
+// (scenario 13). It disposes nothing and changes nothing, so it also
+// terminates the cycle.
+const reReportQ1 = { ...PASS_PACKET, changed: false, dispositions: [], openQuestions: [Q1] };
 // One packet that RAISES `q2` and, in the same breath, claims a `fixed`
 // disposition settles it (scenario 12).
 const raiseAndRetire = {
@@ -166,8 +194,15 @@ async function run(src, { fixes, reviews, cycle }) {
     const q = questionOf(id);
     return !q ? "absent" : q.retired ? "retired" : q.retirementPending ? "pending" : "live";
   };
-  return { res, q: questionOf("q1"), state: stateOf("q1"), questionOf, stateOf, seen, carried: JSON.stringify(res.outstanding || {}) };
+  const entriesOf = (id) => (res.openQuestions || []).filter((x) => x && x.id === id);
+  return { res, q: questionOf("q1"), state: stateOf("q1"), questionOf, stateOf, entriesOf, seen, carried: JSON.stringify(res.outstanding || {}) };
 }
+
+// How many questions a review prompt's RETIREMENT block carries. `originRound`
+// is a question-object field, and questions are serialized into that prompt
+// nowhere else, so its occurrence count IS the number of proposed retirements
+// the round was shown.
+const proposedCount = (prompt) => ((prompt || "").match(/"originRound"/g) || []).length;
 
 for (const name of WORKFLOWS) {
   const src = readFileSync(join(here, "..", "plugins", "dev-skills", "workflows", name), "utf8");
@@ -182,13 +217,17 @@ for (const name of WORKFLOWS) {
   });
 
   // 2. A reviewer that keeps REJECTING the claim -> round cap -> NOT settled.
+  //    The later passes re-claim the same question, which is not a second
+  //    retirement but a stray: a claim already spoke for it, so the guard must
+  //    report each re-claim rather than quietly re-applying it.
   await scenario("2. rejected retirement", async () => {
-    const { res, q, state } = await run(src, {
+    const { res, q, state, carried } = await run(src, {
       fixes: [escalate, retireOn("r1-1"), retireOn("r2-1"), retireOn("r3-1")],
       reviews: [FAIL("r1"), FAIL("unearned retirement"), FAIL("unearned retirement")],
     });
     check("rejected retirement is not settled at the round cap", res.verdict === "review-cap" && state === "pending", `${res.verdict}/${state}`);
     check("rejected retirement carries no `retired` mark", !!q && !q.retired);
+    check("re-retiring an already-claimed question is reported", /retire:q1/.test(carried), carried);
   });
 
   // 3. A cycle that ERRORS before any round accepted the claim -> NOT settled.
@@ -298,6 +337,56 @@ for (const name of WORKFLOWS) {
     check("retiring a question this same packet raised is reported", /retire:q2/.test(carried), carried);
     check("retiring a question this same packet raised does not mark it", stateOf("q2") === "live", stateOf("q2"));
   });
+
+  // 13. A later pass RE-REPORTING a question id the cycle already carries is
+  //     restating it, not raising a new one. The entry from the pass that
+  //     raised it stays authoritative and the re-report is dropped: a second
+  //     entry under one id would fork the question's state, so a retirement
+  //     would mark one copy while the other stayed live — and here, where the
+  //     id is already RETIRED, the re-report would resurrect a settled
+  //     decision as a live one.
+  await scenario("13. re-report neither forks nor revives a question", async () => {
+    const { res, entriesOf } = await run(src, { fixes: [escalate, retireOn("r1-1"), reReportQ1], reviews: [FAIL("r1"), OK] });
+    check("a re-reported question is not appended a second time", entriesOf("q1").length === 1, `${entriesOf("q1").length} entries / ${res.verdict}`);
+    check("a re-report leaves no live copy of a retired question", entriesOf("q1").every((x) => !!x.retired), JSON.stringify(entriesOf("q1").map((x) => (x.retired ? "retired" : x.retirementPending ? "pending" : "live"))));
+  });
+
+  // 14. TWO dispositions in one packet claiming the same still-live question.
+  //     A question is spoken for the moment a claim lands on it, so the FIRST
+  //     claimer wins and the second settles nothing: the question is proposed
+  //     to the reviewer once, and the accepted mark names the disposition that
+  //     actually claimed it — otherwise the round adjudicates one decision
+  //     twice and the result credits the wrong disposition for settling it.
+  await scenario("14. one question, one claimer", async () => {
+    const { q, state, seen } = await run(src, {
+      fixes: [escalate, twoRetirementsSameQuestion, fixOn("r2-1"), idle],
+      reviews: [FAIL("r1", "r1b"), FAIL("r2"), OK],
+    });
+    check("the first claimer of a question wins", state === "retired" && !!q && !!q.retired && q.retired.findingId === "r1-1", `${state}/${(q && q.retired && q.retired.findingId) || "-"}`);
+    check("a doubly-claimed question is proposed to the reviewer once", proposedCount(seen.reviewPrompts[2]) === 1, `${proposedCount(seen.reviewPrompts[2])} proposed`);
+  });
+
+  // 15. The round cap reached through the FINAL CONFIRMATION pass. That pass
+  //     is handed nothing, but the retirement guard binds anyway — a
+  //     retirement is a claim about the cycle's accumulated questions, not
+  //     about a round's findings — so its breach must leave by the same
+  //     `outstanding.carried` door the failed-round cap exit uses. A generic
+  //     note here would drop the only structural record that the last thing
+  //     the cycle did was claim to settle a question that does not exist.
+  await scenario("15. cap reached on the confirmation pass", async () => {
+    const { res, carried } = await run(src, {
+      fixes: [escalate, retireOn("r1-1", ["nope"])],
+      reviews: [OK],
+      cycle: { maxRounds: 1 },
+    });
+    check("confirmation-pass cap exit reports the retirement breach", res.verdict === "review-cap" && /retire:nope/.test(carried), `${res.verdict}/${carried}`);
+    check("confirmation-pass cap exit still says why it stopped", /could not be re-reviewed within the cap/.test(carried), carried);
+  });
+
+  const ran = legOk + legFail;
+  check(`suite ran all ${CHECKS_PER_LEG} checks`, ran === CHECKS_PER_LEG, `ran ${ran}`);
+  legOk = 0;
+  legFail = 0;
 }
 
 if (failures) {
