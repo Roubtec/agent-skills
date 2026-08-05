@@ -236,7 +236,7 @@ const CYCLE_FIX_SCHEMA = {
           disposition: { type: "string", description: "fixed | declined | escalated — nothing else counts as a disposition." },
           detail: { type: "string", description: "fixed: what changed + commit. declined: the reason (a decline is verified by the next fresh reviewer, never final here). escalated: one line naming the question." },
           questionId: { type: "string", description: "REQUIRED when disposition is `escalated`: the id of the openQuestions entry this raised." },
-          retiresQuestionIds: { type: "array", items: { type: "string" }, description: "Ids of STILL-LIVE open questions from earlier passes that this disposition SETTLES, so the cycle stops carrying decisions the maintainer no longer has to make. Only `fixed` and `declined` retire (an `escalated` disposition raises a question rather than settling one); naming an id the cycle does not carry open is reported back, never a silent no-op. Retire nothing you did not actually settle." },
+          retiresQuestionIds: { type: "array", items: { type: "string" }, description: "Ids of STILL-LIVE open questions from EARLIER passes that this disposition SETTLES, so the cycle stops carrying decisions the maintainer no longer has to make. Only `fixed` and `declined` retire (an `escalated` disposition raises a question rather than settling one), and only a question that was already open: a question this same packet RAISES cannot also be settled by it — that is a contradiction, not a retirement. Naming an id the cycle does not carry open from an earlier pass is reported back, never a silent no-op. Retire nothing you did not actually settle." },
         },
         required: ["finding", "origin", "disposition", "detail"],
       },
@@ -346,7 +346,7 @@ function cycleFindingsBlock(findings) {
   if (!findings) return "";
   const parts = [];
   if (Array.isArray(findings.carried) && findings.carried.length) {
-    parts.push(`### Findings carried forward — the previous pass gave these NO single valid disposition (missing \`findingId\`, duplicate dispositions for one id, an unrecognized disposition value, an \`escalated\` with no matching open question — or, for a \`disposition-error\` entry, a disposition naming a finding id never handed, or a retirement that settled nothing). Dispose EVERY one now, exactly one disposition each, echoing its \`id\` as \`findingId\`.\n\n${JSON.stringify(findings.carried, null, 2)}`);
+    parts.push(`### Findings carried forward — the previous pass gave these NO single valid disposition (missing \`findingId\`, duplicate dispositions for one id, an unrecognized disposition value, an \`escalated\` naming no live open question — including one that same pass retired, which settles a decision rather than escalating to it — or, for a \`disposition-error\` entry, a disposition naming a finding id never handed, or a retirement that settled nothing). Dispose EVERY one now, exactly one disposition each, echoing its \`id\` as \`findingId\`.\n\n${JSON.stringify(findings.carried, null, 2)}`);
   }
   if (Array.isArray(findings.reviewer) && findings.reviewer.length) {
     parts.push(`### Reviewer findings\n\n${JSON.stringify(findings.reviewer, null, 2)}`);
@@ -402,7 +402,7 @@ ${cycleItemsBlock(cycle)}${cycleFindingsBlock(state.findings)}${cycleOpenQuestio
 - ${artifactLine}
 - Commit at logical milestones; run the project's build/lint before declaring done (code artifacts).
 - If you must deliver something other than a decision the maintainer LOCKED, do not silently conform or correct: report it in \`deviations\` — what you delivered instead and the constraint that forced it. The cycle surfaces it for the human (report, don't correct).
-- Every \`escalated\` disposition gets an \`openQuestions\` entry in the schema's pinned format, with authoritative artifact pointers (file:line, refs) — never paraphrase — and its \`questionId\` back-reference. Raise a question only for a decision still open: a \`fixed\` or \`declined\` disposition that SETTLES a still-live question from an earlier pass names that question's \`id\` in \`retiresQuestionIds\` instead (only those two dispositions retire; retiring an id the cycle does not carry open comes back to the next pass as a disposition error).
+- Every \`escalated\` disposition gets an \`openQuestions\` entry in the schema's pinned format, under an id no earlier pass used (re-using one reads as a re-report of that pass's question, which the cycle keeps instead of yours), with authoritative artifact pointers (file:line, refs) — never paraphrase — and its \`questionId\` back-reference. Raise a question only for a decision still open: a \`fixed\` or \`declined\` disposition that SETTLES a still-live question from an EARLIER pass names that question's \`id\` in \`retiresQuestionIds\` instead (only those two dispositions retire; a question this pass raises cannot also be retired by it; and retiring an id the cycle does not carry open from an earlier pass comes back to the next pass as a disposition error).
 - Before returning, \`git status --porcelain\` MUST be empty with every intended change committed; set \`clean\` and \`finalSha\` accordingly. An unclean tree is resolved or reported as a \`blocker\`, never handed to review.
 - Pushing is governed by the assignment above; do nothing PR-side, and do NOT use the \`TaskCreate\`/\`TaskUpdate\`/\`TaskList\` tools.
 
@@ -591,18 +591,32 @@ Return a verdict per finding. Edit nothing.`;
 //
 // The same treatment covers the OTHER direction of the question link: a
 // `fixed`/`declined` disposition may name questions it retires, and a
-// retirement that settles nothing — an id no LIVE question carries, or one
-// attached to a disposition that settles nothing — comes back as a
-// `disposition-error` carried entry (id prefixed `retire:`, which like `stray:`
-// can never collide with a real round-scoped id) rather than no-op'ing
+// retirement that settles nothing — an id no question carries live FROM AN
+// EARLIER PASS, or one attached to a disposition that settles nothing — comes
+// back as a `disposition-error` carried entry (id prefixed `retire:`, which like
+// `stray:` can never collide with a real round-scoped id) rather than no-op'ing
 // silently. Unlike the coverage contract, that guard binds even on a pass
 // handed nothing, since a retirement is a claim about the cycle's own
 // accumulated questions rather than about this round's findings.
+//
+// RETIRABLE and KNOWN are deliberately DIFFERENT sets. An `escalated`
+// disposition names the question its own packet just raised, so
+// `knownQuestionIds` must include this pass's new entries; a retirement asserts
+// an EARLIER pass's queued decision is settled, so `retirableQuestionIds` is
+// snapshotted BEFORE those entries are appended. Collapsing the two would let
+// one packet raise `q1`, retire `q1`, and still have an `escalated` disposition
+// naming `q1` count as covered — the finding would be disposed by a question the
+// same breath marked settled, reaching neither the next pass nor the maintainer.
+// The same reasoning invalidates an `escalated` disposition naming a question
+// THIS packet retires (an earlier pass's question is nameable by both): the
+// finding is carried forward rather than covered by a decision being taken off
+// the table, which is why the retirements are collected before coverage is
+// judged.
 function cycleRetiredQuestionIds(d) {
   return (Array.isArray(d.retiresQuestionIds) ? d.retiresQuestionIds : []).filter((q) => typeof q === "string" && q);
 }
 
-function cycleUndisposedFindings(findings, fix, knownQuestionIds) {
+function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuestionIds) {
   const handed = findings
     ? [...(findings.carried || []), ...(findings.reviewer || []), ...(findings.peer || [])]
     : [];
@@ -610,18 +624,25 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds) {
   const counts = new Map(); // handed id -> how many dispositions named it
   const covered = new Set();
   const stray = new Map(); // synthesized-entry id -> one carried entry per contract error
-  for (const d of fix.dispositions || []) {
-    if (!d) continue;
+  const dispositions = (fix.dispositions || []).filter(Boolean);
+  // The questions this packet actually retires — exactly what the caller will
+  // mark — gathered first, because coverage below may not lean on one of them.
+  const retiring = new Set();
+  for (const d of dispositions) {
+    if (d.disposition !== "fixed" && d.disposition !== "declined") continue;
+    for (const qid of cycleRetiredQuestionIds(d)) if (retirableQuestionIds.has(qid)) retiring.add(qid);
+  }
+  for (const d of dispositions) {
     const retires = cycleRetiredQuestionIds(d);
     if (retires.length) {
       const settles = d.disposition === "fixed" || d.disposition === "declined";
       for (const qid of retires) {
-        if (settles && knownQuestionIds.has(qid)) continue;
+        if (settles && retirableQuestionIds.has(qid)) continue;
         stray.set(`retire:${qid}`, {
           id: `retire:${qid}`,
           category: "disposition-error",
           problem: settles
-            ? `A ${d.disposition} disposition claimed to retire open question ${JSON.stringify(qid)}, which this cycle does not carry as a live open question — it was never raised, or an earlier pass already retired it — so the retirement settled nothing. Re-issue it against the correct live question id as needed, and dispose this entry (e.g. declined) explaining the stray.`
+            ? `A ${d.disposition} disposition claimed to retire open question ${JSON.stringify(qid)}, which this cycle does not carry as a live open question from an EARLIER pass — it was never raised, this same pass raised it (one pass cannot both raise and settle a question: report whichever of the two is true, never both), or an earlier pass already retired it — so the retirement settled nothing. Re-issue it against the correct live question id as needed, and dispose this entry (e.g. declined) explaining the stray.`
             : `A disposition claimed to retire open question ${JSON.stringify(qid)}, but its \`disposition\` is ${JSON.stringify(d.disposition || "")} — only a \`fixed\` or \`declined\` disposition retires a question (an \`escalated\` one raises a question rather than settling it) — so the retirement was not applied. Re-issue it on the disposition that actually settles the question, and dispose this entry (e.g. declined) explaining the stray.`,
         });
       }
@@ -642,7 +663,7 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds) {
     const valid =
       d.disposition === "fixed" ||
       d.disposition === "declined" ||
-      (d.disposition === "escalated" && d.questionId && knownQuestionIds.has(d.questionId));
+      (d.disposition === "escalated" && d.questionId && knownQuestionIds.has(d.questionId) && !retiring.has(d.questionId));
     if (valid) covered.add(d.findingId);
   }
   // Exactly one disposition per id: duplicates — conflicting or not — collapse
@@ -756,6 +777,11 @@ async function runReviewCycle(cycle) {
     // A cycle with no home for its rounds' history may not run them.
     if (!artifactDir) return result("error", `fixer reported no artifactDir on pass ${fixerPasses}; refusing to run rounds whose history has no home`);
     for (const d of fix.dispositions || []) findingDispositions.push({ ...d, pass: fixerPasses });
+    // The questions a disposition in THIS packet may retire: the ones live
+    // before the pass's own are appended below. Snapshotted here rather than
+    // beside `knownQuestionIds`, because that append is precisely what destroys
+    // the distinction the two sets exist to keep (see cycleUndisposedFindings).
+    const retirableQuestionIds = new Set(openQuestions.filter((q) => q && !q.retired).map((q) => q.id).filter(Boolean));
     // Accumulate newly raised questions. Every pass after the first is SHOWN
     // the still-live ones (so it has ids to retire), which makes re-reporting
     // one a live possibility; the entry from the pass that raised it stays
@@ -787,11 +813,13 @@ async function runReviewCycle(cycle) {
     // id. Anything uncovered gates the round below and is carried forward.
     // Only LIVE questions count as known: a question an earlier pass retired is
     // settled, so it can neither validate an `escalated` disposition naming it
-    // nor be retired a second time. This pass's own retirements are applied
-    // AFTER the check, so a question is still live for the disposition
-    // retiring it.
+    // nor be retired a second time. This set includes the questions this pass
+    // just raised — an `escalated` disposition names one of those — which is
+    // why the narrower `retirableQuestionIds` snapshot, not this one, decides
+    // what this pass may retire. This pass's own retirements are applied AFTER
+    // the check, so a question is still live for the disposition retiring it.
     const knownQuestionIds = new Set(openQuestions.filter((q) => q && !q.retired).map((q) => q.id).filter(Boolean));
-    const undisposed = cycleUndisposedFindings(findings, fix, knownQuestionIds);
+    const undisposed = cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuestionIds);
 
     // Retire the questions this pass settled. Marking rather than removing: the
     // result then still shows the question was raised and what settled it, so a
@@ -804,6 +832,9 @@ async function runReviewCycle(cycle) {
     for (const d of fix.dispositions || []) {
       if (!d || (d.disposition !== "fixed" && d.disposition !== "declined")) continue;
       for (const qid of cycleRetiredQuestionIds(d)) {
+        // Same snapshot the guard judged, so a rejected retirement (unknown id,
+        // or a question this very pass raised) is never applied behind it.
+        if (!retirableQuestionIds.has(qid)) continue;
         const q = openQuestions.find((x) => x && x.id === qid && !x.retired);
         if (!q) continue;
         q.retired = { pass: fixerPasses, disposition: d.disposition, findingId: d.findingId || "", detail: d.detail || "" };
