@@ -844,18 +844,28 @@ rm -f -- "$CLONE_REFS_FILE" "$SRC_REFS_FILE" "$REF_UPDATES_FILE"
 # CONFIG is dropped rather than `git remote remove`, which would also delete
 # refs/remotes/$SRC_REMOTE/* — after the mirror above, anything under that name
 # is the source's own and part of the exact mirror this helper promises.
-git -C "$CLONE_DIR" config --remove-section "remote.$SRC_REMOTE" >&2 ||
+git -C "$CLONE_DIR" config --local --remove-section "remote.$SRC_REMOTE" >&2 ||
 	die "could not detach the clone from its source remote"
 
 # `git clone` also wrote branch.<name>.remote/.merge pointing at that remote.
 # Left behind they name a remote the clone no longer has, so `git push` in the
 # clone fails with a confusing "does not appear to be a git repository" instead
 # of the honest "no upstream". Cleared for the same reason the remote is.
+# `--local` on the enumeration, not just on the removals: without it the read is
+# of the MERGED configuration, so a caller whose own ~/.gitconfig carries any
+# `branch.<name>.*` setting — `branch.main.rebase = true` is an everyday one —
+# hands this loop a key that exists only in the caller's file. `--unset-all`
+# writes to the local file regardless, finds nothing to unset there, exits 5, and
+# dc-enter dies with "could not clear the clone's stale upstream configuration
+# (branch.main.rebase)": a helper refusing to work because of a setting on the
+# machine it is running on, naming a key it was never meant to touch. Scoped to
+# the clone's own file, the enumeration only ever sees what `git clone` wrote,
+# which is the only thing this loop is for.
 CLONE_BRANCH_CFG_FILE="$SESSION_DIR/.dc-branch-config"
-git -C "$CLONE_DIR" config --name-only --get-regexp '^branch\.' >"$CLONE_BRANCH_CFG_FILE" || true
+git -C "$CLONE_DIR" config --local --name-only --get-regexp '^branch\.' >"$CLONE_BRANCH_CFG_FILE" || true
 while IFS= read -r cfg_key; do
 	[ -n "$cfg_key" ] || continue
-	git -C "$CLONE_DIR" config --unset-all "$cfg_key" >&2 ||
+	git -C "$CLONE_DIR" config --local --unset-all "$cfg_key" >&2 ||
 		die "could not clear the clone's stale upstream configuration ($cfg_key)"
 done <"$CLONE_BRANCH_CFG_FILE"
 rm -f -- "$CLONE_BRANCH_CFG_FILE"
@@ -880,10 +890,13 @@ if [ "$CLONE_HEAD" != "$SHA" ]; then
 fi
 
 # A disposable clone should be able to take a verification commit even where no
-# identity is configured (a bare container account, CI). Only fills a gap.
+# identity is configured (a bare container account, CI). Only fills a gap: the
+# probe reads the MERGED configuration deliberately, so a caller who does have an
+# identity keeps it, and the fallback is written `--local` so what fills the gap
+# lands in the clone rather than anywhere the caller would still be using.
 if ! git -C "$CLONE_DIR" var GIT_COMMITTER_IDENT >/dev/null 2>&1; then
-	git -C "$CLONE_DIR" config user.name "dc-enter disposable clone" >&2 || true
-	git -C "$CLONE_DIR" config user.email "dc-enter@invalid" >&2 || true
+	git -C "$CLONE_DIR" config --local user.name "dc-enter disposable clone" >&2 || true
+	git -C "$CLONE_DIR" config --local user.email "dc-enter@invalid" >&2 || true
 fi
 
 CREATED_SESSION=""

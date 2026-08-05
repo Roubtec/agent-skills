@@ -22,9 +22,9 @@ set -euo pipefail
 #   (a) stdout purity and the DC="$(dc-enter probe)" calling convention
 #   (b) the isolation guarantee — refs, commits, and gc --prune=now in the clone
 #       leave the source's refs and reachable objects untouched, the clone takes
-#       a commit where nothing has configured an identity, and an inherited
-#       GIT_CONFIG neither breaks the run nor aims the clone's own config
-#       surgery at the caller's file
+#       a commit where nothing has configured an identity, and neither an
+#       inherited GIT_CONFIG nor a caller's own global branch.<name>.* setting
+#       breaks the run or lets the clone's config surgery reach outside it
 #   (c) the <ref> interface: default is the INVOKING worktree's HEAD (not the
 #       main worktree's), branch/tag/sha/rev forms, a short name that is both a
 #       branch and a tag resolving to the branch, a qualified ref still winning
@@ -367,6 +367,23 @@ assert_eq "b: ... and no stale remote or upstream config survived there either" 
 	"$(git -C "$CLONE_GITCONFIG" config --local --get-regexp '^(remote|branch)\.' || true)" ""
 assert_eq "b: ... leaving the file GIT_CONFIG named untouched" \
 	"$(cat "$GIT_CONFIG_EXTERNAL")" "$GIT_CONFIG_EXTERNAL_BEFORE"
+
+# The same boundary from the other side: a caller whose own global config carries
+# a `branch.<name>.*` setting. `branch.main.rebase = true` is an everyday one, and
+# the branch it names is the one the fixture's clone actually has. dc-enter
+# enumerates the clone's stale upstream config `--local`; read merged instead, the
+# loop is handed a key that lives only in the caller's file, `--unset-all` finds
+# nothing local to remove, and the helper dies naming a key it never wrote. The
+# clone still has to come out with no remote or upstream config of its own.
+GLOBAL_BRANCH_CFG="$WORK/b/global-branch.gitconfig"
+printf '[user]\n\tuseConfigOnly = true\n[branch "main"]\n\trebase = true\n' >"$GLOBAL_BRANCH_CFG"
+in_repo "$SRC1" env "GIT_CONFIG_GLOBAL=$GLOBAL_BRANCH_CFG" "$DC_ENTER" globalbranchcfg
+assert_eq "b: a caller's global branch.<name>.* still yields a clone" "$RC" 0
+require_clone CLONE_GLOBALBRANCH "b: globalbranchcfg"
+assert_eq "b: ... with no remote or upstream config of its own left behind" \
+	"$(git -C "$CLONE_GLOBALBRANCH" config --local --get-regexp '^(remote|branch)\.' || true)" ""
+assert_eq "b: ... and the caller's global config untouched" \
+	"$(git config --file "$GLOBAL_BRANCH_CFG" --get branch.main.rebase)" "true"
 
 echo "== (c) the <ref> interface =="
 SRC2="$WORK/c/src"
