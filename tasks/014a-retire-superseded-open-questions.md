@@ -97,7 +97,7 @@ The two `review-cycle` skill mirrors have no generator — hand-edit both in loc
 
 - Confirm the embedded section is byte-identical:
   `diff <(awk '/BEGIN EMBEDDABLE SECTION: review-cycle-core/,/END EMBEDDABLE SECTION: review-cycle-core/' plugins/dev-skills/workflows/wf-review-cycle.js) <(awk '/BEGIN EMBEDDABLE SECTION: review-cycle-core/,/END EMBEDDABLE SECTION: review-cycle-core/' plugins/dev-skills/workflows/wf-address-tasks.js)`
-- Parse-check every touched workflow script with `wf-check`, or with the wrapped `node --check` documented in `plugins/dev-skills/workflows/README.md`'s Validation section — a bare `node --check` on these sources cannot fail, so it is not the gate.
+- Parse-check every touched workflow script with `wf-check`, or with the wrapped `node --check` documented in `plugins/dev-skills/workflows/README.md`'s Validation section — a bare `node --check` on these sources can only fail on an error above their first `export`, so it is not the gate.
 - Run `node scripts/test-checkout-cleanliness-report.mjs`.
 - Diff the two `review-cycle` SKILL.md mirrors against each other and confirm the divergence count is unchanged apart from the new rule.
 

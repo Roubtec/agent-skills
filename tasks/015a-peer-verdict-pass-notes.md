@@ -61,7 +61,7 @@ Out of scope (explicitly do NOT do):
 
 - In a powbox container: `bash scripts/test-peer-review-run.sh` in the powbox checkout still passes unchanged (proves the helper/contract were not touched).
 - Exercise one real review round (or a dry run) and confirm: a peer PASS with a nit surfaces it as a compact note; a clean PASS stays a one-line signal; the orchestrator context does not gain the full review prose on a pass.
-- `wf-check` (or the wrapped `node --check` documented in `plugins/dev-skills/workflows/README.md`'s Validation section) passes on any workflow file touched; a bare `node --check` on those sources cannot fail.
+- `wf-check` (or the wrapped `node --check` documented in `plugins/dev-skills/workflows/README.md`'s Validation section) passes on any workflow file touched; a bare `node --check` on those sources can only fail on an error above their first `export`.
 
 ## Review plan
 
