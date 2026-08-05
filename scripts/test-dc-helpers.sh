@@ -21,8 +21,10 @@ set -euo pipefail
 # Covers:
 #   (a) stdout purity and the DC="$(dc-enter probe)" calling convention
 #   (b) the isolation guarantee — refs, commits, and gc --prune=now in the clone
-#       leave the source's refs and reachable objects untouched, and the clone
-#       takes a commit where nothing has configured an identity
+#       leave the source's refs and reachable objects untouched, the clone takes
+#       a commit where nothing has configured an identity, and an inherited
+#       GIT_CONFIG neither breaks the run nor aims the clone's own config
+#       surgery at the caller's file
 #   (c) the <ref> interface: default is the INVOKING worktree's HEAD (not the
 #       main worktree's), branch/tag/sha/rev forms, a short name that is both a
 #       branch and a tag resolving to the branch, a qualified ref still winning
@@ -82,10 +84,14 @@ trap 'rm -rf "$WORK"' EXIT
 # pass locally and exit 128 in CI. Clearing them makes a local run reproduce the
 # runner, and the probe below asserts that it does rather than trusting this list
 # to stay complete.
-# `GIT_CONFIG` is cleared for a different reason: it does not supply an identity
-# to git as a whole, but it does redirect `git config` reads AND writes at that
-# file, so dc-enter's fallback `git config user.name` would land outside the
-# clone and the clone would be left without the identity it just set.
+# `GIT_CONFIG` is cleared for a different reason, and for the SUITE's own sake
+# rather than the helpers'. It supplies no identity to git as a whole — `git
+# config` is the only command that honours it — but it redirects that command's
+# reads AND writes at the named file, and this suite asserts on the clones' own
+# configuration with `git -C "$CLONE" config`. Left set, those assertions would
+# describe the caller's file instead of the clone they name. dc-enter drops the
+# variable itself so a caller carrying one still gets a clone; section (b)
+# asserts that, which is a separate job from keeping these reads honest.
 export HOME="$WORK/home"
 export GIT_CONFIG_NOSYSTEM=1
 unset GIT_CONFIG_GLOBAL GIT_CONFIG_SYSTEM GIT_CONFIG_COUNT GIT_CONFIG_PARAMETERS GIT_CONFIG
@@ -340,6 +346,27 @@ assert_eq "b: source still passes fsck" "$RC" 0
 assert_eq "b: the unreachable ref's commit survives in the source" \
 	"$(git -C "$SRC1" cat-file -t "$(git -C "$SRC1" rev-parse refs/pruned/reserved)")" "commit"
 assert_contains "b: clone accepted a commit" "$(git -C "$CLONE_A" log -1 --format=%s)" "clone-only commit"
+
+# A caller carrying `GIT_CONFIG` in its environment. `git config` is the only
+# command that honours it, and `git config` is precisely what dc-enter uses to
+# detach the clone's remote, clear its stale upstream configuration, and fill its
+# identity — so an inherited one aims all of that at the caller's file. dc-enter
+# drops the variable; without that it dies at the first of those calls with
+# `no such section: remote.dc-source`, blaming the clone for the caller's
+# environment, and produces no clone at all.
+mkdir -p "$WORK/b"
+GIT_CONFIG_EXTERNAL="$WORK/b/external.gitconfig"
+printf '[dc]\n\tsentinel = untouched\n' >"$GIT_CONFIG_EXTERNAL"
+GIT_CONFIG_EXTERNAL_BEFORE="$(cat "$GIT_CONFIG_EXTERNAL")"
+in_repo "$SRC1" env "GIT_CONFIG=$GIT_CONFIG_EXTERNAL" "$DC_ENTER" gitconfigenv
+assert_eq "b: an inherited GIT_CONFIG still yields a clone" "$RC" 0
+require_clone CLONE_GITCONFIG "b: gitconfigenv"
+assert_eq "b: ... whose identity landed in the CLONE's own config" \
+	"$(git -C "$CLONE_GITCONFIG" config --local user.email)" "dc-enter@invalid"
+assert_eq "b: ... and no stale remote or upstream config survived there either" \
+	"$(git -C "$CLONE_GITCONFIG" config --local --get-regexp '^(remote|branch)\.' || true)" ""
+assert_eq "b: ... leaving the file GIT_CONFIG named untouched" \
+	"$(cat "$GIT_CONFIG_EXTERNAL")" "$GIT_CONFIG_EXTERNAL_BEFORE"
 
 echo "== (c) the <ref> interface =="
 SRC2="$WORK/c/src"

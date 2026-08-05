@@ -194,6 +194,22 @@
 # collect_worktree_paths for why no fallback is safe.
 set -euo pipefail
 
+# `GIT_CONFIG` is dropped before any git runs here. It supplies nothing to git at
+# large — `git config` is the only command that honours it — but that command is
+# exactly this helper's exposure: every `git config` below is a
+# `git -C "$CLONE_DIR" config` meant to act on the CLONE's own file, and an
+# inherited `GIT_CONFIG` redirects all of them, reads and writes alike, at
+# whatever file the caller pointed it at. `-C` does not win, and neither does
+# `--local`: combining the two is an error ("only one config file at a time"), so
+# the variable has to go rather than be overridden at each call site. Left set,
+# the run dies at the first of them with `no such section: remote.dc-source` — a
+# diagnostic that blames the clone for the caller's environment and produces no
+# clone at all — and past that point the upstream-config clearing and the
+# identity fallback would WRITE into the caller's file. A helper whose whole
+# promise is that it touches nothing outside the clone cannot honour a variable
+# that aims its only writes elsewhere.
+unset GIT_CONFIG
+
 PROG=dc-enter
 readonly PROG
 # Bumping this magic invalidates every older marker: dc-remove and dc-enter then
