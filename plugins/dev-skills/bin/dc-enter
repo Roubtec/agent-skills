@@ -54,7 +54,12 @@
 # (`refs/heads/main`) counts as naming that branch — it resolves as a commit like
 # any other revision, so without that normalization it would silently detach
 # despite naming a branch. No other qualified form is normalized: `heads/main`,
-# a tag, and a remote-tracking ref all detach. The default is the invoking
+# a tag, and a remote-tracking ref all detach. A short name that is BOTH a local
+# branch and a tag resolves to the BRANCH: gitrevisions disambiguates the other
+# way (`refs/tags/<name>` is tried before `refs/heads/<name>`), so the commit is
+# looked up through the branch's full ref name rather than through the bare
+# name, and `dc-enter probe release` verifies the branch the caller asked for
+# instead of a same-named tag. The default is the invoking
 # worktree's own HEAD — a branch checkout when HEAD is on a branch, detached
 # when it is detached — NOT the repository's or the main worktree's HEAD. That
 # distinction is load-bearing: `git rev-parse --git-common-dir` resolves to the
@@ -429,13 +434,16 @@ canon "$SRC_TOP" || die "could not canonicalize the invoking worktree path"
 SRC_TOP="$CANON_RESULT"
 
 if [ -n "$REF_SEEN" ]; then REF_ARG="$REF"; else REF_ARG="HEAD"; fi
-SHA="$(git rev-parse --verify --quiet "${REF_ARG}^{commit}" 2>/dev/null)" ||
-	die "'$REF_ARG' does not resolve to a commit in the invoking worktree"
-[ -n "$SHA" ] || die "'$REF_ARG' does not resolve to a commit in the invoking worktree"
+# What the caller actually wrote, kept for diagnostics: REF_ARG is rewritten to a
+# branch's full ref name below, and reporting that back would name something the
+# caller never typed.
+REF_DISPLAY="$REF_ARG"
 
 # Which branch (if any) the clone should check out. With no <ref> this follows
 # the INVOKING worktree's HEAD; with one it follows the ref only when that ref
 # is a local branch.
+# Decided BEFORE the commit is resolved, because a local branch that wins here
+# also decides WHICH commit is resolved — see the REF_ARG rewrite below.
 BRANCH=""
 if [ -z "$REF_SEEN" ]; then
 	if HEAD_SYMREF="$(git symbolic-ref --quiet HEAD 2>/dev/null)"; then
@@ -454,8 +462,21 @@ else
 	if [ -n "$BRANCH_CANDIDATE" ] &&
 		git show-ref --verify --quiet "refs/heads/$BRANCH_CANDIDATE" 2>/dev/null; then
 		BRANCH="$BRANCH_CANDIDATE"
+		# Resolve the COMMIT through that branch's full ref name too. A bare
+		# short name is disambiguated by gitrevisions in favour of
+		# `refs/tags/<name>` over `refs/heads/<name>`, so a repository carrying
+		# both `release` the tag and `release` the branch would otherwise
+		# resolve the TAG's commit here, check the branch out, and then trip the
+		# HEAD-mismatch guard further down — which would detach at the tag and
+		# report a ref that "moved during the clone" when nothing moved at all.
+		# The caller named a local branch; the branch is what gets verified.
+		REF_ARG="refs/heads/$BRANCH_CANDIDATE"
 	fi
 fi
+
+SHA="$(git rev-parse --verify --quiet "${REF_ARG}^{commit}" 2>/dev/null)" ||
+	die "'$REF_DISPLAY' does not resolve to a commit in the invoking worktree"
+[ -n "$SHA" ] || die "'$REF_DISPLAY' does not resolve to a commit in the invoking worktree"
 
 # Everything the clone root must stay out of: the invoking worktree, the shared
 # git directory, and every other worktree registered against this repository.

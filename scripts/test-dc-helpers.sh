@@ -23,7 +23,8 @@ set -euo pipefail
 #   (b) the isolation guarantee — refs, commits, and gc --prune=now in the clone
 #       leave the source's refs and reachable objects untouched
 #   (c) the <ref> interface: default is the INVOKING worktree's HEAD (not the
-#       main worktree's), branch/tag/sha/rev forms, and refusal on a bad ref
+#       main worktree's), branch/tag/sha/rev forms, a short name that is both a
+#       branch and a tag resolving to the branch, and refusal on a bad ref
 #   (d) the ref namespace: an exact mirror of the source's refs, demonstrated on
 #       a source carrying refs outside refs/heads/ and refs/tags/ — including one
 #       hiding a namespace from upload-pack, which a refspec fetch would drop
@@ -329,6 +330,30 @@ assert_eq "c: explicit tag exits 0" "$RC" 0
 assert_eq "c: explicit tag detaches" "$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "DETACHED"
 assert_eq "c: explicit tag is at the tag's commit" \
 	"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$SRC2" rev-parse "v1^{commit}")"
+# A short name that is BOTH a local branch and a tag, at different commits.
+# gitrevisions disambiguates it as the TAG, so a helper that resolved the commit
+# from the bare name would check the branch out, see a HEAD that disagrees with
+# the commit it resolved, and detach at the tag — verifying the wrong thing while
+# blaming a ref that never moved. The documented contract is that a local branch
+# is checked out, so the branch must win.
+g -C "$SRC2" branch -q ambig main~1
+g -C "$SRC2" tag ambig main
+assert_ne "c: the ambiguous fixture's branch and tag differ" \
+	"$(git -C "$SRC2" rev-parse "refs/heads/ambig")" "$(git -C "$SRC2" rev-parse "refs/tags/ambig^{commit}")"
+in_repo "$WT2" "$DC_ENTER" ambig ambig
+assert_eq "c: an ambiguous branch/tag name exits 0" "$RC" 0
+assert_eq "c: an ambiguous name checks the BRANCH out, not the tag" \
+	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "refs/heads/ambig"
+assert_eq "c: an ambiguous name is at the branch's commit" \
+	"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$SRC2" rev-parse "refs/heads/ambig")"
+# Only refs/heads/ is normalized, so the qualified tag form still detaches at the
+# tag even though a same-named branch exists.
+in_repo "$WT2" "$DC_ENTER" ambigtag refs/tags/ambig
+assert_eq "c: the qualified tag form of an ambiguous name exits 0" "$RC" 0
+assert_eq "c: the qualified tag form still detaches" \
+	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "DETACHED"
+assert_eq "c: the qualified tag form is at the tag's commit" \
+	"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$SRC2" rev-parse "refs/tags/ambig^{commit}")"
 in_repo "$WT2" "$DC_ENTER" byrev "HEAD~1"
 assert_eq "c: explicit revision exits 0" "$RC" 0
 assert_eq "c: explicit revision resolves in the INVOKING worktree" \
