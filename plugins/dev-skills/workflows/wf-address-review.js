@@ -434,7 +434,11 @@ const workReport = cycle.workReport || [];
 // entry the publisher happens to route first. Review-threads match by
 // threadId, standalone items by url — keyed off the GATHERED item's identity,
 // never the report entry's own claimed `type`, so a mistyped entry cannot
-// dodge the check.
+// dodge the check. What type-blindness costs is that ONE entry carrying both a
+// gathered thread's threadId and a gathered standalone's url counts for both
+// items while publication routes it to one; `dispositionDefect` below rejects
+// such an entry from either side, so the two checks together still admit
+// exactly one entry per item.
 const entriesForItem = (item) =>
   item.type === "review-thread"
     ? workReport.filter((d) => d && d.threadId && d.threadId === item.threadId)
@@ -493,11 +497,14 @@ const duplicatedRefs = duplicatedItems.map(
 // the url makes the two symmetric — an entry naming a url that was never
 // gathered is untriaged work, and while it has no thread to resolve it still
 // reaches the summary comment and, through `author`/`newFinding`, the default
-// contributing-bot ping set. (The coverage check above runs the other
+// contributing-bot ping set. Neither branch may name a gathered item of the
+// OTHER kind on top of its own, since coverage would then count the entry for
+// both while publication serves one. (The coverage check above runs the other
 // direction, so between them every gathered item has exactly one entry and
-// every entry names a gathered item.) Logins are compared case-insensitively:
-// `botKindOf` already lowercases, so case cannot change any routing, and
-// failing publication over it would be brittle rather than protective.
+// every entry names exactly one gathered item.) Logins are compared
+// case-insensitively: `botKindOf` already lowercases, so case cannot change
+// any routing, and failing publication over it would be brittle rather than
+// protective.
 const TRIAGE_KINDS = new Set([
   "actionable-fixed",
   "already-addressed",
@@ -529,6 +536,16 @@ function dispositionDefect(d) {
     // publication, but named as what it is so the re-run fixes the right stage.
     if (gathered.commentId == null || gathered.commentId === "") return "the gathered thread it names carries no commentId of its own, so no reply can be threaded under it — the gather step, not this entry, is what has to be re-run";
     if (String(gathered.commentId) !== String(d.commentId)) return "its commentId is not that gathered thread's top comment, so the reply would thread under one comment while another thread is resolved";
+    // Mirror of the standalone branch's gathered-threadId rejection below, and
+    // the reason the coverage check above can stay type-blind: coverage matches
+    // a standalone item on url alone, so an entry typed `review-thread` that
+    // ALSO carries a gathered standalone's url covers two items at once while
+    // publication routes it to the thread only — the standalone would then be
+    // silently left untouched under a posted summary, the exact failure the
+    // coverage check exists to prevent. A thread entry's own `url` is the
+    // thread's permalink and is otherwise unenforced; it just may not be
+    // another gathered item's identity.
+    if (typeof d.url === "string" && standaloneItemByUrl.has(d.url)) return "it is typed review-thread but carries a gathered standalone item's url, so that standalone would read as covered while publication only ever replies to the thread";
   } else if (d.type === "standalone") {
     if (typeof d.url !== "string" || !d.url) return "it is a standalone entry with no url, the only stable reference its outcome can be recorded against";
     if (d.threadId && threadItemById.has(d.threadId)) return "it is typed standalone but names a gathered review thread, so publication would skip the thread's reply/resolve";
