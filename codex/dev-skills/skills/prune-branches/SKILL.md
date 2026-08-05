@@ -16,7 +16,7 @@ Explicit Codex invocation uses `$prune-branches`; natural-language equivalents a
 Parse arguments leniently and let the inventory listing be the safety net:
 
 - `no-pull` skips the local-default update entirely: an existing local default stays at its current tip, and an absent one is not created. The initial `git fetch --prune` and the targeted refresh of the remote default ref still run, so classification still compares against origin's current default.
-- `hands-off` prints the listing and then performs a best-effort purge without waiting: delete only Merged and Transient branches, reserve recovery refs for every Transient deletion, and leave every Uncertain branch untouched. It sweeps no recovery breadcrumb from an earlier run either: those are inventoried and reported, with their cleanup commands, and left in place.
+- `hands-off` prints the listing and then performs a best-effort purge without waiting: delete only Merged and Transient branches, reserve recovery refs for every Transient deletion, and leave every Uncertain branch untouched. It sweeps no recovery breadcrumb from an earlier run either: those are inventoried and reported — with cleanup commands only for the ones that were otherwise eligible to be swept — and left in place.
 - Treat all other text as guidance, especially branch names to keep and context such as "there is stashed work on X." Resolve and apply keeps before classification and before showing the listing.
 - In an interactive run, plain `go` confirms only the proposed Merged and Transient set plus the breadcrumb rows the listing marked `sweep`. Deleting an Uncertain branch requires the user to name that branch explicitly during this run; invocation-time instructions such as `delete old-spike even if uncertain` count only when they are unambiguous.
 
@@ -205,7 +205,7 @@ In normal interactive mode, wait for typed `go` or a branch list. Typed `go` cov
 
 In `hands-off` mode, print the same listing for auditability and proceed immediately with only Merged and Transient rows that are not checked out in a linked worktree or whose linked worktree is attributable to this container's exact helper root and removable through `wt-remove`. Invocation-time keeps still apply. Ignore any ambiguous delete guidance, never remove an unattributed worktree, and never include Uncertain rows.
 
-`hands-off` prints the breadcrumb inventory in full but sweeps nothing, for the same reason it refuses to touch Uncertain branches: an unattended run should not make a removal decision the user has not had the chance to see first. Report the redundant breadcrumbs, mark them `report only (hands-off)` rather than `sweep`, and print their cleanup commands in step 11 so the user can finish the job in one paste.
+`hands-off` prints the breadcrumb inventory in full but sweeps nothing, for the same reason it refuses to touch Uncertain branches: an unattended run should not make a removal decision the user has not had the chance to see first. Report the redundant breadcrumbs, mark the sweep-eligible ones `report only (hands-off)` rather than `sweep`, and print their cleanup commands in step 11 so the user can finish the job in one paste.
 
 ### Step 8 — Revalidate tips and reserve recovery refs
 
