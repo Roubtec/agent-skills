@@ -58,6 +58,13 @@
 # pathological repository that carries a local branch named literally
 # `refs/tags/v1` or `tags/v1`, because a string git's own rules already resolve
 # to an existing ref is that ref rather than a short branch name to look up.
+# A `$GIT_DIR` PSEUDO-REF is the same story one rule earlier: git reaches
+# `ORIG_HEAD`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD` and `BISECT_HEAD`
+# in `$GIT_DIR` before `refs/heads/<name>`, so in a repository stopped mid-rebase
+# or mid-merge that also carries a branch of that name, `dc-enter probe ORIG_HEAD`
+# detaches at the pseudo-ref — the commit the caller's own `git rev-parse` names —
+# rather than checking the branch out. Pseudo-refs are per-worktree, and it is
+# the INVOKING worktree's that is read, like everything else here.
 # A SHORT name that is both a local branch and a tag resolves to the BRANCH:
 # gitrevisions disambiguates the other way (`refs/tags/<name>` is tried before
 # `refs/heads/<name>`), so the commit is looked up through the branch's full ref

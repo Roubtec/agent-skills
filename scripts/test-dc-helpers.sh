@@ -27,8 +27,9 @@ set -euo pipefail
 #       breaks the run or lets the clone's config surgery reach outside it
 #   (c) the <ref> interface: default is the INVOKING worktree's HEAD (not the
 #       main worktree's), branch/tag/sha/rev forms, a short name that is both a
-#       branch and a tag resolving to the branch, a qualified ref still winning
-#       over a branch named literally like it, and refusal on a bad ref
+#       branch and a tag resolving to the branch, a qualified ref and a
+#       $GIT_DIR pseudo-ref each still winning over a branch named literally
+#       like it, and refusal on a bad ref
 #   (d) the ref namespace: an exact mirror of the source's refs, demonstrated on
 #       a source carrying refs outside refs/heads/ and refs/tags/ — including one
 #       hiding a namespace from upload-pack, which a refspec fetch would drop
@@ -482,6 +483,44 @@ assert_eq "c: ... also at the tag's commit" \
 	"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$SRC2" rev-parse "refs/tags/ambig^{commit}")"
 g -C "$SRC2" branch -q -D "refs/tags/ambig"
 g -C "$SRC2" branch -q -D "tags/ambig"
+# ... and in the repository carrying a PSEUDO-REF beside a same-named branch.
+# `ORIG_HEAD`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD` and `BISECT_HEAD`
+# live in `$GIT_DIR`, and git's rules reach them BEFORE `refs/heads/<name>` — so
+# in a repository stopped mid-rebase, mid-merge or mid-cherry-pick that also
+# carries a branch called `ORIG_HEAD`, the caller's `ORIG_HEAD` is the pseudo-ref.
+# The same guard that handles the qualified forms above already covers this,
+# because `git show-ref --verify` reports a pseudo-ref that exists and stays
+# silent when it does not — but that agreement is the whole reason the guard is
+# correct here and nothing in its own text says so, so it is pinned rather than
+# reasoned about. Getting it wrong hands back the branch's commit while the
+# caller's own `git rev-parse ORIG_HEAD` names the other one.
+# These are per-WORKTREE, which is the shape that matters: dc-enter resolves in
+# the INVOKING worktree, so the fixture writes them into that worktree's own git
+# directory rather than the shared one.
+WT2_GIT_DIR="$(git -C "$WT2" rev-parse --absolute-git-dir)"
+for pseudo in ORIG_HEAD MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_HEAD; do
+	pseudo_slug="$(printf '%s' "$pseudo" | tr 'A-Z_' 'a-z-')"
+	g -C "$SRC2" branch -q "$pseudo" main
+	git -C "$WT2" rev-parse --verify main~1 >"$WT2_GIT_DIR/$pseudo"
+	assert_ne "c: the $pseudo fixture's pseudo-ref and branch differ" \
+		"$(git -C "$WT2" rev-parse --verify "$pseudo")" \
+		"$(git -C "$WT2" rev-parse --verify "refs/heads/$pseudo")"
+	in_repo "$WT2" "$DC_ENTER" "pseudo-$pseudo_slug" "$pseudo"
+	assert_eq "c: $pseudo beside a same-named branch exits 0" "$RC" 0
+	assert_eq "c: the $pseudo branch does not win: HEAD detaches" \
+		"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "DETACHED"
+	assert_eq "c: ... at the commit git rev-parse $pseudo names, not the branch's" \
+		"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$WT2" rev-parse --verify "$pseudo^{commit}")"
+	# The other side of the same guard: with no pseudo-ref present the string is
+	# an ordinary short branch name again and the branch IS checked out, so
+	# clearing the candidate is never over-eager.
+	rm -f -- "$WT2_GIT_DIR/$pseudo"
+	in_repo "$WT2" "$DC_ENTER" "branch-$pseudo_slug" "$pseudo"
+	assert_eq "c: $pseudo with no pseudo-ref present exits 0" "$RC" 0
+	assert_eq "c: ... names the branch, which is checked out" \
+		"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "refs/heads/$pseudo"
+	g -C "$SRC2" branch -q -D "$pseudo"
+done
 in_repo "$WT2" "$DC_ENTER" byrev "HEAD~1"
 assert_eq "c: explicit revision exits 0" "$RC" 0
 assert_eq "c: explicit revision resolves in the INVOKING worktree" \
