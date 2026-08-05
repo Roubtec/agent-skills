@@ -59,10 +59,10 @@
 # way (`refs/tags/<name>` is tried before `refs/heads/<name>`), so the commit is
 # looked up through the branch's full ref name rather than through the bare
 # name, and `dc-enter probe release` verifies the branch the caller asked for
-# instead of a same-named tag. The default is the invoking
-# worktree's own HEAD — a branch checkout when HEAD is on a branch, detached
-# when it is detached — NOT the repository's or the main worktree's HEAD. That
-# distinction is load-bearing: `git rev-parse --git-common-dir` resolves to the
+# instead of a same-named tag. The default is the invoking worktree's own HEAD —
+# a branch checkout when HEAD is on a branch, detached when it is detached — NOT
+# the repository's or the main worktree's HEAD. That distinction is
+# load-bearing: `git rev-parse --git-common-dir` resolves to the
 # main worktree, so the natural implementation would silently verify a linked
 # worktree's claim against the main worktree's commit, which is exactly the
 # class of wrong-branch conclusion this helper exists to prevent. The source is
