@@ -68,7 +68,7 @@ Out of scope:
 - `resolve-open-questions/SKILL.md` — the downstream consumer of `openQuestions[]`; its item format is the target shape for escalations.
 - powbox `docker/shared/peer-review-run` header — invocation and result contract (`outcome ∈ passed | issues | unavailable | timeout | forfeited | failed`; final stdout line is one JSON object, schema `powbox.peer-review-run/v1`; exit 0 for any produced outcome). powbox `docs/architecture.md` peer-review-run bullet names this repo as the adoption boundary.
 - `plugins/dev-skills/workflows/README.md` — the authoring constraints these scripts live under (meta literal first, deterministic plain JS, no `Date.now()` / `Math.random()`).
-- powbox task 047 — the `wf-check` / `wf-status` helpers; `wf-check` applies the runtime's exact wrapping so a script with a top-level `return` validates properly. Use it if it has landed; otherwise `node --check` on the body wrapped as the runtime wraps it.
+- powbox task 047 — the `wf-check` / `wf-status` helpers; `wf-check` applies the runtime's exact wrapping so a script with a top-level `return` validates properly. Use it if it has landed; otherwise the wrapped `node --check` documented in `plugins/dev-skills/workflows/README.md`'s Validation section — a stand-in for that wrapping rather than a reproduction of it, since the runtime's wrapping is not derivable from this repo.
 
 ## Target files or areas
 
@@ -101,7 +101,7 @@ Out of scope:
 
 ## Validation
 
-- `wf-check` (or the runtime-wrapped `node --check`) passes on every touched workflow script.
+- `wf-check` (or the wrapped `node --check` documented in `plugins/dev-skills/workflows/README.md`'s Validation section) passes on every touched workflow script.
 - Dry-run the drop-in skill on a trivial local change (peer available and peer logged-out) — the second run must complete with the peer outcome recorded as non-blocking.
 - A `/dev-skills:wf-address-review` run against a disposable PR in a powbox container exercises one peer round end to end: the stage appears under its own phase, the peer result is recorded, and `peer-opinions=off` on a second run suppresses it.
 - Read the effective strength out of the peer's own session header or result metadata rather than trusting the instruction (codex prints `model:` and `reasoning effort:` on stderr, under launch shapes the observability bullet below pins down; `claude --output-format json` reports `modelUsage`). `reasoning effort: none` is the specific symptom of a helper launch with no passthrough, and fails this task. Both sides of the pin have to be read, which takes **one run per harness** rather than the single run above: a Claude-led rendering launches only the codex peer, and the claude peer is reachable only through the `codex/dev-skills/skills/review-cycle/` mirror run from the codex harness — there being no codex-side workflow — so the run above on its own leaves the claude model-and-effort pin unexercised, free to be broken while every prescribed step still passes.
