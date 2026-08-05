@@ -225,7 +225,7 @@ Triage each work item into exactly one kind and act:
 Preclude repeat comments: for each pattern you fix, grep the PR's changed files and closely related code for the SAME offending pattern and fix those too; report them in \`proactive\`.
 Do NOT push, reply, resolve, or comment on the PR — publication is a separate, later step.
 
-Per-item report contract: return EXACTLY ONE \`workReport\` entry per work item — never a second entry for a thread you already reported, since publication would post both replies and resolve on whichever it routed first — carrying — \`type\` (echoed from the item); \`threadId\` and \`commentId\` (MANDATORY for \`review-thread\` items; publication cannot reply/resolve without them); \`url\` (the stable reference, especially for \`standalone\` items); \`ref\` (file:line + author, human-readable); \`kind\` (the disposition kind above); \`detail\` (for fixed: one line + commit sha; for already-addressed: where it's handled; for push-back: the rationale; for deferred: the committed task file path + one-line scope, and whether the deferral was maintainer-directed or agent-proposed; for ambiguous: what decision is needed); \`authorIsBot\` (echoed VERBATIM from the gathered item; MANDATORY — publication uses it to decide whether a push-back/deferred thread may be auto-resolved, so never omit it; if the gathered item lacked it, use false, the safe human default); \`author\` (the comment author's login, echoed VERBATIM — include it for \`standalone\` items too); and \`newFinding\` — true ONLY when the item surfaces a real concern not previously raised on this PR (typically an \`actionable-fixed\`, or a genuinely new \`deferred-to-task\`/\`already-addressed\`); false for a \`push-back\` (the comment was wrong), a re-raise of a concern already deferred to a committed task file, or a bot re-arguing a push-back it already lost — UNLESS the thread carries a genuinely new angle this round. (\`newFinding\` drives the \`ping-contributing\` flag, which re-pings a bot only when it brought a new finding this round; set it honestly even if no ping was requested.) The echoed fields are re-checked against the gathered item before anything is published, and a mismatch aborts the whole publication — so echo what you were handed rather than what you judge to be more accurate.`;
+Per-item report contract: return EXACTLY ONE \`workReport\` entry per work item — never a second entry for a thread you already reported, since publication would post both replies and resolve on whichever it routed first — carrying — \`type\` (echoed from the item); \`threadId\` and \`commentId\` (MANDATORY for \`review-thread\` items; publication cannot reply/resolve without them); \`url\` (the stable reference, especially for \`standalone\` items, where it is the entry's identity — echo the gathered item's url VERBATIM; an entry naming a url that was never gathered is untriaged work and is rejected before publication); \`ref\` (file:line + author, human-readable); \`kind\` (the disposition kind above); \`detail\` (for fixed: one line + commit sha; for already-addressed: where it's handled; for push-back: the rationale; for deferred: the committed task file path + one-line scope, and whether the deferral was maintainer-directed or agent-proposed; for ambiguous: what decision is needed); \`authorIsBot\` (echoed VERBATIM from the gathered item; MANDATORY — publication uses it to decide whether a push-back/deferred thread may be auto-resolved, so never omit it; if the gathered item lacked it, use false, the safe human default); \`author\` (the comment author's login, echoed VERBATIM — include it for \`standalone\` items too); and \`newFinding\` — true ONLY when the item surfaces a real concern not previously raised on this PR (typically an \`actionable-fixed\`, or a genuinely new \`deferred-to-task\`/\`already-addressed\`); false for a \`push-back\` (the comment was wrong), a re-raise of a concern already deferred to a committed task file, or a bot re-arguing a push-back it already lost — UNLESS the thread carries a genuinely new angle this round. (\`newFinding\` drives the \`ping-contributing\` flag, which re-pings a bot only when it brought a new finding this round; set it honestly even if no ping was requested.) The echoed fields are re-checked against the gathered item before anything is published, and a mismatch aborts the whole publication — so echo what you were handed rather than what you judge to be more accurate.`;
 }
 
 function reviewCriteria() {
@@ -477,10 +477,16 @@ const duplicatedRefs = duplicatedItems.map(
 // HUMAN thread the run was told to leave open (and flipping it to false
 // suppresses the bot resolution), while `author` is what `botKindOf` attributes
 // a round's new findings to, so an altered login re-pings the wrong bot or
-// drops the one that actually contributed. Compare both against the gathered
-// item wherever it is identifiable — every `review-thread` entry (its threadId
-// is already required to be a gathered thread's), and a `standalone` entry
-// whose url matches a gathered item. Logins are compared case-insensitively:
+// drops the one that actually contributed. Both are therefore compared against
+// the gathered item for EVERY entry, which is why identity is required in both
+// branches below: a `review-thread` entry's threadId must be a gathered
+// thread's, and a `standalone` entry's url must be a gathered item's. Requiring
+// the url makes the two symmetric — an entry naming a url that was never
+// gathered is untriaged work, and while it has no thread to resolve it still
+// reaches the summary comment and, through `author`/`newFinding`, the default
+// contributing-bot ping set. (The coverage check above runs the other
+// direction, so between them every gathered item has exactly one entry and
+// every entry names a gathered item.) Logins are compared case-insensitively:
 // `botKindOf` already lowercases, so case cannot change any routing, and
 // failing publication over it would be brittle rather than protective.
 const TRIAGE_KINDS = new Set([
@@ -502,8 +508,8 @@ const sameLogin = (a, b) => String(a).trim().toLowerCase() === String(b).trim().
 function dispositionDefect(d) {
   if (!d) return "the entry is empty";
   // The gathered item this entry speaks for, once identity checks out — the
-  // authority for the echoed fields below. Undefined only for a standalone
-  // entry naming a url that was never gathered.
+  // authority for the echoed fields below. Both branches return a defect when
+  // they cannot name one, so past the routing block it is always set.
   let gathered;
   if (d.type === "review-thread") {
     if (!d.threadId || !d.commentId) return "it is a review-thread entry with no threadId/commentId to resolve and reply through";
@@ -517,6 +523,7 @@ function dispositionDefect(d) {
   } else if (d.type === "standalone") {
     if (typeof d.url !== "string" || !d.url) return "it is a standalone entry with no url, the only stable reference its outcome can be recorded against";
     if (d.threadId && threadItemById.has(d.threadId)) return "it is typed standalone but names a gathered review thread, so publication would skip the thread's reply/resolve";
+    if (!standaloneItemByUrl.has(d.url)) return "its url was never gathered on this PR, so it is untriaged work that no reviewer disposition covers — it would still be written up in the summary comment and counted toward the contributing-bot pings";
     gathered = standaloneItemByUrl.get(d.url);
   } else {
     return `its type ${JSON.stringify(d.type)} is neither review-thread nor standalone, so publication cannot route it`;
@@ -526,18 +533,16 @@ function dispositionDefect(d) {
   if (typeof d.author !== "string") return "it has no author, so a bot that brought a new finding would silently drop out of the ping set";
   if (typeof d.authorIsBot !== "boolean") return "it has no authorIsBot, which decides whether a push-back or deferred thread may be auto-resolved";
   if (typeof d.newFinding !== "boolean") return "it has no newFinding, which decides whether its author bot is re-pinged this round";
-  if (gathered) {
-    // `authorIsBot` absent from the gathered item means `false` — the contract's
-    // safe human default, the same one `fixInstructions` tells the fixer to use
-    // — so the comparison holds either way.
-    const gatheredIsBot = gathered.authorIsBot === true;
-    if (d.authorIsBot !== gatheredIsBot) return `its authorIsBot ${d.authorIsBot} contradicts the gathered item's ${gatheredIsBot}, and that flag alone decides whether a push-back or deferred thread is auto-resolved or left open`;
-    // A gathered item carrying no author string at all is a gather defect that
-    // has already broken ping attribution upstream; there is nothing to judge
-    // the echo against, so leave it to the type check above rather than
-    // reporting a defect this entry did not cause.
-    if (typeof gathered.author === "string" && !sameLogin(d.author, gathered.author)) return `its author ${JSON.stringify(d.author)} is not the gathered item's ${JSON.stringify(gathered.author)}, so the re-review ping would follow the wrong login`;
-  }
+  // `authorIsBot` absent from the gathered item means `false` — the contract's
+  // safe human default, the same one `fixInstructions` tells the fixer to use
+  // — so the comparison holds either way.
+  const gatheredIsBot = gathered.authorIsBot === true;
+  if (d.authorIsBot !== gatheredIsBot) return `its authorIsBot ${d.authorIsBot} contradicts the gathered item's ${gatheredIsBot}, and that flag alone decides whether a push-back or deferred thread is auto-resolved or left open`;
+  // A gathered item carrying no author string at all is a gather defect that
+  // has already broken ping attribution upstream; there is nothing to judge
+  // the echo against, so leave it to the type check above rather than
+  // reporting a defect this entry did not cause.
+  if (typeof gathered.author === "string" && !sameLogin(d.author, gathered.author)) return `its author ${JSON.stringify(d.author)} is not the gathered item's ${JSON.stringify(gathered.author)}, so the re-review ping would follow the wrong login`;
   return "";
 }
 // Every defective entry, not just the first: a run with several would otherwise
