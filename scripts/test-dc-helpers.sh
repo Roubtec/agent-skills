@@ -236,7 +236,9 @@ case "$OUT" in
 /*) assert_eq "a: stdout is an absolute path" true true ;;
 *) assert_eq "a: stdout is an absolute path" "$OUT" "<absolute path>" ;;
 esac
-assert_eq "a: stdout is exactly one line" "$(wc -l <<<"$OUT")" 1
+# `wc -l` is compared as a string, and BSD wc pads its count with leading spaces,
+# so the whitespace is stripped rather than trusted to be absent.
+assert_eq "a: stdout is exactly one line" "$(wc -l <<<"$OUT" | tr -d '[:space:]')" 1
 require_clone CLONE_A "a: probe"
 assert_true "a: clone is a git repository" "$([ -d "$CLONE_A/.git" ] && echo true || echo false)"
 assert_true "a: clone is outside the source" "$(case "$CLONE_A" in "$SRC1"/*) echo false ;; *) echo true ;; esac)"
