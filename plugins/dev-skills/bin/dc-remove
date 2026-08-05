@@ -50,7 +50,8 @@
 # the only `cd` is inside a command-substitution subshell in canon(), whose
 # arrival is verified by the `pwd -P` it must print.
 #
-# Dependencies: `git` and coreutils.
+# Dependencies: `git` and coreutils. As with dc-enter, git must support
+# `worktree list --porcelain -z` (2.36+).
 set -euo pipefail
 
 PROG=dc-remove

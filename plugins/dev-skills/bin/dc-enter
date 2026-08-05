@@ -126,7 +126,9 @@
 # `pwd -P` it must print.
 #
 # Dependencies: `git` and coreutils. Nothing heavier survives being baked into a
-# container image.
+# container image. git must be new enough for `worktree list --porcelain -z`
+# (2.36+); older git is refused rather than guessed at — see
+# collect_worktree_paths for why no fallback is safe.
 set -euo pipefail
 
 PROG=dc-enter
