@@ -105,7 +105,7 @@ State concisely:
 
 - Whether the repo was already compliant, or what you changed, per file.
 - Whether a `.powbox.local.yml` override is in effect — and if so, that it replaces the committed list wholesale, whether that effective list already carries the three roots or the `.powbox.yml` entries are inert until it is resolved, any other `.powbox.yml` path the override drops, which resolution the user chose, what it stops declaring, and which file each change landed in. Never report the repo worktree-ready while an override's effective list still omits the three roots.
-- Whether `.powbox.local.yml` is gitignored, if it exists and is not.
+- A `.powbox.local.yml` that exists but is not gitignored.
 - Anything you untracked in step 4.
 - Whether the container-local mounts are live in the current session (step 5) or pending the next container start.
 - Any blocker: not a git repo, a malformed `shadow:` list in `.powbox.yml` or in an active override, or a stale image.
