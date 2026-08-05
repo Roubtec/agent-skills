@@ -187,7 +187,8 @@ function cycleSlugSegment(s) {
 // accumulated entry, so the result still shows the question was raised and why
 // it stopped needing an answer. That mark is script-applied and deliberately
 // NOT a schema property — a fixer states a retirement through its disposition's
-// `retiresQuestionIds`, never by self-marking a question it emits.
+// `retiresQuestionIds`, never by self-marking a question it emits, and a
+// volunteered mark is stripped where questions are accumulated.
 const CYCLE_OPEN_QUESTION_SCHEMA = {
   type: "object",
   properties: {
@@ -791,6 +792,19 @@ async function runReviewCycle(cycle) {
     for (const q of fix.openQuestions || []) {
       if (q && q.id && openQuestions.some((x) => x && x.id === q.id)) {
         log(`fixer pass ${fixerPasses} re-reported open question ${JSON.stringify(q.id)}; keeping the entry from the pass that raised it (a re-report neither forks nor revives a question).`);
+        continue;
+      }
+      // The `retired` mark is script-applied and no schema property, so a
+      // volunteered one is stripped rather than trusted: self-marking would
+      // settle a question with no disposition behind it, bypassing both the
+      // guard above and the reviewer that adjudicates every retirement — the
+      // decision would leave the maintainer's list with nobody having claimed
+      // to settle it. A fixer retires only through `retiresQuestionIds`.
+      if (q && typeof q === "object" && "retired" in q) {
+        const stripped = { ...q };
+        delete stripped.retired;
+        log(`fixer pass ${fixerPasses} volunteered a \`retired\` mark on open question ${JSON.stringify(q.id || "")}; stripping it (a question is settled only by a later disposition's \`retiresQuestionIds\`, which the round's reviewer then adjudicates).`);
+        openQuestions.push(stripped);
         continue;
       }
       openQuestions.push(q);
