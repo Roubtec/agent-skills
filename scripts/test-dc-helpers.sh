@@ -130,8 +130,10 @@ inode_of() {
 	stat -c '%i' -- "$path" 2>/dev/null || stat -f '%i' -- "$path"
 }
 
-# refs, and the full set of reachable objects, as comparable strings.
-refs_of() { git -C "$1" for-each-ref --format='%(refname) %(objectname)'; }
+# refs, and the full set of reachable objects, as comparable strings. The ref
+# comparison includes %(symref), so a mirror that flattened a symbolic ref into a
+# direct one at the same commit does not pass as exact.
+refs_of() { git -C "$1" for-each-ref --format='%(refname) %(objectname) %(symref)'; }
 objects_of() {
 	local raw
 	raw="$(git -C "$1" rev-list --objects --all)"
@@ -160,6 +162,9 @@ make_source() {
 	printf 'stashed\n' >"$dir/file.txt"
 	g -C "$dir" stash -q
 	g -C "$dir" branch -q other HEAD~1
+	# A symbolic ref — what every real clone has as refs/remotes/origin/HEAD.
+	git -C "$dir" update-ref refs/remotes/origin/main HEAD
+	git -C "$dir" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/main
 	g -C "$dir" worktree add -q "$dir-wt" -b wtbranch HEAD~1
 }
 
@@ -280,6 +285,10 @@ assert_ne "c: outside a git worktree exits non-zero" "$RC" 0
 assert_eq "c: outside a git worktree writes nothing to stdout" "$OUT" ""
 
 echo "== (d) the ref namespace is an exact mirror =="
+# A symbolic ref whose target does not exist: the source cannot advertise it, so
+# it is the one documented gap in the mirror. Added only here, because `git fsck`
+# reports it as a broken ref and sections (b) and (j) assert a clean source.
+git -C "$SRC2" symbolic-ref refs/dangling/sym refs/heads/does-not-exist
 in_repo "$SRC2" "$DC_ENTER" mirror
 assert_eq "d: exits 0" "$RC" 0
 CLONE_D="$OUT"
@@ -288,6 +297,12 @@ assert_contains "d: a non-standard namespace is present" "$(refs_of "$CLONE_D")"
 assert_contains "d: pre-rebase reservations are present" "$(refs_of "$CLONE_D")" "refs/pre-rebase/main"
 assert_contains "d: notes are present" "$(refs_of "$CLONE_D")" "refs/notes/commits"
 assert_contains "d: the stash ref is present" "$(refs_of "$CLONE_D")" "refs/stash"
+assert_eq "d: a symbolic source ref arrives symbolic, not flattened" \
+	"$(git -C "$CLONE_D" symbolic-ref refs/remotes/origin/HEAD)" "refs/remotes/origin/main"
+in_repo "$SRC2" git symbolic-ref --quiet "refs/dangling/sym"
+assert_eq "d: the source really does hold a dangling symref" "$RC" 0
+in_repo "$CLONE_D" git symbolic-ref --quiet "refs/dangling/sym"
+assert_ne "d: a dangling source symref cannot come across (it is never advertised)" "$RC" 0
 assert_eq "d: the object behind an unreachable ref came across" \
 	"$(git -C "$CLONE_D" cat-file -t "$(git -C "$SRC2" rev-parse refs/pruned/reserved)")" "commit"
 # git clone's invented remote-tracking namespace is pruned away, so the mirror
@@ -350,6 +365,33 @@ assert_eq "e: nothing was created inside the repository through the symlink" "$(
 assert_eq "e: the repository is still clean" "$(git -C "$SRC3" status --porcelain)" ""
 rm -f "$SCOPE_E"
 rm -rf "$SRC3/decoy"
+
+# A git that cannot enumerate worktrees unambiguously is refused rather than
+# parsed with the newline form, which cannot distinguish a path containing a
+# newline from a record boundary.
+mkdir -p "$WORK/e/nozbin"
+cat >"$WORK/e/nozbin/git" <<'SHIM'
+#!/usr/bin/env bash
+# Pretends to be a git predating `git worktree list -z`.
+for a in "$@"; do
+	if [ "$a" = "-z" ]; then
+		for b in "$@"; do
+			if [ "$b" = "worktree" ]; then
+				echo "error: unknown option \`z'" >&2
+				exit 129
+			fi
+		done
+	fi
+done
+exec "$REAL_GIT" "$@"
+SHIM
+chmod +x "$WORK/e/nozbin/git"
+in_repo "$SRC3" env "REAL_GIT=$(command -v git)" "PATH=$WORK/e/nozbin:$PATH" "DC_ROOT=$WORK/e/root" "$DC_ENTER" noz
+assert_ne "e: refuses a git that cannot list worktrees with -z" "$RC" 0
+assert_eq "e: that refusal is silent on stdout" "$OUT" ""
+assert_contains "e: that refusal names the missing capability" "$ERR" "worktree list --porcelain -z"
+in_repo "$SRC3" env "REAL_GIT=$(command -v git)" "PATH=$WORK/e/nozbin:$PATH" "DC_ROOT=$WORK/e/root" "$DC_REMOVE" noz
+assert_ne "e: dc-remove refuses the same git" "$RC" 0
 
 # A malformed slug never reaches the filesystem.
 for badslug in "../escape" "a/b" "" "-x" ".hidden"; do

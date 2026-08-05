@@ -64,7 +64,11 @@
 # `git clone` would instead rewrite branches to `refs/remotes/origin/*` and drop
 # every other namespace, and a subagent handed a clone silently missing the
 # namespace under test can conclude a reservation worked or vanished for
-# entirely the wrong reason. NOT carried: the source's reflogs — the clone keeps
+# entirely the wrong reason. A source ref that is SYMBOLIC arrives symbolic, at
+# the same target, rather than flattened to the object id a fetch would copy —
+# except a symbolic ref whose target does not resolve, which the source does not
+# advertise at all and which therefore cannot come across.
+# NOT carried: the source's reflogs — the clone keeps
 # a fresh reflog of its own, so the source's `HEAD@{n}`, `stash@{n}`, and
 # reflog-only recovery are unavailable in it — uncommitted and untracked working
 # tree state, and the source's local config and hooks.
@@ -320,40 +324,29 @@ add_repo_path() {
 	REPO_PATHS+=("$canonical")
 }
 
-# Enumerate every worktree registered against this repository. `-z` (git 2.36+)
-# is unambiguous, but its NUL delimiters cannot survive command substitution, so
-# it is read from a temporary file. Older git gets the newline form plus a
-# refusal on any line this parse does not recognize: `git worktree list
-# --porcelain` prints a path containing a newline RAW rather than quoting it, so
-# an unrecognized line is the signature of a record split across lines, and
-# guessing there could silently omit a worktree.
+# Enumerate every worktree registered against this repository, using `-z` (git
+# 2.36+) and nothing else. Its NUL delimiters cannot survive command
+# substitution, so the output is read from a temporary file.
+#
+# The newline form is NOT an acceptable fallback and is deliberately not
+# attempted: `git worktree list --porcelain` prints a path containing a newline
+# RAW rather than quoting it, which splits one record across lines — and the
+# continuation can impersonate an attribute line (`...//prefix\nlocked x` yields a
+# truncated `worktree .../prefix` followed by a plausible `locked x`), so no
+# parse of it can tell a real record from a split one. A worktree this helper
+# does not learn about is one the clone root could then be placed inside, so an
+# older git is refused rather than guessed at.
 collect_worktree_paths() {
-	local line unparsed=""
+	local line
 	WT_LIST_FILE="$(mktemp "${TMPDIR:-/tmp}/dc-worktrees.XXXXXX")" ||
 		die "could not create a temporary file to enumerate this repository's worktrees"
-	if git worktree list --porcelain -z >"$WT_LIST_FILE" 2>/dev/null; then
-		while IFS= read -r -d '' line; do
-			case "$line" in
-			"worktree "*) add_repo_path "${line#worktree }" ;;
-			esac
-		done <"$WT_LIST_FILE"
-	elif git worktree list --porcelain >"$WT_LIST_FILE"; then
-		while IFS= read -r line; do
-			case "$line" in
-			"") ;;
-			"worktree "*) add_repo_path "${line#worktree }" ;;
-			"HEAD "* | "branch "* | bare | detached | locked* | prunable*) ;;
-			*)
-				unparsed="$line"
-				break
-				;;
-			esac
-		done <"$WT_LIST_FILE"
-		[ -z "$unparsed" ] ||
-			die "this git cannot list worktrees unambiguously (no 'worktree list -z') and printed a line this parse does not recognize, so a worktree could be missed: '$unparsed'"
-	else
-		die "could not enumerate this repository's worktrees; refusing to place a clone without knowing where they are"
-	fi
+	git worktree list --porcelain -z >"$WT_LIST_FILE" 2>/dev/null ||
+		die "could not enumerate this repository's worktrees with 'git worktree list --porcelain -z' (git 2.36+). Refusing to place a clone without knowing where the worktrees are: the newline form cannot report a path containing a newline unambiguously."
+	while IFS= read -r -d '' line; do
+		case "$line" in
+		"worktree "*) add_repo_path "${line#worktree }" ;;
+		esac
+	done <"$WT_LIST_FILE"
 	rm -f -- "$WT_LIST_FILE"
 	WT_LIST_FILE=""
 }
@@ -503,7 +496,10 @@ git clone "${CLONE_ARGS[@]}" -- "$SRC_TOP" "$CLONE_DIR" >&2 ||
 # it is invisible to `for-each-ref` only while it dangles — the moment the source
 # genuinely owns refs under this remote's name it resolves again and the clone
 # carries a ref the source never had. Deleting it here keeps the mirror exact.
-git -C "$CLONE_DIR" update-ref --no-deref -d "refs/remotes/$SRC_REMOTE/HEAD" >/dev/null 2>&1 || true
+# Deleting a ref that is not there already succeeds, so a failure here is a real
+# one and must not be swallowed.
+git -C "$CLONE_DIR" update-ref --no-deref -d "refs/remotes/$SRC_REMOTE/HEAD" >&2 ||
+	die "could not drop the remote-tracking HEAD git clone invented"
 
 # Detach before mirroring: `git fetch` refuses to update a branch that is
 # checked out, and the mirror below rewrites every branch.
@@ -515,6 +511,23 @@ git -C "$CLONE_DIR" update-ref --no-deref HEAD "$SHA" >&2 ||
 git -C "$CLONE_DIR" fetch --quiet --prune --prune-tags \
 	"$SRC_REMOTE" '+refs/*:refs/*' >&2 ||
 	die "could not mirror the source's refs into the clone"
+
+# A fetch copies each ref's RESOLVED object id, so a source ref that is symbolic
+# (`refs/remotes/origin/HEAD` on almost every clone) would arrive as a direct
+# ref at the same commit. Restore the symbolic ones, so the mirror matches the
+# source in shape as well as in name and target.
+SRC_SYMREFS="$(git for-each-ref --format='%(refname) %(symref)')" ||
+	die "could not enumerate the source's symbolic refs"
+while IFS= read -r symref_line; do
+	case "$symref_line" in
+	*" refs/"*)
+		symref_name="${symref_line%% *}"
+		symref_target="${symref_line#* }"
+		git -C "$CLONE_DIR" symbolic-ref "$symref_name" "$symref_target" >&2 ||
+			die "could not restore the symbolic ref $symref_name in the clone"
+		;;
+	esac
+done <<<"$SRC_SYMREFS"
 
 # No remote means a stray `git push` in the clone has nowhere to go. The remote's
 # CONFIG is dropped rather than `git remote remove`, which would also delete

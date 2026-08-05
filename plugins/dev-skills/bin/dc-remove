@@ -196,40 +196,29 @@ add_repo_path() {
 	REPO_PATHS+=("$canonical")
 }
 
-# Enumerate every worktree registered against this repository. `-z` (git 2.36+)
-# is unambiguous, but its NUL delimiters cannot survive command substitution, so
-# it is read from a temporary file. Older git gets the newline form plus a
-# refusal on any line this parse does not recognize: `git worktree list
-# --porcelain` prints a path containing a newline RAW rather than quoting it, so
-# an unrecognized line is the signature of a record split across lines, and
-# guessing there could silently omit a worktree.
+# Enumerate every worktree registered against this repository, using `-z` (git
+# 2.36+) and nothing else. Its NUL delimiters cannot survive command
+# substitution, so the output is read from a temporary file.
+#
+# The newline form is NOT an acceptable fallback and is deliberately not
+# attempted: `git worktree list --porcelain` prints a path containing a newline
+# RAW rather than quoting it, which splits one record across lines — and the
+# continuation can impersonate an attribute line (`...//prefix\nlocked x` yields a
+# truncated `worktree .../prefix` followed by a plausible `locked x`), so no
+# parse of it can tell a real record from a split one. A worktree this helper
+# does not learn about is one the clone root could then be placed inside, so an
+# older git is refused rather than guessed at.
 collect_worktree_paths() {
-	local line unparsed=""
+	local line
 	WT_LIST_FILE="$(mktemp "${TMPDIR:-/tmp}/dc-worktrees.XXXXXX")" ||
 		die "could not create a temporary file to enumerate this repository's worktrees"
-	if git worktree list --porcelain -z >"$WT_LIST_FILE" 2>/dev/null; then
-		while IFS= read -r -d '' line; do
-			case "$line" in
-			"worktree "*) add_repo_path "${line#worktree }" ;;
-			esac
-		done <"$WT_LIST_FILE"
-	elif git worktree list --porcelain >"$WT_LIST_FILE"; then
-		while IFS= read -r line; do
-			case "$line" in
-			"") ;;
-			"worktree "*) add_repo_path "${line#worktree }" ;;
-			"HEAD "* | "branch "* | bare | detached | locked* | prunable*) ;;
-			*)
-				unparsed="$line"
-				break
-				;;
-			esac
-		done <"$WT_LIST_FILE"
-		[ -z "$unparsed" ] ||
-			die "this git cannot list worktrees unambiguously (no 'worktree list -z') and printed a line this parse does not recognize, so a worktree could be missed: '$unparsed'"
-	else
-		die "could not enumerate this repository's worktrees; refusing to place a clone without knowing where they are"
-	fi
+	git worktree list --porcelain -z >"$WT_LIST_FILE" 2>/dev/null ||
+		die "could not enumerate this repository's worktrees with 'git worktree list --porcelain -z' (git 2.36+). Refusing to place a clone without knowing where the worktrees are: the newline form cannot report a path containing a newline unambiguously."
+	while IFS= read -r -d '' line; do
+		case "$line" in
+		"worktree "*) add_repo_path "${line#worktree }" ;;
+		esac
+	done <"$WT_LIST_FILE"
 	rm -f -- "$WT_LIST_FILE"
 	WT_LIST_FILE=""
 }
