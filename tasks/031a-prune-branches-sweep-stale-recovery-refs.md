@@ -16,10 +16,11 @@ Included:
 - Decide and document the `hands-off` behaviour. The conservative default is to report redundant breadcrumbs without deleting them, matching how `hands-off` already refuses to touch Uncertain branches.
 - An age threshold is worth considering so a breadcrumb from the current or previous run is never swept out from under a user who is still orienting; if adopted, state it explicitly rather than leaving it implicit.
 - Apply to both harness renderings: `codex/dev-skills/skills/prune-branches/SKILL.md` and `plugins/dev-skills/skills/prune-branches/SKILL.md`, which must stay in parity apart from their harness-specific invocation and confirmation wording.
+- One deliberate exception to the step 8 carve-out below, admitted during implementation: open step 8's reservation transaction with `option no-deref`, so a claim binds the candidate name itself. The sweep work turned up the same dereference hazard on the write side. `git update-ref --stdin` follows symbolic refs by default, `create` included; a symref at a candidate name whose target exists is refused either way, but a *dangling* one resolves through to its missing target, so the claim succeeds against that and writes a stray ref outside `refs/pruned/` while the candidate stays a symref — and item 6's verification then resolves it, finds exactly the expected OID, and passes, so the branch is deleted against a breadcrumb that is really a pointer elsewhere. Reproduced on both the files and reftable backends. Step 5's inventory cannot backstop it, because `for-each-ref` skips a dangling symref rather than listing it, so `no-deref` is the only guard that applies. A demonstrated path from "reserve a breadcrumb" to "create a ref under `refs/heads/`", inside the step that exists to protect work, was not worth deferring; it is a single directive and can be dropped on its own if the maintainer would rather it arrived in its own PR.
 
 Out of scope:
 
-- Any change to how breadcrumbs are named, claimed, or verified during a run (step 8 stays as is).
+- Any change to how breadcrumbs are named, claimed, or verified during a run — step 8 stays as is, apart from the single `option no-deref` exception recorded above and the safety-rule rewording noted under implementation notes.
 - Reflog expiry, `git gc` tuning, or any other repository-maintenance concern beyond `refs/pruned/**`.
 - Sweeping `refs/pre-rebase/**`, which belongs to the rebase skills and has different retention expectations.
 
@@ -57,4 +58,4 @@ Out of scope:
 
 ## Review plan
 
-Reviewer checks that redundancy is decided by reachability rather than age or name, that no path can delete an unreachable breadcrumb, that the confirmation model matches the one used for branch deletion, that the step 8 safety-rule rewording did not weaken the reservation guarantee, and that the two mirrors stay in parity.
+Reviewer checks that redundancy is decided by reachability rather than age or name, that no path can delete an unreachable breadcrumb, that the confirmation model matches the one used for branch deletion, that the step 8 safety-rule rewording did not weaken the reservation guarantee, that the `option no-deref` exception stays confined to binding a claim to its candidate name and changes nothing else about how breadcrumbs are named, claimed, or verified, and that the two mirrors stay in parity.
