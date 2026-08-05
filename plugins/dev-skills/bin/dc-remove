@@ -205,6 +205,18 @@ sanitize_component() {
 
 # --- Arguments ---------------------------------------------------------------
 SLUG=""
+# Whether an argument was SEEN is tracked separately from whether it is
+# non-empty, exactly as dc-enter tracks it. Using emptiness as the sentinel
+# silently shifts an empty first argument out of the slug's place: `dc-remove ""
+# probe` would take `probe` as the slug and REMOVE that clone, when the caller
+# handed this helper an empty slug and a stray argument. This is the helper that
+# holds the rm -rf, so it must not be the more permissive of the two.
+SLUG_SEEN=""
+take_positional() {
+	[ -z "$SLUG_SEEN" ] || usage 1
+	SLUG="$1"
+	SLUG_SEEN=1
+}
 while [ $# -gt 0 ]; do
 	case "$1" in
 	-h | --help) usage 0 ;;
@@ -214,19 +226,17 @@ while [ $# -gt 0 ]; do
 		;;
 	-*) usage 1 ;;
 	*)
-		[ -z "$SLUG" ] || usage 1
-		SLUG="$1"
+		take_positional "$1"
 		shift
 		;;
 	esac
 done
 while [ $# -gt 0 ]; do
-	[ -z "$SLUG" ] || usage 1
-	SLUG="$1"
+	take_positional "$1"
 	shift
 done
 
-[ -n "$SLUG" ] || usage 1
+[ -n "$SLUG_SEEN" ] || usage 1
 # The guarantee starts here: a slug is one path component, so no caller can
 # steer this helper at an arbitrary directory — a path, absolute or relative,
 # fails this check before anything is resolved, let alone removed.

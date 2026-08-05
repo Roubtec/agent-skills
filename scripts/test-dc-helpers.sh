@@ -38,9 +38,10 @@ set -euo pipefail
 #       one whose marker records another clone is ever discarded
 #   (g) per-agent and per-worktree path scoping, and the sibling case where two
 #       callers share both
-#   (h) dc-remove: removes a dirty clone, refuses a path, refuses a foreign or
-#       mis-marked directory, no-ops on an unknown slug, and removes exactly the
-#       path dc-enter printed (which pins the two path derivations together)
+#   (h) dc-remove: removes a dirty clone, refuses a path, refuses an empty slug
+#       even when another argument follows, refuses a foreign or mis-marked
+#       directory, no-ops on an unknown slug, and removes exactly the path
+#       dc-enter printed (which pins the two path derivations together)
 #   (i) the incident's shape: a failed clone step must not let a script proceed
 #       to operate in the repository root, even when piped as the original was
 #   (j) hardlink policy: --no-hardlinks by default, DC_HARDLINKS=1 opt-in, with
@@ -795,6 +796,19 @@ for badarg in "$SRC4" "$CLONE_H" ".." "." "/" "f/oo" "$WORK"; do
 done
 assert_true "h: the invoking repository is still intact" \
 	"$([ -d "$SRC4/.git" ] && [ -f "$SRC4/file.txt" ] && echo true || echo false)"
+# An empty first argument is the empty SLUG it is, not a placeholder the next
+# argument slides through — the same check section (a) makes on dc-enter. Getting
+# it wrong here is worse than there: this helper's answer to a malformed argument
+# list would be to REMOVE the clone named by the argument it should have refused.
+in_repo "$SRC4" "$DC_ENTER" bystander
+require_clone CLONE_BYSTANDER "h: bystander"
+in_repo "$SRC4" "$DC_REMOVE" "" bystander
+assert_ne "h: an empty slug is refused even with a second argument" "$RC" 0
+assert_true "h: the second argument's clone is untouched" \
+	"$([ -d "$CLONE_BYSTANDER" ] && echo true || echo false)"
+in_repo "$SRC4" "$DC_REMOVE" bystander
+assert_eq "h: naming that slug properly still removes it" "$RC" 0
+assert_true "h: ... and now it is gone" "$([ ! -e "$CLONE_BYSTANDER" ] && echo true || echo false)"
 # A directory at a slug's path that the helper did not create is refused.
 in_repo "$SRC4" "$DC_REMOVE" foreign
 assert_ne "h: refuses a foreign directory" "$RC" 0
