@@ -59,6 +59,7 @@ Every file location below is as of PR #41's tip — this task's own parent PR �
 
 - In a scratch repo, exercise four local-file states — absent, `ctx:`-only, unparseable YAML, and a well-formed `shadow:` list — and confirm the skill's stated outcome matches what `detect-shadows.sh` actually emits in each (including which file it logs as the source and whether the override log line appears).
 - Diff the two `declare-shadows` mirrors to confirm the edit landed identically in both.
+- The malformed-`shadow:`-value case is deliberately not among those four states. That sweep compares the skill's stated outcome against powbox's, and a malformed value is the one input where the two are meant to differ: `detect-shadows.sh` never stops on it — `yq -r '.shadow[]? // empty' … 2>/dev/null || true` yields nothing for a scalar and drops a null member — while the skill stops and reports. Comparing them there would assert the opposite of the intended behaviour, so the acceptance criterion covering it is verified by reading, per the review plan, that the malformed-value rule stayed fail-closed.
 
 ## Review plan
 
