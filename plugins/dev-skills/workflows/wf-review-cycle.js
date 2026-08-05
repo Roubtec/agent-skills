@@ -163,9 +163,9 @@ function cycleShq(s) {
 // and "ref-safe" admits `/` — which `mktemp -d ".../review-cycle-<slug>.XXXXXX"`
 // reads as a parent directory that does not exist, failing the pass outright.
 // Quoting cannot help here: `cycleShq` stops the shell mangling the value, not
-// the path splitting on it. Everything outside `[A-Za-z0-9._-]` collapses for
-// the same reason, the length is bounded so the directory name stays readable
-// and well inside NAME_MAX, and an all-punctuation slug falls back to `cycle`.
+// the path splitting on it. The rest of the filter is readability and defense
+// in depth (a `$` splits no path), the length is bounded so the name stays
+// well inside NAME_MAX, and an all-punctuation slug falls back to `cycle`.
 // The `cycleShq` wrapper stays around the result: quoting every interpolated
 // value is this section's uniform rule, so a later loosening of this filter
 // cannot silently reintroduce an injection.

@@ -50,7 +50,7 @@ When a fixer delivers something other than a decision the maintainer locked, it 
 
 ```bash
 worktree="/absolute/path/to/committed-checkout-or-worktree"
-artifact_dir="/absolute/path/outside/the/worktree/<cycle-slug>/round-1"
+artifact_dir="/absolute/path/outside/the/worktree/<cycle-slug-segment>/round-1"
 mkdir -p "${artifact_dir}"
 
 prompt_file="${artifact_dir}/peer-review.prompt"
