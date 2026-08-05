@@ -121,6 +121,14 @@ path_within() {
 	return 1
 }
 
+# Read with the shell's own `read` rather than `head`: the ownership proof
+# should not depend on a tool beyond git and a POSIX-ish coreutils.
+read_first_line() {
+	local file="$1" first=""
+	IFS= read -r first <"$file" || true
+	printf '%s' "$first"
+}
+
 sanitize_component() {
 	local value="${1//[^A-Za-z0-9._-]/_}"
 	value="${value:0:40}"
@@ -221,7 +229,10 @@ SESSION_DIR="$SCOPE_DIR/$SLUG"
 CLONE_DIR="$SESSION_DIR/repo"
 MARKER="$SESSION_DIR/$MARKER_NAME"
 
-if [ ! -e "$SESSION_DIR" ] && [ ! -L "$SESSION_DIR" ]; then
+if [ -L "$SESSION_DIR" ]; then
+	die "refusing: '$SESSION_DIR' is a symlink, so it points somewhere dc-enter did not create"
+fi
+if [ ! -e "$SESSION_DIR" ]; then
 	printf '%s: nothing to remove for slug %s (%s does not exist)\n' "$PROG" "$SLUG" "$SESSION_DIR" >&2
 	exit 0
 fi
@@ -231,7 +242,7 @@ fi
 	die "refusing: '$SESSION_DIR' is not a directory"
 [ -f "$MARKER" ] ||
 	die "refusing: '$SESSION_DIR' carries no $MARKER_NAME marker, so dc-enter did not create it"
-MARKER_HEAD="$(head -n 1 -- "$MARKER" 2>/dev/null || true)"
+MARKER_HEAD="$(read_first_line "$MARKER")"
 [ "$MARKER_HEAD" = "$MARKER_MAGIC" ] ||
 	die "refusing: '$MARKER' is not a $MARKER_MAGIC marker"
 MARKER_CLONE=""

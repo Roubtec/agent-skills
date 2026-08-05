@@ -214,6 +214,16 @@ path_within() {
 	return 1
 }
 
+# True when a path is one of this helper's marker files. Read with the shell's
+# own `read` rather than `head`, so the helpers depend on nothing but git and a
+# POSIX-ish coreutils for their safety checks.
+marker_is_ours() {
+	local file="$1" first=""
+	[ -f "$file" ] || return 1
+	IFS= read -r first <"$file" || true
+	[ "$first" = "$MARKER_MAGIC" ]
+}
+
 # Reduce a string to a safe single path component.
 sanitize_component() {
 	local value="${1//[^A-Za-z0-9._-]/_}"
@@ -369,9 +379,10 @@ safe_rm_session() {
 	local target="$1" resolved
 	[ -n "$target" ] || die "internal error: empty removal target"
 	resolved="$(canon "$target")" || die "internal error: cannot canonicalize '$target'"
-	[ "$resolved" = "$target" ] || die "internal error: '$target' is not canonical"
+	[ "$resolved" = "$target" ] ||
+		die "refusing to remove '$target': it resolves to '$resolved', so a path component is a symlink out of the clone root"
 	path_within "$resolved" "$SCOPE_DIR" ||
-		die "internal error: refusing to remove '$resolved' — outside the clone scope"
+		die "refusing to remove '$resolved' — outside the clone scope $SCOPE_DIR"
 	[ "$resolved" != "$SCOPE_DIR" ] ||
 		die "internal error: refusing to remove the clone scope directory itself"
 	[ "$resolved" != "$ROOT" ] ||
@@ -379,7 +390,7 @@ safe_rm_session() {
 	local repo_path
 	for repo_path in "${REPO_PATHS[@]}"; do
 		if path_within "$resolved" "$repo_path"; then
-			die "internal error: refusing to remove '$resolved' — inside the invoking repository"
+			die "refusing to remove '$resolved' — inside the invoking repository"
 		fi
 	done
 	rm -rf -- "$resolved"
@@ -388,8 +399,11 @@ safe_rm_session() {
 # --- Re-derive the slug's clone from scratch ---------------------------------
 mkdir -p -- "$SCOPE_DIR" >&2 || die "could not create the clone scope directory: $SCOPE_DIR"
 
-if [ -e "$SESSION_DIR" ] || [ -L "$SESSION_DIR" ]; then
-	if [ -f "$MARKER" ] && [ "$(head -n 1 -- "$MARKER" 2>/dev/null || true)" = "$MARKER_MAGIC" ]; then
+if [ -L "$SESSION_DIR" ]; then
+	die "refusing: '$SESSION_DIR' is a symlink, so it points somewhere this helper did not create. Remove it yourself if it is yours, or pick another slug."
+fi
+if [ -e "$SESSION_DIR" ]; then
+	if marker_is_ours "$MARKER"; then
 		printf '%s: re-deriving disposable clone for slug %s (previous contents discarded)\n' \
 			"$PROG" "$SLUG" >&2
 		safe_rm_session "$SESSION_DIR"
@@ -439,7 +453,7 @@ git -C "$CLONE_DIR" update-ref --no-deref HEAD "$SHA" >&2 ||
 
 # Mirror the source's refs exactly, at their original names, and prune the
 # remote-tracking refs `git clone` invented. See REF NAMESPACE in the header.
-git -C "$CLONE_DIR" fetch --quiet --prune --prune-tags --no-write-fetch-head \
+git -C "$CLONE_DIR" fetch --quiet --prune --prune-tags \
 	"$SRC_REMOTE" '+refs/*:refs/*' >&2 ||
 	die "could not mirror the source's refs into the clone"
 

@@ -367,6 +367,17 @@ assert_ne "f: refuses a directory it did not create" "$RC" 0
 assert_eq "f: refusal is silent on stdout" "$OUT" ""
 assert_contains "f: refusal names the missing marker" "$ERR" "dc-clone-meta"
 assert_eq "f: the foreign directory is untouched" "$(cat "$FOREIGN_DIR/keep.txt")" "precious"
+# A slug path that is a symlink is refused by both helpers rather than followed.
+SCOPE_DIR_F="$(dirname "$(dirname "$CLONE_F")")"
+ln -s "$FOREIGN_DIR" "$SCOPE_DIR_F/linked"
+in_repo "$SRC4" "$DC_ENTER" linked
+assert_ne "f: dc-enter refuses a symlinked slug path" "$RC" 0
+assert_eq "f: the symlink refusal is silent on stdout" "$OUT" ""
+in_repo "$SRC4" "$DC_REMOVE" linked
+assert_ne "f: dc-remove refuses a symlinked slug path" "$RC" 0
+assert_eq "f: the symlink's target survives" "$(cat "$FOREIGN_DIR/keep.txt")" "precious"
+assert_true "f: the symlink itself is left in place" "$([ -L "$SCOPE_DIR_F/linked" ] && echo true || echo false)"
+rm -f "$SCOPE_DIR_F/linked"
 
 echo "== (g) per-agent and per-worktree scoping =="
 in_repo "$SRC4" env "DC_AGENT=agent-one" "$DC_ENTER" shared
