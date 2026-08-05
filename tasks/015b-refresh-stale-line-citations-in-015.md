@@ -2,7 +2,7 @@
 
 ## Why this task exists
 
-`tasks/015-adopt-peer-review-run-in-review-skills.md` pins around twenty line numbers into the peer sections of the ten skill files it will edit. Most no longer resolve — `plugins/dev-skills/skills/address-tasks/SKILL.md:44` still names the peer preflight it is cited for, but it is the exception — and unlike `tasks/012b` and `tasks/014a` the file carries **no "as of PR #N" stamp**, so a reader takes them all as current and follows most of them into blank lines or unrelated prose. Nothing in the file marks which few still hold.
+`tasks/015-adopt-peer-review-run-in-review-skills.md` pins around twenty line numbers into the peer sections of the ten skill files its pre-014 target list names. Most no longer resolve — `plugins/dev-skills/skills/address-tasks/SKILL.md:44` still names the peer preflight it is cited for, but it is the exception — and unlike `tasks/012b` and `tasks/014a` the file carries **no "as of PR #N" stamp**, so a reader takes them all as current and follows most of them into blank lines or unrelated prose. Nothing in the file marks which few still hold.
 
 The staleness has two separate causes, which is why a blanket offset cannot fix it:
 
