@@ -161,6 +161,12 @@ const PUBLISH_SCHEMA = {
 // Single-quote and escape embedded quotes; adjacent quoted spans like
 // `refs/heads/'b'` concatenate into one shell word, so the path still resolves,
 // and so does a quoted `<ref>:<oid>` lease pair.
+//
+// The rule is scoped to command text on purpose. The head OID also appears once
+// as a value the agent is asked to COMPARE against what it re-fetches ("Expected
+// head OID to replace"), not to run; quoting it there would have the agent match
+// the fetched OID against a quoted rendering of itself, so that occurrence is
+// deliberately bare and is not an omission.
 function shq(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
 }
@@ -450,10 +456,13 @@ const duplicatedRefs = duplicatedItems.map(
 // resolving another thread. The JSON schema cannot make fields conditionally
 // required, and the entry's own claim cannot be trusted for this check, so
 // judge against the gathered items (their identity here, their echoed author
-// fields further down — the reviewer judges substance, never this): flag any
-// entry typed `review-thread` whose threadId is not a
-// gathered thread's or whose commentId is not that thread's top comment, and
-// any entry matching a gathered thread's threadId that is not typed for it.
+// fields further down — which `reviewCriteria` also puts to the cycle's
+// reviewer, deliberately: the reviewer catches a mismatch in-cycle where the
+// fixer can still correct it, while this check is the last structural backstop
+// and can only abort publication): flag any entry typed `review-thread` whose
+// threadId is not a gathered thread's or whose commentId is not that thread's
+// top comment, and any entry matching a gathered thread's threadId that is not
+// typed for it.
 //
 // Identity alone is not enough to publish from, though. Every remaining field
 // `fixInstructions` marks mandatory is consumed by a publish side effect, and
