@@ -42,8 +42,12 @@ set -euo pipefail
 #       to operate in the repository root, even when piped as the original was
 #   (j) hardlink policy: --no-hardlinks by default, DC_HARDLINKS=1 opt-in, with
 #       the isolation guarantee holding either way
-#   (k) clone-root hygiene: repeated separators collapse, a newline in the root
-#       is refused by both helpers, and a newline in the SOURCE's path still works
+#   (k) clone-root hygiene: repeated separators collapse, a relative root and a
+#       newline-bearing one are refused by both helpers — including a newline at
+#       the very end and one only the RESOLVED root has — and a newline anywhere
+#       in the SOURCE's path, end included, still works. These are the checks
+#       that must be made on the value the caller supplied rather than on the
+#       canonicalized one, since canonicalizing changes it.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -748,7 +752,7 @@ assert_eq "j: hardlinked clone's gc leaves the source's objects alone" "$(object
 in_repo "$SRC6" git fsck --no-progress --no-dangling --connectivity-only
 assert_eq "j: the source still passes fsck after the hardlinked clone's gc" "$RC" 0
 
-echo "== (k) clone-root hygiene: separators and newlines =="
+echo "== (k) clone-root hygiene: separators, absoluteness, and newlines =="
 SRC7="$WORK/k/src"
 mkdir -p "$WORK/k/root"
 make_source "$SRC7"
@@ -763,6 +767,27 @@ CLONE_K="$OUT"
 in_repo "$SRC7" env "DC_ROOT=$WORK/k///root/" "$DC_REMOVE" seps
 assert_eq "k: dc-remove collapses separators identically" "$RC" 0
 assert_true "k: ... and removed the clone dc-enter printed" "$([ ! -e "$CLONE_K" ] && echo true || echo false)"
+# A RELATIVE root is refused by both helpers rather than resolved against
+# whatever directory each happened to be invoked from. Canonicalizing it first
+# would make the absolute-path guard unfalsifiable — canon() prepends $PWD and
+# asserts its own result is absolute — and the two helpers would then derive
+# DIFFERENT clones from one DC_ROOT: dc-enter explicitly supports being run from
+# a nested subdirectory (section (c)), so the caller entering from a subdirectory
+# and removing from the repository root is a reachable configuration. The clone
+# would be created, left behind, and reported as "nothing to remove" with a zero
+# exit.
+mkdir -p "$SRC7/deep/er"
+REL_TARGET="$WORK/k/relroot"
+in_repo "$SRC7/deep/er" env "DC_ROOT=../../../relroot" "$DC_ENTER" relroot
+assert_ne "k: dc-enter refuses a relative root" "$RC" 0
+assert_eq "k: ... silently on stdout" "$OUT" ""
+assert_contains "k: ... saying it must be absolute" "$ERR" "must be an absolute path"
+assert_true "k: ... and creates nothing where it would have resolved" \
+	"$([ ! -e "$REL_TARGET" ] && echo true || echo false)"
+in_repo "$SRC7" env "DC_ROOT=../../../relroot" "$DC_REMOVE" relroot
+assert_ne "k: dc-remove refuses a relative root too" "$RC" 0
+assert_contains "k: ... rather than reporting nothing to remove" "$ERR" "must be an absolute path"
+rm -rf "$SRC7/deep"
 # A newline in the root is refused by BOTH helpers. dc-enter's whole calling
 # convention is one path on one line of stdout — the incident's own script ended
 # its clone step with `| tail -n 1` — and a clone created under such a root would
@@ -777,6 +802,35 @@ assert_contains "k: ... saying why" "$ERR" "newline"
 assert_eq "k: ... and leaves nothing behind under it" "$(ls -A "$NL_ROOT")" ""
 in_repo "$SRC7" env "DC_ROOT=$NL_ROOT" "$DC_REMOVE" newline
 assert_ne "k: dc-remove refuses the same root" "$RC" 0
+# A root whose newline is the LAST byte is the one that escapes a check made
+# after canonicalization: command substitution strips every trailing newline it
+# captures, so the refusal saw a newline-free path and the clone landed under
+# THAT path instead — succeeding in a directory the caller never named.
+mkdir -p "$WORK/k/trailroot"
+TRAIL_ROOT="$WORK/k/trailroot
+"
+in_repo "$SRC7" env "DC_ROOT=$TRAIL_ROOT" "$DC_ENTER" trailnl
+assert_ne "k: dc-enter refuses a root ending in a newline" "$RC" 0
+assert_eq "k: ... silently on stdout" "$OUT" ""
+assert_contains "k: ... saying why" "$ERR" "newline"
+assert_eq "k: ... rather than silently using the newline-free path" "$(ls -A "$WORK/k/trailroot")" ""
+in_repo "$SRC7" env "DC_ROOT=$TRAIL_ROOT" "$DC_REMOVE" trailnl
+assert_ne "k: dc-remove refuses a root ending in a newline" "$RC" 0
+# ... and a root that acquires a newline only when RESOLVED — the raw value is
+# clean, but a symlinked component points at a directory whose real name is not.
+# This one can only be caught after canonicalization, which is why both helpers
+# check the raw value AND the resolved one.
+NL_REAL="$WORK/k/re
+al"
+mkdir -p "$NL_REAL"
+ln -s "$NL_REAL" "$WORK/k/nl-link"
+in_repo "$SRC7" env "DC_ROOT=$WORK/k/nl-link" "$DC_ENTER" vianl
+assert_ne "k: dc-enter refuses a root RESOLVING into a newline-bearing path" "$RC" 0
+assert_eq "k: ... silently on stdout" "$OUT" ""
+assert_contains "k: ... saying why" "$ERR" "newline"
+assert_eq "k: ... and leaves nothing behind under the real directory" "$(ls -A "$NL_REAL")" ""
+in_repo "$SRC7" env "DC_ROOT=$WORK/k/nl-link" "$DC_REMOVE" vianl
+assert_ne "k: dc-remove refuses the same resolved root" "$RC" 0
 # The SOURCE repository's path is not the helper's to choose, so a newline there
 # still works: the marker is NUL-delimited, so it records such a path
 # unambiguously and dc-remove can still prove ownership from it.
@@ -790,6 +844,32 @@ CLONE_NL="$OUT"
 in_repo "$NL_SRC" env "DC_ROOT=$WORK/k/root" "$DC_REMOVE" nlsource
 assert_eq "k: ... and dc-remove parses its marker and removes it" "$RC" 0
 assert_true "k: ... leaving nothing" "$([ ! -e "$CLONE_NL" ] && echo true || echo false)"
+# The source path a bare `$(git rev-parse --show-toplevel)` cannot survive: its
+# newline is the LAST byte, and command substitution strips it, so the helper
+# would derive a different directory. The decoy below IS that directory, and it
+# is a repository too — so the mistake would not fail loudly, it would quietly
+# clone the wrong repository and hand a subagent the wrong-baseline conclusion
+# these helpers exist to prevent.
+TRAIL_SRC="$WORK/k/tsrc
+"
+make_source "$TRAIL_SRC"
+DECOY_SRC="$WORK/k/tsrc"
+git init -q -b main "$DECOY_SRC"
+g -C "$DECOY_SRC" commit -q --allow-empty -m "decoy only"
+g -C "$DECOY_SRC" branch -q decoy-only
+in_repo "$TRAIL_SRC" env "DC_ROOT=$WORK/k/root" "$DC_ENTER" trailsrc
+assert_eq "k: a source path ENDING in a newline is fine" "$RC" 0
+CLONE_TRAIL="$OUT"
+assert_eq "k: ... and mirrors that source exactly" "$(refs_of "$CLONE_TRAIL")" "$(refs_of "$TRAIL_SRC")"
+assert_eq "k: ... at that source's HEAD" \
+	"$(git -C "$CLONE_TRAIL" rev-parse HEAD)" "$(git -C "$TRAIL_SRC" rev-parse HEAD)"
+assert_true "k: ... and not from the decoy repository at the newline-free path" \
+	"$(git -C "$CLONE_TRAIL" show-ref --verify --quiet refs/heads/decoy-only && echo false || echo true)"
+# dc-remove derives the same source — trailing newline and all — so its ownership
+# proof still matches the marker dc-enter wrote.
+in_repo "$TRAIL_SRC" env "DC_ROOT=$WORK/k/root" "$DC_REMOVE" trailsrc
+assert_eq "k: ... and dc-remove derives the identical source and removes it" "$RC" 0
+assert_true "k: ... leaving nothing" "$([ ! -e "$CLONE_TRAIL" ] && echo true || echo false)"
 
 if [ "$fails" -eq 0 ]; then
 	printf 'test-dc-helpers: %d checks passed\n' "$checks"

@@ -46,6 +46,12 @@
 # derivation is duplicated here rather than sourced, because each helper has to
 # stand alone on a container PATH; scripts/test-dc-helpers.sh pins the two
 # derivations together by removing exactly the path dc-enter printed.
+# The root rules are part of that derivation and are therefore identical too: an
+# absolute path, containing no newline, checked on the RAW value before it is
+# canonicalized. A relative root is what makes "same repository, same DC_ROOT,
+# same clone" false — it resolves against whatever directory each helper happens
+# to be invoked from, and dc-enter explicitly supports being run from a nested
+# subdirectory — so it is refused here rather than resolved to a second place.
 #
 # Sync discipline: see the header of `dc-enter` — this plugin copy is canonical
 # and net-new here, with no powbox-baked original to pin against, and any
@@ -55,7 +61,9 @@
 # This script keeps the same discipline as dc-enter: `set -euo pipefail`, no
 # load-bearing command piped, and it never changes its own working directory —
 # the only `cd` is inside a command-substitution subshell in canon(), whose
-# arrival is verified by the `pwd -P` it must print.
+# arrival is verified by the `pwd -P` it must print. No path is carried through
+# a bare `$(…)` either, since that strips a trailing newline belonging to the
+# path itself; see capture_path below.
 #
 # Dependencies: `git` and coreutils. As with dc-enter, git must support
 # `worktree list --porcelain -z` (2.36+).
@@ -91,8 +99,27 @@ usage() {
 
 # --- Path helpers (identical to dc-enter's; see the note above) --------------
 
+# Capture the path a command prints without losing a trailing newline that is
+# part of the path itself: `$(cmd)` strips every trailing newline it captures, so
+# `git rev-parse --show-toplevel` in a repository whose directory name ends in
+# one yields a shorter path naming a DIFFERENT directory — and this helper's
+# whole ownership proof compares that path against the marker dc-enter wrote.
+CAPTURED_PATH=""
+capture_path() {
+	local out
+	CAPTURED_PATH=""
+	out="$("$@" && printf 'x')" || return 1
+	out="${out%x}"
+	CAPTURED_PATH="${out%$'\n'}"
+}
+
+# Returns its result in CANON_RESULT rather than printing it, so no caller needs
+# a command substitution to read it — see capture_path above for why one would
+# silently shorten a path ending in a newline.
+CANON_RESULT=""
 canon() {
 	local path="$1" head tail_part out comp
+	CANON_RESULT=""
 	[ -n "$path" ] || return 1
 	case "$path" in
 	/*) ;;
@@ -112,7 +139,9 @@ canon() {
 		[ -n "$head" ] || head=/
 		[ "$head" != "$path" ] || return 1
 	done
-	out="$(cd -P -- "$head" >/dev/null 2>&1 && pwd -P)" || return 1
+	out="$(cd -P -- "$head" >/dev/null 2>&1 && pwd -P && printf 'x')" || return 1
+	out="${out%x}"
+	out="${out%$'\n'}"
 	[ -n "$out" ] || return 1
 	case "$out" in
 	/*) ;;
@@ -125,7 +154,7 @@ canon() {
 			out="$out/$tail_part"
 		fi
 	fi
-	printf '%s\n' "$out"
+	CANON_RESULT="$out"
 }
 
 path_within() {
@@ -206,10 +235,12 @@ if [ "${#SLUG}" -gt 64 ] || [[ ! "$SLUG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; the
 fi
 
 # --- The invoking repository -------------------------------------------------
-SRC_TOP="$(git rev-parse --show-toplevel 2>/dev/null)" ||
+capture_path git rev-parse --show-toplevel 2>/dev/null ||
 	die "not inside a git working tree (run this from the repository dc-enter was run in)"
+SRC_TOP="$CAPTURED_PATH"
 [ -n "$SRC_TOP" ] || die "could not resolve the invoking worktree (bare repository?)"
-SRC_TOP="$(canon "$SRC_TOP")" || die "could not canonicalize the invoking worktree path"
+canon "$SRC_TOP" || die "could not canonicalize the invoking worktree path"
+SRC_TOP="$CANON_RESULT"
 
 REPO_PATHS=("$SRC_TOP")
 
@@ -218,11 +249,11 @@ REPO_PATHS=("$SRC_TOP")
 # failure the root check exists to prevent — so "could not tell" must stop the
 # run, never degrade into a shorter list.
 add_repo_path() {
-	local raw="$1" canonical
+	local raw="$1"
 	[ -n "$raw" ] || die "git reported an empty repository path; refusing to guess where the repository is"
-	canonical="$(canon "$raw")" ||
+	canon "$raw" ||
 		die "could not canonicalize the repository path '$raw'; refusing to guess where the repository is"
-	REPO_PATHS+=("$canonical")
+	REPO_PATHS+=("$CANON_RESULT")
 }
 
 # Enumerate every worktree registered against this repository, using `-z` (git
@@ -239,10 +270,15 @@ add_repo_path() {
 # older git is refused rather than guessed at.
 collect_worktree_paths() {
 	local line records=0 git_err=""
-	WT_LIST_FILE="$(mktemp "${TMPDIR:-/tmp}/dc-worktrees.XXXXXX")" ||
+	# capture_path, not $(…): $TMPDIR is not this helper's to constrain, and one
+	# ending in a newline would otherwise leave these files at paths that are not
+	# the ones mktemp created.
+	capture_path mktemp "${TMPDIR:-/tmp}/dc-worktrees.XXXXXX" ||
 		die "could not create a temporary file to enumerate this repository's worktrees"
-	WT_ERR_FILE="$(mktemp "${TMPDIR:-/tmp}/dc-worktrees-err.XXXXXX")" ||
+	WT_LIST_FILE="$CAPTURED_PATH"
+	capture_path mktemp "${TMPDIR:-/tmp}/dc-worktrees-err.XXXXXX" ||
 		die "could not create a temporary file to capture git's diagnostics"
+	WT_ERR_FILE="$CAPTURED_PATH"
 	# git's own stderr is reported rather than swallowed: an old git, a corrupt
 	# repository, and an unreadable .git/worktrees entry all fail here, and
 	# blaming the version for all three sends the reader after the wrong bug.
@@ -270,12 +306,12 @@ collect_worktree_paths() {
 		die "'git worktree list --porcelain -z' succeeded but reported no worktrees; a repository always has at least its main worktree, so this listing cannot be trusted"
 }
 
-GIT_COMMON="$(git rev-parse --git-common-dir)" ||
+capture_path git rev-parse --git-common-dir ||
 	die "could not resolve this repository's shared git directory"
-add_repo_path "$GIT_COMMON"
-GIT_DIR_OWN="$(git rev-parse --absolute-git-dir)" ||
+add_repo_path "$CAPTURED_PATH"
+capture_path git rev-parse --absolute-git-dir ||
 	die "could not resolve this worktree's git directory"
-add_repo_path "$GIT_DIR_OWN"
+add_repo_path "$CAPTURED_PATH"
 collect_worktree_paths
 
 # --- Clone root and slug path ------------------------------------------------
@@ -287,15 +323,36 @@ else
 	ROOT_SRC="${TMPDIR:+TMPDIR}"
 	ROOT_SRC="${ROOT_SRC:-the /tmp default}"
 fi
-ROOT="$(canon "$ROOT_RAW")" || die "could not canonicalize the clone root ($ROOT_SRC): '$ROOT_RAW'"
-[ "$ROOT" != "/" ] || die "the clone root ($ROOT_SRC) must not be the filesystem root"
+# Both rules are checked on the RAW value FIRST, exactly as dc-enter checks them,
+# because canonicalizing changes it: canon() resolves a relative path against
+# $PWD, so a relative root would silently become one absolute path here and a
+# different one in dc-enter — the clone would be created and this helper would
+# then report "nothing to remove" and exit 0 while it sat on disk.
+case "$ROOT_RAW" in
+/*) ;;
+*)
+	die "the clone root ($ROOT_SRC) must be an absolute path: '$ROOT_RAW'. A relative one resolves against whatever directory the caller happens to be in, so this helper and dc-enter would address different clones from the same $ROOT_SRC."
+	;;
+esac
 # Refused for the same reason dc-enter refuses it, so the two helpers agree on
 # which roots exist at all: dc-enter cannot create a clone under a
 # newline-containing root, so there is never one here to remove.
-case "$ROOT" in
+case "$ROOT_RAW" in
 *"
 "*)
 	die "the clone root ($ROOT_SRC) must not contain a newline; dc-enter refuses to create a clone under one, so there is nothing here to remove."
+	;;
+esac
+canon "$ROOT_RAW" || die "could not canonicalize the clone root ($ROOT_SRC): '$ROOT_RAW'"
+ROOT="$CANON_RESULT"
+[ "$ROOT" != "/" ] || die "the clone root ($ROOT_SRC) must not be the filesystem root"
+# Re-applied to the resolved root, which can carry a newline the raw value never
+# had when a symlinked component resolves into a directory whose real name has
+# one — again matching dc-enter, which refuses to create a clone there.
+case "$ROOT" in
+*"
+"*)
+	die "the clone root ($ROOT_SRC='$ROOT_RAW') resolves to a path containing a newline; dc-enter refuses to create a clone under one, so there is nothing here to remove."
 	;;
 esac
 
@@ -341,7 +398,8 @@ read_marker "$MARKER" ||
 [ "$MARKER_SOURCE" = "$SRC_TOP" ] ||
 	die "refusing: '$MARKER' records source repository '$MARKER_SOURCE', not the '$SRC_TOP' this invocation was run from"
 
-RESOLVED="$(canon "$SESSION_DIR")" || die "could not canonicalize '$SESSION_DIR'"
+canon "$SESSION_DIR" || die "could not canonicalize '$SESSION_DIR'"
+RESOLVED="$CANON_RESULT"
 [ "$RESOLVED" = "$SESSION_DIR" ] ||
 	die "refusing: '$SESSION_DIR' resolves to '$RESOLVED' (symlinked out of the clone root)"
 path_within "$RESOLVED" "$SCOPE_DIR" ||
