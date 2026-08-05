@@ -449,8 +449,9 @@ const duplicatedRefs = duplicatedItems.map(
 // wrong-but-nonempty commentId would thread the reply under one comment while
 // resolving another thread. The JSON schema cannot make fields conditionally
 // required, and the entry's own claim cannot be trusted for this check, so
-// judge against the gathered items (identity only — the reviewer judges
-// substance): flag any entry typed `review-thread` whose threadId is not a
+// judge against the gathered items (their identity here, their echoed author
+// fields further down — the reviewer judges substance, never this): flag any
+// entry typed `review-thread` whose threadId is not a
 // gathered thread's or whose commentId is not that thread's top comment, and
 // any entry matching a gathered thread's threadId that is not typed for it.
 //
