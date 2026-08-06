@@ -184,13 +184,25 @@
 # are present either way: a clone from a local PATH copies the whole object
 # store rather than negotiating a pack, so even objects that no ref reaches come
 # across, and a hidden ref therefore always has its object waiting for it — with
-# two exceptions, one repaired here and one refused up front. An object the
-# source itself only BORROWS from an alternate is not in the copied store, which
-# is why the dissociation that stops the borrowing is deferred until after this
-# mirror rather than done by `git clone --dissociate`. An object a PARTIAL clone
-# left on its promisor remote is not in the source's store either, and no local
-# operation can bring it in, so such a source is refused before anything is
-# created — see the partial-clone refusal at the source checks.
+# three exceptions: one repaired here, one refused up front, and one that fails
+# loudly instead of quietly.
+# An object the source itself only BORROWS from an alternate is not in the copied
+# store, which is why the dissociation that stops the borrowing is deferred until
+# after this mirror rather than done by `git clone --dissociate`.
+# An object a PARTIAL clone left on its promisor remote is not in the source's
+# store either, and only a fetch from that remote brings it in — the caller's
+# network to spend, not this helper's — so such a source is refused before
+# anything is created; see the partial-clone refusal at the source checks.
+# A SHALLOW source gets no local copy at all: git declines the optimization for
+# one ("warning: source repository is shallow, ignoring --local", measured
+# identically on 2.36.6 and 2.47.3) and negotiates a pack instead. So the clone
+# holds what that fetch brought, with a matching `shallow` boundary, and an
+# ordinary shallow source clones fine — but a ref outside the namespaces the
+# fetch covers can reach an object it did not bring, and the mirror below then
+# dies with "trying to write ref ... with nonexistent object". A shallow checkout
+# carrying a stash is exactly that. Nothing is handed back when it happens, which
+# is why this one needs no refusal of its own: it is the loud failure, not the
+# silently wrong baseline the partial-clone case would be.
 # A source ref that is SYMBOLIC arrives symbolic, at the same target, rather
 # than flattened to the object id a plain copy would record.
 # NOT carried: a symbolic ref whose target does not exist — `for-each-ref` does
@@ -701,18 +713,16 @@ SRC_GIT_DIR="$CAPTURED_PATH"
 # this helper can show is complete. An explicit `false` does not, because that is
 # git declining to treat the remote as a promisor — but it does not veto a
 # `partialclonefilter` beside it, for the same reason git's parser does not.
-# A SHALLOW source needs no such refusal and gets none: `git clone` of a local
-# path copies `.git/shallow` along with the objects, so the clone has the same
-# grafted boundary as the source rather than a truncated history it believes is
-# whole. Measured — `rev-list --count` agrees and `fsck --connectivity-only`
-# passes in the clone.
-# Read with the caller's COMMAND-SCOPE config restored — the two variables saved
-# above — because git acts on it when the caller reads this repository, so a
-# promisor marker injected that way is as real as one in a config file. Left
-# stripped, such a marker slipped past this refusal; it was still caught, but
-# only by the surviving-remote check after the clone had been built, and only
-# because a `remote.<name>.*` marker also makes that remote visible there —
-# which an `extensions.partialClone` injected the same way does not.
+# A SHALLOW source is a different shape and gets no marker check: it cannot fail
+# QUIETLY, which is the only failure this refusal exists to prevent. See the
+# shallow paragraph in the ref-namespace note.
+# The two `remote.<name>.*` keys are read with the caller's COMMAND-SCOPE config
+# restored — the two variables saved above — because git's promisor parser reads
+# ordinary merged configuration, command-scope included, so a marker injected
+# that way is as real as one in a config file. Measured: a source with no marker
+# of its own fetched lazily under an injected one. Left stripped, such a marker
+# slipped past this refusal and was caught only by the surviving-remote check
+# after the clone had been built.
 PROMISOR_CONFIG_RC=0
 PROMISOR_KEYS="$(env ${SAVED_CONFIG_ENV[@]+"${SAVED_CONFIG_ENV[@]}"} git -C "$SRC_TOP" config --name-only --get-regexp '^remote\..*\.(promisor|partialclonefilter)$')" ||
 	PROMISOR_CONFIG_RC=$?
@@ -720,7 +730,7 @@ PROMISOR_KEYS="$(env ${SAVED_CONFIG_ENV[@]+"${SAVED_CONFIG_ENV[@]}"} git -C "$SR
 # clone. Anything else means the question was not answered, and a helper that
 # cannot tell must not proceed to hand back a clone it cannot vouch for.
 [ "$PROMISOR_CONFIG_RC" -eq 0 ] || [ "$PROMISOR_CONFIG_RC" -eq 1 ] ||
-	die "could not ask git whether the invoking repository is a partial clone: 'git config --name-only --get-regexp remote.*.(promisor|partialclonefilter)' exited $PROMISOR_CONFIG_RC"
+	die "could not ask git whether the invoking repository is a partial clone: 'git config --name-only --get-regexp ^remote\\..*\\.(promisor|partialclonefilter)\$' exited $PROMISOR_CONFIG_RC"
 SRC_PARTIAL_MARKER=""
 while IFS= read -r promisor_key; do
 	[ -n "$promisor_key" ] || continue
@@ -754,15 +764,24 @@ while IFS= read -r promisor_key; do
 	break
 done <<<"$PROMISOR_KEYS"
 if [ -z "$SRC_PARTIAL_MARKER" ]; then
+	# Read from the repository's OWN config, and NOT with the command-scope
+	# variables restored — the opposite of the two keys above, because git reads
+	# it in the opposite place. It is a repository-format extension, taken from
+	# the repository's config file, so `-c extensions.partialClone=origin`, the
+	# same key in `GIT_CONFIG_PARAMETERS`, and one in a global file all leave the
+	# repository whole. Measured on 2.36.6 and 2.47.3: injected either way the
+	# source did NOT fetch lazily, and did the moment the same key was written
+	# into its own config. Asking any wider here would refuse repositories git
+	# itself considers complete.
 	PROMISOR_CONFIG_RC=0
-	env ${SAVED_CONFIG_ENV[@]+"${SAVED_CONFIG_ENV[@]}"} git -C "$SRC_TOP" config --get extensions.partialClone >/dev/null ||
+	git -C "$SRC_TOP" config --local --get extensions.partialClone >/dev/null ||
 		PROMISOR_CONFIG_RC=$?
 	[ "$PROMISOR_CONFIG_RC" -eq 0 ] || [ "$PROMISOR_CONFIG_RC" -eq 1 ] ||
-		die "could not ask git whether the invoking repository is a partial clone: 'git config --get extensions.partialClone' exited $PROMISOR_CONFIG_RC"
+		die "could not ask git whether the invoking repository is a partial clone: 'git config --local --get extensions.partialClone' exited $PROMISOR_CONFIG_RC"
 	[ "$PROMISOR_CONFIG_RC" -ne 0 ] || SRC_PARTIAL_MARKER=extensions.partialClone
 fi
 [ -z "$SRC_PARTIAL_MARKER" ] ||
-	die "refusing: the invoking repository is a partial clone ('$SRC_PARTIAL_MARKER' is set), so part of its history lives on a promisor remote and arrives only when something asks for it. A local clone copies the objects that are here and inherits none of that configuration, so a clone of it can carry refs whose objects it can neither find nor fetch — and a read of one either fails or, with a tree filter, reports that a path present in this repository does not exist, inside a clone this helper had just reported as a faithful copy of it. Fetching those objects here would mean an unbounded network fetch nobody asked for; leaving them fetchable would mean handing back a clone still tied to a repository outside it. Run $PROG from a full clone of this repository instead. This refusal reads the partial-clone CONFIGURATION rather than traversing the history to re-derive completeness on every run, so it is deliberately over-inclusive: if every object has in fact been materialized, this repository is not broken, but the refusal still stands while that configuration is there."
+	die "refusing: the invoking repository is CONFIGURED as a partial clone ('$SRC_PARTIAL_MARKER' is set), so git records part of its history as living on a promisor remote, to be fetched when something asks for it. A local clone copies the objects that are here and inherits none of that configuration, so a clone of it can carry refs whose objects it can neither find nor fetch — and a read of one either fails or, with a tree filter, reports that a path present in this repository does not exist, inside a clone this helper had just reported as a faithful copy of it. Fetching those objects here would mean an unbounded network fetch nobody asked for; leaving them fetchable would mean handing back a clone still tied to a repository outside it. Run $PROG from a full clone of this repository instead. This refusal reads the partial-clone CONFIGURATION rather than traversing the history to re-derive completeness on every run, so it is deliberately over-inclusive: if every object has in fact been materialized, this repository is not broken, but the refusal still stands while that configuration is there."
 
 if [ -n "$REF_SEEN" ]; then REF_ARG="$REF"; else REF_ARG="HEAD"; fi
 # What the caller actually wrote, kept for diagnostics: REF_ARG is rewritten to a

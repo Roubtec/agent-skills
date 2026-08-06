@@ -736,26 +736,90 @@ assert_true "b: ... before creating anything under the clone root" \
 assert_eq "b: ... git itself still fetching lazily despite that trailing false" \
 	"$(git -C "$PARTIAL_MULTI_SRC" cat-file -p refs/remotes/origin/other:big.txt)" "fetched on demand"
 
-# The marker in COMMAND-SCOPE config rather than a file. git acts on
-# `GIT_CONFIG_COUNT`/`GIT_CONFIG_PARAMETERS` when the caller reads the source, so
-# a marker there is as real as one in .git/config — and dc-enter strips those
-# variables from its own commands, which is why the check restores them. The
-# `extensions.partialClone` spelling is the one that matters: a `remote.<name>.*`
-# marker injected this way is caught by the surviving-remote check anyway, just
-# later and for a different reason, while this one would reach nothing at all.
+# A promisor marker in COMMAND-SCOPE config rather than a file. git's promisor
+# parser reads ordinary merged configuration, so a marker in
+# `GIT_CONFIG_COUNT`/`GIT_CONFIG_PARAMETERS` is as real as one in .git/config —
+# measured, a source with no marker of its own fetches lazily under an injected
+# one. dc-enter strips those variables from its own commands, which is why this
+# check restores them. The refusal reason is asserted, not just the exit status:
+# an injected `remote.<name>.*` marker also makes that remote visible to the
+# surviving-remote check, so a helper that could not see it at all still exits
+# non-zero — for the wrong reason, after building the clone.
 PARTIAL_ENV_SRC="$WORK/b/partial-env-src"
 git init -q -b main "$PARTIAL_ENV_SRC"
 g -C "$PARTIAL_ENV_SRC" commit -q --allow-empty -m one
-git -C "$PARTIAL_ENV_SRC" config core.repositoryformatversion 1
 PARTIAL_ENV_ROOT="$WORK/b/partial-env-root"
 in_repo "$PARTIAL_ENV_SRC" env "DC_ROOT=$PARTIAL_ENV_ROOT" \
-	"GIT_CONFIG_COUNT=1" "GIT_CONFIG_KEY_0=extensions.partialClone" "GIT_CONFIG_VALUE_0=origin" \
+	"GIT_CONFIG_COUNT=1" "GIT_CONFIG_KEY_0=remote.origin.promisor" "GIT_CONFIG_VALUE_0=true" \
 	"$DC_ENTER" partialenv
-assert_ne "b: a command-scope partial-clone marker is refused" "$RC" 0
+assert_ne "b: a command-scope promisor marker is refused" "$RC" 0
 assert_eq "b: ... silently on stdout" "$OUT" ""
-assert_contains "b: ... naming that marker" "$ERR" "extensions.partialClone"
+assert_contains "b: ... as a partial clone, naming that marker" "$ERR" "remote.origin.promisor"
 assert_true "b: ... before creating anything under the clone root" \
 	"$([ -e "$PARTIAL_ENV_ROOT" ] && echo false || echo true)"
+
+# ... and the boundary on the other side, which is where git's two readers
+# differ. `extensions.partialClone` is a repository-format extension, read from
+# the repository's OWN config file, so injecting it command-scope leaves the
+# repository whole — measured, the source did NOT fetch lazily under it — and
+# refusing over it would turn away a repository git itself considers complete.
+PARTIAL_EXTENV_SRC="$WORK/b/partial-extenv-src"
+git init -q -b main "$PARTIAL_EXTENV_SRC"
+g -C "$PARTIAL_EXTENV_SRC" commit -q --allow-empty -m one
+in_repo "$PARTIAL_EXTENV_SRC" env \
+	"GIT_CONFIG_COUNT=1" "GIT_CONFIG_KEY_0=extensions.partialClone" "GIT_CONFIG_VALUE_0=origin" \
+	"$DC_ENTER" extensionenv
+assert_eq "b: a command-scope extensions.partialClone is not a partial clone" "$RC" 0
+require_clone CLONE_EXTENV "b: extensionenv"
+assert_eq "b: ... and its clone holds the source's history" \
+	"$(git -C "$CLONE_EXTENV" rev-list --count --all)" "1"
+
+# A SHALLOW source, the third shape whose object store a local clone does not
+# copy wholesale — git declines the optimization for one entirely ("source
+# repository is shallow, ignoring --local") and negotiates a pack instead. It
+# needs no refusal because it cannot fail quietly, and both halves of that are
+# pinned: an ordinary shallow source clones with a matching boundary, and one
+# whose refs reach past what the fetch brought dies at the mirror with nothing
+# handed back.
+SHALLOW_UP="$WORK/b/shallow-upstream"
+git init -q -b main "$SHALLOW_UP"
+for shallow_n in 1 2 3 4; do
+	g -C "$SHALLOW_UP" commit -q --allow-empty -m "c$shallow_n"
+done
+SHALLOW_SRC="$WORK/b/shallow-src"
+git clone -q --depth 2 --no-local "$SHALLOW_UP" "$SHALLOW_SRC"
+assert_true "b: the shallow fixture really is shallow" \
+	"$(git -C "$SHALLOW_SRC" rev-parse --is-shallow-repository)"
+in_repo "$SHALLOW_SRC" "$DC_ENTER" shallowok
+assert_eq "b: an ordinary shallow source still yields a clone" "$RC" 0
+require_clone CLONE_SHALLOW "b: shallowok"
+assert_true "b: ... which is shallow in the same way" \
+	"$(git -C "$CLONE_SHALLOW" rev-parse --is-shallow-repository)"
+assert_eq "b: ... with the source's own history boundary, not a deeper claim" \
+	"$(git -C "$CLONE_SHALLOW" rev-list --count HEAD)" "$(git -C "$SHALLOW_SRC" rev-list --count HEAD)"
+in_repo "$CLONE_SHALLOW" git fsck --no-progress --no-dangling --connectivity-only
+assert_eq "b: ... passing fsck" "$RC" 0
+
+# The loud half: a stash in a shallow checkout is a ref outside the namespaces
+# the fetch covers, reaching a parent the shallow boundary cut off. The mirror
+# cannot write it, so the run dies rather than handing back a clone missing it.
+SHALLOW_STASH_SRC="$WORK/b/shallow-stash-src"
+git clone -q --depth 2 --no-local "$SHALLOW_UP" "$SHALLOW_STASH_SRC"
+printf 'work in progress\n' >"$SHALLOW_STASH_SRC/wip.txt"
+g -C "$SHALLOW_STASH_SRC" add wip.txt
+g -C "$SHALLOW_STASH_SRC" stash -q
+assert_ne "b: the shallow-stash fixture really has a stash" \
+	"$(git -C "$SHALLOW_STASH_SRC" rev-parse --verify --quiet refs/stash || echo none)" "none"
+SHALLOW_STASH_ROOT="$WORK/b/shallow-stash-root"
+in_repo "$SHALLOW_STASH_SRC" env "DC_ROOT=$SHALLOW_STASH_ROOT" "$DC_ENTER" shallowstash
+assert_ne "b: a shallow source whose refs outrun the fetch fails rather than hands one back" "$RC" 0
+assert_eq "b: ... silently on stdout" "$OUT" ""
+assert_contains "b: ... saying the mirror could not be completed" "$ERR" "could not mirror the source's refs into the clone"
+# This one dies mid-run rather than refusing up front, so the clone root exists
+# by then; what must not survive is the half-built clone itself, which the failed
+# -session cleanup removes.
+assert_eq "b: ... leaving no half-built clone behind" \
+	"$(find "$SHALLOW_STASH_ROOT" -mindepth 1 -maxdepth 3 -name repo | wc -l | tr -d '[:space:]')" "0"
 
 # And the boundary the refusal is held to: `remote.<name>.promisor` explicitly
 # set to false is git saying this remote is NOT a promisor, so the repository is
