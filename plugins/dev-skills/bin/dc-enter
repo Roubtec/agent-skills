@@ -185,10 +185,19 @@
 # store rather than negotiating a pack, so even objects that no ref reaches come
 # across, and a hidden ref therefore always has its object waiting for it — with
 # three exceptions: one repaired here, one refused up front, and one bounded and
-# stated.
+# stated. Two of them share a further bound, on the UNREACHABLE half of that
+# promise specifically; each says so where it is described.
 # An object the source itself only BORROWS from an alternate is not in the copied
 # store, which is why the dissociation that stops the borrowing is deferred until
-# after this mirror rather than done by `git clone --dissociate`.
+# after this mirror rather than done by `git clone --dissociate`. That repair
+# reaches exactly as far as the mirrored refs do, because it works by `repack
+# -a`: an object NO ref reaches does not survive it — neither one living only in
+# the donor, nor one that was packed in the source while still reachable and has
+# since stopped being. Measured against its own control: the same
+# packed-then-unreferenced commit comes across from a non-borrowing source and is
+# absent from a borrowing one's clone, with the run exiting 0 and saying nothing.
+# So for a borrowing source the unreachable-object property above holds only for
+# objects some ref still names.
 # An object a PARTIAL clone left on its promisor remote is not in the source's
 # store either, and only a fetch from that remote brings it in — the caller's
 # network to spend, not this helper's — so such a source is refused before
@@ -212,8 +221,9 @@
 # carrying a stash is that case, the missing object being the stash commit itself
 # rather than anything the boundary cut off.
 # QUIETLY, and this is the bound to know: an object NO ref reaches does not come
-# across either, so the unreachable-object property claimed above does NOT hold
-# for a shallow source. Measured — a dangling blob in one is absent from its
+# across either, so the unreachable-object property claimed above does not hold
+# here — the same half of it the borrowing source above loses, reached by a
+# different route. Measured — a dangling blob in one is absent from its
 # clone, with the run exiting 0 and printing nothing. The refs that do arrive are
 # exact and the isolation guarantee is untouched; what such a clone cannot answer
 # is "was this unreferenced object still there?".
@@ -730,7 +740,8 @@ SRC_GIT_DIR="$CAPTURED_PATH"
 # remote if the first has not already, so a filter-only source lazily fetches
 # exactly the same way, measured — plus `extensions.partialClone`, which names
 # the one remote a repository may designate that way; git tries it LAST of its
-# promisor remotes rather than first, so "the default" would misdescribe it. All three are read, because which of
+# promisor remotes rather than first, so "the default" would misdescribe it.
+# All three are read, because which of
 # them a repository carries is a function of the git that made it and of what has
 # been done to it since: measured, both 2.36.6 and 2.47.3 write the first two and
 # neither writes the third, and removing either of the pair leaves the other
@@ -1184,7 +1195,9 @@ mv -f -- "$MARKER_TMP" "$MARKER" || die "could not put the clone marker in place
 # Dissociation — making "independent object store" true for a source that is
 # ITSELF a borrowing clone — is deliberately NOT `git clone --dissociate` here,
 # and happens after the ref mirror below instead. A local clone copies the
-# source's `.git/objects/info/alternates` verbatim, so cloning a
+# source's `.git/objects/info/alternates` verbatim — wherever git takes the local
+# path at all, which for a shallow source it does not, so that one arrives with
+# no alternates file and nothing below runs. For every other source, cloning a
 # `--shared`/`--reference` repository hands back a clone still borrowing from
 # that third repository, holding no local copy of the borrowed objects and
 # breaking outright the moment the external store is pruned or removed. That much

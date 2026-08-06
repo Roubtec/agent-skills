@@ -915,6 +915,54 @@ require_clone CLONE_PROMISOR_OFF "b: promisoroff"
 assert_eq "b: ... and its clone holds the source's history" \
 	"$(git -C "$CLONE_PROMISOR_OFF" rev-list --count --all)" "1"
 
+# The bound on that repair, which the two cases above do not reach: it works by
+# `repack -a`, so it carries exactly what the mirrored refs reach and an object
+# NO ref reaches does not survive it. The fixture is the shape where that bites
+# without anyone doing anything unusual — a commit packed while it was still on a
+# branch, the branch then deleted and the reflog expired. Its control is the same
+# history in a NON-borrowing source, which is what makes this a statement about
+# borrowing rather than about dc-enter: there the object comes across.
+ALT3_DONOR="$WORK/b/alt3-donor"
+ALT3_PLAIN_DONOR="$WORK/b/alt3-plain-donor"
+git init -q -b main "$ALT3_DONOR"
+g -C "$ALT3_DONOR" commit -q --allow-empty -m one
+git init -q -b main "$ALT3_PLAIN_DONOR"
+g -C "$ALT3_PLAIN_DONOR" commit -q --allow-empty -m one
+# Pack the commit while it is still reachable, then strand it. `repack -a -d`
+# keeps unreachable LOOSE objects but not unreachable packed ones, so the loose
+# spelling of this fixture would prove nothing.
+strand_a_packed_commit() {
+	local dir="$1"
+	g -C "$dir" checkout -q -b temp
+	g -C "$dir" commit -q --allow-empty -m doomed
+	git -C "$dir" rev-parse HEAD
+	git -C "$dir" repack -q -a -d
+	g -C "$dir" checkout -q main
+	git -C "$dir" branch -q -D temp
+	git -C "$dir" reflog expire --expire=now --all
+}
+ALT3_SRC="$WORK/b/alt3-src"
+git clone -q --shared "$ALT3_DONOR" "$ALT3_SRC"
+ALT3_STRANDED="$(strand_a_packed_commit "$ALT3_SRC")"
+ALT3_PLAIN_SRC="$WORK/b/alt3-plain-src"
+git clone -q --no-hardlinks "$ALT3_PLAIN_DONOR" "$ALT3_PLAIN_SRC"
+ALT3_PLAIN_STRANDED="$(strand_a_packed_commit "$ALT3_PLAIN_SRC")"
+assert_eq "b: the borrowing source still holds its stranded packed commit" \
+	"$(git -C "$ALT3_SRC" cat-file -t "$ALT3_STRANDED")" "commit"
+assert_eq "b: ... and so does the non-borrowing control" \
+	"$(git -C "$ALT3_PLAIN_SRC" cat-file -t "$ALT3_PLAIN_STRANDED")" "commit"
+in_repo "$ALT3_SRC" "$DC_ENTER" altunreachable
+assert_eq "b: a borrowing source with a stranded object still yields a clone" "$RC" 0
+require_clone CLONE_ALT3 "b: altunreachable"
+assert_eq "b: ... quietly, with nothing said on stderr" "$ERR" ""
+assert_eq "b: ... but WITHOUT that object, which the dissociation's repack cannot reach" \
+	"$(git -C "$CLONE_ALT3" cat-file -t "$ALT3_STRANDED" 2>/dev/null || echo absent)" "absent"
+in_repo "$ALT3_PLAIN_SRC" "$DC_ENTER" plainunreachable
+assert_eq "b: the non-borrowing control yields a clone too" "$RC" 0
+require_clone CLONE_ALT3_PLAIN "b: plainunreachable"
+assert_eq "b: ... and DOES carry its stranded object" \
+	"$(git -C "$CLONE_ALT3_PLAIN" cat-file -t "$ALT3_PLAIN_STRANDED" 2>/dev/null || echo absent)" "commit"
+
 # `includeIf "onbranch:<pattern>"` makes part of the caller's merged
 # configuration depend on the branch HEAD is on. A remote defined that way is
 # invisible while the clone is detached and live the moment HEAD is attached to
