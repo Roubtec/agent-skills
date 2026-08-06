@@ -1089,6 +1089,33 @@ rm -f -- "$WT2_GIT_DIR/NOTES_MERGE_REF" "$WT2_GIT_DIR/ORIG_HEAD"
 g -C "$SRC2" update-ref --no-deref -d refs/dc-chain
 g -C "$SRC2" branch -q -D NOTES_MERGE_REF
 g -C "$SRC2" branch -q -D dc-referent
+
+# The root ref above is not the only name that can win ahead of
+# `refs/heads/<name>`: the ladder puts exactly three there — `<name>` itself,
+# `refs/<name>`, and `refs/tags/<name>` — and the two below are the other two.
+# Aimed at the SAME-NAMED branch each is a symref git resolves THROUGH to that
+# branch, so git's answer IS the branch and the clone checks it out rather than
+# detaching, exactly as the root-ref shape does. Pinned because the header states
+# all three coincide this way, and only the root-ref route was covered.
+for winner in refs tags; do
+	case "$winner" in
+	refs) win_ref="refs/dc-symwin" ;;
+	tags) win_ref="refs/tags/dc-symwin" ;;
+	esac
+	g -C "$SRC2" branch -q dc-symwin main~1
+	g -C "$SRC2" symbolic-ref "$win_ref" refs/heads/dc-symwin
+	assert_eq "c: the $win_ref fixture really is a symref onto the same-named branch" \
+		"$(git -C "$SRC2" symbolic-ref "$win_ref")" "refs/heads/dc-symwin"
+	in_repo "$WT2" "$DC_ENTER" "symwin-$winner" dc-symwin
+	assert_eq "c: a $win_ref symref aimed at the same-named branch exits 0" "$RC" 0
+	assert_eq "c: ... and that branch is checked out, not detached" \
+		"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "refs/heads/dc-symwin"
+	assert_eq "c: ... at the branch's commit" \
+		"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$SRC2" rev-parse refs/heads/dc-symwin)"
+	# `--no-deref` first, or the deletion follows the symref onto the branch.
+	g -C "$SRC2" update-ref --no-deref -d "$win_ref"
+	g -C "$SRC2" branch -q -D dc-symwin
+done
 # The whitespace git skips after `ref:`, and the whitespace that ends an object
 # id, are ASCII whitespace: git's `isspace` is its own ASCII-only one
 # (`sane-ctype.h`), never the locale's. A U+2003 EM SPACE is whitespace to a
