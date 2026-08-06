@@ -39,18 +39,22 @@ set -euo pipefail
 #       main worktree's), branch/tag/sha/rev forms, a short name that is both a
 #       branch and a tag resolving to the branch, a qualified ref and a
 #       $GIT_DIR pseudo-ref each still winning over a branch named literally
-#       like it — in every spelling git's own parser takes, upper-case hex, any
-#       run of whitespace after `ref:`, and a target written on the line BELOW it
-#       included — while a same-named $GIT_DIR file whose CONTENT is not a ref
-#       (COMMIT_EDITMSG and its all-caps kin, an empty root-ref file, a listed
-#       name holding prose, a BISECT_START holding a branch name, a dangling
-#       NOTES_MERGE_REF, a symref carrying a second line under its target, and a
-#       bare id of the OTHER hash width, which git reads as broken) leaves the
-#       branch checked out; a MERGE_RR, whose rerere id names no object, refused
-#       rather than answered with the branch; an unanswerable
-#       --show-object-format refused rather than guessed; a local head whose name
-#       begins with a dash checked out rather than parsed as options; and refusal
-#       on a bad ref
+#       like it — in every spelling git's own rules resolve, upper-case hex, any
+#       run of whitespace after `ref:`, a target written on the line BELOW it, a
+#       symref aimed at another root ref or at HEAD or through a chain, and a
+#       one-level file no root-ref list carries (COMMIT_EDITMSG holding an id, a
+#       lower-case name) included — while a same-named $GIT_DIR file whose
+#       CONTENT is not a ref (COMMIT_EDITMSG and its all-caps kin holding prose,
+#       an empty root-ref file, a BISECT_START holding a branch name, a dangling
+#       NOTES_MERGE_REF, a symref carrying a second line under its target, a bare
+#       id of the OTHER hash width, and either padded with a non-ASCII space git
+#       does not treat as whitespace) leaves the branch checked out; a MERGE_RR
+#       whose rerere id names no object refused rather than answered with the
+#       branch, while the same name with no rerere file underneath is an ordinary
+#       branch again; the branch-over-tag preference held to the plain tag rather
+#       than extended to a root ref aimed at one; a local head whose name begins
+#       with a dash checked out rather than parsed as options; and refusal on a
+#       bad ref
 #   (d) the ref namespace: an exact mirror of the source's refs, demonstrated on
 #       a source carrying refs outside refs/heads/ and refs/tags/ — including one
 #       hiding a namespace from upload-pack, which a refspec fetch would drop
@@ -671,14 +675,14 @@ g -C "$SRC2" branch -q -D "tags/ambig"
 # `refs/heads/<name>` — so in a repository stopped mid-rebase, mid-merge,
 # mid-cherry-pick, mid-bisect or mid-notes-merge that also
 # carries a branch called `ORIG_HEAD`, the caller's `ORIG_HEAD` is the pseudo-ref.
-# Detecting them is the one existence probe dc-enter cannot make with a plain
-# `git show-ref --verify`: that command only learned to report a bare root ref in
-# git 2.45, and the helper supports 2.36+, so on 2.43 it answers "no" for every
-# pseudo-ref here. The helper therefore asks both that way and by the
-# `$GIT_DIR/<name>` file, which is where every git old enough to lack the support
-# keeps them. This suite runs on one git at a time and so pins the BEHAVIOR
-# rather than either mechanism; getting it wrong hands back the branch's commit
-# while the caller's own `git rev-parse ORIG_HEAD` names the other one.
+# Detecting them is the one existence question `git show-ref --verify` cannot
+# answer for dc-enter: that command only learned to report a bare root ref in git
+# 2.45, and the helper supports 2.36+, so on 2.43 it answers "no" for every
+# pseudo-ref here. dc-enter therefore asks `git rev-parse --symbolic-full-name`
+# instead, which has no such limitation — but this suite pins the BEHAVIOR rather
+# than the mechanism, so it stays valid whatever the helper asks. Getting it
+# wrong hands back the branch's commit while the caller's own `git rev-parse
+# ORIG_HEAD` names the other one.
 # These are per-WORKTREE, which is the shape that matters: dc-enter resolves in
 # the INVOKING worktree, so the fixture writes them into that worktree's own git
 # directory rather than the shared one.
@@ -729,6 +733,37 @@ for nonref in COMMIT_EDITMSG MERGE_MSG SQUASH_MSG MERGE_MODE; do
 	rm -f -- "$WT2_GIT_DIR/$nonref"
 	g -C "$SRC2" branch -q -D "$nonref"
 done
+# ... and the same rule read the other way round, which is what pins that the
+# decision is CONTENT rather than a list of blessed names: git resolves any
+# one-level `$GIT_DIR` file whose content is a ref, whatever it is called, so a
+# `COMMIT_EDITMSG` holding nothing but an object id — a commit message that is
+# one — really is what `git rev-parse COMMIT_EDITMSG` names, and so is a
+# lower-case name no root-ref list would ever carry. Answering either with the
+# same-named branch is the wrong baseline in its usual shape.
+# The two sit in different directories, which is the one place the name does
+# decide something: an all-caps one-level name is a pseudo-ref and so is read
+# per-WORKTREE, while any other one-level name is an ordinary ref read from the
+# COMMON git directory. Both are still resolved from the invoking worktree.
+for oidfile in COMMIT_EDITMSG dc_lower_one_level; do
+	oidfile_slug="$(printf '%s' "$oidfile" | tr 'A-Z_' 'a-z-')"
+	case "$oidfile" in
+	COMMIT_EDITMSG) oidfile_dir="$WT2_GIT_DIR" ;;
+	*) oidfile_dir="$(git -C "$WT2" rev-parse --path-format=absolute --git-common-dir)" ;;
+	esac
+	g -C "$SRC2" branch -q "$oidfile" main
+	git -C "$WT2" rev-parse --verify main~1 >"$oidfile_dir/$oidfile"
+	assert_ne "c: the $oidfile fixture's id and the same-named branch differ" \
+		"$(git -C "$WT2" rev-parse --verify "$oidfile")" \
+		"$(git -C "$WT2" rev-parse --verify "refs/heads/$oidfile")"
+	in_repo "$WT2" "$DC_ENTER" "oidfile-$oidfile_slug" "$oidfile"
+	assert_eq "c: a $oidfile holding an object id exits 0" "$RC" 0
+	assert_eq "c: the $oidfile branch does not win over it: HEAD detaches" \
+		"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "DETACHED"
+	assert_eq "c: ... at the commit git rev-parse $oidfile names, not the branch's" \
+		"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$WT2" rev-parse --verify "$oidfile^{commit}")"
+	rm -f -- "$oidfile_dir/$oidfile"
+	g -C "$SRC2" branch -q -D "$oidfile"
+done
 # `MERGE_RR` sits between those two groups. What rerere writes there is records
 # rather than a ref — `<id><TAB><path><NUL>` — but git's root-ref rules read that
 # leading id, so `git rev-parse MERGE_RR` names it while `MERGE_RR^{commit}` is
@@ -745,7 +780,18 @@ assert_eq "c: ... and the source's own MERGE_RR^{commit} is fatal" \
 in_repo "$WT2" "$DC_ENTER" mergerr MERGE_RR
 assert_ne "c: MERGE_RR beside a same-named branch is refused, not answered with the branch" "$RC" 0
 assert_eq "c: ... silently on stdout" "$OUT" ""
+# That refusal is conditional on the FILE, exactly like every other root ref
+# here, and a repository not mid-rerere is the ordinary case: there `MERGE_RR` is
+# a short name like any other and `git rev-parse MERGE_RR` names the branch, so
+# refusing it would refuse a clone the caller's own git can produce.
 rm -f -- "$WT2_GIT_DIR/MERGE_RR"
+assert_eq "c: with no rerere file MERGE_RR resolves to the branch in the source" \
+	"$(git -C "$WT2" rev-parse --verify MERGE_RR)" \
+	"$(git -C "$WT2" rev-parse --verify refs/heads/MERGE_RR)"
+in_repo "$WT2" "$DC_ENTER" mergerrbranch MERGE_RR
+assert_eq "c: MERGE_RR with no rerere file exits 0" "$RC" 0
+assert_eq "c: ... and the branch is checked out, not refused" \
+	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "refs/heads/MERGE_RR"
 g -C "$SRC2" branch -q -D MERGE_RR
 # And an EMPTY root-ref file is not a pseudo-ref either: git's rules fall through
 # it to `refs/heads/<name>`. A fetch with nothing to fetch leaves `FETCH_HEAD`
@@ -891,6 +937,89 @@ assert_eq "c: ... and the branch is checked out, not detached" \
 rm -f -- "$WT2_GIT_DIR/NOTES_MERGE_REF"
 g -C "$SRC2" update-ref -d refs/notes/dc-merge
 g -C "$SRC2" branch -q -D NOTES_MERGE_REF
+# The symref cases above all aim at `refs/notes/...`, which is the referent a
+# conflicted `git notes merge` writes — and holding the referent fixed is what
+# hid a whole class: whether the symref is LIVE depends on resolving the target,
+# and the target can be any of the things git can resolve, including another
+# `$GIT_DIR` root ref. That one is the case a `show-ref --verify` on the target
+# cannot answer below git 2.45 while `git rev-parse` resolves the chain on every
+# version, so a helper that probed the referent that way handed back the
+# same-named branch on three of this suite's four supported gits. Each shape here
+# is asserted against the source's own resolution first, so the fixture is what
+# it claims to be whatever git is running.
+g -C "$SRC2" branch -q NOTES_MERGE_REF main
+g -C "$SRC2" branch -q dc-referent main~1
+git -C "$WT2" rev-parse --verify main~1 >"$WT2_GIT_DIR/ORIG_HEAD"
+g -C "$SRC2" symbolic-ref refs/dc-chain refs/heads/dc-referent
+for referent in ORIG_HEAD HEAD refs/heads/dc-referent refs/dc-chain; do
+	referent_slug="$(printf '%s' "$referent" | tr 'A-Z_/' 'a-z--')"
+	printf 'ref: %s\n' "$referent" >"$WT2_GIT_DIR/NOTES_MERGE_REF"
+	assert_ne "c: the NOTES_MERGE_REF aimed at $referent and the same-named branch differ" \
+		"$(git -C "$WT2" rev-parse --verify NOTES_MERGE_REF)" \
+		"$(git -C "$WT2" rev-parse --verify refs/heads/NOTES_MERGE_REF)"
+	in_repo "$WT2" "$DC_ENTER" "notesref-$referent_slug" NOTES_MERGE_REF
+	assert_eq "c: a NOTES_MERGE_REF aimed at $referent exits 0" "$RC" 0
+	assert_eq "c: the NOTES_MERGE_REF branch does not win over it: HEAD detaches" \
+		"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "DETACHED"
+	assert_eq "c: ... at the commit the chain through $referent names, not the branch's" \
+		"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$WT2" rev-parse --verify 'NOTES_MERGE_REF^{commit}')"
+done
+rm -f -- "$WT2_GIT_DIR/NOTES_MERGE_REF" "$WT2_GIT_DIR/ORIG_HEAD"
+# `--no-deref`, or the deletion follows the symref and removes its TARGET instead.
+g -C "$SRC2" update-ref --no-deref -d refs/dc-chain
+g -C "$SRC2" branch -q -D NOTES_MERGE_REF
+g -C "$SRC2" branch -q -D dc-referent
+# The whitespace git skips after `ref:`, and the whitespace that ends an object
+# id, are ASCII whitespace: git's `isspace` is its own ASCII-only one
+# (`sane-ctype.h`), never the locale's. A U+2003 EM SPACE is whitespace to a
+# locale-aware class and not to git, so the two files below are BROKEN for git —
+# the target `refs/heads/dc-wide ` is a name no ref has, and the id has a
+# non-whitespace character stuck to it — and git's rules fall through both to
+# `refs/heads/<name>`. A helper trimming them with a locale-aware class calls
+# each one live and detaches where the source has the branch checked out.
+g -C "$SRC2" branch -q dc-wide main~1
+g -C "$SRC2" branch -q NOTES_MERGE_REF main
+printf 'ref: refs/heads/dc-wide\xe2\x80\x83\n' >"$WT2_GIT_DIR/NOTES_MERGE_REF"
+assert_eq "c: a symref target padded with U+2003 resolves to the branch in the source" \
+	"$(git -C "$WT2" rev-parse --verify NOTES_MERGE_REF)" \
+	"$(git -C "$WT2" rev-parse --verify refs/heads/NOTES_MERGE_REF)"
+in_repo "$WT2" "$DC_ENTER" notesrefemspace NOTES_MERGE_REF
+assert_eq "c: a symref target padded with U+2003 exits 0" "$RC" 0
+assert_eq "c: ... and the branch is checked out, not detached" \
+	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "refs/heads/NOTES_MERGE_REF"
+printf '%s\xe2\x80\x83\n' "$(git -C "$WT2" rev-parse --verify main~1)" >"$WT2_GIT_DIR/NOTES_MERGE_REF"
+assert_eq "c: an object id followed by U+2003 resolves to the branch in the source" \
+	"$(git -C "$WT2" rev-parse --verify NOTES_MERGE_REF)" \
+	"$(git -C "$WT2" rev-parse --verify refs/heads/NOTES_MERGE_REF)"
+in_repo "$WT2" "$DC_ENTER" oidemspace NOTES_MERGE_REF
+assert_eq "c: an object id followed by U+2003 exits 0" "$RC" 0
+assert_eq "c: ... and the branch is checked out, not detached" \
+	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "refs/heads/NOTES_MERGE_REF"
+rm -f -- "$WT2_GIT_DIR/NOTES_MERGE_REF"
+g -C "$SRC2" branch -q -D NOTES_MERGE_REF
+g -C "$SRC2" branch -q -D dc-wide
+# The deliberate branch-over-tag preference, held to the case it was meant for.
+# A root ref is another way for git to arrive at `refs/tags/<name>` — a hand-
+# written `$GIT_DIR/ORIG_HEAD` holding `ref: refs/tags/ORIG_HEAD` — and there the
+# caller's own `git rev-parse ORIG_HEAD` names the TAG's commit while the
+# same-named branch sits somewhere else. Preferring the branch on the strength of
+# the tag being in the answer would substitute that other commit, which is the
+# wrong baseline the preference was never meant to buy.
+g -C "$SRC2" branch -q ORIG_HEAD main
+g -C "$SRC2" tag ORIG_HEAD main~1
+printf 'ref: refs/tags/ORIG_HEAD\n' >"$WT2_GIT_DIR/ORIG_HEAD"
+assert_ne "c: the tag-aimed ORIG_HEAD and the same-named branch differ" \
+	"$(git -C "$WT2" rev-parse --verify 'ORIG_HEAD^{commit}')" \
+	"$(git -C "$WT2" rev-parse --verify refs/heads/ORIG_HEAD)"
+in_repo "$WT2" "$DC_ENTER" tagaimedpseudoref ORIG_HEAD
+assert_eq "c: an ORIG_HEAD aimed at a same-named tag exits 0" "$RC" 0
+assert_eq "c: the ORIG_HEAD branch does not win over it: HEAD detaches" \
+	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "DETACHED"
+assert_eq "c: ... at the tag's commit, not the branch's" \
+	"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$WT2" rev-parse --verify 'ORIG_HEAD^{commit}')"
+rm -f -- "$WT2_GIT_DIR/ORIG_HEAD"
+g -C "$SRC2" tag -d ORIG_HEAD >/dev/null
+g -C "$SRC2" branch -q -D ORIG_HEAD
 # The object-id half has two boundaries of the same kind, both of them shapes git
 # ACCEPTS that a tighter reading would call prose. The first is CASE: git's hex
 # parser is `hexval()`, which takes `A`-`F` as readily as `a`-`f`, even though git
@@ -950,8 +1079,8 @@ g -C "$SRC2" branch -q -D ORIG_HEAD
 # And the far side of that width rule, on its own fixture because it is the one
 # the repository under test cannot show: in a SHA-256 repository the 64-character
 # id is the real one, and the pseudo-ref has to win there exactly as the 40 does
-# here. Narrowing to the repository's own hash length is only safe if the length
-# is actually asked for rather than assumed.
+# here. A helper that decided the width for itself would read a live id as prose
+# in one of these two repositories whichever width it picked.
 S256="$WORK/c/sha256-src"
 if git init -q -b main --object-format=sha256 "$S256" 2>/dev/null; then
 	g -C "$S256" commit -q --allow-empty -m one
@@ -967,30 +1096,16 @@ if git init -q -b main --object-format=sha256 "$S256" 2>/dev/null; then
 		"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "DETACHED"
 	assert_eq "c: ... at the commit the 64-character id names, not the branch's" \
 		"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$S256" rev-parse --verify 'ORIG_HEAD^{commit}')"
-	# That width is only right because it was ASKED for, and a wrong answer here is
-	# a WRONG baseline rather than a missed one: guessing sha1 in this repository
-	# reads a live 64-character id as prose and hands back the same-named branch.
-	# So an unanswerable `--show-object-format` stops the run. `MERGE_RR` carries
-	# the case on every git: the id below names no object, so `show-ref --verify`
-	# cannot resolve it at any version and the content parse is what decides. The
-	# shim fails that one probe and passes everything else through.
-	OBJFMT_SHIM="$WORK/c/objfmt-shim"
-	mkdir -p "$OBJFMT_SHIM"
-	{
-		echo '#!/usr/bin/env bash'
-		# The shim's own `$@`, written out literally rather than expanded here.
-		# shellcheck disable=SC2016
-		echo 'for a in "$@"; do [ "$a" = "--show-object-format" ] && exit 1; done'
-		printf 'exec %s "$@"\n' "$(command -v git)"
-	} >"$OBJFMT_SHIM/git"
-	chmod +x "$OBJFMT_SHIM/git"
+	# The sha1 fixture's `MERGE_RR` shape again at the other width, because it is
+	# the one root ref whose id names no object: `show-ref --verify` cannot resolve
+	# it at any git version, so nothing but the resolution rules themselves can
+	# decide it, and getting the width wrong here would hand back the branch.
 	g -C "$S256" branch -q MERGE_RR main
 	printf '%s\tsome/conflicted.txt\0' \
 		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" >"$S256/.git/MERGE_RR"
-	in_repo "$S256" env "PATH=$OBJFMT_SHIM:$PATH" "$DC_ENTER" objfmtunknown MERGE_RR
-	assert_ne "c: an unanswerable --show-object-format is refused, not guessed" "$RC" 0
+	in_repo "$S256" "$DC_ENTER" sha256mergerr MERGE_RR
+	assert_ne "c: a sha256 MERGE_RR is refused, not answered with the branch" "$RC" 0
 	assert_eq "c: ... silently on stdout" "$OUT" ""
-	assert_contains "c: ... naming the object format as what could not be read" "$ERR" "object format"
 	rm -f -- "$S256/.git/MERGE_RR"
 	g -C "$S256" branch -q -D MERGE_RR
 fi

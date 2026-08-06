@@ -96,37 +96,44 @@
 # pathological repository that carries a local branch named literally
 # `refs/tags/v1` or `tags/v1`, because a string git's own rules already resolve
 # to an existing ref is that ref rather than a short branch name to look up.
-# A `$GIT_DIR` PSEUDO-REF is the same story one rule earlier: git reaches
-# `ORIG_HEAD`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_HEAD`,
-# `REBASE_HEAD`, `AUTO_MERGE`, `FETCH_HEAD`, `BISECT_EXPECTED_REV`,
-# `MERGE_AUTOSTASH`, `NOTES_MERGE_PARTIAL`, `NOTES_MERGE_REF`, `BISECT_START` and
-# `MERGE_RR` in `$GIT_DIR` before `refs/heads/<name>` (that exact set, detected
-# across the whole supported git range — see source_pseudo_ref_exists), so in a
-# repository stopped mid-rebase, mid-merge, mid-bisect or mid-notes-merge that
-# also carries a branch of that name, `dc-enter probe ORIG_HEAD` detaches at the
-# pseudo-ref — the commit the caller's own `git rev-parse` names — rather than
-# checking the branch out. Pseudo-refs are per-worktree, and it is the INVOKING
-# worktree's that is read, like everything else here.
-# Whether one of those files is a ref at all is decided by its CONTENT, not by
-# its name: git resolves a `$GIT_DIR` file as a ref when it holds an object id,
-# or a symref whose target still resolves. So `COMMIT_EDITMSG`, `MERGE_MSG`,
-# `SQUASH_MSG` and `MERGE_MODE` stay out of the way because they hold a message
-# or a mode, not because of what they are called, and a branch named after one
-# is checked out like any other branch. `BISECT_START` shows both sides of the
-# same rule: a bisect started from a branch writes that branch's NAME there and
-# the branch wins, one started from a detached HEAD writes the commit and it
-# does not. `MERGE_RR` is the one of them no clone can come from: rerere's
+# A `$GIT_DIR` ROOT REF (pseudo-ref) is the same story one rule earlier: git
+# reaches `ORIG_HEAD`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `NOTES_MERGE_REF` and
+# their kin in `$GIT_DIR` before `refs/heads/<name>`, so in a repository stopped
+# mid-rebase, mid-merge, mid-bisect or mid-notes-merge that also carries a branch
+# of that name, `dc-enter probe ORIG_HEAD` detaches at the root ref's commit —
+# the one the caller's own `git rev-parse` names — rather than checking the
+# branch out at another. The one exception is a root ref that is a SYMREF aimed
+# at that same branch: git resolves it through the branch, so the branch is
+# checked out and the commit is the same either way.
+# Root refs are per-worktree, and it is the INVOKING worktree's that are read,
+# like everything else here.
+# WHICH names and which states that covers is not a list kept here: the helper
+# asks git what the caller's string resolves to and checks a branch out only when
+# git's answer is that branch, so it follows git's rules wherever they go — see
+# the branch-resolution block below. Those rules read a `$GIT_DIR` file's
+# CONTENT, not its name: it is a ref when it holds an object id, or a symref
+# whose target still resolves. That is why `COMMIT_EDITMSG`, `MERGE_MSG`,
+# `SQUASH_MSG` and `MERGE_MODE` normally stay out of the way — they hold a
+# message or a mode — and why `BISECT_START` shows both sides of the one rule: a
+# bisect started from a branch writes that branch's NAME there and the branch
+# wins, one started from a detached HEAD writes the commit and it does not.
+# `MERGE_RR` is the one no clone can come from while it is present: rerere's
 # records begin with an id that hashes conflict TEXT rather than naming an
-# object, so the caller's own `git rev-parse MERGE_RR^{commit}` is fatal, and
+# object, so the caller's own `git rev-parse MERGE_RR^{commit}` is fatal and
 # `dc-enter probe MERGE_RR` is refused rather than answered with a same-named
-# branch.
+# branch. Only while it is present, though — in a repository that is not
+# mid-rerere, `MERGE_RR` is an ordinary short name and a branch called that is
+# checked out like any other.
 # A SHORT name that is both a local branch and a tag resolves to the BRANCH:
 # gitrevisions disambiguates the other way (`refs/tags/<name>` is tried before
 # `refs/heads/<name>`), so the commit is looked up through the branch's full ref
 # name rather than through the bare name, and `dc-enter probe release` verifies
 # the branch the caller asked for instead of a same-named tag. That preference
-# is the one deliberate departure from git's resolution, and it is confined to
-# the short form.
+# is the one deliberate departure from git's resolution; it is confined to the
+# short form, and within it to a plain tag — where git reaches `refs/tags/<name>`
+# through a root ref or a `refs/<name>` aimed at it, the branch does not win,
+# because substituting its commit for the one the caller's own git names is the
+# wrong baseline this whole interface exists to avoid.
 # The default is the invoking worktree's own HEAD — a branch checkout when HEAD
 # is on a branch, detached when it is detached — NOT the repository's or the main
 # worktree's HEAD. That distinction is load-bearing: `git rev-parse
@@ -609,9 +616,8 @@ if [ -n "$DROPPED_ENV_VARS" ]; then
 fi
 
 # This worktree's own git directory, resolved once now that the environment can
-# no longer redirect it. Pseudo-refs live here (they are per-worktree, so this is
-# the worktree's `.git/worktrees/<name>` rather than the shared directory), and
-# the clone-root guard needs the same path further down.
+# no longer redirect it: the clone-root guard needs it further down, and it is
+# the worktree's own `.git/worktrees/<name>` rather than the shared directory.
 capture_path git -C "$SRC_TOP" rev-parse --absolute-git-dir ||
 	die "could not resolve this worktree's git directory"
 SRC_GIT_DIR="$CAPTURED_PATH"
@@ -621,131 +627,6 @@ if [ -n "$REF_SEEN" ]; then REF_ARG="$REF"; else REF_ARG="HEAD"; fi
 # branch's full ref name below, and reporting that back would name something the
 # caller never typed.
 REF_DISPLAY="$REF_ARG"
-
-# Does the caller's string name a `$GIT_DIR` PSEUDO-REF — `ORIG_HEAD`,
-# `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_HEAD` and their kin —
-# that actually exists in the invoking worktree? Git's revision rules reach one
-# BEFORE `refs/heads/<name>`, so a string that names one is not a short branch
-# name, however plainly a same-named branch also exists.
-# This is the one existence probe here that cannot be a plain `git show-ref
-# --verify`. That command only learned to report these `$GIT_DIR` root refs in
-# git 2.45, and this helper supports 2.36+: on 2.43 it answers "no" for every
-# pseudo-ref above, the candidate survives, and the BRANCH gets checked out while
-# the caller's own `git rev-parse ORIG_HEAD` names the other commit — the exact
-# wrong-baseline conclusion this helper exists to prevent.
-# So both forms are asked, and they cover the whole supported range between
-# them. `show-ref --verify` is backend-agnostic, which matters under the
-# reftable backend where a pseudo-ref is a ref rather than a file; the
-# `$GIT_DIR/<name>` file covers every git old enough to lack that support, all
-# of which predate reftable and so keep root refs in exactly that file.
-# WHICH NAMES: `$GIT_DIR` root files whose content git's own root-ref rules read
-# as a ref, listed rather than matched by shape so that no other caller-supplied
-# string is ever turned into a path and probed. Deliberately NOT
-# `is_root_ref`: that is a syntax rule (any all-caps name ending in `_HEAD`, plus
-# `HEAD`, `AUTO_MERGE`, `BISECT_EXPECTED_REV`, `NOTES_MERGE_PARTIAL`,
-# `NOTES_MERGE_REF` and `MERGE_AUTOSTASH`) rather than a set, and it EXCLUDES
-# `FETCH_HEAD` and `MERGE_HEAD`, two names this probe very much needs. `HEAD`
-# itself is absent because the caller's string reaches it through the plain
-# `show-ref --verify` beside this probe.
-# WHAT DECIDES whether one of them is a ref right now: the file's CONTENT, read
-# the way `parse_loose_ref_contents` reads it — the WHOLE file, rtrimmed, and
-# then either a bare object id optionally followed by whitespace and anything
-# (which is how `FETCH_HEAD` carries its extra columns) or `ref:` and a target
-# that still resolves. That parse is the decision whenever the `show-ref
-# --verify` beside it says no: always below git 2.45, which does not report any
-# of these names, and still above it for anything that command rejects — a
-# dangling id in one of these files included, since `show-ref` wants the object.
-# Three details are what reading it "the way git does" costs, each measured
-# against real git rather than reasoned about. The whole FILE, not its first
-# line: git rtrims the buffer and then walks it as one string, so its
-# `while (isspace(*buf))` steps over a newline like any other space and the
-# `strbuf_addstr` after that run takes everything left, newlines included — which
-# makes `ref:\nrefs/notes/x` a live symref and makes a second line under
-# `ref: refs/heads/x` part of the target rather than something to ignore. The hex
-# is read case-INSENSITIVELY, because `hexval()` is, even though git only ever
-# writes lower. And it is read at exactly the length THIS repository's hash
-# algorithm uses, because a bare id of the other width is not an object id to git
-# and falls through to `refs/heads/<name>`.
-# The NAME alone will not do, in either direction. It does not qualify
-# one: an EMPTY `FETCH_HEAD`, what a fetch with nothing to fetch leaves behind,
-# is a file git's rules fall straight through, on to `refs/heads/<name>`; so is a
-# `BISECT_START` holding the branch name a bisect was started from rather than a
-# detached HEAD's commit; and so is a DANGLING `NOTES_MERGE_REF`, the symref a
-# conflicted `git notes merge` leaves pointing at a notes ref that has since been
-# deleted — which is why the target is resolved rather than merely read. And the
-# name is not what disqualifies the rest either: a shape rule (all caps, no
-# slash) is what this used to be, and it was wrong in the file half because
-# `$GIT_DIR` is full of all-caps files whose CONTENT is not a ref —
-# `COMMIT_EDITMSG` exists in every repository that has ever committed, and
-# `MERGE_MSG`, `SQUASH_MSG` and `MERGE_MODE` are the same shape — so a branch
-# named after one was answered with a detached HEAD instead of the checkout the
-# `<ref>` contract above documents.
-# The bounded cost of listing by name: a `$GIT_DIR` file git writes as PROSE is
-# excluded from the list whatever it holds, so a repository whose commit message
-# is nothing but a bare object id, and which also carries a branch called
-# `COMMIT_EDITMSG`, can get that branch where git names the object. Accepted
-# deliberately: the alternative is turning an arbitrary caller string into a
-# `$GIT_DIR` path, and no repository reaches that state without having written an
-# object id where a sentence belongs.
-# `MERGE_RR` is on the list although what rerere writes there is records rather
-# than a ref: each is `<id><TAB><path><NUL>`, and git's root-ref rules read that
-# leading id, so `git rev-parse MERGE_RR` names it. The id hashes conflict TEXT
-# rather than an object, so the caller's own `git rev-parse MERGE_RR^{commit}` is
-# fatal — and listing the name is what makes this helper refuse the same string,
-# at the commit check below and before any clone is made. Left out, it checked a
-# same-named BRANCH out instead and handed back a baseline the caller's own git
-# declines to produce; measured on 2.36.6, 2.39.5, 2.43.7 and 2.47.3.
-readonly SRC_PSEUDO_REFS='ORIG_HEAD MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_HEAD REBASE_HEAD AUTO_MERGE FETCH_HEAD BISECT_EXPECTED_REV MERGE_AUTOSTASH NOTES_MERGE_PARTIAL NOTES_MERGE_REF BISECT_START MERGE_RR'
-# How many hex characters an object id has in THIS repository. Filled in on first
-# use rather than up front: only the object-id branch below reads it, and getting
-# there needs a caller who named one of the listed names, with that file present,
-# in a case the `show-ref --verify` above did not already answer.
-SRC_OID_HEXSZ=""
-source_pseudo_ref_exists() {
-	local name="$1" contents="" referent=""
-	case " $SRC_PSEUDO_REFS " in
-	*" $name "*) ;;
-	*) return 1 ;;
-	esac
-	git -C "$SRC_TOP" show-ref --verify --quiet -- "$name" 2>/dev/null && return 0
-	[ -f "$SRC_GIT_DIR/$name" ] || return 1
-	# The whole file, up to its first NUL if it has one, because git parses the
-	# buffer it read as a C string and a NUL ends the content for it too. `read -d
-	# ''` SUCCEEDING is how that is detected, and it also settles the rtrim: git
-	# trims the buffer's trailing whitespace before parsing, but a NUL is not
-	# whitespace, so a trailing run behind one never reaches the part being parsed.
-	if ! IFS= read -r -d '' contents <"$SRC_GIT_DIR/$name" 2>/dev/null; then
-		contents="${contents%"${contents##*[![:space:]]}"}"
-	fi
-	case "$contents" in
-	'ref:'*)
-		# `while (isspace(*buf))` skips whatever follows `ref:`, and everything left
-		# after that run is the target — a second line included, which is why this
-		# reads the file rather than a line: a target with a newline in it is a name
-		# no ref has, and git falls through to `refs/heads/<name>` for it.
-		referent="${contents#ref:}"
-		referent="${referent#"${referent%%[![:space:]]*}"}"
-		[ -n "$referent" ] &&
-			git -C "$SRC_TOP" show-ref --verify --quiet -- "$referent" 2>/dev/null
-		;;
-	*)
-		if [ -z "$SRC_OID_HEXSZ" ]; then
-			# Not defaulted, because a width read wrong is a WRONG BASELINE and not a
-			# missed one: in a sha256 repository, taking 40 makes a live 64-character
-			# `ORIG_HEAD` look like prose and hands back a same-named branch instead,
-			# measured on 2.43.7. `--show-object-format` has existed since git 2.29,
-			# well under this helper's floor, and the repository has already answered
-			# `rev-parse` twice above, so no answer here is a reason to stop.
-			case "$(git -C "$SRC_TOP" rev-parse --show-object-format 2>/dev/null)" in
-			sha1) SRC_OID_HEXSZ=40 ;;
-			sha256) SRC_OID_HEXSZ=64 ;;
-			*) die "could not read the invoking repository's object format, so whether '$name' holds an object id cannot be decided; refusing to guess" ;;
-			esac
-		fi
-		[[ "${contents%%[[:space:]]*}" =~ ^[0-9a-fA-F]{$SRC_OID_HEXSZ}$ ]]
-		;;
-	esac
-}
 
 # Which branch (if any) the clone should check out. With no <ref> this follows
 # the INVOKING worktree's HEAD; with one it follows the ref only when that ref
@@ -766,23 +647,64 @@ else
 	case "$REF" in
 	refs/heads/*) BRANCH_CANDIDATE="${REF#refs/heads/}" ;;
 	*)
-		BRANCH_CANDIDATE="$REF"
-		# ... but only where the caller's string is a SHORT name in the first
-		# place. git's own rev-parse rules try it as a `$GIT_DIR` pseudo-ref, then
-		# as a full ref name, then as `refs/<name>`, BEFORE they reach
-		# `refs/heads/<name>`; where any of those already exists the caller named
-		# THAT ref. Without this, a repository carrying a local branch literally
-		# named `refs/tags/v1` — a legal branch name — would answer `dc-enter probe
-		# refs/tags/v1` with that branch checked out, while `git rev-parse
-		# refs/tags/v1` in the same repository names the tag: the helper would
-		# verify a commit the caller's own ref does not point at. The
-		# branch-over-tag preference below is deliberate and unaffected, because it
-		# applies to the short form, which is the one place gitrevisions' tags-first
-		# rule surprises the caller.
-		if source_pseudo_ref_exists "$REF" ||
-			git -C "$SRC_TOP" show-ref --verify --quiet -- "$REF" 2>/dev/null ||
-			git -C "$SRC_TOP" show-ref --verify --quiet -- "refs/$REF" 2>/dev/null; then
-			BRANCH_CANDIDATE=""
+		# ... every other spelling asks GIT which ref the string names, rather
+		# than working it out here. `rev-parse --symbolic-full-name` walks the
+		# same `ref_rev_parse_rules` ladder that decides what the caller's own
+		# `git rev-parse <ref>` resolves — `<name>` itself, which is where a
+		# `$GIT_DIR` root ref lives, then `refs/<name>`, `refs/tags/<name>`,
+		# `refs/heads/<name>`, `refs/remotes/<name>` — and prints the full name of
+		# the ref it landed on, or nothing at all for a string that is no ref (a
+		# raw object id, `main~1`, an unknown name). So `refs/heads/<name>` comes
+		# back exactly when the branch is what git resolves the string to, and
+		# something else comes back whenever anything wins ahead of it: a live
+		# root ref's own name, the end of its symref chain, a tag, a
+		# remote-tracking ref, or the tag that shadows a branch named literally
+		# `refs/tags/v1`. Either way the clone lands on the commit the caller's own
+		# `git rev-parse <ref>` names — checked out as that branch when git's answer
+		# IS the branch, detached at the commit otherwise. A root ref that is a
+		# symref aimed at the same-named branch is the one place the two coincide,
+		# and it is checked out rather than detached because git resolves it
+		# THROUGH that branch, so the commit is the same either way.
+		# `core.warnAmbiguousRefs=false` is what makes that answer TOTAL, and
+		# leaving it out is what makes this look like it cannot work: with the
+		# warning on, `expand_ref` keeps walking past its first hit and rev-parse
+		# reports an ambiguity INSTEAD of a name — and every case this decision
+		# exists for is ambiguous by construction, a root ref or a tag beside a
+		# same-named branch. With it off it stops at the first hit, which is the
+		# one git resolves the string through anyway; the setting only ever
+		# governed a warning, never the choice.
+		# This block used to read `$GIT_DIR/<name>` and parse it the way
+		# `parse_loose_ref_contents` does, against a list of root-ref names. It
+		# was patched five times — hex case, `ref:` spacing, hash width, embedded
+		# newlines, NUL — and still diverged, because each fix was a guess at the
+		# next rule. Asking git cannot diverge from git, and the move closed three
+		# more shapes at once: a symref whose target is ITSELF a root ref, a
+		# locale-dependent `[[:space:]]` trim where git's `isspace` is ASCII-only,
+		# and any one-level `$GIT_DIR` file no list names — a `COMMIT_EDITMSG`
+		# that happens to hold an object id included. The `show-ref --verify`
+		# limitation that forced the file reading in the first place — it cannot
+		# report `$GIT_DIR` root refs before git 2.45 — does not reach rev-parse,
+		# which resolves root refs, and symref chains through them, on every git
+		# this helper supports; measured on 2.36.6, 2.39.5, 2.43.7 and 2.47.3.
+		BRANCH_CANDIDATE=""
+		REF_FULL_NAME="$(git -C "$SRC_TOP" -c core.warnAmbiguousRefs=false rev-parse \
+			--verify --quiet --symbolic-full-name --end-of-options "$REF" 2>/dev/null)" ||
+			REF_FULL_NAME=""
+		if [ "$REF_FULL_NAME" = "refs/heads/$REF" ]; then
+			BRANCH_CANDIDATE="$REF"
+		elif [ "$REF_FULL_NAME" = "refs/tags/$REF" ] &&
+			! git -C "$SRC_TOP" symbolic-ref --quiet -- "$REF" >/dev/null 2>&1 &&
+			! git -C "$SRC_TOP" show-ref --verify --quiet -- "refs/$REF" 2>/dev/null; then
+			# The deliberate branch-over-tag departure documented above, applied
+			# only where it was meant. git can land on `refs/tags/<name>` two
+			# other ways: a root ref `<name>`, or a `refs/<name>`, that is a
+			# SYMREF aimed at the tag — and taking the branch for either would be
+			# exactly the wrong-baseline substitution this block exists to
+			# prevent, since git names the tag's commit there and the branch's is
+			# some other. Those two are the whole remainder: a ref matched
+			# DIRECTLY resolves to its own name, so anything ahead of the tag that
+			# was not a symref could not have printed the tag's name.
+			BRANCH_CANDIDATE="$REF"
 		fi
 		;;
 	esac
