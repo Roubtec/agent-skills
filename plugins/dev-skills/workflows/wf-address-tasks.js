@@ -224,7 +224,7 @@ Run \`df -B1 --output=avail ${shq(wtBase)}\` (POSIX fallback: \`df -kP\`, avail 
 const MAIN_CHECKOUT_SCHEMA = {
   type: "object",
   properties: {
-    dirty: { type: "array", items: { type: "string" }, description: "One `git status --porcelain -z --untracked-files=all` record per changed path in the shared MAIN checkout (never a worktree): the 2-char `XY` status field, a space, then the repo-relative path (current path for a rename/copy). `--untracked-files=all` means each untracked FILE is listed on its own rather than collapsed to its directory, so files under a pre-existing untracked directory stay attributable. The `XY` prefix is preserved verbatim so the summary can tell a status-code change apart from a brand-new path. Empty when clean; ignored paths like `.worktrees/` never appear." },
+    dirty: { type: "array", items: { type: "string" }, description: "One `git status --porcelain -z --untracked-files=all` record per changed path in the shared MAIN checkout (never a worktree): the 2-char `XY` status field, a space, then the repo-relative path (current path for a rename/copy). `--untracked-files=all` means each untracked FILE is listed on its own rather than collapsed to its directory, so files under a pre-existing untracked directory stay attributable. The `XY` prefix is preserved verbatim so the summary can tell a status-code change apart from a brand-new path. Empty when clean. The reading is bounded rather than exhaustive: `git status` surfaces what it surfaces — ignored paths (`.worktrees/` among them) fall outside it, as does anything else it does not report — so an empty or unchanged list bounds what the summary may claim, never proves nothing was written." },
     measured: { type: "boolean", description: "True only if `git status` ran in the main checkout and produced a definitive list. False when it could not be measured — then `dirty` is best-effort and must not be read as authoritative." },
   },
   required: ["dirty", "measured"],
@@ -268,6 +268,14 @@ function mainCheckoutSummary(baseline, final) {
   // Finding: do not claim the WHOLE workflow was non-destructive — only the
   // observation step is guaranteed so.
   const OTHER_STAGES = "Other batch stages run in per-task worktrees and are not separately proven to have left the main checkout untouched.";
+  // The claim bound, carried by every note that could otherwise read as an
+  // all-clear. Deliberately an EXCLUSION rather than a list of blind spots: the
+  // list is open, and widening what the reading sees (individually-listed
+  // untracked files today, ignored paths tomorrow) improves the report while
+  // leaving the claim exactly this narrow. Reporting that a baseline-present
+  // path was re-classified is an observation this comparison can make; asserting
+  // that path was left alone is not.
+  const CLAIM_BOUND = "This comparison reports what its reading could see change: it claims nothing about what was written INTO paths already present in the baseline, nor about anything the reading does not surface.";
 
   // Parse one porcelain record into { raw, status, path }. Prefer `-z` output
   // (unquoted paths) upstream, but stay robust to plain porcelain: the leading
@@ -355,10 +363,10 @@ function mainCheckoutSummary(baseline, final) {
     }
   } else if (newPaths.length === 0 && disappeared.length === 0) {
     if (finalEntries.length === 0) {
-      note = `Shared main checkout is clean and no pre-batch dirt disappeared. ${OBSERVED}`;
+      note = `Shared main checkout is clean and no pre-batch dirt disappeared. ${OBSERVED} ${OTHER_STAGES} ${CLAIM_BOUND}`;
     } else {
       const trans = transitions.length ? ` — ${transitions.length} changed status code while staying dirty on the same path` : "";
-      note = `Shared main checkout dirt is unchanged from the pre-batch baseline (${preexisting.length} pre-existing path(s)${trans}); nothing new appeared and nothing pre-existing disappeared during the batch. ${OBSERVED}`;
+      note = `Shared main checkout dirt is unchanged from the pre-batch baseline (${preexisting.length} pre-existing path(s)${trans}); no path appeared and no pre-existing path disappeared during the batch. ${OBSERVED} ${OTHER_STAGES} ${CLAIM_BOUND}`;
     }
   } else {
     flagged = true;
@@ -673,6 +681,23 @@ const CYCLE_GROUNDING_SCHEMA = {
   required: ["verdicts"],
 };
 
+// What a subagent of this cycle may run, and what it may not — carried by every
+// command-running prompt the section composes. A reviewer subagent authorized to
+// verify a claim empirically once ran `rm -rf ./*` in a shared main checkout: its
+// setup clone had failed invisibly inside a pipeline under `set -e` (a pipeline's
+// status is its last command), so it was still at the repository root while
+// believing it stood in a clone. Kept OUT of cycleDefaultContract deliberately: a
+// consumer with its own worktree lifecycle overrides the contract via
+// cycle.contracts and would otherwise drop the boundary along with it. The peer
+// prompt does not carry it — that stage runs `codex exec --sandbox read-only`,
+// which is a structural control rather than a prose one.
+const CYCLE_DESTROY_BOUNDARY = `## DESTROY BOUNDARY
+
+Permitted: reading, searching, and read-only \`git\`/\`gh\` queries — plus, where the contract above authorizes it, edits, commits, and pushes confined to the worktree and branch it names.
+Forbidden: \`rm -rf\`, \`git reset --hard\`, \`git clean\`, \`git branch -f\`, \`git update-ref\`, \`git gc\`, and any force-push — NOT in a clone, NOT in a temp directory, NOT "safely". You may not self-authorize one by putting yourself somewhere you believe is safe; only the disposable clone below is exempt.
+A worktree is not a blast radius: it isolates the working tree, not the repository, so \`branch -f\`, \`reset\`, \`update-ref\`, and \`gc\` reach every sibling worktree through the shared \`.git\`.
+Verify anything empirically ONLY in a disposable clone. Run \`command -v dc-enter\`; where it is found, work in \`DC="$(dc-enter <slug>)"\` — it prints one absolute path on stdout, \`dc-remove <slug>\` drops it, and a reused slug is REFUSED rather than re-derived, so pass \`--replace\` or remove the slug first if this may run twice. Where the helper is absent, use an absolute path outside the repository — never a relative one, and never the repository itself.`;
+
 // Default worktree/branch contract when the consumer supplies none. A consumer
 // with its own worktree lifecycle (wt-enter etc.) passes richer per-role
 // contract text via cycle.contracts instead.
@@ -748,6 +773,8 @@ function cycleFixPrompt(cycle, state) {
 
 ${cycleContract(cycle, "fixer")}
 
+${CYCLE_DESTROY_BOUNDARY}
+
 Read the repository's agent-context files (\`AGENTS.md\` / \`CLAUDE.md\`) first for conventions.
 
 ${roundIntro}
@@ -808,6 +835,8 @@ function cycleReviewPrompt(cycle, state) {
 ## WORKTREE CONTRACT (do this before anything else)
 
 ${cycleContract(cycle, "reviewer")}
+
+${CYCLE_DESTROY_BOUNDARY}
 
 Read the repository's agent-context files (\`AGENTS.md\` / \`CLAUDE.md\`) first for conventions.
 

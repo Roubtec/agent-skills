@@ -185,8 +185,25 @@ function botKindOf(login, authorIsBot) {
   return null;
 }
 
+// What an agent this script spawns may run, and what it may not. A reviewer
+// subagent authorized to verify a claim empirically once ran `rm -rf ./*` in a
+// shared main checkout: its setup clone had failed invisibly inside a pipeline
+// under `set -e` (a pipeline's status is its last command), so it was still at
+// the repository root while believing it stood in a clone. This script's own
+// two agents (gather, publish) carry it from here; the fix and review briefs
+// below ride the NESTED wf-review-cycle, whose review-cycle-core section states
+// the same boundary in the prompts it composes, so they do not restate it.
+const DESTROY_BOUNDARY = `## DESTROY BOUNDARY
+
+Permitted: reading, searching, read-only \`git\`/\`gh\` queries, and the specific mutations this assignment names.
+Forbidden: \`rm -rf\`, \`git reset --hard\`, \`git clean\`, \`git branch -f\`, \`git update-ref\`, \`git gc\`, and any force-push beyond an exact lease this assignment spells out — NOT in a clone, NOT in a temp directory, NOT "safely". You may not self-authorize one by putting yourself somewhere you believe is safe; only the disposable clone below is exempt.
+A worktree is not a blast radius: it isolates the working tree, not the repository, so \`branch -f\`, \`reset\`, \`update-ref\`, and \`gc\` reach every sibling worktree through the shared \`.git\`.
+Verify anything empirically ONLY in a disposable clone. Run \`command -v dc-enter\`; where it is found, work in \`DC="$(dc-enter <slug>)"\` — it prints one absolute path on stdout, \`dc-remove <slug>\` drops it, and a reused slug is REFUSED rather than re-derived, so pass \`--replace\` or remove the slug first if this may run twice. Where the helper is absent, use an absolute path outside the repository — never a relative one, and never the repository itself.`;
+
 function gatherPrompt(input) {
   return `You are preparing a pull request for review-addressing. Read \`AGENTS.md\` / \`CLAUDE.md\` first.
+
+${DESTROY_BOUNDARY}
 
 Request (lenient parsing — commas, &, free word order): ${JSON.stringify(input)}
 Possible tokens: a PR number (e.g. #38), \`rebase on top of <branch>\`, \`no-push\`, \`push\`, \`peer-opinions=off\`, \`ping-codex\`, \`ping-claude\`, \`ping-copilot\`, \`ping-contributing\`. You only act on the PR# and the rebase here; the push/ping/peer flags are handled later.
@@ -249,6 +266,8 @@ You may reclassify any item. Confirm the claimed same-pattern sweep did not miss
 
 function publishPrompt(packet, dispositions, flags) {
   return `Publish the addressed review for PR #${packet.pr.number} (branch \`${packet.pr.branch}\`). A fresh reviewer has PASSED. Read \`AGENTS.md\` / \`CLAUDE.md\` first.
+
+${DESTROY_BOUNDARY}
 
 Flags for this publication: ${JSON.stringify(flags)}.
 

@@ -326,6 +326,23 @@ const CYCLE_GROUNDING_SCHEMA = {
   required: ["verdicts"],
 };
 
+// What a subagent of this cycle may run, and what it may not — carried by every
+// command-running prompt the section composes. A reviewer subagent authorized to
+// verify a claim empirically once ran `rm -rf ./*` in a shared main checkout: its
+// setup clone had failed invisibly inside a pipeline under `set -e` (a pipeline's
+// status is its last command), so it was still at the repository root while
+// believing it stood in a clone. Kept OUT of cycleDefaultContract deliberately: a
+// consumer with its own worktree lifecycle overrides the contract via
+// cycle.contracts and would otherwise drop the boundary along with it. The peer
+// prompt does not carry it — that stage runs `codex exec --sandbox read-only`,
+// which is a structural control rather than a prose one.
+const CYCLE_DESTROY_BOUNDARY = `## DESTROY BOUNDARY
+
+Permitted: reading, searching, and read-only \`git\`/\`gh\` queries — plus, where the contract above authorizes it, edits, commits, and pushes confined to the worktree and branch it names.
+Forbidden: \`rm -rf\`, \`git reset --hard\`, \`git clean\`, \`git branch -f\`, \`git update-ref\`, \`git gc\`, and any force-push — NOT in a clone, NOT in a temp directory, NOT "safely". You may not self-authorize one by putting yourself somewhere you believe is safe; only the disposable clone below is exempt.
+A worktree is not a blast radius: it isolates the working tree, not the repository, so \`branch -f\`, \`reset\`, \`update-ref\`, and \`gc\` reach every sibling worktree through the shared \`.git\`.
+Verify anything empirically ONLY in a disposable clone. Run \`command -v dc-enter\`; where it is found, work in \`DC="$(dc-enter <slug>)"\` — it prints one absolute path on stdout, \`dc-remove <slug>\` drops it, and a reused slug is REFUSED rather than re-derived, so pass \`--replace\` or remove the slug first if this may run twice. Where the helper is absent, use an absolute path outside the repository — never a relative one, and never the repository itself.`;
+
 // Default worktree/branch contract when the consumer supplies none. A consumer
 // with its own worktree lifecycle (wt-enter etc.) passes richer per-role
 // contract text via cycle.contracts instead.
@@ -401,6 +418,8 @@ function cycleFixPrompt(cycle, state) {
 
 ${cycleContract(cycle, "fixer")}
 
+${CYCLE_DESTROY_BOUNDARY}
+
 Read the repository's agent-context files (\`AGENTS.md\` / \`CLAUDE.md\`) first for conventions.
 
 ${roundIntro}
@@ -461,6 +480,8 @@ function cycleReviewPrompt(cycle, state) {
 ## WORKTREE CONTRACT (do this before anything else)
 
 ${cycleContract(cycle, "reviewer")}
+
+${CYCLE_DESTROY_BOUNDARY}
 
 Read the repository's agent-context files (\`AGENTS.md\` / \`CLAUDE.md\`) first for conventions.
 
