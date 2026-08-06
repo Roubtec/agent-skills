@@ -46,8 +46,11 @@ set -euo pipefail
 #       name holding prose, a BISECT_START holding a branch name, a dangling
 #       NOTES_MERGE_REF, a symref carrying a second line under its target, and a
 #       bare id of the OTHER hash width, which git reads as broken) leaves the
-#       branch checked out; a local head whose name begins with a dash checked
-#       out rather than parsed as options; and refusal on a bad ref
+#       branch checked out; a MERGE_RR, whose rerere id names no object, refused
+#       rather than answered with the branch; an unanswerable
+#       --show-object-format refused rather than guessed; a local head whose name
+#       begins with a dash checked out rather than parsed as options; and refusal
+#       on a bad ref
 #   (d) the ref namespace: an exact mirror of the source's refs, demonstrated on
 #       a source carrying refs outside refs/heads/ and refs/tags/ — including one
 #       hiding a namespace from upload-pack, which a refspec fetch would drop
@@ -726,6 +729,24 @@ for nonref in COMMIT_EDITMSG MERGE_MSG SQUASH_MSG MERGE_MODE; do
 	rm -f -- "$WT2_GIT_DIR/$nonref"
 	g -C "$SRC2" branch -q -D "$nonref"
 done
+# `MERGE_RR` sits between those two groups. What rerere writes there is records
+# rather than a ref — `<id><TAB><path><NUL>` — but git's root-ref rules read that
+# leading id, so `git rev-parse MERGE_RR` names it while `MERGE_RR^{commit}` is
+# fatal: the id hashes the conflict TEXT and matches no object. There is no
+# baseline for the caller to be given, so dc-enter has to refuse the string their
+# own git refuses rather than quietly substitute the same-named branch.
+g -C "$SRC2" branch -q MERGE_RR main
+printf '0123456789abcdef0123456789abcdef01234567\tsome/conflicted.txt\0' >"$WT2_GIT_DIR/MERGE_RR"
+assert_ne "c: the MERGE_RR fixture's id is not the same-named branch's commit" \
+	"$(git -C "$WT2" rev-parse --verify MERGE_RR)" \
+	"$(git -C "$WT2" rev-parse --verify refs/heads/MERGE_RR)"
+assert_eq "c: ... and the source's own MERGE_RR^{commit} is fatal" \
+	"$(git -C "$WT2" rev-parse --verify --quiet 'MERGE_RR^{commit}' >/dev/null 2>&1 && echo resolves || echo fatal)" "fatal"
+in_repo "$WT2" "$DC_ENTER" mergerr MERGE_RR
+assert_ne "c: MERGE_RR beside a same-named branch is refused, not answered with the branch" "$RC" 0
+assert_eq "c: ... silently on stdout" "$OUT" ""
+rm -f -- "$WT2_GIT_DIR/MERGE_RR"
+g -C "$SRC2" branch -q -D MERGE_RR
 # And an EMPTY root-ref file is not a pseudo-ref either: git's rules fall through
 # it to `refs/heads/<name>`. A fetch with nothing to fetch leaves `FETCH_HEAD`
 # exactly like that, so a presence-only probe would detach a repository whose own
@@ -946,6 +967,32 @@ if git init -q -b main --object-format=sha256 "$S256" 2>/dev/null; then
 		"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "DETACHED"
 	assert_eq "c: ... at the commit the 64-character id names, not the branch's" \
 		"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$S256" rev-parse --verify 'ORIG_HEAD^{commit}')"
+	# That width is only right because it was ASKED for, and a wrong answer here is
+	# a WRONG baseline rather than a missed one: guessing sha1 in this repository
+	# reads a live 64-character id as prose and hands back the same-named branch.
+	# So an unanswerable `--show-object-format` stops the run. `MERGE_RR` carries
+	# the case on every git: the id below names no object, so `show-ref --verify`
+	# cannot resolve it at any version and the content parse is what decides. The
+	# shim fails that one probe and passes everything else through.
+	OBJFMT_SHIM="$WORK/c/objfmt-shim"
+	mkdir -p "$OBJFMT_SHIM"
+	{
+		echo '#!/usr/bin/env bash'
+		# The shim's own `$@`, written out literally rather than expanded here.
+		# shellcheck disable=SC2016
+		echo 'for a in "$@"; do [ "$a" = "--show-object-format" ] && exit 1; done'
+		printf 'exec %s "$@"\n' "$(command -v git)"
+	} >"$OBJFMT_SHIM/git"
+	chmod +x "$OBJFMT_SHIM/git"
+	g -C "$S256" branch -q MERGE_RR main
+	printf '%s\tsome/conflicted.txt\0' \
+		"0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef" >"$S256/.git/MERGE_RR"
+	in_repo "$S256" env "PATH=$OBJFMT_SHIM:$PATH" "$DC_ENTER" objfmtunknown MERGE_RR
+	assert_ne "c: an unanswerable --show-object-format is refused, not guessed" "$RC" 0
+	assert_eq "c: ... silently on stdout" "$OUT" ""
+	assert_contains "c: ... naming the object format as what could not be read" "$ERR" "object format"
+	rm -f -- "$S256/.git/MERGE_RR"
+	g -C "$S256" branch -q -D MERGE_RR
 fi
 # A local head whose name begins with a DASH. `refs/heads/-foo` passes `git
 # check-ref-format`, so it is a legal branch, and the qualified-form

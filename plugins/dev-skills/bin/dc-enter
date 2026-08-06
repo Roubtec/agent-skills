@@ -99,10 +99,10 @@
 # A `$GIT_DIR` PSEUDO-REF is the same story one rule earlier: git reaches
 # `ORIG_HEAD`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_HEAD`,
 # `REBASE_HEAD`, `AUTO_MERGE`, `FETCH_HEAD`, `BISECT_EXPECTED_REV`,
-# `MERGE_AUTOSTASH`, `NOTES_MERGE_PARTIAL`, `NOTES_MERGE_REF` and `BISECT_START`
-# in `$GIT_DIR` before `refs/heads/<name>` (that exact set, detected across the
-# whole supported git range — see source_pseudo_ref_exists), so in a repository
-# stopped mid-rebase, mid-merge, mid-bisect or mid-notes-merge that
+# `MERGE_AUTOSTASH`, `NOTES_MERGE_PARTIAL`, `NOTES_MERGE_REF`, `BISECT_START` and
+# `MERGE_RR` in `$GIT_DIR` before `refs/heads/<name>` (that exact set, detected
+# across the whole supported git range — see source_pseudo_ref_exists), so in a
+# repository stopped mid-rebase, mid-merge, mid-bisect or mid-notes-merge that
 # also carries a branch of that name, `dc-enter probe ORIG_HEAD` detaches at the
 # pseudo-ref — the commit the caller's own `git rev-parse` names — rather than
 # checking the branch out. Pseudo-refs are per-worktree, and it is the INVOKING
@@ -115,7 +115,11 @@
 # is checked out like any other branch. `BISECT_START` shows both sides of the
 # same rule: a bisect started from a branch writes that branch's NAME there and
 # the branch wins, one started from a detached HEAD writes the commit and it
-# does not.
+# does not. `MERGE_RR` is the one of them no clone can come from: rerere's
+# records begin with an id that hashes conflict TEXT rather than naming an
+# object, so the caller's own `git rev-parse MERGE_RR^{commit}` is fatal, and
+# `dc-enter probe MERGE_RR` is refused rather than answered with a same-named
+# branch.
 # A SHORT name that is both a local branch and a tag resolves to the BRANCH:
 # gitrevisions disambiguates the other way (`refs/tags/<name>` is tried before
 # `refs/heads/<name>`), so the commit is looked up through the branch's full ref
@@ -683,13 +687,15 @@ REF_DISPLAY="$REF_ARG"
 # deliberately: the alternative is turning an arbitrary caller string into a
 # `$GIT_DIR` path, and no repository reaches that state without having written an
 # object id where a sentence belongs.
-# One unlisted name an ORDINARY repository does reach is `MERGE_RR`, which is not
-# prose: rerere writes `<id><TAB><path><NUL>` records there, and git's root-ref
-# rules read that leading id, so `git rev-parse MERGE_RR` names it while a branch
-# called `MERGE_RR` is checked out here. Left out on purpose: the rerere id
-# hashes conflict TEXT rather than naming an object, so `MERGE_RR^{commit}` is
-# fatal for the caller too and there is no baseline to get wrong.
-readonly SRC_PSEUDO_REFS='ORIG_HEAD MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_HEAD REBASE_HEAD AUTO_MERGE FETCH_HEAD BISECT_EXPECTED_REV MERGE_AUTOSTASH NOTES_MERGE_PARTIAL NOTES_MERGE_REF BISECT_START'
+# `MERGE_RR` is on the list although what rerere writes there is records rather
+# than a ref: each is `<id><TAB><path><NUL>`, and git's root-ref rules read that
+# leading id, so `git rev-parse MERGE_RR` names it. The id hashes conflict TEXT
+# rather than an object, so the caller's own `git rev-parse MERGE_RR^{commit}` is
+# fatal — and listing the name is what makes this helper refuse the same string,
+# at the commit check below and before any clone is made. Left out, it checked a
+# same-named BRANCH out instead and handed back a baseline the caller's own git
+# declines to produce; measured on 2.36.6, 2.39.5, 2.43.7 and 2.47.3.
+readonly SRC_PSEUDO_REFS='ORIG_HEAD MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_HEAD REBASE_HEAD AUTO_MERGE FETCH_HEAD BISECT_EXPECTED_REV MERGE_AUTOSTASH NOTES_MERGE_PARTIAL NOTES_MERGE_REF BISECT_START MERGE_RR'
 # How many hex characters an object id has in THIS repository. Filled in on first
 # use rather than up front: only the object-id branch below reads it, and getting
 # there needs a caller who named one of the listed names, with that file present,
@@ -724,12 +730,16 @@ source_pseudo_ref_exists() {
 		;;
 	*)
 		if [ -z "$SRC_OID_HEXSZ" ]; then
-			# sha1 is both the other answer and the safe default: `--show-object-format`
-			# has existed since git 2.29, well under this helper's floor, and the
-			# repository it is asked about has already answered `rev-parse` twice above.
+			# Not defaulted, because a width read wrong is a WRONG BASELINE and not a
+			# missed one: in a sha256 repository, taking 40 makes a live 64-character
+			# `ORIG_HEAD` look like prose and hands back a same-named branch instead,
+			# measured on 2.43.7. `--show-object-format` has existed since git 2.29,
+			# well under this helper's floor, and the repository has already answered
+			# `rev-parse` twice above, so no answer here is a reason to stop.
 			case "$(git -C "$SRC_TOP" rev-parse --show-object-format 2>/dev/null)" in
+			sha1) SRC_OID_HEXSZ=40 ;;
 			sha256) SRC_OID_HEXSZ=64 ;;
-			*) SRC_OID_HEXSZ=40 ;;
+			*) die "could not read the invoking repository's object format, so whether '$name' holds an object id cannot be decided; refusing to guess" ;;
 			esac
 		fi
 		[[ "${contents%%[[:space:]]*}" =~ ^[0-9a-fA-F]{$SRC_OID_HEXSZ}$ ]]
