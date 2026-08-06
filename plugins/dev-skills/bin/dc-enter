@@ -688,10 +688,12 @@ else
 		# remote-tracking ref, or the tag that shadows a branch named literally
 		# `refs/tags/v1`. Either way the clone lands on the commit the caller's own
 		# `git rev-parse <ref>` names — checked out as that branch when git's answer
-		# IS the branch, detached at the commit otherwise. A root ref that is a
-		# symref aimed at the same-named branch is the one place the two coincide,
-		# and it is checked out rather than detached because git resolves it
-		# THROUGH that branch, so the commit is the same either way.
+		# IS the branch, detached at the commit otherwise. A ref that wins ahead of
+		# the branch still answers WITH the branch when it is a symref resolving
+		# through to it, which all three of the shapes that can win do: a `$GIT_DIR`
+		# root ref, `refs/<name>`, and a tag (measured for each). Every one of them
+		# is checked out rather than detached, because git resolves it THROUGH that
+		# branch, so the commit is the same either way.
 		# `core.warnAmbiguousRefs=false` is what makes that answer TOTAL, and
 		# leaving it out is what makes this look like it cannot work: with the
 		# warning on, `expand_ref` keeps walking past its first hit and rev-parse
