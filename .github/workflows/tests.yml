@@ -11,5 +11,6 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - run: bash scripts/test-gh-review-threads.sh
+      - run: bash scripts/test-dc-helpers.sh
       - run: node scripts/test-checkout-cleanliness-report.mjs
       - run: node scripts/test-review-cycle-retirement.mjs

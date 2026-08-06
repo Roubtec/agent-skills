@@ -1,0 +1,1501 @@
+#!/usr/bin/env bash
+# dc-enter — make a DISPOSABLE CLONE of the invoking repository and print only
+# its absolute path, so a subagent can verify a claim empirically somewhere it
+# is safe to wreck.
+#
+# Why this exists: a reviewer subagent asked to verify a claim empirically ran
+# `rm -rf ./*` in the shared main checkout. It had tried to build a throwaway
+# clone first; the clone step was piped to `tail`, so `set -e` never saw it fail,
+# and execution continued in the repo root. The root cause was not carelessness —
+# the prompt authorized empirical verification while the environment offered no
+# safe place to do it, so every agent hand-rolls its own clone-and-cd and each
+# one is a fresh chance to get it wrong. This helper is that safe place.
+#
+# A worktree is NOT that place and is actively misleading here: a linked
+# worktree isolates the working tree but shares `.git`, so `branch -f`, `reset`,
+# `update-ref`, `gc`, and `push` all reach every sibling worktree. Only a real
+# clone isolates refs and objects.
+#
+# ISOLATION GUARANTEE — the whole contract:
+#   Creating, moving, and deleting refs, committing, rewriting history, and
+#   running `gc`/`repack`/`prune` inside the clone CANNOT change the invoking
+#   repository's refs or its reachable objects.
+#   "Inside the clone" means a git command whose git actually addresses the
+#   clone, which is not the same thing as one that mentions its path: `GIT_DIR`
+#   and its relatives beat `git -C`, so a CALLER whose own shell still exports
+#   one gets `git -C "$DC" …` aimed at the invoking repository however the path
+#   reads. This helper drops those variables from its own process and warns on
+#   stderr when it had to, but `unset` is process-local and cannot reach the
+#   shell that invoked it — see the environment paragraph below.
+#   The clone is never made with `--shared` or `--reference`, and no option
+#   exposes them — those genuinely do couple the object stores. Where the SOURCE
+#   is itself a borrowing clone the coupling arrives anyway, since a local clone
+#   copies the source's `objects/info/alternates` across (rewriting a relative
+#   entry to an absolute path, measured, but carrying the borrowing either way);
+#   the clone is dissociated from that third repository before it is handed
+#   back, but only AFTER the ref mirror below, so that objects reachable solely
+#   from the source refs `git clone` never fetches are copied in rather than
+#   dropped. See the dissociation note at the clone itself.
+#   The remote `git clone` created, and the upstream configuration pointing at
+#   it, are both removed after the clone is populated, and the clone's MERGED
+#   remote list is then checked to be empty — a remote the caller's own global or
+#   system configuration defines survives a `--local` removal, and this helper
+#   refuses rather than hand back a clone whose stray `git push` still has
+#   somewhere to go. That check, and the push-target check beside it, are made
+#   once HEAD is in its final state: `includeIf "onbranch:…"` makes part of the
+#   merged configuration depend on the checked-out branch, so asking earlier
+#   would answer for a clone nobody receives. Stated exactly, they answer for the
+#   HEAD the clone is HANDED BACK on. Switching branches inside the clone can
+#   activate an `onbranch:` include the checked-out one did not match, and no
+#   check over the branches that EXIST can pre-empt that: the pattern may match a
+#   branch that does not exist yet, so there is no set of branches to sweep.
+#   Refusing on the mere PRESENCE of any `onbranch:` include would pre-empt it —
+#   git lists those keys whether or not the condition currently matches — but it
+#   would equally refuse the everyday per-branch identity include, and narrowing
+#   it to "only if the included file defines a remote or a push destination" —
+#   both, since both checks below are bounded the same way — puts the work back
+#   on this helper rather than on git. `git config --file <path> --includes`
+#   reads such a file and expands a plain `include.path` inside it, but it cannot
+#   answer the two parts that matter: a relative `path` resolves against the
+#   INCLUDING file's directory, which only `--show-origin` reveals, and a nested
+#   `includeIf` is evaluated against the real HEAD rather than the hypothetical
+#   branch being asked about. So the bound is stated rather than approximated,
+#   and a caller whose own config defines remotes or push destinations that way
+#   owns that one — the same way they own the `GIT_DIR` paragraph below.
+#   (Remote-tracking refs survive as ordinary refs; see the ref-namespace note
+#   below.)
+#   A remote NAME is not the only way to name a push target, so the clone's
+#   MERGED `remote.pushDefault`, `branch.<name>.pushRemote` and
+#   `branch.<name>.remote` are checked to be absent as well. Git accepts a bare
+#   path or URL in all three and pushes to it as an ANONYMOUS remote, which
+#   `git remote` never lists — so one of them left standing in the caller's own
+#   configuration is a live push target the remote check above cannot see, and a
+#   bare `git push` in the clone writes branches into whatever it names, the
+#   invoking repository included. A survivor is refused for exactly the reason a
+#   surviving remote is; see the push-target check below.
+#   The caller's repository-targeting git environment is dropped, once the source
+#   has been chosen, from the commands THIS HELPER runs. `GIT_DIR` and its
+#   relatives override `git -C`, so an inherited one would aim the clone's own ref
+#   surgery at the source; see the sanitize block below. That drop is process-
+#   local and so protects the helper only: the caller's shell keeps its
+#   variables, and clearing them there before using `$DC` is the caller's job.
+#   The helper cannot do it for them, so it names on stderr what it dropped.
+#   Object hardlinking would not violate the guarantee either way — git objects
+#   are immutable and content-addressed, created with O_EXCL and never modified
+#   in place, and `gc` only unlinks the clone's own directory entries — but this
+#   helper still clones with `--no-hardlinks` by default. See "Hardlinks" below.
+#
+# Usage: dc-enter [--replace] <slug> [<ref>]
+#
+#   DC="$(dc-enter probe)"          # clone at the INVOKING WORKTREE's HEAD
+#   DC="$(dc-enter probe main)"     # clone with branch `main` checked out
+#   DC="$(dc-enter probe HEAD~3)"   # clone detached at that commit
+#   DC="$(dc-enter --replace probe)" # discard an existing clone for that slug
+#
+# Calling convention: the ONLY thing this helper writes to stdout is the clone's
+# absolute path. Every diagnostic goes to stderr, so `DC="$(dc-enter probe)"`
+# always yields either a usable path or an empty string plus a non-zero status.
+# Check it before using it — an unguarded empty `$DC` in `rm -rf "$DC"/*` is the
+# incident this helper exists to prevent:
+#
+#   set -euo pipefail
+#   DC="$(dc-enter probe)"
+#   [ -n "$DC" ] && [ -d "$DC/.git" ] || exit 1
+#
+# ... and clear `GIT_DIR` and its relatives in YOUR shell before using `$DC`,
+# because they override `git -C` and this helper can only drop them from its own
+# process. It warns on stderr, naming them, whenever it had to drop any — so an
+# unguarded `git -C "$DC" update-ref -d refs/heads/keepme` reaching the invoking
+# repository instead of the clone is announced rather than silent. `unset GIT_DIR
+# GIT_WORK_TREE GIT_INDEX_FILE …`, or `env -u GIT_DIR … your-script`, settles it;
+# `git rev-parse --local-env-vars` prints the whole set.
+#
+# <ref> (optional): any revision the INVOKING WORKTREE can resolve to a commit.
+# If it names a local branch, the clone checks that branch out; otherwise the
+# clone's HEAD is detached at the resolved commit. A fully qualified local head
+# (`refs/heads/main`) counts as naming that branch — it resolves as a commit like
+# any other revision, so without that normalization it would silently detach
+# despite naming a branch. No other qualified form is normalized: `heads/main`,
+# a tag, and a remote-tracking ref all detach — and they detach even in the
+# pathological repository that carries a local branch named literally
+# `refs/tags/v1` or `tags/v1`, because a string git's own rules already resolve
+# to an existing ref is that ref rather than a short branch name to look up.
+# A `$GIT_DIR` ROOT REF (pseudo-ref) is the same story one rule earlier: git
+# reaches `ORIG_HEAD`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `NOTES_MERGE_REF` and
+# their kin in `$GIT_DIR` before `refs/heads/<name>`, so in a repository stopped
+# mid-rebase, mid-merge, mid-bisect or mid-notes-merge that also carries a branch
+# of that name, `dc-enter probe ORIG_HEAD` detaches at the root ref's commit —
+# the one the caller's own `git rev-parse` names — rather than checking the
+# branch out at another. The one exception is a root ref that is a SYMREF aimed
+# at that same branch: git resolves it through the branch, so the branch is
+# checked out and the commit is the same either way.
+# Root refs are per-worktree, and it is the INVOKING worktree's that are read,
+# like everything else here.
+# WHICH names and which states that covers is not a list kept here: the helper
+# asks git what the caller's string resolves to and checks a branch out only when
+# git's answer is that branch, so it follows git's rules wherever they go — see
+# the branch-resolution block below. Those rules read a `$GIT_DIR` file's
+# CONTENT, not its name: it is a ref when it holds an object id, or a symref
+# whose target still resolves. That is why `COMMIT_EDITMSG`, `MERGE_MSG`,
+# `SQUASH_MSG` and `MERGE_MODE` normally stay out of the way — they hold a
+# message or a mode — and why `BISECT_START` shows both sides of the one rule: a
+# bisect started from a branch writes that branch's NAME there and the branch
+# wins, one started from a detached HEAD writes the commit and it does not.
+# `MERGE_RR` is the one no clone can come from while it is present: rerere's
+# records begin with an id that hashes conflict TEXT rather than naming an
+# object, so the caller's own `git rev-parse MERGE_RR^{commit}` is fatal and
+# `dc-enter probe MERGE_RR` is refused rather than answered with a same-named
+# branch. Only while it is present, though — in a repository that is not
+# mid-rerere, `MERGE_RR` is an ordinary short name and a branch called that is
+# checked out like any other.
+# A SHORT name that is both a local branch and a tag resolves to the BRANCH:
+# gitrevisions disambiguates the other way (`refs/tags/<name>` is tried before
+# `refs/heads/<name>`), so the commit is looked up through the branch's full ref
+# name rather than through the bare name, and `dc-enter probe release` verifies
+# the branch the caller asked for instead of a same-named tag. That preference
+# is the one deliberate departure from git's resolution; it is confined to the
+# short form, and within it to a plain tag — where git reaches `refs/tags/<name>`
+# through a root ref or a `refs/<name>` aimed at it, the branch does not win,
+# because substituting its commit for the one the caller's own git names is the
+# wrong baseline this whole interface exists to avoid.
+# The default is the invoking worktree's own HEAD — a branch checkout when HEAD
+# is on a branch, detached when it is detached — NOT the repository's or the main
+# worktree's HEAD. That distinction is load-bearing: `git rev-parse
+# --git-common-dir` resolves to the main worktree, so the natural implementation
+# would silently verify a linked worktree's claim against the main worktree's
+# commit, which is exactly the class of wrong-branch conclusion this helper
+# exists to prevent. The source is therefore derived from `git rev-parse
+# --show-toplevel` (the invoking worktree, including from a nested subdirectory)
+# and the target commit is resolved there.
+#
+# REF NAMESPACE: the clone mirrors the source's refs EXACTLY — every ref at its
+# original full name, including `refs/pruned/*`, `refs/pre-rebase/*`,
+# `refs/notes/*`, `refs/stash`, `refs/replace/*`, and `refs/remotes/*`. A plain
+# `git clone` would instead rewrite branches to `refs/remotes/origin/*` and drop
+# every other namespace, and a subagent handed a clone silently missing the
+# namespace under test can conclude a reservation worked or vanished for
+# entirely the wrong reason.
+# The mirror is built by ENUMERATING the source's refs locally with
+# `git for-each-ref` and writing them into the clone with `update-ref --stdin -z`
+# — NOT by fetching a `+refs/*:refs/*` refspec. A fetch can only copy what the
+# source's upload-pack advertises, so a source configuring `uploadpack.hideRefs`
+# or `transfer.hideRefs` over the namespace under test would hand back a clone
+# silently missing exactly the refs the caller came to look at. Local
+# enumeration sees the ref store itself and has no such blind spot. The objects
+# are present either way: a clone from a local PATH copies the whole object
+# store rather than negotiating a pack, so even objects that no ref reaches come
+# across, and a hidden ref therefore always has its object waiting for it — with
+# three exceptions: one repaired here, one refused up front, and one bounded and
+# stated. Two of them share a further bound, on the UNREACHABLE half of that
+# promise specifically; each says so where it is described.
+# An object the source itself only BORROWS from an alternate is not in the copied
+# store, which is why the dissociation that stops the borrowing is deferred until
+# after this mirror rather than done by `git clone --dissociate`. That repair
+# is bounded by what `repack -a` can see, so two shapes of object that NO ref
+# reaches do not survive it: one living only in the donor, and one that was
+# PACKED in the source while still reachable and has since stopped being. A loose
+# unreachable object in the source's own store does survive — `repack -a -d`
+# rewrites packs and does not delete loose objects — which is the ordinary shape
+# an amended commit or a dropped stash leaves, so the loss is narrower than
+# "unreachable objects are gone". All three measured, and the packed one against
+# its own control — the only shape that can have one, since "control" here means
+# the same history in a NON-borrowing source and a donor-only object has no such
+# counterpart: the same packed-then-unreferenced commit comes across from a
+# non-borrowing source and is absent from a borrowing one's clone, with the run
+# exiting 0 and saying nothing.
+# It stays `repack -a -d`, and the honest reason is not that `-A -d` would fail.
+# Measured, `-A -d` closes the packed-in-the-source half — that commit does come
+# across — and leaves the donor half exactly as it was, because
+# `--unpack-unreachable` loosens objects only out of LOCAL packs. What `-a -d`
+# buys is being precisely the repack `git clone --dissociate` itself runs
+# (`repack -a -d`, in git's own clone.c), which is what this block reproduces on
+# a later schedule rather than reimplements; `-A` would additionally loosen every
+# unreachable object in the packs it replaces into the disposable clone. So the
+# bound is stated rather than half-closed by departing from the operation being
+# mirrored — a deliberate call, not a limitation of git.
+# An object a PARTIAL clone left on its promisor remote is not in the source's
+# store either, and only a fetch from that remote brings it in — the caller's
+# network to spend, not this helper's — so such a source is refused before
+# anything is created; see the partial-clone refusal at the source checks.
+# A SHALLOW source gets no local copy at all: git declines the optimization for
+# one and negotiates a pack instead, so the clone holds what that fetch brought,
+# with a matching `shallow` boundary. Measured by inode on 2.36.6 and 2.47.3 —
+# such a clone's pack is a fresh file rather than a link to the source's, on the
+# default and the `--no-hardlinks` path alike. Git says so in words only when
+# `--local` was asked for explicitly; this helper never asks, so nothing is
+# printed on its own command line and the effect has to be measured rather than
+# read off stderr.
+# That has two consequences, and they fail differently.
+# LOUDLY: a ref beyond what that fetch brought — outside refs/heads and
+# refs/tags, or inside them but hidden from the source's own `upload-pack` — CAN
+# name an object nothing brought. Most do not: the `refs/remotes/*` every clone
+# carries point at commits the fetch itself delivered, and any such ref mirrors
+# fine, which is why an ordinary shallow checkout clones without complaint. But
+# where one names an
+# object the fetch did not bring, the wholesale copy that would otherwise carry
+# it is exactly what git declined, so the mirror below dies with "trying to write
+# ref ... with nonexistent object" and hands nothing back. A shallow checkout
+# carrying a stash is that case, the missing object being the stash commit itself
+# rather than anything the boundary cut off.
+# QUIETLY, and this is the bound to know: an object NO ref reaches does not come
+# across either, so the unreachable-object property claimed above does not hold
+# here at all — a stronger loss than the borrowing source's, which keeps the
+# loose ones. Measured — a dangling blob in one is absent from its
+# clone, with the run exiting 0 and printing nothing. The refs that do arrive are
+# exact and the isolation guarantee is untouched; what such a clone cannot answer
+# is "was this unreferenced object still there?".
+# It is bounded rather than refused because of what is lost: objects no ref
+# names, where the partial-clone case above loses objects the source's own refs
+# REACH. That is the difference between a bonus this helper offers and the
+# exact-mirror contract it makes — and refusing every shallow checkout, which is
+# what CI hands an agent by default, would cost that contract its main user.
+# A source ref that is SYMBOLIC arrives symbolic, at the same target, rather
+# than flattened to the object id a plain copy would record.
+# NOT carried: a symbolic ref whose target does not exist — `for-each-ref` does
+# not report one, so it cannot be enumerated; the source's reflogs — the clone
+# keeps a fresh reflog of its own, so the source's `HEAD@{n}`, `stash@{n}`, and
+# reflog-only recovery are unavailable in it — uncommitted and untracked working
+# tree state, and the source's local config and hooks.
+#
+# CLONE ROOT: `$DC_ROOT` if set, else `$TMPDIR`, else `/tmp`. Never a path
+# inside the invoking repository or any of its worktrees — the helper refuses,
+# non-zero and silent on stdout, rather than falling back somewhere convenient.
+# The root must be ABSOLUTE. A relative one is refused rather than resolved
+# against the current directory, because the two helpers would then derive
+# different clones from the same value: dc-enter explicitly supports being run
+# from a nested subdirectory, so a caller entering from `<repo>/nested` and
+# removing from `<repo>` is a reachable configuration, not a contrived one.
+# A root containing a NEWLINE is refused too: this helper's whole calling
+# convention is one path on one line of stdout, and a two-line `$DC` is the
+# accident it exists to prevent — the incident's own script ended its clone step
+# with `| tail -n 1`, which would hand `rm -rf "$DC"/*` a truncated path. The
+# SOURCE repository's path may contain a newline, anywhere in it including at the
+# very end; only the root, which the caller chooses, is constrained.
+# Both root rules are enforced on the RAW value, before it is canonicalized —
+# canonicalizing CHANGES it, and a guard applied afterwards checks something
+# other than what the caller supplied. The newline rule is re-applied to the
+# resolved value as well, which can acquire a newline the raw value never had
+# when a symlinked component resolves into a directory whose own name has one.
+# `DC_ROOT` is the placement interface between this repository and the container
+# image: powbox will express its "outside /workspace" placement by setting it,
+# and until it does, a clone in a powbox container lands under `$TMPDIR` like
+# anywhere else. Do not rename it on one side only.
+#
+# PATH LAYOUT: <root>/dc-<agent>-<repo-hash>/<slug>/repo
+# The `<agent>-<repo-hash>` component scopes clones per agent AND per invoking
+# worktree, so two agents sharing one temp root on a plain machine never resolve
+# slug `probe` to the same directory. `<agent>` is `$DC_AGENT` if set, else
+# `$CONTAINER_NAME`, else the login name, reduced to 40 safe characters — two
+# identities differing only past that prefix land in one scope, so set `DC_AGENT`
+# explicitly when they might.
+#
+# REUSE: a slug's clone is never handed back as it was found. A disposable clone
+# exists to be wrecked, so returning whatever survived the last experiment —
+# refs deleted, objects collected — would run the next verification against a
+# corrupted baseline. So an existing directory at the slug's path is REFUSED:
+# non-zero, nothing on stdout, and nothing removed. Pass `--replace` to discard
+# it and re-derive the clone from scratch, or drop it first with
+# `dc-remove <slug>`.
+# Refusing rather than silently re-deriving is what makes the helper safe for
+# CONCURRENT SIBLINGS. Several subagents of one Claude container commonly share
+# both `$CONTAINER_NAME` and a worktree, so they derive the same scope, and a
+# second `dc-enter probe` that discarded what it found would `rm -rf` a sibling's
+# clone while that sibling was mid-verification — the refs and objects would
+# vanish under it and it would draw exactly the wrong-baseline conclusion this
+# helper exists to prevent. A caller cannot reliably pick a unique slug up front,
+# because it cannot see who else shares its identity; it can react to a refusal.
+# So `--replace` means "this clone is mine and I am done with it", never "make
+# room" — when the refusal names an agent or a creation time you do not
+# recognize, pick another slug instead. Setting `DC_AGENT` per subagent avoids
+# the contention entirely.
+# The printed path is deterministic for a given agent, worktree, and slug, so
+# carry `$DC` forward within a script rather than calling dc-enter again.
+#
+# Hardlinks: `git clone` of a local path hardlinks `.git/objects` by default,
+# which is safe for every git operation — wherever it takes the local path at
+# all, which for a SHALLOW source it does not; see the shallow exception in the
+# ref-namespace note above. The default here is nonetheless `--no-hardlinks`,
+# because the accidents a disposable clone exists to absorb are precisely the
+# non-git ones: a shell redirect, `sed -i`, or an unpacked tarball landing on
+# `.git/objects/ab/cdef…` writes THROUGH a hardlink and
+# corrupts the source repository's copy of that object. Copying the object store
+# costs disk and clone time proportional to repository size and buys defence in
+# depth against exactly that. `DC_HARDLINKS=1` takes the fast path on a large
+# repository and gives that defence up: the isolation guarantee above still holds
+# there — it is stated over git operations, and no git operation writes into an
+# existing object — but a NON-git write into the clone's `.git/objects` then
+# reaches the source, so set it only where clone cost actually bites and the
+# clone's user is git. Both paths use git's local-clone optimization where git
+# offers it, and so both carry the source's unreachable objects as well as its
+# reachable ones — with the two bounds the ref-namespace note above states, which
+# are properties of the SOURCE rather than of this setting: a shallow source is
+# offered no local path at all, so its clone holds only what its fetch
+# negotiated, and a borrowing one loses the unreachable objects the dissociation's
+# repack cannot see.
+#
+# Sync discipline: this plugin copy is canonical and net-new here — unlike
+# `gh-review-threads` there is no powbox-baked original to vendor or checksum
+# against, so nothing is pinned. If powbox later bakes `dc-enter`/`dc-remove`
+# onto the container PATH, it must bake from this copy and keep `DC_ROOT` as the
+# placement interface. Any behavior change to either helper must update
+# scripts/test-dc-helpers.sh in the same PR.
+#
+# This script must not repeat the trap that caused the incident it exists to
+# prevent: `set -euo pipefail` is on, no load-bearing command is piped, and the
+# script NEVER changes its own working directory — the only `cd` is inside a
+# command-substitution subshell in canon(), whose arrival is verified by the
+# `pwd -P` it must print.
+# For the same reason no PATH is carried through a bare `$(…)`: command
+# substitution strips every trailing newline from what it captures, so a
+# directory whose name ends in one comes back as a different — usually
+# non-existent — path, and the helper would then clone, check, or refuse against
+# the wrong directory. Paths are captured with capture_path() and returned from
+# canon() in a variable instead.
+#
+# Dependencies: `git` and coreutils. Nothing heavier survives being baked into a
+# container image. git must be new enough for `worktree list --porcelain -z`
+# (2.36+); older git is refused rather than guessed at — see
+# collect_worktree_paths for why no fallback is safe.
+set -euo pipefail
+
+# `GIT_CONFIG` is dropped before any git runs here. It supplies nothing to git at
+# large — `git config` is the only command that honours it — but that command is
+# exactly this helper's exposure: every `git config` below is a
+# `git -C "$CLONE_DIR" config` meant to act on the CLONE's own file, and an
+# inherited `GIT_CONFIG` redirects all of them, reads and writes alike, at
+# whatever file the caller pointed it at. `-C` does not win, and neither does
+# `--local`: combining the two is an error ("only one config file at a time"), so
+# the variable has to go rather than be overridden at each call site. Left set,
+# the run dies at the first of them with `no such section: remote.dc-source` — a
+# diagnostic that blames the clone for the caller's environment and produces no
+# clone at all — and past that point the upstream-config clearing and the
+# identity fallback would WRITE into the caller's file. A helper whose whole
+# promise is that it touches nothing outside the clone cannot honour a variable
+# that aims its only writes elsewhere.
+# Whether it was set is remembered, because the caller's shell keeps it and their
+# own `git -C "$DC" config` is redirected by it exactly as this helper's would
+# have been. It is one of the names the warning below reports; the unset has to
+# happen here, ahead of git's own list, so the set-ness is recorded here too.
+GIT_CONFIG_WAS_SET=""
+[ -z "${GIT_CONFIG+x}" ] || GIT_CONFIG_WAS_SET=GIT_CONFIG
+unset GIT_CONFIG
+
+PROG=dc-enter
+readonly PROG
+# Bumping this magic invalidates every older marker: dc-remove and dc-enter then
+# refuse to touch directories a previous layout created, instead of guessing.
+# v2 is NUL-delimited (see read_marker); v1 was line-delimited.
+readonly MARKER_MAGIC='dc-clone-v2'
+readonly MARKER_NAME='dc-clone-meta'
+# The clone's transient remote name. Deliberately not `origin`: the clone's own
+# refs are all deleted before the source's are written, and naming the remote
+# `origin` would make that deletion pass indistinguishable, in the code and in a
+# reader's head, from deleting the source's OWN refs/remotes/origin/*.
+readonly SRC_REMOTE='dc-source'
+
+# Also clears the worktree-listing temp files, so no fatal path leaks one. Set
+# before any code that can create them, so `set -u` never sees them unset.
+WT_LIST_FILE=""
+WT_ERR_FILE=""
+die() {
+	[ -z "$WT_LIST_FILE" ] || rm -f -- "$WT_LIST_FILE"
+	[ -z "$WT_ERR_FILE" ] || rm -f -- "$WT_ERR_FILE"
+	printf '%s: %s\n' "$PROG" "$*" >&2
+	exit 1
+}
+
+usage() {
+	local code="${1:-1}"
+	{
+		echo "usage: dc-enter [--replace] <slug> [<ref>]"
+		echo
+		echo "  Prints the absolute path of a disposable clone of the invoking"
+		echo "  repository, and nothing else, on stdout. <ref> defaults to the"
+		echo "  invoking worktree's HEAD. The clone's refs and objects are fully"
+		echo "  independent of the invoking repository; wreck it freely and drop it"
+		echo "  with 'dc-remove <slug>'. Root: \$DC_ROOT, else \$TMPDIR, else /tmp —"
+		echo "  never inside the repository."
+		echo
+		echo "  An existing clone for the slug is refused, because a concurrent"
+		echo "  sibling may be using it. --replace discards it and re-derives:"
+		echo "  it means 'that clone is mine and I am done with it'."
+	} >&$((code == 0 ? 1 : 2))
+	exit "$code"
+}
+
+# --- Path helpers ------------------------------------------------------------
+
+# Capture the path a command prints, WITHOUT losing a trailing newline that is
+# part of the path itself. `$(cmd)` strips every trailing newline it captures, so
+# `git rev-parse --show-toplevel` in a repository whose directory name ends in a
+# newline hands back a shorter path that names a DIFFERENT directory — and the
+# helper then clones that one, guards that one, and records that one in the
+# marker. The sentinel byte keeps the command's own output intact; exactly one
+# trailing newline, the terminator the command itself adds, is then removed.
+# Result in CAPTURED_PATH; non-zero when the command failed.
+CAPTURED_PATH=""
+capture_path() {
+	local out
+	CAPTURED_PATH=""
+	out="$("$@" && printf 'x')" || return 1
+	out="${out%x}"
+	CAPTURED_PATH="${out%$'\n'}"
+}
+
+# Canonicalize a path that need not exist yet: resolve the deepest EXISTING
+# ancestor for real (symlinks and all) and re-append the rest lexically.
+# The result is returned in CANON_RESULT rather than printed, so that callers
+# need no command substitution to read it — see capture_path above for why one
+# would silently shorten a path ending in a newline.
+# `cd` runs only inside the command-substitution subshell below, so the script's
+# own working directory never moves, and arrival is verified rather than assumed
+# — a failed `cd` yields a non-zero status AND an empty result, both of which are
+# checked. Refuses `.`/`..` in the non-existent tail rather than guessing what
+# they would resolve to.
+CANON_RESULT=""
+canon() {
+	local path="$1" head tail_part out comp
+	CANON_RESULT=""
+	[ -n "$path" ] || return 1
+	case "$path" in
+	/*) ;;
+	*) path="$PWD/$path" ;;
+	esac
+	# Collapse duplicate slashes and drop a trailing one (but keep a bare "/").
+	while [ "$path" != "${path//\/\///}" ]; do path="${path//\/\///}"; done
+	while [ "${#path}" -gt 1 ] && [ "${path%/}" != "$path" ]; do path="${path%/}"; done
+	head="$path"
+	tail_part=""
+	while [ ! -d "$head" ]; do
+		comp="${head##*/}"
+		case "$comp" in
+		. | ..) return 1 ;;
+		esac
+		tail_part="${comp}${tail_part:+/$tail_part}"
+		head="${head%/*}"
+		[ -n "$head" ] || head=/
+		[ "$head" != "$path" ] || return 1
+	done
+	# `pwd -P` is captured with the same sentinel capture_path uses, and for the
+	# same reason: a real directory whose name ends in a newline would otherwise
+	# come back shortened, and every check downstream would be made against a
+	# path that is not the one this resolved.
+	out="$(cd -P -- "$head" >/dev/null 2>&1 && pwd -P && printf 'x')" || return 1
+	out="${out%x}"
+	out="${out%$'\n'}"
+	[ -n "$out" ] || return 1
+	case "$out" in
+	/*) ;;
+	*) return 1 ;;
+	esac
+	if [ -n "$tail_part" ]; then
+		if [ "$out" = "/" ]; then
+			out="/$tail_part"
+		else
+			out="$out/$tail_part"
+		fi
+	fi
+	CANON_RESULT="$out"
+}
+
+# True when $1 is $2 or lives underneath it. Both must already be canonical.
+path_within() {
+	local candidate="$1" ancestor="$2"
+	[ -n "$candidate" ] && [ -n "$ancestor" ] || return 1
+	if [ "$ancestor" = "/" ]; then
+		return 0
+	fi
+	case "$candidate" in
+	"$ancestor") return 0 ;;
+	"$ancestor"/*) return 0 ;;
+	esac
+	return 1
+}
+
+# --- The ownership marker ----------------------------------------------------
+# The marker is NUL-delimited, not line-delimited: a repository path may legally
+# contain a newline, so a line-oriented `key=value` file could not record
+# `source=` unambiguously — the first embedded newline would truncate the value,
+# and the remainder could impersonate another key. Read one by hand with
+#   tr '\0' '\n' <"<session>/dc-clone-meta"
+# Parsed with the shell's own `read`, so the helpers depend on nothing but git
+# and a POSIX-ish coreutils for their safety checks.
+MARKER_AGENT=""
+MARKER_SOURCE=""
+MARKER_CLONE=""
+MARKER_CREATED=""
+read_marker() {
+	local file="$1" rec magic_seen=""
+	MARKER_AGENT=""
+	MARKER_SOURCE=""
+	MARKER_CLONE=""
+	MARKER_CREATED=""
+	[ -f "$file" ] || return 1
+	while IFS= read -r -d '' rec; do
+		if [ -z "$magic_seen" ]; then
+			[ "$rec" = "$MARKER_MAGIC" ] || return 1
+			magic_seen=1
+			continue
+		fi
+		case "$rec" in
+		"agent="*) MARKER_AGENT="${rec#agent=}" ;;
+		"source="*) MARKER_SOURCE="${rec#source=}" ;;
+		"clone="*) MARKER_CLONE="${rec#clone=}" ;;
+		"created="*) MARKER_CREATED="${rec#created=}" ;;
+		esac
+	done <"$file"
+	[ -n "$magic_seen" ]
+}
+
+# The proof this helper demands before it discards anything, and deliberately
+# the SAME predicate dc-remove applies. dc-enter is the helper holding the
+# `rm -rf`, so it must never be the more permissive of the two: the magic alone
+# would let it delete a directory whose marker records some other clone.
+marker_is_ours() {
+	read_marker "$1" || return 1
+	[ "$MARKER_CLONE" = "$CLONE_DIR" ] || return 1
+	[ "$MARKER_SOURCE" = "$SRC_TOP" ] || return 1
+	return 0
+}
+
+# Reduce a string to a safe single path component.
+sanitize_component() {
+	local value="${1//[^A-Za-z0-9._-]/_}"
+	value="${value:0:40}"
+	printf '%s' "$value"
+}
+
+# --- Arguments ---------------------------------------------------------------
+SLUG=""
+REF=""
+# Whether an argument was SEEN is tracked separately from whether it is
+# non-empty. Using emptiness as the sentinel would silently shift an empty first
+# argument into the slug's place: `dc-enter "" probe` would build a clone for
+# slug `probe` instead of rejecting the empty slug it was actually given.
+SLUG_SEEN=""
+REF_SEEN=""
+REPLACE=""
+take_positional() {
+	if [ -z "$SLUG_SEEN" ]; then
+		SLUG="$1"
+		SLUG_SEEN=1
+	elif [ -z "$REF_SEEN" ]; then
+		REF="$1"
+		REF_SEEN=1
+	else
+		usage 1
+	fi
+}
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-h | --help) usage 0 ;;
+	--replace)
+		REPLACE=1
+		shift
+		;;
+	--)
+		shift
+		break
+		;;
+	-*) usage 1 ;;
+	*)
+		take_positional "$1"
+		shift
+		;;
+	esac
+done
+while [ $# -gt 0 ]; do
+	take_positional "$1"
+	shift
+done
+
+[ -n "$SLUG_SEEN" ] || usage 1
+[ -z "$REF_SEEN" ] || [ -n "$REF" ] || usage 1
+# A slug is one path component the helper controls, never a caller-supplied
+# path: that is what makes "dc-remove can only reach what dc-enter created" hold.
+if [ "${#SLUG}" -gt 64 ] || [[ ! "$SLUG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+	die "slug must be 1-64 chars matching [A-Za-z0-9][A-Za-z0-9._-]*: '$SLUG'"
+fi
+
+# --- The invoking repository -------------------------------------------------
+capture_path git rev-parse --show-toplevel 2>/dev/null ||
+	die "not inside a git working tree (run this from the repository you want to clone)"
+SRC_TOP="$CAPTURED_PATH"
+[ -n "$SRC_TOP" ] || die "could not resolve the invoking worktree (bare repository?)"
+canon "$SRC_TOP" || die "could not canonicalize the invoking worktree path"
+SRC_TOP="$CANON_RESULT"
+
+# --- Drop the caller's repository-targeting environment -----------------------
+# The source has been chosen; from here on every git command either targets the
+# CLONE or names the source explicitly with `git -C "$SRC_TOP"`. An inherited
+# `GIT_DIR` (or `GIT_WORK_TREE`, `GIT_INDEX_FILE`, `GIT_OBJECT_DIRECTORY`, …)
+# would override both, and `-C` does NOT win over it: with `GIT_DIR` exported at
+# the invoking repository, `git -C "$CLONE_DIR" update-ref --stdin` runs the
+# ref-clearing transaction below against the SOURCE and deletes every ref it
+# has. That is this helper's central promise exactly inverted, so the variables
+# go rather than being overridden at each call site — the same conclusion, for
+# the same reason, that `unset GIT_CONFIG` reaches at the top of the file.
+# `git rev-parse --local-env-vars` is git's OWN list of the variables that pin an
+# invocation to one specific repository, and the same set git clears before it
+# runs a command in another repository — which is precisely what this helper
+# does. It is therefore asked rather than hardcoded, and an unanswerable or
+# empty list stops the run instead of leaving the environment quietly in place.
+# Choosing the source FIRST is deliberate: a caller who pointed `GIT_DIR` at the
+# repository they meant to clone still gets that repository cloned. What they no
+# longer get is its refs rewritten.
+LOCAL_ENV_VARS="$(git rev-parse --local-env-vars)" ||
+	die "could not ask git which environment variables target a specific repository ('git rev-parse --local-env-vars')"
+[ -n "$LOCAL_ENV_VARS" ] ||
+	die "'git rev-parse --local-env-vars' named no variables; refusing to run the clone's git commands under an environment that may still point at the invoking repository"
+# `GIT_CONFIG_COUNT`/`GIT_CONFIG_PARAMETERS` are on that list, and dropping them
+# is right for the helper's own commands — but they carry command-scope config,
+# which git acts on for anything the CALLER does. So their values are kept, and
+# restored for the three reads that have to answer a question about the caller's
+# git rather than about this helper's: the two isolation checks below — the
+# surviving-remote one and the push-target one — which ask what this clone will
+# actually push to rather than what it pushes to with the caller's environment
+# taken away, and the partial-clone check further down, which asks what git makes
+# of the SOURCE when the caller reads it.
+SAVED_CONFIG_ENV=()
+[ -z "${GIT_CONFIG_COUNT+x}" ] || SAVED_CONFIG_ENV+=("GIT_CONFIG_COUNT=$GIT_CONFIG_COUNT")
+[ -z "${GIT_CONFIG_PARAMETERS+x}" ] || SAVED_CONFIG_ENV+=("GIT_CONFIG_PARAMETERS=$GIT_CONFIG_PARAMETERS")
+# Which of them were actually SET is collected as it goes, because `unset` is
+# process-local and this is the only moment the helper can still see them. The
+# caller's shell keeps every one of them, and `git -C "$DC" …` run there is
+# redirected by `GIT_DIR` just as this helper's would have been — so a caller
+# handed a path back would delete refs in the INVOKING repository while believing
+# they were "inside the clone". The helper cannot fix that environment, and it
+# will not refuse over it either: git itself exports `GIT_DIR` to hooks and to
+# `submodule foreach`, so refusing would lock the helper out of the very
+# scripted contexts it is for, and the deliberate choice above — clone the
+# repository the caller pointed at, just do not rewrite it — would be undone. So
+# it says so, once, on stderr. The clone path stays the only thing on stdout.
+DROPPED_ENV_VARS="$GIT_CONFIG_WAS_SET"
+while IFS= read -r env_var; do
+	[ -n "$env_var" ] || continue
+	if [ -n "${!env_var+x}" ]; then
+		case "$env_var" in
+		# Not everything on git's list AIMS git somewhere, and the warning below
+		# is only about the ones that do — its whole advice is "clear these or
+		# your own commands against the clone path act on what they name", which
+		# has to be true of every name it prints or the warning is a false alarm.
+		# So three kinds are dropped silently. The two saved above inject config
+		# the clone's later user is MEANT to see (that is what the
+		# surviving-remote check reads them for). `GIT_PREFIX` names a path
+		# INSIDE the current worktree and redirects nothing at all; git exports
+		# it to every alias, so reporting it would fire the whole warning on a
+		# plain `git someAlias` wrapper with nothing dangerous set.
+		# `GIT_INTERNAL_SUPER_PREFIX` joins it for the same reason and has to be
+		# named explicitly because it is on the list only on the OLDER half of
+		# the supported range — `git rev-parse --local-env-vars` prints it on
+		# 2.36.6 and 2.39.5 and no longer on 2.43.7 — so on the floor this file
+		# promises it would otherwise fall through to the warning. It is a
+		# DISPLAY prefix git prepends to the paths it prints while recursing
+		# into a submodule; like `GIT_PREFIX` it names nothing outside the
+		# current repository and redirects nothing.
+		# `GIT_IMPLICIT_WORK_TREE`, `GIT_NO_REPLACE_OBJECTS` and
+		# `GIT_REPLACE_REF_BASE` are settings rather than locations: they change
+		# how git reads whichever repository it is already pointed at.
+		# What is left — `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`,
+		# `GIT_INDEX_FILE`, the object-directory pair, `GIT_GRAFT_FILE`,
+		# `GIT_SHALLOW_FILE` and `GIT_CONFIG` — each names another repository's
+		# directory, index, objects or config FILE, which is exactly the hazard
+		# the sentence describes. `GIT_CONFIG` earns its place there: it is the
+		# caller's file that `git -C "$DC" config` then writes to.
+		GIT_CONFIG_COUNT | GIT_CONFIG_PARAMETERS | GIT_PREFIX | GIT_INTERNAL_SUPER_PREFIX | GIT_IMPLICIT_WORK_TREE | GIT_NO_REPLACE_OBJECTS | GIT_REPLACE_REF_BASE) ;;
+		*) DROPPED_ENV_VARS="${DROPPED_ENV_VARS:+$DROPPED_ENV_VARS }$env_var" ;;
+		esac
+	fi
+	unset "$env_var"
+done <<<"$LOCAL_ENV_VARS"
+if [ -n "$DROPPED_ENV_VARS" ]; then
+	printf '%s: warning: dropped %s from this run, but that unset cannot reach your shell: they are still set there, they override "git -C", and until you clear them your own git commands against the clone path will act on whatever those variables name — the invoking repository, if that is where they point — rather than on the clone. Clear them before using the path this prints.\n' \
+		"$PROG" "$DROPPED_ENV_VARS" >&2
+fi
+
+# This worktree's own git directory, resolved once now that the environment can
+# no longer redirect it: the clone-root guard needs it further down, and it is
+# the worktree's own `.git/worktrees/<name>` rather than the shared directory.
+capture_path git -C "$SRC_TOP" rev-parse --absolute-git-dir ||
+	die "could not resolve this worktree's git directory"
+SRC_GIT_DIR="$CAPTURED_PATH"
+
+# --- Refuse a source whose object store is incomplete by design ---------------
+# A partial clone (`git clone --filter=…`) omits objects and records a PROMISOR
+# remote to fetch them from on demand; git tolerates their absence only because
+# that remote can still supply them. A local clone copies the objects that are
+# PRESENT and inherits none of that configuration, so the clone below would carry
+# every one of the source's refs while some objects those refs reach exist
+# nowhere it can look. Nothing fails while it is being built: the mirror succeeds
+# and this helper exits 0. What breaks is the first read of such an object, and
+# not always as a failure. Measured on git 2.47.3 and 2.36.6: from a
+# `--filter=blob:none` source, `cat-file -p <ref>:<path>` printed the blob in the
+# source and answered `fatal: Not a valid object name` in the clone; from a
+# `--filter=tree:0` source the same read answered `fatal: path '<path>' does not
+# exist in '<ref>'` — non-zero, but asserting something that is FALSE of the
+# repository being copied. So the caller gets a verification baseline that
+# disagrees with the source, in the one direction a subagent would take at face
+# value.
+# Neither repair is this helper's to make. Materializing the omitted objects
+# means an unbounded fetch from the promisor remote, over a network connection
+# nobody asked it to open. Carrying the promisor configuration over keeps them
+# fetchable, but only by handing back a clone that depends on a repository
+# outside it and holds a remote pointing there — the coupling this file exists to
+# remove, and what the surviving-remote check below refuses when the caller's own
+# configuration leaves one. So the source is refused instead, before anything is
+# created, and the refusal names the configuration it was decided by rather than
+# only the conclusion.
+# It is decided by CONFIGURATION, and so is deliberately over-inclusive: a
+# partial clone whose objects have since all been materialized is refused too,
+# and materializing them does not lift the refusal while the configuration is
+# still there. Deciding it by completeness instead means traversing every object
+# reachable from every ref on every run — history-sized work on each invocation,
+# to admit the one shape a full clone of the same repository answers better
+# anyway. The diagnostic says which it is, so the caller is not left inferring
+# that their objects are missing.
+# The markers are the three git itself registers a promisor remote from, taken
+# from its own config parser (`promisor_remote_config` in promisor-remote.c):
+# `remote.<name>.promisor` when it reads as a true BOOLEAN, and
+# `remote.<name>.partialclonefilter` by PRESENCE — that key creates the promisor
+# remote if the first has not already, so a filter-only source lazily fetches
+# exactly the same way, measured — plus `extensions.partialClone`, which names
+# the one remote a repository may designate that way; git tries it LAST of its
+# promisor remotes rather than first, so "the default" would misdescribe it.
+# All three are read, because which of them a repository carries is a function of
+# the git that made it and of what has been done to it since: measured, both
+# 2.36.6 and 2.47.3 write the first two and neither writes the third, and
+# removing either of the pair leaves the other still lazily fetching. A
+# `promisor` value git cannot read as a boolean counts as set: git rejects such a
+# value outright rather than deciding it, so the repository is one this helper
+# cannot show is complete — and the diagnostic says which of the two it is. An
+# explicit `false` does not count, because that is git declining to treat the
+# remote as a promisor — but it does not veto a
+# `partialclonefilter` beside it, for the same reason git's parser does not.
+# A SHALLOW source is a different shape and gets no marker check: what its clone
+# loses is objects no ref names, not objects the source's refs REACH. See the
+# shallow paragraph in the ref-namespace note for that bound and both halves of
+# how it shows up.
+# The two `remote.<name>.*` keys are read with the caller's COMMAND-SCOPE config
+# restored — the two variables saved above — because git's promisor parser reads
+# ordinary merged configuration, command-scope included, so a marker injected
+# that way is as real as one in a config file. Measured: a source with no marker
+# of its own fetched lazily under an injected one. Left stripped, such a marker
+# slipped past this refusal and was caught only by the surviving-remote check
+# after the clone had been built.
+PROMISOR_CONFIG_RC=0
+PROMISOR_KEYS="$(env ${SAVED_CONFIG_ENV[@]+"${SAVED_CONFIG_ENV[@]}"} git -C "$SRC_TOP" config --name-only --get-regexp '^remote\..*\.(promisor|partialclonefilter)$')" ||
+	PROMISOR_CONFIG_RC=$?
+# 1 is "no such key", the ordinary answer for a repository that is not a partial
+# clone. Anything else means the question was not answered, and a helper that
+# cannot tell must not proceed to hand back a clone it cannot vouch for.
+[ "$PROMISOR_CONFIG_RC" -eq 0 ] || [ "$PROMISOR_CONFIG_RC" -eq 1 ] ||
+	die "could not ask git whether the invoking repository is a partial clone: 'git config --name-only --get-regexp ^remote\\..*\\.(promisor|partialclonefilter)\$' exited $PROMISOR_CONFIG_RC"
+SRC_PARTIAL_MARKER=""
+while IFS= read -r promisor_key; do
+	[ -n "$promisor_key" ] || continue
+	# The suffix decides how the key is read, exactly as git's parser reads it:
+	# `promisor` is a boolean and an explicit false is not a promisor remote,
+	# while `partialclonefilter` registers one by being there at all. Matching the
+	# LAST component is what makes both right for a remote whose own name ends in
+	# one of these words.
+	case "$promisor_key" in
+	*.promisor)
+		# EVERY value, not just the last one git's `--get` reports. git registers
+		# the remote on any value that reads true, and a false is a no-op rather
+		# than a removal — measured, a `promisor = true` followed by a
+		# `promisor = false` still lazily fetches, while `--get` sees only the
+		# trailing `false` and would wave that repository through.
+		promisor_values="$(env ${SAVED_CONFIG_ENV[@]+"${SAVED_CONFIG_ENV[@]}"} git -C "$SRC_TOP" config --type=bool --get-all "$promisor_key")" ||
+			promisor_values=unreadable
+		promisor_registers=""
+		while IFS= read -r promisor_value; do
+			[ -n "$promisor_value" ] || continue
+			# `unreadable` lands here too, and counts as registering.
+			[ "$promisor_value" = false ] || {
+				promisor_registers=yes
+				break
+			}
+		done <<<"$promisor_values"
+		[ -n "$promisor_registers" ] || continue
+		;;
+	esac
+	SRC_PARTIAL_MARKER="$promisor_key"
+	break
+done <<<"$PROMISOR_KEYS"
+if [ -z "$SRC_PARTIAL_MARKER" ]; then
+	# Read from the repository's OWN config, and NOT with the command-scope
+	# variables restored — the opposite of the two keys above, because git reads
+	# it in the opposite place. It is a repository-format extension, taken from
+	# the repository's config file, so `-c extensions.partialClone=origin`, the
+	# same key in `GIT_CONFIG_PARAMETERS`, and one in a global file all leave the
+	# repository whole. Measured on 2.36.6 and 2.47.3: injected either way the
+	# source did NOT fetch lazily, and did the moment the same key was written
+	# into its own config. Asking any wider here would refuse repositories git
+	# itself considers complete.
+	PROMISOR_CONFIG_RC=0
+	git -C "$SRC_TOP" config --local --get extensions.partialClone >/dev/null ||
+		PROMISOR_CONFIG_RC=$?
+	[ "$PROMISOR_CONFIG_RC" -eq 0 ] || [ "$PROMISOR_CONFIG_RC" -eq 1 ] ||
+		die "could not ask git whether the invoking repository is a partial clone: 'git config --local --get extensions.partialClone' exited $PROMISOR_CONFIG_RC"
+	[ "$PROMISOR_CONFIG_RC" -ne 0 ] || SRC_PARTIAL_MARKER=extensions.partialClone
+fi
+[ -z "$SRC_PARTIAL_MARKER" ] ||
+	die "refusing: the invoking repository carries partial-clone CONFIGURATION ('$SRC_PARTIAL_MARKER' is set). Git treats such a repository as keeping part of its history on a promisor remote, to be fetched when something asks for it — and where that setting holds a value git rejects rather than reads, it cannot be shown to be anything else. A local clone copies the objects that are here and inherits none of that configuration, so a clone of it can carry refs whose objects it can neither find nor fetch — and a read of one either fails or, with a tree filter, reports that a path present in this repository does not exist, inside a clone this helper had just reported as a faithful copy of it. Fetching those objects here would mean an unbounded network fetch nobody asked for; leaving them fetchable would mean handing back a clone still tied to a repository outside it. Run $PROG somewhere that setting is absent — a full clone of this repository, or, if the setting turns out to be in your own global or command-scope configuration rather than the repository's, that configuration without it ('git config --show-origin --get-all $SRC_PARTIAL_MARKER' names the file it is in). This refusal reads the partial-clone CONFIGURATION rather than traversing the history to re-derive completeness on every run, so it is deliberately over-inclusive: if every object has in fact been materialized, this repository is not broken, but the refusal still stands while that configuration is there."
+
+if [ -n "$REF_SEEN" ]; then REF_ARG="$REF"; else REF_ARG="HEAD"; fi
+# What the caller actually wrote, kept for diagnostics: REF_ARG is rewritten to a
+# branch's full ref name below, and reporting that back would name something the
+# caller never typed.
+REF_DISPLAY="$REF_ARG"
+
+# Which branch (if any) the clone should check out. With no <ref> this follows
+# the INVOKING worktree's HEAD; with one it follows the ref only when that ref
+# is a local branch.
+# Decided BEFORE the commit is resolved, because a local branch that wins here
+# also decides WHICH commit is resolved — see the REF_ARG rewrite below.
+BRANCH=""
+if [ -z "$REF_SEEN" ]; then
+	if HEAD_SYMREF="$(git -C "$SRC_TOP" symbolic-ref --quiet HEAD 2>/dev/null)"; then
+		case "$HEAD_SYMREF" in
+		refs/heads/*) BRANCH="${HEAD_SYMREF#refs/heads/}" ;;
+		esac
+	fi
+else
+	# A fully qualified local head names its branch just as plainly as the short
+	# form does; without this it would resolve as an ordinary commit-ish and
+	# detach, contradicting the documented "names a local branch" behavior.
+	case "$REF" in
+	refs/heads/*) BRANCH_CANDIDATE="${REF#refs/heads/}" ;;
+	*)
+		# ... every other spelling asks GIT which ref the string names, rather
+		# than working it out here. `rev-parse --symbolic-full-name` walks the
+		# same `ref_rev_parse_rules` ladder that decides what the caller's own
+		# `git rev-parse <ref>` resolves — `<name>` itself, which is where a
+		# `$GIT_DIR` root ref lives, then `refs/<name>`, `refs/tags/<name>`,
+		# `refs/heads/<name>`, `refs/remotes/<name>` — and prints the full name of
+		# the ref it landed on, or nothing at all for a string that is no ref (a
+		# raw object id, `main~1`, an unknown name). So `refs/heads/<name>` comes
+		# back exactly when the branch is what git resolves the string to, and
+		# something else comes back whenever anything wins ahead of it: a live
+		# root ref's own name, the end of its symref chain, a tag, a
+		# remote-tracking ref, or the tag that shadows a branch named literally
+		# `refs/tags/v1`. Either way the clone lands on the commit the caller's own
+		# `git rev-parse <ref>` names — checked out as that branch when git's answer
+		# IS the branch, detached at the commit otherwise. A ref that wins ahead of
+		# the branch still answers WITH the branch when it is a symref resolving
+		# through to it, which all three of the shapes that can win do: a `$GIT_DIR`
+		# root ref, `refs/<name>`, and a tag (measured for each). Every one of them
+		# is checked out rather than detached, because git resolves it THROUGH that
+		# branch, so the commit is the same either way.
+		# `core.warnAmbiguousRefs=false` is what makes that answer TOTAL, and
+		# leaving it out is what makes this look like it cannot work: with the
+		# warning on, `expand_ref` keeps walking past its first hit and rev-parse
+		# reports an ambiguity INSTEAD of a name — and every case this decision
+		# exists for is ambiguous by construction, a root ref or a tag beside a
+		# same-named branch. With it off it stops at the first hit, which is the
+		# one git resolves the string through anyway; the setting only ever
+		# governed a warning, never the choice.
+		# This block used to read `$GIT_DIR/<name>` and parse it the way
+		# `parse_loose_ref_contents` does, against a list of root-ref names. It
+		# was patched five times — hex case, `ref:` spacing, hash width, embedded
+		# newlines, NUL — and still diverged, because each fix was a guess at the
+		# next rule. Asking git cannot diverge from git, and the move closed three
+		# more shapes at once: a symref whose target is ITSELF a root ref, a
+		# locale-dependent `[[:space:]]` trim where git's `isspace` is ASCII-only,
+		# and any one-level `$GIT_DIR` file no list names — a `COMMIT_EDITMSG`
+		# that happens to hold an object id included. The `show-ref --verify`
+		# limitation that forced the file reading in the first place — it cannot
+		# report `$GIT_DIR` root refs before git 2.45 — does not reach rev-parse,
+		# which resolves root refs, and symref chains through them, on every git
+		# this helper supports; measured on 2.36.6, 2.39.5, 2.43.7 and 2.47.3.
+		BRANCH_CANDIDATE=""
+		REF_FULL_NAME="$(git -C "$SRC_TOP" -c core.warnAmbiguousRefs=false rev-parse \
+			--verify --quiet --symbolic-full-name --end-of-options "$REF" 2>/dev/null)" ||
+			REF_FULL_NAME=""
+		if [ "$REF_FULL_NAME" = "refs/heads/$REF" ]; then
+			BRANCH_CANDIDATE="$REF"
+		elif [ "$REF_FULL_NAME" = "refs/tags/$REF" ] &&
+			! git -C "$SRC_TOP" symbolic-ref --quiet -- "$REF" >/dev/null 2>&1 &&
+			! git -C "$SRC_TOP" show-ref --verify --quiet -- "refs/$REF" 2>/dev/null; then
+			# The deliberate branch-over-tag departure documented above, applied
+			# only where it was meant. git can land on `refs/tags/<name>` two
+			# other ways: a root ref `<name>`, or a `refs/<name>`, that is a
+			# SYMREF aimed at the tag — and taking the branch for either would be
+			# exactly the wrong-baseline substitution this block exists to
+			# prevent, since git names the tag's commit there and the branch's is
+			# some other. Those two are the whole remainder: a ref matched
+			# DIRECTLY resolves to its own name, so anything ahead of the tag that
+			# was not a symref could not have printed the tag's name.
+			BRANCH_CANDIDATE="$REF"
+		fi
+		;;
+	esac
+	if [ -n "$BRANCH_CANDIDATE" ] &&
+		git -C "$SRC_TOP" show-ref --verify --quiet "refs/heads/$BRANCH_CANDIDATE" 2>/dev/null; then
+		BRANCH="$BRANCH_CANDIDATE"
+		# Resolve the COMMIT through that branch's full ref name too. A bare
+		# short name is disambiguated by gitrevisions in favour of
+		# `refs/tags/<name>` over `refs/heads/<name>`, so a repository carrying
+		# both `release` the tag and `release` the branch would otherwise
+		# resolve the TAG's commit here, check the branch out, and then trip the
+		# HEAD-mismatch guard further down — which would detach at the tag and
+		# report a ref that "moved during the clone" when nothing moved at all.
+		# The caller named a local branch; the branch is what gets verified.
+		REF_ARG="refs/heads/$BRANCH_CANDIDATE"
+	fi
+fi
+
+SHA="$(git -C "$SRC_TOP" rev-parse --verify --quiet "${REF_ARG}^{commit}" 2>/dev/null)" ||
+	die "'$REF_DISPLAY' does not resolve to a commit in the invoking worktree"
+[ -n "$SHA" ] || die "'$REF_DISPLAY' does not resolve to a commit in the invoking worktree"
+
+# Everything the clone root must stay out of: the invoking worktree, the shared
+# git directory, and every other worktree registered against this repository.
+REPO_PATHS=("$SRC_TOP")
+
+# Every step of this enumeration fails closed. A path this helper does not learn
+# about is one the clone root could then be placed inside, which is the single
+# failure the root check exists to prevent — so "could not tell" must stop the
+# run, never degrade into a shorter list.
+add_repo_path() {
+	local raw="$1"
+	[ -n "$raw" ] || die "git reported an empty repository path; refusing to guess where the repository is"
+	canon "$raw" ||
+		die "could not canonicalize the repository path '$raw'; refusing to guess where the repository is"
+	REPO_PATHS+=("$CANON_RESULT")
+}
+
+# Enumerate every worktree registered against this repository, using `-z` (git
+# 2.36+) and nothing else. Its NUL delimiters cannot survive command
+# substitution, so the output is read from a temporary file.
+#
+# The newline form is NOT an acceptable fallback and is deliberately not
+# attempted: `git worktree list --porcelain` prints a path containing a newline
+# RAW rather than quoting it, which splits one record across lines — and the
+# continuation can impersonate an attribute line (`...//prefix\nlocked x` yields a
+# truncated `worktree .../prefix` followed by a plausible `locked x`), so no
+# parse of it can tell a real record from a split one. A worktree this helper
+# does not learn about is one the clone root could then be placed inside, so an
+# older git is refused rather than guessed at.
+collect_worktree_paths() {
+	local line records=0 git_err=""
+	# capture_path, not $(…): $TMPDIR is not this helper's to constrain, and one
+	# ending in a newline would otherwise leave these files at paths that are not
+	# the ones mktemp created — read from the wrong place and cleaned up at the
+	# wrong place.
+	capture_path mktemp "${TMPDIR:-/tmp}/dc-worktrees.XXXXXX" ||
+		die "could not create a temporary file to enumerate this repository's worktrees"
+	WT_LIST_FILE="$CAPTURED_PATH"
+	capture_path mktemp "${TMPDIR:-/tmp}/dc-worktrees-err.XXXXXX" ||
+		die "could not create a temporary file to capture git's diagnostics"
+	WT_ERR_FILE="$CAPTURED_PATH"
+	# git's own stderr is reported rather than swallowed: an old git, a corrupt
+	# repository, and an unreadable .git/worktrees entry all fail here, and
+	# blaming the version for all three sends the reader after the wrong bug.
+	if ! git -C "$SRC_TOP" worktree list --porcelain -z >"$WT_LIST_FILE" 2>"$WT_ERR_FILE"; then
+		IFS= read -r -d '' git_err <"$WT_ERR_FILE" || true
+		die "could not enumerate this repository's worktrees with 'git worktree list --porcelain -z' (needs git 2.36+, but any repository error fails here too — git said: ${git_err:-nothing}). Refusing to place a clone without knowing where the worktrees are: the newline form cannot report a path containing a newline unambiguously."
+	fi
+	rm -f -- "$WT_ERR_FILE"
+	WT_ERR_FILE=""
+	while IFS= read -r -d '' line; do
+		case "$line" in
+		"worktree "*)
+			add_repo_path "${line#worktree }"
+			records=$((records + 1))
+			;;
+		esac
+	done <"$WT_LIST_FILE"
+	rm -f -- "$WT_LIST_FILE"
+	WT_LIST_FILE=""
+	# A successful listing with no records at all is not "this repository has no
+	# worktrees" — every repository has at least its main one. It is a listing
+	# this helper cannot trust, and trusting it would leave the clone free to
+	# land inside a worktree it never heard of. Fail closed like every other step.
+	[ "$records" -gt 0 ] ||
+		die "'git worktree list --porcelain -z' succeeded but reported no worktrees; a repository always has at least its main worktree, so this listing cannot be trusted"
+}
+
+# `--path-format=absolute` because `--git-common-dir` alone answers RELATIVE to
+# the git process's own working directory (`.git`, `../../.git`), while
+# add_repo_path canonicalizes against THIS script's `$PWD` — which `git -C` moved
+# away from. Run from a nested subdirectory the two disagree, and the path added
+# to the refuse-list is one that does not exist. It happens to be harmless here,
+# since a non-linked worktree's common dir always sits under `$SRC_TOP`, which is
+# on the list already; asking for an absolute answer costs nothing and removes
+# the need to know that.
+capture_path git -C "$SRC_TOP" rev-parse --path-format=absolute --git-common-dir ||
+	die "could not resolve this repository's shared git directory"
+add_repo_path "$CAPTURED_PATH"
+add_repo_path "$SRC_GIT_DIR"
+collect_worktree_paths
+
+# --- Clone root --------------------------------------------------------------
+if [ -n "${DC_ROOT:-}" ]; then
+	ROOT_RAW="$DC_ROOT"
+	ROOT_SRC="DC_ROOT"
+else
+	ROOT_RAW="${TMPDIR:-/tmp}"
+	ROOT_SRC="${TMPDIR:+TMPDIR}"
+	ROOT_SRC="${ROOT_SRC:-the /tmp default}"
+fi
+# Both root rules are checked on the RAW value FIRST, because canonicalizing it
+# changes it and a guard applied afterwards is a guard on something else:
+# canon() resolves a relative path against $PWD and asserts its own result is
+# absolute, so an absolute-path test applied to the canonicalized value could
+# never fail and a relative root would sail through it silently.
+case "$ROOT_RAW" in
+/*) ;;
+*)
+	die "the clone root ($ROOT_SRC) must be an absolute path: '$ROOT_RAW'. A relative one resolves against whatever directory the caller happens to be in, so dc-enter run from a subdirectory and dc-remove run from the repository root would derive different clones from the same $ROOT_SRC — the clone would be left behind and the removal would report nothing to do."
+	;;
+esac
+# The one path component a caller chooses, and the only one that could carry a
+# newline into the printed path: the slug is validated, the agent is sanitized,
+# and the hash is digits. Refused because the calling convention is one path on
+# one LINE of stdout — an agent that writes `dc-enter probe | tail -n 1`, as the
+# incident's script did, would get a truncated path and hand it to `rm -rf`.
+case "$ROOT_RAW" in
+*"
+"*)
+	die "the clone root ($ROOT_SRC) must not contain a newline: this helper prints the clone's path as a single line of stdout, and a caller reading that path line-wise would act on a truncated one. Point $ROOT_SRC at a newline-free path."
+	;;
+esac
+canon "$ROOT_RAW" || die "could not canonicalize the clone root ($ROOT_SRC): '$ROOT_RAW'"
+ROOT="$CANON_RESULT"
+[ "$ROOT" != "/" ] || die "the clone root ($ROOT_SRC) must not be the filesystem root"
+# Re-applied to the RESOLVED root, which can carry a newline the raw value never
+# had: a symlinked component resolves to wherever it points, and that directory's
+# real name is not the caller's to vouch for.
+case "$ROOT" in
+*"
+"*)
+	die "the clone root ($ROOT_SRC='$ROOT_RAW') resolves to a path containing a newline: this helper prints the clone's path as a single line of stdout, and a caller reading that path line-wise would act on a truncated one. Point $ROOT_SRC at a path that resolves somewhere newline-free."
+	;;
+esac
+
+AGENT_RAW="${DC_AGENT:-}"
+if [ -z "$AGENT_RAW" ]; then AGENT_RAW="${CONTAINER_NAME:-}"; fi
+if [ -z "$AGENT_RAW" ]; then AGENT_RAW="${USER:-}"; fi
+if [ -z "$AGENT_RAW" ]; then AGENT_RAW="${LOGNAME:-}"; fi
+if [ -z "$AGENT_RAW" ]; then AGENT_RAW="$(id -un 2>/dev/null || true)"; fi
+if [ -z "$AGENT_RAW" ]; then AGENT_RAW="agent"; fi
+AGENT="$(sanitize_component "$AGENT_RAW")"
+[ -n "$AGENT" ] || AGENT="agent"
+
+# Per-worktree component: two agents in different worktrees of one repository
+# must not collide on a slug even when they share an account and a temp root.
+HASH_LINE="$(cksum <<<"$SRC_TOP")" || die "could not hash the invoking worktree path"
+REPO_HASH="${HASH_LINE%% *}"
+[ -n "$REPO_HASH" ] || die "could not hash the invoking worktree path"
+
+SCOPE_DIR="$ROOT/dc-$AGENT-$REPO_HASH"
+SESSION_DIR="$SCOPE_DIR/$SLUG"
+CLONE_DIR="$SESSION_DIR/repo"
+MARKER="$SESSION_DIR/$MARKER_NAME"
+
+# Refuse — non-zero, nothing on stdout — rather than falling back somewhere
+# convenient. Checked on the fully resolved target, so a symlinked root that
+# lands inside the repository is caught too.
+for repo_path in "${REPO_PATHS[@]}"; do
+	if path_within "$SESSION_DIR" "$repo_path"; then
+		die "refusing: the clone root ($ROOT_SRC='$ROOT_RAW') resolves inside the invoking repository ($repo_path). A clone inside the repository is not isolation; point $ROOT_SRC somewhere outside it."
+	fi
+done
+
+# --- Removal guard -----------------------------------------------------------
+# The only rm -rf in this helper. It runs solely against paths this helper
+# derived and owns, re-verified at the moment of use.
+safe_rm_session() {
+	local target="$1" resolved
+	[ -n "$target" ] || die "internal error: empty removal target"
+	canon "$target" || die "internal error: cannot canonicalize '$target'"
+	resolved="$CANON_RESULT"
+	[ "$resolved" = "$target" ] ||
+		die "refusing to remove '$target': it resolves to '$resolved', so a path component is a symlink out of the clone root"
+	path_within "$resolved" "$SCOPE_DIR" ||
+		die "refusing to remove '$resolved' — outside the clone scope $SCOPE_DIR"
+	[ "$resolved" != "$SCOPE_DIR" ] ||
+		die "internal error: refusing to remove the clone scope directory itself"
+	[ "$resolved" != "$ROOT" ] ||
+		die "internal error: refusing to remove the clone root itself"
+	local repo_path
+	for repo_path in "${REPO_PATHS[@]}"; do
+		if path_within "$resolved" "$repo_path"; then
+			die "refusing to remove '$resolved' — inside the invoking repository"
+		fi
+	done
+	rm -rf -- "$resolved"
+}
+
+# The containment check above is lexical, and `$SCOPE_DIR` is the one component
+# appended to an already-canonical root — so resolving it is what makes that
+# check binding. A pre-existing symlink there would otherwise be followed by the
+# mkdir below and land the clone wherever it points, including back inside the
+# repository. Checked BEFORE anything is created, so a refusal leaves no trace.
+if [ -L "$SCOPE_DIR" ]; then
+	die "refusing: '$SCOPE_DIR' is a symlink, so the clone would not land where it was derived. Remove it, or point $ROOT_SRC elsewhere."
+fi
+canon "$SCOPE_DIR" || die "could not canonicalize the clone scope directory: $SCOPE_DIR"
+SCOPE_DIR_REAL="$CANON_RESULT"
+if [ "$SCOPE_DIR_REAL" != "$SCOPE_DIR" ]; then
+	die "refusing: '$SCOPE_DIR' resolves to '$SCOPE_DIR_REAL', so the clone would not land where it was derived. Point $ROOT_SRC at a path with no symlinked components."
+fi
+
+# --- Derive the slug's clone from scratch ------------------------------------
+# `-m 0700`, because the default root is `/tmp`: under an ordinary `0022` umask
+# these would be created `0755`, and a repository the caller keeps behind an
+# inaccessible home directory would be copied — source, objects and all — into a
+# path every other account on the machine can walk into. The clone is a copy of
+# the invoking repository, so it deserves the invoking repository's privacy.
+# What this covers is the directories THIS helper creates. `mkdir -p` applies the
+# mode to the final component only, so a `$DC_ROOT` it has to create on the way
+# keeps the umask default — harmless, since the scope directory beneath it is the
+# one that stops the traversal — and an already-existing scope directory keeps
+# whatever mode it already had, since `-p` on an existing path changes nothing.
+# `-p` is what makes the call idempotent across the runs that share a scope, so
+# SC2174's warning about `-m` reaching only the deepest directory is the
+# behaviour described above rather than a surprise.
+# shellcheck disable=SC2174
+mkdir -m 0700 -p -- "$SCOPE_DIR" >&2 || die "could not create the clone scope directory: $SCOPE_DIR"
+
+if [ -L "$SESSION_DIR" ]; then
+	die "refusing: '$SESSION_DIR' is a symlink, so it points somewhere this helper did not create. Remove it yourself if it is yours, or pick another slug."
+fi
+if [ -e "$SESSION_DIR" ]; then
+	if marker_is_ours "$MARKER"; then
+		# Ours by the same proof dc-remove demands — but possibly a CONCURRENT
+		# sibling's, since siblings of one container share an identity and a
+		# worktree and so derive this very path. Discarding it is therefore an
+		# explicit decision, never a default. See REUSE in the header.
+		[ -n "$REPLACE" ] ||
+			die "refusing: slug '$SLUG' already has a clone at $SESSION_DIR (agent=${MARKER_AGENT:-unknown}, created=${MARKER_CREATED:-unknown}). A concurrent sibling may be verifying in it right now, and discarding it would pull the refs and objects out from under that sibling. Pick a different slug; or, if that clone is yours and you are finished with it, 'dc-remove $SLUG' or 'dc-enter --replace $SLUG'."
+		printf '%s: --replace: discarding the existing clone for slug %s and re-deriving it\n' \
+			"$PROG" "$SLUG" >&2
+		safe_rm_session "$SESSION_DIR"
+	else
+		die "refusing: '$SESSION_DIR' exists but $PROG cannot prove it created it — no $MARKER_NAME marker recording this clone path and this source repository. Remove it yourself if it is yours, or pick another slug."
+	fi
+fi
+
+CREATED_SESSION=""
+cleanup_failed_session() {
+	local status=$?
+	if [ -n "$CREATED_SESSION" ]; then
+		safe_rm_session "$CREATED_SESSION" || true
+	fi
+	exit "$status"
+}
+# `-m 0700` for the same reason the scope directory above carries it, and not
+# merely because it sits inside one: a scope directory that predates this helper
+# version, or one a caller pointed `$DC_ROOT` at directly, is not necessarily
+# private itself, and this is the directory that actually holds the clone.
+mkdir -m 0700 -- "$SESSION_DIR" >&2 || die "could not create the clone directory: $SESSION_DIR"
+CREATED_SESSION="$SESSION_DIR"
+trap cleanup_failed_session EXIT
+
+# Marker first: a clone that dies halfway must still be recognizable as ours, so
+# a later --replace can re-derive it instead of refusing to touch what looks like
+# a stranger's leftovers. Written to a temp name and renamed into place, so the
+# marker is either absent or complete — a half-written one would carry the magic
+# without the clone path, and the ownership proof would then reject it forever.
+# NUL-delimited: see read_marker for why.
+MARKER_TMP="$SESSION_DIR/.$MARKER_NAME.tmp"
+{
+	printf '%s\0' "$MARKER_MAGIC"
+	printf 'helper=%s\0' "$PROG"
+	printf 'agent=%s\0' "$AGENT"
+	printf 'source=%s\0' "$SRC_TOP"
+	printf 'ref=%s\0' "$REF_ARG"
+	printf 'commit=%s\0' "$SHA"
+	printf 'clone=%s\0' "$CLONE_DIR"
+	printf 'created=%s\0' "$(date -u +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || echo unknown)"
+} >"$MARKER_TMP" || die "could not write the clone marker: $MARKER_TMP"
+mv -f -- "$MARKER_TMP" "$MARKER" || die "could not put the clone marker in place: $MARKER"
+
+# Dissociation — making "independent object store" true for a source that is
+# ITSELF a borrowing clone — is deliberately NOT `git clone --dissociate` here,
+# and happens after the ref mirror below instead. A local clone copies the
+# source's `.git/objects/info/alternates` across — a relative entry arrives
+# resolved to an absolute path rather than byte-for-byte, measured, which changes
+# nothing about the borrowing — wherever git takes the local path at all, which
+# for a shallow source it does not, so that one arrives with no alternates file
+# and nothing below runs. For every other source, cloning a
+# `--shared`/`--reference` repository hands back a clone still borrowing from
+# that third repository, holding no local copy of the borrowed objects and
+# breaking outright the moment the external store is pruned or removed. That much
+# `--dissociate` does fix — but it fixes it too early. `--dissociate` copies in
+# the objects reachable from the refs THE CLONE HAS, and at that moment the clone
+# has only the branches and tags `git clone` itself fetched. A source ref outside
+# those namespaces — the `refs/pruned/*`, `refs/stash`, `refs/notes/*` the mirror
+# below exists to carry — is not yet present, so an object reachable only from
+# one of them is not copied and the alternate is then dropped out from under it.
+# The mirror's `update-ref` fails with "trying to write ref ... with nonexistent
+# object" and the run dies: the exact-ref-namespace contract cannot be met for
+# that source at all. (Measured on a `git clone --shared` source with a custom
+# ref pointing at an object held only by the alternate.) `git clone -h` promises
+# no better — it documents `--dissociate` as being for objects borrowed "while
+# cloning", not for refs the initial clone never asked for.
+# So the alternate is kept until the clone holds every ref the source has, and
+# dropped once each of them is reachable locally.
+# Note this is orthogonal to `DC_HARDLINKS` below, which is about the source's
+# OWN object store rather than a third repository's.
+CLONE_ARGS=(--quiet --no-checkout --origin "$SRC_REMOTE")
+if [ "${DC_HARDLINKS:-}" != "1" ]; then
+	CLONE_ARGS+=(--no-hardlinks)
+fi
+# Every git stdout below is redirected to stderr: the only thing this helper is
+# allowed to print on stdout is the final path.
+git clone "${CLONE_ARGS[@]}" -- "$SRC_TOP" "$CLONE_DIR" >&2 ||
+	die "git clone failed: $SRC_TOP -> $CLONE_DIR"
+
+# Drop the remote-tracking HEAD `git clone` invents, explicitly and by name. The
+# deletion pass below enumerates with `for-each-ref`, which does not report a
+# symbolic ref whose target is gone — and this one dangles the moment its target
+# is deleted, so it would survive that pass and leave the clone holding a ref the
+# source never had. Deleting a ref that is not there already succeeds, so a
+# failure here is a real one and must not be swallowed.
+git -C "$CLONE_DIR" update-ref --no-deref -d "refs/remotes/$SRC_REMOTE/HEAD" >&2 ||
+	die "could not drop the remote-tracking HEAD git clone invented"
+
+# Detach before rewriting refs: the pass below deletes every branch, including
+# the one `git clone` checked out.
+git -C "$CLONE_DIR" update-ref --no-deref HEAD "$SHA" >&2 ||
+	die "could not point the clone's HEAD at $SHA"
+
+# --- Mirror the source's refs exactly ----------------------------------------
+# Enumerated from the source's own ref store, not fetched: see REF NAMESPACE in
+# the header for why a refspec fetch cannot promise exactness. Ref names cannot
+# contain a space or a control character, so the line-oriented `for-each-ref`
+# output is unambiguous here — the `-z` form is used for the update-ref input,
+# whose VALUES (the paths git reports) carry no such guarantee.
+#
+# Two update-ref transactions, not one: a single transaction refuses to both
+# delete and recreate the same ref name.
+CLONE_REFS_FILE="$SESSION_DIR/.dc-refs-clone"
+SRC_REFS_FILE="$SESSION_DIR/.dc-refs-source"
+REF_UPDATES_FILE="$SESSION_DIR/.dc-refs-updates"
+
+git -C "$CLONE_DIR" for-each-ref --format='%(refname)' >"$CLONE_REFS_FILE" ||
+	die "could not enumerate the clone's own refs"
+: >"$REF_UPDATES_FILE" || die "could not stage the clone's ref updates"
+while IFS= read -r ref_name; do
+	[ -n "$ref_name" ] || continue
+	# `option no-deref` so a symbolic ref is deleted itself rather than resolved
+	# and its TARGET deleted — which would also collide with the target's own
+	# delete record and abort the transaction.
+	printf 'option no-deref\0delete %s\0\0' "$ref_name" >>"$REF_UPDATES_FILE" ||
+		die "could not stage the clone's ref updates"
+done <"$CLONE_REFS_FILE"
+git -C "$CLONE_DIR" update-ref --stdin -z <"$REF_UPDATES_FILE" >&2 ||
+	die "could not clear the refs git clone created in the clone"
+
+git -C "$SRC_TOP" for-each-ref --format='%(refname) %(objectname) %(symref)' >"$SRC_REFS_FILE" ||
+	die "could not enumerate the source's refs"
+: >"$REF_UPDATES_FILE" || die "could not stage the clone's ref updates"
+while IFS= read -r ref_line; do
+	[ -n "$ref_line" ] || continue
+	ref_name="${ref_line%% *}"
+	ref_rest="${ref_line#* }"
+	ref_object="${ref_rest%% *}"
+	ref_symref="${ref_rest#* }"
+	# Symbolic refs are recreated symbolically in the pass below; creating them
+	# here would flatten them to the object id they happen to resolve to.
+	[ -z "$ref_symref" ] || continue
+	printf 'create %s\0%s\0' "$ref_name" "$ref_object" >>"$REF_UPDATES_FILE" ||
+		die "could not stage the clone's ref updates"
+done <"$SRC_REFS_FILE"
+git -C "$CLONE_DIR" update-ref --stdin -z <"$REF_UPDATES_FILE" >&2 ||
+	die "could not mirror the source's refs into the clone"
+
+# A source ref that is symbolic (`refs/remotes/origin/HEAD` on almost every
+# clone) must arrive symbolic, so the mirror matches the source in shape as well
+# as in name and target. Done last, so every possible target already exists.
+while IFS= read -r ref_line; do
+	[ -n "$ref_line" ] || continue
+	ref_name="${ref_line%% *}"
+	ref_rest="${ref_line#* }"
+	ref_symref="${ref_rest#* }"
+	[ -n "$ref_symref" ] || continue
+	git -C "$CLONE_DIR" symbolic-ref "$ref_name" "$ref_symref" >&2 ||
+		die "could not restore the symbolic ref $ref_name in the clone"
+done <"$SRC_REFS_FILE"
+
+rm -f -- "$CLONE_REFS_FILE" "$SRC_REFS_FILE" "$REF_UPDATES_FILE"
+
+# --- Stop borrowing, now that every source ref is here ------------------------
+# The deferred half of the `--dissociate` note above. Only reached by a clone of
+# a source that borrows: an ordinary source writes no alternates file, the
+# condition is false, and nothing below runs — which is exactly what
+# `--dissociate` amounted to for that source anyway.
+# `repack -a` (deliberately without `--local`) packs everything reachable from
+# the clone's refs and HEAD, and a borrowed object is copied into that pack
+# rather than referenced across the alternate; the mirror above is what makes
+# "reachable" mean the SOURCE's full ref set rather than the branches and tags
+# `git clone` fetched. This is the same repack `--dissociate` performs, just held
+# until it can see every ref. Only once it succeeds is the alternates file
+# removed: dropping it first would take the borrowed objects away from a clone
+# that still needed them, and the failure would be a corrupt clone rather than a
+# refusal.
+capture_path git -C "$CLONE_DIR" rev-parse --absolute-git-dir ||
+	die "could not resolve the clone's git directory"
+CLONE_GIT_DIR="$CAPTURED_PATH"
+CLONE_ALTERNATES="$CLONE_GIT_DIR/objects/info/alternates"
+if [ -e "$CLONE_ALTERNATES" ]; then
+	git -C "$CLONE_DIR" repack -a -d --quiet >&2 ||
+		die "could not copy in the objects the clone borrows from another repository, so it cannot be made independent of it"
+	rm -f -- "$CLONE_ALTERNATES" ||
+		die "could not drop the clone's alternates file: $CLONE_ALTERNATES"
+fi
+
+# --- Settle HEAD, and only then ask what the clone can push to ----------------
+# The checkout comes BEFORE the two isolation checks below, and that ordering is
+# load-bearing rather than incidental. Both checks read the MERGED configuration
+# to answer what the clone's own user will see, and git's `includeIf
+# "onbranch:<pattern>"` makes part of that configuration a function of which
+# branch HEAD is on: a caller whose global config uses one to define a remote, or
+# a default push target, has it INACTIVE while the clone is still detached and
+# active the moment HEAD is attached to a matching branch. Checked before the
+# attach, both checks pass on a configuration the returned clone does not have,
+# and `git push` in it then writes a branch straight into the invoking repository
+# — the one thing the header promises has nowhere to go. (Measured with an
+# `onbranch:main` include defining a remote at the source: refused now, handed
+# back and pushable before.) So the final HEAD state is established first, and
+# the questions are asked of the clone as it will actually be handed over.
+# That, and no more: a `git checkout` INSIDE the clone can still activate an
+# include the handed-back branch did not match. Sweeping the mirrored branches
+# would not close it either, since an `onbranch:` pattern matches by name and the
+# branch that matches need not exist yet — so the bound is stated in the header
+# rather than approximated with a loop that would still miss `checkout -b`.
+#
+# The working tree is always materialized by detaching at the commit resolved up
+# front, and a branch checkout is then made by pointing HEAD at the branch — not
+# by `git checkout "$BRANCH"`. A branch operand shares git's option-parsing
+# position, so a local head whose name begins with a dash — `refs/heads/-foo`
+# passes `git check-ref-format`, and the qualified-form normalization above
+# correctly derives `-foo` from it — is read as a bundle of switches and the run
+# dies with `unknown switch 'o'`. A trailing `--` cannot rescue it: that
+# separates PATHS, and the operand is already parsed by the time git reaches it.
+# Both commands here take the name only where it cannot be mistaken for an
+# option: an object id, and `symbolic-ref`'s value argument in its full
+# `refs/heads/...` form. `git reset --hard` would do the same job, but it also
+# writes `ORIG_HEAD`, which is bookkeeping this helper has no reason to leave in
+# a clone that has no history to return to.
+git -C "$CLONE_DIR" checkout --quiet --force --detach "$SHA" >&2 ||
+	die "could not check out $SHA in the clone"
+if [ -n "$BRANCH" ] && git -C "$CLONE_DIR" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+	git -C "$CLONE_DIR" symbolic-ref HEAD "refs/heads/$BRANCH" >&2 ||
+		die "could not check out '$BRANCH' in the clone"
+fi
+
+CLONE_HEAD="$(git -C "$CLONE_DIR" rev-parse --verify HEAD)" ||
+	die "could not read the clone's HEAD"
+if [ "$CLONE_HEAD" != "$SHA" ]; then
+	# The source ref moved between the clone and the checkout. Honour the commit
+	# that was resolved up front rather than silently verifying another one.
+	printf '%s: source ref moved during the clone; detaching at the originally resolved %s\n' \
+		"$PROG" "$SHA" >&2
+	git -C "$CLONE_DIR" checkout --quiet --force --detach "$SHA" >&2 ||
+		die "could not check out $SHA in the clone"
+fi
+
+# No remote means a stray `git push` in the clone has nowhere to go. The remote's
+# CONFIG is dropped rather than `git remote remove`, which would also delete
+# refs/remotes/$SRC_REMOTE/* — after the mirror above, anything under that name
+# is the source's own and part of the exact mirror this helper promises.
+git -C "$CLONE_DIR" config --local --remove-section "remote.$SRC_REMOTE" >&2 ||
+	die "could not detach the clone from its source remote"
+
+# ... and then verified, because `--local` can only remove what this helper's own
+# `git clone` wrote. A remote of the SAME NAME already defined in the caller's
+# system, global, or command-scope configuration survives that removal untouched
+# and is still live in the clone: `git push dc-source HEAD:leaked` then creates a
+# branch in the invoking repository, which is the "nowhere to go" invariant of
+# the header defeated by a setting on the machine. No local write can delete an
+# outer section — `--unset` in the clone cannot reach the caller's file — so the
+# honest answer to a survivor is to hand back no clone at all rather than one
+# whose isolation is quietly weaker than promised.
+# The whole merged list is checked rather than just this helper's own remote
+# name: any surviving remote is a push target the clone was promised not to have.
+# Read with the caller's command-scope config restored, so this answers what the
+# clone's own user will see rather than what it looks like with their environment
+# stripped away.
+SURVIVING_REMOTES="$(env ${SAVED_CONFIG_ENV[@]+"${SAVED_CONFIG_ENV[@]}"} git -C "$CLONE_DIR" remote)" ||
+	die "could not list the clone's remotes to confirm none survived"
+if [ -n "$SURVIVING_REMOTES" ]; then
+	die "refusing: the clone would still have the remote(s) $(tr '\n' ' ' <<<"$SURVIVING_REMOTES")— defined outside its own configuration (your system, global, or command-scope git config), where this helper cannot remove them. A stray 'git push' in the clone would reach them, so the clone is not the isolated place it promises to be. Unset them, or run dc-enter with a configuration that does not define remotes."
+fi
+
+# `git clone` also wrote branch.<name>.remote/.merge pointing at that remote.
+# Left behind they name a remote the clone no longer has, so `git push` in the
+# clone fails with a confusing "does not appear to be a git repository" instead
+# of the honest "no upstream". Cleared for the same reason the remote is.
+# `--local` on the enumeration, not just on the removals: without it the read is
+# of the MERGED configuration, so a caller whose own ~/.gitconfig carries any
+# `branch.<name>.*` setting — `branch.main.rebase = true` is an everyday one —
+# hands this loop a key that exists only in the caller's file. `--unset-all`
+# writes to the local file regardless, finds nothing to unset there, exits 5, and
+# dc-enter dies with "could not clear the clone's stale upstream configuration
+# (branch.main.rebase)": a helper refusing to work because of a setting on the
+# machine it is running on, naming a key it was never meant to touch. Scoped to
+# the clone's own file, the enumeration only ever sees what `git clone` wrote,
+# which is the only thing this loop is for.
+CLONE_BRANCH_CFG_FILE="$SESSION_DIR/.dc-branch-config"
+git -C "$CLONE_DIR" config --local --name-only --get-regexp '^branch\.' >"$CLONE_BRANCH_CFG_FILE" || true
+while IFS= read -r cfg_key; do
+	[ -n "$cfg_key" ] || continue
+	git -C "$CLONE_DIR" config --local --unset-all "$cfg_key" >&2 ||
+		die "could not clear the clone's stale upstream configuration ($cfg_key)"
+done <"$CLONE_BRANCH_CFG_FILE"
+rm -f -- "$CLONE_BRANCH_CFG_FILE"
+
+# ... and now the same question the surviving-remote check asked, for the push
+# targets that are not remotes. With no `<repository>` argument, `git push` takes
+# `branch.<current>.pushRemote`, else `remote.pushDefault`, else
+# `branch.<current>.remote`, else `origin` — and a value that is not a configured
+# remote is used as a URL or path DIRECTLY, an anonymous remote that `git remote`
+# never lists. So a caller whose own global config carries
+# `remote.pushDefault = /path/to/this/repo`, or a `branch.<name>.pushRemote` or
+# `branch.<name>.remote` naming one, hands the clone a live push target the check
+# above cannot see: a bare `git push` in the clone then writes a branch straight
+# into the invoking repository. (Measured, not theorized — with `push.default =
+# current`, or with `branch.<name>.merge` alongside, or with
+# `push.autoSetupRemote = true`, the push simply succeeds.)
+# Read MERGED and only after the `--local` clearing above, so what is left is
+# exactly what the clone's own user will see AND is defined outside the clone's
+# own configuration, where no local write can reach it. Command-scope config is
+# restored for the read for the same reason it is restored for `git remote`.
+# Refused rather than repaired, and for the same reason a surviving remote is:
+# the honest answer to a push target this helper cannot remove is no clone at
+# all, not one whose isolation is quietly weaker than the header promises.
+SURVIVING_PUSH_CFG=""
+push_cfg_status=0
+SURVIVING_PUSH_CFG="$(env ${SAVED_CONFIG_ENV[@]+"${SAVED_CONFIG_ENV[@]}"} git -C "$CLONE_DIR" config \
+	--name-only --get-regexp '^(remote\.pushdefault|branch\..*\.(pushremote|remote))$')" ||
+	push_cfg_status=$?
+# git config exits 1 for "no key matched", which is the answer this check wants.
+# Anything else means the question could not be asked, and a check that cannot be
+# made must not pass — the same fail-closed rule the rest of this helper follows.
+# The pattern is lowercase because git normalizes a key's section and variable to
+# lowercase (only a subsection keeps its case), so `remote.pushDefault` is
+# reported and matched as `remote.pushdefault`.
+[ "$push_cfg_status" -eq 0 ] || [ "$push_cfg_status" -eq 1 ] ||
+	die "could not list the clone's push-target configuration to confirm none survived ('git config --get-regexp' exited $push_cfg_status)"
+if [ -n "$SURVIVING_PUSH_CFG" ]; then
+	die "refusing: the clone would still have the push-target setting(s) $(tr '\n' ' ' <<<"$SURVIVING_PUSH_CFG")— defined outside its own configuration (your system, global, or command-scope git config), where this helper cannot remove them. git accepts a path or a URL in those settings and pushes to it as an anonymous remote that 'git remote' never lists, so a bare 'git push' in the clone would reach whatever they name — the invoking repository included. The clone is not the isolated place it promises to be. Unset them, or run dc-enter with a configuration that sets no default push destination."
+fi
+
+# A disposable clone should be able to take a verification commit even where no
+# identity is configured (a bare container account, CI). Only fills a gap: the
+# probe reads the MERGED configuration deliberately, so a caller who does have an
+# identity keeps it, and the fallback is written `--local` so what fills the gap
+# lands in the clone rather than anywhere the caller would still be using.
+if ! git -C "$CLONE_DIR" var GIT_COMMITTER_IDENT >/dev/null 2>&1; then
+	git -C "$CLONE_DIR" config --local user.name "dc-enter disposable clone" >&2 || true
+	git -C "$CLONE_DIR" config --local user.email "dc-enter@invalid" >&2 || true
+fi
+
+CREATED_SESSION=""
+trap - EXIT
+
+printf '%s\n' "$CLONE_DIR"

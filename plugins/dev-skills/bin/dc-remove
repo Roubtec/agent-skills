@@ -1,0 +1,463 @@
+#!/usr/bin/env bash
+# dc-remove — delete a disposable clone that `dc-enter` created.
+#
+# Its safety bar is deliberately the INVERSE of `wt-remove`'s. A worktree holds
+# the only copy of the work in it, so `wt-remove` refuses to remove a dirty or
+# mid-operation one even with `--force`. A disposable clone exists to be
+# wrecked: a dirty tree, deleted refs, a half-finished rebase, and a corrupted
+# object store are all expected states, and removing them destroys nothing that
+# was not already disposable. So dc-remove removes a wrecked clone without
+# complaint — and in exchange guarantees the other direction absolutely:
+#
+#   It can only ever delete a directory `dc-enter` created.
+#
+# Two mechanics enforce that. The signature is slug-only, so a caller cannot
+# hand it a path at all — anything with a slash is rejected as a malformed slug,
+# including the invoking repository's own path. And the directory it derives
+# must carry dc-enter's marker file, whose recorded clone path AND source
+# repository must both match what this invocation derived, or it refuses rather
+# than deleting a stranger's directory that happens to sit at the same place.
+# dc-enter applies the identical proof before it discards anything, so the
+# destructive helper is never the more permissive of the two.
+#
+# The marker is an accident guard, not an authentication token: a process running
+# as this user could forge one, but such a process can already call `rm -rf`
+# itself, so nothing is gained by hardening against it. What the marker rules out
+# is the case that actually happens — a slug resolving onto a directory that was
+# put there for some other purpose.
+#
+# Usage: dc-remove <slug>
+#
+#   dc-remove probe        # remove the clone dc-enter created for slug `probe`
+#
+# Removing a slug that has no clone is a no-op and succeeds, so a cleanup trap
+# can call it unconditionally. Nothing is ever written to stdout; diagnostics go
+# to stderr, and the exit status is the whole result.
+#
+# This is also how a slug is freed: `dc-enter` refuses a slug that already has a
+# clone, because a concurrent sibling may be using it. Calling dc-remove when a
+# verification is finished — ideally from the caller's own cleanup trap — is what
+# keeps the next `dc-enter <slug>` from having to refuse.
+#
+# The clone root and per-agent/per-worktree path layout are derived exactly as
+# `dc-enter` derives them (`$DC_ROOT`, else `$TMPDIR`, else `/tmp`; then
+# `dc-<agent>-<repo-hash>/<slug>`), so both helpers must be invoked from the same
+# repository with the same `DC_ROOT`/`DC_AGENT` to resolve the same clone. That
+# derivation is duplicated here rather than sourced, because each helper has to
+# stand alone on a container PATH; scripts/test-dc-helpers.sh pins the two
+# derivations together by removing exactly the path dc-enter printed.
+# The caller's repository-targeting git environment is dropped here too, at the
+# same point dc-enter drops it — once `git rev-parse --show-toplevel` has chosen
+# the source. `GIT_DIR` and its relatives beat `git -C`, and "both helpers derive
+# the same paths from the same repository" cannot be true while one of them reads
+# that environment and the other does not.
+# The root rules are part of that derivation and are therefore identical too: an
+# absolute path, containing no newline, checked on the RAW value before it is
+# canonicalized. A relative root is what makes "same repository, same DC_ROOT,
+# same clone" false — it resolves against whatever directory each helper happens
+# to be invoked from, and dc-enter explicitly supports being run from a nested
+# subdirectory — so it is refused here rather than resolved to a second place.
+#
+# Sync discipline: see the header of `dc-enter` — this plugin copy is canonical
+# and net-new here, with no powbox-baked original to pin against, and any
+# behavior change to either helper must update scripts/test-dc-helpers.sh in the
+# same PR.
+#
+# This script keeps the same discipline as dc-enter: `set -euo pipefail`, no
+# load-bearing command piped, and it never changes its own working directory —
+# the only `cd` is inside a command-substitution subshell in canon(), whose
+# arrival is verified by the `pwd -P` it must print. No path is carried through
+# a bare `$(…)` either, since that strips a trailing newline belonging to the
+# path itself; see capture_path below.
+#
+# Dependencies: `git` and coreutils. As with dc-enter, git must support
+# `worktree list --porcelain -z` (2.36+).
+set -euo pipefail
+
+PROG=dc-remove
+readonly PROG
+readonly MARKER_MAGIC='dc-clone-v2'
+readonly MARKER_NAME='dc-clone-meta'
+
+# Also clears the worktree-listing temp files, so no fatal path leaks one. Set
+# before any code that can create them, so `set -u` never sees them unset.
+WT_LIST_FILE=""
+WT_ERR_FILE=""
+die() {
+	[ -z "$WT_LIST_FILE" ] || rm -f -- "$WT_LIST_FILE"
+	[ -z "$WT_ERR_FILE" ] || rm -f -- "$WT_ERR_FILE"
+	printf '%s: %s\n' "$PROG" "$*" >&2
+	exit 1
+}
+
+usage() {
+	local code="${1:-1}"
+	{
+		echo "usage: dc-remove <slug>"
+		echo
+		echo "  Removes the disposable clone 'dc-enter <slug>' created, however"
+		echo "  wrecked it is. Takes a slug, never a path: it can only reach a"
+		echo "  directory dc-enter created and marked. An unknown slug is a no-op."
+	} >&$((code == 0 ? 1 : 2))
+	exit "$code"
+}
+
+# --- Path helpers (identical to dc-enter's; see the note above) --------------
+
+# Capture the path a command prints without losing a trailing newline that is
+# part of the path itself: `$(cmd)` strips every trailing newline it captures, so
+# `git rev-parse --show-toplevel` in a repository whose directory name ends in
+# one yields a shorter path naming a DIFFERENT directory — and this helper's
+# whole ownership proof compares that path against the marker dc-enter wrote.
+CAPTURED_PATH=""
+capture_path() {
+	local out
+	CAPTURED_PATH=""
+	out="$("$@" && printf 'x')" || return 1
+	out="${out%x}"
+	CAPTURED_PATH="${out%$'\n'}"
+}
+
+# Returns its result in CANON_RESULT rather than printing it, so no caller needs
+# a command substitution to read it — see capture_path above for why one would
+# silently shorten a path ending in a newline.
+CANON_RESULT=""
+canon() {
+	local path="$1" head tail_part out comp
+	CANON_RESULT=""
+	[ -n "$path" ] || return 1
+	case "$path" in
+	/*) ;;
+	*) path="$PWD/$path" ;;
+	esac
+	while [ "$path" != "${path//\/\///}" ]; do path="${path//\/\///}"; done
+	while [ "${#path}" -gt 1 ] && [ "${path%/}" != "$path" ]; do path="${path%/}"; done
+	head="$path"
+	tail_part=""
+	while [ ! -d "$head" ]; do
+		comp="${head##*/}"
+		case "$comp" in
+		. | ..) return 1 ;;
+		esac
+		tail_part="${comp}${tail_part:+/$tail_part}"
+		head="${head%/*}"
+		[ -n "$head" ] || head=/
+		[ "$head" != "$path" ] || return 1
+	done
+	out="$(cd -P -- "$head" >/dev/null 2>&1 && pwd -P && printf 'x')" || return 1
+	out="${out%x}"
+	out="${out%$'\n'}"
+	[ -n "$out" ] || return 1
+	case "$out" in
+	/*) ;;
+	*) return 1 ;;
+	esac
+	if [ -n "$tail_part" ]; then
+		if [ "$out" = "/" ]; then
+			out="/$tail_part"
+		else
+			out="$out/$tail_part"
+		fi
+	fi
+	CANON_RESULT="$out"
+}
+
+path_within() {
+	local candidate="$1" ancestor="$2"
+	[ -n "$candidate" ] && [ -n "$ancestor" ] || return 1
+	if [ "$ancestor" = "/" ]; then
+		return 0
+	fi
+	case "$candidate" in
+	"$ancestor") return 0 ;;
+	"$ancestor"/*) return 0 ;;
+	esac
+	return 1
+}
+
+# The marker is NUL-delimited, not line-delimited: a repository path may legally
+# contain a newline, so a line-oriented `key=value` file could not record
+# `source=` unambiguously — the first embedded newline would truncate the value,
+# and the remainder could impersonate another key. dc-enter writes it; this is
+# the reader. Parsed with the shell's own `read` rather than a text tool, so the
+# ownership proof depends on nothing beyond git and a POSIX-ish coreutils.
+MARKER_SOURCE=""
+MARKER_CLONE=""
+read_marker() {
+	local file="$1" rec magic_seen=""
+	MARKER_SOURCE=""
+	MARKER_CLONE=""
+	[ -f "$file" ] || return 1
+	while IFS= read -r -d '' rec; do
+		if [ -z "$magic_seen" ]; then
+			[ "$rec" = "$MARKER_MAGIC" ] || return 1
+			magic_seen=1
+			continue
+		fi
+		case "$rec" in
+		"source="*) MARKER_SOURCE="${rec#source=}" ;;
+		"clone="*) MARKER_CLONE="${rec#clone=}" ;;
+		esac
+	done <"$file"
+	[ -n "$magic_seen" ]
+}
+
+sanitize_component() {
+	local value="${1//[^A-Za-z0-9._-]/_}"
+	value="${value:0:40}"
+	printf '%s' "$value"
+}
+
+# --- Arguments ---------------------------------------------------------------
+SLUG=""
+# Whether an argument was SEEN is tracked separately from whether it is
+# non-empty, exactly as dc-enter tracks it. Using emptiness as the sentinel
+# silently shifts an empty first argument out of the slug's place: `dc-remove ""
+# probe` would take `probe` as the slug and REMOVE that clone, when the caller
+# handed this helper an empty slug and a stray argument. This is the helper that
+# holds the rm -rf, so it must not be the more permissive of the two.
+SLUG_SEEN=""
+take_positional() {
+	[ -z "$SLUG_SEEN" ] || usage 1
+	SLUG="$1"
+	SLUG_SEEN=1
+}
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-h | --help) usage 0 ;;
+	--)
+		shift
+		break
+		;;
+	-*) usage 1 ;;
+	*)
+		take_positional "$1"
+		shift
+		;;
+	esac
+done
+while [ $# -gt 0 ]; do
+	take_positional "$1"
+	shift
+done
+
+[ -n "$SLUG_SEEN" ] || usage 1
+# The guarantee starts here: a slug is one path component, so no caller can
+# steer this helper at an arbitrary directory — a path, absolute or relative,
+# fails this check before anything is resolved, let alone removed.
+if [ "${#SLUG}" -gt 64 ] || [[ ! "$SLUG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; then
+	die "expected a slug, not a path: '$SLUG' (slugs are 1-64 chars matching [A-Za-z0-9][A-Za-z0-9._-]*)"
+fi
+
+# --- The invoking repository -------------------------------------------------
+capture_path git rev-parse --show-toplevel 2>/dev/null ||
+	die "not inside a git working tree (run this from the repository dc-enter was run in)"
+SRC_TOP="$CAPTURED_PATH"
+[ -n "$SRC_TOP" ] || die "could not resolve the invoking worktree (bare repository?)"
+canon "$SRC_TOP" || die "could not canonicalize the invoking worktree path"
+SRC_TOP="$CANON_RESULT"
+
+# --- Drop the caller's repository-targeting environment -----------------------
+# The same drop dc-enter makes, at the same point and for the same reason: the
+# source has been chosen, and every git command from here on asks about THAT
+# repository with `git -C "$SRC_TOP"`. `GIT_DIR` and its relatives beat `-C`, so
+# an inherited one would build this helper's REPO_PATHS refusal list — the paths
+# it must never delete — from wherever the caller's environment points instead of
+# from the repository dc-enter was run in. The ownership proof below binds the
+# target either way (the marker's clone= and source= must both match), so this is
+# alignment rather than a hole being closed: the two helpers' derivations are
+# claimed to be identical, and one of them reading the environment while the
+# other does not is what would make that claim false.
+# Unlike dc-enter this helper does NOT warn about what it dropped. dc-enter warns
+# because it hands back a path its caller then runs git against; dc-remove hands
+# back nothing to go on using, so there is nothing for a caller to get wrong.
+LOCAL_ENV_VARS="$(git rev-parse --local-env-vars)" ||
+	die "could not ask git which environment variables target a specific repository ('git rev-parse --local-env-vars')"
+[ -n "$LOCAL_ENV_VARS" ] ||
+	die "'git rev-parse --local-env-vars' named no variables; refusing to derive this repository's paths under an environment that may still point somewhere else"
+while IFS= read -r env_var; do
+	[ -n "$env_var" ] || continue
+	unset "$env_var"
+done <<<"$LOCAL_ENV_VARS"
+
+REPO_PATHS=("$SRC_TOP")
+
+# Every step of this enumeration fails closed. A path this helper does not learn
+# about is one the clone root could then be placed inside, which is the single
+# failure the root check exists to prevent — so "could not tell" must stop the
+# run, never degrade into a shorter list.
+add_repo_path() {
+	local raw="$1"
+	[ -n "$raw" ] || die "git reported an empty repository path; refusing to guess where the repository is"
+	canon "$raw" ||
+		die "could not canonicalize the repository path '$raw'; refusing to guess where the repository is"
+	REPO_PATHS+=("$CANON_RESULT")
+}
+
+# Enumerate every worktree registered against this repository, using `-z` (git
+# 2.36+) and nothing else. Its NUL delimiters cannot survive command
+# substitution, so the output is read from a temporary file.
+#
+# The newline form is NOT an acceptable fallback and is deliberately not
+# attempted: `git worktree list --porcelain` prints a path containing a newline
+# RAW rather than quoting it, which splits one record across lines — and the
+# continuation can impersonate an attribute line (`...//prefix\nlocked x` yields a
+# truncated `worktree .../prefix` followed by a plausible `locked x`), so no
+# parse of it can tell a real record from a split one. A worktree this helper
+# does not learn about is one the clone root could then be placed inside, so an
+# older git is refused rather than guessed at.
+collect_worktree_paths() {
+	local line records=0 git_err=""
+	# capture_path, not $(…): $TMPDIR is not this helper's to constrain, and one
+	# ending in a newline would otherwise leave these files at paths that are not
+	# the ones mktemp created.
+	capture_path mktemp "${TMPDIR:-/tmp}/dc-worktrees.XXXXXX" ||
+		die "could not create a temporary file to enumerate this repository's worktrees"
+	WT_LIST_FILE="$CAPTURED_PATH"
+	capture_path mktemp "${TMPDIR:-/tmp}/dc-worktrees-err.XXXXXX" ||
+		die "could not create a temporary file to capture git's diagnostics"
+	WT_ERR_FILE="$CAPTURED_PATH"
+	# git's own stderr is reported rather than swallowed: an old git, a corrupt
+	# repository, and an unreadable .git/worktrees entry all fail here, and
+	# blaming the version for all three sends the reader after the wrong bug.
+	if ! git -C "$SRC_TOP" worktree list --porcelain -z >"$WT_LIST_FILE" 2>"$WT_ERR_FILE"; then
+		IFS= read -r -d '' git_err <"$WT_ERR_FILE" || true
+		die "could not enumerate this repository's worktrees with 'git worktree list --porcelain -z' (needs git 2.36+, but any repository error fails here too — git said: ${git_err:-nothing}). Refusing to place a clone without knowing where the worktrees are: the newline form cannot report a path containing a newline unambiguously."
+	fi
+	rm -f -- "$WT_ERR_FILE"
+	WT_ERR_FILE=""
+	while IFS= read -r -d '' line; do
+		case "$line" in
+		"worktree "*)
+			add_repo_path "${line#worktree }"
+			records=$((records + 1))
+			;;
+		esac
+	done <"$WT_LIST_FILE"
+	rm -f -- "$WT_LIST_FILE"
+	WT_LIST_FILE=""
+	# A successful listing with no records at all is not "this repository has no
+	# worktrees" — every repository has at least its main one. It is a listing
+	# this helper cannot trust, and trusting it would leave a worktree it never
+	# heard of out of the paths it refuses to delete. Fail closed.
+	[ "$records" -gt 0 ] ||
+		die "'git worktree list --porcelain -z' succeeded but reported no worktrees; a repository always has at least its main worktree, so this listing cannot be trusted"
+}
+
+# `--path-format=absolute` because bare `--git-common-dir` answers RELATIVE to
+# the git process's own working directory, which `git -C` has just moved away
+# from this script's `$PWD` — and add_repo_path canonicalizes against `$PWD`. Run
+# from a nested subdirectory the two would disagree and the path added to the
+# refuse-list would be one that does not exist.
+capture_path git -C "$SRC_TOP" rev-parse --path-format=absolute --git-common-dir ||
+	die "could not resolve this repository's shared git directory"
+add_repo_path "$CAPTURED_PATH"
+capture_path git -C "$SRC_TOP" rev-parse --absolute-git-dir ||
+	die "could not resolve this worktree's git directory"
+add_repo_path "$CAPTURED_PATH"
+collect_worktree_paths
+
+# --- Clone root and slug path ------------------------------------------------
+if [ -n "${DC_ROOT:-}" ]; then
+	ROOT_RAW="$DC_ROOT"
+	ROOT_SRC="DC_ROOT"
+else
+	ROOT_RAW="${TMPDIR:-/tmp}"
+	ROOT_SRC="${TMPDIR:+TMPDIR}"
+	ROOT_SRC="${ROOT_SRC:-the /tmp default}"
+fi
+# Both rules are checked on the RAW value FIRST, exactly as dc-enter checks them,
+# because canonicalizing changes it: canon() resolves a relative path against
+# $PWD, so a relative root would silently become one absolute path here and a
+# different one in dc-enter — the clone would be created and this helper would
+# then report "nothing to remove" and exit 0 while it sat on disk.
+case "$ROOT_RAW" in
+/*) ;;
+*)
+	die "the clone root ($ROOT_SRC) must be an absolute path: '$ROOT_RAW'. A relative one resolves against whatever directory the caller happens to be in, so this helper and dc-enter would address different clones from the same $ROOT_SRC."
+	;;
+esac
+# Refused for the same reason dc-enter refuses it, so the two helpers agree on
+# which roots exist at all: dc-enter cannot create a clone under a
+# newline-containing root, so there is never one here to remove.
+case "$ROOT_RAW" in
+*"
+"*)
+	die "the clone root ($ROOT_SRC) must not contain a newline; dc-enter refuses to create a clone under one, so there is nothing here to remove."
+	;;
+esac
+canon "$ROOT_RAW" || die "could not canonicalize the clone root ($ROOT_SRC): '$ROOT_RAW'"
+ROOT="$CANON_RESULT"
+[ "$ROOT" != "/" ] || die "the clone root ($ROOT_SRC) must not be the filesystem root"
+# Re-applied to the resolved root, which can carry a newline the raw value never
+# had when a symlinked component resolves into a directory whose real name has
+# one — again matching dc-enter, which refuses to create a clone there.
+case "$ROOT" in
+*"
+"*)
+	die "the clone root ($ROOT_SRC='$ROOT_RAW') resolves to a path containing a newline; dc-enter refuses to create a clone under one, so there is nothing here to remove."
+	;;
+esac
+
+AGENT_RAW="${DC_AGENT:-}"
+if [ -z "$AGENT_RAW" ]; then AGENT_RAW="${CONTAINER_NAME:-}"; fi
+if [ -z "$AGENT_RAW" ]; then AGENT_RAW="${USER:-}"; fi
+if [ -z "$AGENT_RAW" ]; then AGENT_RAW="${LOGNAME:-}"; fi
+if [ -z "$AGENT_RAW" ]; then AGENT_RAW="$(id -un 2>/dev/null || true)"; fi
+if [ -z "$AGENT_RAW" ]; then AGENT_RAW="agent"; fi
+AGENT="$(sanitize_component "$AGENT_RAW")"
+[ -n "$AGENT" ] || AGENT="agent"
+
+HASH_LINE="$(cksum <<<"$SRC_TOP")" || die "could not hash the invoking worktree path"
+REPO_HASH="${HASH_LINE%% *}"
+[ -n "$REPO_HASH" ] || die "could not hash the invoking worktree path"
+
+SCOPE_DIR="$ROOT/dc-$AGENT-$REPO_HASH"
+SESSION_DIR="$SCOPE_DIR/$SLUG"
+CLONE_DIR="$SESSION_DIR/repo"
+MARKER="$SESSION_DIR/$MARKER_NAME"
+
+if [ -L "$SESSION_DIR" ]; then
+	die "refusing: '$SESSION_DIR' is a symlink, so it points somewhere dc-enter did not create"
+fi
+if [ ! -e "$SESSION_DIR" ]; then
+	printf '%s: nothing to remove for slug %s (%s does not exist)\n' "$PROG" "$SLUG" "$SESSION_DIR" >&2
+	exit 0
+fi
+
+# --- Ownership proof ---------------------------------------------------------
+[ -d "$SESSION_DIR" ] ||
+	die "refusing: '$SESSION_DIR' is not a directory"
+[ -f "$MARKER" ] ||
+	die "refusing: '$SESSION_DIR' carries no $MARKER_NAME marker, so dc-enter did not create it"
+read_marker "$MARKER" ||
+	die "refusing: '$MARKER' is not a $MARKER_MAGIC marker"
+[ "$MARKER_CLONE" = "$CLONE_DIR" ] ||
+	die "refusing: '$MARKER' records clone path '$MARKER_CLONE', not the '$CLONE_DIR' this invocation derived"
+# The source repository is checked as well as the clone path: the scope
+# component is a CRC32 of the invoking worktree's path, so two worktrees whose
+# paths collide on that hash would otherwise share a scope silently. Recording
+# and comparing the path itself turns that collision into a refusal.
+[ "$MARKER_SOURCE" = "$SRC_TOP" ] ||
+	die "refusing: '$MARKER' records source repository '$MARKER_SOURCE', not the '$SRC_TOP' this invocation was run from"
+
+canon "$SESSION_DIR" || die "could not canonicalize '$SESSION_DIR'"
+RESOLVED="$CANON_RESULT"
+[ "$RESOLVED" = "$SESSION_DIR" ] ||
+	die "refusing: '$SESSION_DIR' resolves to '$RESOLVED' (symlinked out of the clone root)"
+path_within "$RESOLVED" "$SCOPE_DIR" ||
+	die "refusing: '$RESOLVED' is outside the clone scope '$SCOPE_DIR'"
+if [ "$RESOLVED" = "$SCOPE_DIR" ] || [ "$RESOLVED" = "$ROOT" ]; then
+	die "refusing: '$RESOLVED' is the clone scope or root directory, not a slug's clone"
+fi
+for repo_path in "${REPO_PATHS[@]}"; do
+	if path_within "$RESOLVED" "$repo_path"; then
+		die "refusing: '$RESOLVED' is inside the invoking repository ($repo_path)"
+	fi
+	if [ "$RESOLVED" -ef "$repo_path" ] 2>/dev/null; then
+		die "refusing: '$RESOLVED' is the invoking repository ($repo_path)"
+	fi
+done
+
+rm -rf -- "$RESOLVED"
+printf '%s: removed %s\n' "$PROG" "$RESOLVED" >&2
