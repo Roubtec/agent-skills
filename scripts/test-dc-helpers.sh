@@ -36,8 +36,9 @@ set -euo pipefail
 #       not, an alternate-backed source yields a clone that outlives the
 #       deletion of the store it borrowed from, and a PARTIAL-clone source —
 #       whose missing objects no local operation can bring in — is refused
-#       outright before anything is created, by either marker, while a
-#       `remote.<name>.promisor=false` repository still gets its clone
+#       outright before anything is created, by each of the three markers git
+#       registers a promisor remote from, while a `remote.<name>.promisor=false`
+#       repository still gets its clone
 #   (c) the <ref> interface: default is the INVOKING worktree's HEAD (not the
 #       main worktree's), branch/tag/sha/rev forms, a short name that is both a
 #       branch and a tag resolving to the branch, a qualified ref and a
@@ -664,6 +665,32 @@ assert_eq "b: ... silently on stdout" "$OUT" ""
 assert_contains "b: ... naming the configuration it was decided by" "$ERR" "remote.origin.promisor"
 assert_true "b: ... before creating anything under the clone root" \
 	"$([ -e "$PARTIAL_ROOT" ] && echo false || echo true)"
+
+# The same source with `remote.origin.promisor` REMOVED. Git registers the
+# promisor remote from `remote.<name>.partialclonefilter` too — measured, the
+# source still lazily fetches the blob with only that key left — so a check
+# reading the promisor key alone hands back the broken clone this refusal exists
+# to prevent. Both halves are asserted: that the stripped fixture is still a
+# lazily-fetching partial clone, and that dc-enter still refuses it.
+PARTIAL_FILTER_SRC="$WORK/b/partial-filter-src"
+git clone -q --filter=blob:none --no-local "$PARTIAL_UP" "$PARTIAL_FILTER_SRC"
+git -C "$PARTIAL_FILTER_SRC" config --unset remote.origin.promisor
+assert_eq "b: the filter-only fixture keeps no promisor key" \
+	"$(git -C "$PARTIAL_FILTER_SRC" config --get remote.origin.promisor || echo unset)" "unset"
+assert_ne "b: ... while still missing an object its refs reach" \
+	"$(git -C "$PARTIAL_FILTER_SRC" rev-list --objects --all --missing=print | grep -c '^?' | tr -d '[:space:]')" "0"
+PARTIAL_FILTER_ROOT="$WORK/b/partial-filter-root"
+in_repo "$PARTIAL_FILTER_SRC" env "DC_ROOT=$PARTIAL_FILTER_ROOT" "$DC_ENTER" partialfilter
+assert_ne "b: a filter-only partial-clone source is refused too" "$RC" 0
+assert_eq "b: ... silently on stdout" "$OUT" ""
+assert_contains "b: ... naming the filter key it was decided by" "$ERR" "remote.origin.partialclonefilter"
+assert_true "b: ... before creating anything under the clone root" \
+	"$([ -e "$PARTIAL_FILTER_ROOT" ] && echo false || echo true)"
+# Last, because it MATERIALIZES the object: git treating the filter key alone as
+# a promisor remote is the whole reason the refusal has to read it, and proving
+# it earlier would leave the assertions above running against a complete fixture.
+assert_eq "b: ... git itself fetching lazily on that key alone" \
+	"$(git -C "$PARTIAL_FILTER_SRC" cat-file -p refs/remotes/origin/other:big.txt)" "fetched on demand"
 
 # The second marker, on its own. Neither git 2.36.6 nor 2.47.3 writes
 # `extensions.partialClone` — both record only the promisor remote — so a

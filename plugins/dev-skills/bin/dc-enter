@@ -660,12 +660,15 @@ SRC_GIT_DIR="$CAPTURED_PATH"
 # PRESENT and inherits none of that configuration, so the clone below would carry
 # every one of the source's refs while some objects those refs reach exist
 # nowhere it can look. Nothing fails while it is being built: the mirror succeeds
-# and this helper exits 0. The first command to read such an object is fatal —
-# measured on git 2.47.3 and 2.36.6 with a `--filter=blob:none` source, where
-# `cat-file -p <ref>:<path>` printed the blob in the source and answered `bad
-# object` in the clone — so the caller gets a verification baseline that
-# disagrees with the repository it claims to copy, in the one direction a
-# subagent would take at face value.
+# and this helper exits 0. What breaks is the first read of such an object, and
+# not always as a failure. Measured on git 2.47.3 and 2.36.6: from a
+# `--filter=blob:none` source, `cat-file -p <ref>:<path>` printed the blob in the
+# source and answered `fatal: Not a valid object name` in the clone; from a
+# `--filter=tree:0` source the same read answered `fatal: path '<path>' does not
+# exist in '<ref>'` — non-zero, but asserting something that is FALSE of the
+# repository being copied. So the caller gets a verification baseline that
+# disagrees with the source, in the one direction a subagent would take at face
+# value.
 # Neither repair is this helper's to make. Materializing the omitted objects
 # means an unbounded fetch from the promisor remote, over a network connection
 # nobody asked it to open. Carrying the promisor configuration over keeps them
@@ -675,32 +678,49 @@ SRC_GIT_DIR="$CAPTURED_PATH"
 # configuration leaves one. So the source is refused instead, before anything is
 # created, and the refusal names the configuration it was decided by rather than
 # only the conclusion.
-# The two markers are the two git itself acts on: `remote.<name>.promisor`, which
-# is what makes a remote a promisor, and `extensions.partialClone`, which names
-# the one git lazily fetches from by default. Both are read, because which one a
-# repository carries is a function of the git that made it — measured, 2.36.6 and
-# 2.47.3 both write only the first. A promisor value git cannot read as a boolean
-# counts as set: a repository whose partial-clone configuration is unreadable is
-# not one this helper can show is complete.
+# The markers are the three git itself registers a promisor remote from, taken
+# from its own config parser (`promisor_remote_config` in promisor-remote.c):
+# `remote.<name>.promisor` when it reads as a true BOOLEAN, and
+# `remote.<name>.partialclonefilter` by PRESENCE — that key creates the promisor
+# remote if the first has not already, so a filter-only source lazily fetches
+# exactly the same way, measured — plus `extensions.partialClone`, which names
+# the remote git fetches from by default. All three are read, because which of
+# them a repository carries is a function of the git that made it and of what has
+# been done to it since: measured, both 2.36.6 and 2.47.3 write the first two and
+# neither writes the third, and removing either of the pair leaves the other
+# still lazily fetching. A `promisor` value git cannot read as a boolean counts
+# as set: a repository whose partial-clone configuration is unreadable is not one
+# this helper can show is complete. An explicit `false` does not, because that is
+# git declining to treat the remote as a promisor — but it does not veto a
+# `partialclonefilter` beside it, for the same reason git's parser does not.
 # A SHALLOW source needs no such refusal and gets none: `git clone` of a local
 # path copies `.git/shallow` along with the objects, so the clone has the same
 # grafted boundary as the source rather than a truncated history it believes is
 # whole. Measured — `rev-list --count` agrees and `fsck --connectivity-only`
 # passes in the clone.
 PROMISOR_CONFIG_RC=0
-PROMISOR_KEYS="$(git -C "$SRC_TOP" config --name-only --get-regexp '^remote\..*\.promisor$')" ||
+PROMISOR_KEYS="$(git -C "$SRC_TOP" config --name-only --get-regexp '^remote\..*\.(promisor|partialclonefilter)$')" ||
 	PROMISOR_CONFIG_RC=$?
 # 1 is "no such key", the ordinary answer for a repository that is not a partial
 # clone. Anything else means the question was not answered, and a helper that
 # cannot tell must not proceed to hand back a clone it cannot vouch for.
 [ "$PROMISOR_CONFIG_RC" -eq 0 ] || [ "$PROMISOR_CONFIG_RC" -eq 1 ] ||
-	die "could not ask git whether the invoking repository is a partial clone: 'git config --name-only --get-regexp remote.*.promisor' exited $PROMISOR_CONFIG_RC"
+	die "could not ask git whether the invoking repository is a partial clone: 'git config --name-only --get-regexp remote.*.(promisor|partialclonefilter)' exited $PROMISOR_CONFIG_RC"
 SRC_PARTIAL_MARKER=""
 while IFS= read -r promisor_key; do
 	[ -n "$promisor_key" ] || continue
-	promisor_value="$(git -C "$SRC_TOP" config --type=bool --get "$promisor_key")" ||
-		promisor_value=unreadable
-	[ "$promisor_value" != false ] || continue
+	# The suffix decides how the key is read, exactly as git's parser reads it:
+	# `promisor` is a boolean and an explicit false is not a promisor remote,
+	# while `partialclonefilter` registers one by being there at all. Matching the
+	# LAST component is what makes both right for a remote whose own name ends in
+	# one of these words.
+	case "$promisor_key" in
+	*.promisor)
+		promisor_value="$(git -C "$SRC_TOP" config --type=bool --get "$promisor_key")" ||
+			promisor_value=unreadable
+		[ "$promisor_value" != false ] || continue
+		;;
+	esac
 	SRC_PARTIAL_MARKER="$promisor_key"
 	break
 done <<<"$PROMISOR_KEYS"
@@ -713,7 +733,7 @@ if [ -z "$SRC_PARTIAL_MARKER" ]; then
 	[ "$PROMISOR_CONFIG_RC" -ne 0 ] || SRC_PARTIAL_MARKER=extensions.partialClone
 fi
 [ -z "$SRC_PARTIAL_MARKER" ] ||
-	die "refusing: the invoking repository is a partial clone ('$SRC_PARTIAL_MARKER' is set), so part of its history lives on a promisor remote and arrives only when something asks for it. A local clone copies the objects that are here and inherits none of that configuration, so the clone would carry refs whose objects it can neither find nor fetch, and the first command to read one would fail with 'bad object' inside a clone this helper had just reported as a faithful copy of the source. Fetching them here would mean an unbounded network fetch nobody asked for; leaving them fetchable would mean handing back a clone still tied to a repository outside it. Make the repository complete — refetch or re-clone it without a filter — and run this again, or run $PROG from a full clone of it."
+	die "refusing: the invoking repository is a partial clone ('$SRC_PARTIAL_MARKER' is set), so part of its history lives on a promisor remote and arrives only when something asks for it. A local clone copies the objects that are here and inherits none of that configuration, so the clone would carry refs whose objects it can neither find nor fetch — and a read of one either fails or, with a tree filter, reports that a path present in this repository does not exist, inside a clone this helper had just reported as a faithful copy of it. Fetching those objects here would mean an unbounded network fetch nobody asked for; leaving them fetchable would mean handing back a clone still tied to a repository outside it. Run $PROG from a full clone of this repository instead. This refusal reads the partial-clone CONFIGURATION rather than re-deriving completeness on every run, so materializing the objects (refetching) does not lift it while that configuration is still there."
 
 if [ -n "$REF_SEEN" ]; then REF_ARG="$REF"; else REF_ARG="HEAD"; fi
 # What the caller actually wrote, kept for diagnostics: REF_ARG is rewritten to a
