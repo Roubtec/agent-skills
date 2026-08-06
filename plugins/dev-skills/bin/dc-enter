@@ -202,12 +202,15 @@
 # printed on its own command line and the effect has to be measured rather than
 # read off stderr.
 # That has two consequences, and they fail differently.
-# LOUDLY: a ref outside refs/heads and refs/tags names an object nothing brought
-# — the wholesale copy that would otherwise carry it is exactly what git declined
-# — so the mirror below dies with "trying to write ref ... with nonexistent
-# object" and hands nothing back. A shallow checkout carrying a stash is that
-# case, the missing object being the stash commit itself rather than anything the
-# boundary cut off.
+# LOUDLY: a ref outside refs/heads and refs/tags CAN name an object nothing
+# brought. Most do not — the `refs/remotes/*` every clone carries point at
+# commits the fetch itself delivered, and any such ref mirrors fine, which is why
+# an ordinary shallow checkout clones without complaint. But where one names an
+# object the fetch did not bring, the wholesale copy that would otherwise carry
+# it is exactly what git declined, so the mirror below dies with "trying to write
+# ref ... with nonexistent object" and hands nothing back. A shallow checkout
+# carrying a stash is that case, the missing object being the stash commit itself
+# rather than anything the boundary cut off.
 # QUIETLY, and this is the bound to know: an object NO ref reaches does not come
 # across either, so the unreachable-object property claimed above does NOT hold
 # for a shallow source. Measured — a dangling blob in one is absent from its
@@ -726,7 +729,8 @@ SRC_GIT_DIR="$CAPTURED_PATH"
 # `remote.<name>.partialclonefilter` by PRESENCE — that key creates the promisor
 # remote if the first has not already, so a filter-only source lazily fetches
 # exactly the same way, measured — plus `extensions.partialClone`, which names
-# the remote git fetches from by default. All three are read, because which of
+# the one remote a repository may designate that way; git tries it LAST of its
+# promisor remotes rather than first, so "the default" would misdescribe it. All three are read, because which of
 # them a repository carries is a function of the git that made it and of what has
 # been done to it since: measured, both 2.36.6 and 2.47.3 write the first two and
 # neither writes the third, and removing either of the pair leaves the other

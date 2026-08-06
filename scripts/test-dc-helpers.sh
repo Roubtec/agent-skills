@@ -785,6 +785,29 @@ require_clone CLONE_EXTGLOBAL "b: extensionglobal"
 assert_eq "b: ... and its clone holds the source's history" \
 	"$(git -C "$CLONE_EXTGLOBAL" rev-list --count --all)" "1"
 
+# A `false` promisor key beside a filter key. git's parser treats the two
+# independently — a false `promisor` simply does not register the remote, and the
+# `partialclonefilter` then does — so the false must not end the scan. Measured:
+# such a source still fetches lazily. Without this case, giving up at the first
+# false-reading key passes every other check, because the `false`-only fixture
+# has no filter key and the multivalued one has had its filter key removed.
+PARTIAL_FALSEFILTER_SRC="$WORK/b/partial-falsefilter-src"
+git clone -q --filter=blob:none --no-local "$PARTIAL_UP" "$PARTIAL_FALSEFILTER_SRC"
+git -C "$PARTIAL_FALSEFILTER_SRC" config remote.origin.promisor false
+assert_eq "b: the false-beside-filter fixture reads false for its promisor key" \
+	"$(git -C "$PARTIAL_FALSEFILTER_SRC" config --type=bool --get remote.origin.promisor)" "false"
+assert_eq "b: ... while keeping its filter key" \
+	"$(git -C "$PARTIAL_FALSEFILTER_SRC" config --get remote.origin.partialclonefilter)" "blob:none"
+PARTIAL_FALSEFILTER_ROOT="$WORK/b/partial-falsefilter-root"
+in_repo "$PARTIAL_FALSEFILTER_SRC" env "DC_ROOT=$PARTIAL_FALSEFILTER_ROOT" "$DC_ENTER" partialfalsefilter
+assert_ne "b: a false promisor does not cancel the filter key beside it" "$RC" 0
+assert_eq "b: ... silently on stdout" "$OUT" ""
+assert_contains "b: ... naming the filter key as what decided it" "$ERR" "remote.origin.partialclonefilter"
+# Last, because it materializes the object: git registering the remote from the
+# filter key alone is the reason the false must not stop the scan.
+assert_eq "b: ... git itself still fetching lazily under that pair" \
+	"$(git -C "$PARTIAL_FALSEFILTER_SRC" cat-file -p refs/remotes/origin/other:big.txt)" "fetched on demand"
+
 # The unreadable-value branch: git would die on this value rather than decide it,
 # so the helper treats it as set rather than as absent.
 PARTIAL_BOGUS_SRC="$WORK/b/partial-bogus-src"
@@ -853,9 +876,11 @@ assert_eq "b: ... leaving no half-built clone behind" \
 # The quiet half, and the one the header states as a BOUND rather than a
 # guarantee: with no wholesale object copy, an object no ref reaches does not
 # come across. The run exits 0 and says nothing, so this is the one place a
-# shallow clone is a weaker baseline than its source — pinned here beside the
-# control, since the same probe on an ordinary source carries the object over
-# (section (d) asserts that for the whole object set).
+# shallow clone is a weaker baseline than its source. The control beside it is
+# what makes that a statement about SHALLOWNESS rather than about dc-enter: the
+# same probe on a full clone of the same upstream carries the object over. These
+# two are the only place the no-ref-reaches property is pinned — section (d)'s
+# unreachable-COMMIT case is about a commit `refs/pruned/reserved` still names.
 SHALLOW_DANGLE_SRC="$WORK/b/shallow-dangle-src"
 git clone -q --depth 2 --no-local "$SHALLOW_UP" "$SHALLOW_DANGLE_SRC"
 SHALLOW_DANGLE_OID="$(printf 'unreferenced\n' | git -C "$SHALLOW_DANGLE_SRC" hash-object -w --stdin)"
