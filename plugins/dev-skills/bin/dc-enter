@@ -576,6 +576,14 @@ while IFS= read -r env_var; do
 		# INSIDE the current worktree and redirects nothing at all; git exports
 		# it to every alias, so reporting it would fire the whole warning on a
 		# plain `git someAlias` wrapper with nothing dangerous set.
+		# `GIT_INTERNAL_SUPER_PREFIX` joins it for the same reason and has to be
+		# named explicitly because it is on the list only on the OLDER half of
+		# the supported range — `git rev-parse --local-env-vars` prints it on
+		# 2.36.6 and 2.39.5 and no longer on 2.43.7 — so on the floor this file
+		# promises it would otherwise fall through to the warning. It is a
+		# DISPLAY prefix git prepends to the paths it prints while recursing
+		# into a submodule; like `GIT_PREFIX` it names nothing outside the
+		# current repository and redirects nothing.
 		# `GIT_IMPLICIT_WORK_TREE`, `GIT_NO_REPLACE_OBJECTS` and
 		# `GIT_REPLACE_REF_BASE` are settings rather than locations: they change
 		# how git reads whichever repository it is already pointed at.
@@ -585,7 +593,7 @@ while IFS= read -r env_var; do
 		# directory, index, objects or config FILE, which is exactly the hazard
 		# the sentence describes. `GIT_CONFIG` earns its place there: it is the
 		# caller's file that `git -C "$DC" config` then writes to.
-		GIT_CONFIG_COUNT | GIT_CONFIG_PARAMETERS | GIT_PREFIX | GIT_IMPLICIT_WORK_TREE | GIT_NO_REPLACE_OBJECTS | GIT_REPLACE_REF_BASE) ;;
+		GIT_CONFIG_COUNT | GIT_CONFIG_PARAMETERS | GIT_PREFIX | GIT_INTERNAL_SUPER_PREFIX | GIT_IMPLICIT_WORK_TREE | GIT_NO_REPLACE_OBJECTS | GIT_REPLACE_REF_BASE) ;;
 		*) DROPPED_ENV_VARS="${DROPPED_ENV_VARS:+$DROPPED_ENV_VARS }$env_var" ;;
 		esac
 	fi
@@ -638,7 +646,18 @@ REF_DISPLAY="$REF_ARG"
 # WHAT DECIDES whether one of them is a ref right now: the file's CONTENT, the
 # same way git decides it — a bare object id, optionally followed by whitespace
 # and anything (which is how `FETCH_HEAD` carries its extra columns), or a `ref:`
-# line whose target still resolves. The NAME alone will not do, in either
+# line whose target still resolves. "The same way" is meant literally, and the
+# three places it is easy to be merely NEARLY the same are all shapes git accepts
+# and a tighter rule would hand back the branch for: the hex is read
+# case-INSENSITIVELY, because git's is (`hexval()`), even though git only ever
+# writes lower; it is read at exactly the length THIS repository's hash algorithm
+# uses, because a bare id of the other width is not an object id to git and falls
+# through to `refs/heads/<name>`; and `ref:` is followed by any run of whitespace
+# or none at all, because git skips `while (isspace(*buf))` rather than the one
+# space it writes itself. All three measured against real git on 2.36.6, 2.39.5,
+# 2.43.7 and 2.47.3, and all three matter only BELOW 2.45, where the plain
+# `show-ref --verify` beside this probe cannot answer and the parse is the whole
+# decision. The NAME alone will not do, in either
 # direction. It does not qualify one: an EMPTY `FETCH_HEAD`, what a fetch
 # with nothing to fetch leaves behind, is a file git's rules fall straight
 # through, on to `refs/heads/<name>`; so is a `BISECT_START` holding the branch
@@ -662,8 +681,13 @@ REF_DISPLAY="$REF_ARG"
 # `$GIT_DIR` path, and no repository reaches that state without having written an
 # object id where a sentence belongs.
 readonly SRC_PSEUDO_REFS='ORIG_HEAD MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_HEAD REBASE_HEAD AUTO_MERGE FETCH_HEAD BISECT_EXPECTED_REV MERGE_AUTOSTASH NOTES_MERGE_PARTIAL NOTES_MERGE_REF BISECT_START'
+# How many hex characters an object id has in THIS repository. Filled in on first
+# use rather than up front: only the object-id branch below reads it, and getting
+# there needs a caller who named one of the listed pseudo-refs on a git too old to
+# answer `show-ref --verify` for it, with that file present.
+SRC_OID_HEXSZ=""
 source_pseudo_ref_exists() {
-	local name="$1" line=""
+	local name="$1" line="" referent=""
 	case " $SRC_PSEUDO_REFS " in
 	*" $name "*) ;;
 	*) return 1 ;;
@@ -674,8 +698,27 @@ source_pseudo_ref_exists() {
 	# exit status is not the answer here — the content is.
 	IFS= read -r line <"$SRC_GIT_DIR/$name" 2>/dev/null || :
 	case "$line" in
-	'ref: '*) git -C "$SRC_TOP" show-ref --verify --quiet -- "${line#ref: }" 2>/dev/null ;;
-	*) [[ "${line%%[[:space:]]*}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] ;;
+	'ref:'*)
+		# Everything between `ref:` and the target is skipped, and git rtrims the
+		# file before parsing, so the target is trimmed on both sides here.
+		referent="${line#ref:}"
+		referent="${referent#"${referent%%[![:space:]]*}"}"
+		referent="${referent%"${referent##*[![:space:]]}"}"
+		[ -n "$referent" ] &&
+			git -C "$SRC_TOP" show-ref --verify --quiet -- "$referent" 2>/dev/null
+		;;
+	*)
+		if [ -z "$SRC_OID_HEXSZ" ]; then
+			# sha1 is both the other answer and the safe default: `--show-object-format`
+			# has existed since git 2.29, well under this helper's floor, and the
+			# repository it is asked about has already answered `rev-parse` twice above.
+			case "$(git -C "$SRC_TOP" rev-parse --show-object-format 2>/dev/null)" in
+			sha256) SRC_OID_HEXSZ=64 ;;
+			*) SRC_OID_HEXSZ=40 ;;
+			esac
+		fi
+		[[ "${line%%[[:space:]]*}" =~ ^[0-9a-fA-F]{$SRC_OID_HEXSZ}$ ]]
+		;;
 	esac
 }
 

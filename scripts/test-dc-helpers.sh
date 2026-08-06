@@ -39,10 +39,13 @@ set -euo pipefail
 #       main worktree's), branch/tag/sha/rev forms, a short name that is both a
 #       branch and a tag resolving to the branch, a qualified ref and a
 #       $GIT_DIR pseudo-ref each still winning over a branch named literally
-#       like it while a same-named $GIT_DIR file whose CONTENT is not a ref
+#       like it — in every spelling git's own parser takes, upper-case hex and
+#       any run of whitespace after `ref:` included — while a same-named
+#       $GIT_DIR file whose CONTENT is not a ref
 #       (COMMIT_EDITMSG and its all-caps kin, an empty root-ref file, a listed
-#       name holding prose, a BISECT_START holding a branch name, and a dangling
-#       NOTES_MERGE_REF) leaves the branch checked out,
+#       name holding prose, a BISECT_START holding a branch name, a dangling
+#       NOTES_MERGE_REF, and a bare id of the OTHER hash width, which git reads
+#       as broken) leaves the branch checked out,
 #       a local head whose name begins with a dash checked out rather
 #       than parsed as options, and refusal on a bad ref
 #   (d) the ref namespace: an exact mirror of the source's refs, demonstrated on
@@ -798,6 +801,88 @@ assert_eq "c: ... and the branch is checked out, not detached" \
 	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "refs/heads/NOTES_MERGE_REF"
 rm -f -- "$WT2_GIT_DIR/NOTES_MERGE_REF"
 g -C "$SRC2" branch -q -D NOTES_MERGE_REF
+# ... and the whitespace between `ref:` and its target is ANY run of it or none
+# at all, because that is what git skips (`while (isspace(*buf))`) rather than the
+# single space it writes itself. A one-space-only reading calls a live symref
+# prose and hands back the branch, while `git rev-parse NOTES_MERGE_REF` in the
+# source names the notes ref's commit — the wrong-baseline conclusion once more,
+# and on git < 2.45 the parse is the whole decision.
+g -C "$SRC2" update-ref refs/notes/dc-merge "$(git -C "$SRC2" rev-parse main~1)"
+g -C "$SRC2" branch -q NOTES_MERGE_REF main
+for spacing in tab none double; do
+	case "$spacing" in
+	tab) printf 'ref:\trefs/notes/dc-merge\n' >"$WT2_GIT_DIR/NOTES_MERGE_REF" ;;
+	none) printf 'ref:refs/notes/dc-merge\n' >"$WT2_GIT_DIR/NOTES_MERGE_REF" ;;
+	double) printf 'ref:  refs/notes/dc-merge\n' >"$WT2_GIT_DIR/NOTES_MERGE_REF" ;;
+	esac
+	assert_ne "c: the $spacing-spaced NOTES_MERGE_REF and the same-named branch differ" \
+		"$(git -C "$WT2" rev-parse --verify NOTES_MERGE_REF)" \
+		"$(git -C "$WT2" rev-parse --verify refs/heads/NOTES_MERGE_REF)"
+	in_repo "$WT2" "$DC_ENTER" "notesmergeref$spacing" NOTES_MERGE_REF
+	assert_eq "c: a $spacing-spaced NOTES_MERGE_REF beside a same-named branch exits 0" "$RC" 0
+	assert_eq "c: the NOTES_MERGE_REF branch does not win over it: HEAD detaches" \
+		"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "DETACHED"
+	assert_eq "c: ... at the commit the $spacing-spaced symref names, not the branch's" \
+		"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$WT2" rev-parse --verify 'NOTES_MERGE_REF^{commit}')"
+done
+rm -f -- "$WT2_GIT_DIR/NOTES_MERGE_REF"
+g -C "$SRC2" update-ref -d refs/notes/dc-merge
+g -C "$SRC2" branch -q -D NOTES_MERGE_REF
+# The object-id half has two boundaries of the same kind, both of them shapes git
+# ACCEPTS that a tighter reading would call prose. The first is CASE: git's hex
+# parser is `hexval()`, which takes `A`-`F` as readily as `a`-`f`, even though git
+# writes only lower case itself.
+g -C "$SRC2" branch -q ORIG_HEAD main
+git -C "$WT2" rev-parse --verify main~1 | tr 'a-f' 'A-F' >"$WT2_GIT_DIR/ORIG_HEAD"
+assert_ne "c: the upper-case ORIG_HEAD and the same-named branch differ" \
+	"$(git -C "$WT2" rev-parse --verify ORIG_HEAD)" \
+	"$(git -C "$WT2" rev-parse --verify refs/heads/ORIG_HEAD)"
+in_repo "$WT2" "$DC_ENTER" upperhexpseudoref ORIG_HEAD
+assert_eq "c: an upper-case ORIG_HEAD beside a same-named branch exits 0" "$RC" 0
+assert_eq "c: the ORIG_HEAD branch does not win over it: HEAD detaches" \
+	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "DETACHED"
+assert_eq "c: ... at the commit the upper-case id names, not the branch's" \
+	"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$WT2" rev-parse --verify 'ORIG_HEAD^{commit}')"
+rm -f -- "$WT2_GIT_DIR/ORIG_HEAD"
+g -C "$SRC2" branch -q -D ORIG_HEAD
+# The second is WIDTH, and it runs the other way: git parses exactly the length
+# THIS repository's hash algorithm uses and treats the other one as broken, so a
+# 64-character id in this sha1 fixture is not an object id at all and git's rules
+# fall through it to `refs/heads/<name>`. Reading "40 or 64" instead detaches a
+# repository whose own `git rev-parse ORIG_HEAD` names the branch — the same
+# lost-branch-attachment the `COMMIT_EDITMSG` boundary above guards.
+g -C "$SRC2" branch -q ORIG_HEAD main~1
+printf '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef\n' >"$WT2_GIT_DIR/ORIG_HEAD"
+assert_eq "c: an ORIG_HEAD of the other hash width resolves to the branch in the source" \
+	"$(git -C "$WT2" rev-parse --verify ORIG_HEAD)" \
+	"$(git -C "$WT2" rev-parse --verify refs/heads/ORIG_HEAD)"
+in_repo "$WT2" "$DC_ENTER" widehexpseudoref ORIG_HEAD
+assert_eq "c: an ORIG_HEAD of the other hash width beside a same-named branch exits 0" "$RC" 0
+assert_eq "c: ... and the branch is checked out, not detached" \
+	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "refs/heads/ORIG_HEAD"
+rm -f -- "$WT2_GIT_DIR/ORIG_HEAD"
+g -C "$SRC2" branch -q -D ORIG_HEAD
+# And the far side of that width rule, on its own fixture because it is the one
+# the repository under test cannot show: in a SHA-256 repository the 64-character
+# id is the real one, and the pseudo-ref has to win there exactly as the 40 does
+# here. Narrowing to the repository's own hash length is only safe if the length
+# is actually asked for rather than assumed.
+S256="$WORK/c/sha256-src"
+if git init -q -b main --object-format=sha256 "$S256" 2>/dev/null; then
+	g -C "$S256" commit -q --allow-empty -m one
+	g -C "$S256" commit -q --allow-empty -m two
+	g -C "$S256" branch -q ORIG_HEAD main~1
+	git -C "$S256" rev-parse --verify main >"$S256/.git/ORIG_HEAD"
+	assert_ne "c: the sha256 ORIG_HEAD and the same-named branch differ" \
+		"$(git -C "$S256" rev-parse --verify ORIG_HEAD)" \
+		"$(git -C "$S256" rev-parse --verify refs/heads/ORIG_HEAD)"
+	in_repo "$S256" "$DC_ENTER" sha256pseudoref ORIG_HEAD
+	assert_eq "c: a sha256 ORIG_HEAD beside a same-named branch exits 0" "$RC" 0
+	assert_eq "c: the sha256 ORIG_HEAD branch does not win: HEAD detaches" \
+		"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "DETACHED"
+	assert_eq "c: ... at the commit the 64-character id names, not the branch's" \
+		"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$S256" rev-parse --verify 'ORIG_HEAD^{commit}')"
+fi
 # A local head whose name begins with a DASH. `refs/heads/-foo` passes `git
 # check-ref-format`, so it is a legal branch, and the qualified-form
 # normalization above correctly derives `-foo` from it — which git's own option
