@@ -49,6 +49,8 @@ The same bootstrap serves this skill and `address-reviews`:
 
 5. **Preflight the peer once** unless `peer-opinions=off`, per the `review-cycle` skill's peer preflight. Peer unavailability is never an error; proceed with own reviewers and note the reason once in the final summary.
 
+6. **Baseline the shared main checkout** — read its working-tree state now, before any worktree exists, as the reading the closing cleanliness report compares against (see "Main-checkout cleanliness report"). Observe only; never "fix" a checkout that is already dirty.
+
 If a `wt-bootstrap` helper is on PATH, prefer it for steps 1–4 — it performs those worktree checks, prunes orphans, and prints the base dir (`wtBase`) and free space (`availBytes`) as JSON. Still run the peer preflight in step 5 separately.
 
 ## Codex subagent execution
@@ -213,6 +215,10 @@ The task-number guard that follows extends the pre-PR check to task-number claim
 
 Run this guard before opening any PR that adds task files. It is defined once, in `address-tasks-serialized` → "Task-number collisions across in-flight branches", and is deliberately not restated here: the full-number parsing, the comparison set and what each member contributes, the base-refresh and PR-head enumeration recipes with their note-and-proceed degradations, the same-branch relocation pairing, the renumber-the-flagged-new-claimant rule, and the bounded-snapshot caveat with its `reap-tasks` backstop all apply verbatim. The one reading specific to this skill: where that definition establishes the first claimant in the *run's* deterministic delivery order, use this skill's **wave** order (dependency or scheduling order, then task number).
 
+## Diagnosis discipline
+
+A subagent's environment or infrastructure diagnosis is a **hypothesis, not a finding**. Verify it against that subagent's own transcript — bounded greps for the specific commands it claims it ran — before propagating any mitigation into sibling prompts. A scratch-filename collision was once misdiagnosed as a working-directory bug, and the wrong mitigation rode into roughly ten later subagent prompts before anyone checked.
+
 ## Subagent destroy boundary
 
 State this in every subagent prompt this skill composes. A reviewer subagent authorized to verify a claim empirically once ran `rm -rf ./*` in a shared main checkout: its setup `git clone … | tail` had failed invisibly under `set -e` (a pipeline's status is its last command), so it deleted tracked files and moved a branch ref while believing it stood inside a clone.
@@ -256,6 +262,7 @@ Include in each reviewer prompt:
 - The **full task file content** (same source of truth the implementer got).
 - The **PR base branch** for this task. After assigning it and the task worktree to the shell variables `base` and `worktree`, the reviewer scopes with `git -C "$worktree" diff --name-only "$base"...HEAD`. The implementation is already committed on the current branch in this worktree — the reviewer must read the actual files and must NOT conclude "no implementation" without first confirming the diff is genuinely empty (an empty diff at this stage signals a wrong worktree/branch, not real absence — say so rather than reviewing nothing).
 - Instruction to run a **full build / type-check first** (a failure is an automatic blocker), then check each acceptance criterion against the code, then a code-quality pass over the touched files using the inherited checklist (logic, error handling, edge cases, dead code, consistency, duplication, type safety).
+- **Where validation output goes:** any build or check output that must land in a file goes inside this task's worktree (a gitignored path, removed before any commit), never a shared scratchpad filename. Two concurrent reviewers both redirecting to `<scratchpad>/verify.log` once had one reading the other worktree's results and returning a verdict for the wrong branch.
 - Reporting format: **Pass** (all criteria met, build passes, no material issues) or **Issues** (numbered, each with category + file/line + what's wrong + what to change).
 - **Do NOT edit, create, or delete any files. Do NOT read commit messages or `git diff` content** — list touched files for scoping only, then read whole files. Be strict but fair; flag real gaps, not style nits. Put any follow-up suggestions in the report only.
 
@@ -334,6 +341,16 @@ The main checkout must remain on the branch and commit where it started.
 An empty guide branch means that canonical branch contributes no unique patch after the earlier recommended branches; flag it as potentially redundant or already subsumed, not as a reason to merge it first.
 If the restack stops partway, the canonical order remains the review recommendation, but only the completed prefix was integration-checked; report the first unstacked branch and the remaining suffix.
 
+## Main-checkout cleanliness report
+
+Every task runs in its own worktree, but the repository's main checkout is shared — with the maintainer, and with any peer harness running in the same container. Take a reading of its working-tree state at Bootstrap, and take the same reading again once **every** batch entry has reached a terminal state. Trigger it on batch termination, not on "the last task delivers": a batch in which every task blocks, fails, or aborts never reaches a delivery, and a failed implementer is at least as likely to have leaked strays as a successful one — so gating on a delivery skips the check exactly when it matters most.
+
+Compare the two **by path**, so a path whose status code changed reads as a re-classification — a co-tenant staging their own work — rather than as one path vanishing and another appearing. Paths that appeared are a finding in the final report; paths that **disappeared** are a louder one, because a stray `checkout` or `clean` in the shared tree eating a co-tenant's uncommitted work is the hazard only a baseline can see. Report a vanished path as something to check against co-tenant commits, the reflog, and the stash rather than as established loss: a maintainer who committed their own work mid-run also removes a baseline path, with nothing gone. Everything else is pre-existing. Take a baseline rather than testing for emptiness — the maintainer's own work-in-progress is deliberately permitted in that checkout, so an unconditional non-empty rule would both blame the batch for work it never touched and destroy the one signal separating a real stray from the tree's starting state.
+
+**Report, never clean.** Do not `git clean`, `checkout`, `reset`, or `stash` the shared main checkout on the strength of this report — another agent's uncommitted work is not yours to delete — and diff any stray against the delivered branches before touching it at all.
+
+State the claim as narrowly as it is. The report says what its reading could see change; it claims nothing about what was **written into** paths already present in the baseline, nor about anything its reading does not surface. That is an exclusion rather than a list of blind spots, because the list is open: widening what the reading sees improves the report and leaves the claim exactly this narrow. What it does surface is a report to verify, not a conclusion — the same reading cannot tell a stray from a co-tenant's ordinary progress. It is never a proof that the batch wrote nothing, and must not be delivered as one.
+
 ## Final Output
 
 After the batch, provide a concise summary:
@@ -343,4 +360,5 @@ After the batch, provide a concise summary:
 - Whether the peer participated; if it was unavailable or forfeited any rounds, note the reason once without treating it as a failure.
 - The dependency/wave structure actually used, and any base-branch/stacking choices worth flagging.
 - The **recommended merge order** using canonical PR branch names — `b1 → … → bN`, merge `b1` first — plus the corresponding local `review-stack/...` guide refs, the integration-checked prefix, any stop point or merge-history guard, reproducible conflict notes, and any empty guide branch. Make clear the guide stack is local only and not pushed; the canonical PR branches were not rewritten, and independent-branch tie ordering is advisory.
+- The main-checkout cleanliness report: what appeared, what disappeared, and what was pre-existing — carried with the claim bound that section states, never as an assurance the batch left the tree untouched.
 - Any blockers, local branches that still need pushing, or uncertainties that remain.
