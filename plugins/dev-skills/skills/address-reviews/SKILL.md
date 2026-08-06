@@ -147,6 +147,15 @@ Every prompt starts with:
 - **Validation in a worktree:** "If verifying fixes needs a build, install dependencies in this worktree first — cheap when the package manager's store hardlinks (e.g. pnpm on the same filesystem). Point Playwright at a system Chromium if your environment provides one. App-server / `next build` e2e may not run from a nested worktree path; defer it per `address-tasks`'s app-server caveat and note that in your report rather than forcing it."
 - **No shared task-tracker:** "Do not use the `TaskCreate`/`TaskUpdate`/`TaskList` tools — their entries leak into the orchestrator's view."
 
+### Subagent destroy boundary
+
+State this in every subagent prompt this skill composes. A reviewer subagent authorized to verify a claim empirically once ran `rm -rf ./*` in a shared main checkout: its setup `git clone … | tail` had failed invisibly under `set -e` (a pipeline's status is its last command), so it deleted tracked files and moved a branch ref while believing it stood inside a clone.
+
+- **Permitted:** reading, searching, and read-only `git`/`gh` queries — plus, for a fixer or implementer, edits, commits, and pushes confined to its own assigned worktree and branch.
+- **Forbidden, named outright:** `rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`, and any force-push. A subagent may not self-authorize one by putting itself somewhere it believes is safe — forbidden **not in a clone, not in a temp directory, not "safely"**. Only the disposable location below is exempt, and only because you named it.
+- **A worktree is not a blast radius.** It isolates the working tree, not the repository: `branch -f`, `reset`, `update-ref`, and `gc` all reach every sibling worktree through the shared `.git`.
+- **Empirical verification goes where you send it.** Where `command -v dc-enter` finds the helper, send the subagent to `DC="$(dc-enter <slug>)"` — one absolute path on stdout, dropped again with `dc-remove <slug>`; a reused slug is refused rather than re-derived, so anything that may run twice passes `--replace` or removes the slug first. Where the helper is absent, name an absolute path outside the repository — never a relative one. Never leave the choice to the subagent.
+
 ### Phase A — initial fix
 
 Before launching Phase A, topologically partition rebase-enabled stack entries into dependency waves. A parent makes its dependent ready only after the parent has either cleared its complete Phase-B/fix-up review gate at its final stable local tip or qualified for the terminal zero-feedback shortcut (defined below); only then pin the dependent's rebase target to that exact parent tip and launch its wave. Unrelated and non-rebase entries may still run concurrently, but if a required parent was skip-and-recorded during setup, fails Phase A, or is blocked at the `review-cycle` round cap, skip-and-record every affected dependent and descendant with the parent's reason rather than falling back to the original pinned target.
