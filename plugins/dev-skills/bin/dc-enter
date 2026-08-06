@@ -51,12 +51,18 @@
 #   Refusing on the mere PRESENCE of any `onbranch:` include would pre-empt it —
 #   git lists those keys whether or not the condition currently matches — but it
 #   would equally refuse the everyday per-branch identity include, and narrowing
-#   it to "only if the included file defines a remote" means resolving include
-#   paths and their own nested includes by hand instead of letting git answer. So
-#   the bound is stated rather than approximated, and a caller whose own config
-#   defines remotes or push destinations that way owns that one — the same way
-#   they own the `GIT_DIR` paragraph below. (Remote-tracking refs survive as
-#   ordinary refs; see the ref-namespace note below.)
+#   it to "only if the included file defines a remote or a push destination" —
+#   both, since both checks below are bounded the same way — puts the work back
+#   on this helper rather than on git. `git config --file <path> --includes`
+#   reads such a file and expands a plain `include.path` inside it, but it cannot
+#   answer the two parts that matter: a relative `path` resolves against the
+#   INCLUDING file's directory, which only `--show-origin` reveals, and a nested
+#   `includeIf` is evaluated against the real HEAD rather than the hypothetical
+#   branch being asked about. So the bound is stated rather than approximated,
+#   and a caller whose own config defines remotes or push destinations that way
+#   owns that one — the same way they own the `GIT_DIR` paragraph below.
+#   (Remote-tracking refs survive as ordinary refs; see the ref-namespace note
+#   below.)
 #   A remote NAME is not the only way to name a push target, so the clone's
 #   MERGED `remote.pushDefault`, `branch.<name>.pushRemote` and
 #   `branch.<name>.remote` are checked to be absent as well. Git accepts a bare
