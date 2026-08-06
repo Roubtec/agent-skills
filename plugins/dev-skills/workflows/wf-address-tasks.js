@@ -268,14 +268,16 @@ function mainCheckoutSummary(baseline, final) {
   // Finding: do not claim the WHOLE workflow was non-destructive — only the
   // observation step is guaranteed so.
   const OTHER_STAGES = "Other batch stages run in per-task worktrees and are not separately proven to have left the main checkout untouched.";
-  // The claim bound, carried by every note that could otherwise read as an
-  // all-clear. Deliberately an EXCLUSION rather than a list of blind spots: the
-  // list is open, and widening what the reading sees (individually-listed
-  // untracked files today, ignored paths tomorrow) improves the report while
-  // leaving the claim exactly this narrow. Reporting that a baseline-present
-  // path was re-classified is an observation this comparison can make; asserting
-  // that path was left alone is not.
-  const CLAIM_BOUND = "This comparison reports what its reading could see change: it claims nothing about what was written INTO paths already present in the baseline, nor about anything the reading does not surface.";
+  // The claim bound, carried by EVERY note — including the ones with the least
+  // information, where an unqualified sentence reads most like an all-clear.
+  // Phrased against what the readings list rather than against a baseline, so
+  // the one bound covers the unmeasured-baseline branches too. Deliberately an
+  // EXCLUSION rather than a list of blind spots: the list is open, and widening
+  // what the reading sees (individually-listed untracked files today, ignored
+  // paths tomorrow) improves the report while leaving the claim exactly this
+  // narrow. Reporting that a listed path was re-classified is an observation
+  // this comparison can make; asserting that path was left alone is not.
+  const CLAIM_BOUND = "This report says only what its readings could see: it claims nothing about what was written INTO paths those readings already list, nor about anything they do not surface at all.";
 
   // Parse one porcelain record into { raw, status, path }. Prefer `-z` output
   // (unquoted paths) upstream, but stay robust to plain porcelain: the leading
@@ -322,7 +324,7 @@ function mainCheckoutSummary(baseline, final) {
       unattributed: [],
       transitions: [],
       flagged: false,
-      note: `Post-batch main-checkout status could not be measured; cleanliness comparison skipped. ${OBSERVED} ${OTHER_STAGES}`,
+      note: `Post-batch main-checkout status could not be measured; cleanliness comparison skipped. ${OBSERVED} ${OTHER_STAGES} ${CLAIM_BOUND}`,
     };
   }
 
@@ -356,10 +358,10 @@ function mainCheckoutSummary(baseline, final) {
   let flagged = false;
   if (!baselineMeasured) {
     if (finalEntries.length === 0) {
-      note = `Shared main checkout is clean. ${OBSERVED}`;
+      note = `Shared main checkout showed nothing dirty at the final boundary, but no pre-batch baseline was captured, so nothing could be compared against it. ${OBSERVED} ${OTHER_STAGES} ${CLAIM_BOUND}`;
     } else {
       flagged = true;
-      note = `Shared main checkout was dirty at the final boundary (${finalEntries.length} path(s)), but no pre-batch baseline was captured, so there is nothing to attribute them against and they are NOT credited to this batch. ${OBSERVED} ${OTHER_STAGES} Inspect and clean up yourself if unexpected.`;
+      note = `Shared main checkout was dirty at the final boundary (${finalEntries.length} path(s)), but no pre-batch baseline was captured, so there is nothing to attribute them against and they are NOT credited to this batch. ${OBSERVED} ${OTHER_STAGES} ${CLAIM_BOUND} Inspect and clean up yourself if unexpected.`;
     }
   } else if (newPaths.length === 0 && disappeared.length === 0) {
     if (finalEntries.length === 0) {
@@ -379,7 +381,7 @@ function mainCheckoutSummary(baseline, final) {
     const vanishClause = disappeared.length
       ? " Vanished baseline dirt can mean that uncommitted work was committed, reset, cleaned, or stashed away — by the user, a peer harness, or a batch stage that strayed from its worktree; if unexpected, check the reflog/stash before assuming it is lost."
       : "";
-    note = `Shared main checkout ${parts.join(" and ")} during the batch, alongside ${preexisting.length} pre-existing path(s).${newClause}${vanishClause} ${OBSERVED} ${OTHER_STAGES} Review before any cleanup.`;
+    note = `Shared main checkout ${parts.join(" and ")} during the batch, alongside ${preexisting.length} pre-existing path(s).${newClause}${vanishClause} ${OBSERVED} ${OTHER_STAGES} ${CLAIM_BOUND} Review before any cleanup.`;
   }
 
   return {
@@ -1690,10 +1692,41 @@ const mainCheckoutBaseline = await agent(mainCheckoutStatusPrompt("pre-batch bas
   effort: "low",
 });
 
+// The closing half of the cleanliness check, factored out so that EVERY exit
+// past the baseline runs it — a batch that aborts or delivers nothing is
+// exactly the case the check exists for, and gating it on the Summary path
+// alone would skip it whenever the run went worst. This report step is
+// non-destructive: it only reports dirt — distinguishing pre-existing from
+// newly-appeared paths and, crucially, from baseline paths that DISAPPEARED (a
+// possible destructive loss) — and never modifies, resets, or fails on it. It
+// does not vouch for the batch's other stages. Logs the flagged AND the
+// not-measured outcome: a skipped comparison is easy to miss if only `flagged`
+// reports surface, and its note says exactly why the check has nothing
+// authoritative this run.
+async function finalMainCheckoutReport() {
+  const final = await agent(mainCheckoutStatusPrompt("post-batch"), {
+    label: "main-checkout-final",
+    schema: MAIN_CHECKOUT_SCHEMA,
+    effort: "low",
+  });
+  const summary = mainCheckoutSummary(mainCheckoutBaseline, final);
+  if (summary.flagged || !summary.measured) {
+    const details = [];
+    if (summary.newPaths.length) details.push(`new: ${summary.newPaths.join(", ")}`);
+    if (summary.disappeared.length) details.push(`disappeared: ${summary.disappeared.join(", ")}`);
+    if (summary.unattributed.length) details.push(`unattributed: ${summary.unattributed.join(", ")}`);
+    log(`${summary.note}${details.length ? ` [${details.join("; ")}]` : ""}`);
+  }
+  return summary;
+}
+
 phase("Resolve batch");
 const plan = await agent(resolvePrompt(args), { label: "resolve", schema: PLAN_SCHEMA });
 if (!plan || !Array.isArray(plan.waves) || plan.waves.length === 0) {
-  return { error: "Could not resolve any task files from the argument.", args };
+  // A batch that resolves no task is still a batch that terminated with the
+  // baseline already taken, so it owes the same report as a delivering one.
+  phase("Summary");
+  return { error: "Could not resolve any task files from the argument.", args, mainCheckout: await finalMainCheckoutReport() };
 }
 
 // Track each task's terminal status so dependent waves can be gated.
@@ -1996,27 +2029,10 @@ for (let w = 0; w < plan.waves.length; w++) {
 }
 
 phase("Summary");
-// Post-batch snapshot of the shared main checkout, compared against the baseline.
-// This report step is non-destructive: it only reports dirt — distinguishing
-// pre-existing from newly-appeared paths and, crucially, from baseline paths
-// that DISAPPEARED (a possible destructive loss) — and never modifies, resets,
-// or fails on it. It does not vouch for the batch's other stages.
-const mainCheckoutFinal = await agent(mainCheckoutStatusPrompt("post-batch"), {
-  label: "main-checkout-final",
-  schema: MAIN_CHECKOUT_SCHEMA,
-  effort: "low",
-});
-const mainCheckout = mainCheckoutSummary(mainCheckoutBaseline, mainCheckoutFinal);
-// Log flagged dirt AND the not-measured outcome: a skipped comparison is easy
-// to miss if only `flagged` reports surface, and its note says exactly why the
-// cleanliness check has nothing authoritative this run.
-if (mainCheckout.flagged || !mainCheckout.measured) {
-  const details = [];
-  if (mainCheckout.newPaths.length) details.push(`new: ${mainCheckout.newPaths.join(", ")}`);
-  if (mainCheckout.disappeared.length) details.push(`disappeared: ${mainCheckout.disappeared.join(", ")}`);
-  if (mainCheckout.unattributed.length) details.push(`unattributed: ${mainCheckout.unattributed.join(", ")}`);
-  log(`${mainCheckout.note}${details.length ? ` [${details.join("; ")}]` : ""}`);
-}
+// Post-batch snapshot of the shared main checkout, compared against the
+// baseline (see finalMainCheckoutReport, which the aborted-batch exit also
+// runs).
+const mainCheckout = await finalMainCheckoutReport();
 const landed = results.filter((r) => r.status === "done").length;
 log(`Batch complete: ${landed}/${results.length} tasks landed a PR.`);
 // Open questions and locked-decision deviations bubble up structurally — they
