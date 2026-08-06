@@ -28,18 +28,23 @@
 #   stderr when it had to, but `unset` is process-local and cannot reach the
 #   shell that invoked it — see the environment paragraph below.
 #   The clone is never made with `--shared` or `--reference`, and no option
-#   exposes them — those genuinely do couple the object stores. It is made WITH
-#   `--dissociate`, which is what keeps that true when the SOURCE is itself a
-#   borrowing clone: a local clone copies the source's `objects/info/alternates`
-#   verbatim, and without dissociation the clone would go on borrowing from the
-#   same third repository.
+#   exposes them — those genuinely do couple the object stores. Where the SOURCE
+#   is itself a borrowing clone the coupling arrives anyway, since a local clone
+#   copies the source's `objects/info/alternates` verbatim; the clone is
+#   dissociated from that third repository before it is handed back, but only
+#   AFTER the ref mirror below, so that objects reachable solely from the source
+#   refs `git clone` never fetches are copied in rather than dropped. See the
+#   dissociation note at the clone itself.
 #   The remote `git clone` created, and the upstream configuration pointing at
 #   it, are both removed after the clone is populated, and the clone's MERGED
 #   remote list is then checked to be empty — a remote the caller's own global or
 #   system configuration defines survives a `--local` removal, and this helper
 #   refuses rather than hand back a clone whose stray `git push` still has
-#   somewhere to go. (Remote-tracking refs survive as ordinary refs; see the
-#   ref-namespace note below.)
+#   somewhere to go. That check, and the push-target check beside it, are made
+#   once HEAD is in its final state: `includeIf "onbranch:…"` makes part of the
+#   merged configuration depend on the checked-out branch, so asking earlier
+#   would answer for a clone nobody receives. (Remote-tracking refs survive as
+#   ordinary refs; see the ref-namespace note below.)
 #   A remote NAME is not the only way to name a push target, so the clone's
 #   MERGED `remote.pushDefault`, `branch.<name>.pushRemote` and
 #   `branch.<name>.remote` are checked to be absent as well. Git accepts a bare
@@ -160,7 +165,10 @@
 # enumeration sees the ref store itself and has no such blind spot. The objects
 # are present either way: a clone from a local PATH copies the whole object
 # store rather than negotiating a pack, so even objects that no ref reaches come
-# across, and a hidden ref therefore always has its object waiting for it.
+# across, and a hidden ref therefore always has its object waiting for it. The
+# one object a copied store does not hold is one the source itself only BORROWS
+# from an alternate — which is why the dissociation that stops the borrowing is
+# deferred until after this mirror rather than done by `git clone --dissociate`.
 # A source ref that is SYMBOLIC arrives symbolic, at the same target, rather
 # than flattened to the object id a plain copy would record.
 # NOT carried: a symbolic ref whose target does not exist — `for-each-ref` does
@@ -921,7 +929,21 @@ if [ "$SCOPE_DIR_REAL" != "$SCOPE_DIR" ]; then
 fi
 
 # --- Derive the slug's clone from scratch ------------------------------------
-mkdir -p -- "$SCOPE_DIR" >&2 || die "could not create the clone scope directory: $SCOPE_DIR"
+# `-m 0700`, because the default root is `/tmp`: under an ordinary `0022` umask
+# these would be created `0755`, and a repository the caller keeps behind an
+# inaccessible home directory would be copied — source, objects and all — into a
+# path every other account on the machine can walk into. The clone is a copy of
+# the invoking repository, so it deserves the invoking repository's privacy.
+# What this covers is the directories THIS helper creates. `mkdir -p` applies the
+# mode to the final component only, so a `$DC_ROOT` it has to create on the way
+# keeps the umask default — harmless, since the scope directory beneath it is the
+# one that stops the traversal — and an already-existing scope directory keeps
+# whatever mode it already had, since `-p` on an existing path changes nothing.
+# `-p` is what makes the call idempotent across the runs that share a scope, so
+# SC2174's warning about `-m` reaching only the deepest directory is the
+# behaviour described above rather than a surprise.
+# shellcheck disable=SC2174
+mkdir -m 0700 -p -- "$SCOPE_DIR" >&2 || die "could not create the clone scope directory: $SCOPE_DIR"
 
 if [ -L "$SESSION_DIR" ]; then
 	die "refusing: '$SESSION_DIR' is a symlink, so it points somewhere this helper did not create. Remove it yourself if it is yours, or pick another slug."
@@ -950,7 +972,11 @@ cleanup_failed_session() {
 	fi
 	exit "$status"
 }
-mkdir -- "$SESSION_DIR" >&2 || die "could not create the clone directory: $SESSION_DIR"
+# `-m 0700` for the same reason the scope directory above carries it, and not
+# merely because it sits inside one: a scope directory that predates this helper
+# version, or one a caller pointed `$DC_ROOT` at directly, is not necessarily
+# private itself, and this is the directory that actually holds the clone.
+mkdir -m 0700 -- "$SESSION_DIR" >&2 || die "could not create the clone directory: $SESSION_DIR"
 CREATED_SESSION="$SESSION_DIR"
 trap cleanup_failed_session EXIT
 
@@ -973,19 +999,30 @@ MARKER_TMP="$SESSION_DIR/.$MARKER_NAME.tmp"
 } >"$MARKER_TMP" || die "could not write the clone marker: $MARKER_TMP"
 mv -f -- "$MARKER_TMP" "$MARKER" || die "could not put the clone marker in place: $MARKER"
 
-# `--dissociate` is what makes "independent object store" true for a source that
-# is ITSELF a borrowing clone. A local clone copies the source's
-# `.git/objects/info/alternates` verbatim, so cloning a `--shared`/`--reference`
-# repository hands back a clone still borrowing from that third repository —
-# holding no local copy of the borrowed objects and breaking outright the moment
-# the external store is pruned or removed. `git clone` documents `--dissociate`
-# for exactly this case ("can also be used when cloning locally from a repository
-# that already borrows objects from another repository"): the borrowed objects
-# are copied in and the alternates file is dropped. It costs nothing on the
-# ordinary source that borrows from nobody.
+# Dissociation — making "independent object store" true for a source that is
+# ITSELF a borrowing clone — is deliberately NOT `git clone --dissociate` here,
+# and happens after the ref mirror below instead. A local clone copies the
+# source's `.git/objects/info/alternates` verbatim, so cloning a
+# `--shared`/`--reference` repository hands back a clone still borrowing from
+# that third repository, holding no local copy of the borrowed objects and
+# breaking outright the moment the external store is pruned or removed. That much
+# `--dissociate` does fix — but it fixes it too early. `--dissociate` copies in
+# the objects reachable from the refs THE CLONE HAS, and at that moment the clone
+# has only the branches and tags `git clone` itself fetched. A source ref outside
+# those namespaces — the `refs/pruned/*`, `refs/stash`, `refs/notes/*` the mirror
+# below exists to carry — is not yet present, so an object reachable only from
+# one of them is not copied and the alternate is then dropped out from under it.
+# The mirror's `update-ref` fails with "trying to write ref ... with nonexistent
+# object" and the run dies: the exact-ref-namespace contract cannot be met for
+# that source at all. (Measured on a `git clone --shared` source with a custom
+# ref pointing at an object held only by the alternate.) `git clone -h` promises
+# no better — it documents `--dissociate` as being for objects borrowed "while
+# cloning", not for refs the initial clone never asked for.
+# So the alternate is kept until the clone holds every ref the source has, and
+# dropped once each of them is reachable locally.
 # Note this is orthogonal to `DC_HARDLINKS` below, which is about the source's
 # OWN object store rather than a third repository's.
-CLONE_ARGS=(--quiet --no-checkout --dissociate --origin "$SRC_REMOTE")
+CLONE_ARGS=(--quiet --no-checkout --origin "$SRC_REMOTE")
 if [ "${DC_HARDLINKS:-}" != "1" ]; then
 	CLONE_ARGS+=(--no-hardlinks)
 fi
@@ -1067,6 +1104,77 @@ while IFS= read -r ref_line; do
 done <"$SRC_REFS_FILE"
 
 rm -f -- "$CLONE_REFS_FILE" "$SRC_REFS_FILE" "$REF_UPDATES_FILE"
+
+# --- Stop borrowing, now that every source ref is here ------------------------
+# The deferred half of the `--dissociate` note above. Only reached by a clone of
+# a source that borrows: an ordinary source writes no alternates file, the
+# condition is false, and nothing below runs — which is exactly what
+# `--dissociate` amounted to for that source anyway.
+# `repack -a` (deliberately without `--local`) packs everything reachable from
+# the clone's refs and HEAD, and a borrowed object is copied into that pack
+# rather than referenced across the alternate; the mirror above is what makes
+# "reachable" mean the SOURCE's full ref set rather than the branches and tags
+# `git clone` fetched. This is the same repack `--dissociate` performs, just held
+# until it can see every ref. Only once it succeeds is the alternates file
+# removed: dropping it first would take the borrowed objects away from a clone
+# that still needed them, and the failure would be a corrupt clone rather than a
+# refusal.
+capture_path git -C "$CLONE_DIR" rev-parse --absolute-git-dir ||
+	die "could not resolve the clone's git directory"
+CLONE_GIT_DIR="$CAPTURED_PATH"
+CLONE_ALTERNATES="$CLONE_GIT_DIR/objects/info/alternates"
+if [ -e "$CLONE_ALTERNATES" ]; then
+	git -C "$CLONE_DIR" repack -a -d --quiet >&2 ||
+		die "could not copy in the objects the clone borrows from another repository, so it cannot be made independent of it"
+	rm -f -- "$CLONE_ALTERNATES" ||
+		die "could not drop the clone's alternates file: $CLONE_ALTERNATES"
+fi
+
+# --- Settle HEAD, and only then ask what the clone can push to ----------------
+# The checkout comes BEFORE the two isolation checks below, and that ordering is
+# load-bearing rather than incidental. Both checks read the MERGED configuration
+# to answer what the clone's own user will see, and git's `includeIf
+# "onbranch:<pattern>"` makes part of that configuration a function of which
+# branch HEAD is on: a caller whose global config uses one to define a remote, or
+# a default push target, has it INACTIVE while the clone is still detached and
+# active the moment HEAD is attached to a matching branch. Checked before the
+# attach, both checks pass on a configuration the returned clone does not have,
+# and `git push` in it then writes a branch straight into the invoking repository
+# — the one thing the header promises has nowhere to go. (Measured with an
+# `onbranch:main` include defining a remote at the source: refused now, handed
+# back and pushable before.) So the final HEAD state is established first, and
+# the questions are asked of the clone as it will actually be handed over.
+#
+# The working tree is always materialized by detaching at the commit resolved up
+# front, and a branch checkout is then made by pointing HEAD at the branch — not
+# by `git checkout "$BRANCH"`. A branch operand shares git's option-parsing
+# position, so a local head whose name begins with a dash — `refs/heads/-foo`
+# passes `git check-ref-format`, and the qualified-form normalization above
+# correctly derives `-foo` from it — is read as a bundle of switches and the run
+# dies with `unknown switch 'o'`. A trailing `--` cannot rescue it: that
+# separates PATHS, and the operand is already parsed by the time git reaches it.
+# Both commands here take the name only where it cannot be mistaken for an
+# option: an object id, and `symbolic-ref`'s value argument in its full
+# `refs/heads/...` form. `git reset --hard` would do the same job, but it also
+# writes `ORIG_HEAD`, which is bookkeeping this helper has no reason to leave in
+# a clone that has no history to return to.
+git -C "$CLONE_DIR" checkout --quiet --force --detach "$SHA" >&2 ||
+	die "could not check out $SHA in the clone"
+if [ -n "$BRANCH" ] && git -C "$CLONE_DIR" show-ref --verify --quiet "refs/heads/$BRANCH"; then
+	git -C "$CLONE_DIR" symbolic-ref HEAD "refs/heads/$BRANCH" >&2 ||
+		die "could not check out '$BRANCH' in the clone"
+fi
+
+CLONE_HEAD="$(git -C "$CLONE_DIR" rev-parse --verify HEAD)" ||
+	die "could not read the clone's HEAD"
+if [ "$CLONE_HEAD" != "$SHA" ]; then
+	# The source ref moved between the clone and the checkout. Honour the commit
+	# that was resolved up front rather than silently verifying another one.
+	printf '%s: source ref moved during the clone; detaching at the originally resolved %s\n' \
+		"$PROG" "$SHA" >&2
+	git -C "$CLONE_DIR" checkout --quiet --force --detach "$SHA" >&2 ||
+		die "could not check out $SHA in the clone"
+fi
 
 # No remote means a stray `git push` in the clone has nowhere to go. The remote's
 # CONFIG is dropped rather than `git remote remove`, which would also delete
@@ -1152,37 +1260,6 @@ SURVIVING_PUSH_CFG="$(env ${SAVED_CONFIG_ENV[@]+"${SAVED_CONFIG_ENV[@]}"} git -C
 	die "could not list the clone's push-target configuration to confirm none survived ('git config --get-regexp' exited $push_cfg_status)"
 if [ -n "$SURVIVING_PUSH_CFG" ]; then
 	die "refusing: the clone would still have the push-target setting(s) $(tr '\n' ' ' <<<"$SURVIVING_PUSH_CFG")— defined outside its own configuration (your system, global, or command-scope git config), where this helper cannot remove them. git accepts a path or a URL in those settings and pushes to it as an anonymous remote that 'git remote' never lists, so a bare 'git push' in the clone would reach whatever they name — the invoking repository included. The clone is not the isolated place it promises to be. Unset them, or run dc-enter with a configuration that sets no default push destination."
-fi
-
-# The working tree is always materialized by detaching at the commit resolved up
-# front, and a branch checkout is then made by pointing HEAD at the branch — not
-# by `git checkout "$BRANCH"`. A branch operand shares git's option-parsing
-# position, so a local head whose name begins with a dash — `refs/heads/-foo`
-# passes `git check-ref-format`, and the qualified-form normalization above
-# correctly derives `-foo` from it — is read as a bundle of switches and the run
-# dies with `unknown switch 'o'`. A trailing `--` cannot rescue it: that
-# separates PATHS, and the operand is already parsed by the time git reaches it.
-# Both commands here take the name only where it cannot be mistaken for an
-# option: an object id, and `symbolic-ref`'s value argument in its full
-# `refs/heads/...` form. `git reset --hard` would do the same job, but it also
-# writes `ORIG_HEAD`, which is bookkeeping this helper has no reason to leave in
-# a clone that has no history to return to.
-git -C "$CLONE_DIR" checkout --quiet --force --detach "$SHA" >&2 ||
-	die "could not check out $SHA in the clone"
-if [ -n "$BRANCH" ] && git -C "$CLONE_DIR" show-ref --verify --quiet "refs/heads/$BRANCH"; then
-	git -C "$CLONE_DIR" symbolic-ref HEAD "refs/heads/$BRANCH" >&2 ||
-		die "could not check out '$BRANCH' in the clone"
-fi
-
-CLONE_HEAD="$(git -C "$CLONE_DIR" rev-parse --verify HEAD)" ||
-	die "could not read the clone's HEAD"
-if [ "$CLONE_HEAD" != "$SHA" ]; then
-	# The source ref moved between the clone and the checkout. Honour the commit
-	# that was resolved up front rather than silently verifying another one.
-	printf '%s: source ref moved during the clone; detaching at the originally resolved %s\n' \
-		"$PROG" "$SHA" >&2
-	git -C "$CLONE_DIR" checkout --quiet --force --detach "$SHA" >&2 ||
-		die "could not check out $SHA in the clone"
 fi
 
 # A disposable clone should be able to take a verification commit even where no

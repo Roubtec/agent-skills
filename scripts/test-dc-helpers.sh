@@ -549,9 +549,9 @@ require_clone CLONE_NOTATARGET "b: pt-notatarget"
 assert_eq "b: ... and that clone has no remote either" "$(git -C "$CLONE_NOTATARGET" remote)" ""
 
 # A source that is ITSELF a borrowing clone. `git clone` of a local path copies
-# `objects/info/alternates` verbatim, so without `--dissociate` the disposable
-# clone goes on borrowing from a third repository: it holds no copy of the
-# objects it is supposed to own and breaks outright when that store is pruned.
+# `objects/info/alternates` verbatim, so undissociated the disposable clone goes
+# on borrowing from a third repository: it holds no copy of the objects it is
+# supposed to own and breaks outright when that store is pruned.
 # The check that settles it is the destructive one — the external store is
 # DELETED and the clone must still be whole.
 ALT_BASE="$WORK/b/alt-base"
@@ -571,6 +571,103 @@ assert_eq "b: ... and still holds its history once the external store is deleted
 	"$(git -C "$CLONE_ALT" rev-list --count --all)" "1"
 in_repo "$CLONE_ALT" git fsck --no-progress --no-dangling --connectivity-only
 assert_eq "b: ... passing fsck without it" "$RC" 0
+
+# ... and the case that pins WHEN the borrowing stops. `git clone --dissociate`
+# copies in only what the refs the initial clone fetched can reach — branches and
+# tags — so an object reachable solely from a source ref in another namespace is
+# not copied, and dropping the alternate then leaves the mirror with nothing to
+# point its ref at ("trying to write ref ... with nonexistent object"). The
+# fixture is exactly that: a commit that exists ONLY in the external store, named
+# only by a `refs/pruned/*` ref in the borrowing source. Both halves of the
+# contract are asserted — the ref arrives, and it still resolves once the store
+# it came from is gone.
+ALT2_BASE="$WORK/b/alt2-base"
+git init -q -b main "$ALT2_BASE"
+g -C "$ALT2_BASE" commit -q --allow-empty -m one
+g -C "$ALT2_BASE" commit -q --allow-empty -m hidden
+ALT2_HIDDEN="$(git -C "$ALT2_BASE" rev-parse HEAD)"
+g -C "$ALT2_BASE" reset -q --hard HEAD~1
+ALT2_SRC="$WORK/b/alt2-src"
+git clone -q --shared "$ALT2_BASE" "$ALT2_SRC"
+git -C "$ALT2_SRC" update-ref refs/pruned/hidden "$ALT2_HIDDEN"
+assert_eq "b: the borrowed-object fixture really is borrowed" \
+	"$(git -C "$ALT2_SRC" cat-file -t "$ALT2_HIDDEN")" "commit"
+# Decisive, because a fixture whose source held the object itself would pass the
+# final assertion below without the deferred dissociation doing anything: neither
+# loosely nor in a pack of its own, so the ONLY way the clone can end up with it
+# is by copying it out of the alternate.
+assert_true "b: ... and the source's own store does not hold it loose" \
+	"$([ -e "$ALT2_SRC/.git/objects/${ALT2_HIDDEN:0:2}/${ALT2_HIDDEN:2}" ] && echo false || echo true)"
+assert_eq "b: ... nor in a pack of its own" \
+	"$(find "$ALT2_SRC/.git/objects/pack" -name '*.pack' 2>/dev/null | wc -l | tr -d '[:space:]')" "0"
+in_repo "$ALT2_SRC" "$DC_ENTER" altborrowedref
+assert_eq "b: a ref reaching an object only the alternate holds still yields a clone" "$RC" 0
+require_clone CLONE_ALT2 "b: altborrowedref"
+assert_eq "b: ... with that ref mirrored" \
+	"$(git -C "$CLONE_ALT2" rev-parse refs/pruned/hidden)" "$ALT2_HIDDEN"
+assert_true "b: ... and borrowing from nobody" \
+	"$([ -e "$CLONE_ALT2/.git/objects/info/alternates" ] && echo false || echo true)"
+rm -rf "$ALT2_BASE"
+assert_eq "b: ... the borrowed object surviving the external store's deletion" \
+	"$(git -C "$CLONE_ALT2" cat-file -t "$ALT2_HIDDEN")" "commit"
+in_repo "$CLONE_ALT2" git fsck --no-progress --no-dangling --connectivity-only
+assert_eq "b: ... and fsck clean without it" "$RC" 0
+
+# `includeIf "onbranch:<pattern>"` makes part of the caller's merged
+# configuration depend on the branch HEAD is on. A remote defined that way is
+# invisible while the clone is detached and live the moment HEAD is attached to
+# the requested branch, so an isolation check made before the checkout answers
+# for a clone nobody receives — and the one handed back can `git push` into the
+# invoking repository. The refusal must therefore hold for the conditional
+# definition exactly as it does for an unconditional one.
+ONBRANCH_SRC="$WORK/b/onbranch-src"
+git init -q -b main "$ONBRANCH_SRC"
+g -C "$ONBRANCH_SRC" commit -q --allow-empty -m one
+ONBRANCH_INC="$WORK/b/onbranch-remote.inc"
+printf '[remote "leak"]\n\turl = %s\n' "$ONBRANCH_SRC" >"$ONBRANCH_INC"
+ONBRANCH_CFG="$WORK/b/onbranch.gitconfig"
+printf '[user]\n\tuseConfigOnly = true\n[includeIf "onbranch:main"]\n\tpath = %s\n' \
+	"$ONBRANCH_INC" >"$ONBRANCH_CFG"
+in_repo "$ONBRANCH_SRC" env "GIT_CONFIG_GLOBAL=$ONBRANCH_CFG" "$DC_ENTER" onbranchremote main
+assert_ne "b: a remote a conditional onbranch include defines is refused" "$RC" 0
+assert_eq "b: ... silently on stdout" "$OUT" ""
+assert_contains "b: ... naming the remote it would have carried" "$ERR" "leak"
+# The same include defining a PUSH TARGET rather than a remote, which the second
+# check is the one to catch.
+printf '[remote]\n\tpushDefault = %s\n' "$ONBRANCH_SRC" >"$ONBRANCH_INC"
+in_repo "$ONBRANCH_SRC" env "GIT_CONFIG_GLOBAL=$ONBRANCH_CFG" "$DC_ENTER" onbranchpush main
+assert_ne "b: a push target a conditional onbranch include defines is refused" "$RC" 0
+assert_eq "b: ... silently on stdout as well" "$OUT" ""
+assert_contains "b: ... naming the setting" "$ERR" "remote.pushdefault"
+# Not over-broad: the include is scoped to `main`, so requesting a branch it does
+# not match leaves it inactive in the clone that is handed back, and that clone
+# is legitimate. This is what makes the two refusals above evidence of the
+# ordering rather than of a check that fires on the include's mere presence.
+g -C "$ONBRANCH_SRC" branch other
+in_repo "$ONBRANCH_SRC" env "GIT_CONFIG_GLOBAL=$ONBRANCH_CFG" "$DC_ENTER" onbranchmiss other
+assert_eq "b: a conditional include the requested branch does not match still yields a clone" "$RC" 0
+require_clone CLONE_ONBRANCH "b: onbranchmiss"
+assert_eq "b: ... checked out on that branch" \
+	"$(git -C "$CLONE_ONBRANCH" symbolic-ref HEAD)" "refs/heads/other"
+assert_eq "b: ... and with no remote" "$(git -C "$CLONE_ONBRANCH" remote)" ""
+
+# The default clone root is /tmp, which on a shared machine every account can
+# walk. The directories this helper creates there hold a copy of the invoking
+# repository — its source and its objects — so they are created 0700 rather than
+# left to a 0022 umask's world-readable 0755.
+MODE_SRC="$WORK/b/mode-src"
+git init -q -b main "$MODE_SRC"
+g -C "$MODE_SRC" commit -q --allow-empty -m one
+MODE_ROOT="$WORK/b/mode-root"
+in_repo "$MODE_SRC" env "DC_ROOT=$MODE_ROOT" "$DC_ENTER" privatemode
+assert_eq "b: a clone under a fresh root exits 0" "$RC" 0
+require_clone CLONE_PRIVATE "b: privatemode"
+MODE_SESSION="$(dirname "$CLONE_PRIVATE")"
+MODE_SCOPE="$(dirname "$MODE_SESSION")"
+assert_eq "b: the per-agent scope directory is private" \
+	"$(stat -c '%a' "$MODE_SCOPE")" "700"
+assert_eq "b: the session directory holding the clone is private too" \
+	"$(stat -c '%a' "$MODE_SESSION")" "700"
 
 echo "== (c) the <ref> interface =="
 SRC2="$WORK/c/src"
