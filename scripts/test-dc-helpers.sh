@@ -48,9 +48,10 @@ set -euo pipefail
 #       quietly missing the objects no ref reaches at all. The alternate-backed
 #       source carries the second half of that bound by a different route: the
 #       dissociation's repack cannot see an unreachable object held only by the
-#       donor, or packed in the source before it was stranded, though a loose one
-#       there survives. Both bounds are characterization cases with a
-#       self-contained control beside them — close either bound and they invert
+#       donor, or packed in the source before it was stranded, while a loose one
+#       there survives — all three asserted. Both bounds are characterization
+#       cases with a self-contained control beside them: close either and the
+#       assertions invert rather than disappear
 #   (c) the <ref> interface: default is the INVOKING worktree's HEAD (not the
 #       main worktree's), branch/tag/sha/rev forms, a short name that is both a
 #       branch and a tag resolving to the branch, a qualified ref and a
@@ -572,8 +573,9 @@ assert_eq "b: a global branch.<name>.rebase is not read as a push target" "$RC" 
 require_clone CLONE_NOTATARGET "b: pt-notatarget"
 assert_eq "b: ... and that clone has no remote either" "$(git -C "$CLONE_NOTATARGET" remote)" ""
 
-# A source that is ITSELF a borrowing clone. `git clone` of a local path copies
-# `objects/info/alternates` verbatim, so undissociated the disposable clone goes
+# A source that is ITSELF a borrowing clone. `git clone` of a local path carries
+# `objects/info/alternates` across (a relative entry resolved to an absolute
+# path rather than byte-for-byte), so undissociated the disposable clone goes
 # on borrowing from a third repository: it holds no copy of the objects it is
 # supposed to own and breaks outright when that store is pruned.
 # The check that settles it is the destructive one — the external store is
@@ -930,10 +932,11 @@ assert_eq "b: ... and its clone holds the source's history" \
 # the branch then deleted and the reflog expired. Its control is the same history
 # in a NON-borrowing source, which is what makes this a statement about borrowing
 # rather than about dc-enter — there the object comes across.
-# CHARACTERIZATION, not a fix pin: these assert the bound as it stands. Closing
-# it (`repack -A -d`, which the helper rejects because `-A` would explode the
-# DONOR's unreachable objects loose into the clone) would make the "absent"
-# assertion below fail, and it should then be inverted rather than deleted.
+# CHARACTERIZATION, not a fix pin: these assert the bound as it stands. `repack
+# -A -d` would close the packed half — measured, that commit comes across under
+# it — and the helper keeps `-a -d` anyway, to stay exactly the repack
+# `--dissociate` itself runs. So the "absent" assertion below is the one that
+# would need inverting if that call were ever revisited, not deleting.
 ALT3_DONOR="$WORK/b/alt3-donor"
 ALT3_PLAIN_DONOR="$WORK/b/alt3-plain-donor"
 git init -q -b main "$ALT3_DONOR"
@@ -954,8 +957,19 @@ strand_a_packed_commit() {
 	git -C "$dir" reflog expire --expire=now --all
 }
 ALT3_SRC="$WORK/b/alt3-src"
+# The other two shapes the bound distinguishes, written before the clone so both
+# are in place for one run: an unreachable object the DONOR alone holds, and a
+# LOOSE unreachable one in the source's own store. The first is lost with the
+# packed one; the second survives, because `repack -a -d` rewrites packs and does
+# not delete loose objects.
+ALT3_DONOR_ONLY="$(printf 'donor-only unreachable\n' | git -C "$ALT3_DONOR" hash-object -w --stdin)"
 git clone -q --shared "$ALT3_DONOR" "$ALT3_SRC"
+ALT3_LOOSE="$(printf 'loose unreachable\n' | git -C "$ALT3_SRC" hash-object -w --stdin)"
 ALT3_STRANDED="$(strand_a_packed_commit "$ALT3_SRC")"
+assert_eq "b: the borrowing source can see the donor-only unreachable object" \
+	"$(git -C "$ALT3_SRC" cat-file -t "$ALT3_DONOR_ONLY")" "blob"
+assert_eq "b: ... and holds a loose unreachable one of its own" \
+	"$(git -C "$ALT3_SRC" cat-file -t "$ALT3_LOOSE")" "blob"
 ALT3_PLAIN_SRC="$WORK/b/alt3-plain-src"
 git clone -q --no-hardlinks "$ALT3_PLAIN_DONOR" "$ALT3_PLAIN_SRC"
 ALT3_PLAIN_STRANDED="$(strand_a_packed_commit "$ALT3_PLAIN_SRC")"
@@ -969,6 +983,10 @@ require_clone CLONE_ALT3 "b: altunreachable"
 assert_eq "b: ... quietly, with nothing said on stderr" "$ERR" ""
 assert_eq "b: ... but WITHOUT that object, which the dissociation's repack cannot reach" \
 	"$(git -C "$CLONE_ALT3" cat-file -t "$ALT3_STRANDED" 2>/dev/null || echo absent)" "absent"
+assert_eq "b: ... nor the one only the donor held" \
+	"$(git -C "$CLONE_ALT3" cat-file -t "$ALT3_DONOR_ONLY" 2>/dev/null || echo absent)" "absent"
+assert_eq "b: ... while the source's own LOOSE unreachable object does come across" \
+	"$(git -C "$CLONE_ALT3" cat-file -t "$ALT3_LOOSE" 2>/dev/null || echo absent)" "blob"
 in_repo "$ALT3_PLAIN_SRC" "$DC_ENTER" plainunreachable
 assert_eq "b: the non-borrowing control yields a clone too" "$RC" 0
 require_clone CLONE_ALT3_PLAIN "b: plainunreachable"

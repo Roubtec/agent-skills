@@ -33,10 +33,9 @@
 #   copies the source's `objects/info/alternates` across (rewriting a relative
 #   entry to an absolute path, measured, but carrying the borrowing either way);
 #   the clone is dissociated from that third repository before it is handed
-#   back, but only
-#   AFTER the ref mirror below, so that objects reachable solely from the source
-#   refs `git clone` never fetches are copied in rather than dropped. See the
-#   dissociation note at the clone itself.
+#   back, but only AFTER the ref mirror below, so that objects reachable solely
+#   from the source refs `git clone` never fetches are copied in rather than
+#   dropped. See the dissociation note at the clone itself.
 #   The remote `git clone` created, and the upstream configuration pointing at
 #   it, are both removed after the clone is populated, and the clone's MERGED
 #   remote list is then checked to be empty — a remote the caller's own global or
@@ -202,10 +201,16 @@
 # own control: the same packed-then-unreferenced commit comes across from a
 # non-borrowing source and is absent from a borrowing one's clone, with the run
 # exiting 0 and saying nothing.
-# It stays `repack -a -d` rather than `-A -d`, which would keep the packed shape:
-# `-A` explodes unreachable objects into loose ones, and the objects reachable
-# here include the DONOR's, so a borrowing source would hand back a clone
-# carrying the donor's unreachable objects loose. The bound is stated instead.
+# It stays `repack -a -d`, and the honest reason is not that `-A -d` would fail.
+# Measured, `-A -d` closes the packed-in-the-source half — that commit does come
+# across — and leaves the donor half exactly as it was, because
+# `--unpack-unreachable` loosens objects only out of LOCAL packs. What `-a -d`
+# buys is being precisely the repack `git clone --dissociate` itself runs
+# (`repack -a -d`, in git's own clone.c), which is what this block reproduces on
+# a later schedule rather than reimplements; `-A` would additionally loosen every
+# unreachable object in the packs it replaces into the disposable clone. So the
+# bound is stated rather than half-closed by departing from the operation being
+# mirrored — a deliberate call, not a limitation of git.
 # An object a PARTIAL clone left on its promisor remote is not in the source's
 # store either, and only a fetch from that remote brings it in — the caller's
 # network to spend, not this helper's — so such a source is refused before
@@ -230,8 +235,8 @@
 # rather than anything the boundary cut off.
 # QUIETLY, and this is the bound to know: an object NO ref reaches does not come
 # across either, so the unreachable-object property claimed above does not hold
-# here — the same half of it the borrowing source above loses, reached by a
-# different route. Measured — a dangling blob in one is absent from its
+# here at all — a stronger loss than the borrowing source's, which keeps the
+# loose ones. Measured — a dangling blob in one is absent from its
 # clone, with the run exiting 0 and printing nothing. The refs that do arrive are
 # exact and the isolation guarantee is untouched; what such a clone cannot answer
 # is "was this unreferenced object still there?".
