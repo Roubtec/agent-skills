@@ -14,6 +14,8 @@ How we open and merge PRs is a development practice like any other, so it lives 
 
 Before doing a code review, read ALL existing review comments and threads on the PR for context before making suggestions. Findings previously delegated to follow-up work need not be re-raised unless the facts changed since the delegation.
 
+Calibrate findings against the helpers to [README.md's safety posture](README.md#safety-posture): these are accident guardrails, not a security boundary. Weight a finding by whether an ordinary run can reach it, and prefer a fix that deletes complexity over one that adds a case.
+
 ## When Asked to Address Review Comments
 
 - Read ALL existing review comments and threads on the PR for context before making changes.
