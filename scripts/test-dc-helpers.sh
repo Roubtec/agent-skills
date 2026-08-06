@@ -37,8 +37,10 @@ set -euo pipefail
 #       deletion of the store it borrowed from, and a PARTIAL-clone source —
 #       whose missing objects no local operation can bring in — is refused
 #       outright before anything is created, by each of the three markers git
-#       registers a promisor remote from, while a `remote.<name>.promisor=false`
-#       repository still gets its clone
+#       registers a promisor remote from — read as git reads them, so a
+#       multivalued promisor whose LAST value is false is still refused and one
+#       in command-scope config is seen at all — while a repository whose only
+#       promisor key is an ordinary single `false` still gets its clone
 #   (c) the <ref> interface: default is the INVOKING worktree's HEAD (not the
 #       main worktree's), branch/tag/sha/rev forms, a short name that is both a
 #       branch and a tag resolving to the branch, a qualified ref and a
@@ -629,9 +631,11 @@ assert_eq "b: ... and fsck clean without it" "$RC" 0
 # PARTIAL clone. `--filter=blob:none` leaves objects on a promisor remote and git
 # tolerates their absence only because that remote can still serve them; a local
 # clone copies what is present and inherits none of that configuration, so
-# unrefused the mirror succeeded, dc-enter exited 0, and the clone answered `bad
-# object` for a blob the source served — a verification baseline disagreeing with
-# the repository it claimed to copy. The refusal has to land before anything is
+# unrefused the mirror succeeded, dc-enter exited 0, and the clone answered
+# `fatal: Not a valid object name` for a blob the source served — a verification
+# baseline disagreeing with the repository it claimed to copy, and with a tree
+# filter it answers `path ... does not exist` instead, which is worse: an error
+# asserting something false of the source. The refusal has to land before anything is
 # created, so the assertions are on the exit status, an empty stdout, the marker
 # named in the diagnostic, and an untouched clone root.
 PARTIAL_UP="$WORK/b/partial-upstream"
@@ -692,10 +696,11 @@ assert_true "b: ... before creating anything under the clone root" \
 assert_eq "b: ... git itself fetching lazily on that key alone" \
 	"$(git -C "$PARTIAL_FILTER_SRC" cat-file -p refs/remotes/origin/other:big.txt)" "fetched on demand"
 
-# The second marker, on its own. Neither git 2.36.6 nor 2.47.3 writes
-# `extensions.partialClone` — both record only the promisor remote — so a
-# repository carrying it is the one shape the check above cannot reach, and
-# without this case that half of the code is never executed.
+# The third marker, on its own. Neither git 2.36.6 nor 2.47.3 writes
+# `extensions.partialClone` at all — both register the promisor remote through
+# the two `remote.<name>.*` keys above instead — so a repository carrying it is
+# the one shape those cases cannot reach, and without this one that branch of the
+# code is never executed.
 PARTIAL_EXT_SRC="$WORK/b/partial-ext-src"
 git init -q -b main "$PARTIAL_EXT_SRC"
 g -C "$PARTIAL_EXT_SRC" commit -q --allow-empty -m one
@@ -706,6 +711,51 @@ in_repo "$PARTIAL_EXT_SRC" env "DC_ROOT=$PARTIAL_EXT_ROOT" "$DC_ENTER" partialex
 assert_ne "b: an extensions.partialClone source is refused too" "$RC" 0
 assert_eq "b: ... silently on stdout" "$OUT" ""
 assert_contains "b: ... naming that marker rather than the promisor one" "$ERR" "extensions.partialClone"
+assert_true "b: ... before creating anything under the clone root" \
+	"$([ -e "$PARTIAL_EXT_ROOT" ] && echo false || echo true)"
+
+# `promisor` is multivalued here, `true` then `false`. git registers the promisor
+# remote on the FIRST and never unregisters it — measured, this source still
+# fetches the blob lazily — so reading only the last value (what `git config
+# --get` reports) would wave it through. The refusal must read every value.
+PARTIAL_MULTI_SRC="$WORK/b/partial-multi-src"
+git clone -q --filter=blob:none --no-local "$PARTIAL_UP" "$PARTIAL_MULTI_SRC"
+git -C "$PARTIAL_MULTI_SRC" config --unset-all remote.origin.partialclonefilter
+git -C "$PARTIAL_MULTI_SRC" config --add remote.origin.promisor false
+assert_eq "b: the multivalued fixture's LAST promisor value is false" \
+	"$(git -C "$PARTIAL_MULTI_SRC" config --type=bool --get remote.origin.promisor)" "false"
+assert_ne "b: ... while it still misses an object its refs reach" \
+	"$(git -C "$PARTIAL_MULTI_SRC" rev-list --objects --all --missing=print | grep -c '^?' | tr -d '[:space:]')" "0"
+PARTIAL_MULTI_ROOT="$WORK/b/partial-multi-root"
+in_repo "$PARTIAL_MULTI_SRC" env "DC_ROOT=$PARTIAL_MULTI_ROOT" "$DC_ENTER" partialmulti
+assert_ne "b: a trailing promisor=false does not lift the refusal" "$RC" 0
+assert_eq "b: ... silently on stdout" "$OUT" ""
+assert_true "b: ... before creating anything under the clone root" \
+	"$([ -e "$PARTIAL_MULTI_ROOT" ] && echo false || echo true)"
+# Last, because it materializes the object and rewrites the marker git decided by.
+assert_eq "b: ... git itself still fetching lazily despite that trailing false" \
+	"$(git -C "$PARTIAL_MULTI_SRC" cat-file -p refs/remotes/origin/other:big.txt)" "fetched on demand"
+
+# The marker in COMMAND-SCOPE config rather than a file. git acts on
+# `GIT_CONFIG_COUNT`/`GIT_CONFIG_PARAMETERS` when the caller reads the source, so
+# a marker there is as real as one in .git/config — and dc-enter strips those
+# variables from its own commands, which is why the check restores them. The
+# `extensions.partialClone` spelling is the one that matters: a `remote.<name>.*`
+# marker injected this way is caught by the surviving-remote check anyway, just
+# later and for a different reason, while this one would reach nothing at all.
+PARTIAL_ENV_SRC="$WORK/b/partial-env-src"
+git init -q -b main "$PARTIAL_ENV_SRC"
+g -C "$PARTIAL_ENV_SRC" commit -q --allow-empty -m one
+git -C "$PARTIAL_ENV_SRC" config core.repositoryformatversion 1
+PARTIAL_ENV_ROOT="$WORK/b/partial-env-root"
+in_repo "$PARTIAL_ENV_SRC" env "DC_ROOT=$PARTIAL_ENV_ROOT" \
+	"GIT_CONFIG_COUNT=1" "GIT_CONFIG_KEY_0=extensions.partialClone" "GIT_CONFIG_VALUE_0=origin" \
+	"$DC_ENTER" partialenv
+assert_ne "b: a command-scope partial-clone marker is refused" "$RC" 0
+assert_eq "b: ... silently on stdout" "$OUT" ""
+assert_contains "b: ... naming that marker" "$ERR" "extensions.partialClone"
+assert_true "b: ... before creating anything under the clone root" \
+	"$([ -e "$PARTIAL_ENV_ROOT" ] && echo false || echo true)"
 
 # And the boundary the refusal is held to: `remote.<name>.promisor` explicitly
 # set to false is git saying this remote is NOT a promisor, so the repository is

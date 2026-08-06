@@ -678,6 +678,14 @@ SRC_GIT_DIR="$CAPTURED_PATH"
 # configuration leaves one. So the source is refused instead, before anything is
 # created, and the refusal names the configuration it was decided by rather than
 # only the conclusion.
+# It is decided by CONFIGURATION, and so is deliberately over-inclusive: a
+# partial clone whose objects have since all been materialized is refused too,
+# and materializing them does not lift the refusal while the configuration is
+# still there. Deciding it by completeness instead means traversing every object
+# reachable from every ref on every run — history-sized work on each invocation,
+# to admit the one shape a full clone of the same repository answers better
+# anyway. The diagnostic says which it is, so the caller is not left inferring
+# that their objects are missing.
 # The markers are the three git itself registers a promisor remote from, taken
 # from its own config parser (`promisor_remote_config` in promisor-remote.c):
 # `remote.<name>.promisor` when it reads as a true BOOLEAN, and
@@ -698,8 +706,15 @@ SRC_GIT_DIR="$CAPTURED_PATH"
 # grafted boundary as the source rather than a truncated history it believes is
 # whole. Measured — `rev-list --count` agrees and `fsck --connectivity-only`
 # passes in the clone.
+# Read with the caller's COMMAND-SCOPE config restored — the two variables saved
+# above — because git acts on it when the caller reads this repository, so a
+# promisor marker injected that way is as real as one in a config file. Left
+# stripped, such a marker slipped past this refusal; it was still caught, but
+# only by the surviving-remote check after the clone had been built, and only
+# because a `remote.<name>.*` marker also makes that remote visible there —
+# which an `extensions.partialClone` injected the same way does not.
 PROMISOR_CONFIG_RC=0
-PROMISOR_KEYS="$(git -C "$SRC_TOP" config --name-only --get-regexp '^remote\..*\.(promisor|partialclonefilter)$')" ||
+PROMISOR_KEYS="$(env ${SAVED_CONFIG_ENV[@]+"${SAVED_CONFIG_ENV[@]}"} git -C "$SRC_TOP" config --name-only --get-regexp '^remote\..*\.(promisor|partialclonefilter)$')" ||
 	PROMISOR_CONFIG_RC=$?
 # 1 is "no such key", the ordinary answer for a repository that is not a partial
 # clone. Anything else means the question was not answered, and a helper that
@@ -716,9 +731,23 @@ while IFS= read -r promisor_key; do
 	# one of these words.
 	case "$promisor_key" in
 	*.promisor)
-		promisor_value="$(git -C "$SRC_TOP" config --type=bool --get "$promisor_key")" ||
-			promisor_value=unreadable
-		[ "$promisor_value" != false ] || continue
+		# EVERY value, not just the last one git's `--get` reports. git registers
+		# the remote on any value that reads true, and a false is a no-op rather
+		# than a removal — measured, a `promisor = true` followed by a
+		# `promisor = false` still lazily fetches, while `--get` sees only the
+		# trailing `false` and would wave that repository through.
+		promisor_values="$(env ${SAVED_CONFIG_ENV[@]+"${SAVED_CONFIG_ENV[@]}"} git -C "$SRC_TOP" config --type=bool --get-all "$promisor_key")" ||
+			promisor_values=unreadable
+		promisor_registers=""
+		while IFS= read -r promisor_value; do
+			[ -n "$promisor_value" ] || continue
+			# `unreadable` lands here too, and counts as registering.
+			[ "$promisor_value" = false ] || {
+				promisor_registers=yes
+				break
+			}
+		done <<<"$promisor_values"
+		[ -n "$promisor_registers" ] || continue
 		;;
 	esac
 	SRC_PARTIAL_MARKER="$promisor_key"
@@ -726,14 +755,14 @@ while IFS= read -r promisor_key; do
 done <<<"$PROMISOR_KEYS"
 if [ -z "$SRC_PARTIAL_MARKER" ]; then
 	PROMISOR_CONFIG_RC=0
-	git -C "$SRC_TOP" config --get extensions.partialClone >/dev/null ||
+	env ${SAVED_CONFIG_ENV[@]+"${SAVED_CONFIG_ENV[@]}"} git -C "$SRC_TOP" config --get extensions.partialClone >/dev/null ||
 		PROMISOR_CONFIG_RC=$?
 	[ "$PROMISOR_CONFIG_RC" -eq 0 ] || [ "$PROMISOR_CONFIG_RC" -eq 1 ] ||
 		die "could not ask git whether the invoking repository is a partial clone: 'git config --get extensions.partialClone' exited $PROMISOR_CONFIG_RC"
 	[ "$PROMISOR_CONFIG_RC" -ne 0 ] || SRC_PARTIAL_MARKER=extensions.partialClone
 fi
 [ -z "$SRC_PARTIAL_MARKER" ] ||
-	die "refusing: the invoking repository is a partial clone ('$SRC_PARTIAL_MARKER' is set), so part of its history lives on a promisor remote and arrives only when something asks for it. A local clone copies the objects that are here and inherits none of that configuration, so the clone would carry refs whose objects it can neither find nor fetch — and a read of one either fails or, with a tree filter, reports that a path present in this repository does not exist, inside a clone this helper had just reported as a faithful copy of it. Fetching those objects here would mean an unbounded network fetch nobody asked for; leaving them fetchable would mean handing back a clone still tied to a repository outside it. Run $PROG from a full clone of this repository instead. This refusal reads the partial-clone CONFIGURATION rather than re-deriving completeness on every run, so materializing the objects (refetching) does not lift it while that configuration is still there."
+	die "refusing: the invoking repository is a partial clone ('$SRC_PARTIAL_MARKER' is set), so part of its history lives on a promisor remote and arrives only when something asks for it. A local clone copies the objects that are here and inherits none of that configuration, so a clone of it can carry refs whose objects it can neither find nor fetch — and a read of one either fails or, with a tree filter, reports that a path present in this repository does not exist, inside a clone this helper had just reported as a faithful copy of it. Fetching those objects here would mean an unbounded network fetch nobody asked for; leaving them fetchable would mean handing back a clone still tied to a repository outside it. Run $PROG from a full clone of this repository instead. This refusal reads the partial-clone CONFIGURATION rather than traversing the history to re-derive completeness on every run, so it is deliberately over-inclusive: if every object has in fact been materialized, this repository is not broken, but the refusal still stands while that configuration is there."
 
 if [ -n "$REF_SEEN" ]; then REF_ARG="$REF"; else REF_ARG="HEAD"; fi
 # What the caller actually wrote, kept for diagnostics: REF_ARG is rewritten to a
