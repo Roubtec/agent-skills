@@ -197,10 +197,12 @@
 # one ("warning: source repository is shallow, ignoring --local", measured
 # identically on 2.36.6 and 2.47.3) and negotiates a pack instead. So the clone
 # holds what that fetch brought, with a matching `shallow` boundary, and an
-# ordinary shallow source clones fine — but a ref outside the namespaces the
-# fetch covers can reach an object it did not bring, and the mirror below then
+# ordinary shallow source clones fine — but a ref outside the namespaces that
+# fetch covers names an object nothing brought, since the wholesale copy that
+# would otherwise carry it is what git just declined, and the mirror below then
 # dies with "trying to write ref ... with nonexistent object". A shallow checkout
-# carrying a stash is exactly that. Nothing is handed back when it happens, which
+# carrying a stash is exactly that: the missing object is the stash commit
+# itself, not something the boundary cut off. Nothing is handed back when it happens, which
 # is why this one needs no refusal of its own: it is the loud failure, not the
 # silently wrong baseline the partial-clone case would be.
 # A source ref that is SYMBOLIC arrives symbolic, at the same target, rather
@@ -265,8 +267,12 @@
 # The printed path is deterministic for a given agent, worktree, and slug, so
 # carry `$DC` forward within a script rather than calling dc-enter again.
 #
-# Hardlinks: `git clone` of a local path hardlinks `.git/objects` by default,
-# which is safe for every git operation. The default here is nonetheless
+# Hardlinks: `git clone` of a local path hardlinks `.git/objects` by default —
+# wherever it takes the local path at all, which for a SHALLOW source it does not
+# (see the shallow exception in the ref-namespace note above; measured, such a
+# clone's pack is a fresh file rather than a link to the source's, on both the
+# default and the `--no-hardlinks` path). It is safe for every git operation. The
+# default here is nonetheless
 # `--no-hardlinks`, because the accidents a disposable clone exists to absorb
 # are precisely the non-git ones: a shell redirect, `sed -i`, or an unpacked
 # tarball landing on `.git/objects/ab/cdef…` writes THROUGH a hardlink and
@@ -277,8 +283,10 @@
 # there — it is stated over git operations, and no git operation writes into an
 # existing object — but a NON-git write into the clone's `.git/objects` then
 # reaches the source, so set it only where clone cost actually bites and the
-# clone's user is git. Both paths use git's local-clone optimization, so both
-# carry the source's unreachable objects as well as its reachable ones.
+# clone's user is git. Both paths use git's local-clone optimization where git
+# offers it, and so both carry the source's unreachable objects as well as its
+# reachable ones — for a shallow source neither does, since git offers it to
+# neither, and the clone then holds only what its fetch negotiated.
 #
 # Sync discipline: this plugin copy is canonical and net-new here — unlike
 # `gh-review-threads` there is no powbox-baked original to vendor or checksum

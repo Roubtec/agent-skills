@@ -800,9 +800,12 @@ assert_eq "b: ... with the source's own history boundary, not a deeper claim" \
 in_repo "$CLONE_SHALLOW" git fsck --no-progress --no-dangling --connectivity-only
 assert_eq "b: ... passing fsck" "$RC" 0
 
-# The loud half: a stash in a shallow checkout is a ref outside the namespaces
-# the fetch covers, reaching a parent the shallow boundary cut off. The mirror
-# cannot write it, so the run dies rather than handing back a clone missing it.
+# The loud half, and the mechanism is the missing local COPY rather than the
+# shallow boundary: `git clone` fetches refs/heads and refs/tags, and for an
+# ordinary source the wholesale object copy carries everything else across
+# anyway. A shallow source gets no such copy, so an object no fetched ref reaches
+# is simply absent — here the stash COMMIT itself, which is inside the boundary
+# and whose object id is the one the mirror then cannot write.
 SHALLOW_STASH_SRC="$WORK/b/shallow-stash-src"
 git clone -q --depth 2 --no-local "$SHALLOW_UP" "$SHALLOW_STASH_SRC"
 printf 'work in progress\n' >"$SHALLOW_STASH_SRC/wip.txt"
