@@ -184,8 +184,8 @@
 # are present either way: a clone from a local PATH copies the whole object
 # store rather than negotiating a pack, so even objects that no ref reaches come
 # across, and a hidden ref therefore always has its object waiting for it — with
-# three exceptions: one repaired here, one refused up front, and one that fails
-# loudly instead of quietly.
+# three exceptions: one repaired here, one refused up front, and one bounded and
+# stated.
 # An object the source itself only BORROWS from an alternate is not in the copied
 # store, which is why the dissociation that stops the borrowing is deferred until
 # after this mirror rather than done by `git clone --dissociate`.
@@ -194,17 +194,31 @@
 # network to spend, not this helper's — so such a source is refused before
 # anything is created; see the partial-clone refusal at the source checks.
 # A SHALLOW source gets no local copy at all: git declines the optimization for
-# one ("warning: source repository is shallow, ignoring --local", measured
-# identically on 2.36.6 and 2.47.3) and negotiates a pack instead. So the clone
-# holds what that fetch brought, with a matching `shallow` boundary, and an
-# ordinary shallow source clones fine — but a ref outside the namespaces that
-# fetch covers names an object nothing brought, since the wholesale copy that
-# would otherwise carry it is what git just declined, and the mirror below then
-# dies with "trying to write ref ... with nonexistent object". A shallow checkout
-# carrying a stash is exactly that: the missing object is the stash commit
-# itself, not something the boundary cut off. Nothing is handed back when it happens, which
-# is why this one needs no refusal of its own: it is the loud failure, not the
-# silently wrong baseline the partial-clone case would be.
+# one and negotiates a pack instead, so the clone holds what that fetch brought,
+# with a matching `shallow` boundary. Measured by inode on 2.36.6 and 2.47.3 —
+# such a clone's pack is a fresh file rather than a link to the source's, on the
+# default and the `--no-hardlinks` path alike. Git says so in words only when
+# `--local` was asked for explicitly; this helper never asks, so nothing is
+# printed on its own command line and the effect has to be measured rather than
+# read off stderr.
+# That has two consequences, and they fail differently.
+# LOUDLY: a ref outside refs/heads and refs/tags names an object nothing brought
+# — the wholesale copy that would otherwise carry it is exactly what git declined
+# — so the mirror below dies with "trying to write ref ... with nonexistent
+# object" and hands nothing back. A shallow checkout carrying a stash is that
+# case, the missing object being the stash commit itself rather than anything the
+# boundary cut off.
+# QUIETLY, and this is the bound to know: an object NO ref reaches does not come
+# across either, so the unreachable-object property claimed above does NOT hold
+# for a shallow source. Measured — a dangling blob in one is absent from its
+# clone, with the run exiting 0 and printing nothing. The refs that do arrive are
+# exact and the isolation guarantee is untouched; what such a clone cannot answer
+# is "was this unreferenced object still there?".
+# It is bounded rather than refused because of what is lost: objects no ref
+# names, where the partial-clone case above loses objects the source's own refs
+# REACH. That is the difference between a bonus this helper offers and the
+# exact-mirror contract it makes — and refusing every shallow checkout, which is
+# what CI hands an agent by default, would cost that contract its main user.
 # A source ref that is SYMBOLIC arrives symbolic, at the same target, rather
 # than flattened to the object id a plain copy would record.
 # NOT carried: a symbolic ref whose target does not exist — `for-each-ref` does
@@ -267,12 +281,10 @@
 # The printed path is deterministic for a given agent, worktree, and slug, so
 # carry `$DC` forward within a script rather than calling dc-enter again.
 #
-# Hardlinks: `git clone` of a local path hardlinks `.git/objects` by default —
-# wherever it takes the local path at all, which for a SHALLOW source it does not
-# (see the shallow exception in the ref-namespace note above; measured, such a
-# clone's pack is a fresh file rather than a link to the source's, on both the
-# default and the `--no-hardlinks` path). It is safe for every git operation. The
-# default here is nonetheless
+# Hardlinks: `git clone` of a local path hardlinks `.git/objects` by default,
+# which is safe for every git operation — wherever it takes the local path at
+# all, which for a SHALLOW source it does not; see the shallow exception in the
+# ref-namespace note above. The default here is nonetheless
 # `--no-hardlinks`, because the accidents a disposable clone exists to absorb
 # are precisely the non-git ones: a shell redirect, `sed -i`, or an unpacked
 # tarball landing on `.git/objects/ab/cdef…` writes THROUGH a hardlink and
@@ -604,11 +616,13 @@ LOCAL_ENV_VARS="$(git rev-parse --local-env-vars)" ||
 	die "'git rev-parse --local-env-vars' named no variables; refusing to run the clone's git commands under an environment that may still point at the invoking repository"
 # `GIT_CONFIG_COUNT`/`GIT_CONFIG_PARAMETERS` are on that list, and dropping them
 # is right for the helper's own commands — but they carry command-scope config,
-# which is part of what a caller's later `git push` inside the clone will see. So
-# their values are kept for the two isolation checks below — the surviving-remote
-# one and the push-target one — which have to answer "what will this clone
-# actually push to?" rather than "what does it push to with the caller's
-# environment taken away?".
+# which git acts on for anything the CALLER does. So their values are kept, and
+# restored for the three reads that have to answer a question about the caller's
+# git rather than about this helper's: the two isolation checks below — the
+# surviving-remote one and the push-target one — which ask what this clone will
+# actually push to rather than what it pushes to with the caller's environment
+# taken away, and the partial-clone check further down, which asks what git makes
+# of the SOURCE when the caller reads it.
 SAVED_CONFIG_ENV=()
 [ -z "${GIT_CONFIG_COUNT+x}" ] || SAVED_CONFIG_ENV+=("GIT_CONFIG_COUNT=$GIT_CONFIG_COUNT")
 [ -z "${GIT_CONFIG_PARAMETERS+x}" ] || SAVED_CONFIG_ENV+=("GIT_CONFIG_PARAMETERS=$GIT_CONFIG_PARAMETERS")
@@ -721,9 +735,10 @@ SRC_GIT_DIR="$CAPTURED_PATH"
 # this helper can show is complete. An explicit `false` does not, because that is
 # git declining to treat the remote as a promisor — but it does not veto a
 # `partialclonefilter` beside it, for the same reason git's parser does not.
-# A SHALLOW source is a different shape and gets no marker check: it cannot fail
-# QUIETLY, which is the only failure this refusal exists to prevent. See the
-# shallow paragraph in the ref-namespace note.
+# A SHALLOW source is a different shape and gets no marker check: what its clone
+# loses is objects no ref names, not objects the source's refs REACH. See the
+# shallow paragraph in the ref-namespace note for that bound and both halves of
+# how it shows up.
 # The two `remote.<name>.*` keys are read with the caller's COMMAND-SCOPE config
 # restored — the two variables saved above — because git's promisor parser reads
 # ordinary merged configuration, command-scope included, so a marker injected

@@ -35,12 +35,17 @@ set -euo pipefail
 #       /.remote is refused for the same reason while a branch.<name>.rebase is
 #       not, an alternate-backed source yields a clone that outlives the
 #       deletion of the store it borrowed from, and a PARTIAL-clone source —
-#       whose missing objects no local operation can bring in — is refused
-#       outright before anything is created, by each of the three markers git
-#       registers a promisor remote from — read as git reads them, so a
-#       multivalued promisor whose LAST value is false is still refused and one
-#       in command-scope config is seen at all — while a repository whose only
-#       promisor key is an ordinary single `false` still gets its clone
+#       whose missing objects only a fetch from its promisor remote brings in —
+#       is refused outright before anything is created, by each of the three
+#       markers git registers a promisor remote from, read as git reads them and
+#       from where git reads them: a multivalued promisor whose LAST value is
+#       false is still refused, one in command-scope config is seen at all, an
+#       unreadable value counts as set, and a global-file extensions.partialClone
+#       — which git ignores — is not mistaken for one, while a repository whose
+#       only promisor key is an ordinary single `false` still gets its clone.
+#       A SHALLOW source is bounded rather than refused: exact for the refs that
+#       arrive, loudly fatal for one whose object the fetch never brought, and
+#       quietly missing the objects no ref reaches at all
 #   (c) the <ref> interface: default is the INVOKING worktree's HEAD (not the
 #       main worktree's), branch/tag/sha/rev forms, a short name that is both a
 #       branch and a tag resolving to the branch, a qualified ref and a
@@ -635,9 +640,9 @@ assert_eq "b: ... and fsck clean without it" "$RC" 0
 # `fatal: Not a valid object name` for a blob the source served — a verification
 # baseline disagreeing with the repository it claimed to copy, and with a tree
 # filter it answers `path ... does not exist` instead, which is worse: an error
-# asserting something false of the source. The refusal has to land before anything is
-# created, so the assertions are on the exit status, an empty stdout, the marker
-# named in the diagnostic, and an untouched clone root.
+# asserting something false of the source. The refusal has to land before
+# anything is created, so the assertions are on the exit status, an empty stdout,
+# the marker named in the diagnostic, and an untouched clone root.
 PARTIAL_UP="$WORK/b/partial-upstream"
 git init -q -b main "$PARTIAL_UP"
 printf 'base\n' >"$PARTIAL_UP/f.txt"
@@ -758,29 +763,50 @@ assert_contains "b: ... as a partial clone, naming that marker" "$ERR" "remote.o
 assert_true "b: ... before creating anything under the clone root" \
 	"$([ -e "$PARTIAL_ENV_ROOT" ] && echo false || echo true)"
 
-# ... and the boundary on the other side, which is where git's two readers
-# differ. `extensions.partialClone` is a repository-format extension, read from
-# the repository's OWN config file, so injecting it command-scope leaves the
-# repository whole — measured, the source did NOT fetch lazily under it — and
-# refusing over it would turn away a repository git itself considers complete.
-PARTIAL_EXTENV_SRC="$WORK/b/partial-extenv-src"
-git init -q -b main "$PARTIAL_EXTENV_SRC"
-g -C "$PARTIAL_EXTENV_SRC" commit -q --allow-empty -m one
-in_repo "$PARTIAL_EXTENV_SRC" env \
-	"GIT_CONFIG_COUNT=1" "GIT_CONFIG_KEY_0=extensions.partialClone" "GIT_CONFIG_VALUE_0=origin" \
-	"$DC_ENTER" extensionenv
-assert_eq "b: a command-scope extensions.partialClone is not a partial clone" "$RC" 0
-require_clone CLONE_EXTENV "b: extensionenv"
+# ... and the boundary on the other side, which is where git's two readers part
+# company. `extensions.partialClone` is a repository-format extension, taken from
+# the repository's OWN config file: in a GLOBAL one it is visible to a merged
+# `git config --get` and means nothing to git, so a check reading it merged would
+# refuse every repository on the machine. The global file is what makes this
+# decisive — a command-scope injection could not, since dc-enter strips those
+# variables from its own environment and a merged read would not see one either.
+PARTIAL_EXTGLOBAL_SRC="$WORK/b/partial-extglobal-src"
+git init -q -b main "$PARTIAL_EXTGLOBAL_SRC"
+g -C "$PARTIAL_EXTGLOBAL_SRC" commit -q --allow-empty -m one
+PARTIAL_EXTGLOBAL_CFG="$WORK/b/partial-extglobal-gitconfig"
+printf '[extensions]\n\tpartialClone = origin\n' >"$PARTIAL_EXTGLOBAL_CFG"
+assert_eq "b: the global-file extensions fixture is invisible to a --local read" \
+	"$(GIT_CONFIG_GLOBAL="$PARTIAL_EXTGLOBAL_CFG" git -C "$PARTIAL_EXTGLOBAL_SRC" config --local --get extensions.partialClone || echo unset)" "unset"
+assert_eq "b: ... while a merged read does see it" \
+	"$(GIT_CONFIG_GLOBAL="$PARTIAL_EXTGLOBAL_CFG" git -C "$PARTIAL_EXTGLOBAL_SRC" config --get extensions.partialClone)" "origin"
+in_repo "$PARTIAL_EXTGLOBAL_SRC" env "GIT_CONFIG_GLOBAL=$PARTIAL_EXTGLOBAL_CFG" "$DC_ENTER" extensionglobal
+assert_eq "b: a global-file extensions.partialClone is not a partial clone" "$RC" 0
+require_clone CLONE_EXTGLOBAL "b: extensionglobal"
 assert_eq "b: ... and its clone holds the source's history" \
-	"$(git -C "$CLONE_EXTENV" rev-list --count --all)" "1"
+	"$(git -C "$CLONE_EXTGLOBAL" rev-list --count --all)" "1"
+
+# The unreadable-value branch: git would die on this value rather than decide it,
+# so the helper treats it as set rather than as absent.
+PARTIAL_BOGUS_SRC="$WORK/b/partial-bogus-src"
+git init -q -b main "$PARTIAL_BOGUS_SRC"
+g -C "$PARTIAL_BOGUS_SRC" commit -q --allow-empty -m one
+git -C "$PARTIAL_BOGUS_SRC" config remote.origin.promisor banana
+PARTIAL_BOGUS_ROOT="$WORK/b/partial-bogus-root"
+in_repo "$PARTIAL_BOGUS_SRC" env "DC_ROOT=$PARTIAL_BOGUS_ROOT" "$DC_ENTER" partialbogus
+assert_ne "b: a promisor value git cannot read as a boolean is refused" "$RC" 0
+assert_eq "b: ... silently on stdout" "$OUT" ""
+assert_true "b: ... before creating anything under the clone root" \
+	"$([ -e "$PARTIAL_BOGUS_ROOT" ] && echo false || echo true)"
 
 # A SHALLOW source, the third shape whose object store a local clone does not
-# copy wholesale — git declines the optimization for one entirely ("source
-# repository is shallow, ignoring --local") and negotiates a pack instead. It
-# needs no refusal because it cannot fail quietly, and both halves of that are
-# pinned: an ordinary shallow source clones with a matching boundary, and one
-# whose refs reach past what the fetch brought dies at the mirror with nothing
-# handed back.
+# copy wholesale — git declines the optimization for one entirely and negotiates
+# a pack instead. It is bounded rather than refused, because what it loses is
+# objects no ref names rather than objects the source's refs reach, and all three
+# halves of that bound are pinned below: an ordinary shallow source clones with a
+# matching boundary; one whose refs reach past what the fetch brought dies at the
+# mirror with nothing handed back; and an object no ref reaches quietly does not
+# come across, which is the one place a shallow clone is a weaker baseline than
+# the source.
 SHALLOW_UP="$WORK/b/shallow-upstream"
 git init -q -b main "$SHALLOW_UP"
 for shallow_n in 1 2 3 4; do
@@ -823,6 +849,32 @@ assert_contains "b: ... saying the mirror could not be completed" "$ERR" "could 
 # -session cleanup removes.
 assert_eq "b: ... leaving no half-built clone behind" \
 	"$(find "$SHALLOW_STASH_ROOT" -mindepth 1 -maxdepth 3 -name repo | wc -l | tr -d '[:space:]')" "0"
+
+# The quiet half, and the one the header states as a BOUND rather than a
+# guarantee: with no wholesale object copy, an object no ref reaches does not
+# come across. The run exits 0 and says nothing, so this is the one place a
+# shallow clone is a weaker baseline than its source — pinned here beside the
+# control, since the same probe on an ordinary source carries the object over
+# (section (d) asserts that for the whole object set).
+SHALLOW_DANGLE_SRC="$WORK/b/shallow-dangle-src"
+git clone -q --depth 2 --no-local "$SHALLOW_UP" "$SHALLOW_DANGLE_SRC"
+SHALLOW_DANGLE_OID="$(printf 'unreferenced\n' | git -C "$SHALLOW_DANGLE_SRC" hash-object -w --stdin)"
+assert_eq "b: the dangling object really is in the shallow source" \
+	"$(git -C "$SHALLOW_DANGLE_SRC" cat-file -t "$SHALLOW_DANGLE_OID")" "blob"
+in_repo "$SHALLOW_DANGLE_SRC" "$DC_ENTER" shallowdangle
+assert_eq "b: a shallow source with an unreferenced object still yields a clone" "$RC" 0
+require_clone CLONE_SHALLOW_DANGLE "b: shallowdangle"
+assert_eq "b: ... quietly, with nothing said on stderr" "$ERR" ""
+assert_eq "b: ... but WITHOUT that object, which a full source's clone would carry" \
+	"$(git -C "$CLONE_SHALLOW_DANGLE" cat-file -t "$SHALLOW_DANGLE_OID" 2>/dev/null || echo absent)" "absent"
+SHALLOW_CONTROL_SRC="$WORK/b/shallow-control-src"
+git clone -q --no-local "$SHALLOW_UP" "$SHALLOW_CONTROL_SRC"
+SHALLOW_CONTROL_OID="$(printf 'unreferenced\n' | git -C "$SHALLOW_CONTROL_SRC" hash-object -w --stdin)"
+in_repo "$SHALLOW_CONTROL_SRC" "$DC_ENTER" shallowcontrol
+assert_eq "b: the control, a full clone of the same upstream, yields a clone too" "$RC" 0
+require_clone CLONE_SHALLOW_CONTROL "b: shallowcontrol"
+assert_eq "b: ... and DOES carry the same unreferenced object" \
+	"$(git -C "$CLONE_SHALLOW_CONTROL" cat-file -t "$SHALLOW_CONTROL_OID" 2>/dev/null || echo absent)" "blob"
 
 # And the boundary the refusal is held to: `remote.<name>.promisor` explicitly
 # set to false is git saying this remote is NOT a promisor, so the repository is
