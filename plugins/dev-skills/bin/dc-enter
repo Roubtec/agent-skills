@@ -46,8 +46,14 @@
 #   would answer for a clone nobody receives. Stated exactly, they answer for the
 #   HEAD the clone is HANDED BACK on. Switching branches inside the clone can
 #   activate an `onbranch:` include the checked-out one did not match, and no
-#   check here can pre-empt that: the pattern may match a branch that does not
-#   exist yet, so there is no set of branches to sweep. A caller whose own config
+#   check over the branches that EXIST can pre-empt that: the pattern may match a
+#   branch that does not exist yet, so there is no set of branches to sweep.
+#   Refusing on the mere PRESENCE of any `onbranch:` include would pre-empt it —
+#   git lists those keys whether or not the condition currently matches — but it
+#   would equally refuse the everyday per-branch identity include, and narrowing
+#   it to "only if the included file defines a remote" means resolving include
+#   paths and their own nested includes by hand instead of letting git answer. So
+#   the bound is stated rather than approximated, and a caller whose own config
 #   defines remotes or push destinations that way owns that one — the same way
 #   they own the `GIT_DIR` paragraph below. (Remote-tracking refs survive as
 #   ordinary refs; see the ref-namespace note below.)
@@ -569,9 +575,10 @@ LOCAL_ENV_VARS="$(git rev-parse --local-env-vars)" ||
 # `GIT_CONFIG_COUNT`/`GIT_CONFIG_PARAMETERS` are on that list, and dropping them
 # is right for the helper's own commands — but they carry command-scope config,
 # which is part of what a caller's later `git push` inside the clone will see. So
-# their values are kept for exactly one read: the surviving-remote check below,
-# which has to answer "what remotes will this clone actually have?" rather than
-# "what remotes does it have with the caller's environment taken away?".
+# their values are kept for the two isolation checks below — the surviving-remote
+# one and the push-target one — which have to answer "what will this clone
+# actually push to?" rather than "what does it push to with the caller's
+# environment taken away?".
 SAVED_CONFIG_ENV=()
 [ -z "${GIT_CONFIG_COUNT+x}" ] || SAVED_CONFIG_ENV+=("GIT_CONFIG_COUNT=$GIT_CONFIG_COUNT")
 [ -z "${GIT_CONFIG_PARAMETERS+x}" ] || SAVED_CONFIG_ENV+=("GIT_CONFIG_PARAMETERS=$GIT_CONFIG_PARAMETERS")
