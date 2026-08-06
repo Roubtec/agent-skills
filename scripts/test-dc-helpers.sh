@@ -45,7 +45,12 @@ set -euo pipefail
 #       only promisor key is an ordinary single `false` still gets its clone.
 #       A SHALLOW source is bounded rather than refused: exact for the refs that
 #       arrive, loudly fatal for one whose object the fetch never brought, and
-#       quietly missing the objects no ref reaches at all
+#       quietly missing the objects no ref reaches at all. The alternate-backed
+#       source carries the second half of that bound by a different route: the
+#       dissociation's repack cannot see an unreachable object held only by the
+#       donor, or packed in the source before it was stranded, though a loose one
+#       there survives. Both bounds are characterization cases with a
+#       self-contained control beside them — close either bound and they invert
 #   (c) the <ref> interface: default is the INVOKING worktree's HEAD (not the
 #       main worktree's), branch/tag/sha/rev forms, a short name that is both a
 #       branch and a tag resolving to the branch, a qualified ref and a
@@ -879,8 +884,9 @@ assert_eq "b: ... leaving no half-built clone behind" \
 # shallow clone is a weaker baseline than its source. The control beside it is
 # what makes that a statement about SHALLOWNESS rather than about dc-enter: the
 # same probe on a full clone of the same upstream carries the object over. These
-# two are the only place the no-ref-reaches property is pinned — section (d)'s
-# unreachable-COMMIT case is about a commit `refs/pruned/reserved` still names.
+# two, and the borrowing-source pair further down, are where the no-ref-reaches
+# property is pinned — section (d)'s unreachable-COMMIT case is not: that commit
+# is one `refs/pruned/reserved` still names.
 SHALLOW_DANGLE_SRC="$WORK/b/shallow-dangle-src"
 git clone -q --depth 2 --no-local "$SHALLOW_UP" "$SHALLOW_DANGLE_SRC"
 SHALLOW_DANGLE_OID="$(printf 'unreferenced\n' | git -C "$SHALLOW_DANGLE_SRC" hash-object -w --stdin)"
@@ -890,7 +896,7 @@ in_repo "$SHALLOW_DANGLE_SRC" "$DC_ENTER" shallowdangle
 assert_eq "b: a shallow source with an unreferenced object still yields a clone" "$RC" 0
 require_clone CLONE_SHALLOW_DANGLE "b: shallowdangle"
 assert_eq "b: ... quietly, with nothing said on stderr" "$ERR" ""
-assert_eq "b: ... but WITHOUT that object, which a full source's clone would carry" \
+assert_eq "b: ... but WITHOUT that object, which a self-contained source's clone carries" \
 	"$(git -C "$CLONE_SHALLOW_DANGLE" cat-file -t "$SHALLOW_DANGLE_OID" 2>/dev/null || echo absent)" "absent"
 SHALLOW_CONTROL_SRC="$WORK/b/shallow-control-src"
 git clone -q --no-local "$SHALLOW_UP" "$SHALLOW_CONTROL_SRC"
@@ -915,13 +921,19 @@ require_clone CLONE_PROMISOR_OFF "b: promisoroff"
 assert_eq "b: ... and its clone holds the source's history" \
 	"$(git -C "$CLONE_PROMISOR_OFF" rev-list --count --all)" "1"
 
-# The bound on that repair, which the two cases above do not reach: it works by
-# `repack -a`, so it carries exactly what the mirrored refs reach and an object
-# NO ref reaches does not survive it. The fixture is the shape where that bites
-# without anyone doing anything unusual — a commit packed while it was still on a
-# branch, the branch then deleted and the reflog expired. Its control is the same
-# history in a NON-borrowing source, which is what makes this a statement about
-# borrowing rather than about dc-enter: there the object comes across.
+# The bound on that repair, which the two cases above do not reach: it is limited
+# to what `repack -a` can see, so an unreachable object held only by the donor,
+# or PACKED in the source before it was stranded, does not survive it — while a
+# loose one in the source's own store does, since that repack rewrites packs
+# rather than deleting loose objects. The fixture is the shape that bites without
+# anyone doing anything unusual: a commit packed while it was still on a branch,
+# the branch then deleted and the reflog expired. Its control is the same history
+# in a NON-borrowing source, which is what makes this a statement about borrowing
+# rather than about dc-enter — there the object comes across.
+# CHARACTERIZATION, not a fix pin: these assert the bound as it stands. Closing
+# it (`repack -A -d`, which the helper rejects because `-A` would explode the
+# DONOR's unreachable objects loose into the clone) would make the "absent"
+# assertion below fail, and it should then be inverted rather than deleted.
 ALT3_DONOR="$WORK/b/alt3-donor"
 ALT3_PLAIN_DONOR="$WORK/b/alt3-plain-donor"
 git init -q -b main "$ALT3_DONOR"

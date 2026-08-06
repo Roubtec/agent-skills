@@ -30,8 +30,10 @@
 #   The clone is never made with `--shared` or `--reference`, and no option
 #   exposes them — those genuinely do couple the object stores. Where the SOURCE
 #   is itself a borrowing clone the coupling arrives anyway, since a local clone
-#   copies the source's `objects/info/alternates` verbatim; the clone is
-#   dissociated from that third repository before it is handed back, but only
+#   copies the source's `objects/info/alternates` across (rewriting a relative
+#   entry to an absolute path, measured, but carrying the borrowing either way);
+#   the clone is dissociated from that third repository before it is handed
+#   back, but only
 #   AFTER the ref mirror below, so that objects reachable solely from the source
 #   refs `git clone` never fetches are copied in rather than dropped. See the
 #   dissociation note at the clone itself.
@@ -190,14 +192,20 @@
 # An object the source itself only BORROWS from an alternate is not in the copied
 # store, which is why the dissociation that stops the borrowing is deferred until
 # after this mirror rather than done by `git clone --dissociate`. That repair
-# reaches exactly as far as the mirrored refs do, because it works by `repack
-# -a`: an object NO ref reaches does not survive it — neither one living only in
-# the donor, nor one that was packed in the source while still reachable and has
-# since stopped being. Measured against its own control: the same
-# packed-then-unreferenced commit comes across from a non-borrowing source and is
-# absent from a borrowing one's clone, with the run exiting 0 and saying nothing.
-# So for a borrowing source the unreachable-object property above holds only for
-# objects some ref still names.
+# is bounded by what `repack -a` can see, so two shapes of object that NO ref
+# reaches do not survive it: one living only in the donor, and one that was
+# PACKED in the source while still reachable and has since stopped being. A loose
+# unreachable object in the source's own store does survive — `repack -a -d`
+# rewrites packs and does not delete loose objects — which is the ordinary shape
+# an amended commit or a dropped stash leaves, so the loss is narrower than
+# "unreachable objects are gone". All three measured, the first two against their
+# own control: the same packed-then-unreferenced commit comes across from a
+# non-borrowing source and is absent from a borrowing one's clone, with the run
+# exiting 0 and saying nothing.
+# It stays `repack -a -d` rather than `-A -d`, which would keep the packed shape:
+# `-A` explodes unreachable objects into loose ones, and the objects reachable
+# here include the DONOR's, so a borrowing source would hand back a clone
+# carrying the donor's unreachable objects loose. The bound is stated instead.
 # An object a PARTIAL clone left on its promisor remote is not in the source's
 # store either, and only a fetch from that remote brings it in — the caller's
 # network to spend, not this helper's — so such a source is refused before
@@ -297,9 +305,9 @@
 # Hardlinks: `git clone` of a local path hardlinks `.git/objects` by default,
 # which is safe for every git operation — wherever it takes the local path at
 # all, which for a SHALLOW source it does not; see the shallow exception in the
-# ref-namespace note above. The default here is nonetheless
-# `--no-hardlinks`, because the accidents a disposable clone exists to absorb
-# are precisely the non-git ones: a shell redirect, `sed -i`, or an unpacked
+# ref-namespace note above. The default here is nonetheless `--no-hardlinks`,
+# because the accidents a disposable clone exists to absorb are precisely the
+# non-git ones: a shell redirect, `sed -i`, or an unpacked
 # tarball landing on `.git/objects/ab/cdef…` writes THROUGH a hardlink and
 # corrupts the source repository's copy of that object. Copying the object store
 # costs disk and clone time proportional to repository size and buys defence in
@@ -310,8 +318,11 @@
 # reaches the source, so set it only where clone cost actually bites and the
 # clone's user is git. Both paths use git's local-clone optimization where git
 # offers it, and so both carry the source's unreachable objects as well as its
-# reachable ones — for a shallow source neither does, since git offers it to
-# neither, and the clone then holds only what its fetch negotiated.
+# reachable ones — with the two bounds the ref-namespace note above states, which
+# are properties of the SOURCE rather than of this setting: a shallow source is
+# offered no local path at all, so its clone holds only what its fetch
+# negotiated, and a borrowing one loses the unreachable objects the dissociation's
+# repack cannot see.
 #
 # Sync discipline: this plugin copy is canonical and net-new here — unlike
 # `gh-review-threads` there is no powbox-baked original to vendor or checksum
@@ -741,10 +752,10 @@ SRC_GIT_DIR="$CAPTURED_PATH"
 # exactly the same way, measured — plus `extensions.partialClone`, which names
 # the one remote a repository may designate that way; git tries it LAST of its
 # promisor remotes rather than first, so "the default" would misdescribe it.
-# All three are read, because which of
-# them a repository carries is a function of the git that made it and of what has
-# been done to it since: measured, both 2.36.6 and 2.47.3 write the first two and
-# neither writes the third, and removing either of the pair leaves the other
+# All three are read, because which of them a repository carries is a function of
+# the git that made it and of what has been done to it since: measured, both
+# 2.36.6 and 2.47.3 write the first two and neither writes the third, and
+# removing either of the pair leaves the other
 # still lazily fetching. A `promisor` value git cannot read as a boolean counts
 # as set: a repository whose partial-clone configuration is unreadable is not one
 # this helper can show is complete. An explicit `false` does not, because that is
@@ -1195,7 +1206,9 @@ mv -f -- "$MARKER_TMP" "$MARKER" || die "could not put the clone marker in place
 # Dissociation — making "independent object store" true for a source that is
 # ITSELF a borrowing clone — is deliberately NOT `git clone --dissociate` here,
 # and happens after the ref mirror below instead. A local clone copies the
-# source's `.git/objects/info/alternates` verbatim — wherever git takes the local
+# source's `.git/objects/info/alternates` across — a relative entry arrives
+# resolved to an absolute path rather than byte-for-byte, measured, which changes
+# nothing about the borrowing — wherever git takes the local
 # path at all, which for a shallow source it does not, so that one arrives with
 # no alternates file and nothing below runs. For every other source, cloning a
 # `--shared`/`--reference` repository hands back a clone still borrowing from
