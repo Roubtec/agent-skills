@@ -657,20 +657,20 @@ REF_DISPLAY="$REF_ARG"
 # space it writes itself. All three measured against real git on 2.36.6, 2.39.5,
 # 2.43.7 and 2.47.3, and all three matter only BELOW 2.45, where the plain
 # `show-ref --verify` beside this probe cannot answer and the parse is the whole
-# decision. The NAME alone will not do, in either
-# direction. It does not qualify one: an EMPTY `FETCH_HEAD`, what a fetch
-# with nothing to fetch leaves behind, is a file git's rules fall straight
-# through, on to `refs/heads/<name>`; so is a `BISECT_START` holding the branch
-# name a bisect was started from rather than a detached HEAD's commit; and so is
-# a DANGLING `NOTES_MERGE_REF`, the symref a conflicted `git notes merge` leaves
-# pointing at a notes ref that has since been deleted — which is why the target
-# is resolved rather than merely read. And the name is not what disqualifies the
-# rest either: a shape rule (all caps, no slash) is what this used to be, and it
-# was wrong in the file half because `$GIT_DIR` is full of all-caps files whose
-# CONTENT is not a ref — `COMMIT_EDITMSG` exists in every repository that has
-# ever committed, and `MERGE_MSG`, `SQUASH_MSG` and `MERGE_MODE` are the same
-# shape — so a branch named after one was answered with a detached HEAD instead
-# of the checkout the `<ref>` contract above documents.
+# decision. The NAME alone will not do, in either direction. It does not qualify
+# one: an EMPTY `FETCH_HEAD`, what a fetch with nothing to fetch leaves behind,
+# is a file git's rules fall straight through, on to `refs/heads/<name>`; so is a
+# `BISECT_START` holding the branch name a bisect was started from rather than a
+# detached HEAD's commit; and so is a DANGLING `NOTES_MERGE_REF`, the symref a
+# conflicted `git notes merge` leaves pointing at a notes ref that has since been
+# deleted — which is why the target is resolved rather than merely read. And the
+# name is not what disqualifies the rest either: a shape rule (all caps, no
+# slash) is what this used to be, and it was wrong in the file half because
+# `$GIT_DIR` is full of all-caps files whose CONTENT is not a ref —
+# `COMMIT_EDITMSG` exists in every repository that has ever committed, and
+# `MERGE_MSG`, `SQUASH_MSG` and `MERGE_MODE` are the same shape — so a branch
+# named after one was answered with a detached HEAD instead of the checkout the
+# `<ref>` contract above documents.
 # The bounded cost of listing by name: a `$GIT_DIR` file git writes as PROSE is
 # excluded here whatever it holds, so a repository whose commit message is
 # nothing but a bare object id, and which also carries a branch called
@@ -680,6 +680,16 @@ REF_DISPLAY="$REF_ARG"
 # deliberately: the alternative is turning an arbitrary caller string into a
 # `$GIT_DIR` path, and no repository reaches that state without having written an
 # object id where a sentence belongs.
+# One unlisted name an ORDINARY repository does reach is `MERGE_RR`, which is not
+# prose: rerere writes `<id><TAB><path><NUL>` records there, and git's root-ref
+# rules read that leading id, so `git rev-parse MERGE_RR` names it while a branch
+# called `MERGE_RR` is checked out here. That one diverges on EVERY version
+# rather than below 2.45, because the `show-ref --verify` beside this probe
+# rejects it as a bad ref instead of falling through. Left out on purpose: the
+# rerere id hashes conflict TEXT rather than naming an object, so
+# `MERGE_RR^{commit}` is fatal for the caller too and there is no baseline to get
+# wrong — while listing it would detach the clone at an id no object matches and
+# fail the checkout outright.
 readonly SRC_PSEUDO_REFS='ORIG_HEAD MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_HEAD REBASE_HEAD AUTO_MERGE FETCH_HEAD BISECT_EXPECTED_REV MERGE_AUTOSTASH NOTES_MERGE_PARTIAL NOTES_MERGE_REF BISECT_START'
 # How many hex characters an object id has in THIS repository. Filled in on first
 # use rather than up front: only the object-id branch below reads it, and getting
