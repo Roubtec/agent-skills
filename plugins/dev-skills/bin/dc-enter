@@ -197,8 +197,10 @@
 # unreachable object in the source's own store does survive — `repack -a -d`
 # rewrites packs and does not delete loose objects — which is the ordinary shape
 # an amended commit or a dropped stash leaves, so the loss is narrower than
-# "unreachable objects are gone". All three measured, the first two against their
-# own control: the same packed-then-unreferenced commit comes across from a
+# "unreachable objects are gone". All three measured, and the packed one against
+# its own control — the only shape that can have one, since "control" here means
+# the same history in a NON-borrowing source and a donor-only object has no such
+# counterpart: the same packed-then-unreferenced commit comes across from a
 # non-borrowing source and is absent from a borrowing one's clone, with the run
 # exiting 0 and saying nothing.
 # It stays `repack -a -d`, and the honest reason is not that `-A -d` would fail.
@@ -224,10 +226,12 @@
 # printed on its own command line and the effect has to be measured rather than
 # read off stderr.
 # That has two consequences, and they fail differently.
-# LOUDLY: a ref outside refs/heads and refs/tags CAN name an object nothing
-# brought. Most do not — the `refs/remotes/*` every clone carries point at
-# commits the fetch itself delivered, and any such ref mirrors fine, which is why
-# an ordinary shallow checkout clones without complaint. But where one names an
+# LOUDLY: a ref beyond what that fetch brought — outside refs/heads and
+# refs/tags, or inside them but hidden from the source's own `upload-pack` — CAN
+# name an object nothing brought. Most do not: the `refs/remotes/*` every clone
+# carries point at commits the fetch itself delivered, and any such ref mirrors
+# fine, which is why an ordinary shallow checkout clones without complaint. But
+# where one names an
 # object the fetch did not bring, the wholesale copy that would otherwise carry
 # it is exactly what git declined, so the mirror below dies with "trying to write
 # ref ... with nonexistent object" and hands nothing back. A shallow checkout
@@ -312,8 +316,8 @@
 # all, which for a SHALLOW source it does not; see the shallow exception in the
 # ref-namespace note above. The default here is nonetheless `--no-hardlinks`,
 # because the accidents a disposable clone exists to absorb are precisely the
-# non-git ones: a shell redirect, `sed -i`, or an unpacked
-# tarball landing on `.git/objects/ab/cdef…` writes THROUGH a hardlink and
+# non-git ones: a shell redirect, `sed -i`, or an unpacked tarball landing on
+# `.git/objects/ab/cdef…` writes THROUGH a hardlink and
 # corrupts the source repository's copy of that object. Copying the object store
 # costs disk and clone time proportional to repository size and buys defence in
 # depth against exactly that. `DC_HARDLINKS=1` takes the fast path on a large
@@ -760,11 +764,12 @@ SRC_GIT_DIR="$CAPTURED_PATH"
 # All three are read, because which of them a repository carries is a function of
 # the git that made it and of what has been done to it since: measured, both
 # 2.36.6 and 2.47.3 write the first two and neither writes the third, and
-# removing either of the pair leaves the other
-# still lazily fetching. A `promisor` value git cannot read as a boolean counts
-# as set: a repository whose partial-clone configuration is unreadable is not one
-# this helper can show is complete. An explicit `false` does not, because that is
-# git declining to treat the remote as a promisor — but it does not veto a
+# removing either of the pair leaves the other still lazily fetching. A
+# `promisor` value git cannot read as a boolean counts as set: git rejects such a
+# value outright rather than deciding it, so the repository is one this helper
+# cannot show is complete — and the diagnostic says which of the two it is. An
+# explicit `false` does not count, because that is git declining to treat the
+# remote as a promisor — but it does not veto a
 # `partialclonefilter` beside it, for the same reason git's parser does not.
 # A SHALLOW source is a different shape and gets no marker check: what its clone
 # loses is objects no ref names, not objects the source's refs REACH. See the
@@ -835,7 +840,7 @@ if [ -z "$SRC_PARTIAL_MARKER" ]; then
 	[ "$PROMISOR_CONFIG_RC" -ne 0 ] || SRC_PARTIAL_MARKER=extensions.partialClone
 fi
 [ -z "$SRC_PARTIAL_MARKER" ] ||
-	die "refusing: the invoking repository is CONFIGURED as a partial clone ('$SRC_PARTIAL_MARKER' is set), so git records part of its history as living on a promisor remote, to be fetched when something asks for it. A local clone copies the objects that are here and inherits none of that configuration, so a clone of it can carry refs whose objects it can neither find nor fetch — and a read of one either fails or, with a tree filter, reports that a path present in this repository does not exist, inside a clone this helper had just reported as a faithful copy of it. Fetching those objects here would mean an unbounded network fetch nobody asked for; leaving them fetchable would mean handing back a clone still tied to a repository outside it. Run $PROG from a full clone of this repository instead. This refusal reads the partial-clone CONFIGURATION rather than traversing the history to re-derive completeness on every run, so it is deliberately over-inclusive: if every object has in fact been materialized, this repository is not broken, but the refusal still stands while that configuration is there."
+	die "refusing: the invoking repository carries partial-clone CONFIGURATION ('$SRC_PARTIAL_MARKER' is set). Git treats such a repository as keeping part of its history on a promisor remote, to be fetched when something asks for it — and where that setting holds a value git rejects rather than reads, it cannot be shown to be anything else. A local clone copies the objects that are here and inherits none of that configuration, so a clone of it can carry refs whose objects it can neither find nor fetch — and a read of one either fails or, with a tree filter, reports that a path present in this repository does not exist, inside a clone this helper had just reported as a faithful copy of it. Fetching those objects here would mean an unbounded network fetch nobody asked for; leaving them fetchable would mean handing back a clone still tied to a repository outside it. Run $PROG somewhere that setting is absent — a full clone of this repository, or, if the setting turns out to be in your own global or command-scope configuration rather than the repository's, that configuration without it ('git config --show-origin' says which). This refusal reads the partial-clone CONFIGURATION rather than traversing the history to re-derive completeness on every run, so it is deliberately over-inclusive: if every object has in fact been materialized, this repository is not broken, but the refusal still stands while that configuration is there."
 
 if [ -n "$REF_SEEN" ]; then REF_ARG="$REF"; else REF_ARG="HEAD"; fi
 # What the caller actually wrote, kept for diagnostics: REF_ARG is rewritten to a
@@ -1213,9 +1218,9 @@ mv -f -- "$MARKER_TMP" "$MARKER" || die "could not put the clone marker in place
 # and happens after the ref mirror below instead. A local clone copies the
 # source's `.git/objects/info/alternates` across — a relative entry arrives
 # resolved to an absolute path rather than byte-for-byte, measured, which changes
-# nothing about the borrowing — wherever git takes the local
-# path at all, which for a shallow source it does not, so that one arrives with
-# no alternates file and nothing below runs. For every other source, cloning a
+# nothing about the borrowing — wherever git takes the local path at all, which
+# for a shallow source it does not, so that one arrives with no alternates file
+# and nothing below runs. For every other source, cloning a
 # `--shared`/`--reference` repository hands back a clone still borrowing from
 # that third repository, holding no local copy of the borrowed objects and
 # breaking outright the moment the external store is pruned or removed. That much
