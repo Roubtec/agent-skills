@@ -33,8 +33,11 @@ set -euo pipefail
 #       config is refused rather than left live in the clone, an anonymous push
 #       target surviving there as remote.pushDefault or branch.<name>.pushRemote
 #       /.remote is refused for the same reason while a branch.<name>.rebase is
-#       not, and an alternate-backed source yields a clone that outlives the
-#       deletion of the store it borrowed from
+#       not, an alternate-backed source yields a clone that outlives the
+#       deletion of the store it borrowed from, and a PARTIAL-clone source —
+#       whose missing objects no local operation can bring in — is refused
+#       outright before anything is created, by either marker, while a
+#       `remote.<name>.promisor=false` repository still gets its clone
 #   (c) the <ref> interface: default is the INVOKING worktree's HEAD (not the
 #       main worktree's), branch/tag/sha/rev forms, a short name that is both a
 #       branch and a tag resolving to the branch, a qualified ref and a
@@ -620,6 +623,76 @@ assert_eq "b: ... the borrowed object surviving the external store's deletion" \
 	"$(git -C "$CLONE_ALT2" cat-file -t "$ALT2_HIDDEN")" "commit"
 in_repo "$CLONE_ALT2" git fsck --no-progress --no-dangling --connectivity-only
 assert_eq "b: ... and fsck clean without it" "$RC" 0
+
+# The object store the deferred dissociation CANNOT repair: a source that is a
+# PARTIAL clone. `--filter=blob:none` leaves objects on a promisor remote and git
+# tolerates their absence only because that remote can still serve them; a local
+# clone copies what is present and inherits none of that configuration, so
+# unrefused the mirror succeeded, dc-enter exited 0, and the clone answered `bad
+# object` for a blob the source served — a verification baseline disagreeing with
+# the repository it claimed to copy. The refusal has to land before anything is
+# created, so the assertions are on the exit status, an empty stdout, the marker
+# named in the diagnostic, and an untouched clone root.
+PARTIAL_UP="$WORK/b/partial-upstream"
+git init -q -b main "$PARTIAL_UP"
+printf 'base\n' >"$PARTIAL_UP/f.txt"
+g -C "$PARTIAL_UP" add f.txt
+g -C "$PARTIAL_UP" commit -q -m base
+g -C "$PARTIAL_UP" checkout -q -b other
+printf 'fetched on demand\n' >"$PARTIAL_UP/big.txt"
+g -C "$PARTIAL_UP" add big.txt
+g -C "$PARTIAL_UP" commit -q -m big
+g -C "$PARTIAL_UP" checkout -q main
+# Without this the file-transport upload-pack ignores the filter entirely
+# ("filtering not recognized by server, ignoring") and the fixture below is an
+# ordinary complete clone — which is why both halves of it are asserted rather
+# than assumed: a complete fixture would satisfy the refusal checks for a reason
+# that has nothing to do with partial clones.
+git -C "$PARTIAL_UP" config uploadpack.allowFilter true
+PARTIAL_SRC="$WORK/b/partial-src"
+# `--no-local` because a clone from a local PATH copies the object store
+# wholesale and no filter applies to it at all.
+git clone -q --filter=blob:none --no-local "$PARTIAL_UP" "$PARTIAL_SRC"
+assert_eq "b: the partial-clone fixture really is one" \
+	"$(git -C "$PARTIAL_SRC" config --type=bool --get remote.origin.promisor)" "true"
+assert_ne "b: ... missing an object its refs reach" \
+	"$(git -C "$PARTIAL_SRC" rev-list --objects --all --missing=print | grep -c '^?' | tr -d '[:space:]')" "0"
+PARTIAL_ROOT="$WORK/b/partial-root"
+in_repo "$PARTIAL_SRC" env "DC_ROOT=$PARTIAL_ROOT" "$DC_ENTER" partialclone
+assert_ne "b: a partial-clone source is refused" "$RC" 0
+assert_eq "b: ... silently on stdout" "$OUT" ""
+assert_contains "b: ... naming the configuration it was decided by" "$ERR" "remote.origin.promisor"
+assert_true "b: ... before creating anything under the clone root" \
+	"$([ -e "$PARTIAL_ROOT" ] && echo false || echo true)"
+
+# The second marker, on its own. Neither git 2.36.6 nor 2.47.3 writes
+# `extensions.partialClone` — both record only the promisor remote — so a
+# repository carrying it is the one shape the check above cannot reach, and
+# without this case that half of the code is never executed.
+PARTIAL_EXT_SRC="$WORK/b/partial-ext-src"
+git init -q -b main "$PARTIAL_EXT_SRC"
+g -C "$PARTIAL_EXT_SRC" commit -q --allow-empty -m one
+git -C "$PARTIAL_EXT_SRC" config core.repositoryformatversion 1
+git -C "$PARTIAL_EXT_SRC" config extensions.partialClone origin
+PARTIAL_EXT_ROOT="$WORK/b/partial-ext-root"
+in_repo "$PARTIAL_EXT_SRC" env "DC_ROOT=$PARTIAL_EXT_ROOT" "$DC_ENTER" partialext
+assert_ne "b: an extensions.partialClone source is refused too" "$RC" 0
+assert_eq "b: ... silently on stdout" "$OUT" ""
+assert_contains "b: ... naming that marker rather than the promisor one" "$ERR" "extensions.partialClone"
+
+# And the boundary the refusal is held to: `remote.<name>.promisor` explicitly
+# set to false is git saying this remote is NOT a promisor, so the repository is
+# an ordinary complete one and still gets its clone. Without this case the check
+# could be a presence test and the suite would not notice.
+PARTIAL_OFF_SRC="$WORK/b/partial-off-src"
+git init -q -b main "$PARTIAL_OFF_SRC"
+g -C "$PARTIAL_OFF_SRC" commit -q --allow-empty -m one
+git -C "$PARTIAL_OFF_SRC" config remote.up.promisor false
+in_repo "$PARTIAL_OFF_SRC" "$DC_ENTER" promisoroff
+assert_eq "b: a remote.<name>.promisor=false source is not refused" "$RC" 0
+require_clone CLONE_PROMISOR_OFF "b: promisoroff"
+assert_eq "b: ... and its clone holds the source's history" \
+	"$(git -C "$CLONE_PROMISOR_OFF" rev-list --count --all)" "1"
 
 # `includeIf "onbranch:<pattern>"` makes part of the caller's merged
 # configuration depend on the branch HEAD is on. A remote defined that way is
