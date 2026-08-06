@@ -14,7 +14,7 @@ How we open and merge PRs is a development practice like any other, so it lives 
 
 Before doing a code review, read ALL existing review comments and threads on the PR for context before making suggestions. Findings previously delegated to follow-up work need not be re-raised unless the facts changed since the delegation.
 
-Calibrate findings against the helpers to [README.md's safety posture](README.md#safety-posture): these are accident guardrails, not a security boundary. Weight a finding by whether an ordinary run can reach it, and prefer a fix that deletes complexity over one that adds a case.
+Calibrate hardening findings against [README.md's safety posture](README.md#safety-posture): the safety helpers are accident guardrails, not a security boundary. Weight such a finding by whether an ordinary run can reach it, and prefer a fix that deletes complexity over one that adds a case. This is a weighting, not a lower bar — a defect an ordinary run meets is a finding regardless of how it is classified.
 
 ## When Asked to Address Review Comments
 
