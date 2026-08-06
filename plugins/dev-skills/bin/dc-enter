@@ -102,11 +102,11 @@
 # `MERGE_AUTOSTASH`, `NOTES_MERGE_PARTIAL`, `NOTES_MERGE_REF` and `BISECT_START`
 # in `$GIT_DIR` before `refs/heads/<name>` (that exact set, detected across the
 # whole supported git range — see source_pseudo_ref_exists), so in a repository
-# stopped mid-rebase, mid-merge, mid-bisect or mid-notes-merge that also carries
-# a branch of that name, `dc-enter probe ORIG_HEAD` detaches at the pseudo-ref —
-# the commit the caller's own `git rev-parse` names — rather than checking the
-# branch out. Pseudo-refs are per-worktree, and it is the INVOKING worktree's
-# that is read, like everything else here.
+# stopped mid-rebase, mid-merge, mid-bisect or mid-notes-merge that
+# also carries a branch of that name, `dc-enter probe ORIG_HEAD` detaches at the
+# pseudo-ref — the commit the caller's own `git rev-parse` names — rather than
+# checking the branch out. Pseudo-refs are per-worktree, and it is the INVOKING
+# worktree's that is read, like everything else here.
 # Whether one of those files is a ref at all is decided by its CONTENT, not by
 # its name: git resolves a `$GIT_DIR` file as a ref when it holds an object id,
 # or a symref whose target still resolves. So `COMMIT_EDITMSG`, `MERGE_MSG`,
@@ -624,40 +624,45 @@ REF_DISPLAY="$REF_ARG"
 # BEFORE `refs/heads/<name>`, so a string that names one is not a short branch
 # name, however plainly a same-named branch also exists.
 # This is the one existence probe here that cannot be a plain `git show-ref
-# --verify`. That command only learned to report a bare root ref in git 2.45,
-# and this helper supports 2.36+: on 2.43 it answers "no" for every pseudo-ref
-# above, the candidate survives, and the BRANCH gets checked out while the
-# caller's own `git rev-parse ORIG_HEAD` names the other commit — the exact
+# --verify`. That command only learned to report these `$GIT_DIR` root refs in
+# git 2.45, and this helper supports 2.36+: on 2.43 it answers "no" for every
+# pseudo-ref above, the candidate survives, and the BRANCH gets checked out while
+# the caller's own `git rev-parse ORIG_HEAD` names the other commit — the exact
 # wrong-baseline conclusion this helper exists to prevent.
 # So both forms are asked, and they cover the whole supported range between
 # them. `show-ref --verify` is backend-agnostic, which matters under the
 # reftable backend where a pseudo-ref is a ref rather than a file; the
 # `$GIT_DIR/<name>` file covers every git old enough to lack that support, all
 # of which predate reftable and so keep root refs in exactly that file.
-# WHICH NAMES: the ones git itself writes at the root of `$GIT_DIR` holding an
-# object id or a symref, listed rather than matched by shape so that no other
-# caller-supplied string is ever turned into a path and probed. Deliberately NOT
+# WHICH NAMES: `$GIT_DIR` root files whose content git's own root-ref rules read
+# as a ref, listed rather than matched by shape so that no other caller-supplied
+# string is ever turned into a path and probed. Deliberately NOT
 # `is_root_ref`: that is a syntax rule (any all-caps name ending in `_HEAD`, plus
 # `HEAD`, `AUTO_MERGE`, `BISECT_EXPECTED_REV`, `NOTES_MERGE_PARTIAL`,
 # `NOTES_MERGE_REF` and `MERGE_AUTOSTASH`) rather than a set, and it EXCLUDES
 # `FETCH_HEAD` and `MERGE_HEAD`, two names this probe very much needs. `HEAD`
 # itself is absent because the caller's string reaches it through the plain
 # `show-ref --verify` beside this probe.
-# WHAT DECIDES whether one of them is a ref right now: the file's CONTENT, the
-# same way git decides it — a bare object id, optionally followed by whitespace
-# and anything (which is how `FETCH_HEAD` carries its extra columns), or a `ref:`
-# line whose target still resolves. "The same way" is meant literally, and the
-# three places it is easy to be merely NEARLY the same are all shapes git accepts
-# and a tighter rule would hand back the branch for: the hex is read
-# case-INSENSITIVELY, because git's is (`hexval()`), even though git only ever
-# writes lower; it is read at exactly the length THIS repository's hash algorithm
-# uses, because a bare id of the other width is not an object id to git and falls
-# through to `refs/heads/<name>`; and `ref:` is followed by any run of whitespace
-# or none at all, because git skips `while (isspace(*buf))` rather than the one
-# space it writes itself. All three measured against real git on 2.36.6, 2.39.5,
-# 2.43.7 and 2.47.3, and all three matter only BELOW 2.45, where the plain
-# `show-ref --verify` beside this probe cannot answer and the parse is the whole
-# decision. The NAME alone will not do, in either direction. It does not qualify
+# WHAT DECIDES whether one of them is a ref right now: the file's CONTENT, read
+# the way `parse_loose_ref_contents` reads it — the WHOLE file, rtrimmed, and
+# then either a bare object id optionally followed by whitespace and anything
+# (which is how `FETCH_HEAD` carries its extra columns) or `ref:` and a target
+# that still resolves. That parse is the decision whenever the `show-ref
+# --verify` beside it says no: always below git 2.45, which does not report any
+# of these names, and still above it for anything that command rejects — a
+# dangling id in one of these files included, since `show-ref` wants the object.
+# Three details are what reading it "the way git does" costs, each measured
+# against real git rather than reasoned about. The whole FILE, not its first
+# line: git rtrims the buffer and then walks it as one string, so its
+# `while (isspace(*buf))` steps over a newline like any other space and the
+# `strbuf_addstr` after that run takes everything left, newlines included — which
+# makes `ref:\nrefs/notes/x` a live symref and makes a second line under
+# `ref: refs/heads/x` part of the target rather than something to ignore. The hex
+# is read case-INSENSITIVELY, because `hexval()` is, even though git only ever
+# writes lower. And it is read at exactly the length THIS repository's hash
+# algorithm uses, because a bare id of the other width is not an object id to git
+# and falls through to `refs/heads/<name>`.
+# The NAME alone will not do, in either direction. It does not qualify
 # one: an EMPTY `FETCH_HEAD`, what a fetch with nothing to fetch leaves behind,
 # is a file git's rules fall straight through, on to `refs/heads/<name>`; so is a
 # `BISECT_START` holding the branch name a bisect was started from rather than a
@@ -672,48 +677,48 @@ REF_DISPLAY="$REF_ARG"
 # named after one was answered with a detached HEAD instead of the checkout the
 # `<ref>` contract above documents.
 # The bounded cost of listing by name: a `$GIT_DIR` file git writes as PROSE is
-# excluded here whatever it holds, so a repository whose commit message is
-# nothing but a bare object id, and which also carries a branch called
-# `COMMIT_EDITMSG`, gets that branch on git < 2.45 where git names the object.
-# From 2.45 the plain `show-ref --verify` beside this probe — which is asked
-# whatever the name, this list being consulted only here — follows git. Accepted
+# excluded from the list whatever it holds, so a repository whose commit message
+# is nothing but a bare object id, and which also carries a branch called
+# `COMMIT_EDITMSG`, can get that branch where git names the object. Accepted
 # deliberately: the alternative is turning an arbitrary caller string into a
 # `$GIT_DIR` path, and no repository reaches that state without having written an
 # object id where a sentence belongs.
 # One unlisted name an ORDINARY repository does reach is `MERGE_RR`, which is not
 # prose: rerere writes `<id><TAB><path><NUL>` records there, and git's root-ref
 # rules read that leading id, so `git rev-parse MERGE_RR` names it while a branch
-# called `MERGE_RR` is checked out here. That one diverges on EVERY version
-# rather than below 2.45, because the `show-ref --verify` beside this probe
-# rejects it as a bad ref instead of falling through. Left out on purpose: the
-# rerere id hashes conflict TEXT rather than naming an object, so
-# `MERGE_RR^{commit}` is fatal for the caller too and there is no baseline to get
-# wrong — while listing it would detach the clone at an id no object matches and
-# fail the checkout outright.
+# called `MERGE_RR` is checked out here. Left out on purpose: the rerere id
+# hashes conflict TEXT rather than naming an object, so `MERGE_RR^{commit}` is
+# fatal for the caller too and there is no baseline to get wrong.
 readonly SRC_PSEUDO_REFS='ORIG_HEAD MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_HEAD REBASE_HEAD AUTO_MERGE FETCH_HEAD BISECT_EXPECTED_REV MERGE_AUTOSTASH NOTES_MERGE_PARTIAL NOTES_MERGE_REF BISECT_START'
 # How many hex characters an object id has in THIS repository. Filled in on first
 # use rather than up front: only the object-id branch below reads it, and getting
-# there needs a caller who named one of the listed pseudo-refs on a git too old to
-# answer `show-ref --verify` for it, with that file present.
+# there needs a caller who named one of the listed names, with that file present,
+# in a case the `show-ref --verify` above did not already answer.
 SRC_OID_HEXSZ=""
 source_pseudo_ref_exists() {
-	local name="$1" line="" referent=""
+	local name="$1" contents="" referent=""
 	case " $SRC_PSEUDO_REFS " in
 	*" $name "*) ;;
 	*) return 1 ;;
 	esac
 	git -C "$SRC_TOP" show-ref --verify --quiet -- "$name" 2>/dev/null && return 0
 	[ -f "$SRC_GIT_DIR/$name" ] || return 1
-	# A file whose last line has no newline still fills `line`, so the read's own
-	# exit status is not the answer here — the content is.
-	IFS= read -r line <"$SRC_GIT_DIR/$name" 2>/dev/null || :
-	case "$line" in
+	# The whole file, up to its first NUL if it has one, because git parses the
+	# buffer it read as a C string and a NUL ends the content for it too. `read -d
+	# ''` SUCCEEDING is how that is detected, and it also settles the rtrim: git
+	# trims the buffer's trailing whitespace before parsing, but a NUL is not
+	# whitespace, so a trailing run behind one never reaches the part being parsed.
+	if ! IFS= read -r -d '' contents <"$SRC_GIT_DIR/$name" 2>/dev/null; then
+		contents="${contents%"${contents##*[![:space:]]}"}"
+	fi
+	case "$contents" in
 	'ref:'*)
-		# Everything between `ref:` and the target is skipped, and git rtrims the
-		# file before parsing, so the target is trimmed on both sides here.
-		referent="${line#ref:}"
+		# `while (isspace(*buf))` skips whatever follows `ref:`, and everything left
+		# after that run is the target — a second line included, which is why this
+		# reads the file rather than a line: a target with a newline in it is a name
+		# no ref has, and git falls through to `refs/heads/<name>` for it.
+		referent="${contents#ref:}"
 		referent="${referent#"${referent%%[![:space:]]*}"}"
-		referent="${referent%"${referent##*[![:space:]]}"}"
 		[ -n "$referent" ] &&
 			git -C "$SRC_TOP" show-ref --verify --quiet -- "$referent" 2>/dev/null
 		;;
@@ -727,7 +732,7 @@ source_pseudo_ref_exists() {
 			*) SRC_OID_HEXSZ=40 ;;
 			esac
 		fi
-		[[ "${line%%[[:space:]]*}" =~ ^[0-9a-fA-F]{$SRC_OID_HEXSZ}$ ]]
+		[[ "${contents%%[[:space:]]*}" =~ ^[0-9a-fA-F]{$SRC_OID_HEXSZ}$ ]]
 		;;
 	esac
 }

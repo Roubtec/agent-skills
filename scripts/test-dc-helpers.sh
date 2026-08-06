@@ -39,15 +39,15 @@ set -euo pipefail
 #       main worktree's), branch/tag/sha/rev forms, a short name that is both a
 #       branch and a tag resolving to the branch, a qualified ref and a
 #       $GIT_DIR pseudo-ref each still winning over a branch named literally
-#       like it — in every spelling git's own parser takes, upper-case hex and
-#       any run of whitespace after `ref:` included — while a same-named
-#       $GIT_DIR file whose CONTENT is not a ref
+#       like it — in every spelling git's own parser takes, upper-case hex, any
+#       run of whitespace after `ref:`, and a target written on the line BELOW it
+#       included — while a same-named $GIT_DIR file whose CONTENT is not a ref
 #       (COMMIT_EDITMSG and its all-caps kin, an empty root-ref file, a listed
 #       name holding prose, a BISECT_START holding a branch name, a dangling
-#       NOTES_MERGE_REF, and a bare id of the OTHER hash width, which git reads
-#       as broken) leaves the branch checked out,
-#       a local head whose name begins with a dash checked out rather
-#       than parsed as options, and refusal on a bad ref
+#       NOTES_MERGE_REF, a symref carrying a second line under its target, and a
+#       bare id of the OTHER hash width, which git reads as broken) leaves the
+#       branch checked out; a local head whose name begins with a dash checked
+#       out rather than parsed as options; and refusal on a bad ref
 #   (d) the ref namespace: an exact mirror of the source's refs, demonstrated on
 #       a source carrying refs outside refs/heads/ and refs/tags/ — including one
 #       hiding a namespace from upload-pack, which a refspec fetch would drop
@@ -825,6 +825,48 @@ for spacing in tab none double; do
 	assert_eq "c: ... at the commit the $spacing-spaced symref names, not the branch's" \
 		"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$WT2" rev-parse --verify 'NOTES_MERGE_REF^{commit}')"
 done
+# ... and that run of whitespace can contain a NEWLINE, because git rtrims the
+# whole file and then walks it as one string: `while (isspace(*buf))` steps over
+# a newline exactly like a space, so a `ref:` alone on the first line still names
+# the ref written on the second. Reading only the first LINE finds an empty
+# target there and hands the branch back, while `git rev-parse NOTES_MERGE_REF`
+# in the source names the notes ref's commit.
+printf 'ref:\nrefs/notes/dc-merge\n' >"$WT2_GIT_DIR/NOTES_MERGE_REF"
+assert_ne "c: the newline-separated NOTES_MERGE_REF and the same-named branch differ" \
+	"$(git -C "$WT2" rev-parse --verify NOTES_MERGE_REF)" \
+	"$(git -C "$WT2" rev-parse --verify refs/heads/NOTES_MERGE_REF)"
+in_repo "$WT2" "$DC_ENTER" notesmergereflf NOTES_MERGE_REF
+assert_eq "c: a newline-separated NOTES_MERGE_REF beside a same-named branch exits 0" "$RC" 0
+assert_eq "c: the NOTES_MERGE_REF branch does not win over it: HEAD detaches" \
+	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "DETACHED"
+assert_eq "c: ... at the commit the newline-separated symref names, not the branch's" \
+	"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$WT2" rev-parse --verify 'NOTES_MERGE_REF^{commit}')"
+# The same rule read the other way, which is the half a line-wise reading gets
+# wrong in the direction that LOSES a branch: everything after that whitespace
+# run is the target, so a second line under a perfectly good first one is part of
+# the name, and no ref answers to a name with a newline in it. git falls through
+# to `refs/heads/<name>`; reading one line sees only the good first one, calls the
+# symref live, and detaches where the source has the branch checked out.
+printf 'ref: refs/notes/dc-merge\nrefs/heads/junk\n' >"$WT2_GIT_DIR/NOTES_MERGE_REF"
+assert_eq "c: a NOTES_MERGE_REF with a second line resolves to the branch in the source" \
+	"$(git -C "$WT2" rev-parse --verify NOTES_MERGE_REF)" \
+	"$(git -C "$WT2" rev-parse --verify refs/heads/NOTES_MERGE_REF)"
+in_repo "$WT2" "$DC_ENTER" notesmergereftwoline NOTES_MERGE_REF
+assert_eq "c: a NOTES_MERGE_REF with a second line exits 0" "$RC" 0
+assert_eq "c: ... and the branch is checked out, not detached" \
+	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "refs/heads/NOTES_MERGE_REF"
+# A NUL is where "the whole file" stops for git, which parses the buffer it read
+# as a C string — and the rtrim it does BEFORE that parse cannot reach back
+# across one, a NUL not being whitespace. So the padding below stays inside the
+# target, and a target with spaces in it is a name no ref has.
+printf 'ref: refs/notes/dc-merge   \0refs/notes/dc-merge\n' >"$WT2_GIT_DIR/NOTES_MERGE_REF"
+assert_eq "c: a NOTES_MERGE_REF whose padding sits behind a NUL resolves to the branch" \
+	"$(git -C "$WT2" rev-parse --verify NOTES_MERGE_REF)" \
+	"$(git -C "$WT2" rev-parse --verify refs/heads/NOTES_MERGE_REF)"
+in_repo "$WT2" "$DC_ENTER" notesmergerefnul NOTES_MERGE_REF
+assert_eq "c: a NOTES_MERGE_REF whose padding sits behind a NUL exits 0" "$RC" 0
+assert_eq "c: ... and the branch is checked out, not detached" \
+	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "refs/heads/NOTES_MERGE_REF"
 rm -f -- "$WT2_GIT_DIR/NOTES_MERGE_REF"
 g -C "$SRC2" update-ref -d refs/notes/dc-merge
 g -C "$SRC2" branch -q -D NOTES_MERGE_REF
@@ -842,6 +884,28 @@ assert_eq "c: an upper-case ORIG_HEAD beside a same-named branch exits 0" "$RC" 
 assert_eq "c: the ORIG_HEAD branch does not win over it: HEAD detaches" \
 	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "DETACHED"
 assert_eq "c: ... at the commit the upper-case id names, not the branch's" \
+	"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$WT2" rev-parse --verify 'ORIG_HEAD^{commit}')"
+rm -f -- "$WT2_GIT_DIR/ORIG_HEAD"
+g -C "$SRC2" branch -q -D ORIG_HEAD
+# Reading the whole file rather than its first line has to stop where git stops,
+# and for an object id that is the first whitespace: git parses the id and then
+# accepts anything after it as long as a whitespace character separates the two,
+# which is how `FETCH_HEAD` carries its extra columns. A newline is such a
+# character, so a second line under the id leaves it a live pseudo-ref — the
+# boundary a whole-file reading must not overshoot into calling broken.
+g -C "$SRC2" branch -q ORIG_HEAD main
+{
+	git -C "$WT2" rev-parse --verify main~1
+	echo refs/heads/junk
+} >"$WT2_GIT_DIR/ORIG_HEAD"
+assert_ne "c: the two-line ORIG_HEAD and the same-named branch differ" \
+	"$(git -C "$WT2" rev-parse --verify ORIG_HEAD)" \
+	"$(git -C "$WT2" rev-parse --verify refs/heads/ORIG_HEAD)"
+in_repo "$WT2" "$DC_ENTER" twolinepseudoref ORIG_HEAD
+assert_eq "c: a two-line ORIG_HEAD beside a same-named branch exits 0" "$RC" 0
+assert_eq "c: the ORIG_HEAD branch does not win over it: HEAD detaches" \
+	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "DETACHED"
+assert_eq "c: ... at the commit the id on its first line names, not the branch's" \
 	"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$WT2" rev-parse --verify 'ORIG_HEAD^{commit}')"
 rm -f -- "$WT2_GIT_DIR/ORIG_HEAD"
 g -C "$SRC2" branch -q -D ORIG_HEAD
