@@ -27,7 +27,9 @@ set -euo pipefail
 #       run or lets the clone's config surgery reach outside it, an inherited
 #       GIT_DIR does not aim that surgery at the source but IS reported on stderr
 #       (the helper's unset cannot reach the caller's shell) without joining the
-#       path on stdout, a remote surviving in the caller's global or command-scope
+#       path on stdout while GIT_PREFIX and the other entries on git's list that
+#       aim git nowhere are NOT reported, a remote surviving in the caller's
+#       global or command-scope
 #       config is refused rather than left live in the clone, an anonymous push
 #       target surviving there as remote.pushDefault or branch.<name>.pushRemote
 #       /.remote is refused for the same reason while a branch.<name>.rebase is
@@ -37,9 +39,11 @@ set -euo pipefail
 #       main worktree's), branch/tag/sha/rev forms, a short name that is both a
 #       branch and a tag resolving to the branch, a qualified ref and a
 #       $GIT_DIR pseudo-ref each still winning over a branch named literally
-#       like it while a same-named NON-ref file in $GIT_DIR (COMMIT_EDITMSG and
-#       its all-caps kin, and an empty root-ref file) leaves the branch checked
-#       out, a local head whose name begins with a dash checked out rather
+#       like it while a same-named $GIT_DIR file whose CONTENT is not a ref
+#       (COMMIT_EDITMSG and its all-caps kin, an empty root-ref file, a listed
+#       name holding prose, a BISECT_START holding a branch name, and a dangling
+#       NOTES_MERGE_REF) leaves the branch checked out,
+#       a local head whose name begins with a dash checked out rather
 #       than parsed as options, and refusal on a bad ref
 #   (d) the ref namespace: an exact mirror of the source's refs, demonstrated on
 #       a source carrying refs outside refs/heads/ and refs/tags/ — including one
@@ -381,6 +385,11 @@ assert_eq "b: ... and no stale remote or upstream config survived there either" 
 	"$(git -C "$CLONE_GITCONFIG" config --local --get-regexp '^(remote|branch)\.' || true)" ""
 assert_eq "b: ... leaving the file GIT_CONFIG named untouched" \
 	"$(cat "$GIT_CONFIG_EXTERNAL")" "$GIT_CONFIG_EXTERNAL_BEFORE"
+# ... and the caller IS warned about it, like the repository-targeting variables
+# below. The helper's unset reached its own process only: the caller's shell
+# still exports GIT_CONFIG, so their `git -C "$DC" config user.name x` writes
+# into the file it names rather than into the clone they were handed.
+assert_contains "b: ... while naming GIT_CONFIG in the warning on stderr" "$ERR" "GIT_CONFIG"
 
 # The same boundary from the other side: a caller whose own global config carries
 # a `branch.<name>.*` setting. `branch.main.rebase = true` is an everyday one, and
@@ -450,6 +459,21 @@ assert_true "b: ... yielding a usable path uncontaminated by the warning" \
 # at all, so the one above means what it says.
 in_repo "$GITDIR_SRC" "$DC_ENTER" cleanenv
 assert_eq "b: a clean environment still yields a clone" "$RC" 0
+assert_eq "b: ... with no environment warning on stderr" "$ERR" ""
+# Nor for the variables on git's list that AIM git nowhere. The warning's advice
+# is "clear these or your own commands against the clone path act on what they
+# name", so a variable that names nothing outside the current repository must not
+# appear in it. `GIT_PREFIX` is the one that matters in practice: it carries the
+# caller's subdirectory within the worktree, redirects nothing, and git exports it
+# to every alias — so reporting it fires the entire warning on a plain `git
+# someAlias` wrapper that has nothing dangerous set at all.
+in_repo "$GITDIR_SRC" env "GIT_PREFIX=sub/" "$DC_ENTER" gitprefixenv
+assert_eq "b: an inherited GIT_PREFIX still yields a clone" "$RC" 0
+assert_eq "b: ... with no environment warning on stderr" "$ERR" ""
+# Same for the entries on that list that are settings rather than locations: they
+# change how git reads whichever repository it is already pointed at.
+in_repo "$GITDIR_SRC" env "GIT_NO_REPLACE_OBJECTS=1" "$DC_ENTER" noreplaceenv
+assert_eq "b: an inherited GIT_NO_REPLACE_OBJECTS still yields a clone" "$RC" 0
 assert_eq "b: ... with no environment warning on stderr" "$ERR" ""
 
 # A remote defined under dc-enter's own remote name OUTSIDE the clone's config.
@@ -636,9 +660,10 @@ assert_eq "c: ... also at the tag's commit" \
 g -C "$SRC2" branch -q -D "refs/tags/ambig"
 g -C "$SRC2" branch -q -D "tags/ambig"
 # ... and in the repository carrying a PSEUDO-REF beside a same-named branch.
-# `ORIG_HEAD`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD` and `BISECT_HEAD`
-# live in `$GIT_DIR`, and git's rules reach them BEFORE `refs/heads/<name>` — so
-# in a repository stopped mid-rebase, mid-merge or mid-cherry-pick that also
+# `ORIG_HEAD`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_HEAD` and
+# the rest below live in `$GIT_DIR`, and git's rules reach them BEFORE
+# `refs/heads/<name>` — so in a repository stopped mid-rebase, mid-merge,
+# mid-cherry-pick, mid-bisect or mid-notes-merge that also
 # carries a branch called `ORIG_HEAD`, the caller's `ORIG_HEAD` is the pseudo-ref.
 # Detecting them is the one existence probe dc-enter cannot make with a plain
 # `git show-ref --verify`: that command only learned to report a bare root ref in
@@ -652,7 +677,8 @@ g -C "$SRC2" branch -q -D "tags/ambig"
 # the INVOKING worktree, so the fixture writes them into that worktree's own git
 # directory rather than the shared one.
 WT2_GIT_DIR="$(git -C "$WT2" rev-parse --absolute-git-dir)"
-for pseudo in ORIG_HEAD MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_HEAD REBASE_HEAD AUTO_MERGE FETCH_HEAD; do
+for pseudo in ORIG_HEAD MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_HEAD REBASE_HEAD AUTO_MERGE FETCH_HEAD \
+	BISECT_EXPECTED_REV MERGE_AUTOSTASH NOTES_MERGE_PARTIAL NOTES_MERGE_REF BISECT_START; do
 	pseudo_slug="$(printf '%s' "$pseudo" | tr 'A-Z_' 'a-z-')"
 	g -C "$SRC2" branch -q "$pseudo" main
 	git -C "$WT2" rev-parse --verify main~1 >"$WT2_GIT_DIR/$pseudo"
@@ -712,6 +738,66 @@ assert_eq "c: ... and the branch is checked out, not detached" \
 	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "refs/heads/FETCH_HEAD"
 rm -f -- "$WT2_GIT_DIR/FETCH_HEAD"
 g -C "$SRC2" branch -q -D FETCH_HEAD
+# Emptiness is only the extreme case of the real rule, which is that CONTENT
+# decides, not the name. A listed name whose file holds PROSE is not a ref either:
+# git's rules fall through it to `refs/heads/<name>`, exactly as they do for
+# `COMMIT_EDITMSG` above, so a presence-only probe detaches a repository whose own
+# `git rev-parse ORIG_HEAD` names the branch.
+g -C "$SRC2" branch -q ORIG_HEAD main~1
+printf 'not a ref\n' >"$WT2_GIT_DIR/ORIG_HEAD"
+assert_eq "c: an ORIG_HEAD holding prose resolves to the branch in the source" \
+	"$(git -C "$WT2" rev-parse --verify ORIG_HEAD)" \
+	"$(git -C "$WT2" rev-parse --verify refs/heads/ORIG_HEAD)"
+in_repo "$WT2" "$DC_ENTER" prosepseudoref ORIG_HEAD
+assert_eq "c: an ORIG_HEAD holding prose beside a same-named branch exits 0" "$RC" 0
+assert_eq "c: ... and the branch is checked out, not detached" \
+	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "refs/heads/ORIG_HEAD"
+rm -f -- "$WT2_GIT_DIR/ORIG_HEAD"
+g -C "$SRC2" branch -q -D ORIG_HEAD
+# `BISECT_START` carries both sides of that rule under one name: a bisect started
+# from a BRANCH writes that branch's name there, one started from a DETACHED HEAD
+# writes the commit. Only the second is a ref, and the loop above already pinned
+# that half; this is the other one, where the branch must survive.
+g -C "$SRC2" branch -q BISECT_START main~1
+printf 'main\n' >"$WT2_GIT_DIR/BISECT_START"
+assert_eq "c: a BISECT_START holding a branch name resolves to the branch" \
+	"$(git -C "$WT2" rev-parse --verify BISECT_START)" \
+	"$(git -C "$WT2" rev-parse --verify refs/heads/BISECT_START)"
+in_repo "$WT2" "$DC_ENTER" bisectstartname BISECT_START
+assert_eq "c: a BISECT_START holding a branch name exits 0" "$RC" 0
+assert_eq "c: ... and the branch is checked out, not detached" \
+	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "refs/heads/BISECT_START"
+rm -f -- "$WT2_GIT_DIR/BISECT_START"
+g -C "$SRC2" branch -q -D BISECT_START
+# `NOTES_MERGE_REF` is the SYMREF among them: a conflicted `git notes merge`
+# leaves it pointing at the notes ref being merged rather than holding an object
+# id. A live one is a ref and wins; a DANGLING one — its notes ref deleted since,
+# which is the state that outlives the operation — is a fall-through exactly like
+# an empty file. So the target has to be RESOLVED, not merely read: "does this
+# name hold something" and "does what it holds still resolve" are different
+# questions here, and only the second one is the one git asks.
+g -C "$SRC2" update-ref refs/notes/dc-merge "$(git -C "$SRC2" rev-parse main~1)"
+g -C "$SRC2" branch -q NOTES_MERGE_REF main
+printf 'ref: refs/notes/dc-merge\n' >"$WT2_GIT_DIR/NOTES_MERGE_REF"
+assert_ne "c: the live NOTES_MERGE_REF and the same-named branch differ" \
+	"$(git -C "$WT2" rev-parse --verify NOTES_MERGE_REF)" \
+	"$(git -C "$WT2" rev-parse --verify refs/heads/NOTES_MERGE_REF)"
+in_repo "$WT2" "$DC_ENTER" notesmergereflive NOTES_MERGE_REF
+assert_eq "c: a live NOTES_MERGE_REF beside a same-named branch exits 0" "$RC" 0
+assert_eq "c: the NOTES_MERGE_REF branch does not win: HEAD detaches" \
+	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "DETACHED"
+assert_eq "c: ... at the commit the symref names, not the branch's" \
+	"$(git -C "$OUT" rev-parse HEAD)" "$(git -C "$WT2" rev-parse --verify 'NOTES_MERGE_REF^{commit}')"
+g -C "$SRC2" update-ref -d refs/notes/dc-merge
+assert_eq "c: the dangling NOTES_MERGE_REF resolves to the branch in the source" \
+	"$(git -C "$WT2" rev-parse --verify NOTES_MERGE_REF)" \
+	"$(git -C "$WT2" rev-parse --verify refs/heads/NOTES_MERGE_REF)"
+in_repo "$WT2" "$DC_ENTER" notesmergerefdangling NOTES_MERGE_REF
+assert_eq "c: a dangling NOTES_MERGE_REF beside a same-named branch exits 0" "$RC" 0
+assert_eq "c: ... and the branch is checked out, not detached" \
+	"$(git -C "$OUT" symbolic-ref -q HEAD || echo DETACHED)" "refs/heads/NOTES_MERGE_REF"
+rm -f -- "$WT2_GIT_DIR/NOTES_MERGE_REF"
+g -C "$SRC2" branch -q -D NOTES_MERGE_REF
 # A local head whose name begins with a DASH. `refs/heads/-foo` passes `git
 # check-ref-format`, so it is a legal branch, and the qualified-form
 # normalization above correctly derives `-foo` from it — which git's own option

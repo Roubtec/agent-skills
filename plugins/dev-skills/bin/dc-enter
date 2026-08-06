@@ -98,16 +98,24 @@
 # to an existing ref is that ref rather than a short branch name to look up.
 # A `$GIT_DIR` PSEUDO-REF is the same story one rule earlier: git reaches
 # `ORIG_HEAD`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_HEAD`,
-# `REBASE_HEAD`, `AUTO_MERGE` and `FETCH_HEAD` in `$GIT_DIR` before
-# `refs/heads/<name>` (that exact set, detected across the whole supported git
-# range — see source_pseudo_ref_exists), so in a repository stopped mid-rebase
-# or mid-merge that also carries a branch of that name, `dc-enter probe ORIG_HEAD`
-# detaches at the pseudo-ref — the commit the caller's own `git rev-parse` names —
-# rather than checking the branch out. Pseudo-refs are per-worktree, and it is
-# the INVOKING worktree's that is read, like everything else here.
-# Every OTHER all-caps file `$GIT_DIR` holds — `COMMIT_EDITMSG`, `MERGE_MSG`,
-# `SQUASH_MSG`, `MERGE_MODE` — is not a ref and does not take part: a branch
-# named after one is checked out like any other branch.
+# `REBASE_HEAD`, `AUTO_MERGE`, `FETCH_HEAD`, `BISECT_EXPECTED_REV`,
+# `MERGE_AUTOSTASH`, `NOTES_MERGE_PARTIAL`, `NOTES_MERGE_REF` and `BISECT_START`
+# in `$GIT_DIR` before `refs/heads/<name>` (that exact set, detected across the
+# whole supported git range — see source_pseudo_ref_exists), so in a repository
+# stopped mid-rebase, mid-merge, mid-bisect or mid-notes-merge that also carries
+# a branch of that name, `dc-enter probe ORIG_HEAD` detaches at the pseudo-ref —
+# the commit the caller's own `git rev-parse` names — rather than checking the
+# branch out. Pseudo-refs are per-worktree, and it is the INVOKING worktree's
+# that is read, like everything else here.
+# Whether one of those files is a ref at all is decided by its CONTENT, not by
+# its name: git resolves a `$GIT_DIR` file as a ref when it holds an object id,
+# or a symref whose target still resolves. So `COMMIT_EDITMSG`, `MERGE_MSG`,
+# `SQUASH_MSG` and `MERGE_MODE` stay out of the way because they hold a message
+# or a mode, not because of what they are called, and a branch named after one
+# is checked out like any other branch. `BISECT_START` shows both sides of the
+# same rule: a bisect started from a branch writes that branch's NAME there and
+# the branch wins, one started from a detached HEAD writes the commit and it
+# does not.
 # A SHORT name that is both a local branch and a tag resolves to the BRANCH:
 # gitrevisions disambiguates the other way (`refs/tags/<name>` is tried before
 # `refs/heads/<name>`), so the commit is looked up through the branch's full ref
@@ -558,12 +566,26 @@ while IFS= read -r env_var; do
 	[ -n "$env_var" ] || continue
 	if [ -n "${!env_var+x}" ]; then
 		case "$env_var" in
-		# The two saved above are deliberately not reported. They inject config
-		# rather than aim git at another repository, the clone's later user is
-		# MEANT to see them (that is what the surviving-remote check reads them
-		# for), and naming them in a warning whose advice is "clear these or your
-		# commands reach the invoking repository" would be untrue of them.
-		GIT_CONFIG_COUNT | GIT_CONFIG_PARAMETERS) ;;
+		# Not everything on git's list AIMS git somewhere, and the warning below
+		# is only about the ones that do — its whole advice is "clear these or
+		# your own commands against the clone path act on what they name", which
+		# has to be true of every name it prints or the warning is a false alarm.
+		# So three kinds are dropped silently. The two saved above inject config
+		# the clone's later user is MEANT to see (that is what the
+		# surviving-remote check reads them for). `GIT_PREFIX` names a path
+		# INSIDE the current worktree and redirects nothing at all; git exports
+		# it to every alias, so reporting it would fire the whole warning on a
+		# plain `git someAlias` wrapper with nothing dangerous set.
+		# `GIT_IMPLICIT_WORK_TREE`, `GIT_NO_REPLACE_OBJECTS` and
+		# `GIT_REPLACE_REF_BASE` are settings rather than locations: they change
+		# how git reads whichever repository it is already pointed at.
+		# What is left — `GIT_DIR`, `GIT_WORK_TREE`, `GIT_COMMON_DIR`,
+		# `GIT_INDEX_FILE`, the object-directory pair, `GIT_GRAFT_FILE`,
+		# `GIT_SHALLOW_FILE` and `GIT_CONFIG` — each names another repository's
+		# directory, index, objects or config FILE, which is exactly the hazard
+		# the sentence describes. `GIT_CONFIG` earns its place there: it is the
+		# caller's file that `git -C "$DC" config` then writes to.
+		GIT_CONFIG_COUNT | GIT_CONFIG_PARAMETERS | GIT_PREFIX | GIT_IMPLICIT_WORK_TREE | GIT_NO_REPLACE_OBJECTS | GIT_REPLACE_REF_BASE) ;;
 		*) DROPPED_ENV_VARS="${DROPPED_ENV_VARS:+$DROPPED_ENV_VARS }$env_var" ;;
 		esac
 	fi
@@ -604,29 +626,57 @@ REF_DISPLAY="$REF_ARG"
 # reftable backend where a pseudo-ref is a ref rather than a file; the
 # `$GIT_DIR/<name>` file covers every git old enough to lack that support, all
 # of which predate reftable and so keep root refs in exactly that file.
-# Restricted to the NAMES git itself resolves at the root of `$GIT_DIR`, listed
-# rather than matched by shape, so no other string is ever turned into a path and
-# probed. A shape rule (all caps, no slash) is what this used to be and it is
-# wrong in the file half: `$GIT_DIR` is full of all-caps files that are not refs
-# — `COMMIT_EDITMSG` exists in every repository that has ever committed, and
-# `MERGE_MSG`, `SQUASH_MSG` and `MERGE_MODE` are the same shape — so a branch
-# named after one was answered with a detached HEAD instead of the checkout the
-# `<ref>` contract above documents. The list is git's own set of root refs
-# (`is_root_ref`), minus `HEAD`, which the caller's string reaches through the
-# plain `show-ref --verify` beside this probe.
-# `-s` rather than `-f`: an EMPTY root-ref file is one git's rules fall straight
-# through, on to `refs/heads/<name>`. `FETCH_HEAD` is left empty by a fetch that
-# had nothing to fetch, and treating that as a pseudo-ref would detach a
-# repository whose own `git rev-parse FETCH_HEAD` names the branch.
-readonly SRC_PSEUDO_REFS='ORIG_HEAD MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_HEAD REBASE_HEAD AUTO_MERGE FETCH_HEAD'
+# WHICH NAMES: the ones git itself writes at the root of `$GIT_DIR` holding an
+# object id or a symref, listed rather than matched by shape so that no other
+# caller-supplied string is ever turned into a path and probed. Deliberately NOT
+# `is_root_ref`: that is a syntax rule (any all-caps name ending in `_HEAD`, plus
+# `HEAD`, `AUTO_MERGE`, `BISECT_EXPECTED_REV`, `NOTES_MERGE_PARTIAL`,
+# `NOTES_MERGE_REF` and `MERGE_AUTOSTASH`) rather than a set, and it EXCLUDES
+# `FETCH_HEAD` and `MERGE_HEAD`, two names this probe very much needs. `HEAD`
+# itself is absent because the caller's string reaches it through the plain
+# `show-ref --verify` beside this probe.
+# WHAT DECIDES whether one of them is a ref right now: the file's CONTENT, the
+# same way git decides it — a bare object id, optionally followed by whitespace
+# and anything (which is how `FETCH_HEAD` carries its extra columns), or a `ref:`
+# line whose target still resolves. The NAME alone will not do, in either
+# direction. It does not qualify one: an EMPTY `FETCH_HEAD`, what a fetch
+# with nothing to fetch leaves behind, is a file git's rules fall straight
+# through, on to `refs/heads/<name>`; so is a `BISECT_START` holding the branch
+# name a bisect was started from rather than a detached HEAD's commit; and so is
+# a DANGLING `NOTES_MERGE_REF`, the symref a conflicted `git notes merge` leaves
+# pointing at a notes ref that has since been deleted — which is why the target
+# is resolved rather than merely read. And the name is not what disqualifies the
+# rest either: a shape rule (all caps, no slash) is what this used to be, and it
+# was wrong in the file half because `$GIT_DIR` is full of all-caps files whose
+# CONTENT is not a ref — `COMMIT_EDITMSG` exists in every repository that has
+# ever committed, and `MERGE_MSG`, `SQUASH_MSG` and `MERGE_MODE` are the same
+# shape — so a branch named after one was answered with a detached HEAD instead
+# of the checkout the `<ref>` contract above documents.
+# The bounded cost of listing by name: a `$GIT_DIR` file git writes as PROSE is
+# excluded here whatever it holds, so a repository whose commit message is
+# nothing but a bare object id, and which also carries a branch called
+# `COMMIT_EDITMSG`, gets that branch on git < 2.45 where git names the object.
+# From 2.45 the plain `show-ref --verify` beside this probe — which is asked
+# whatever the name, this list being consulted only here — follows git. Accepted
+# deliberately: the alternative is turning an arbitrary caller string into a
+# `$GIT_DIR` path, and no repository reaches that state without having written an
+# object id where a sentence belongs.
+readonly SRC_PSEUDO_REFS='ORIG_HEAD MERGE_HEAD CHERRY_PICK_HEAD REVERT_HEAD BISECT_HEAD REBASE_HEAD AUTO_MERGE FETCH_HEAD BISECT_EXPECTED_REV MERGE_AUTOSTASH NOTES_MERGE_PARTIAL NOTES_MERGE_REF BISECT_START'
 source_pseudo_ref_exists() {
-	local name="$1"
+	local name="$1" line=""
 	case " $SRC_PSEUDO_REFS " in
 	*" $name "*) ;;
 	*) return 1 ;;
 	esac
 	git -C "$SRC_TOP" show-ref --verify --quiet -- "$name" 2>/dev/null && return 0
-	[ -s "$SRC_GIT_DIR/$name" ]
+	[ -f "$SRC_GIT_DIR/$name" ] || return 1
+	# A file whose last line has no newline still fills `line`, so the read's own
+	# exit status is not the answer here — the content is.
+	IFS= read -r line <"$SRC_GIT_DIR/$name" 2>/dev/null || :
+	case "$line" in
+	'ref: '*) git -C "$SRC_TOP" show-ref --verify --quiet -- "${line#ref: }" 2>/dev/null ;;
+	*) [[ "${line%%[[:space:]]*}" =~ ^[0-9a-f]{40}([0-9a-f]{24})?$ ]] ;;
+	esac
 }
 
 # Which branch (if any) the clone should check out. With no <ref> this follows
