@@ -43,7 +43,13 @@
 #   somewhere to go. That check, and the push-target check beside it, are made
 #   once HEAD is in its final state: `includeIf "onbranch:…"` makes part of the
 #   merged configuration depend on the checked-out branch, so asking earlier
-#   would answer for a clone nobody receives. (Remote-tracking refs survive as
+#   would answer for a clone nobody receives. Stated exactly, they answer for the
+#   HEAD the clone is HANDED BACK on. Switching branches inside the clone can
+#   activate an `onbranch:` include the checked-out one did not match, and no
+#   check here can pre-empt that: the pattern may match a branch that does not
+#   exist yet, so there is no set of branches to sweep. A caller whose own config
+#   defines remotes or push destinations that way owns that one — the same way
+#   they own the `GIT_DIR` paragraph below. (Remote-tracking refs survive as
 #   ordinary refs; see the ref-namespace note below.)
 #   A remote NAME is not the only way to name a push target, so the clone's
 #   MERGED `remote.pushDefault`, `branch.<name>.pushRemote` and
@@ -1144,6 +1150,11 @@ fi
 # `onbranch:main` include defining a remote at the source: refused now, handed
 # back and pushable before.) So the final HEAD state is established first, and
 # the questions are asked of the clone as it will actually be handed over.
+# That, and no more: a `git checkout` INSIDE the clone can still activate an
+# include the handed-back branch did not match. Sweeping the mirrored branches
+# would not close it either, since an `onbranch:` pattern matches by name and the
+# branch that matches need not exist yet — so the bound is stated in the header
+# rather than approximated with a loop that would still miss `checkout -b`.
 #
 # The working tree is always materialized by detaching at the commit resolved up
 # front, and a branch checkout is then made by pointing HEAD at the branch — not

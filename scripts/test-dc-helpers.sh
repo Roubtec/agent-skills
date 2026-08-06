@@ -251,6 +251,14 @@ inode_of() {
 	stat -c '%i' -- "$path" 2>/dev/null || stat -f '%i' -- "$path"
 }
 
+# Permission bits of a path as octal digits, by the same GNU-then-BSD rule.
+# BSD's `%Lp` is the three-digit permission field; its `%p` would include the
+# file type and answer 40700 for a directory.
+mode_of() {
+	local path="$1"
+	stat -c '%a' -- "$path" 2>/dev/null || stat -f '%Lp' -- "$path"
+}
+
 # refs, and the full set of reachable objects, as comparable strings. The ref
 # comparison includes %(symref), so a mirror that flattened a symbolic ref into a
 # direct one at the same commit does not pass as exact.
@@ -643,6 +651,10 @@ assert_contains "b: ... naming the setting" "$ERR" "remote.pushdefault"
 # not match leaves it inactive in the clone that is handed back, and that clone
 # is legitimate. This is what makes the two refusals above evidence of the
 # ordering rather than of a check that fires on the include's mere presence.
+# It is also the bound the header states: this clone is clean as handed back, and
+# a `git checkout main` inside it would activate the include again. That is not
+# closable by checking more branches — an `onbranch:` pattern can name a branch
+# that does not exist yet — so it is documented rather than approximated.
 g -C "$ONBRANCH_SRC" branch other
 in_repo "$ONBRANCH_SRC" env "GIT_CONFIG_GLOBAL=$ONBRANCH_CFG" "$DC_ENTER" onbranchmiss other
 assert_eq "b: a conditional include the requested branch does not match still yields a clone" "$RC" 0
@@ -655,19 +667,30 @@ assert_eq "b: ... and with no remote" "$(git -C "$CLONE_ONBRANCH" remote)" ""
 # walk. The directories this helper creates there hold a copy of the invoking
 # repository — its source and its objects — so they are created 0700 rather than
 # left to a 0022 umask's world-readable 0755.
+# The umask is PINNED to 0022 for the invocation rather than inherited, because
+# this test is only decisive under a permissive one: run from a shell that
+# already masks group and other away, an unfixed helper produces 0700 by
+# accident and the suite goes green on a broken helper. CI's 0022 is the
+# environment the assertion is about, so it is set here rather than assumed.
+# Set and restored around the call instead of wrapped in a subshell, because
+# `in_repo` reports through the RC/OUT/ERR globals, which a subshell would
+# discard.
 MODE_SRC="$WORK/b/mode-src"
 git init -q -b main "$MODE_SRC"
 g -C "$MODE_SRC" commit -q --allow-empty -m one
 MODE_ROOT="$WORK/b/mode-root"
+MODE_UMASK_SAVED="$(umask)"
+umask 0022
 in_repo "$MODE_SRC" env "DC_ROOT=$MODE_ROOT" "$DC_ENTER" privatemode
+umask "$MODE_UMASK_SAVED"
 assert_eq "b: a clone under a fresh root exits 0" "$RC" 0
 require_clone CLONE_PRIVATE "b: privatemode"
 MODE_SESSION="$(dirname "$CLONE_PRIVATE")"
 MODE_SCOPE="$(dirname "$MODE_SESSION")"
-assert_eq "b: the per-agent scope directory is private" \
-	"$(stat -c '%a' "$MODE_SCOPE")" "700"
+assert_eq "b: the per-agent scope directory is private under a 0022 umask" \
+	"$(mode_of "$MODE_SCOPE")" "700"
 assert_eq "b: the session directory holding the clone is private too" \
-	"$(stat -c '%a' "$MODE_SESSION")" "700"
+	"$(mode_of "$MODE_SESSION")" "700"
 
 echo "== (c) the <ref> interface =="
 SRC2="$WORK/c/src"
