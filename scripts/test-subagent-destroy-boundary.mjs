@@ -27,22 +27,29 @@
 // entirely. What the suite guarantees otherwise rests on ACCOUNTING rather than
 // on searching: every LITERAL `agent(` occurrence in the source must be either a
 // matched call site or a prose mention on a comment line, and anything else
-// fails the suite. A later `agent(p, ...)` over a variable, or an inline
-// template literal, is therefore loud rather than silently unrendered. The
-// accounting pattern stays literal where discovery does not, deliberately:
+// fails the suite. A later unspaced `agent(p, ...)` over a variable, or an
+// inline template literal, is therefore loud rather than silently unrendered;
+// the spaced form is the second gap below. The accounting pattern stays literal
+// where discovery does not, deliberately:
 // prompt templates here write English `agent (...)` — `wf-address-review.js`'s
 // ping step says so of Copilot's coding agent — which is prose rather than an
 // unrecognized call, so counting it would fail the suite on the shipped
 // sources. The comment exclusion is reported with its line numbers on every run
 // rather than applied quietly.
 //
-// One gap that accounting cannot close, stated plainly rather than implied
-// away: a NEW BRANCH INSIDE AN EXISTING BUILDER. Rendering is fixture-driven,
+// Two gaps that accounting cannot close, stated plainly rather than implied
+// away. A NEW BRANCH INSIDE AN EXISTING BUILDER: rendering is fixture-driven,
 // so a builder this suite already renders can grow a conditional whose other
 // arm no fixture supplies, and its call site still looks accounted for. That is
 // inherent to rendering rather than an oversight — widen the fixtures for the
 // builder when it gains a branch, as `prPrompt` and `mainCheckoutStatusPrompt`
-// already do below.
+// already do below. And a SPACED CALL OVER A VARIABLE, `agent (p, ...)`: it
+// names no builder for discovery to render, and the literal accounting pattern
+// skips it over the space, so it passes silently where the unspaced form is
+// loud. Left open deliberately — it takes both deviations at once, no such call
+// exists in these sources, and letting accounting match the space would fail
+// the shipped tree on the English `agent (...)` in `wf-address-review.js`'s
+// ping step, which lives in a template literal rather than on a comment line.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -275,6 +282,26 @@ for (const file of Object.keys(CUT)) {
       rows.push([file, `${name} (STALE FIXTURE)`, "FAIL", "no agent() call site renders this builder any more"]);
     }
   }
+}
+
+// The three out-of-section `DESTROY_BOUNDARY` constants are maintained as
+// byte-identical copies, and two of them SAY SO in prose beside themselves; the
+// clause regexes above match each independently and would pass a drifted copy,
+// so the comments' claim is checked here rather than trusted. The two in-section
+// `CYCLE_DESTROY_BOUNDARY` copies are not rechecked: the `review-cycle-core`
+// awk/diff byte-identity check already covers the whole section holding them.
+const copies = Object.keys(CUT).map((file) => [
+  file,
+  (readFileSync(join(workflows, file), "utf8").match(/^const DESTROY_BOUNDARY = `((?:\\.|[^`\\])*)`;$/m) || [])[1],
+]);
+const drifted = copies.filter(([, text]) => text !== copies[0][1]).map(([file]) => file);
+const missing = copies.filter(([, text]) => text === undefined).map(([file]) => file);
+if (missing.length || drifted.length) {
+  failures++;
+  const why = missing.length ? `no top-level \`const DESTROY_BOUNDARY\` in ${missing.join(", ")}` : `${drifted.join(", ")} differs from ${copies[0][0]}`;
+  rows.push(["(all)", "DESTROY_BOUNDARY identity", "FAIL", why]);
+} else {
+  rows.push(["(all)", "DESTROY_BOUNDARY identity", "ok", `${copies.length} copies byte-identical, ${Buffer.byteLength(copies[0][1])} bytes each`]);
 }
 
 const w = (i) => Math.max(...rows.map((r) => r[i].length));
