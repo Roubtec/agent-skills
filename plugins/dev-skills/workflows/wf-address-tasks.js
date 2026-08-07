@@ -1754,11 +1754,23 @@ const mainCheckoutBaseline = await agent(mainCheckoutStatusPrompt("pre-batch bas
 // reports surface, and its note says exactly why the check has nothing
 // authoritative this run.
 async function finalMainCheckoutReport() {
-  const final = await agent(mainCheckoutStatusPrompt("post-batch"), {
-    label: "main-checkout-final",
-    schema: MAIN_CHECKOUT_SCHEMA,
-    effort: "low",
-  });
+  // The closing reading is itself an agent stage, and an agent stage throws
+  // (runCyclePeerStage exists because of it). This function is the last step of
+  // every exit including the aborted one, so a throw here would take down the
+  // very report an abort is owed — and, on the normal path, a completed batch's
+  // whole result with it. A reading that fails is an UNMEASURED report, whose
+  // note already says the comparison had nothing authoritative; never a second
+  // crash.
+  let final = null;
+  try {
+    final = await agent(mainCheckoutStatusPrompt("post-batch"), {
+      label: "main-checkout-final",
+      schema: MAIN_CHECKOUT_SCHEMA,
+      effort: "low",
+    });
+  } catch (e) {
+    log(`Post-batch main-checkout reading threw (${e && e.message ? e.message : String(e)}); reporting the comparison as unmeasured.`);
+  }
   const summary = mainCheckoutSummary(mainCheckoutBaseline, final);
   if (summary.flagged || !summary.measured) {
     const details = [];
@@ -1770,318 +1782,336 @@ async function finalMainCheckoutReport() {
   return summary;
 }
 
-phase("Resolve batch");
-const plan = await agent(resolvePrompt(args), { label: "resolve", schema: PLAN_SCHEMA });
-if (!plan || !Array.isArray(plan.waves) || plan.waves.length === 0) {
-  // A batch that resolves no task is still a batch that terminated with the
-  // baseline already taken, so it owes the same report as a delivering one.
-  phase("Summary");
-  return { error: "Could not resolve any task files from the argument.", args, mainCheckout: await finalMainCheckoutReport() };
-}
-
+// Every stage from here on runs with the pre-batch baseline already taken, so
+// each one owes the closing comparison — including the ones that never reach a
+// `return`. An agent stage throws (runCyclePeerStage catches exactly that), and
+// a throw would otherwise unwind past the baseline's other half and leave an
+// aborted batch with no cleanliness report at all, which is the case the check
+// exists for. So the batch body runs inside a try whose catch reports rather
+// than rethrows. What the report needs from the body is declared out here: a
+// crash mid-batch still has terminal statuses worth returning.
+let plan = null;
 // Track each task's terminal status so dependent waves can be gated.
 const statusBySlug = new Map();
 const results = [];
 const throttled = [];
 const collisions = [];
 
-// Map every in-batch branch to the slug that produces it. A dependent task's
-// `base` IS its prerequisite's `branch` (stacked PRs), so this lets the gate
-// derive the prerequisite structurally instead of trusting only the plan
-// agent's `dependsOn` list — a forgotten entry can no longer slip a dependent
-// past a failed prerequisite and have it build on known-bad work. Independent
-// tasks base off `defaultBase` / the current branch, which no in-batch task
-// produces, so they pick up no spurious dependency.
-const slugByBranch = new Map();
-for (const wave of plan.waves) {
-  if (!Array.isArray(wave)) continue;
-  for (const task of wave) {
-    if (task && typeof task.branch === "string" && typeof task.slug === "string") {
-      slugByBranch.set(task.branch, task.slug);
+try {
+  phase("Resolve batch");
+  plan = await agent(resolvePrompt(args), { label: "resolve", schema: PLAN_SCHEMA });
+  if (!plan || !Array.isArray(plan.waves) || plan.waves.length === 0) {
+    // A batch that resolves no task is still a batch that terminated with the
+    // baseline already taken, so it owes the same report as a delivering one.
+    phase("Summary");
+    return { error: "Could not resolve any task files from the argument.", args, mainCheckout: await finalMainCheckoutReport() };
+  }
+
+  // Map every in-batch branch to the slug that produces it. A dependent task's
+  // `base` IS its prerequisite's `branch` (stacked PRs), so this lets the gate
+  // derive the prerequisite structurally instead of trusting only the plan
+  // agent's `dependsOn` list — a forgotten entry can no longer slip a dependent
+  // past a failed prerequisite and have it build on known-bad work. Independent
+  // tasks base off `defaultBase` / the current branch, which no in-batch task
+  // produces, so they pick up no spurious dependency.
+  const slugByBranch = new Map();
+  for (const wave of plan.waves) {
+    if (!Array.isArray(wave)) continue;
+    for (const task of wave) {
+      if (task && typeof task.branch === "string" && typeof task.slug === "string") {
+        slugByBranch.set(task.branch, task.slug);
+      }
     }
   }
-}
 
-// Wave width: run every dependency-ready task unless measured storage headroom
-// requires sub-batching. The workflow runtime/provider owns its own active-agent
-// ceiling and rate limiting; do not impose an arbitrary smaller policy cap here.
-// An unmeasured reading (0) yields `Infinity` — no storage cap — which behaves
-// correctly at both use sites (`slice(i, i + Infinity)` takes the rest of the
-// wave; `runnable.length > widthCap` never fires). Bootstrap's reading serves
-// only the first wave: later waves run against headroom already consumed by
-// earlier waves' pnpm-store growth, ccache, and build artifacts that worktree
-// reclaim does not return, so each subsequent wave boundary re-probes `df`
-// through a cheap agent and recomputes the cap from the fresh reading.
-let availBytes = typeof boot.availBytes === "number" ? boot.availBytes : 0;
-const widthCapFor = (bytes) => (bytes > 0 ? Math.max(1, Math.floor(bytes / PER_WORKTREE_BYTES)) : Infinity);
+  // Wave width: run every dependency-ready task unless measured storage headroom
+  // requires sub-batching. The workflow runtime/provider owns its own active-agent
+  // ceiling and rate limiting; do not impose an arbitrary smaller policy cap here.
+  // An unmeasured reading (0) yields `Infinity` — no storage cap — which behaves
+  // correctly at both use sites (`slice(i, i + Infinity)` takes the rest of the
+  // wave; `runnable.length > widthCap` never fires). Bootstrap's reading serves
+  // only the first wave: later waves run against headroom already consumed by
+  // earlier waves' pnpm-store growth, ccache, and build artifacts that worktree
+  // reclaim does not return, so each subsequent wave boundary re-probes `df`
+  // through a cheap agent and recomputes the cap from the fresh reading.
+  let availBytes = typeof boot.availBytes === "number" ? boot.availBytes : 0;
+  const widthCapFor = (bytes) => (bytes > 0 ? Math.max(1, Math.floor(bytes / PER_WORKTREE_BYTES)) : Infinity);
 
-for (let w = 0; w < plan.waves.length; w++) {
-  const wave = plan.waves[w];
-  if (!Array.isArray(wave) || wave.length === 0) continue;
+  for (let w = 0; w < plan.waves.length; w++) {
+    const wave = plan.waves[w];
+    if (!Array.isArray(wave) || wave.length === 0) continue;
 
-  // Dependency gating: a task whose in-batch dependency did not finish
-  // successfully must NOT run — it would branch from a missing/partial/rejected
-  // prerequisite. A dependency is "succeeded" if it landed a PR (`done`) OR, on a
-  // no-remote run, was implemented and reviewed locally (`local-only`): its base
-  // branch and commits persist in the shared `.git`, so dependents can still
-  // build on it. `error`/`review-cap`/`skipped-dep`/`pushed-no-pr`,
-  // `collision-hold`, `collision-blocked`, and `collision-scan-error` do not unlock.
-  // Effective deps = the declared `dependsOn` UNION the prerequisite derived from
-  // the `base`→`branch` relationship, so the gate holds even if the plan agent
-  // omits a `dependsOn` entry it should have listed.
-  const succeeded = (s) => s === "done" || s === "local-only";
-  const runnable = [];
-  for (const task of wave) {
-    const deps = new Set(Array.isArray(task.dependsOn) ? task.dependsOn : []);
-    const baseDep = slugByBranch.get(task.base);
-    if (baseDep && baseDep !== task.slug) deps.add(baseDep);
-    const failedDep = [...deps].find((d) => !succeeded(statusBySlug.get(d)));
-    if (failedDep) {
-      const r = { slug: task.slug, branch: task.branch, status: "skipped-dep", blockedBy: failedDep, depStatus: statusBySlug.get(failedDep) || "missing" };
-      statusBySlug.set(task.slug, "skipped-dep");
-      results.push(r);
-    } else {
-      runnable.push(task);
-    }
-  }
-  if (runnable.length === 0) continue;
-
-  phase(`Wave ${w + 1} (${runnable.length} task${runnable.length === 1 ? "" : "s"})`);
-  // Re-probe free space at each wave boundary after the first (see the wave-width
-  // comment above). A failed or unmeasurable probe keeps the previous reading —
-  // stale-but-conservative beats silently dropping the throttle mid-batch. A
-  // 1-task wave skips the probe: its cap can never throttle (widthCap >= 1).
-  if (w > 0 && runnable.length > 1) {
-    const probe = await agent(storageProbePrompt(boot.wtBase || ".worktrees"), { label: `storage-probe:w${w + 1}`, schema: STORAGE_PROBE_SCHEMA, effort: "low" });
-    if (probe && typeof probe.availBytes === "number" && probe.availBytes > 0) availBytes = probe.availBytes;
-  }
-  const widthCap = widthCapFor(availBytes);
-  if (runnable.length > widthCap) {
-    log(`Throttling wave ${w + 1} to ${widthCap} concurrent task(s) to fit measured storage headroom (~1 GiB per worktree).`);
-    throttled.push({ wave: w + 1, tasks: runnable.length, width: widthCap });
-  }
-  // Sub-batch the wave at the width cap: a wave that exhausts the .worktrees
-  // mount mid-flight delivers nothing. But the pre-PR collision scan must compare
-  // EVERY reviewed branch before any delivery, so — unlike the old per-task flow
-  // that delivered and `wt-remove`d each task as it finished — delivery is now
-  // deferred to after the whole wave is scanned. Left unmanaged, that would let
-  // reviewed worktrees from earlier slices pile up while later slices run,
-  // re-introducing the ENOSPC the sub-batching exists to prevent. So reclaim each
-  // finished slice's reviewed worktrees right here: the branch refs persist in
-  // the shared `.git`, the scan compares by ref (it never enters a worktree), and
-  // the resolver, re-review, and delivery each re-attach on demand via `wt-enter`
-  // — keeping the live worktree count bounded by the cap. Only when the wave is
-  // actually sub-batched; a single-slice wave already fits the cap, so reclaiming
-  // it just to re-attach for delivery would be pure churn.
-  const ready = [];
-  const subBatched = runnable.length > widthCap;
-  for (let i = 0; i < runnable.length; i += widthCap) {
-    const slice = runnable.slice(i, i + widthCap);
-    const sliceResults = await parallel(slice.map((task) => () => implementTask(task, remote, peerMode)));
-    const sliceReady = [];
-    sliceResults.forEach((r, j) => {
-      const res = r || { slug: slice[j].slug, branch: slice[j].branch, status: "error", detail: "task crashed" };
-      if (res.status === "ready") {
-        const entry = { task: slice[j], result: res };
-        ready.push(entry);
-        sliceReady.push(entry);
+    // Dependency gating: a task whose in-batch dependency did not finish
+    // successfully must NOT run — it would branch from a missing/partial/rejected
+    // prerequisite. A dependency is "succeeded" if it landed a PR (`done`) OR, on a
+    // no-remote run, was implemented and reviewed locally (`local-only`): its base
+    // branch and commits persist in the shared `.git`, so dependents can still
+    // build on it. `error`/`review-cap`/`skipped-dep`/`pushed-no-pr`,
+    // `collision-hold`, `collision-blocked`, and `collision-scan-error` do not unlock.
+    // Effective deps = the declared `dependsOn` UNION the prerequisite derived from
+    // the `base`→`branch` relationship, so the gate holds even if the plan agent
+    // omits a `dependsOn` entry it should have listed.
+    const succeeded = (s) => s === "done" || s === "local-only";
+    const runnable = [];
+    for (const task of wave) {
+      const deps = new Set(Array.isArray(task.dependsOn) ? task.dependsOn : []);
+      const baseDep = slugByBranch.get(task.base);
+      if (baseDep && baseDep !== task.slug) deps.add(baseDep);
+      const failedDep = [...deps].find((d) => !succeeded(statusBySlug.get(d)));
+      if (failedDep) {
+        const r = { slug: task.slug, branch: task.branch, status: "skipped-dep", blockedBy: failedDep, depStatus: statusBySlug.get(failedDep) || "missing" };
+        statusBySlug.set(task.slug, "skipped-dep");
+        results.push(r);
       } else {
-        statusBySlug.set(res.slug, res.status);
-        results.push(res);
+        runnable.push(task);
+      }
+    }
+    if (runnable.length === 0) continue;
+
+    phase(`Wave ${w + 1} (${runnable.length} task${runnable.length === 1 ? "" : "s"})`);
+    // Re-probe free space at each wave boundary after the first (see the wave-width
+    // comment above). A failed or unmeasurable probe keeps the previous reading —
+    // stale-but-conservative beats silently dropping the throttle mid-batch. A
+    // 1-task wave skips the probe: its cap can never throttle (widthCap >= 1).
+    if (w > 0 && runnable.length > 1) {
+      const probe = await agent(storageProbePrompt(boot.wtBase || ".worktrees"), { label: `storage-probe:w${w + 1}`, schema: STORAGE_PROBE_SCHEMA, effort: "low" });
+      if (probe && typeof probe.availBytes === "number" && probe.availBytes > 0) availBytes = probe.availBytes;
+    }
+    const widthCap = widthCapFor(availBytes);
+    if (runnable.length > widthCap) {
+      log(`Throttling wave ${w + 1} to ${widthCap} concurrent task(s) to fit measured storage headroom (~1 GiB per worktree).`);
+      throttled.push({ wave: w + 1, tasks: runnable.length, width: widthCap });
+    }
+    // Sub-batch the wave at the width cap: a wave that exhausts the .worktrees
+    // mount mid-flight delivers nothing. But the pre-PR collision scan must compare
+    // EVERY reviewed branch before any delivery, so — unlike the old per-task flow
+    // that delivered and `wt-remove`d each task as it finished — delivery is now
+    // deferred to after the whole wave is scanned. Left unmanaged, that would let
+    // reviewed worktrees from earlier slices pile up while later slices run,
+    // re-introducing the ENOSPC the sub-batching exists to prevent. So reclaim each
+    // finished slice's reviewed worktrees right here: the branch refs persist in
+    // the shared `.git`, the scan compares by ref (it never enters a worktree), and
+    // the resolver, re-review, and delivery each re-attach on demand via `wt-enter`
+    // — keeping the live worktree count bounded by the cap. Only when the wave is
+    // actually sub-batched; a single-slice wave already fits the cap, so reclaiming
+    // it just to re-attach for delivery would be pure churn.
+    const ready = [];
+    const subBatched = runnable.length > widthCap;
+    for (let i = 0; i < runnable.length; i += widthCap) {
+      const slice = runnable.slice(i, i + widthCap);
+      const sliceResults = await parallel(slice.map((task) => () => implementTask(task, remote, peerMode)));
+      const sliceReady = [];
+      sliceResults.forEach((r, j) => {
+        const res = r || { slug: slice[j].slug, branch: slice[j].branch, status: "error", detail: "task crashed" };
+        if (res.status === "ready") {
+          const entry = { task: slice[j], result: res };
+          ready.push(entry);
+          sliceReady.push(entry);
+        } else {
+          statusBySlug.set(res.slug, res.status);
+          results.push(res);
+        }
+      });
+      if (subBatched && sliceReady.length) {
+        await parallel(sliceReady.map(({ task }) => () => agent(cleanupNote(task), { label: `reclaim:${task.slug}` })));
+      }
+    }
+
+    // Pre-PR collision guard. Independent sibling branches in this wave each live
+    // in their own worktree, so two can ADD the same new file or exported symbol
+    // with no in-worktree conflict. Scan reviewed branches before delivery so a
+    // known clash does not become a fresh PR that immediately needs a rename.
+    let heldBranches = new Set();
+    let scanError = "";
+    if (ready.length >= 2) {
+      phase(`Collision scan (wave ${w + 1})`);
+      const scan = await agent(
+        collisionScanPrompt(ready.map(({ task }) => ({ slug: task.slug, branch: task.branch, base: task.base || plan.defaultBase }))),
+        { label: `collision-scan:w${w + 1}`, schema: COLLISION_SCHEMA }
+      );
+      if (!scan || !Array.isArray(scan.collisions)) {
+        scanError = `collision scan failed for wave ${w + 1}; holding reviewed branches before PR delivery`;
+        log(scanError);
+      } else if (scan.collisions.length) {
+        collisions.push(...scan.collisions.map((c) => ({ ...c, wave: w + 1 })));
+        heldBranches = new Set(scan.collisions.flatMap(collisionBranchNames));
+        log(`${scan.collisions.length} cross-branch naming collision(s) in wave ${w + 1}; holding ${heldBranches.size} branch(es) before PR delivery.`);
+      }
+    }
+
+    // Partition the wave's reviewed branches: clean ones are deliverable; ones the
+    // scan flagged go to resolution; a scan failure holds everything it covered.
+    const deliverable = [];
+    const heldTasks = [];
+    ready.forEach(({ task, result }) => {
+      if (scanError) {
+        const held = {
+          slug: task.slug,
+          branch: task.branch,
+          status: "collision-scan-error",
+          detail: scanError,
+          ...cycleCarried(result),
+        };
+        statusBySlug.set(task.slug, held.status);
+        results.push(held);
+      } else if (heldBranches.has(task.branch) || heldBranches.has(task.slug)) {
+        heldTasks.push({ task, result });
+      } else {
+        deliverable.push({ task, result });
       }
     });
-    if (subBatched && sliceReady.length) {
-      await parallel(sliceReady.map(({ task }) => () => agent(cleanupNote(task), { label: `reclaim:${task.slug}` })));
-    }
-  }
 
-  // Pre-PR collision guard. Independent sibling branches in this wave each live
-  // in their own worktree, so two can ADD the same new file or exported symbol
-  // with no in-worktree conflict. Scan reviewed branches before delivery so a
-  // known clash does not become a fresh PR that immediately needs a rename.
-  let heldBranches = new Set();
-  let scanError = "";
-  if (ready.length >= 2) {
-    phase(`Collision scan (wave ${w + 1})`);
-    const scan = await agent(
-      collisionScanPrompt(ready.map(({ task }) => ({ slug: task.slug, branch: task.branch, base: task.base || plan.defaultBase }))),
-      { label: `collision-scan:w${w + 1}`, schema: COLLISION_SCHEMA }
-    );
-    if (!scan || !Array.isArray(scan.collisions)) {
-      scanError = `collision scan failed for wave ${w + 1}; holding reviewed branches before PR delivery`;
-      log(scanError);
-    } else if (scan.collisions.length) {
-      collisions.push(...scan.collisions.map((c) => ({ ...c, wave: w + 1 })));
-      heldBranches = new Set(scan.collisions.flatMap(collisionBranchNames));
-      log(`${scan.collisions.length} cross-branch naming collision(s) in wave ${w + 1}; holding ${heldBranches.size} branch(es) before PR delivery.`);
-    }
-  }
+    // Collision resolution. Neither side of an add/add clash is inherently "first",
+    // so a single orchestrator-deputy agent — seeing every held branch and its
+    // worktree, still in place — decides which side to rename and does it: rename
+    // the file/symbol, regenerate derived files, commit, push. A name that MUST
+    // stay identical (framework-mandated, externally fixed, or pinned by a task
+    // file) is reported `blocked` instead of getting an invented divergent name.
+    // Each branch the resolver CHANGED is then re-reviewed fresh (one pass) before
+    // it may deliver; the unchanged side of a resolved clash delivers as-is; a
+    // blocked, unresolved, or re-review-failed branch stays held for a human.
+    if (heldTasks.length) {
+      const waveCollisions = collisions.filter((c) => c.wave === w + 1);
+      const relatedFor = (task) =>
+        waveCollisions.filter((c) => {
+          const names = collisionBranchNames(c);
+          return names.includes(task.branch) || names.includes(task.slug);
+        });
 
-  // Partition the wave's reviewed branches: clean ones are deliverable; ones the
-  // scan flagged go to resolution; a scan failure holds everything it covered.
-  const deliverable = [];
-  const heldTasks = [];
-  ready.forEach(({ task, result }) => {
-    if (scanError) {
-      const held = {
-        slug: task.slug,
-        branch: task.branch,
-        status: "collision-scan-error",
-        detail: scanError,
-        ...cycleCarried(result),
-      };
-      statusBySlug.set(task.slug, held.status);
-      results.push(held);
-    } else if (heldBranches.has(task.branch) || heldBranches.has(task.slug)) {
-      heldTasks.push({ task, result });
-    } else {
-      deliverable.push({ task, result });
-    }
-  });
+      phase(`Collision resolve (wave ${w + 1})`);
+      const resolution = await agent(
+        resolveCollisionsPrompt(
+          heldTasks.map(({ task }) => ({ slug: task.slug, branch: task.branch, base: task.base || plan.defaultBase })),
+          waveCollisions,
+          remote
+        ),
+        { label: `collision-resolve:w${w + 1}`, schema: RESOLUTION_SCHEMA }
+      );
+      const resolutions = resolution && Array.isArray(resolution.resolutions) ? resolution.resolutions : null;
 
-  // Collision resolution. Neither side of an add/add clash is inherently "first",
-  // so a single orchestrator-deputy agent — seeing every held branch and its
-  // worktree, still in place — decides which side to rename and does it: rename
-  // the file/symbol, regenerate derived files, commit, push. A name that MUST
-  // stay identical (framework-mandated, externally fixed, or pinned by a task
-  // file) is reported `blocked` instead of getting an invented divergent name.
-  // Each branch the resolver CHANGED is then re-reviewed fresh (one pass) before
-  // it may deliver; the unchanged side of a resolved clash delivers as-is; a
-  // blocked, unresolved, or re-review-failed branch stays held for a human.
-  if (heldTasks.length) {
-    const waveCollisions = collisions.filter((c) => c.wave === w + 1);
-    const relatedFor = (task) =>
-      waveCollisions.filter((c) => {
-        const names = collisionBranchNames(c);
-        return names.includes(task.branch) || names.includes(task.slug);
-      });
-
-    phase(`Collision resolve (wave ${w + 1})`);
-    const resolution = await agent(
-      resolveCollisionsPrompt(
-        heldTasks.map(({ task }) => ({ slug: task.slug, branch: task.branch, base: task.base || plan.defaultBase })),
-        waveCollisions,
-        remote
-      ),
-      { label: `collision-resolve:w${w + 1}`, schema: RESOLUTION_SCHEMA }
-    );
-    const resolutions = resolution && Array.isArray(resolution.resolutions) ? resolution.resolutions : null;
-
-    // Index the resolver's outcome by branch and by collision name. A collision
-    // is actually resolved only when enough involved branches were changed that
-    // at most one branch still carries the original colliding value. This matters
-    // for 3+ branch clashes: renaming one side leaves the other two still
-    // colliding, so those unchanged branches must stay held.
-    const changedBranches = new Set();
-    const changedBranchesByCollision = new Map();
-    const blockedNames = new Set();
-    if (resolutions) {
-      for (const r of resolutions) {
-        const changed = Array.isArray(r.changedBranches) ? r.changedBranches.map(normalizeBranchName).filter(Boolean) : [];
-        if (r.action === "renamed") {
-          changed.forEach((n) => changedBranches.add(n));
-          if (r.collision) {
-            const existing = changedBranchesByCollision.get(r.collision) || new Set();
-            changed.forEach((n) => existing.add(n));
-            changedBranchesByCollision.set(r.collision, existing);
+      // Index the resolver's outcome by branch and by collision name. A collision
+      // is actually resolved only when enough involved branches were changed that
+      // at most one branch still carries the original colliding value. This matters
+      // for 3+ branch clashes: renaming one side leaves the other two still
+      // colliding, so those unchanged branches must stay held.
+      const changedBranches = new Set();
+      const changedBranchesByCollision = new Map();
+      const blockedNames = new Set();
+      if (resolutions) {
+        for (const r of resolutions) {
+          const changed = Array.isArray(r.changedBranches) ? r.changedBranches.map(normalizeBranchName).filter(Boolean) : [];
+          if (r.action === "renamed") {
+            changed.forEach((n) => changedBranches.add(n));
+            if (r.collision) {
+              const existing = changedBranchesByCollision.get(r.collision) || new Set();
+              changed.forEach((n) => existing.add(n));
+              changedBranchesByCollision.set(r.collision, existing);
+            }
+          } else if (r.action === "blocked" && r.collision) {
+            blockedNames.add(r.collision);
           }
-        } else if (r.action === "blocked" && r.collision) {
-          blockedNames.add(r.collision);
         }
       }
-    }
-    const collisionBlocked = (c) => blockedNames.has(c.name);
-    // Only branches the resolver reported as changed FOR THIS collision count
-    // toward resolving it. An earlier version also credited any branch in the
-    // global `changedBranches` set, to guard against a resolver that mistypes the
-    // collision echo — but that is unsound when a branch sits in more than one
-    // collision: renaming branch B to fix an A/B path clash would also mark B
-    // "changed" for an unrelated B/C symbol clash, dropping that clash to a single
-    // remaining branch and letting B and C both deliver while still colliding. A
-    // mis-echoed rename now conservatively leaves the branch held (for a manual
-    // pass / re-scan) instead — matching this guard's bias that holding a real
-    // conflict beats shipping a wrong delivery.
-    const changedForCollision = (c) => new Set(changedBranchesByCollision.get(c.name) || []);
-    const remainingForCollision = (c) => {
-      const changed = changedForCollision(c);
-      return collisionBranchNames(c).filter((n) => !changed.has(n));
-    };
-    const collisionResolved = (c) => !collisionBlocked(c) && remainingForCollision(c).length <= 1;
-    const collisionStillIncludes = (c, task) => {
-      if (collisionBlocked(c)) return true;
-      const names = collisionBranchNames(c);
-      const participates = names.includes(task.branch) || names.includes(task.slug);
-      if (!participates) return false;
-      const changed = changedForCollision(c);
-      if (changed.has(task.branch) || changed.has(task.slug)) return false;
-      return remainingForCollision(c).length >= 2;
-    };
+      const collisionBlocked = (c) => blockedNames.has(c.name);
+      // Only branches the resolver reported as changed FOR THIS collision count
+      // toward resolving it. An earlier version also credited any branch in the
+      // global `changedBranches` set, to guard against a resolver that mistypes the
+      // collision echo — but that is unsound when a branch sits in more than one
+      // collision: renaming branch B to fix an A/B path clash would also mark B
+      // "changed" for an unrelated B/C symbol clash, dropping that clash to a single
+      // remaining branch and letting B and C both deliver while still colliding. A
+      // mis-echoed rename now conservatively leaves the branch held (for a manual
+      // pass / re-scan) instead — matching this guard's bias that holding a real
+      // conflict beats shipping a wrong delivery.
+      const changedForCollision = (c) => new Set(changedBranchesByCollision.get(c.name) || []);
+      const remainingForCollision = (c) => {
+        const changed = changedForCollision(c);
+        return collisionBranchNames(c).filter((n) => !changed.has(n));
+      };
+      const collisionResolved = (c) => !collisionBlocked(c) && remainingForCollision(c).length <= 1;
+      const collisionStillIncludes = (c, task) => {
+        if (collisionBlocked(c)) return true;
+        const names = collisionBranchNames(c);
+        const participates = names.includes(task.branch) || names.includes(task.slug);
+        if (!participates) return false;
+        const changed = changedForCollision(c);
+        if (changed.has(task.branch) || changed.has(task.slug)) return false;
+        return remainingForCollision(c).length >= 2;
+      };
 
-    for (const { task, result } of heldTasks) {
-      const related = relatedFor(task);
-      const isChanged = changedBranches.has(task.branch) || changedBranches.has(task.slug);
+      for (const { task, result } of heldTasks) {
+        const related = relatedFor(task);
+        const isChanged = changedBranches.has(task.branch) || changedBranches.has(task.slug);
 
-      if (!resolutions) {
-        const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision resolver returned no result; branch held before PR delivery — deconflict manually and re-review", collisions: related, ...cycleCarried(result) };
-        statusBySlug.set(task.slug, held.status);
-        results.push(held);
-      } else if (related.some(collisionBlocked)) {
-        // An imperative shared name still clashes even if this branch was also
-        // touched — keep it held for a human/design decision.
-        const held = { slug: task.slug, branch: task.branch, status: "collision-blocked", detail: "shared name must stay identical (imperative); resolver could not deconflict — needs a human/design decision", collisions: related, ...cycleCarried(result) };
-        statusBySlug.set(task.slug, held.status);
-        results.push(held);
-      } else if (related.some((c) => collisionStillIncludes(c, task))) {
-        const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision still has two or more unchanged branches after resolver ran; branch held before PR delivery — rename enough sides and re-review", collisions: related, ...cycleCarried(result) };
-        statusBySlug.set(task.slug, held.status);
-        results.push(held);
-      } else if (isChanged) {
-        // Fresh re-review of the rename — ONE pass of the cycle's reviewer
-        // brief, with no fixer loop and no peer stage. This is deliberately
-        // not another full cycle: the branch already cleared the complete
-        // cycle (peer included) before the collision guard ran, the check is
-        // scoped to the deconfliction rename, and the address-tasks skill
-        // specifies exactly this — "re-review each changed task with fresh
-        // eyes" — a single-reviewer pass that predates the shared cycle.
-        // Hold on failure rather than loop.
-        const verdict = await agent(cycleReviewPrompt(taskCycleConfig(task, remote, peerMode), { round: 1, packet: null, artifactDir: "" }), { label: `re-review:${task.slug}`, schema: CYCLE_REVIEW_SCHEMA });
-        if (verdict && verdict.pass && !verdict.emptyDiffFlag) {
-          deliverable.push({ task, result: { ...result, notes: verdict.notes || result.notes } });
+        if (!resolutions) {
+          const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision resolver returned no result; branch held before PR delivery — deconflict manually and re-review", collisions: related, ...cycleCarried(result) };
+          statusBySlug.set(task.slug, held.status);
+          results.push(held);
+        } else if (related.some(collisionBlocked)) {
+          // An imperative shared name still clashes even if this branch was also
+          // touched — keep it held for a human/design decision.
+          const held = { slug: task.slug, branch: task.branch, status: "collision-blocked", detail: "shared name must stay identical (imperative); resolver could not deconflict — needs a human/design decision", collisions: related, ...cycleCarried(result) };
+          statusBySlug.set(task.slug, held.status);
+          results.push(held);
+        } else if (related.some((c) => collisionStillIncludes(c, task))) {
+          const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision still has two or more unchanged branches after resolver ran; branch held before PR delivery — rename enough sides and re-review", collisions: related, ...cycleCarried(result) };
+          statusBySlug.set(task.slug, held.status);
+          results.push(held);
+        } else if (isChanged) {
+          // Fresh re-review of the rename — ONE pass of the cycle's reviewer
+          // brief, with no fixer loop and no peer stage. This is deliberately
+          // not another full cycle: the branch already cleared the complete
+          // cycle (peer included) before the collision guard ran, the check is
+          // scoped to the deconfliction rename, and the address-tasks skill
+          // specifies exactly this — "re-review each changed task with fresh
+          // eyes" — a single-reviewer pass that predates the shared cycle.
+          // Hold on failure rather than loop.
+          const verdict = await agent(cycleReviewPrompt(taskCycleConfig(task, remote, peerMode), { round: 1, packet: null, artifactDir: "" }), { label: `re-review:${task.slug}`, schema: CYCLE_REVIEW_SCHEMA });
+          if (verdict && verdict.pass && !verdict.emptyDiffFlag) {
+            deliverable.push({ task, result: { ...result, notes: verdict.notes || result.notes } });
+          } else {
+            const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "rename did not pass fresh re-review; held before PR delivery", outstanding: verdict ? verdict.issues : null, collisions: related, ...cycleCarried(result) };
+            statusBySlug.set(task.slug, held.status);
+            results.push(held);
+          }
+        } else if (related.every(collisionResolved)) {
+          // Unchanged side of a clash the resolver fixed on the other branch.
+          deliverable.push({ task, result });
         } else {
-          const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "rename did not pass fresh re-review; held before PR delivery", outstanding: verdict ? verdict.issues : null, collisions: related, ...cycleCarried(result) };
+          // Resolver neither changed nor blocked this branch's clash — do not
+          // re-introduce it by delivering; hold for a manual pass.
+          const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision left unresolved by the resolver; branch held before PR delivery — deconflict manually and re-review", collisions: related, ...cycleCarried(result) };
           statusBySlug.set(task.slug, held.status);
           results.push(held);
         }
-      } else if (related.every(collisionResolved)) {
-        // Unchanged side of a clash the resolver fixed on the other branch.
-        deliverable.push({ task, result });
-      } else {
-        // Resolver neither changed nor blocked this branch's clash — do not
-        // re-introduce it by delivering; hold for a manual pass.
-        const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision left unresolved by the resolver; branch held before PR delivery — deconflict manually and re-review", collisions: related, ...cycleCarried(result) };
-        statusBySlug.set(task.slug, held.status);
-        results.push(held);
       }
     }
-  }
 
-  for (let i = 0; i < deliverable.length; i += widthCap) {
-    const slice = deliverable.slice(i, i + widthCap);
-    const delivered = await parallel(slice.map(({ task, result }) => () => deliverTask(task, result, remote)));
-    delivered.forEach((r, j) => {
-      // Even on a delivery crash the cycle itself completed, so its record is
-      // still in hand — carry it rather than losing it with the crash.
-      const res = r || { slug: slice[j].task.slug, branch: slice[j].task.branch, status: "error", detail: "delivery crashed", ...cycleCarried(slice[j].result) };
-      statusBySlug.set(res.slug, res.status);
-      results.push(res);
-    });
+    for (let i = 0; i < deliverable.length; i += widthCap) {
+      const slice = deliverable.slice(i, i + widthCap);
+      const delivered = await parallel(slice.map(({ task, result }) => () => deliverTask(task, result, remote)));
+      delivered.forEach((r, j) => {
+        // Even on a delivery crash the cycle itself completed, so its record is
+        // still in hand — carry it rather than losing it with the crash.
+        const res = r || { slug: slice[j].task.slug, branch: slice[j].task.branch, status: "error", detail: "delivery crashed", ...cycleCarried(slice[j].result) };
+        statusBySlug.set(res.slug, res.status);
+        results.push(res);
+      });
+    }
   }
+} catch (e) {
+  // Reported, not rethrown: the batch is over either way, and the closing
+  // comparison plus whatever terminal statuses were reached are more use to the
+  // reader than an unwound stack. `finalMainCheckoutReport` cannot throw, so
+  // this exit always carries a report — an unmeasured one if the reading failed.
+  phase("Summary");
+  return { error: `Batch aborted: ${e && e.message ? e.message : String(e)}`, batch: args, remote, peer: peerMode, throttled, collisions, results, mainCheckout: await finalMainCheckoutReport() };
 }
 
 phase("Summary");
 // Post-batch snapshot of the shared main checkout, compared against the
-// baseline (see finalMainCheckoutReport, which the aborted-batch exit also
-// runs).
+// baseline (see finalMainCheckoutReport, which the empty-batch return and the
+// thrown-stage catch above run too).
 const mainCheckout = await finalMainCheckoutReport();
 const landed = results.filter((r) => r.status === "done").length;
 log(`Batch complete: ${landed}/${results.length} tasks landed a PR.`);
