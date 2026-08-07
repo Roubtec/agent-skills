@@ -246,6 +246,7 @@ Include in each implementer prompt:
   - Commit at logical milestones, keeping each commit buildable when practical.
   - **After every commit, push while the remote is available** (per Bootstrap's remote probe): `git push -u origin HEAD` on the first push, `git push` thereafter. Worktrees are disposable, so pushing is the backup. **In a known local-only run (Bootstrap's probe failed), skip pushing entirely** and rely on commits for durability — don't retry a push you already know will fail every commit; if a push unexpectedly fails mid-run, keep committing and note it — commits still persist locally.
   - Run the project build/lint periodically and a full build check before reporting done.
+  - Any build or check output that must land in a file goes inside this worktree (a gitignored path, removed before any commit), never a shared scratchpad filename — two concurrent agents both redirecting to `<scratchpad>/verify.log` once crossed results between worktrees.
 - **Coordination:** it must not revert unrelated or concurrent edits, and must accommodate that its base branch may itself be a sibling task's branch.
 - **Reporting:** when done, report what was implemented, decisions/tradeoffs/deviations, and any areas needing focused review.
 

@@ -74,6 +74,7 @@ Construct a prompt that contains:
 - **Relevant upstream context** — if this task depends on a previous task in the batch, briefly describe what the previous task introduced so the implementer can build on it.
 - **Commit and validation instructions:**
   - Commit at logical milestones, keeping each commit buildable when practical.
+  - **An absolute path for validation output**, which you allocate — namespaced by this task's number or created with `mktemp -d`, and outside the working tree the implementer commits from. Any build or lint output that must land in a file goes there, never a fixed shared scratchpad name: one session's agents share that directory. Never leave the choice to the implementer.
 - **Coordination instructions** — remind the implementer that it is not alone in the codebase, must not revert unrelated edits made by others, and should accommodate concurrent changes.
 - **No shared task-tracker.** Tell the implementer not to use the `TaskCreate`/`TaskUpdate`/`TaskList` tools. A subagent's entries leak into the orchestrator's task view and linger there as stale, misleading items (e.g. a child's `in_progress` step that has already finished), adding noise to every later turn without helping the orchestrator spot a struggling task — that signal comes from the implement→review→fix result, not from a child's micro-steps. The implementer should track its own steps however it likes and surface progress only in its final report.
 - **Reporting instructions** — when done, report back with:
@@ -108,6 +109,7 @@ Read `AGENTS.md` first for project conventions.
 - Commit at logical milestones. Aim for one commit per logical unit of work.
 - Do not revert unrelated or concurrent edits. Accommodate changes made by others.
 - Run the project's build and lint commands periodically. Run a full build check before reporting completion.
+- Any build or lint output that must land in a file goes to `<validation-output path allocated above>`, never anywhere else.
 - When done, report: what you did, any decisions/tradeoffs, any uncertainties.
 ```
 
