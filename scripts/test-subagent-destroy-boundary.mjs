@@ -32,7 +32,10 @@
 // same technique `test-checkout-cleanliness-report.mjs` uses on a single
 // function, widened to the whole prefix so each builder gets the helpers it
 // calls (`shq`, the `cycle*` contract and block builders) for free; extracted
-// alone they raise a ReferenceError instead of rendering.
+// alone they raise a ReferenceError instead of rendering. "Each shipped file"
+// is literal rather than aspirational: the cut markers are a hand-maintained
+// map, so the set of `wf-*.js` on disk is asserted to equal its keys before
+// anything is evaluated — see CUT below.
 //
 // The set of prompt builders is DISCOVERED from the `agent(<fn>(...))` call
 // sites in each source, not listed here, so a prompt path added later fails
@@ -67,7 +70,7 @@
 // the shipped tree on the English `agent (...)` in `wf-address-review.js`'s
 // ping step, which lives in a template literal rather than on a comment line.
 
-import { readFileSync } from "node:fs";
+import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
@@ -84,13 +87,31 @@ const CUT = {
   "wf-address-review.js": "\nconst raw = flattenArgs(args);",
 };
 
+// CUT drives the whole run, so a `wf-*.js` this map does not name would be
+// evaluated by nothing and the suite would still report "0 failing" — a new
+// workflow whose only prompt carried no boundary would ship green. So the
+// SHIPPED SET is read off the directory and required to equal CUT's keys, in
+// both directions: an unlisted file fails until it is given a cut marker
+// (exactly as a new builder fails until it is given a fixture), and a key
+// naming a file that no longer exists fails rather than being skipped. This is
+// what lets the claim "each shipped file" be made literally.
+function shippedWorkflows() {
+  return readdirSync(workflows)
+    .filter((f) => /^wf-.*\.js$/.test(f))
+    .sort();
+}
+
 // What every boundary CONSTANT must say. Task 017's criterion is that each site
 // states the PERMITTED-versus-FORBIDDEN boundary, so the permitted half is
 // asserted too: a constant that lost its Permitted line would otherwise still
 // pass. Each entry is one semantic clause the criterion names, matched by the
 // phrase that carries it — deliberately not a byte comparison of the whole
 // constant, which would turn every future wording tweak into a failure. This
-// must fail when a clause is LOST, not when it is reworded.
+// must fail when a clause is LOST. The tolerance that buys is bounded by each
+// phrase rather than general: wording the phrase leaves open may change freely,
+// and a rewording that moves the phrase itself reads here as a loss. Say that
+// rather than "a rewording is not a failure", which is broader than any of
+// these patterns delivers.
 //
 // The directive clause is the one place a wildcard used to span a verb: it read
 // `/Empirical verification[^\n]*belongs ONLY in a disposable clone/`, which a
@@ -99,7 +120,10 @@ const CUT = {
 // saying the opposite of what it must. The gap is now bounded to the qualifier
 // that was narrowed last round ("that could change state", "that could mutate
 // state"), with `that ... state belongs ONLY` literal around it, so the
-// directive's own verb can no longer be reworded out from under the match.
+// directive's own verb can no longer be reworded out from under the match. The
+// qualifier window admits a hyphen ("that could change on-disk state") because
+// excluding one narrowed the clause below its own intent while closing nothing:
+// the negation the literal text fences out cannot be spelled with one.
 const REQUIRED = [
   ["permitted set", /Permitted: reading, searching,[^\n]*read-only `git`\/`gh` queries/],
   ["forbidden set", /`rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`/],
@@ -109,7 +133,7 @@ const REQUIRED = [
   ["exemptions are granted, not self-selected", /the only exemptions — and only because this assignment names them/],
   ["worktree is not a blast radius", /A worktree is not a blast radius/],
   ["shared `.git` reaches every sibling worktree", /reach every sibling worktree through the shared `\.git`/],
-  ["empirical verification is clone-only", /Empirical verification that [a-z ]+ state belongs ONLY in a disposable clone/],
+  ["empirical verification is clone-only", /Empirical verification that [a-z -]+ state belongs ONLY in a disposable clone/],
   ["disposable-clone destination", /command -v dc-enter/],
   ["absolute-path fallback", /absolute path outside the repository — never a relative one/],
 ];
@@ -282,6 +306,23 @@ let failures = 0;
 let rendered = 0;
 let clauseChecks = 0;
 const rows = [];
+
+const shipped = shippedWorkflows();
+const listed = Object.keys(CUT).sort();
+const unlisted = shipped.filter((f) => !listed.includes(f));
+const vanished = listed.filter((f) => !shipped.includes(f));
+if (unlisted.length || vanished.length) {
+  failures++;
+  const why = [
+    unlisted.length ? `shipped but not in CUT: ${unlisted.join(", ")} — add its cut marker and fixtures` : "",
+    vanished.length ? `in CUT but not shipped: ${vanished.join(", ")}` : "",
+  ]
+    .filter(Boolean)
+    .join("; ");
+  rows.push(["(all)", "workflow set", "FAIL", why]);
+} else {
+  rows.push(["(all)", "workflow set", "ok", `${shipped.length} shipped wf-*.js all accounted for: ${shipped.join(", ")}`]);
+}
 
 for (const file of Object.keys(CUT)) {
   const { names, fns, boundaries, accounting } = load(file);
