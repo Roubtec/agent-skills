@@ -105,14 +105,14 @@ function shippedWorkflows() {
 // What every boundary CONSTANT must say. Task 017's criterion is that each site
 // states the PERMITTED-versus-FORBIDDEN boundary, so the permitted half is
 // asserted too: a constant that lost its Permitted line would otherwise still
-// pass. Each entry is one semantic clause the boundary states, decomposed from
-// that criterion rather than named by it, matched by the phrase that carries it
-// — deliberately not a byte comparison of the whole constant, which would turn
-// every future wording tweak into a failure. This must fail when a clause is
-// LOST. The tolerance that buys is bounded by each phrase rather than general:
-// wording the phrase leaves open may change freely, and a rewording that moves
-// the phrase itself reads here as a loss. Say that rather than "a rewording is
-// not a failure", which is broader than any of these patterns delivers.
+// pass. Each entry is one semantic clause the boundary states, matched by the
+// phrase that carries it — deliberately not a byte comparison of the whole
+// constant, which would turn every future wording tweak into a failure. This
+// must fail when a clause is LOST. The tolerance that buys is bounded by each
+// phrase rather than general: wording the phrase leaves open may change freely,
+// and a rewording that moves the phrase itself reads here as a loss. Say that
+// rather than "a rewording is not a failure", which is broader than any of
+// these patterns delivers.
 //
 // The directive clause is the one place a wildcard used to span a verb: it read
 // `/Empirical verification[^\n]*belongs ONLY in a disposable clone/`, which a
@@ -318,7 +318,11 @@ function report() {
   for (const r of rows) {
     console.log(`${r[0].padEnd(widths[0])}  ${r[1].padEnd(widths[1])}  ${r[2].padEnd(widths[2])}  ${r[3]}`);
   }
-  console.log(`\n${rendered} rendered prompt paths across ${Object.keys(CUT).length} accounted-for workflows, ${clauseChecks} boundary constants clause-checked, ${failures} failing.`);
+  // "Accounted for" is the CUT keys whose file is actually shipped, not the key
+  // count: on the vanished path one key names a file that is gone, and counting
+  // it would contradict the row directly above that says exactly that.
+  const accountedFor = Object.keys(CUT).filter((f) => shipped.includes(f)).length;
+  console.log(`\n${rendered} rendered prompt paths across ${accountedFor} accounted-for workflows, ${clauseChecks} boundary constants clause-checked, ${failures} failing.`);
   if (failures) process.exit(1);
 }
 
