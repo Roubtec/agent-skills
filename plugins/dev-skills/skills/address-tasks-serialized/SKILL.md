@@ -44,6 +44,21 @@ Your responsibilities are:
 7. Advance to the next task or stop on blockers.
 8. Produce the final batch summary.
 
+Before the first task's branch is created, read the main checkout's working-tree state as the baseline the closing cleanliness report compares against (see "Main-checkout cleanliness report"). Observe only; never "fix" a checkout that is already dirty.
+
+## Diagnosis discipline
+
+A subagent's environment or infrastructure diagnosis is a **hypothesis, not a finding**. Verify it against that subagent's own transcript — bounded greps for the specific commands it claims it ran — before propagating any mitigation into sibling prompts. A scratch-filename collision was once misdiagnosed as a working-directory bug, and the wrong mitigation rode into roughly ten later subagent prompts before anyone checked.
+
+## Subagent destroy boundary
+
+State this in every subagent prompt this skill composes. A reviewer subagent authorized to verify a claim empirically once ran `rm -rf ./*` in a shared main checkout: its setup `git clone … | tail` had failed invisibly under `set -e` (a pipeline's status is its last command), so it deleted tracked files and moved a branch ref while believing it stood inside a clone.
+
+- **Permitted:** reading, searching, and read-only `git`/`gh` queries — plus, for an implementer, edits, commits, and pushes confined to the task branch you checked out for it.
+- **Forbidden, named outright:** `rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`, and force-pushing — each of them beyond what the prompt itself spells out, whether as an exact command or as a skill it names to invoke. A subagent may not self-authorize one by putting itself somewhere it believes is safe — forbidden **not in a clone, not in a temp directory, not "safely"**. What you spelled out, and the disposable location below, are the only exemptions — and only because you named them.
+- **A worktree is not a blast radius, and here there is not even one.** A worktree isolates the working tree, not the repository: `branch -f`, `reset`, `update-ref`, and `gc` all reach every sibling worktree through the shared `.git` — and this skill's subagents share your single working tree outright.
+- **Empirical verification that could change state goes where you send it.** Where `command -v dc-enter` finds the helper, send the subagent to `DC="$(dc-enter <slug>)"` — one absolute path on stdout, dropped again with `dc-remove <slug>`; a reused slug is refused rather than re-derived, so anything that may run twice passes `--replace` or removes the slug first. Where the helper is absent, name an absolute path outside the repository — never a relative one. Never leave the choice to the subagent.
+
 ## Implementer Agent
 
 The implementer receives a focused, self-contained prompt and works autonomously on a single task.
@@ -59,6 +74,7 @@ Construct a prompt that contains:
 - **Relevant upstream context** — if this task depends on a previous task in the batch, briefly describe what the previous task introduced so the implementer can build on it.
 - **Commit and validation instructions:**
   - Commit at logical milestones, keeping each commit buildable when practical.
+  - **An absolute path for validation output**, which you allocate — namespaced by this task's number or created with `mktemp -d`, and outside the working tree the implementer commits from. Any build or lint output that must land in a file goes there, never a fixed shared scratchpad name: one session's agents share that directory. Never leave the choice to the implementer.
 - **Coordination instructions** — remind the implementer that it is not alone in the codebase, must not revert unrelated edits made by others, and should accommodate concurrent changes.
 - **No shared task-tracker.** Tell the implementer not to use the `TaskCreate`/`TaskUpdate`/`TaskList` tools. A subagent's entries leak into the orchestrator's task view and linger there as stale, misleading items (e.g. a child's `in_progress` step that has already finished), adding noise to every later turn without helping the orchestrator spot a struggling task — that signal comes from the implement→review→fix result, not from a child's micro-steps. The implementer should track its own steps however it likes and surface progress only in its final report.
 - **Reporting instructions** — when done, report back with:
@@ -93,6 +109,7 @@ Read `AGENTS.md` first for project conventions.
 - Commit at logical milestones. Aim for one commit per logical unit of work.
 - Do not revert unrelated or concurrent edits. Accommodate changes made by others.
 - Run the project's build and lint commands periodically. Run a full build check before reporting completion.
+- Any build or lint output that must land in a file goes to `<validation-output path allocated above>`, never anywhere else.
 - When done, report: what you did, any decisions/tradeoffs, any uncertainties.
 ```
 
@@ -112,6 +129,7 @@ It is launched in the **foreground** (not background) since the feedback loop mu
 - **A note that the implementation is already committed on the current branch** — the reviewer must read the actual files, and must NOT conclude "no implementation" without first confirming the diff is genuinely empty (an empty diff at this stage is far more likely an orchestration error than real absence; the reviewer should say so rather than spend its budget reviewing nothing).
 - **Instruction to perform a code quality pass** (see dimensions below) orthogonal to the criteria check.
 - **Scoping guidance** — the reviewer may run `git diff --name-only <base>...HEAD` to identify the set of touched files and prioritize quality review there. It must still read each touched file in full (not just the diff) and may follow references into untouched files when needed to evaluate consistency or call sites.
+- **An absolute path for validation output**, which you allocate — namespaced by this task's number or created with `mktemp -d`. Any build or check output that must land in a file goes there, never a fixed shared scratchpad name: one session's agents share that directory, and two of them redirecting to `<scratchpad>/verify.log` once had one reading the other's results and returning a verdict for the wrong branch. This batch runs serially, but the session around it does not. Never leave the choice to the reviewer.
 - **Reporting format:**
   - **Pass** — all acceptance criteria are met, build passes, and no material quality issues found. State this clearly.
   - **Issues** — a numbered list of specific, actionable findings. Each finding must include: the category (criteria gap vs. quality), where in the code the gap is, and what needs to change.
@@ -148,7 +166,7 @@ The implementation is already committed on the current branch — read the actua
 report "no implementation": if `git diff --name-only <base-branch>...HEAD` looks empty, say so as a
 flag to the orchestrator (it signals a likely race or wrong branch) rather than reviewing nothing.
 
-DO NOT edit, create, or delete any files. Only read, search, and run validation commands.
+DO NOT edit, create, or delete any files — the validation-output path named below is the sole exception. Only read, search, and run validation commands.
 Do not write follow-up task files; put any suggested follow-up work in your review report only.
 
 The PR base branch for this task is `<base-branch>`. The current branch is `<task-branch>`.
@@ -160,6 +178,7 @@ The PR base branch for this task is `<base-branch>`. The current branch is `<tas
 ## Instructions
 
 - Run a full build and verify there are no type errors before checking anything else. A build failure is an automatic blocker.
+- Any build or check output that must land in a file goes to `<validation-output path allocated above>`, never anywhere else.
 - Identify the touched files with `git diff --name-only <base-branch>...HEAD`. Use this list to scope your code quality review. If no base branch was provided above, fall back to `main` and mention the fallback in your report.
 - Do NOT read commit messages (`git log`) and do NOT read diffs (`git diff` with content); read each touched file in full instead. You may follow references from touched files into untouched files when needed to evaluate consistency, call sites, or downstream effects.
 - Read the relevant areas of the codebase and check each acceptance criterion.
@@ -282,6 +301,16 @@ The user can open the PR manually later.
 Prefer every commit to remain buildable, but do not treat that as an absolute requirement for intermediate checkpoints.
 The completed task branch and final PR should be clean and pass validation.
 
+## Main-checkout cleanliness report
+
+This batch runs on the repository's main checkout, which is shared — with the maintainer, and with any peer harness running in the same container. Take a reading of its working-tree state before the first task's branch is created, and take the same reading again once **every** batch entry has reached a terminal state. Trigger it on batch termination, not on "the last task delivers": a batch in which every task blocks, fails, or aborts never reaches a delivery, and a failed implementer is at least as likely to have leaked strays as a successful one — so gating on a delivery skips the check exactly when it matters most. Because the flow works in that very tree, the reading is about uncommitted and untracked residue left behind rather than about staying out of it — a stray is still a stray.
+
+Compare the two **by path**, so a path whose status code changed reads as a re-classification — a co-tenant staging their own work — rather than as one path vanishing and another appearing. Paths that appeared are a finding in the final report; paths that **disappeared** are a louder one, because a stray `checkout` or `clean` in the shared tree eating a co-tenant's uncommitted work is the hazard only a baseline can see. Report a vanished path as something to check against co-tenant commits, the reflog, and the stash rather than as established loss: a maintainer who committed their own work mid-run also removes a baseline path, with nothing gone. Everything else is pre-existing. Take a baseline rather than testing for emptiness — the maintainer's own work-in-progress is deliberately permitted in that checkout, so an unconditional non-empty rule would both blame the batch for work it never touched and destroy the one signal separating a real stray from the tree's starting state.
+
+**Report, never clean.** Do not `git clean`, `checkout`, `reset`, or `stash` the shared main checkout on the strength of this report — another agent's uncommitted work is not yours to delete — and diff any stray against the delivered branches before touching it at all.
+
+State the claim as narrowly as it is. The report says what its reading could see change; it claims nothing about what was **written into** paths already present in the baseline, nor about anything its reading does not surface. That is an exclusion rather than a list of blind spots, because the list is open: widening what the reading sees improves the report and leaves the claim exactly this narrow. What it does surface is a report to verify, not a conclusion — the same reading cannot tell a stray from a co-tenant's ordinary progress. It is never a proof that the batch wrote nothing, and must not be delivered as one.
+
 ## Final Output
 
 After completing the batch, provide a concise summary:
@@ -290,4 +319,5 @@ After completing the batch, provide a concise summary:
 - How many review iterations each task required (and whether any hit the cap).
 - Whether the peer participated; if it was unavailable or forfeited any rounds, note the reason once without treating it as a failure.
 - Any observations outside the task descriptions worth flagging.
+- The main-checkout cleanliness report: what appeared, what disappeared, and what was pre-existing — carried with the claim bound that section states, never as an assurance the batch left the tree untouched.
 - Any blockers or uncertainties that remain.

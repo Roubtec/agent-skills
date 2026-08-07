@@ -169,6 +169,7 @@ Collect decisions across the whole list, then apply. The mechanics depend on the
 - **A decision that just records intent** (a product choice, a spec edit, a "leave as-is") → make
   the edit, leave nothing dangling, note where it landed.
 - **A decision that writes code** → delegate the locked decision to a fresh implementation subagent in the worktree that owns the change, under whatever verification the repo expects (tests, build/lint, isolated validation), and require a clean commit before review.
+  Hand it the path any of that output must land in — namespaced by the item, or created with `mktemp -d` — never a fixed shared scratchpad name: one session's agents share that directory, and two of them redirecting to `<scratchpad>/verify.log` once had one report a verdict for the wrong branch. Never leave the choice to the subagent.
 
 For **every code-writing decision**, run a scoped `review-cycle` on the applied decision's diff (artifact type: decision) before recording the item as applied or offering the change for delivery — the fresh-eyes reviewer, the best-effort peer with its pinned-strength launch and timeout, the gates, verbatim finding relay, and round cap are all that skill's and are not restated here. Deltas for this skill:
 
@@ -178,6 +179,15 @@ For **every code-writing decision**, run a scoped `review-cycle` on the applied 
 
 Keep a per-item ledger: the decision, where it landed (file/commit/record), or how the item was
 refined.
+
+## Subagent destroy boundary
+
+State this in every subagent prompt this skill composes. A reviewer subagent authorized to verify a claim empirically once ran `rm -rf ./*` in a shared main checkout: its setup `git clone … | tail` had failed invisibly under `set -e` (a pipeline's status is its last command), so it deleted tracked files and moved a branch ref while believing it stood inside a clone.
+
+- **Permitted:** reading, searching, and read-only `git`/`gh` queries — plus, for a fixer or implementer, edits, commits, and pushes confined to its own assigned worktree and branch.
+- **Forbidden, named outright:** `rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`, and force-pushing — each of them beyond what the prompt itself spells out, whether as an exact command or as a skill it names to invoke. A subagent may not self-authorize one by putting itself somewhere it believes is safe — forbidden **not in a clone, not in a temp directory, not "safely"**. What you spelled out, and the disposable location below, are the only exemptions — and only because you named them.
+- **A worktree is not a blast radius.** It isolates the working tree, not the repository: `branch -f`, `reset`, `update-ref`, and `gc` all reach every sibling worktree through the shared `.git`.
+- **Empirical verification that could change state goes where you send it.** Where `command -v dc-enter` finds the helper, send the subagent to `DC="$(dc-enter <slug>)"` — one absolute path on stdout, dropped again with `dc-remove <slug>`; a reused slug is refused rather than re-derived, so anything that may run twice passes `--replace` or removes the slug first. Where the helper is absent, name an absolute path outside the repository — never a relative one. Never leave the choice to the subagent.
 
 ---
 
@@ -258,7 +268,9 @@ In **pointed mode** for review work, re-derive these: for each PR read its commi
 - Delegate the implementation to a fresh subagent with the worktree contract, the task-file spec,
   and the decided option. Require: real **tests** (deterministic, clock-injected where the bug is a
   race — they verify the fix even when the production trigger is dormant), validation on an
-  **isolated DB**, a clean commit, **no push**. When the fix **fully satisfies** the task, that same
+  **isolated DB**, a clean commit, **no push**.
+  Hand it the path any of that validation output must land in — namespaced by the item, or created with `mktemp -d`, and outside the worktree it commits from, which must be left clean — never a fixed shared scratchpad name: one session's agents share that directory, and two of them redirecting to `<scratchpad>/verify.log` once had one report a verdict for the wrong branch. Never leave the choice to the subagent.
+  When the fix **fully satisfies** the task, that same
   commit must also **move the task file to `tasks/done/`** so a later round cannot pick up a stale
   copy of work already done; when it only **partially** satisfies the task, leave the file in
   `tasks/` for a follow-up round and do **not** claim the thread as done. Archiving inside the

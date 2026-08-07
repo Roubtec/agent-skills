@@ -78,6 +78,15 @@ Claude subagents must not be assumed to spawn nested subagents.
 
 The worktree orchestrator owns the fresh reviewer, peer invocation, and any fix-up rounds between these modes.
 
+## Subagent destroy boundary
+
+State this in every subagent prompt this skill composes. A reviewer subagent authorized to verify a claim empirically once ran `rm -rf ./*` in a shared main checkout: its setup `git clone … | tail` had failed invisibly under `set -e` (a pipeline's status is its last command), so it deleted tracked files and moved a branch ref while believing it stood inside a clone.
+
+- **Permitted:** reading, searching, and read-only `git`/`gh` queries — plus, for a fixer or implementer, edits, commits, and pushes confined to its own assigned worktree and branch.
+- **Forbidden, named outright:** `rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`, and force-pushing — each of them beyond what the prompt itself spells out, whether as an exact command or as a skill it names to invoke. A subagent may not self-authorize one by putting itself somewhere it believes is safe — forbidden **not in a clone, not in a temp directory, not "safely"**. What you spelled out, and the disposable location below, are the only exemptions — and only because you named them.
+- **A worktree is not a blast radius.** It isolates the working tree, not the repository: `branch -f`, `reset`, `update-ref`, and `gc` all reach every sibling worktree through the shared `.git`.
+- **Empirical verification that could change state goes where you send it.** Where `command -v dc-enter` finds the helper, send the subagent to `DC="$(dc-enter <slug>)"` — one absolute path on stdout, dropped again with `dc-remove <slug>`; a reused slug is refused rather than re-derived, so anything that may run twice passes `--replace` or removes the slug first. Where the helper is absent, name an absolute path outside the repository — never a relative one. Never leave the choice to the subagent.
+
 ## Procedure
 
 ### Step 0 — Preflight
@@ -165,7 +174,7 @@ For the **follow-up-task** items, write the task file(s) following the `write-ta
 - Each task must stand alone: restate the concern with file/line references and link the PR thread; an implementer should not need to re-read the review.
 - **Commit task files on the current branch, separately from code-fix commits** (when practical). The task ships with the branch that prompted it — merging the PR then also lands the record of its loose ends, which is what makes a committed follow-up a legitimate way to close a thread.
 
-Fixer subagent prompt should include: the relevant review comment(s) **verbatim**, the file/line locations, the branch name (and "verify you are on it"), an instruction to read `AGENTS.md` first, the same-pattern sweep instruction, commit/validation instructions, an instruction **not** to use the `TaskCreate`/`TaskUpdate`/`TaskList` tools (their entries leak into your task view), and a request to report what it changed, any tradeoffs, and anything uncertain. Do **not** give it unrelated context.
+Fixer subagent prompt should include: the relevant review comment(s) **verbatim**, the file/line locations, the branch name (and "verify you are on it"), an instruction to read `AGENTS.md` first, the same-pattern sweep instruction, commit/validation instructions, an instruction **not** to use the `TaskCreate`/`TaskUpdate`/`TaskList` tools (their entries leak into your task view), and a request to report what it changed, any tradeoffs, and anything uncertain. Do **not** give it unrelated context. With those validation instructions, hand it the path any build or check output must land in — namespaced by this PR number, or created with `mktemp -d`, and outside the checkout it commits from — never a fixed shared scratchpad name: one session's agents share that directory, and two of them redirecting to `<scratchpad>/verify.log` once had one report a verdict for the wrong branch. Never leave the choice to the fixer.
 
 In `delegated-fix` mode, do not spawn a Fixer or Reviewer and do not launch the peer; the batch orchestrator owns both review paths.
 Perform the fixes directly, leave the worktree clean with all intended changes committed, return the review packet defined above, and stop here.

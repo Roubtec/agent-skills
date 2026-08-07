@@ -224,6 +224,37 @@ const SELF_MUTATION_RE = /\b(?:this report|the report|the workflow|we|it)\s+(?:r
   check("no note asserts the report/workflow itself mutated the tree", !selfMutation);
 }
 
+// 9b. Claim bound: the acceptance criterion rejects any note that reads as an
+//     assurance the batch left the tree untouched, so EVERY branch's note also
+//     carries the open exclusion — what the readings could see, nothing about
+//     what was written into paths they already list, nothing about what they do
+//     not surface. The no-baseline branches are the ones this pins hardest:
+//     they have the least information and previously said only "is clean".
+{
+  const CLAIM_BOUND_RE = /claims nothing about what was written INTO paths those readings already list, nor about anything they do not surface/i;
+  const cases = [
+    [{ measured: true, dirty: [] }, { measured: true, dirty: [] }],
+    [{ measured: true, dirty: [" M a"] }, { measured: true, dirty: [" M a"] }],
+    [{ measured: true, dirty: [" M a"] }, { measured: true, dirty: ["MM a"] }],
+    [{ measured: true, dirty: [" M a"] }, { measured: true, dirty: [" M a", "?? b"] }],
+    [{ measured: true, dirty: [" M a", "?? b"] }, { measured: true, dirty: [" M a"] }],
+    [{ measured: false, dirty: [] }, { measured: true, dirty: ["?? b"] }],
+    [{ measured: false, dirty: [] }, { measured: true, dirty: [] }],
+    [null, { measured: true, dirty: [] }],
+    [{ measured: true, dirty: [" M a"] }, { measured: false, dirty: [] }],
+    [null, { measured: false, dirty: [] }],
+  ];
+  const allBound = cases.every(([b, f]) => CLAIM_BOUND_RE.test(mainCheckoutSummary(b, f).note));
+  check("every note carries the open claim bound", allBound);
+  const allOtherStages = cases.every(([b, f]) => /not separately proven|per-task worktrees/i.test(mainCheckoutSummary(b, f).note));
+  check("every note carries the other-stages disclaimer", allOtherStages);
+  // The specific regression: with no baseline the report has the LEAST to say,
+  // so an unqualified "is clean" there is the strongest overclaim of all.
+  const noBaselineClean = mainCheckoutSummary(null, { measured: true, dirty: [] }).note;
+  check("no baseline + clean end → note is not a bare all-clear", !/^Shared main checkout is clean\.\s/.test(noBaselineClean));
+  check("no baseline + clean end → note says no baseline was captured", /no pre-batch baseline/i.test(noBaselineClean));
+}
+
 // 10. FINDING 1: the porcelain capture must request `--untracked-files=all` so
 //     individual files under a pre-existing untracked directory are listed
 //     (and thus attributable) rather than collapsed to the directory. Asserted

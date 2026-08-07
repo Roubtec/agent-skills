@@ -326,6 +326,32 @@ const CYCLE_GROUNDING_SCHEMA = {
   required: ["verdicts"],
 };
 
+// What a subagent of this cycle may run, and what it may not — carried by every
+// command-running prompt the section composes: fixer, reviewer, peer, grounding.
+// A reviewer subagent authorized to verify a claim empirically once ran
+// `rm -rf ./*` in a shared main checkout: its setup clone had failed invisibly
+// inside a pipeline under `set -e` (a pipeline's status is its last command), so
+// it was still at the repository root while believing it stood in a clone. Kept
+// OUT of cycleDefaultContract deliberately: a consumer with its own worktree
+// lifecycle overrides the contract via cycle.contracts and would otherwise drop
+// the boundary along with it. The peer stage carries it like the rest: its
+// `codex exec --sandbox read-only` constrains the CODEX process, not the
+// subagent that composes and launches it, which has an unrestricted shell.
+const CYCLE_DESTROY_BOUNDARY = `## DESTROY BOUNDARY
+
+Permitted: reading, searching, and read-only \`git\`/\`gh\` queries — plus, where the contract above authorizes it, edits, commits, and pushes confined to the worktree and branch it names.
+Forbidden: \`rm -rf\`, \`git reset --hard\`, \`git clean\`, \`git branch -f\`, \`git update-ref\`, \`git gc\`, and force-pushing — each of them beyond what this assignment itself spells out, whether as an exact command or as a skill it names to invoke — NOT in a clone, NOT in a temp directory, NOT "safely". You may not self-authorize one by putting yourself somewhere you believe is safe; what this assignment spells out, and the disposable clone below, are the only exemptions — and only because this assignment names them, not because a clone is safe.
+A worktree is not a blast radius: it isolates the working tree, not the repository, so \`branch -f\`, \`reset\`, \`update-ref\`, and \`gc\` reach every sibling worktree through the shared \`.git\`.
+Empirical verification that could change state belongs ONLY in a disposable clone. Run \`command -v dc-enter\`; where it is found, work in \`DC="$(dc-enter <slug>)"\` — it prints one absolute path on stdout, \`dc-remove <slug>\` drops it, and a reused slug is REFUSED rather than re-derived, so pass \`--replace\` or remove the slug first if this may run twice. Where the helper is absent, use an absolute path outside the repository — never a relative one, and never the repository itself.`;
+
+// Where a role's redirected output goes. Every cycle brief that orders a build
+// orders one whose output the role may want in a file, and a role left to pick
+// its own path picks the session scratchpad: two concurrent reviewers both
+// redirected their build output to `<scratchpad>/verify.log` there once, and
+// one read the other worktree's results and returned a verdict for the wrong
+// branch. The brief names the destination rather than leaving it to be chosen.
+const CYCLE_REDIRECTED_OUTPUT = "Any build or validation output you redirect to a file goes under that same round directory, under any name you like — never a fixed shared scratchpad name: parallel cycles share one scratch directory.";
+
 // Default worktree/branch contract when the consumer supplies none. A consumer
 // with its own worktree lifecycle (wt-enter etc.) passes richer per-role
 // contract text via cycle.contracts instead.
@@ -392,14 +418,17 @@ function cycleFixPrompt(cycle, state) {
     : state.findings
       ? `This is fix-up round ${state.round}. Address the findings below: dispose EVERY one explicitly — \`fixed\`, \`declined\` (with a reason; the next fresh reviewer verifies declines), or \`escalated\` to an open question in the pinned format — echoing each finding's \`id\` as your disposition's \`findingId\`, exactly ONE disposition per finding (coverage is checked structurally; an uncovered or double-disposed finding comes back to the next pass and blocks the round). Never drop one silently, and never implement a fix you believe is wrong just to clear a finding.`
       : `This is round 1: carry out the assignment below.`;
-  const artifactLine = state.artifactDir
+  const artifactHome = state.artifactDir
     ? `This cycle's artifact directory is \`${state.artifactDir}\` — report it back as \`artifactDir\` and write this pass's packet prose (what you did, dispositions, question drafts) under it as \`round-${state.round}/\`.`
     : `Create this cycle's UNIQUE artifact directory first — outside the worktree, e.g. \`mktemp -d "\${TMPDIR:-/tmp}/review-cycle-"${cycleShq(cycleSlugSegment(cycle.slug))}".XXXXXX"\` (never a fixed shared name: parallel cycles share scratch space) — report it as \`artifactDir\` (REQUIRED: the cycle refuses to run rounds with no home for their history), and write this pass's packet prose under it as \`round-${state.round}/\`.`;
+  const artifactLine = `${artifactHome} ${CYCLE_REDIRECTED_OUTPUT}`;
   return `You are the fixer for one review cycle (branch \`${cycle.branch}\`, review base \`${cycle.base}\`, artifact type ${cycle.artifactType}).
 
 ## WORKTREE CONTRACT (do this before anything else)
 
 ${cycleContract(cycle, "fixer")}
+
+${CYCLE_DESTROY_BOUNDARY}
 
 Read the repository's agent-context files (\`AGENTS.md\` / \`CLAUDE.md\`) first for conventions.
 
@@ -453,14 +482,20 @@ function cycleReviewPrompt(cycle, state) {
   const workBlock = state.packet && Array.isArray(state.packet.workReport) && state.packet.workReport.length
     ? `\n## Fixer's per-item report (verify the claims hold in the committed state; you were NOT given its reasoning)\n\n${JSON.stringify(state.packet.workReport, null, 2)}\n`
     : "";
+  // This brief orders a full build, so the reviewer needs a destination for the
+  // build's output as much as for its own report — including on the pass that
+  // runs with no cycle behind it (the collision re-review), where leaving the
+  // path to the reviewer is exactly how a shared scratch name gets chosen.
   const persistLine = state.artifactDir
-    ? `\nPersist your full report for the round history: write the same content you return (verdict, numbered issues, notes) to \`${state.artifactDir}/round-${state.round}/reviewer-report.md\`. That directory is OUTSIDE the worktree, and this one report file is the sole exception to the no-file-creation rule.\n`
-    : "";
+    ? `\nPersist your full report for the round history: write the same content you return (verdict, numbered issues, notes) to \`${state.artifactDir}/round-${state.round}/reviewer-report.md\`. ${CYCLE_REDIRECTED_OUTPUT} That directory is OUTSIDE the worktree, and those files are the only exceptions to the no-file-creation rule.\n`
+    : `\nYou were given no cycle artifact directory, so there is no round history to persist. If any build or validation output must land in a file, create a UNIQUE directory for it first — outside the worktree, e.g. \`mktemp -d "\${TMPDIR:-/tmp}/re-review-"${cycleShq(cycleSlugSegment(cycle.slug))}".XXXXXX"\` (never a fixed shared name: concurrent reviewers share one scratch directory) — and write inside it. Those files are the only exception to the no-file-creation rule.\n`;
   return `You are an independent fresh-eyes reviewer for one review cycle (branch \`${cycle.branch}\`, review base \`${cycle.base}\`, artifact type ${cycle.artifactType}). You have no knowledge of how the work was built, and that is the point. Edit NOTHING; create, update, or delete no files; do not use the task-tracker tools.
 
 ## WORKTREE CONTRACT (do this before anything else)
 
 ${cycleContract(cycle, "reviewer")}
+
+${CYCLE_DESTROY_BOUNDARY}
 
 Read the repository's agent-context files (\`AGENTS.md\` / \`CLAUDE.md\`) first for conventions.
 
@@ -497,6 +532,9 @@ function cyclePeerPrompt(cycle, state) {
 ## WORKTREE CONTRACT
 
 ${cycleContract(cycle, "peer")}
+
+${CYCLE_DESTROY_BOUNDARY}
+
 The peer examines this worktree READ-ONLY; you edit nothing either. The cycle's fresh reviewer is examining the same committed state concurrently — two readers are safe, and the reviewer alone owns builds/execution.
 
 ## Steps
@@ -579,6 +617,8 @@ function cycleGroundingPrompt(cycle, findings) {
   return `Cheap grounding spot-check, read-only. The fresh reviewer PASSED this round; only the peer findings below would gate it. For each, check that its \`file:line\` (or referenced site) exists in the worktree and that the claim is not self-evidently false. Do NOT re-review or judge severity — discard is only for nonexistent references and self-evidently false claims; when in doubt, \`grounded: true\`.
 
 ${cycleContract(cycle, "reviewer")}
+
+${CYCLE_DESTROY_BOUNDARY}
 
 ## Findings
 
@@ -1080,8 +1120,21 @@ const SCOPE_SCHEMA = {
   required: ["ok"],
 };
 
+// The scope agent runs OUTSIDE the embeddable section, so nothing placed at the
+// `cycleContract()` call sites reaches it. Same boundary, stated for a brief
+// that carries no worktree contract to hang it off: identical to the one
+// `wf-address-review.js` states for its own two agents.
+const DESTROY_BOUNDARY = `## DESTROY BOUNDARY
+
+Permitted: reading, searching, read-only \`git\`/\`gh\` queries, and the specific mutations this assignment spells out.
+Forbidden: \`rm -rf\`, \`git reset --hard\`, \`git clean\`, \`git branch -f\`, \`git update-ref\`, \`git gc\`, and force-pushing — each of them beyond what this assignment itself spells out, whether as an exact command or as a skill it names to invoke — NOT in a clone, NOT in a temp directory, NOT "safely". You may not self-authorize one by putting yourself somewhere you believe is safe; what this assignment spells out, and the disposable clone below, are the only exemptions — and only because this assignment names them, not because a clone is safe.
+A worktree is not a blast radius: it isolates the working tree, not the repository, so \`branch -f\`, \`reset\`, \`update-ref\`, and \`gc\` reach every sibling worktree through the shared \`.git\`.
+Empirical verification that could change state belongs ONLY in a disposable clone. Run \`command -v dc-enter\`; where it is found, work in \`DC="$(dc-enter <slug>)"\` — it prints one absolute path on stdout, \`dc-remove <slug>\` drops it, and a reused slug is REFUSED rather than re-derived, so pass \`--replace\` or remove the slug first if this may run twice. Where the helper is absent, use an absolute path outside the repository — never a relative one, and never the repository itself.`;
+
 function scopePrompt(input) {
   return `You are scoping one review cycle. Read the repository's agent-context files (\`AGENTS.md\` / \`CLAUDE.md\`) first. This is scoping only — edit nothing, commit nothing.
+
+${DESTROY_BOUNDARY}
 
 Request (lenient parsing — free word order): ${JSON.stringify(input)}
 Recognized tokens (already handled by the caller, listed for context): \`light\`, \`peer-opinions=off\`, \`artifact-type: code|prose|decision\`, \`max-rounds=N\`. Everything else describes the TARGET.

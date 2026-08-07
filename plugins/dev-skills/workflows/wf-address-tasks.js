@@ -191,8 +191,27 @@ const RESOLUTION_SCHEMA = {
   required: ["resolutions"],
 };
 
+// The boundary for this script's OWN briefs — every agent it spawns outside the
+// embedded review-cycle-core section, which states the same rule for the three
+// cycle roles through CYCLE_DESTROY_BOUNDARY. Two constants rather than one
+// because the section is mirrored byte-for-byte from wf-review-cycle.js and
+// cannot reference anything this file declares; the text below is instead
+// identical to wf-address-review.js's, which brief for brief is the same shape:
+// an assignment that spells out its own mutations and has no role contract to
+// hang the boundary off. Several of these briefs point a subagent at mutating
+// git or `gh` work in the SHARED tree, and `cleanupNote` sends it out of its
+// worktree to the repo root — the exact posture the `rm -rf ./*` incident had.
+const DESTROY_BOUNDARY = `## DESTROY BOUNDARY
+
+Permitted: reading, searching, read-only \`git\`/\`gh\` queries, and the specific mutations this assignment spells out.
+Forbidden: \`rm -rf\`, \`git reset --hard\`, \`git clean\`, \`git branch -f\`, \`git update-ref\`, \`git gc\`, and force-pushing — each of them beyond what this assignment itself spells out, whether as an exact command or as a skill it names to invoke — NOT in a clone, NOT in a temp directory, NOT "safely". You may not self-authorize one by putting yourself somewhere you believe is safe; what this assignment spells out, and the disposable clone below, are the only exemptions — and only because this assignment names them, not because a clone is safe.
+A worktree is not a blast radius: it isolates the working tree, not the repository, so \`branch -f\`, \`reset\`, \`update-ref\`, and \`gc\` reach every sibling worktree through the shared \`.git\`.
+Empirical verification that could change state belongs ONLY in a disposable clone. Run \`command -v dc-enter\`; where it is found, work in \`DC="$(dc-enter <slug>)"\` — it prints one absolute path on stdout, \`dc-remove <slug>\` drops it, and a reused slug is REFUSED rather than re-derived, so pass \`--replace\` or remove the slug first if this may run twice. Where the helper is absent, use an absolute path outside the repository — never a relative one, and never the repository itself.`;
+
 function bootstrapPrompt() {
   return `Prepare this container for a worktree-isolated task batch. This is setup only — edit no project files.
+
+${DESTROY_BOUNDARY}
 
 1. From the repo root, run \`wt-bootstrap\` (an image-baked helper on PATH). It performs the whole Session Bootstrap deterministically: verifies the worktree roots are container-local (never the host bind mount), prunes ONLY this container's orphaned worktrees under \`.worktrees/$CONTAINER_NAME/\`, sets up the container-local SSH→HTTPS remote rewrite, probes push access, and prints one JSON object.
 2. Map that JSON onto the structured result verbatim — \`ok\`, \`blocker\`, \`wtBase\`, \`remote\`, \`availBytes\` — with no reinterpretation. \`remote: false\` is NOT a blocker (the batch falls back to local branches and skips PRs).
@@ -211,6 +230,8 @@ const STORAGE_PROBE_SCHEMA = {
 function storageProbePrompt(wtBase) {
   return `Measure free storage for wave-width throttling. This is measurement only — edit nothing, create nothing.
 
+${DESTROY_BOUNDARY}
+
 Run \`df -B1 --output=avail ${shq(wtBase)}\` (POSIX fallback: \`df -kP\`, avail column, times 1024) and return the mount's free bytes as \`availBytes\`. If the path is missing or \`df\` fails, return \`availBytes: 0\`.`;
 }
 
@@ -224,7 +245,7 @@ Run \`df -B1 --output=avail ${shq(wtBase)}\` (POSIX fallback: \`df -kP\`, avail 
 const MAIN_CHECKOUT_SCHEMA = {
   type: "object",
   properties: {
-    dirty: { type: "array", items: { type: "string" }, description: "One `git status --porcelain -z --untracked-files=all` record per changed path in the shared MAIN checkout (never a worktree): the 2-char `XY` status field, a space, then the repo-relative path (current path for a rename/copy). `--untracked-files=all` means each untracked FILE is listed on its own rather than collapsed to its directory, so files under a pre-existing untracked directory stay attributable. The `XY` prefix is preserved verbatim so the summary can tell a status-code change apart from a brand-new path. Empty when clean; ignored paths like `.worktrees/` never appear." },
+    dirty: { type: "array", items: { type: "string" }, description: "One `git status --porcelain -z --untracked-files=all` record per changed path in the shared MAIN checkout (never a worktree): the 2-char `XY` status field, a space, then the repo-relative path (current path for a rename/copy). `--untracked-files=all` means each untracked FILE is listed on its own rather than collapsed to its directory, so files under a pre-existing untracked directory stay attributable. The `XY` prefix is preserved verbatim so the summary can tell a status-code change apart from a brand-new path. Empty when clean. The reading is bounded rather than exhaustive: `git status` surfaces what it surfaces — ignored paths (`.worktrees/` among them) fall outside it, as does anything else it does not report — so an empty or unchanged list bounds what the summary may claim, never proves nothing was written." },
     measured: { type: "boolean", description: "True only if `git status` ran in the main checkout and produced a definitive list. False when it could not be measured — then `dirty` is best-effort and must not be read as authoritative." },
   },
   required: ["dirty", "measured"],
@@ -232,6 +253,8 @@ const MAIN_CHECKOUT_SCHEMA = {
 
 function mainCheckoutStatusPrompt(when) {
   return `Non-destructive cleanliness snapshot of the SHARED main checkout (${when}). OBSERVE ONLY — do NOT stage, commit, reset, clean, stash, or edit anything. This step must never modify the tree; a checkout that is already dirty (e.g. the user's own work-in-progress) is fine and must not be "fixed".
+
+${DESTROY_BOUNDARY}
 
 Why: each task runs in its own \`.worktrees/$CONTAINER_NAME/<slug>\` worktree, but the repository's MAIN checkout is shared — a peer harness invoked in this container and the user both see it. Snapshotting its porcelain status at batch boundaries lets the summary report main-checkout dirt without touching it.
 
@@ -268,6 +291,16 @@ function mainCheckoutSummary(baseline, final) {
   // Finding: do not claim the WHOLE workflow was non-destructive — only the
   // observation step is guaranteed so.
   const OTHER_STAGES = "Other batch stages run in per-task worktrees and are not separately proven to have left the main checkout untouched.";
+  // The claim bound, carried by EVERY note — including the ones with the least
+  // information, where an unqualified sentence reads most like an all-clear.
+  // Phrased against what the readings list rather than against a baseline, so
+  // the one bound covers the unmeasured-baseline branches too. Deliberately an
+  // EXCLUSION rather than a list of blind spots: the list is open, and widening
+  // what the reading sees (individually-listed untracked files today, ignored
+  // paths tomorrow) improves the report while leaving the claim exactly this
+  // narrow. Reporting that a listed path was re-classified is an observation
+  // this comparison can make; asserting that path was left alone is not.
+  const CLAIM_BOUND = "This report says only what its readings could see: it claims nothing about what was written INTO paths those readings already list, nor about anything they do not surface at all.";
 
   // Parse one porcelain record into { raw, status, path }. Prefer `-z` output
   // (unquoted paths) upstream, but stay robust to plain porcelain: the leading
@@ -314,7 +347,7 @@ function mainCheckoutSummary(baseline, final) {
       unattributed: [],
       transitions: [],
       flagged: false,
-      note: `Post-batch main-checkout status could not be measured; cleanliness comparison skipped. ${OBSERVED} ${OTHER_STAGES}`,
+      note: `Post-batch main-checkout status could not be measured; cleanliness comparison skipped. ${OBSERVED} ${OTHER_STAGES} ${CLAIM_BOUND}`,
     };
   }
 
@@ -348,17 +381,17 @@ function mainCheckoutSummary(baseline, final) {
   let flagged = false;
   if (!baselineMeasured) {
     if (finalEntries.length === 0) {
-      note = `Shared main checkout is clean. ${OBSERVED}`;
+      note = `Shared main checkout showed nothing dirty at the final boundary, but no pre-batch baseline was captured, so nothing could be compared against it. ${OBSERVED} ${OTHER_STAGES} ${CLAIM_BOUND}`;
     } else {
       flagged = true;
-      note = `Shared main checkout was dirty at the final boundary (${finalEntries.length} path(s)), but no pre-batch baseline was captured, so there is nothing to attribute them against and they are NOT credited to this batch. ${OBSERVED} ${OTHER_STAGES} Inspect and clean up yourself if unexpected.`;
+      note = `Shared main checkout was dirty at the final boundary (${finalEntries.length} path(s)), but no pre-batch baseline was captured, so there is nothing to attribute them against and they are NOT credited to this batch. ${OBSERVED} ${OTHER_STAGES} ${CLAIM_BOUND} Inspect and clean up yourself if unexpected.`;
     }
   } else if (newPaths.length === 0 && disappeared.length === 0) {
     if (finalEntries.length === 0) {
-      note = `Shared main checkout is clean and no pre-batch dirt disappeared. ${OBSERVED}`;
+      note = `Shared main checkout is clean and no pre-batch dirt disappeared. ${OBSERVED} ${OTHER_STAGES} ${CLAIM_BOUND}`;
     } else {
       const trans = transitions.length ? ` — ${transitions.length} changed status code while staying dirty on the same path` : "";
-      note = `Shared main checkout dirt is unchanged from the pre-batch baseline (${preexisting.length} pre-existing path(s)${trans}); nothing new appeared and nothing pre-existing disappeared during the batch. ${OBSERVED}`;
+      note = `Shared main checkout dirt is unchanged from the pre-batch baseline (${preexisting.length} pre-existing path(s)${trans}); no path appeared and no pre-existing path disappeared during the batch. ${OBSERVED} ${OTHER_STAGES} ${CLAIM_BOUND}`;
     }
   } else {
     flagged = true;
@@ -371,7 +404,7 @@ function mainCheckoutSummary(baseline, final) {
     const vanishClause = disappeared.length
       ? " Vanished baseline dirt can mean that uncommitted work was committed, reset, cleaned, or stashed away — by the user, a peer harness, or a batch stage that strayed from its worktree; if unexpected, check the reflog/stash before assuming it is lost."
       : "";
-    note = `Shared main checkout ${parts.join(" and ")} during the batch, alongside ${preexisting.length} pre-existing path(s).${newClause}${vanishClause} ${OBSERVED} ${OTHER_STAGES} Review before any cleanup.`;
+    note = `Shared main checkout ${parts.join(" and ")} during the batch, alongside ${preexisting.length} pre-existing path(s).${newClause}${vanishClause} ${OBSERVED} ${OTHER_STAGES} ${CLAIM_BOUND} Review before any cleanup.`;
   }
 
   return {
@@ -389,6 +422,8 @@ function mainCheckoutSummary(baseline, final) {
 
 function resolvePrompt(input) {
   return `You are scoping a batch of pre-planned task files for implementation. Do NOT implement anything.
+
+${DESTROY_BOUNDARY}
 
 Read \`AGENTS.md\` / \`CLAUDE.md\` first for project conventions.
 
@@ -673,6 +708,32 @@ const CYCLE_GROUNDING_SCHEMA = {
   required: ["verdicts"],
 };
 
+// What a subagent of this cycle may run, and what it may not — carried by every
+// command-running prompt the section composes: fixer, reviewer, peer, grounding.
+// A reviewer subagent authorized to verify a claim empirically once ran
+// `rm -rf ./*` in a shared main checkout: its setup clone had failed invisibly
+// inside a pipeline under `set -e` (a pipeline's status is its last command), so
+// it was still at the repository root while believing it stood in a clone. Kept
+// OUT of cycleDefaultContract deliberately: a consumer with its own worktree
+// lifecycle overrides the contract via cycle.contracts and would otherwise drop
+// the boundary along with it. The peer stage carries it like the rest: its
+// `codex exec --sandbox read-only` constrains the CODEX process, not the
+// subagent that composes and launches it, which has an unrestricted shell.
+const CYCLE_DESTROY_BOUNDARY = `## DESTROY BOUNDARY
+
+Permitted: reading, searching, and read-only \`git\`/\`gh\` queries — plus, where the contract above authorizes it, edits, commits, and pushes confined to the worktree and branch it names.
+Forbidden: \`rm -rf\`, \`git reset --hard\`, \`git clean\`, \`git branch -f\`, \`git update-ref\`, \`git gc\`, and force-pushing — each of them beyond what this assignment itself spells out, whether as an exact command or as a skill it names to invoke — NOT in a clone, NOT in a temp directory, NOT "safely". You may not self-authorize one by putting yourself somewhere you believe is safe; what this assignment spells out, and the disposable clone below, are the only exemptions — and only because this assignment names them, not because a clone is safe.
+A worktree is not a blast radius: it isolates the working tree, not the repository, so \`branch -f\`, \`reset\`, \`update-ref\`, and \`gc\` reach every sibling worktree through the shared \`.git\`.
+Empirical verification that could change state belongs ONLY in a disposable clone. Run \`command -v dc-enter\`; where it is found, work in \`DC="$(dc-enter <slug>)"\` — it prints one absolute path on stdout, \`dc-remove <slug>\` drops it, and a reused slug is REFUSED rather than re-derived, so pass \`--replace\` or remove the slug first if this may run twice. Where the helper is absent, use an absolute path outside the repository — never a relative one, and never the repository itself.`;
+
+// Where a role's redirected output goes. Every cycle brief that orders a build
+// orders one whose output the role may want in a file, and a role left to pick
+// its own path picks the session scratchpad: two concurrent reviewers both
+// redirected their build output to `<scratchpad>/verify.log` there once, and
+// one read the other worktree's results and returned a verdict for the wrong
+// branch. The brief names the destination rather than leaving it to be chosen.
+const CYCLE_REDIRECTED_OUTPUT = "Any build or validation output you redirect to a file goes under that same round directory, under any name you like — never a fixed shared scratchpad name: parallel cycles share one scratch directory.";
+
 // Default worktree/branch contract when the consumer supplies none. A consumer
 // with its own worktree lifecycle (wt-enter etc.) passes richer per-role
 // contract text via cycle.contracts instead.
@@ -739,14 +800,17 @@ function cycleFixPrompt(cycle, state) {
     : state.findings
       ? `This is fix-up round ${state.round}. Address the findings below: dispose EVERY one explicitly — \`fixed\`, \`declined\` (with a reason; the next fresh reviewer verifies declines), or \`escalated\` to an open question in the pinned format — echoing each finding's \`id\` as your disposition's \`findingId\`, exactly ONE disposition per finding (coverage is checked structurally; an uncovered or double-disposed finding comes back to the next pass and blocks the round). Never drop one silently, and never implement a fix you believe is wrong just to clear a finding.`
       : `This is round 1: carry out the assignment below.`;
-  const artifactLine = state.artifactDir
+  const artifactHome = state.artifactDir
     ? `This cycle's artifact directory is \`${state.artifactDir}\` — report it back as \`artifactDir\` and write this pass's packet prose (what you did, dispositions, question drafts) under it as \`round-${state.round}/\`.`
     : `Create this cycle's UNIQUE artifact directory first — outside the worktree, e.g. \`mktemp -d "\${TMPDIR:-/tmp}/review-cycle-"${cycleShq(cycleSlugSegment(cycle.slug))}".XXXXXX"\` (never a fixed shared name: parallel cycles share scratch space) — report it as \`artifactDir\` (REQUIRED: the cycle refuses to run rounds with no home for their history), and write this pass's packet prose under it as \`round-${state.round}/\`.`;
+  const artifactLine = `${artifactHome} ${CYCLE_REDIRECTED_OUTPUT}`;
   return `You are the fixer for one review cycle (branch \`${cycle.branch}\`, review base \`${cycle.base}\`, artifact type ${cycle.artifactType}).
 
 ## WORKTREE CONTRACT (do this before anything else)
 
 ${cycleContract(cycle, "fixer")}
+
+${CYCLE_DESTROY_BOUNDARY}
 
 Read the repository's agent-context files (\`AGENTS.md\` / \`CLAUDE.md\`) first for conventions.
 
@@ -800,14 +864,20 @@ function cycleReviewPrompt(cycle, state) {
   const workBlock = state.packet && Array.isArray(state.packet.workReport) && state.packet.workReport.length
     ? `\n## Fixer's per-item report (verify the claims hold in the committed state; you were NOT given its reasoning)\n\n${JSON.stringify(state.packet.workReport, null, 2)}\n`
     : "";
+  // This brief orders a full build, so the reviewer needs a destination for the
+  // build's output as much as for its own report — including on the pass that
+  // runs with no cycle behind it (the collision re-review), where leaving the
+  // path to the reviewer is exactly how a shared scratch name gets chosen.
   const persistLine = state.artifactDir
-    ? `\nPersist your full report for the round history: write the same content you return (verdict, numbered issues, notes) to \`${state.artifactDir}/round-${state.round}/reviewer-report.md\`. That directory is OUTSIDE the worktree, and this one report file is the sole exception to the no-file-creation rule.\n`
-    : "";
+    ? `\nPersist your full report for the round history: write the same content you return (verdict, numbered issues, notes) to \`${state.artifactDir}/round-${state.round}/reviewer-report.md\`. ${CYCLE_REDIRECTED_OUTPUT} That directory is OUTSIDE the worktree, and those files are the only exceptions to the no-file-creation rule.\n`
+    : `\nYou were given no cycle artifact directory, so there is no round history to persist. If any build or validation output must land in a file, create a UNIQUE directory for it first — outside the worktree, e.g. \`mktemp -d "\${TMPDIR:-/tmp}/re-review-"${cycleShq(cycleSlugSegment(cycle.slug))}".XXXXXX"\` (never a fixed shared name: concurrent reviewers share one scratch directory) — and write inside it. Those files are the only exception to the no-file-creation rule.\n`;
   return `You are an independent fresh-eyes reviewer for one review cycle (branch \`${cycle.branch}\`, review base \`${cycle.base}\`, artifact type ${cycle.artifactType}). You have no knowledge of how the work was built, and that is the point. Edit NOTHING; create, update, or delete no files; do not use the task-tracker tools.
 
 ## WORKTREE CONTRACT (do this before anything else)
 
 ${cycleContract(cycle, "reviewer")}
+
+${CYCLE_DESTROY_BOUNDARY}
 
 Read the repository's agent-context files (\`AGENTS.md\` / \`CLAUDE.md\`) first for conventions.
 
@@ -844,6 +914,9 @@ function cyclePeerPrompt(cycle, state) {
 ## WORKTREE CONTRACT
 
 ${cycleContract(cycle, "peer")}
+
+${CYCLE_DESTROY_BOUNDARY}
+
 The peer examines this worktree READ-ONLY; you edit nothing either. The cycle's fresh reviewer is examining the same committed state concurrently — two readers are safe, and the reviewer alone owns builds/execution.
 
 ## Steps
@@ -926,6 +999,8 @@ function cycleGroundingPrompt(cycle, findings) {
   return `Cheap grounding spot-check, read-only. The fresh reviewer PASSED this round; only the peer findings below would gate it. For each, check that its \`file:line\` (or referenced site) exists in the worktree and that the claim is not self-evidently false. Do NOT re-review or judge severity — discard is only for nonexistent references and self-evidently false claims; when in doubt, \`grounded: true\`.
 
 ${cycleContract(cycle, "reviewer")}
+
+${CYCLE_DESTROY_BOUNDARY}
 
 ## Findings
 
@@ -1455,10 +1530,14 @@ function taskCycleConfig(task, remote, peerMode) {
 
 function prPrompt(task, notes, remote) {
   if (!remote) {
-    return `Remote push/PR is unavailable this run. Verify branch \`${task.branch}\` and its commits are intact: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && git -C "$WT" log --oneline ${shq(task.base)}..${shq(task.branch)}\` shows the work. Return \`opened: false\`, \`pushed: false\`, \`reason: "no remote auth this run"\`. Do not fail.`;
+    return `Remote push/PR is unavailable this run. Verify branch \`${task.branch}\` and its commits are intact: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && git -C "$WT" log --oneline ${shq(task.base)}..${shq(task.branch)}\` shows the work. Return \`opened: false\`, \`pushed: false\`, \`reason: "no remote auth this run"\`. Do not fail.
+
+${DESTROY_BOUNDARY}`;
   }
   const caveats = notes ? `\n\nReviewer caveats to surface in the PR body:\n${notes}` : "";
   return `Open a pull request for branch \`${task.branch}\` against base \`${task.base}\`. Work from this task's worktree: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && cd "$WT"\` (rerun-safe resolve of the existing worktree; if it errors, STOP and report).
+
+${DESTROY_BOUNDARY}
 
 1. Ensure the branch is pushed: \`git push -u origin ${shq(task.branch)}\` (or \`git push\`).
 2. \`gh pr create --base ${shq(task.base)} --head ${shq(task.branch)} --title "<concise title>" --body "<summary>"\`.
@@ -1471,7 +1550,11 @@ Return \`opened: true\` with the \`url\` ONLY if \`gh pr create\` actually produ
 function cleanupNote(task) {
   // Best-effort worktree removal is requested after delivery; commits and the
   // branch persist in shared `.git` and on the remote, so removal is safe.
-  return `Remove this task's worktree to reclaim space — the branch and commits persist. From the repo root (not inside the worktree) run \`wt-remove ${shq(task.slug)}\`. It refuses to delete uncommitted work; if it refuses, report why instead of forcing (\`--force\` only clears git's refusal over ignored build artifacts — the clean checks still apply). It never deletes the branch \`${task.branch}\`. Report done.`;
+  return `Remove this task's worktree to reclaim space — the branch and commits persist. From the repo root (not inside the worktree) run \`wt-remove ${shq(task.slug)}\`. It refuses to delete uncommitted work; if it refuses, report why instead of forcing (\`--force\` only clears git's refusal over ignored build artifacts — the clean checks still apply). It never deletes the branch \`${task.branch}\`. Report done.
+
+${DESTROY_BOUNDARY}
+
+\`wt-remove\` is the ONLY removal this assignment spells out, and the repo root is the one place you run it from: you are standing in the SHARED main checkout, outside every worktree, so nothing here is yours to delete by hand. A refusal is the helper working — report it.`;
 }
 
 function collisionScanPrompt(branches) {
@@ -1482,6 +1565,8 @@ function collisionScanPrompt(branches) {
     )
     .join("\n");
   return `You are a read-only PRE-PR COLLISION GUARD for a batch of sibling task branches implemented in parallel, each reviewed and ready for its own PR. Edit, stage, commit, or push NOTHING. Work from the repo ROOT; do not enter or create any worktree — these branches live in the shared \`.git\` and you compare them by ref.
+
+${DESTROY_BOUNDARY}
 
 Why this exists: independent siblings never conflict while they are implemented (each in its own worktree), so two of them can each ADD the same new file path — or a file with the same basename, or a file that exports the same top-level class/symbol — with no warning. The clash only surfaces later, when the branches linearize or merge (an add/add conflict, or a duplicate definition). Find those overlaps now so they can be reconciled before merge.
 
@@ -1519,6 +1604,16 @@ function collisionBranchNames(collision) {
     : [];
 }
 
+// This deputy is ordered to run the project build, so it needs a destination
+// for that build's output for the same reason the cycle's roles do: a role left
+// to pick its own path picks the session scratchpad, and that scratchpad is
+// shared per session rather than per batch — so "one deputy per wave" does not
+// make it safe from the reviewer, peer, or later run beside it. The sentence is
+// written out here rather than shared with the cycle's CYCLE_REDIRECTED_OUTPUT,
+// which sits INSIDE the byte-identical `review-cycle-core` section and cannot
+// be reached from out here, and which names a different destination anyway: the
+// cycle's roles write into a round directory they keep, while this deputy needs
+// its log out of the worktree it is about to `git add` and commit.
 function resolveCollisionsPrompt(tasks, waveCollisions, remote) {
   const taskList = tasks
     .map(
@@ -1536,6 +1631,8 @@ Each held branch's commits persist in the shared \`.git\`; its worktree may have
 
 If \`wt-enter\` errors, STOP and report it. Verify \`git rev-parse --show-toplevel\` is that worktree and \`git branch --show-current\` is that branch before editing. Touch ONLY the worktree of the branch you are changing; never edit a sibling's worktree. Read \`AGENTS.md\` / \`CLAUDE.md\` for the project's regen and build commands.
 
+${DESTROY_BOUNDARY}
+
 Held branches:
 ${taskList}
 
@@ -1545,7 +1642,7 @@ ${collisionList}
 For each collision:
 1. Pick the side(s) to change. There is no inherent "first", so choose the LEAST disruptive rename(s): branches with fewer references, not a path a framework mandates, not a name a task file pins. Read the colliding files on each branch first. Rename enough sides that AT MOST ONE branch keeps the original colliding path/basename/symbol. With a two-branch collision, renaming one side is normally enough and the other then delivers unchanged; with three or more branches, you may need to rename multiple sides.
 2. If the name is genuinely IMPERATIVE — it MUST stay identical (a framework-required filename, an external/published contract, or a name a task file explicitly mandates) — do NOT invent a divergent name. Mark the collision \`blocked\` with the reason and leave those branches untouched; a human decides. Blocking a real conflict beats shipping a wrong rename.
-3. Otherwise, on EACH branch you chose to change, rename the file and/or exported symbol plus every in-branch reference to it, to a clear name that is distinct from the original AND from any other renamed side — so two renamed branches cannot themselves re-collide on the new name. Regenerate anything derived from it (e.g. contracts). Run the project build / type-check — it MUST pass. Commit with a clear message. ${pushLine}
+3. Otherwise, on EACH branch you chose to change, rename the file and/or exported symbol plus every in-branch reference to it, to a clear name that is distinct from the original AND from any other renamed side — so two renamed branches cannot themselves re-collide on the new name. Regenerate anything derived from it (e.g. contracts). Run the project build / type-check — it MUST pass; if you redirect its output to a file, create a UNIQUE directory for that first, OUTSIDE every worktree (\`mktemp -d "\${TMPDIR:-/tmp}/collision-resolve.XXXXXX"\`), and write there — never a fixed shared scratchpad name (one session's agents share that directory, and two that both wrote \`<scratchpad>/verify.log\` once crossed results between worktrees), and never inside the worktree, which you are about to commit. Commit with a clear message. ${pushLine}
 4. Record the outcome with \`collision\` set to the exact \`name\` from the list above: \`renamed\` (with \`changedBranches\`, \`from\`, \`to\`, what you \`regenerated\`, and why that side) or \`blocked\` (with the reason; empty \`changedBranches\`).
 
 Do NOT open any PR and do NOT remove any worktree — the workflow re-reviews each changed branch and handles delivery. Return one resolution entry per collision.`;
@@ -1655,333 +1752,377 @@ const mainCheckoutBaseline = await agent(mainCheckoutStatusPrompt("pre-batch bas
   effort: "low",
 });
 
-phase("Resolve batch");
-const plan = await agent(resolvePrompt(args), { label: "resolve", schema: PLAN_SCHEMA });
-if (!plan || !Array.isArray(plan.waves) || plan.waves.length === 0) {
-  return { error: "Could not resolve any task files from the argument.", args };
+// The closing half of the cleanliness check, factored out so that EVERY exit
+// past the baseline runs it — a batch that aborts or delivers nothing is
+// exactly the case the check exists for, and gating it on the Summary path
+// alone would skip it whenever the run went worst. This report step is
+// non-destructive: it only reports dirt — distinguishing pre-existing from
+// newly-appeared paths and, crucially, from baseline paths that DISAPPEARED (a
+// possible destructive loss) — and never modifies, resets, or fails on it. It
+// does not vouch for the batch's other stages. Logs the flagged AND the
+// not-measured outcome: a skipped comparison is easy to miss if only `flagged`
+// reports surface, and its note says exactly why the check has nothing
+// authoritative this run.
+async function finalMainCheckoutReport() {
+  // The closing reading is itself an agent stage, and an agent stage throws
+  // (runCyclePeerStage exists because of it). This function is the last step of
+  // every exit including the aborted one, so a throw here would take down the
+  // very report an abort is owed — and, on the normal path, a completed batch's
+  // whole result with it. A reading that fails is an UNMEASURED report, whose
+  // note already says the comparison had nothing authoritative; never a second
+  // crash.
+  let final = null;
+  try {
+    final = await agent(mainCheckoutStatusPrompt("post-batch"), {
+      label: "main-checkout-final",
+      schema: MAIN_CHECKOUT_SCHEMA,
+      effort: "low",
+    });
+  } catch (e) {
+    log(`Post-batch main-checkout reading threw (${e && e.message ? e.message : String(e)}); reporting the comparison as unmeasured.`);
+  }
+  const summary = mainCheckoutSummary(mainCheckoutBaseline, final);
+  if (summary.flagged || !summary.measured) {
+    const details = [];
+    if (summary.newPaths.length) details.push(`new: ${summary.newPaths.join(", ")}`);
+    if (summary.disappeared.length) details.push(`disappeared: ${summary.disappeared.join(", ")}`);
+    if (summary.unattributed.length) details.push(`unattributed: ${summary.unattributed.join(", ")}`);
+    log(`${summary.note}${details.length ? ` [${details.join("; ")}]` : ""}`);
+  }
+  return summary;
 }
 
+// Every stage from here on runs with the pre-batch baseline already taken, so
+// each one owes the closing comparison — including the ones that never reach a
+// `return`. An agent stage throws (runCyclePeerStage catches exactly that), and
+// a throw would otherwise unwind past the baseline's other half and leave an
+// aborted batch with no cleanliness report at all, which is the case the check
+// exists for. So the batch body runs inside a try whose catch reports rather
+// than rethrows. What the report needs from the body is declared out here: a
+// crash mid-batch still has terminal statuses worth returning.
+let plan = null;
 // Track each task's terminal status so dependent waves can be gated.
 const statusBySlug = new Map();
 const results = [];
 const throttled = [];
 const collisions = [];
 
-// Map every in-batch branch to the slug that produces it. A dependent task's
-// `base` IS its prerequisite's `branch` (stacked PRs), so this lets the gate
-// derive the prerequisite structurally instead of trusting only the plan
-// agent's `dependsOn` list — a forgotten entry can no longer slip a dependent
-// past a failed prerequisite and have it build on known-bad work. Independent
-// tasks base off `defaultBase` / the current branch, which no in-batch task
-// produces, so they pick up no spurious dependency.
-const slugByBranch = new Map();
-for (const wave of plan.waves) {
-  if (!Array.isArray(wave)) continue;
-  for (const task of wave) {
-    if (task && typeof task.branch === "string" && typeof task.slug === "string") {
-      slugByBranch.set(task.branch, task.slug);
+try {
+  phase("Resolve batch");
+  plan = await agent(resolvePrompt(args), { label: "resolve", schema: PLAN_SCHEMA });
+  if (!plan || !Array.isArray(plan.waves) || plan.waves.length === 0) {
+    // A batch that resolves no task is still a batch that terminated with the
+    // baseline already taken, so it owes the same report as a delivering one.
+    phase("Summary");
+    return { error: "Could not resolve any task files from the argument.", args, mainCheckout: await finalMainCheckoutReport() };
+  }
+
+  // Map every in-batch branch to the slug that produces it. A dependent task's
+  // `base` IS its prerequisite's `branch` (stacked PRs), so this lets the gate
+  // derive the prerequisite structurally instead of trusting only the plan
+  // agent's `dependsOn` list — a forgotten entry can no longer slip a dependent
+  // past a failed prerequisite and have it build on known-bad work. Independent
+  // tasks base off `defaultBase` / the current branch, which no in-batch task
+  // produces, so they pick up no spurious dependency.
+  const slugByBranch = new Map();
+  for (const wave of plan.waves) {
+    if (!Array.isArray(wave)) continue;
+    for (const task of wave) {
+      if (task && typeof task.branch === "string" && typeof task.slug === "string") {
+        slugByBranch.set(task.branch, task.slug);
+      }
     }
   }
-}
 
-// Wave width: run every dependency-ready task unless measured storage headroom
-// requires sub-batching. The workflow runtime/provider owns its own active-agent
-// ceiling and rate limiting; do not impose an arbitrary smaller policy cap here.
-// An unmeasured reading (0) yields `Infinity` — no storage cap — which behaves
-// correctly at both use sites (`slice(i, i + Infinity)` takes the rest of the
-// wave; `runnable.length > widthCap` never fires). Bootstrap's reading serves
-// only the first wave: later waves run against headroom already consumed by
-// earlier waves' pnpm-store growth, ccache, and build artifacts that worktree
-// reclaim does not return, so each subsequent wave boundary re-probes `df`
-// through a cheap agent and recomputes the cap from the fresh reading.
-let availBytes = typeof boot.availBytes === "number" ? boot.availBytes : 0;
-const widthCapFor = (bytes) => (bytes > 0 ? Math.max(1, Math.floor(bytes / PER_WORKTREE_BYTES)) : Infinity);
+  // Wave width: run every dependency-ready task unless measured storage headroom
+  // requires sub-batching. The workflow runtime/provider owns its own active-agent
+  // ceiling and rate limiting; do not impose an arbitrary smaller policy cap here.
+  // An unmeasured reading (0) yields `Infinity` — no storage cap — which behaves
+  // correctly at both use sites (`slice(i, i + Infinity)` takes the rest of the
+  // wave; `runnable.length > widthCap` never fires). Bootstrap's reading serves
+  // only the first wave: later waves run against headroom already consumed by
+  // earlier waves' pnpm-store growth, ccache, and build artifacts that worktree
+  // reclaim does not return, so each subsequent wave boundary re-probes `df`
+  // through a cheap agent and recomputes the cap from the fresh reading.
+  let availBytes = typeof boot.availBytes === "number" ? boot.availBytes : 0;
+  const widthCapFor = (bytes) => (bytes > 0 ? Math.max(1, Math.floor(bytes / PER_WORKTREE_BYTES)) : Infinity);
 
-for (let w = 0; w < plan.waves.length; w++) {
-  const wave = plan.waves[w];
-  if (!Array.isArray(wave) || wave.length === 0) continue;
+  for (let w = 0; w < plan.waves.length; w++) {
+    const wave = plan.waves[w];
+    if (!Array.isArray(wave) || wave.length === 0) continue;
 
-  // Dependency gating: a task whose in-batch dependency did not finish
-  // successfully must NOT run — it would branch from a missing/partial/rejected
-  // prerequisite. A dependency is "succeeded" if it landed a PR (`done`) OR, on a
-  // no-remote run, was implemented and reviewed locally (`local-only`): its base
-  // branch and commits persist in the shared `.git`, so dependents can still
-  // build on it. `error`/`review-cap`/`skipped-dep`/`pushed-no-pr`,
-  // `collision-hold`, `collision-blocked`, and `collision-scan-error` do not unlock.
-  // Effective deps = the declared `dependsOn` UNION the prerequisite derived from
-  // the `base`→`branch` relationship, so the gate holds even if the plan agent
-  // omits a `dependsOn` entry it should have listed.
-  const succeeded = (s) => s === "done" || s === "local-only";
-  const runnable = [];
-  for (const task of wave) {
-    const deps = new Set(Array.isArray(task.dependsOn) ? task.dependsOn : []);
-    const baseDep = slugByBranch.get(task.base);
-    if (baseDep && baseDep !== task.slug) deps.add(baseDep);
-    const failedDep = [...deps].find((d) => !succeeded(statusBySlug.get(d)));
-    if (failedDep) {
-      const r = { slug: task.slug, branch: task.branch, status: "skipped-dep", blockedBy: failedDep, depStatus: statusBySlug.get(failedDep) || "missing" };
-      statusBySlug.set(task.slug, "skipped-dep");
-      results.push(r);
-    } else {
-      runnable.push(task);
-    }
-  }
-  if (runnable.length === 0) continue;
-
-  phase(`Wave ${w + 1} (${runnable.length} task${runnable.length === 1 ? "" : "s"})`);
-  // Re-probe free space at each wave boundary after the first (see the wave-width
-  // comment above). A failed or unmeasurable probe keeps the previous reading —
-  // stale-but-conservative beats silently dropping the throttle mid-batch. A
-  // 1-task wave skips the probe: its cap can never throttle (widthCap >= 1).
-  if (w > 0 && runnable.length > 1) {
-    const probe = await agent(storageProbePrompt(boot.wtBase || ".worktrees"), { label: `storage-probe:w${w + 1}`, schema: STORAGE_PROBE_SCHEMA, effort: "low" });
-    if (probe && typeof probe.availBytes === "number" && probe.availBytes > 0) availBytes = probe.availBytes;
-  }
-  const widthCap = widthCapFor(availBytes);
-  if (runnable.length > widthCap) {
-    log(`Throttling wave ${w + 1} to ${widthCap} concurrent task(s) to fit measured storage headroom (~1 GiB per worktree).`);
-    throttled.push({ wave: w + 1, tasks: runnable.length, width: widthCap });
-  }
-  // Sub-batch the wave at the width cap: a wave that exhausts the .worktrees
-  // mount mid-flight delivers nothing. But the pre-PR collision scan must compare
-  // EVERY reviewed branch before any delivery, so — unlike the old per-task flow
-  // that delivered and `wt-remove`d each task as it finished — delivery is now
-  // deferred to after the whole wave is scanned. Left unmanaged, that would let
-  // reviewed worktrees from earlier slices pile up while later slices run,
-  // re-introducing the ENOSPC the sub-batching exists to prevent. So reclaim each
-  // finished slice's reviewed worktrees right here: the branch refs persist in
-  // the shared `.git`, the scan compares by ref (it never enters a worktree), and
-  // the resolver, re-review, and delivery each re-attach on demand via `wt-enter`
-  // — keeping the live worktree count bounded by the cap. Only when the wave is
-  // actually sub-batched; a single-slice wave already fits the cap, so reclaiming
-  // it just to re-attach for delivery would be pure churn.
-  const ready = [];
-  const subBatched = runnable.length > widthCap;
-  for (let i = 0; i < runnable.length; i += widthCap) {
-    const slice = runnable.slice(i, i + widthCap);
-    const sliceResults = await parallel(slice.map((task) => () => implementTask(task, remote, peerMode)));
-    const sliceReady = [];
-    sliceResults.forEach((r, j) => {
-      const res = r || { slug: slice[j].slug, branch: slice[j].branch, status: "error", detail: "task crashed" };
-      if (res.status === "ready") {
-        const entry = { task: slice[j], result: res };
-        ready.push(entry);
-        sliceReady.push(entry);
+    // Dependency gating: a task whose in-batch dependency did not finish
+    // successfully must NOT run — it would branch from a missing/partial/rejected
+    // prerequisite. A dependency is "succeeded" if it landed a PR (`done`) OR, on a
+    // no-remote run, was implemented and reviewed locally (`local-only`): its base
+    // branch and commits persist in the shared `.git`, so dependents can still
+    // build on it. `error`/`review-cap`/`skipped-dep`/`pushed-no-pr`,
+    // `collision-hold`, `collision-blocked`, and `collision-scan-error` do not unlock.
+    // Effective deps = the declared `dependsOn` UNION the prerequisite derived from
+    // the `base`→`branch` relationship, so the gate holds even if the plan agent
+    // omits a `dependsOn` entry it should have listed.
+    const succeeded = (s) => s === "done" || s === "local-only";
+    const runnable = [];
+    for (const task of wave) {
+      const deps = new Set(Array.isArray(task.dependsOn) ? task.dependsOn : []);
+      const baseDep = slugByBranch.get(task.base);
+      if (baseDep && baseDep !== task.slug) deps.add(baseDep);
+      const failedDep = [...deps].find((d) => !succeeded(statusBySlug.get(d)));
+      if (failedDep) {
+        const r = { slug: task.slug, branch: task.branch, status: "skipped-dep", blockedBy: failedDep, depStatus: statusBySlug.get(failedDep) || "missing" };
+        statusBySlug.set(task.slug, "skipped-dep");
+        results.push(r);
       } else {
-        statusBySlug.set(res.slug, res.status);
-        results.push(res);
+        runnable.push(task);
+      }
+    }
+    if (runnable.length === 0) continue;
+
+    phase(`Wave ${w + 1} (${runnable.length} task${runnable.length === 1 ? "" : "s"})`);
+    // Re-probe free space at each wave boundary after the first (see the wave-width
+    // comment above). A failed or unmeasurable probe keeps the previous reading —
+    // stale-but-conservative beats silently dropping the throttle mid-batch. A
+    // 1-task wave skips the probe: its cap can never throttle (widthCap >= 1).
+    if (w > 0 && runnable.length > 1) {
+      const probe = await agent(storageProbePrompt(boot.wtBase || ".worktrees"), { label: `storage-probe:w${w + 1}`, schema: STORAGE_PROBE_SCHEMA, effort: "low" });
+      if (probe && typeof probe.availBytes === "number" && probe.availBytes > 0) availBytes = probe.availBytes;
+    }
+    const widthCap = widthCapFor(availBytes);
+    if (runnable.length > widthCap) {
+      log(`Throttling wave ${w + 1} to ${widthCap} concurrent task(s) to fit measured storage headroom (~1 GiB per worktree).`);
+      throttled.push({ wave: w + 1, tasks: runnable.length, width: widthCap });
+    }
+    // Sub-batch the wave at the width cap: a wave that exhausts the .worktrees
+    // mount mid-flight delivers nothing. But the pre-PR collision scan must compare
+    // EVERY reviewed branch before any delivery, so — unlike the old per-task flow
+    // that delivered and `wt-remove`d each task as it finished — delivery is now
+    // deferred to after the whole wave is scanned. Left unmanaged, that would let
+    // reviewed worktrees from earlier slices pile up while later slices run,
+    // re-introducing the ENOSPC the sub-batching exists to prevent. So reclaim each
+    // finished slice's reviewed worktrees right here: the branch refs persist in
+    // the shared `.git`, the scan compares by ref (it never enters a worktree), and
+    // the resolver, re-review, and delivery each re-attach on demand via `wt-enter`
+    // — keeping the live worktree count bounded by the cap. Only when the wave is
+    // actually sub-batched; a single-slice wave already fits the cap, so reclaiming
+    // it just to re-attach for delivery would be pure churn.
+    const ready = [];
+    const subBatched = runnable.length > widthCap;
+    for (let i = 0; i < runnable.length; i += widthCap) {
+      const slice = runnable.slice(i, i + widthCap);
+      const sliceResults = await parallel(slice.map((task) => () => implementTask(task, remote, peerMode)));
+      const sliceReady = [];
+      sliceResults.forEach((r, j) => {
+        const res = r || { slug: slice[j].slug, branch: slice[j].branch, status: "error", detail: "task crashed" };
+        if (res.status === "ready") {
+          const entry = { task: slice[j], result: res };
+          ready.push(entry);
+          sliceReady.push(entry);
+        } else {
+          statusBySlug.set(res.slug, res.status);
+          results.push(res);
+        }
+      });
+      if (subBatched && sliceReady.length) {
+        await parallel(sliceReady.map(({ task }) => () => agent(cleanupNote(task), { label: `reclaim:${task.slug}` })));
+      }
+    }
+
+    // Pre-PR collision guard. Independent sibling branches in this wave each live
+    // in their own worktree, so two can ADD the same new file or exported symbol
+    // with no in-worktree conflict. Scan reviewed branches before delivery so a
+    // known clash does not become a fresh PR that immediately needs a rename.
+    let heldBranches = new Set();
+    let scanError = "";
+    if (ready.length >= 2) {
+      phase(`Collision scan (wave ${w + 1})`);
+      const scan = await agent(
+        collisionScanPrompt(ready.map(({ task }) => ({ slug: task.slug, branch: task.branch, base: task.base || plan.defaultBase }))),
+        { label: `collision-scan:w${w + 1}`, schema: COLLISION_SCHEMA }
+      );
+      if (!scan || !Array.isArray(scan.collisions)) {
+        scanError = `collision scan failed for wave ${w + 1}; holding reviewed branches before PR delivery`;
+        log(scanError);
+      } else if (scan.collisions.length) {
+        collisions.push(...scan.collisions.map((c) => ({ ...c, wave: w + 1 })));
+        heldBranches = new Set(scan.collisions.flatMap(collisionBranchNames));
+        log(`${scan.collisions.length} cross-branch naming collision(s) in wave ${w + 1}; holding ${heldBranches.size} branch(es) before PR delivery.`);
+      }
+    }
+
+    // Partition the wave's reviewed branches: clean ones are deliverable; ones the
+    // scan flagged go to resolution; a scan failure holds everything it covered.
+    const deliverable = [];
+    const heldTasks = [];
+    ready.forEach(({ task, result }) => {
+      if (scanError) {
+        const held = {
+          slug: task.slug,
+          branch: task.branch,
+          status: "collision-scan-error",
+          detail: scanError,
+          ...cycleCarried(result),
+        };
+        statusBySlug.set(task.slug, held.status);
+        results.push(held);
+      } else if (heldBranches.has(task.branch) || heldBranches.has(task.slug)) {
+        heldTasks.push({ task, result });
+      } else {
+        deliverable.push({ task, result });
       }
     });
-    if (subBatched && sliceReady.length) {
-      await parallel(sliceReady.map(({ task }) => () => agent(cleanupNote(task), { label: `reclaim:${task.slug}` })));
-    }
-  }
 
-  // Pre-PR collision guard. Independent sibling branches in this wave each live
-  // in their own worktree, so two can ADD the same new file or exported symbol
-  // with no in-worktree conflict. Scan reviewed branches before delivery so a
-  // known clash does not become a fresh PR that immediately needs a rename.
-  let heldBranches = new Set();
-  let scanError = "";
-  if (ready.length >= 2) {
-    phase(`Collision scan (wave ${w + 1})`);
-    const scan = await agent(
-      collisionScanPrompt(ready.map(({ task }) => ({ slug: task.slug, branch: task.branch, base: task.base || plan.defaultBase }))),
-      { label: `collision-scan:w${w + 1}`, schema: COLLISION_SCHEMA }
-    );
-    if (!scan || !Array.isArray(scan.collisions)) {
-      scanError = `collision scan failed for wave ${w + 1}; holding reviewed branches before PR delivery`;
-      log(scanError);
-    } else if (scan.collisions.length) {
-      collisions.push(...scan.collisions.map((c) => ({ ...c, wave: w + 1 })));
-      heldBranches = new Set(scan.collisions.flatMap(collisionBranchNames));
-      log(`${scan.collisions.length} cross-branch naming collision(s) in wave ${w + 1}; holding ${heldBranches.size} branch(es) before PR delivery.`);
-    }
-  }
+    // Collision resolution. Neither side of an add/add clash is inherently "first",
+    // so a single orchestrator-deputy agent — seeing every held branch and its
+    // worktree, still in place — decides which side to rename and does it: rename
+    // the file/symbol, regenerate derived files, commit, push. A name that MUST
+    // stay identical (framework-mandated, externally fixed, or pinned by a task
+    // file) is reported `blocked` instead of getting an invented divergent name.
+    // Each branch the resolver CHANGED is then re-reviewed fresh (one pass) before
+    // it may deliver; the unchanged side of a resolved clash delivers as-is; a
+    // blocked, unresolved, or re-review-failed branch stays held for a human.
+    if (heldTasks.length) {
+      const waveCollisions = collisions.filter((c) => c.wave === w + 1);
+      const relatedFor = (task) =>
+        waveCollisions.filter((c) => {
+          const names = collisionBranchNames(c);
+          return names.includes(task.branch) || names.includes(task.slug);
+        });
 
-  // Partition the wave's reviewed branches: clean ones are deliverable; ones the
-  // scan flagged go to resolution; a scan failure holds everything it covered.
-  const deliverable = [];
-  const heldTasks = [];
-  ready.forEach(({ task, result }) => {
-    if (scanError) {
-      const held = {
-        slug: task.slug,
-        branch: task.branch,
-        status: "collision-scan-error",
-        detail: scanError,
-        ...cycleCarried(result),
-      };
-      statusBySlug.set(task.slug, held.status);
-      results.push(held);
-    } else if (heldBranches.has(task.branch) || heldBranches.has(task.slug)) {
-      heldTasks.push({ task, result });
-    } else {
-      deliverable.push({ task, result });
-    }
-  });
+      phase(`Collision resolve (wave ${w + 1})`);
+      const resolution = await agent(
+        resolveCollisionsPrompt(
+          heldTasks.map(({ task }) => ({ slug: task.slug, branch: task.branch, base: task.base || plan.defaultBase })),
+          waveCollisions,
+          remote
+        ),
+        { label: `collision-resolve:w${w + 1}`, schema: RESOLUTION_SCHEMA }
+      );
+      const resolutions = resolution && Array.isArray(resolution.resolutions) ? resolution.resolutions : null;
 
-  // Collision resolution. Neither side of an add/add clash is inherently "first",
-  // so a single orchestrator-deputy agent — seeing every held branch and its
-  // worktree, still in place — decides which side to rename and does it: rename
-  // the file/symbol, regenerate derived files, commit, push. A name that MUST
-  // stay identical (framework-mandated, externally fixed, or pinned by a task
-  // file) is reported `blocked` instead of getting an invented divergent name.
-  // Each branch the resolver CHANGED is then re-reviewed fresh (one pass) before
-  // it may deliver; the unchanged side of a resolved clash delivers as-is; a
-  // blocked, unresolved, or re-review-failed branch stays held for a human.
-  if (heldTasks.length) {
-    const waveCollisions = collisions.filter((c) => c.wave === w + 1);
-    const relatedFor = (task) =>
-      waveCollisions.filter((c) => {
-        const names = collisionBranchNames(c);
-        return names.includes(task.branch) || names.includes(task.slug);
-      });
-
-    phase(`Collision resolve (wave ${w + 1})`);
-    const resolution = await agent(
-      resolveCollisionsPrompt(
-        heldTasks.map(({ task }) => ({ slug: task.slug, branch: task.branch, base: task.base || plan.defaultBase })),
-        waveCollisions,
-        remote
-      ),
-      { label: `collision-resolve:w${w + 1}`, schema: RESOLUTION_SCHEMA }
-    );
-    const resolutions = resolution && Array.isArray(resolution.resolutions) ? resolution.resolutions : null;
-
-    // Index the resolver's outcome by branch and by collision name. A collision
-    // is actually resolved only when enough involved branches were changed that
-    // at most one branch still carries the original colliding value. This matters
-    // for 3+ branch clashes: renaming one side leaves the other two still
-    // colliding, so those unchanged branches must stay held.
-    const changedBranches = new Set();
-    const changedBranchesByCollision = new Map();
-    const blockedNames = new Set();
-    if (resolutions) {
-      for (const r of resolutions) {
-        const changed = Array.isArray(r.changedBranches) ? r.changedBranches.map(normalizeBranchName).filter(Boolean) : [];
-        if (r.action === "renamed") {
-          changed.forEach((n) => changedBranches.add(n));
-          if (r.collision) {
-            const existing = changedBranchesByCollision.get(r.collision) || new Set();
-            changed.forEach((n) => existing.add(n));
-            changedBranchesByCollision.set(r.collision, existing);
+      // Index the resolver's outcome by branch and by collision name. A collision
+      // is actually resolved only when enough involved branches were changed that
+      // at most one branch still carries the original colliding value. This matters
+      // for 3+ branch clashes: renaming one side leaves the other two still
+      // colliding, so those unchanged branches must stay held.
+      const changedBranches = new Set();
+      const changedBranchesByCollision = new Map();
+      const blockedNames = new Set();
+      if (resolutions) {
+        for (const r of resolutions) {
+          const changed = Array.isArray(r.changedBranches) ? r.changedBranches.map(normalizeBranchName).filter(Boolean) : [];
+          if (r.action === "renamed") {
+            changed.forEach((n) => changedBranches.add(n));
+            if (r.collision) {
+              const existing = changedBranchesByCollision.get(r.collision) || new Set();
+              changed.forEach((n) => existing.add(n));
+              changedBranchesByCollision.set(r.collision, existing);
+            }
+          } else if (r.action === "blocked" && r.collision) {
+            blockedNames.add(r.collision);
           }
-        } else if (r.action === "blocked" && r.collision) {
-          blockedNames.add(r.collision);
         }
       }
-    }
-    const collisionBlocked = (c) => blockedNames.has(c.name);
-    // Only branches the resolver reported as changed FOR THIS collision count
-    // toward resolving it. An earlier version also credited any branch in the
-    // global `changedBranches` set, to guard against a resolver that mistypes the
-    // collision echo — but that is unsound when a branch sits in more than one
-    // collision: renaming branch B to fix an A/B path clash would also mark B
-    // "changed" for an unrelated B/C symbol clash, dropping that clash to a single
-    // remaining branch and letting B and C both deliver while still colliding. A
-    // mis-echoed rename now conservatively leaves the branch held (for a manual
-    // pass / re-scan) instead — matching this guard's bias that holding a real
-    // conflict beats shipping a wrong delivery.
-    const changedForCollision = (c) => new Set(changedBranchesByCollision.get(c.name) || []);
-    const remainingForCollision = (c) => {
-      const changed = changedForCollision(c);
-      return collisionBranchNames(c).filter((n) => !changed.has(n));
-    };
-    const collisionResolved = (c) => !collisionBlocked(c) && remainingForCollision(c).length <= 1;
-    const collisionStillIncludes = (c, task) => {
-      if (collisionBlocked(c)) return true;
-      const names = collisionBranchNames(c);
-      const participates = names.includes(task.branch) || names.includes(task.slug);
-      if (!participates) return false;
-      const changed = changedForCollision(c);
-      if (changed.has(task.branch) || changed.has(task.slug)) return false;
-      return remainingForCollision(c).length >= 2;
-    };
+      const collisionBlocked = (c) => blockedNames.has(c.name);
+      // Only branches the resolver reported as changed FOR THIS collision count
+      // toward resolving it. An earlier version also credited any branch in the
+      // global `changedBranches` set, to guard against a resolver that mistypes the
+      // collision echo — but that is unsound when a branch sits in more than one
+      // collision: renaming branch B to fix an A/B path clash would also mark B
+      // "changed" for an unrelated B/C symbol clash, dropping that clash to a single
+      // remaining branch and letting B and C both deliver while still colliding. A
+      // mis-echoed rename now conservatively leaves the branch held (for a manual
+      // pass / re-scan) instead — matching this guard's bias that holding a real
+      // conflict beats shipping a wrong delivery.
+      const changedForCollision = (c) => new Set(changedBranchesByCollision.get(c.name) || []);
+      const remainingForCollision = (c) => {
+        const changed = changedForCollision(c);
+        return collisionBranchNames(c).filter((n) => !changed.has(n));
+      };
+      const collisionResolved = (c) => !collisionBlocked(c) && remainingForCollision(c).length <= 1;
+      const collisionStillIncludes = (c, task) => {
+        if (collisionBlocked(c)) return true;
+        const names = collisionBranchNames(c);
+        const participates = names.includes(task.branch) || names.includes(task.slug);
+        if (!participates) return false;
+        const changed = changedForCollision(c);
+        if (changed.has(task.branch) || changed.has(task.slug)) return false;
+        return remainingForCollision(c).length >= 2;
+      };
 
-    for (const { task, result } of heldTasks) {
-      const related = relatedFor(task);
-      const isChanged = changedBranches.has(task.branch) || changedBranches.has(task.slug);
+      for (const { task, result } of heldTasks) {
+        const related = relatedFor(task);
+        const isChanged = changedBranches.has(task.branch) || changedBranches.has(task.slug);
 
-      if (!resolutions) {
-        const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision resolver returned no result; branch held before PR delivery — deconflict manually and re-review", collisions: related, ...cycleCarried(result) };
-        statusBySlug.set(task.slug, held.status);
-        results.push(held);
-      } else if (related.some(collisionBlocked)) {
-        // An imperative shared name still clashes even if this branch was also
-        // touched — keep it held for a human/design decision.
-        const held = { slug: task.slug, branch: task.branch, status: "collision-blocked", detail: "shared name must stay identical (imperative); resolver could not deconflict — needs a human/design decision", collisions: related, ...cycleCarried(result) };
-        statusBySlug.set(task.slug, held.status);
-        results.push(held);
-      } else if (related.some((c) => collisionStillIncludes(c, task))) {
-        const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision still has two or more unchanged branches after resolver ran; branch held before PR delivery — rename enough sides and re-review", collisions: related, ...cycleCarried(result) };
-        statusBySlug.set(task.slug, held.status);
-        results.push(held);
-      } else if (isChanged) {
-        // Fresh re-review of the rename — ONE pass of the cycle's reviewer
-        // brief, with no fixer loop and no peer stage. This is deliberately
-        // not another full cycle: the branch already cleared the complete
-        // cycle (peer included) before the collision guard ran, the check is
-        // scoped to the deconfliction rename, and the address-tasks skill
-        // specifies exactly this — "re-review each changed task with fresh
-        // eyes" — a single-reviewer pass that predates the shared cycle.
-        // Hold on failure rather than loop.
-        const verdict = await agent(cycleReviewPrompt(taskCycleConfig(task, remote, peerMode), { round: 1, packet: null, artifactDir: "" }), { label: `re-review:${task.slug}`, schema: CYCLE_REVIEW_SCHEMA });
-        if (verdict && verdict.pass && !verdict.emptyDiffFlag) {
-          deliverable.push({ task, result: { ...result, notes: verdict.notes || result.notes } });
+        if (!resolutions) {
+          const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision resolver returned no result; branch held before PR delivery — deconflict manually and re-review", collisions: related, ...cycleCarried(result) };
+          statusBySlug.set(task.slug, held.status);
+          results.push(held);
+        } else if (related.some(collisionBlocked)) {
+          // An imperative shared name still clashes even if this branch was also
+          // touched — keep it held for a human/design decision.
+          const held = { slug: task.slug, branch: task.branch, status: "collision-blocked", detail: "shared name must stay identical (imperative); resolver could not deconflict — needs a human/design decision", collisions: related, ...cycleCarried(result) };
+          statusBySlug.set(task.slug, held.status);
+          results.push(held);
+        } else if (related.some((c) => collisionStillIncludes(c, task))) {
+          const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision still has two or more unchanged branches after resolver ran; branch held before PR delivery — rename enough sides and re-review", collisions: related, ...cycleCarried(result) };
+          statusBySlug.set(task.slug, held.status);
+          results.push(held);
+        } else if (isChanged) {
+          // Fresh re-review of the rename — ONE pass of the cycle's reviewer
+          // brief, with no fixer loop and no peer stage. This is deliberately
+          // not another full cycle: the branch already cleared the complete
+          // cycle (peer included) before the collision guard ran, the check is
+          // scoped to the deconfliction rename, and the address-tasks skill
+          // specifies exactly this — "re-review each changed task with fresh
+          // eyes" — a single-reviewer pass that predates the shared cycle.
+          // Hold on failure rather than loop.
+          const verdict = await agent(cycleReviewPrompt(taskCycleConfig(task, remote, peerMode), { round: 1, packet: null, artifactDir: "" }), { label: `re-review:${task.slug}`, schema: CYCLE_REVIEW_SCHEMA });
+          if (verdict && verdict.pass && !verdict.emptyDiffFlag) {
+            deliverable.push({ task, result: { ...result, notes: verdict.notes || result.notes } });
+          } else {
+            const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "rename did not pass fresh re-review; held before PR delivery", outstanding: verdict ? verdict.issues : null, collisions: related, ...cycleCarried(result) };
+            statusBySlug.set(task.slug, held.status);
+            results.push(held);
+          }
+        } else if (related.every(collisionResolved)) {
+          // Unchanged side of a clash the resolver fixed on the other branch.
+          deliverable.push({ task, result });
         } else {
-          const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "rename did not pass fresh re-review; held before PR delivery", outstanding: verdict ? verdict.issues : null, collisions: related, ...cycleCarried(result) };
+          // Resolver neither changed nor blocked this branch's clash — do not
+          // re-introduce it by delivering; hold for a manual pass.
+          const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision left unresolved by the resolver; branch held before PR delivery — deconflict manually and re-review", collisions: related, ...cycleCarried(result) };
           statusBySlug.set(task.slug, held.status);
           results.push(held);
         }
-      } else if (related.every(collisionResolved)) {
-        // Unchanged side of a clash the resolver fixed on the other branch.
-        deliverable.push({ task, result });
-      } else {
-        // Resolver neither changed nor blocked this branch's clash — do not
-        // re-introduce it by delivering; hold for a manual pass.
-        const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision left unresolved by the resolver; branch held before PR delivery — deconflict manually and re-review", collisions: related, ...cycleCarried(result) };
-        statusBySlug.set(task.slug, held.status);
-        results.push(held);
       }
     }
-  }
 
-  for (let i = 0; i < deliverable.length; i += widthCap) {
-    const slice = deliverable.slice(i, i + widthCap);
-    const delivered = await parallel(slice.map(({ task, result }) => () => deliverTask(task, result, remote)));
-    delivered.forEach((r, j) => {
-      // Even on a delivery crash the cycle itself completed, so its record is
-      // still in hand — carry it rather than losing it with the crash.
-      const res = r || { slug: slice[j].task.slug, branch: slice[j].task.branch, status: "error", detail: "delivery crashed", ...cycleCarried(slice[j].result) };
-      statusBySlug.set(res.slug, res.status);
-      results.push(res);
-    });
+    for (let i = 0; i < deliverable.length; i += widthCap) {
+      const slice = deliverable.slice(i, i + widthCap);
+      const delivered = await parallel(slice.map(({ task, result }) => () => deliverTask(task, result, remote)));
+      delivered.forEach((r, j) => {
+        // Even on a delivery crash the cycle itself completed, so its record is
+        // still in hand — carry it rather than losing it with the crash.
+        const res = r || { slug: slice[j].task.slug, branch: slice[j].task.branch, status: "error", detail: "delivery crashed", ...cycleCarried(slice[j].result) };
+        statusBySlug.set(res.slug, res.status);
+        results.push(res);
+      });
+    }
   }
+} catch (e) {
+  // Reported, not rethrown: the batch is over either way, and the closing
+  // comparison plus whatever terminal statuses were reached are more use to the
+  // reader than an unwound stack. `finalMainCheckoutReport` cannot throw, so
+  // this exit always carries a report — an unmeasured one if the reading failed.
+  phase("Summary");
+  return { error: `Batch aborted: ${e && e.message ? e.message : String(e)}`, batch: args, remote, peer: peerMode, throttled, collisions, results, mainCheckout: await finalMainCheckoutReport() };
 }
 
 phase("Summary");
-// Post-batch snapshot of the shared main checkout, compared against the baseline.
-// This report step is non-destructive: it only reports dirt — distinguishing
-// pre-existing from newly-appeared paths and, crucially, from baseline paths
-// that DISAPPEARED (a possible destructive loss) — and never modifies, resets,
-// or fails on it. It does not vouch for the batch's other stages.
-const mainCheckoutFinal = await agent(mainCheckoutStatusPrompt("post-batch"), {
-  label: "main-checkout-final",
-  schema: MAIN_CHECKOUT_SCHEMA,
-  effort: "low",
-});
-const mainCheckout = mainCheckoutSummary(mainCheckoutBaseline, mainCheckoutFinal);
-// Log flagged dirt AND the not-measured outcome: a skipped comparison is easy
-// to miss if only `flagged` reports surface, and its note says exactly why the
-// cleanliness check has nothing authoritative this run.
-if (mainCheckout.flagged || !mainCheckout.measured) {
-  const details = [];
-  if (mainCheckout.newPaths.length) details.push(`new: ${mainCheckout.newPaths.join(", ")}`);
-  if (mainCheckout.disappeared.length) details.push(`disappeared: ${mainCheckout.disappeared.join(", ")}`);
-  if (mainCheckout.unattributed.length) details.push(`unattributed: ${mainCheckout.unattributed.join(", ")}`);
-  log(`${mainCheckout.note}${details.length ? ` [${details.join("; ")}]` : ""}`);
-}
+// Post-batch snapshot of the shared main checkout, compared against the
+// baseline (see finalMainCheckoutReport, which the empty-batch return and the
+// thrown-stage catch above run too).
+const mainCheckout = await finalMainCheckoutReport();
 const landed = results.filter((r) => r.status === "done").length;
 log(`Batch complete: ${landed}/${results.length} tasks landed a PR.`);
 // Open questions and locked-decision deviations bubble up structurally — they

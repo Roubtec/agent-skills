@@ -19,6 +19,13 @@ Consider parallel subagents for disparate, independent tasks when their implemen
 Keep dependent tasks or a chain of dependent PRs in one analysis when acceptance depends on their combined end state or shared context.
 Base the choice on dependency structure, validation cost, and the risk of conflicting follow-up files; regardless of execution shape, synthesize one coherent result and perform shared cleanup checks once.
 
+Whenever you spawn a verification subagent, state this boundary in its prompt — you compose that prompt yourself, so nothing else carries it. A reviewer subagent authorized to verify a claim empirically once ran `rm -rf ./*` in a shared main checkout: its setup `git clone … | tail` had failed invisibly under `set -e` (a pipeline's status is its last command), so it deleted tracked files and moved a branch ref while believing it stood inside a clone.
+
+- **Permitted:** reading, searching, and read-only `git`/`gh` queries, plus running the build below.
+- **Forbidden, named outright:** `rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`, and force-pushing — each of them beyond what the prompt itself spells out, whether as an exact command or as a skill it names to invoke. A subagent may not self-authorize one by putting itself somewhere it believes is safe — forbidden **not in a clone, not in a temp directory, not "safely"**. What you spelled out, and the disposable location below, are the only exemptions — and only because you named them.
+- **A worktree is not a blast radius.** It isolates the working tree, not the repository: `branch -f`, `reset`, `update-ref`, and `gc` all reach every sibling worktree through the shared `.git`. A reap sweep has no worktree isolation at all — every subagent you spawn shares the one checkout, so this is the only boundary there is.
+- **Empirical verification that could change state goes where you send it.** Where `command -v dc-enter` finds the helper, send the subagent to `DC="$(dc-enter <slug>)"` — one absolute path on stdout, dropped again with `dc-remove <slug>`; a reused slug is refused rather than re-derived, so anything that may run twice passes `--replace` or removes the slug first. Where the helper is absent, name an absolute path outside the repository — never a relative one. Never leave the choice to the subagent.
+
 ## Reaping process
 
 For a sweep, if the repo's deferred task subfolder exists (for example, `tasks/deferred/`), inspect it and report entries whose recorded condition appears to have arrived; promotion into the active task folder remains a maintainer decision, so do not move them automatically.
@@ -31,6 +38,7 @@ For every task file:
 
 2. **Run a full build** and verify there are no type errors.
    A build failure is an automatic blocker regardless of whether the task's acceptance criteria mention it.
+   Output that must land in a file goes to a path namespaced by the task number, or one created with `mktemp -d` — never a fixed shared scratchpad name: one session's agents share that directory, and two of them redirecting to `<scratchpad>/verify.log` once had one report a verdict for the wrong branch. When you spawn a subagent to run the build, hand it the path rather than leaving it to choose.
 
 3. **Inspect the implementation** to verify delivery.
    Do not take file existence at face value — read the relevant source files, check route behavior, verify that tests exist and pass, confirm that types are sound, and validate that the implementation matches the task's stated intent.
