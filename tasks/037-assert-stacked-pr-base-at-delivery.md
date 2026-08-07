@@ -9,8 +9,9 @@ A dependent task's PR opened against `main` instead of its parent branch shows t
 Included:
 
 - **State the intent once, where the base rules live:** a PR's base must be the ref its branch actually builds on, so the PR shows the honest diff of that branch's own contribution to the stack — this is what routes review comments to the right PR. One or two sentences; the existing determination rules stay as they are.
-- **Post-create assertion:** immediately after `gh pr create`, read the PR back (`gh pr view --json baseRefName`) and require it to equal the recorded base. On mismatch, repair with `gh pr edit --base <recorded-base>` and note the repair; if the repair fails, report the PR as delivered-with-wrong-base rather than silently succeeding.
+- **Post-create assertion:** immediately after `gh pr create`, capture the PR URL it returned and read *that* PR back explicitly (`gh pr view <pr-url> --json baseRefName`), requiring the result to equal the recorded base. Address the repair the same way (`gh pr edit <pr-url> --base <recorded-base>`) and note it; if the repair fails, report the PR as delivered-with-wrong-base rather than silently succeeding. The explicit target is load-bearing, not ceremony: every delivery point creates the PR with `--head <branch>` from whatever checkout the orchestrator happens to be standing in, and an argument-less `gh pr view`/`gh pr edit` resolves the *current branch's* PR — the main checkout's, or none at all — so a bare form would assert against, and repair, the wrong PR.
 - Apply the assertion at every delivery point: the Delivery section of `address-tasks`, the per-task loop's PR step in `address-tasks-serialized`, and the PR-creation stage prompt in `wf-address-tasks.js` (the agent asserts the base before it may return `opened: true`).
+- **Record the practice where the repo documents PR practice:** how we open and merge PRs lives in `README.md`'s Contributing section, so the honest-diff base rule and the assert-then-repair policy get a sentence or two there as well — the practice stated once for humans and agents alike, with the skills carrying the mechanics.
 
 Out of scope:
 
@@ -25,17 +26,18 @@ Out of scope:
 
 ## Target files or areas
 
-- `plugins/dev-skills/skills/{address-tasks,address-tasks-serialized}/SKILL.md`, `plugins/dev-skills/workflows/wf-address-tasks.js`, and the codex-side mirrors of the two skills.
+- `plugins/dev-skills/skills/{address-tasks,address-tasks-serialized}/SKILL.md`, `plugins/dev-skills/workflows/wf-address-tasks.js`, the codex-side mirrors of the two skills, and `README.md`'s Contributing section.
 
 ## Implementation notes
 
-- This is a tightening, not a redesign: a few sentences per delivery point plus the workflow prompt's assertion. Keep the repair path (`gh pr edit --base`) in the same breath as the check so an agent never stops a batch over a repairable mismatch.
+- This is a tightening, not a redesign: a few sentences per delivery point plus the workflow prompt's assertion. Keep the repair path (`gh pr edit <pr-url> --base`) in the same breath as the check so an agent never stops a batch over a repairable mismatch.
 - The likeliest real mismatch sources are a retried creation after a partial failure and an omitted `--base` falling back to the default branch; the assertion catches both without needing to enumerate causes.
 - The stacked-PR body note ("which branch it stacks on") already exists in `address-tasks` Delivery; leave it, the assertion complements it.
 
 ## Acceptance criteria
 
-- Each of the three delivery points states the honest-diff intent and performs the post-create base assertion with the repair-then-report escalation.
+- Each of the three delivery points states the honest-diff intent and performs the post-create base assertion with the repair-then-report escalation, addressing the PR that `gh pr create` returned explicitly rather than relying on the current branch to select it.
+- `README.md`'s Contributing section states the honest-diff base rule and the assert-then-repair policy, so the repository's own PR practice does not go out of sync with the skills.
 - The `wf-address-tasks.js` PR-stage prompt cannot report `opened: true` without having verified (or repaired) the base, and its structured result reflects a delivered-with-wrong-base outcome distinctly when repair failed.
 - No change to base determination, retargeting behavior, or the review-stack construction; codex mirrors match.
 
