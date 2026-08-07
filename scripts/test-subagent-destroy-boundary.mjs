@@ -8,6 +8,22 @@
 // rounds of task 017 each eyeballed the sources and each missed a path. A
 // rendered string cannot be argued with.
 //
+// Two separable jobs, because in a workflow the boundary is a CONSTANT and
+// every use of it is a bare `${CONSTANT}` interpolation:
+//
+//   PRESENCE, checked per rendered prompt, by exact string containment. Each
+//   brief must carry one of the boundary constants DECLARED IN ITS OWN FILE,
+//   verbatim. Nothing is re-derived from prose, so a prompt cannot pass with a
+//   partial or hand-edited copy that happens to satisfy a set of phrase
+//   regexes.
+//
+//   CONTENT, checked per boundary constant, against the clause list below.
+//   Task 017's criterion is about what the constants SAY, and they say it once
+//   each; asserting eleven clauses against all thirty renders re-derived the
+//   same five answers thirty times over. The constants are evaluated out of the
+//   same declaration prefix the builders come from, so this is the value the
+//   briefs actually interpolate rather than the source text of the literal.
+//
 // A workflow is a runtime script, not a module: it opens with `export const
 // meta` and ends in top-level `await agent(...)`. So this suite evaluates the
 // DECLARATION PREFIX of each shipped file — everything up to the documented cut
@@ -68,13 +84,22 @@ const CUT = {
   "wf-address-review.js": "\nconst raw = flattenArgs(args);",
 };
 
-// What every rendered prompt must contain. Task 017's criterion is that each
-// site states the PERMITTED-versus-FORBIDDEN boundary, so the permitted half is
-// asserted too: a prompt that lost its Permitted line would otherwise still
+// What every boundary CONSTANT must say. Task 017's criterion is that each site
+// states the PERMITTED-versus-FORBIDDEN boundary, so the permitted half is
+// asserted too: a constant that lost its Permitted line would otherwise still
 // pass. Each entry is one semantic clause the criterion names, matched by the
 // phrase that carries it — deliberately not a byte comparison of the whole
 // constant, which would turn every future wording tweak into a failure. This
 // must fail when a clause is LOST, not when it is reworded.
+//
+// The directive clause is the one place a wildcard used to span a verb: it read
+// `/Empirical verification[^\n]*belongs ONLY in a disposable clone/`, which a
+// NEGATED boundary satisfies — "never belongs ONLY in a disposable clone", "does
+// not belong ONLY in a disposable clone" — so the suite could pass a boundary
+// saying the opposite of what it must. The gap is now bounded to the qualifier
+// that was narrowed last round ("that could change state", "that could mutate
+// state"), with `that ... state belongs ONLY` literal around it, so the
+// directive's own verb can no longer be reworded out from under the match.
 const REQUIRED = [
   ["permitted set", /Permitted: reading, searching,[^\n]*read-only `git`\/`gh` queries/],
   ["forbidden set", /`rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`/],
@@ -84,7 +109,7 @@ const REQUIRED = [
   ["exemptions are granted, not self-selected", /the only exemptions — and only because this assignment names them/],
   ["worktree is not a blast radius", /A worktree is not a blast radius/],
   ["shared `.git` reaches every sibling worktree", /reach every sibling worktree through the shared `\.git`/],
-  ["empirical verification is clone-only", /Empirical verification[^\n]*belongs ONLY in a disposable clone/],
+  ["empirical verification is clone-only", /Empirical verification that [a-z ]+ state belongs ONLY in a disposable clone/],
   ["disposable-clone destination", /command -v dc-enter/],
   ["absolute-path fallback", /absolute path outside the repository — never a relative one/],
 ];
@@ -113,6 +138,15 @@ function promptBuilders(src) {
   return { names: [...found].sort(), sites: sites.size, prose, unaccounted };
 }
 
+// Every top-level boundary constant the file declares — `DESTROY_BOUNDARY` for
+// a workflow's own briefs, `CYCLE_DESTROY_BOUNDARY` for the review-cycle-core
+// section's four roles. Discovered rather than listed, so a third one added
+// later is content-checked and becomes an accepted presence value on its own.
+// A file that declares none fails: nothing it renders could then carry one.
+function boundaryNames(src) {
+  return [...src.matchAll(/^const (\w*DESTROY_BOUNDARY) = `/gm)].map((m) => m[1]);
+}
+
 function load(file) {
   const src = readFileSync(join(workflows, file), "utf8");
   const marker = CUT[file];
@@ -127,13 +161,21 @@ function load(file) {
     throw new Error(`${file}: declaration prefix reaches a top-level await; the cut marker is too late`);
   }
   const { names, ...accounting } = promptBuilders(src);
+  const bNames = boundaryNames(src);
+  if (!bNames.length) throw new Error(`${file}: declares no top-level *DESTROY_BOUNDARY constant`);
   // `args` is the workflow's own injected parameter; a few late declarations in
   // the prefix read it. An empty string keeps them inert. Each requested name is
-  // returned by an explicit reference, so a builder that is not declared in the
-  // prefix is a ReferenceError here rather than a silent skip.
-  const body = `"use strict";\n${prefix}\nreturn { ${names.map((n) => `${n}: ${n}`).join(", ")} };`;
-  const fns = new Function("args", body)("");
-  return { src, names, fns, accounting };
+  // returned by an explicit reference, so a builder — or a boundary constant —
+  // that is not declared in the prefix is a ReferenceError here rather than a
+  // silent skip. The constants come back EVALUATED, which is exactly what the
+  // briefs interpolate; the source-text identity check further down is a
+  // separate question and reads the literal instead.
+  const wanted = [...names, ...bNames];
+  const body = `"use strict";\n${prefix}\nreturn { ${wanted.map((n) => `${n}: ${n}`).join(", ")} };`;
+  const out = new Function("args", body)("");
+  const fns = Object.fromEntries(names.map((n) => [n, out[n]]));
+  const boundaries = bNames.map((n) => [n, out[n]]);
+  return { src, names, fns, boundaries, accounting };
 }
 
 // --- Fixtures -------------------------------------------------------------
@@ -238,10 +280,11 @@ const FIXTURES = {
 
 let failures = 0;
 let rendered = 0;
+let clauseChecks = 0;
 const rows = [];
 
 for (const file of Object.keys(CUT)) {
-  const { names, fns, accounting } = load(file);
+  const { names, fns, boundaries, accounting } = load(file);
   const fixtures = FIXTURES[file] || {};
   const { sites, prose, unaccounted } = accounting;
   if (unaccounted.length) {
@@ -250,6 +293,17 @@ for (const file of Object.keys(CUT)) {
   } else {
     const excluded = prose.length ? ` (line ${prose.join(", ")})` : "";
     rows.push([file, "agent( accounting", "ok", `${sites} call sites; ${prose.length} prose mention(s) in comments excluded${excluded}`]);
+  }
+  // CONTENT: the clauses, once per constant this file declares.
+  for (const [bName, text] of boundaries) {
+    clauseChecks++;
+    const missing = REQUIRED.filter(([, re]) => !re.test(text)).map(([what]) => what);
+    if (missing.length) {
+      failures++;
+      rows.push([file, `${bName} (clauses)`, "FAIL", `missing: ${missing.join("; ")}`]);
+    } else {
+      rows.push([file, `${bName} (clauses)`, "ok", `all ${REQUIRED.length} clauses, ${Buffer.byteLength(text)} bytes`]);
+    }
   }
   for (const name of names) {
     if (!fixtures[name]) {
@@ -267,12 +321,15 @@ for (const file of Object.keys(CUT)) {
         rows.push([file, label, "FAIL", `render threw: ${err.message}`]);
         continue;
       }
-      const missing = REQUIRED.filter(([, re]) => !re.test(text)).map(([what]) => what);
-      if (missing.length) {
+      // PRESENCE: exact containment of one of this file's own constants. Every
+      // boundary use in these sources is a bare `${CONSTANT}` interpolation, so
+      // a rendered brief carries the constant verbatim or does not carry it.
+      const carried = boundaries.find(([, b]) => text.includes(b));
+      if (!carried) {
         failures++;
-        rows.push([file, label, "FAIL", `missing: ${missing.join("; ")}`]);
+        rows.push([file, label, "FAIL", `no boundary: carries none of ${boundaries.map(([n]) => n).join(", ")} verbatim`]);
       } else {
-        rows.push([file, label, "ok", `${text.length} chars`]);
+        rows.push([file, label, "ok", `${text.length} chars, carries ${carried[0]}`]);
       }
     }
   }
@@ -310,5 +367,5 @@ const widths = [w(0), w(1), w(2)];
 for (const r of rows) {
   console.log(`${r[0].padEnd(widths[0])}  ${r[1].padEnd(widths[1])}  ${r[2].padEnd(widths[2])}  ${r[3]}`);
 }
-console.log(`\n${rendered} rendered prompt paths across ${Object.keys(CUT).length} accounted-for workflows, ${failures} failing.`);
+console.log(`\n${rendered} rendered prompt paths across ${Object.keys(CUT).length} accounted-for workflows, ${clauseChecks} boundary constants clause-checked, ${failures} failing.`);
 if (failures) process.exit(1);
