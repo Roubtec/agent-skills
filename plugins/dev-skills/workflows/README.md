@@ -69,10 +69,15 @@ A pass is not a promise that the runtime will accept the file: this wrapper stan
 Check the embedded `review-cycle-core` section for byte-identity after changing it in either file. `wf-address-tasks.js` carries a copy of `wf-review-cycle.js`'s marked section, and the copy is maintained by hand — from the repository root, under `bash` (the process substitutions are not POSIX `sh`):
 
 ```
-diff <(awk '/BEGIN EMBEDDABLE SECTION: review-cycle-core/,/END EMBEDDABLE SECTION: review-cycle-core/' plugins/dev-skills/workflows/wf-review-cycle.js) <(awk '/BEGIN EMBEDDABLE SECTION: review-cycle-core/,/END EMBEDDABLE SECTION: review-cycle-core/' plugins/dev-skills/workflows/wf-address-tasks.js)
+A=$(awk '/BEGIN EMBEDDABLE SECTION: review-cycle-core/,/END EMBEDDABLE SECTION: review-cycle-core/' plugins/dev-skills/workflows/wf-review-cycle.js) \
+  && B=$(awk '/BEGIN EMBEDDABLE SECTION: review-cycle-core/,/END EMBEDDABLE SECTION: review-cycle-core/' plugins/dev-skills/workflows/wf-address-tasks.js) \
+  && { [ -n "$A" ] && [ -n "$B" ] || { echo 'MARKERS MISSING — one or both extractions are empty'; false; }; } \
+  && diff <(printf '%s\n' "$A") <(printf '%s\n' "$B")
 ```
 
-Empty output — `diff` exiting 0 — establishes that the two sections are byte-identical, marker lines included, so an edit to one was carried to the other rather than left behind in the file it was made in. It establishes nothing past that: byte-identity proves the text was *copied*, not that it renders. A section whose prompts lost the destroy boundary is identically wrong in both files and passes this check unmoved, which is what the rendering suite below is for.
+Empty output — the whole chain exiting 0 — establishes that the two sections are byte-identical, marker lines included, so an edit to one was carried to the other rather than left behind in the file it was made in. The emptiness gate is why the chain is longer than a bare `diff` of the two `awk` extractions: with both marker ranges missing or renamed, both extractions are empty, `diff` compares nothing and exits 0, so the bare form's pass is vacuous exactly when the section has been lost. The gate turns that case into `MARKERS MISSING` and a non-zero status.
+
+It establishes nothing past that: byte-identity proves the text was *copied*, not that it renders. A section whose prompts lost the destroy boundary is identically wrong in both files and passes this check unmoved, which is what the rendering suite below is for.
 
 Run `node scripts/test-checkout-cleanliness-report.mjs` for the focused regression suite covering `wf-address-tasks.js`'s `mainCheckoutSummary` function. The test extracts that function from the shipped workflow rather than maintaining a second copy.
 
