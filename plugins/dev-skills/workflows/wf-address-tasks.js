@@ -1604,6 +1604,16 @@ function collisionBranchNames(collision) {
     : [];
 }
 
+// This deputy is ordered to run the project build, so it needs a destination
+// for that build's output for the same reason the cycle's roles do: a role left
+// to pick its own path picks the session scratchpad, and that scratchpad is
+// shared per session rather than per batch — so "one deputy per wave" does not
+// make it safe from the reviewer, peer, or later run beside it. The sentence is
+// written out here rather than shared with the cycle's CYCLE_REDIRECTED_OUTPUT,
+// which sits INSIDE the byte-identical `review-cycle-core` section and cannot
+// be reached from out here, and which names a different destination anyway: the
+// cycle's roles write into a round directory they keep, while this deputy needs
+// its log out of the worktree it is about to `git add` and commit.
 function resolveCollisionsPrompt(tasks, waveCollisions, remote) {
   const taskList = tasks
     .map(
@@ -1632,7 +1642,7 @@ ${collisionList}
 For each collision:
 1. Pick the side(s) to change. There is no inherent "first", so choose the LEAST disruptive rename(s): branches with fewer references, not a path a framework mandates, not a name a task file pins. Read the colliding files on each branch first. Rename enough sides that AT MOST ONE branch keeps the original colliding path/basename/symbol. With a two-branch collision, renaming one side is normally enough and the other then delivers unchanged; with three or more branches, you may need to rename multiple sides.
 2. If the name is genuinely IMPERATIVE — it MUST stay identical (a framework-required filename, an external/published contract, or a name a task file explicitly mandates) — do NOT invent a divergent name. Mark the collision \`blocked\` with the reason and leave those branches untouched; a human decides. Blocking a real conflict beats shipping a wrong rename.
-3. Otherwise, on EACH branch you chose to change, rename the file and/or exported symbol plus every in-branch reference to it, to a clear name that is distinct from the original AND from any other renamed side — so two renamed branches cannot themselves re-collide on the new name. Regenerate anything derived from it (e.g. contracts). Run the project build / type-check — it MUST pass. Commit with a clear message. ${pushLine}
+3. Otherwise, on EACH branch you chose to change, rename the file and/or exported symbol plus every in-branch reference to it, to a clear name that is distinct from the original AND from any other renamed side — so two renamed branches cannot themselves re-collide on the new name. Regenerate anything derived from it (e.g. contracts). Run the project build / type-check — it MUST pass; if you redirect its output to a file, create a UNIQUE directory for that first, OUTSIDE every worktree (\`mktemp -d "\${TMPDIR:-/tmp}/collision-resolve.XXXXXX"\`), and write there — never a fixed shared scratchpad name (one session's agents share that directory, and two that both wrote \`<scratchpad>/verify.log\` once crossed results between worktrees), and never inside the worktree, which you are about to commit. Commit with a clear message. ${pushLine}
 4. Record the outcome with \`collision\` set to the exact \`name\` from the list above: \`renamed\` (with \`changedBranches\`, \`from\`, \`to\`, what you \`regenerated\`, and why that side) or \`blocked\` (with the reason; empty \`changedBranches\`).
 
 Do NOT open any PR and do NOT remove any worktree — the workflow re-reviews each changed branch and handles delivery. Return one resolution entry per collision.`;
