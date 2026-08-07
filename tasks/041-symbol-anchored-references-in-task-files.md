@@ -20,7 +20,7 @@ Out of scope:
 ## Context and references
 
 - Task 015b — the concrete rot case: two independent staleness causes, offsets that differ per file, anchors that crossed into different files entirely; its "Implementation notes" are the argument for names over coordinates.
-- `tasks/012b` and `tasks/014a` — the as-of stamp wording the permitted-exception case must mirror.
+- Tasks 012b and 014a — the as-of stamp wording the permitted-exception case must mirror.
 - `plugins/dev-skills/skills/write-tasks/SKILL.md` — "Context and references" and "Writing guidance" are the natural homes.
 - `plugins/dev-skills/skills/address-review/SKILL.md` — step 5's follow-up-task bullet list.
 
@@ -32,7 +32,7 @@ Out of scope:
 
 - Express the intent, not just the ban: the reference's job is to survive the code moving. "Name the symbol in the file; the reader greps" is the whole mechanism.
 - Keep it to a handful of sentences per touchpoint; this is a conventions nudge, not a new section.
-- The `review-cycle` prose reviewer already checks task files against the repo's documented conventions, so once `write-tasks` documents this, drafted tasks get it enforced for free — no reviewer-side edit needed.
+- The `review-cycle` prose reviewer checks task files against the repo's house conventions, so once `write-tasks` documents this rule, drafted tasks should pick up its enforcement — but the canonical prose brief names only the house conventions and documented numbering style, while it is `write-tasks`' own verbiage cycle that checks against the sections that skill requires, so verify the rule actually reaches the drafted-task review rather than assuming free enforcement (the same verify-rather-than-assume courtesy the reap-tasks grep gets); if it does not, the fix is stating the rule where `write-tasks` briefs its verbiage cycle, not editing the canonical reviewer.
 
 ## Acceptance criteria
 

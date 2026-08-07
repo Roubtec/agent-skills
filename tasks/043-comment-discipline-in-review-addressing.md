@@ -12,7 +12,7 @@ Included:
 - **Current-rationale-only provenance:** when a change supersedes a previously commented decision, replace the old rationale — do not append history. The comment always reads as the reasoning for the code as it now stands; superseded reasoning lives in version control. The one history-shaped thing a comment legitimately carries is a still-standing overruled-review decision, because its job is preventing a live re-raise, and it too is replaced when genuinely superseded.
 - **Reviewer-side weighting in the canonical `review-cycle` block:** the Reviewer's quality pass treats a prose-re-implementation comment as removable noise (flag it for deletion), not as material to precision-edit, and does not report the absence of behavior-narrating comments as a gap. Author this once in `review-cycle` and let the renderings carry it; `address-review` step 6 already consumes those gates by reference.
 
-Out of scope: repository-wide comment style policy (this governs the review-addressing flows, where the churn arises), docstrings/API documentation conventions, and any relaxation of the rule that overruled review decisions get recorded.
+Out of scope: repository-wide comment style policy — the fixer-side rule lands in `address-review` because that is where the comment churn arises, while the reviewer-side weighting, authored in the canonical block, deliberately travels to every `review-cycle` consumer; what stays out of scope is legislating how comments are written outside these review flows. Also out: docstrings/API documentation conventions, and any relaxation of the rule that overruled review decisions get recorded.
 
 ## Context and references
 

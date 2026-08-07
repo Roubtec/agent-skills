@@ -10,7 +10,7 @@ Included:
 
 - **State the intent once, where the base rules live:** a PR's base must be the ref its branch actually builds on, so the PR shows the honest diff of that branch's own contribution to the stack — this is what routes review comments to the right PR. One or two sentences; the existing determination rules stay as they are.
 - **Post-create assertion:** immediately after `gh pr create`, read the PR back (`gh pr view --json baseRefName`) and require it to equal the recorded base. On mismatch, repair with `gh pr edit --base <recorded-base>` and note the repair; if the repair fails, report the PR as delivered-with-wrong-base rather than silently succeeding.
-- Apply the assertion at every delivery point: the Delivery sections of `address-tasks` and `address-tasks-serialized`, and the PR-creation stage prompt in `wf-address-tasks.js` (the agent asserts the base before it may return `opened: true`).
+- Apply the assertion at every delivery point: the Delivery section of `address-tasks`, the per-task loop's PR step in `address-tasks-serialized`, and the PR-creation stage prompt in `wf-address-tasks.js` (the agent asserts the base before it may return `opened: true`).
 
 Out of scope:
 
