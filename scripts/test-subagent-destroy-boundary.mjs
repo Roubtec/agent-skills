@@ -21,13 +21,20 @@
 // The set of prompt builders is DISCOVERED from the `agent(<fn>(...))` call
 // sites in each source, not listed here, so a prompt path added later fails
 // this suite until it is given a fixture — the failure mode the enumeration in
-// task 017 kept hitting. Discovery recognizes one call shape, so what it
-// guarantees rests on ACCOUNTING rather than on searching: every `agent(`
-// occurrence in the source must be either a matched call site or a prose
-// mention on a comment line, and anything else fails the suite. A later
-// `agent(p, ...)` over a variable, or an inline template literal, is therefore
-// loud rather than silently unrendered. The comment exclusion is reported with
-// its line numbers on every run rather than applied quietly.
+// task 017 kept hitting. Discovery recognizes one call shape, whitespace before
+// the paren included — `agent (fn(...))` matched neither pattern until this was
+// widened, so it was neither rendered nor reported and vanished from the audit
+// entirely. What the suite guarantees otherwise rests on ACCOUNTING rather than
+// on searching: every LITERAL `agent(` occurrence in the source must be either a
+// matched call site or a prose mention on a comment line, and anything else
+// fails the suite. A later `agent(p, ...)` over a variable, or an inline
+// template literal, is therefore loud rather than silently unrendered. The
+// accounting pattern stays literal where discovery does not, deliberately:
+// prompt templates here write English `agent (...)` — `wf-address-review.js`'s
+// ping step says so of Copilot's coding agent — which is prose rather than an
+// unrecognized call, so counting it would fail the suite on the shipped
+// sources. The comment exclusion is reported with its line numbers on every run
+// rather than applied quietly.
 //
 // One gap that accounting cannot close, stated plainly rather than implied
 // away: a NEW BRANCH INSIDE AN EXISTING BUILDER. Rendering is fixture-driven,
@@ -75,8 +82,8 @@ const REQUIRED = [
 ];
 
 // Every `agent(<fn>(...))` in the file — the complete set of prompt paths — plus
-// an accounting of every OTHER `agent(` occurrence, so an unrecognized call
-// shape reads as a failure rather than as an absence of call sites. Comment
+// an accounting of every OTHER literal `agent(` occurrence, so an unrecognized
+// call shape reads as a failure rather than as an absence of call sites. Comment
 // lines are the one excluded kind (these sources discuss `agent()` in prose),
 // and the caller reports that exclusion with its lines rather than dropping it
 // silently.
@@ -84,7 +91,7 @@ function promptBuilders(src) {
   const lines = src.split("\n");
   const sites = new Set();
   const found = new Set();
-  for (const m of src.matchAll(/\bagent\(\s*([A-Za-z_$][\w$]*)\s*\(/g)) {
+  for (const m of src.matchAll(/\bagent\s*\(\s*([A-Za-z_$][\w$]*)\s*\(/g)) {
     found.add(m[1]);
     sites.add(m.index);
   }
