@@ -344,6 +344,14 @@ Forbidden: \`rm -rf\`, \`git reset --hard\`, \`git clean\`, \`git branch -f\`, \
 A worktree is not a blast radius: it isolates the working tree, not the repository, so \`branch -f\`, \`reset\`, \`update-ref\`, and \`gc\` reach every sibling worktree through the shared \`.git\`.
 Empirical verification that could change state belongs ONLY in a disposable clone. Run \`command -v dc-enter\`; where it is found, work in \`DC="$(dc-enter <slug>)"\` — it prints one absolute path on stdout, \`dc-remove <slug>\` drops it, and a reused slug is REFUSED rather than re-derived, so pass \`--replace\` or remove the slug first if this may run twice. Where the helper is absent, use an absolute path outside the repository — never a relative one, and never the repository itself.`;
 
+// Where a role's redirected output goes. Every cycle brief that orders a build
+// orders one whose output the role may want in a file, and a role left to pick
+// its own path picks the session scratchpad: two concurrent reviewers both
+// redirected their build output to `<scratchpad>/verify.log` there once, and
+// one read the other worktree's results and returned a verdict for the wrong
+// branch. The brief names the destination rather than leaving it to be chosen.
+const CYCLE_REDIRECTED_OUTPUT = "Any build or validation output you redirect to a file goes under that same round directory, under any name you like — never a fixed shared scratchpad name: parallel cycles share one scratch directory.";
+
 // Default worktree/branch contract when the consumer supplies none. A consumer
 // with its own worktree lifecycle (wt-enter etc.) passes richer per-role
 // contract text via cycle.contracts instead.
@@ -410,9 +418,10 @@ function cycleFixPrompt(cycle, state) {
     : state.findings
       ? `This is fix-up round ${state.round}. Address the findings below: dispose EVERY one explicitly — \`fixed\`, \`declined\` (with a reason; the next fresh reviewer verifies declines), or \`escalated\` to an open question in the pinned format — echoing each finding's \`id\` as your disposition's \`findingId\`, exactly ONE disposition per finding (coverage is checked structurally; an uncovered or double-disposed finding comes back to the next pass and blocks the round). Never drop one silently, and never implement a fix you believe is wrong just to clear a finding.`
       : `This is round 1: carry out the assignment below.`;
-  const artifactLine = state.artifactDir
+  const artifactHome = state.artifactDir
     ? `This cycle's artifact directory is \`${state.artifactDir}\` — report it back as \`artifactDir\` and write this pass's packet prose (what you did, dispositions, question drafts) under it as \`round-${state.round}/\`.`
     : `Create this cycle's UNIQUE artifact directory first — outside the worktree, e.g. \`mktemp -d "\${TMPDIR:-/tmp}/review-cycle-"${cycleShq(cycleSlugSegment(cycle.slug))}".XXXXXX"\` (never a fixed shared name: parallel cycles share scratch space) — report it as \`artifactDir\` (REQUIRED: the cycle refuses to run rounds with no home for their history), and write this pass's packet prose under it as \`round-${state.round}/\`.`;
+  const artifactLine = `${artifactHome} ${CYCLE_REDIRECTED_OUTPUT}`;
   return `You are the fixer for one review cycle (branch \`${cycle.branch}\`, review base \`${cycle.base}\`, artifact type ${cycle.artifactType}).
 
 ## WORKTREE CONTRACT (do this before anything else)
@@ -473,9 +482,13 @@ function cycleReviewPrompt(cycle, state) {
   const workBlock = state.packet && Array.isArray(state.packet.workReport) && state.packet.workReport.length
     ? `\n## Fixer's per-item report (verify the claims hold in the committed state; you were NOT given its reasoning)\n\n${JSON.stringify(state.packet.workReport, null, 2)}\n`
     : "";
+  // This brief orders a full build, so the reviewer needs a destination for the
+  // build's output as much as for its own report — including on the pass that
+  // runs with no cycle behind it (the collision re-review), where leaving the
+  // path to the reviewer is exactly how a shared scratch name gets chosen.
   const persistLine = state.artifactDir
-    ? `\nPersist your full report for the round history: write the same content you return (verdict, numbered issues, notes) to \`${state.artifactDir}/round-${state.round}/reviewer-report.md\`. That directory is OUTSIDE the worktree, and this one report file is the sole exception to the no-file-creation rule.\n`
-    : "";
+    ? `\nPersist your full report for the round history: write the same content you return (verdict, numbered issues, notes) to \`${state.artifactDir}/round-${state.round}/reviewer-report.md\`. ${CYCLE_REDIRECTED_OUTPUT} That directory is OUTSIDE the worktree, and those files are the only exceptions to the no-file-creation rule.\n`
+    : `\nYou were given no cycle artifact directory, so there is no round history to persist. If any build or validation output must land in a file, create a UNIQUE directory for it first — outside the worktree, e.g. \`mktemp -d "\${TMPDIR:-/tmp}/re-review-"${cycleShq(cycleSlugSegment(cycle.slug))}".XXXXXX"\` (never a fixed shared name: concurrent reviewers share one scratch directory) — and write inside it. Those files are the only exception to the no-file-creation rule.\n`;
   return `You are an independent fresh-eyes reviewer for one review cycle (branch \`${cycle.branch}\`, review base \`${cycle.base}\`, artifact type ${cycle.artifactType}). You have no knowledge of how the work was built, and that is the point. Edit NOTHING; create, update, or delete no files; do not use the task-tracker tools.
 
 ## WORKTREE CONTRACT (do this before anything else)
