@@ -21,7 +21,21 @@
 // The set of prompt builders is DISCOVERED from the `agent(<fn>(...))` call
 // sites in each source, not listed here, so a prompt path added later fails
 // this suite until it is given a fixture — the failure mode the enumeration in
-// task 017 kept hitting.
+// task 017 kept hitting. Discovery recognizes one call shape, so what it
+// guarantees rests on ACCOUNTING rather than on searching: every `agent(`
+// occurrence in the source must be either a matched call site or a prose
+// mention on a comment line, and anything else fails the suite. A later
+// `agent(p, ...)` over a variable, or an inline template literal, is therefore
+// loud rather than silently unrendered. The comment exclusion is reported with
+// its line numbers on every run rather than applied quietly.
+//
+// One gap that accounting cannot close, stated plainly rather than implied
+// away: a NEW BRANCH INSIDE AN EXISTING BUILDER. Rendering is fixture-driven,
+// so a builder this suite already renders can grow a conditional whose other
+// arm no fixture supplies, and its call site still looks accounted for. That is
+// inherent to rendering rather than an oversight — widen the fixtures for the
+// builder when it gains a branch, as `prPrompt` and `mainCheckoutStatusPrompt`
+// already do below.
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -40,23 +54,48 @@ const CUT = {
   "wf-address-review.js": "\nconst raw = flattenArgs(args);",
 };
 
-// What every rendered prompt must contain. The three clauses task 017 item 5
-// names: the forbidden set with its self-authorization qualifier, the
-// worktree-is-not-the-repository line, and a named destination for empirical
-// verification.
+// What every rendered prompt must contain. Task 017's criterion is that each
+// site states the PERMITTED-versus-FORBIDDEN boundary, so the permitted half is
+// asserted too: a prompt that lost its Permitted line would otherwise still
+// pass. Each entry is one semantic clause the criterion names, matched by the
+// phrase that carries it — deliberately not a byte comparison of the whole
+// constant, which would turn every future wording tweak into a failure. This
+// must fail when a clause is LOST, not when it is reworded.
 const REQUIRED = [
-  ['forbidden set', /`rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`/],
+  ["permitted set", /Permitted: reading, searching,[^\n]*read-only `git`\/`gh` queries/],
+  ["forbidden set", /`rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`/],
+  ["force-pushing forbidden", /and force-pushing/],
+  ["exact-command / named-skill carve-out", /whether as an exact command or as a skill it names to invoke/],
   ['"not in a clone" qualifier', /NOT in a clone, NOT in a temp directory, NOT "safely"/],
+  ["exemptions are granted, not self-selected", /the only exemptions — and only because this assignment names them/],
   ["worktree is not a blast radius", /A worktree is not a blast radius/],
+  ["shared `.git` reaches every sibling worktree", /reach every sibling worktree through the shared `\.git`/],
   ["disposable-clone destination", /command -v dc-enter/],
   ["absolute-path fallback", /absolute path outside the repository — never a relative one/],
 ];
 
-// Every `agent(<fn>(...))` in the file — the complete set of prompt paths.
+// Every `agent(<fn>(...))` in the file — the complete set of prompt paths — plus
+// an accounting of every OTHER `agent(` occurrence, so an unrecognized call
+// shape reads as a failure rather than as an absence of call sites. Comment
+// lines are the one excluded kind (these sources discuss `agent()` in prose),
+// and the caller reports that exclusion with its lines rather than dropping it
+// silently.
 function promptBuilders(src) {
+  const lines = src.split("\n");
+  const sites = new Set();
   const found = new Set();
-  for (const m of src.matchAll(/\bagent\(\s*([A-Za-z_$][\w$]*)\s*\(/g)) found.add(m[1]);
-  return [...found].sort();
+  for (const m of src.matchAll(/\bagent\(\s*([A-Za-z_$][\w$]*)\s*\(/g)) {
+    found.add(m[1]);
+    sites.add(m.index);
+  }
+  const prose = [];
+  const unaccounted = [];
+  for (const m of src.matchAll(/\bagent\(/g)) {
+    if (sites.has(m.index)) continue;
+    const line = src.slice(0, m.index).split("\n").length;
+    (/^\s*(?:\/\/|\*|\/\*)/.test(lines[line - 1]) ? prose : unaccounted).push(line);
+  }
+  return { names: [...found].sort(), sites: sites.size, prose, unaccounted };
 }
 
 function load(file) {
@@ -72,14 +111,14 @@ function load(file) {
   if (/^(?:(?:const|let|var)\b[^\n=]*=\s*)?await\b/m.test(prefix)) {
     throw new Error(`${file}: declaration prefix reaches a top-level await; the cut marker is too late`);
   }
-  const names = promptBuilders(src);
+  const { names, ...accounting } = promptBuilders(src);
   // `args` is the workflow's own injected parameter; a few late declarations in
   // the prefix read it. An empty string keeps them inert. Each requested name is
   // returned by an explicit reference, so a builder that is not declared in the
   // prefix is a ReferenceError here rather than a silent skip.
   const body = `"use strict";\n${prefix}\nreturn { ${names.map((n) => `${n}: ${n}`).join(", ")} };`;
   const fns = new Function("args", body)("");
-  return { src, names, fns };
+  return { src, names, fns, accounting };
 }
 
 // --- Fixtures -------------------------------------------------------------
@@ -183,11 +222,20 @@ const FIXTURES = {
 // --- Run ------------------------------------------------------------------
 
 let failures = 0;
+let rendered = 0;
 const rows = [];
 
 for (const file of Object.keys(CUT)) {
-  const { src, names, fns } = load(file);
+  const { names, fns, accounting } = load(file);
   const fixtures = FIXTURES[file] || {};
+  const { sites, prose, unaccounted } = accounting;
+  if (unaccounted.length) {
+    failures++;
+    rows.push([file, "agent( accounting", "FAIL", `unrecognized agent( call shape at line ${unaccounted.join(", ")} — discovery renders nothing for it`]);
+  } else {
+    const excluded = prose.length ? ` (line ${prose.join(", ")})` : "";
+    rows.push([file, "agent( accounting", "ok", `${sites} call sites; ${prose.length} prose mention(s) in comments excluded${excluded}`]);
+  }
   for (const name of names) {
     if (!fixtures[name]) {
       failures++;
@@ -195,6 +243,7 @@ for (const file of Object.keys(CUT)) {
       continue;
     }
     for (const [label, render] of fixtures[name]) {
+      rendered++;
       let text;
       try {
         text = render(fns);
@@ -226,5 +275,5 @@ const widths = [w(0), w(1), w(2)];
 for (const r of rows) {
   console.log(`${r[0].padEnd(widths[0])}  ${r[1].padEnd(widths[1])}  ${r[2].padEnd(widths[2])}  ${r[3]}`);
 }
-console.log(`\n${rows.length} rendered prompt paths, ${failures} failing.`);
+console.log(`\n${rendered} rendered prompt paths across ${Object.keys(CUT).length} accounted-for workflows, ${failures} failing.`);
 if (failures) process.exit(1);
