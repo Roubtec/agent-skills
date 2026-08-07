@@ -21,7 +21,7 @@ A batch in which concurrent flake tasks were queued and the maintainer's consoli
 
 - Decide between widening the writer's search across the batch's sibling refs and hoisting flake-task authorship to a batch-level owner; do not do both.
 - Author the outcome once in the canonical `review-cycle` block if it stays a writer-side rule, or in the batch skills if it becomes an orchestrator responsibility, and carry it into every derived rendering per the pattern 019 establishes.
-- Revise 035's honest scoping clause (the one that states what the grep can see) to match whatever ships, so the two do not contradict each other.
+- Revise the shipped honest-scoping clause — the sentence in the canonical `review-cycle` block and each derived rendering that states what the writer's grep can see — so no rendering still describes a reach the new rule has changed. Task 035 itself will have been archived to `tasks/done/` by then and stays as written; archived tasks are records.
 
 ## Context and references
 

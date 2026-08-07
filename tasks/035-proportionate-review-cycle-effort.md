@@ -20,7 +20,7 @@ Out of scope: the round cap and its semantics, the peer launch mechanics (015), 
 - Task 019 — convergence heuristics landing in the same sections; implement this after 019 to avoid churny conflicts. Unlike 019, this task **does** amend gates, knowingly: item 1 conditions the reviewer's build-first rule on the stated tier, item 2 makes an evidenced unrelated test failure non-blocking, and item 3 lifts the re-review rule for non-semantic fixes.
 - Task 033 — pipelining raises round throughput, which multiplies whatever each round costs; this task is what keeps that affordable.
 - Task 014 — the extraction that makes the canonical block the single authoring point.
-- Task 035a (deferred) — the duplication item 2 knowingly leaves to the maintainer: a concurrent sibling's flake task is invisible to the grep, and closing that race needs either a cross-branch search or a batch-level owner. Do not build either here; state the scope honestly and let 035a carry the residue.
+- Task 035a (deferred) — the duplication item 2 knowingly leaves to the maintainer: a concurrent sibling's flake task is invisible to the grep. 035a is where the candidate remedies are weighed against that race and against each other; do not build one here, state the scope honestly and let 035a carry the residue.
 
 ## Target files or areas
 
