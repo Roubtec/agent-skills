@@ -44,7 +44,7 @@ When a fixer delivers something other than a decision the maintainer locked, it 
 
 **Preflight once per run**, unless `peer-opinions=off`: run `command -v codex`; when missing, mark the peer unavailable. Otherwise run `codex login status`: a non-zero exit marks it unavailable when `CODEX_API_KEY` is unset, while a set `CODEX_API_KEY` means classify availability at the first real invocation instead — an auth/usage failure there marks the peer unavailable for the rest of the run. Unavailability never blocks; record its reason for one final-summary note. A batch orchestrator preflights once for the whole batch and never repeats the probe inside entries.
 
-**Review strength is pinned per invocation.** This Claude-led side reviews with codex and always passes `-c model_reasoning_effort=high`, leaving the model to the peer's configured high-capability default (`~/.codex/config.toml` — that configuration is what "configured high-capability model" means wherever these skills say it). The codex-led mirror of this skill reviews with `claude` and pins both dimensions, `--model opus --effort high`, because that side has a stable capability alias to pin. Each form pins everything its CLI gives a stable handle on, so no pinned dimension follows whichever value a container most recently selected; the pin is per-invocation and never writes back to the saved configuration.
+**Review strength is pinned per invocation.** This Claude-led side reviews with codex and always passes `-c model_reasoning_effort=medium`, leaving the model to the peer's configured high-capability default (`~/.codex/config.toml` — that configuration is what "configured high-capability model" means wherever these skills say it). The codex-led mirror of this skill reviews with `claude` and pins both dimensions, `--model opus --effort medium`, because that side has a stable capability alias to pin. Each form pins everything its CLI gives a stable handle on, so no pinned dimension follows whichever value a container most recently selected; the pin is per-invocation and never writes back to the saved configuration.
 
 **Launch** the peer with the prompt written to a file first, never assembled through shell interpolation, using unique per-attempt paths in this cycle's artifact directory:
 
@@ -62,7 +62,7 @@ stderr_file="${artifact_dir}/peer-review.stderr"
 prompt="$(<"${prompt_file}")"
 
 # Pin peer effort per invocation; this never changes the container's configuration.
-peer_args=(-c model_reasoning_effort=high)
+peer_args=(-c model_reasoning_effort=medium)
 
 codex exec --sandbox read-only --cd "${worktree}" -o "${outfile}" \
   -c mcp_servers={} "${peer_args[@]}" "${prompt}" \
