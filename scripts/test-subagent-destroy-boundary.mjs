@@ -104,8 +104,9 @@ function shippedWorkflows() {
 // What every boundary CONSTANT must say. Task 017's criterion is that each site
 // states the PERMITTED-versus-FORBIDDEN boundary, so the permitted half is
 // asserted too: a constant that lost its Permitted line would otherwise still
-// pass. Each entry is one semantic clause the criterion names, matched by the
-// phrase that carries it — deliberately not a byte comparison of the whole
+// pass. Each entry is one semantic clause the boundary states, decomposed from
+// that criterion rather than named by it, matched by the phrase that carries
+// it — deliberately not a byte comparison of the whole
 // constant, which would turn every future wording tweak into a failure. This
 // must fail when a clause is LOST. The tolerance that buys is bounded by each
 // phrase rather than general: wording the phrase leaves open may change freely,
