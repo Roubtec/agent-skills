@@ -38,7 +38,7 @@ Included:
 
 Out of scope:
 
-- Any change to the classification, confirmation, or deletion mechanics of 031a — the executed form `git update-ref --no-deref -d "$ref" "$old_oid"` stays exactly as it is, and the expected-old-OID guard is the thing working correctly here. The `:253` correction above is to that bullet's *description* of the refusal, not to the command it prescribes; and the reclassification the second alternative requires governs what step 11 may print, not how step 6 classifies.
+- Any change to the classification, confirmation, or deletion mechanics of 031a — the executed form `git update-ref --no-deref -d "$ref" "$old_oid"` stays exactly as it is, and the expected-old-OID guard is the thing working correctly here. The `:253` correction above is to that bullet's *description* of the refusal, not to the command it prescribes; the post-refusal probe adds to what the sweep **records** about a deletion it already attempted and refused, leaving the attempt itself untouched; and the reclassification the second alternative requires governs what step 11 may print, not how step 6 classifies.
 - The age-threshold, load-bearing, and unrecognized-ref print rules in the same paragraph, which are consistent and correct. This task leans on the load-bearing rule rather than revising it.
 
 ## Context and references
@@ -54,7 +54,7 @@ Out of scope:
 
 ## Implementation notes
 
-- Keep it proportionate: this is one paragraph reconciled with itself, not a rework of step 11.
+- Keep it proportionate: this is one paragraph reconciled with itself, not a rework of step 11 — with one deliberate addition, the post-refusal existence/type probe that telling a vanished breadcrumb from a replaced one requires. Place that probe where the sweep already records the refusal (`:253-256`), so step 11 reports a disposition already established rather than re-reading refs while it formats output.
 - The expected-old-OID refusal is worth naming as informative in its own right. A breadcrumb that moved between inventory and cleanup means something else touched `refs/pruned/**` during the run, which the user should probably know about regardless of what command they are or are not handed.
 
 ## Acceptance criteria
@@ -73,7 +73,7 @@ Out of scope:
   - repoint the breadcrumb to another redundant commit;
   - repoint it to a commit unreachable from the resolved default, and confirm no working removal command is printed for it;
   - delete the breadcrumb outright, and confirm it is reported as vanished rather than as a mismatch;
-  - replace the breadcrumb with a symref pointing at a ref that does not exist, and confirm it is reported as still present and replaced rather than as vanished — the two refusals are told apart only by probing the ref, not by their text.
+  - replace the breadcrumb with a symref pointing at a ref that does not exist, and confirm it is reported as still present and replaced rather than as vanished — a disposition the implementation must reach by probing the ref rather than by matching on the refusal text, which differs between these two but is not an interface Git promises to keep stable.
 - Capture Git's actual refusal text in each case rather than paraphrasing it, since all three refusal shapes differ and only the moved one names the ref's current OID.
 - Confirm the mirrors' divergence count is unchanged apart from harness-specific wording.
 
