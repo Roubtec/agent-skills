@@ -93,8 +93,9 @@ const CUT = {
 // SHIPPED SET is read off the directory and required to equal CUT's keys, in
 // both directions: an unlisted file fails until it is given a cut marker
 // (exactly as a new builder fails until it is given a fixture), and a key
-// naming a file that no longer exists fails rather than being skipped. This is
-// what lets the claim "each shipped file" be made literally.
+// naming a file that no longer exists stops the run right there, naming the
+// key, rather than being skipped or reaching the render loop. This is what
+// lets the claim "each shipped file" be made literally.
 function shippedWorkflows() {
   return readdirSync(workflows)
     .filter((f) => /^wf-.*\.js$/.test(f))
@@ -105,14 +106,13 @@ function shippedWorkflows() {
 // states the PERMITTED-versus-FORBIDDEN boundary, so the permitted half is
 // asserted too: a constant that lost its Permitted line would otherwise still
 // pass. Each entry is one semantic clause the boundary states, decomposed from
-// that criterion rather than named by it, matched by the phrase that carries
-// it — deliberately not a byte comparison of the whole
-// constant, which would turn every future wording tweak into a failure. This
-// must fail when a clause is LOST. The tolerance that buys is bounded by each
-// phrase rather than general: wording the phrase leaves open may change freely,
-// and a rewording that moves the phrase itself reads here as a loss. Say that
-// rather than "a rewording is not a failure", which is broader than any of
-// these patterns delivers.
+// that criterion rather than named by it, matched by the phrase that carries it
+// — deliberately not a byte comparison of the whole constant, which would turn
+// every future wording tweak into a failure. This must fail when a clause is
+// LOST. The tolerance that buys is bounded by each phrase rather than general:
+// wording the phrase leaves open may change freely, and a rewording that moves
+// the phrase itself reads here as a loss. Say that rather than "a rewording is
+// not a failure", which is broader than any of these patterns delivers.
 //
 // The directive clause is the one place a wildcard used to span a verb: it read
 // `/Empirical verification[^\n]*belongs ONLY in a disposable clone/`, which a
@@ -308,6 +308,20 @@ let rendered = 0;
 let clauseChecks = 0;
 const rows = [];
 
+// Printing is a function so the workflow-set check below can report and stop.
+// A CUT key naming a file that is gone must not fall through to the render
+// loop: `load()` reaches it first and dies with a raw ENOENT, which fails the
+// run but discards the diagnostic row that says which key it was.
+function report() {
+  const w = (i) => Math.max(...rows.map((r) => r[i].length));
+  const widths = [w(0), w(1), w(2)];
+  for (const r of rows) {
+    console.log(`${r[0].padEnd(widths[0])}  ${r[1].padEnd(widths[1])}  ${r[2].padEnd(widths[2])}  ${r[3]}`);
+  }
+  console.log(`\n${rendered} rendered prompt paths across ${Object.keys(CUT).length} accounted-for workflows, ${clauseChecks} boundary constants clause-checked, ${failures} failing.`);
+  if (failures) process.exit(1);
+}
+
 const shipped = shippedWorkflows();
 const listed = Object.keys(CUT).sort();
 const unlisted = shipped.filter((f) => !listed.includes(f));
@@ -321,6 +335,9 @@ if (unlisted.length || vanished.length) {
     .filter(Boolean)
     .join("; ");
   rows.push(["(all)", "workflow set", "FAIL", why]);
+  // Only the vanished direction is fatal to the rest of the run; an unlisted
+  // file leaves every CUT key resolvable, so that half still reports in full.
+  if (vanished.length) report();
 } else {
   rows.push(["(all)", "workflow set", "ok", `${shipped.length} shipped wf-*.js all accounted for: ${shipped.join(", ")}`]);
 }
@@ -404,10 +421,4 @@ if (missing.length || drifted.length) {
   rows.push(["(all)", "DESTROY_BOUNDARY identity", "ok", `${copies.length} copies byte-identical, ${Buffer.byteLength(copies[0][1])} bytes each`]);
 }
 
-const w = (i) => Math.max(...rows.map((r) => r[i].length));
-const widths = [w(0), w(1), w(2)];
-for (const r of rows) {
-  console.log(`${r[0].padEnd(widths[0])}  ${r[1].padEnd(widths[1])}  ${r[2].padEnd(widths[2])}  ${r[3]}`);
-}
-console.log(`\n${rendered} rendered prompt paths across ${Object.keys(CUT).length} accounted-for workflows, ${clauseChecks} boundary constants clause-checked, ${failures} failing.`);
-if (failures) process.exit(1);
+report();
