@@ -1,15 +1,18 @@
-# 017a — State `rebase-stack`'s own destroy boundary, the one unbounded referent of 017's carve-out
+# 017a — State `rebase-stack`'s own destroy boundary, the one destructive referent of 017's carve-out
 
 ## Why this task exists
 
 Task 017 item 5 gave every subagent-spawning skill and workflow a destroy boundary, and that boundary carves out the destructive commands the assignment itself authorises — "each of them beyond what this assignment itself spells out, whether as an exact command **or as a skill it names to invoke**". The carve-out is deliberate: a brief that tells a subagent to invoke a skill has authorised whatever that skill does, and the boundary must not forbid the work it just assigned.
 
-A sweep of all seven spawning skills and all three workflows finds exactly two skills ever named for a subagent to invoke:
+A sweep of all seven spawning skills and all three workflows finds three skills named, in text a subagent reads, as something to invoke or follow:
 
-- `address-review` — `address-reviews/SKILL.md:167` and `:200`, which carries 017's boundary itself, so what it authorises is bounded by text a reader can find;
-- `rebase-stack` — `address-tasks/SKILL.md:272` and `:277`, which carries no boundary of any kind.
+- `address-review` — `address-reviews/SKILL.md:167` and `:200`, which carries 017's boundary itself (`address-review/SKILL.md:86`), so what it authorises is bounded by text a reader can find;
+- `rebase-stack` — `address-tasks/SKILL.md:272` and `:277`, which carries no boundary of any kind;
+- `write-tasks` — `address-review/SKILL.md:168` ("invoke that skill where available"), `reap-tasks/SKILL.md:64`, and `wf-address-review.js:245`'s `deferred-to-task` disposition, which reaches the fixer through the nested cycle's `scope.instructions` (`:423`); it carries no boundary either, and needs none — see the next paragraph.
 
-So `rebase-stack` is the carve-out's only unbounded referent. Its own behaviour is genuinely destructive: it runs `git clean -fd` before returning (`plugins/dev-skills/skills/rebase-stack/SKILL.md:69`, mirrored at `codex/dev-skills/skills/rebase-stack/SKILL.md:70`), applies the same clean-stop after a restore (`:249` / `:250`), and runs `git reset --hard <pre-rebase-ref>` on the current disposable branch in delegated unattended mode (`:286` / `:287`). A subagent handed "invoke the `rebase-stack` skill" is therefore authorised, through the carve-out, to run commands the skill nowhere states a boundary for.
+The other spawning skills are cross-referenced in the same text — `review-cycle` most of all, since the five skills before it delegate their role contracts to it — but each carries 017's boundary itself, so naming one is bounded by construction rather than by a sweep.
+
+So `rebase-stack` is the only referent whose **own behaviour** is destructive, and that is what makes it the one the carve-out leaves unbounded in substance. `write-tasks` is recorded above so a later sweep does not rediscover it and file a redundant task: it is a task-authoring skill containing no destructive command at all — no `rm`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`, or force-push — whose only `git` invocations are a `fetch` and an `ls-tree` in its number-allocation recipe (`write-tasks/SKILL.md:73-74`) and which forbids pushing outright (`:22`). Naming it authorises nothing that needs bounding. `rebase-stack`'s own behaviour, by contrast, is genuinely destructive: it runs `git clean -fd` before returning (`plugins/dev-skills/skills/rebase-stack/SKILL.md:69`, mirrored at `codex/dev-skills/skills/rebase-stack/SKILL.md:70`), applies the same clean-stop after a restore (`:249` / `:250`), and runs `git reset --hard <pre-rebase-ref>` on the current disposable branch in delegated unattended mode (`:286` / `:287`). A subagent handed "invoke the `rebase-stack` skill" is therefore authorised, through the carve-out, to run commands the skill nowhere states a boundary for.
 
 017 recorded this in its out-of-scope section and left the question of a task of its own explicitly unfiled and undecided. This task is the maintainer's decision to file it.
 
@@ -27,6 +30,7 @@ Out of scope:
 - **Adding 017 item 5's prompt contract to `rebase-stack`.** 017's acceptance criteria fail a delivery that adds its boundary text to `rebase-stack` "as a prompt contract or as a spawn instruction", and 017 item 5 excluded the skill because it issues no spawn instruction at all — only a note about being *called by* a subagent (`SKILL.md:71`). The two kinds of boundary are different objects: item 5's is a contract a skill **writes for someone else**, this task's is a rule about what a skill **does itself**. Conflating them is what produced an earlier 017 draft's wrong skill list, and a future implementer who "fixes" this task by pasting the item 5 boundary into `rebase-stack` has broken 017 rather than delivered 017a.
 - Any change to `address-tasks`, `address-reviews`, or the carve-out wording in the boundary constants. The carve-out is correct; what it points at is what is missing.
 - `enable-worktrees`, which forbids spawning outright (`SKILL.md:10`) and is out of scope for the same reason it was in 017.
+- `write-tasks`, the carve-out's third referent. Naming it authorises nothing destructive, so a boundary there would add a case rather than close a hazard. It is named in the sweep above precisely so this stays a recorded decision rather than something a later sweep rediscovers.
 
 ## Context and references
 
@@ -51,7 +55,7 @@ Out of scope:
 - The statement is a rule about the skill's own behaviour. A delivery that instead adds 017 item 5's prompt-contract boundary to `rebase-stack`, in any form, fails this criterion and 017's own.
 - The worktree-isolates-the-working-tree-not-the-repository fact is stated for the ref-moving half specifically, rather than asserted generally over both commands.
 - Both mirrors carry the same statement; the Claude/codex divergence count for this file is unchanged by anything other than the intended edit.
-- No change to `address-tasks`, `address-reviews`, the boundary constants, or the three workflows.
+- No change to `address-tasks`, `address-reviews`, `write-tasks`, the boundary constants, or the three workflows.
 
 ## Validation
 

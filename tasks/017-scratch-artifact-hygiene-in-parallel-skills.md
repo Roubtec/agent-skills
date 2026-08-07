@@ -28,7 +28,7 @@ Out of scope:
 
 - Harness-level per-subagent scratchpad namespacing (upstream Claude Code concern).
 - powbox container-doc wording (tracked as powbox task 045).
-- A destroy boundary for `rebase-stack`'s own behaviour. It runs `git reset --hard` and `git clean -fd` on disposable branches, which is a rule about what it does when invoked rather than a contract it writes for someone else, so it does not belong in item 5 and is not folded in here. Whether it deserves a task of its own is unfiled and undecided. Conflating the two kinds of boundary is what produced an earlier draft's wrong skill list.
+- A destroy boundary for `rebase-stack`'s own behaviour. It runs `git reset --hard` and `git clean -fd` on disposable branches, which is a rule about what it does when invoked rather than a contract it writes for someone else, so it does not belong in item 5 and is not folded in here. It does deserve a task of its own: that question is now decided and filed as task 017a, which states the boundary in `rebase-stack`'s own voice and is explicitly forbidden to deliver it as item 5's prompt contract. Conflating the two kinds of boundary is what produced an earlier draft's wrong skill list.
 
 ## Scope delta found by the 2026-08-06 reap sweep
 
