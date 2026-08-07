@@ -45,7 +45,7 @@ Do this in the **main working tree** before creating worktrees. The worktree che
 
 6. **Baseline the shared main checkout** — read its working-tree state now, before any worktree exists, as the reading the closing cleanliness report compares against (see "Main-checkout cleanliness report"). Observe only; never "fix" a checkout that is already dirty.
 
-If a `wt-bootstrap` helper is on PATH, prefer it for steps 1–4 — it performs those worktree checks, prunes orphans, and prints the base dir (`wtBase`) and free space (`availBytes`) as JSON. Still run the peer preflight in step 5 separately.
+If a `wt-bootstrap` helper is on PATH, prefer it for steps 1–4 — it performs those worktree checks, prunes orphans, and prints the base dir (`wtBase`) and free space (`availBytes`) as JSON. It covers those and nothing else: run every remaining step above yourself.
 
 ## Orchestrator Responsibilities
 
