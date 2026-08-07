@@ -41,7 +41,7 @@ Out of scope:
 
 ## Validation
 
-- `wf-check` passes on `wf-address-tasks.js`; read-through of both skills' delivery sections confirms the assertion sits after creation, before the worktree is reclaimed.
+- `wf-check` passes on `wf-address-tasks.js`; read-through of each delivery point (the `address-tasks` Delivery section, the serialized per-task loop's PR step) confirms the assertion sits immediately after creation — and, where a worktree is in play, before it is reclaimed.
 
 ## Review plan
 
