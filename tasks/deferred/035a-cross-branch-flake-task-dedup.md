@@ -13,6 +13,8 @@ The cheap remedy is the one 035 ships, and it may well be sufficient forever: co
 
 Neither is justified until the duplication is observed to actually cost something. The condition also cannot occur yet: nothing writes flake tasks until 035 itself ships.
 
+The maintainer confirmed this deferred placement when PR #48's review follow-ups were resolved, so it is a settled decision rather than an agent-proposed placement still awaiting one.
+
 ## Trigger to promote this task
 
 A batch in which concurrent flake tasks were queued and the maintainer's consolidation sweep was more than incidental effort — several near-duplicate task files, or duplicates that survived a sweep and confused later scheduling. Promote with the observed batch cited, and pick between the two shapes above on that evidence.
