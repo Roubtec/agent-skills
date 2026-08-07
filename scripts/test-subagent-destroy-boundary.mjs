@@ -238,6 +238,14 @@ const cycleOverridden = {
 const fixState = { round: 2, findings: { reviewer: [{ id: "f1", text: "x" }] }, confirming: false, artifactDir: "/tmp/a", openQuestions: [] };
 const reviewState = { round: 2, packet: { dispositions: [] }, artifactDir: "/tmp/a" };
 const peerState = { round: 2, packet: { dispositions: [] } };
+// The states above all carry an artifact directory, which the fixer and
+// reviewer briefs branch on — and both take the empty branch in a real run:
+// round 1 has not created the directory yet, and wf-address-tasks's collision
+// re-review calls the reviewer builder outside any cycle with `artifactDir: ""`.
+// That is the "new branch inside an existing builder" gap the header names, so
+// each is rendered rather than argued to be the same text.
+const fixStateRound1 = { ...fixState, round: 1, findings: null, artifactDir: "" };
+const reviewStateNoArtifact = { ...reviewState, round: 1, artifactDir: "" };
 
 // The cycle briefs, each rendered under BOTH configurations, because
 // cycleContract() branches on whether the consumer overrode the role.
@@ -245,10 +253,12 @@ const cycleCases = {
   cycleFixPrompt: [
     ["cycleFixPrompt (standalone)", (f) => f.cycleFixPrompt(cycleStandalone, fixState)],
     ["cycleFixPrompt (batch/overridden)", (f) => f.cycleFixPrompt(cycleOverridden, fixState)],
+    ["cycleFixPrompt (round 1, no artifact directory yet)", (f) => f.cycleFixPrompt(cycleOverridden, fixStateRound1)],
   ],
   cycleReviewPrompt: [
     ["cycleReviewPrompt (standalone)", (f) => f.cycleReviewPrompt(cycleStandalone, reviewState)],
     ["cycleReviewPrompt (batch/overridden)", (f) => f.cycleReviewPrompt(cycleOverridden, reviewState)],
+    ["cycleReviewPrompt (no artifact directory — collision re-review)", (f) => f.cycleReviewPrompt(cycleOverridden, reviewStateNoArtifact)],
   ],
   cyclePeerPrompt: [
     ["cyclePeerPrompt (standalone)", (f) => f.cyclePeerPrompt(cycleStandalone, peerState)],
