@@ -84,6 +84,7 @@ const REQUIRED = [
   ["exemptions are granted, not self-selected", /the only exemptions — and only because this assignment names them/],
   ["worktree is not a blast radius", /A worktree is not a blast radius/],
   ["shared `.git` reaches every sibling worktree", /reach every sibling worktree through the shared `\.git`/],
+  ["empirical verification is clone-only", /Empirical verification[^\n]*belongs ONLY in a disposable clone/],
   ["disposable-clone destination", /command -v dc-enter/],
   ["absolute-path fallback", /absolute path outside the repository — never a relative one/],
 ];
