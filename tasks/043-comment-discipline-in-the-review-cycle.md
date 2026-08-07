@@ -8,13 +8,13 @@ Review rounds routinely ask fixers to "document" nearby behavior, and fixers ove
 
 Included:
 
-- **The shipped-comment test, authored once in the canonical `review-cycle` block, in the Fixer contract:** a code comment ships only if it still earns its keep after the PR closes. What earns its keep is what the code cannot show — why an arbitrary constant or choice is what it is, an external constraint or influence that shaped a decision, or a still-standing deliberately-overruled review decision (kept so the point is not re-raised). Never ship a comment that restates what adjacent code does — an outcome matrix, condition-by-condition narration, or any prose a reader gets from the code itself with minimal effort. Self-documenting code is the goal; the comment is the bounded exception for decisions outside forces shaped, not a default channel. Placing this in the Fixer contract makes every consumer inherit it — a batch implementer is the cycle's round-1 fixer, so `address-tasks` code is covered without any consumer-side restatement.
+- **The shipped-comment test, authored once in the canonical `review-cycle` block, in the Fixer contract:** a code comment ships only if it still earns its keep after the PR closes. What earns its keep is what the code cannot show — why an arbitrary constant or choice is what it is, an external constraint or influence that shaped a decision, or a still-standing deliberately-overruled review decision (kept so the point is not re-raised). Never ship a comment that restates what adjacent code does — an outcome matrix, condition-by-condition narration, or any prose a reader gets from the code itself with minimal effort. Self-documenting code is the goal; the comment is the bounded exception for decisions outside forces shaped, not a default channel. Placing this in the Fixer contract covers every consumer that briefs through it — including the workflow batch flow, whose round-1 fix prompt is the canonical Fixer briefing. The prose batch skills construct implementer prompts from their own contract instead, so add a one-line pointer to the canonical rule there — a pointer, never a restatement.
 - **Channel routing for reasoning that fails the test:** any amount of rationale may land in a PR reply or the summary comment — that is the right home for reasoning addressed to the people watching the current diff, and it is left behind automatically once the PR closes, exactly as it should be. Durable knowledge too bulky for a why-comment goes to the repo's docs area (commonly `docs/`), findable by anyone eager to reason about a past decision without taxing every future read of the code file. The code comment is reserved for what a reader needs at the point of reading. State this routing beside the test so "don't ship it" always comes with "here is where it goes instead".
 - **Current-rationale-only provenance:** when a change supersedes a previously commented decision, replace the old rationale — do not append history. The comment always reads as the reasoning for the code as it now stands; superseded reasoning lives in version control. The one history-shaped thing a comment legitimately carries is a still-standing overruled-review decision, and it too is replaced when genuinely superseded.
 - **Reviewer-side weighting, in the same canonical block:** the Reviewer's quality pass treats a prose-re-implementation comment as removable noise (flag it for deletion), not as material to precision-edit, and does not report the absence of behavior-narrating comments as a gap.
 - **`address-review` keeps only its thread-level deltas:** triage acknowledges that a "document this behavior" thread may be satisfied by a minimal why-comment, by a PR reply carrying the fuller rationale, or by push-back — never by prose re-implementation; and the overruled-decision carve-out's cross-round purpose is stated here, where it bites — external reviewers re-raise across PR rounds and runs, which is what the standing comment exists to prevent.
 
-Out of scope: legislating how comments are written outside these review flows, docstrings/API documentation conventions, any relaxation of the rule that overruled review decisions get recorded, and any mandate to produce docs files per PR — the docs area is a routing option, not a ritual.
+Out of scope: legislating how comments are written outside these review flows, docstrings/API documentation conventions, any relaxation of the practice of recording deliberately overruled review decisions, and any mandate to produce docs files per PR — the docs area is a routing option, not a ritual.
 
 ## Context and references
 
@@ -24,7 +24,7 @@ Out of scope: legislating how comments are written outside these review flows, d
 
 ## Target files or areas
 
-- `plugins/dev-skills/skills/review-cycle/SKILL.md` plus `wf-review-cycle.js` and the `wf-address-tasks.js` embedded copy (primary), `plugins/dev-skills/skills/address-review/SKILL.md` (deltas), and the codex-side mirrors of both.
+- `plugins/dev-skills/skills/review-cycle/SKILL.md` plus `wf-review-cycle.js` and the `wf-address-tasks.js` embedded copy (primary), `plugins/dev-skills/skills/address-review/SKILL.md` and the fix-instructions triage guidance in `plugins/dev-skills/workflows/wf-address-review.js` (deltas), the one-line pointer in the implementer-prompt contracts of `plugins/dev-skills/skills/{address-tasks,address-tasks-serialized}/SKILL.md`, and the codex-side mirrors of the touched skills.
 
 ## Implementation notes
 
@@ -36,8 +36,8 @@ Out of scope: legislating how comments are written outside these review flows, d
 ## Acceptance criteria
 
 - The canonical block's Fixer contract carries the outlives-the-PR test, the welcome categories stated positively, and the channel routing (PR reply / docs area / shipped comment); the provenance rule and the reviewer-side weighting are present in the same block; all authored once and consistent across renderings.
-- `address-review` carries only the thread-level deltas: the minimal-why-or-reply-or-push-back resolution for "document this" threads and the cross-round purpose of the overruled-decision carve-out; it restates no canonical rule.
-- Batch implementers are covered through the round-1-fixer mechanism with no duplicated consumer-side restatement.
+- `address-review` carries only the thread-level deltas: the minimal-why-or-reply-or-push-back resolution for "document this" threads and the cross-round purpose of the overruled-decision carve-out; it restates no canonical rule, and its `wf-address-review.js` fix-instructions rendering stays in step.
+- Batch implementers are covered — through the round-1 fix prompt in the workflow renderings, and via the one-line pointer in the prose batch skills' implementer-prompt contracts — with no duplicated restatement of the rule anywhere.
 - No change to how overruled review decisions are recorded or to push-back mechanics; codex mirrors match.
 
 ## Validation
