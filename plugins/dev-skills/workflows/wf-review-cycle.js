@@ -77,7 +77,7 @@
  * config, so a peer launched through it runs at `reasoning effort: none` on a
  * bare default model. Until powbox delivers the review-strength passthrough,
  * the stage's subagent runs the PINNED RAW LAUNCH (codex exec with
- * `-c model_reasoning_effort=high`; the model stays the peer's configured
+ * `-c model_reasoning_effort=medium`; the model stays the peer's configured
  * high-capability default from ~/.codex/config.toml). When the passthrough
  * lands, the swap to `peer-review-run --provider codex --worktree ...
  * --prompt-file ... --artifact-root ... --timeout N` (flag spelling transcribed
@@ -476,7 +476,7 @@ Return \`pass: true\` only if everything holds and no material issue remains; el
 // `peer-review-run` helper (schema powbox.peer-review-run/v1) — retained
 // pinned raw launch until powbox's review-strength passthrough lands; see the
 // header comment. The launch pins review strength per invocation
-// (-c model_reasoning_effort=high; the model stays the peer's configured
+// (-c model_reasoning_effort=medium; the model stays the peer's configured
 // high-capability default from ~/.codex/config.toml) and never writes back to
 // saved configuration.
 function cyclePeerPrompt(cycle, state) {
@@ -510,7 +510,7 @@ ${preflightStep}
    worktree="<the worktree path from the contract above>"
    # Pin peer effort per invocation; never changes the container's saved config.
    timeout 540 codex exec --sandbox read-only --cd "$worktree" -o "$outfile" \\
-     -c mcp_servers={} -c model_reasoning_effort=high "$(<"$prompt_file")" \\
+     -c mcp_servers={} -c model_reasoning_effort=medium "$(<"$prompt_file")" \\
      < /dev/null 2> "$stderr_file"
    \`\`\`
 
