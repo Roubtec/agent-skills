@@ -1107,8 +1107,21 @@ const SCOPE_SCHEMA = {
   required: ["ok"],
 };
 
+// The scope agent runs OUTSIDE the embeddable section, so nothing placed at the
+// `cycleContract()` call sites reaches it. Same boundary, stated for a brief
+// that carries no worktree contract to hang it off: identical to the one
+// `wf-address-review.js` states for its own two agents.
+const DESTROY_BOUNDARY = `## DESTROY BOUNDARY
+
+Permitted: reading, searching, read-only \`git\`/\`gh\` queries, and the specific mutations this assignment spells out.
+Forbidden: \`rm -rf\`, \`git reset --hard\`, \`git clean\`, \`git branch -f\`, \`git update-ref\`, \`git gc\`, and force-pushing — each of them beyond what this assignment itself spells out, whether as an exact command or as a skill it names to invoke — NOT in a clone, NOT in a temp directory, NOT "safely". You may not self-authorize one by putting yourself somewhere you believe is safe; what this assignment spells out, and the disposable clone below, are the only exemptions.
+A worktree is not a blast radius: it isolates the working tree, not the repository, so \`branch -f\`, \`reset\`, \`update-ref\`, and \`gc\` reach every sibling worktree through the shared \`.git\`.
+Verify anything empirically ONLY in a disposable clone. Run \`command -v dc-enter\`; where it is found, work in \`DC="$(dc-enter <slug>)"\` — it prints one absolute path on stdout, \`dc-remove <slug>\` drops it, and a reused slug is REFUSED rather than re-derived, so pass \`--replace\` or remove the slug first if this may run twice. Where the helper is absent, use an absolute path outside the repository — never a relative one, and never the repository itself.`;
+
 function scopePrompt(input) {
   return `You are scoping one review cycle. Read the repository's agent-context files (\`AGENTS.md\` / \`CLAUDE.md\`) first. This is scoping only — edit nothing, commit nothing.
+
+${DESTROY_BOUNDARY}
 
 Request (lenient parsing — free word order): ${JSON.stringify(input)}
 Recognized tokens (already handled by the caller, listed for context): \`light\`, \`peer-opinions=off\`, \`artifact-type: code|prose|decision\`, \`max-rounds=N\`. Everything else describes the TARGET.

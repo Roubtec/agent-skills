@@ -191,8 +191,27 @@ const RESOLUTION_SCHEMA = {
   required: ["resolutions"],
 };
 
+// The boundary for this script's OWN briefs — every agent it spawns outside the
+// embedded review-cycle-core section, which states the same rule for the three
+// cycle roles through CYCLE_DESTROY_BOUNDARY. Two constants rather than one
+// because the section is mirrored byte-for-byte from wf-review-cycle.js and
+// cannot reference anything this file declares; the text below is instead
+// identical to wf-address-review.js's, which brief for brief is the same shape:
+// an assignment that spells out its own mutations and has no role contract to
+// hang the boundary off. Several of these briefs point a subagent at mutating
+// git or `gh` work in the SHARED tree, and `cleanupNote` sends it out of its
+// worktree to the repo root — the exact posture the `rm -rf ./*` incident had.
+const DESTROY_BOUNDARY = `## DESTROY BOUNDARY
+
+Permitted: reading, searching, read-only \`git\`/\`gh\` queries, and the specific mutations this assignment spells out.
+Forbidden: \`rm -rf\`, \`git reset --hard\`, \`git clean\`, \`git branch -f\`, \`git update-ref\`, \`git gc\`, and force-pushing — each of them beyond what this assignment itself spells out, whether as an exact command or as a skill it names to invoke — NOT in a clone, NOT in a temp directory, NOT "safely". You may not self-authorize one by putting yourself somewhere you believe is safe; what this assignment spells out, and the disposable clone below, are the only exemptions.
+A worktree is not a blast radius: it isolates the working tree, not the repository, so \`branch -f\`, \`reset\`, \`update-ref\`, and \`gc\` reach every sibling worktree through the shared \`.git\`.
+Verify anything empirically ONLY in a disposable clone. Run \`command -v dc-enter\`; where it is found, work in \`DC="$(dc-enter <slug>)"\` — it prints one absolute path on stdout, \`dc-remove <slug>\` drops it, and a reused slug is REFUSED rather than re-derived, so pass \`--replace\` or remove the slug first if this may run twice. Where the helper is absent, use an absolute path outside the repository — never a relative one, and never the repository itself.`;
+
 function bootstrapPrompt() {
   return `Prepare this container for a worktree-isolated task batch. This is setup only — edit no project files.
+
+${DESTROY_BOUNDARY}
 
 1. From the repo root, run \`wt-bootstrap\` (an image-baked helper on PATH). It performs the whole Session Bootstrap deterministically: verifies the worktree roots are container-local (never the host bind mount), prunes ONLY this container's orphaned worktrees under \`.worktrees/$CONTAINER_NAME/\`, sets up the container-local SSH→HTTPS remote rewrite, probes push access, and prints one JSON object.
 2. Map that JSON onto the structured result verbatim — \`ok\`, \`blocker\`, \`wtBase\`, \`remote\`, \`availBytes\` — with no reinterpretation. \`remote: false\` is NOT a blocker (the batch falls back to local branches and skips PRs).
@@ -210,6 +229,8 @@ const STORAGE_PROBE_SCHEMA = {
 
 function storageProbePrompt(wtBase) {
   return `Measure free storage for wave-width throttling. This is measurement only — edit nothing, create nothing.
+
+${DESTROY_BOUNDARY}
 
 Run \`df -B1 --output=avail ${shq(wtBase)}\` (POSIX fallback: \`df -kP\`, avail column, times 1024) and return the mount's free bytes as \`availBytes\`. If the path is missing or \`df\` fails, return \`availBytes: 0\`.`;
 }
@@ -232,6 +253,8 @@ const MAIN_CHECKOUT_SCHEMA = {
 
 function mainCheckoutStatusPrompt(when) {
   return `Non-destructive cleanliness snapshot of the SHARED main checkout (${when}). OBSERVE ONLY — do NOT stage, commit, reset, clean, stash, or edit anything. This step must never modify the tree; a checkout that is already dirty (e.g. the user's own work-in-progress) is fine and must not be "fixed".
+
+${DESTROY_BOUNDARY}
 
 Why: each task runs in its own \`.worktrees/$CONTAINER_NAME/<slug>\` worktree, but the repository's MAIN checkout is shared — a peer harness invoked in this container and the user both see it. Snapshotting its porcelain status at batch boundaries lets the summary report main-checkout dirt without touching it.
 
@@ -399,6 +422,8 @@ function mainCheckoutSummary(baseline, final) {
 
 function resolvePrompt(input) {
   return `You are scoping a batch of pre-planned task files for implementation. Do NOT implement anything.
+
+${DESTROY_BOUNDARY}
 
 Read \`AGENTS.md\` / \`CLAUDE.md\` first for project conventions.
 
@@ -1492,10 +1517,14 @@ function taskCycleConfig(task, remote, peerMode) {
 
 function prPrompt(task, notes, remote) {
   if (!remote) {
-    return `Remote push/PR is unavailable this run. Verify branch \`${task.branch}\` and its commits are intact: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && git -C "$WT" log --oneline ${shq(task.base)}..${shq(task.branch)}\` shows the work. Return \`opened: false\`, \`pushed: false\`, \`reason: "no remote auth this run"\`. Do not fail.`;
+    return `Remote push/PR is unavailable this run. Verify branch \`${task.branch}\` and its commits are intact: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && git -C "$WT" log --oneline ${shq(task.base)}..${shq(task.branch)}\` shows the work. Return \`opened: false\`, \`pushed: false\`, \`reason: "no remote auth this run"\`. Do not fail.
+
+${DESTROY_BOUNDARY}`;
   }
   const caveats = notes ? `\n\nReviewer caveats to surface in the PR body:\n${notes}` : "";
   return `Open a pull request for branch \`${task.branch}\` against base \`${task.base}\`. Work from this task's worktree: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && cd "$WT"\` (rerun-safe resolve of the existing worktree; if it errors, STOP and report).
+
+${DESTROY_BOUNDARY}
 
 1. Ensure the branch is pushed: \`git push -u origin ${shq(task.branch)}\` (or \`git push\`).
 2. \`gh pr create --base ${shq(task.base)} --head ${shq(task.branch)} --title "<concise title>" --body "<summary>"\`.
@@ -1508,7 +1537,11 @@ Return \`opened: true\` with the \`url\` ONLY if \`gh pr create\` actually produ
 function cleanupNote(task) {
   // Best-effort worktree removal is requested after delivery; commits and the
   // branch persist in shared `.git` and on the remote, so removal is safe.
-  return `Remove this task's worktree to reclaim space — the branch and commits persist. From the repo root (not inside the worktree) run \`wt-remove ${shq(task.slug)}\`. It refuses to delete uncommitted work; if it refuses, report why instead of forcing (\`--force\` only clears git's refusal over ignored build artifacts — the clean checks still apply). It never deletes the branch \`${task.branch}\`. Report done.`;
+  return `Remove this task's worktree to reclaim space — the branch and commits persist. From the repo root (not inside the worktree) run \`wt-remove ${shq(task.slug)}\`. It refuses to delete uncommitted work; if it refuses, report why instead of forcing (\`--force\` only clears git's refusal over ignored build artifacts — the clean checks still apply). It never deletes the branch \`${task.branch}\`. Report done.
+
+${DESTROY_BOUNDARY}
+
+\`wt-remove\` is the ONLY removal this assignment spells out, and the repo root is the one place you run it from: you are standing in the SHARED main checkout, outside every worktree, so nothing here is yours to delete by hand. A refusal is the helper working — report it.`;
 }
 
 function collisionScanPrompt(branches) {
@@ -1519,6 +1552,8 @@ function collisionScanPrompt(branches) {
     )
     .join("\n");
   return `You are a read-only PRE-PR COLLISION GUARD for a batch of sibling task branches implemented in parallel, each reviewed and ready for its own PR. Edit, stage, commit, or push NOTHING. Work from the repo ROOT; do not enter or create any worktree — these branches live in the shared \`.git\` and you compare them by ref.
+
+${DESTROY_BOUNDARY}
 
 Why this exists: independent siblings never conflict while they are implemented (each in its own worktree), so two of them can each ADD the same new file path — or a file with the same basename, or a file that exports the same top-level class/symbol — with no warning. The clash only surfaces later, when the branches linearize or merge (an add/add conflict, or a duplicate definition). Find those overlaps now so they can be reconciled before merge.
 
@@ -1572,6 +1607,8 @@ function resolveCollisionsPrompt(tasks, waveCollisions, remote) {
 Each held branch's commits persist in the shared \`.git\`; its worktree may have been reclaimed after review to bound disk use. For each branch you CHANGE, \`cd\` into its worktree using the exact, ready-to-run \`wt-enter\` command listed for that branch under "Held branches" below — its slug and branch are already shell-quoted there because a generated/task-derived branch name can contain shell metacharacters (\`$\`, backticks, \`;\`). NEVER hand-substitute a raw \`<branch>\` into \`wt-enter\` — copy the listed command verbatim. No base argument is needed: the branch already exists and \`wt-enter\` is rerun-safe, re-attaching the worktree if it was reclaimed.
 
 If \`wt-enter\` errors, STOP and report it. Verify \`git rev-parse --show-toplevel\` is that worktree and \`git branch --show-current\` is that branch before editing. Touch ONLY the worktree of the branch you are changing; never edit a sibling's worktree. Read \`AGENTS.md\` / \`CLAUDE.md\` for the project's regen and build commands.
+
+${DESTROY_BOUNDARY}
 
 Held branches:
 ${taskList}

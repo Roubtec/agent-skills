@@ -22,6 +22,7 @@ scripts/
   test-dc-helpers.sh                    # hermetic contract coverage for the disposable-clone helpers
   test-checkout-cleanliness-report.mjs  # regression coverage for the batch workflow's checkout report
   test-review-cycle-retirement.mjs      # behavior coverage for the review cycle's open-question retirement lifecycle
+  test-subagent-destroy-boundary.mjs    # renders every workflow subagent prompt and asserts the destroy boundary is in it
   verify-014-peer-strength-pin.md       # harness-neutral prompt: observe the peer step's pinned review strength (task 014)
 ```
 
@@ -93,6 +94,8 @@ Run `node scripts/test-checkout-cleanliness-report.mjs` after changing the batch
 
 Run `node scripts/test-review-cycle-retirement.mjs` after changing how the review cycle raises, retires, or serves open questions; it drives the shipped `review-cycle-core` section of both workflows through scripted rounds.
 
+Run `node scripts/test-subagent-destroy-boundary.mjs` after changing any workflow prompt; it renders every brief the three workflows hand a spawned subagent — discovering the set from their own `agent()` call sites — and fails when one is missing the destroy boundary, or when a newly added prompt path has no rendered case.
+
 Parse-check any changed dynamic workflow under `plugins/dev-skills/workflows/`. That check is not a `scripts/` suite: the command, and what a pass does and does not establish, live in `plugins/dev-skills/workflows/README.md`'s Validation section rather than here.
 
 ## Consumers
@@ -109,6 +112,6 @@ The `enable-worktrees`, `declare-shadows`, and `session-learnings` skills intent
 
 This repo runs focused tests and Claude automation against its own PRs via three workflows in `.github/workflows/`. The two Claude workflows require a `CLAUDE_CODE_OAUTH_TOKEN` repo secret.
 
-- **`tests.yml`** — runs four regression suites on every PR: the hermetic `gh-review-threads` and disposable-clone helper suites, the checkout-cleanliness report test, and the review-cycle open-question retirement lifecycle test.
+- **`tests.yml`** — runs five regression suites on every PR: the hermetic `gh-review-threads` and disposable-clone helper suites, the checkout-cleanliness report test, the review-cycle open-question retirement lifecycle test, and the subagent destroy-boundary rendering test.
 - **`claude.yml`** — a mention bot. Comment `@claude ...` on an issue or PR (or in a PR review) to summon it; only OWNER/MEMBER/COLLABORATOR authors can trigger it, since the job runs with write permissions.
 - **`claude-code-review.yml`** — runs Anthropic's `code-review` plugin automatically when a PR is opened (or reopened / marked ready for review) and posts inline review comments; later pushes are not auto-reviewed — ask for a re-review with an `@claude` mention. Skipped on PRs from forks, which don't receive the secret.
