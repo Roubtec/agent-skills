@@ -141,6 +141,7 @@ Wait for completion and close the reviewer before the orchestrator advances bran
 - **A note that the implementation is already committed on the current branch** — the reviewer must read the actual files, and must NOT conclude "no implementation" without first confirming the diff is genuinely empty (an empty diff at this stage is far more likely an orchestration error than real absence; the reviewer should say so rather than spend its budget reviewing nothing).
 - **Instruction to perform a code quality pass** (see dimensions below) orthogonal to the criteria check.
 - **Scoping guidance** — the reviewer may run `git diff --name-only <base>...HEAD` to identify the set of touched files and prioritize quality review there. It must still read each touched file in full (not just the diff) and may follow references into untouched files when needed to evaluate consistency or call sites.
+- **An absolute path for validation output**, which you allocate — namespaced by this task's number or created with `mktemp -d`. Any build or check output that must land in a file goes there, never a fixed shared scratchpad name: one session's agents share that directory, and two of them redirecting to `<scratchpad>/verify.log` once had one reading the other's results and returning a verdict for the wrong branch. This batch runs serially, but the session around it does not. Never leave the choice to the reviewer.
 - **Reporting format:**
   - **Pass** — all acceptance criteria are met, build passes, and no material quality issues found. State this clearly.
   - **Issues** — a numbered list of specific, actionable findings. Each finding must include: the category (criteria gap vs. quality), where in the code the gap is, and what needs to change.
@@ -177,7 +178,7 @@ The implementation is already committed on the current branch — read the actua
 report "no implementation": if `git diff --name-only <base-branch>...HEAD` looks empty, say so as a
 flag to the orchestrator (it signals a likely race or wrong branch) rather than reviewing nothing.
 
-DO NOT edit, create, or delete any files. Only read, search, and run validation commands.
+DO NOT edit, create, or delete any files — the validation-output path named below is the sole exception. Only read, search, and run validation commands.
 Do not write follow-up task files; put any suggested follow-up work in your review report only.
 
 The PR base branch for this task is `<base-branch>`. The current branch is `<task-branch>`.
@@ -189,6 +190,7 @@ The PR base branch for this task is `<base-branch>`. The current branch is `<tas
 ## Instructions
 
 - Run a full build and verify there are no type errors before checking anything else. A build failure is an automatic blocker.
+- Any build or check output that must land in a file goes to `<validation-output path allocated above>`, never anywhere else.
 - Identify the touched files with `git diff --name-only <base-branch>...HEAD`. Use this list to scope your code quality review. If no base branch was provided above, fall back to `main` and mention the fallback in your report.
 - Do NOT read commit messages (`git log`) and do NOT read diffs (`git diff` with content); read each touched file in full instead. You may follow references from touched files into untouched files when needed to evaluate consistency, call sites, or downstream effects.
 - Read the relevant areas of the codebase and check each acceptance criterion.
