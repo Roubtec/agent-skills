@@ -181,6 +181,7 @@ Collect decisions across the whole list, then apply. The mechanics depend on the
 - **A decision that writes code** → delegate the locked decision to a fresh implementation
   subagent in the worktree that owns the change, under whatever verification the repo expects
   (tests, build/lint, isolated validation), and require a clean commit before review.
+  Hand it the path any of that output must land in — namespaced by the item, or created with `mktemp -d` — never a fixed shared scratchpad name: one session's agents share that directory, and two of them redirecting to `<scratchpad>/verify.log` once had one report a verdict for the wrong branch. Never leave the choice to the subagent.
 
 For **every code-writing decision**, run a scoped `review-cycle` on the applied decision's diff (artifact type: decision) before recording the item as applied or offering the change for delivery — the fresh-eyes reviewer, the best-effort peer with its pinned-strength launch and timeout, the gates, verbatim finding relay, and round cap are all that skill's and are not restated here. Deltas for this skill:
 
