@@ -298,7 +298,7 @@ const drifted = copies.filter(([, text]) => text !== copies[0][1]).map(([file]) 
 const missing = copies.filter(([, text]) => text === undefined).map(([file]) => file);
 if (missing.length || drifted.length) {
   failures++;
-  const why = missing.length ? `no top-level \`const DESTROY_BOUNDARY\` in ${missing.join(", ")}` : `${drifted.join(", ")} differs from ${copies[0][0]}`;
+  const why = missing.length ? `no top-level \`const DESTROY_BOUNDARY\` in ${missing.join(", ")}` : `copies differ: ${copies[0][0]} vs ${drifted.join(", ")}`;
   rows.push(["(all)", "DESTROY_BOUNDARY identity", "FAIL", why]);
 } else {
   rows.push(["(all)", "DESTROY_BOUNDARY identity", "ok", `${copies.length} copies byte-identical, ${Buffer.byteLength(copies[0][1])} bytes each`]);
