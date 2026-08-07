@@ -268,7 +268,9 @@ In **pointed mode** for review work, re-derive these: for each PR read its commi
 - Delegate the implementation to a fresh subagent with the worktree contract, the task-file spec,
   and the decided option. Require: real **tests** (deterministic, clock-injected where the bug is a
   race — they verify the fix even when the production trigger is dormant), validation on an
-  **isolated DB**, a clean commit, **no push**. When the fix **fully satisfies** the task, that same
+  **isolated DB**, a clean commit, **no push**.
+  Hand it the path any of that validation output must land in — namespaced by the item, or created with `mktemp -d`, and outside the worktree it commits from, which must be left clean — never a fixed shared scratchpad name: one session's agents share that directory, and two of them redirecting to `<scratchpad>/verify.log` once had one report a verdict for the wrong branch. Never leave the choice to the subagent.
+  When the fix **fully satisfies** the task, that same
   commit must also **move the task file to `tasks/done/`** so a later round cannot pick up a stale
   copy of work already done; when it only **partially** satisfies the task, leave the file in
   `tasks/` for a follow-up round and do **not** claim the thread as done. Archiving inside the
