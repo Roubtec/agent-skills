@@ -257,7 +257,7 @@ const CYCLE_FIX_SCHEMA = {
       },
     },
     openQuestions: { type: "array", items: CYCLE_OPEN_QUESTION_SCHEMA, description: "One entry per `escalated` disposition, in the pinned wire format." },
-    deviations: { type: "array", items: { type: "string" }, description: "Each deviation from a LOCKED maintainer decision that STILL STANDS after this pass — what was delivered instead and the constraint that forced it. Report, don't correct; the cycle surfaces these for the human. Restate every standing one on every pass and leave out only one that genuinely no longer stands: the result describes the FINAL state and keeps the per-pass reports as history." },
+    deviations: { type: "array", items: { type: "string" }, description: "Each deviation from a LOCKED maintainer decision that STILL STANDS after this pass — what was delivered instead and the constraint that forced it. Report, don't correct; the cycle surfaces these for the human. Restate every standing one on every pass — VERBATIM, since the cycle matches these by exact text and a reworded restatement reads as a drop plus a brand-new deviation — and leave out only one that genuinely no longer stands: the result describes the FINAL state and keeps the per-pass reports as history." },
     workReport: { type: "array", items: { type: "object" }, description: "One entry per work item in the scope, in the per-item shape the scope's instructions define (a consumer contract rides through here untyped); echoed into the cycle result." },
     proactive: { type: "string", description: "Same-pattern fixes made beyond the literal items, or empty." },
     finalSha: { type: "string", description: "HEAD sha after this pass, with everything committed." },
@@ -443,10 +443,13 @@ function cycleOpenQuestionsBlock(openQuestions) {
 // rounds after the work had conformed, sending a maintainer to "restore"
 // something already present. Restating is what makes replacing safe — a pass
 // that omits one is CLAIMING it no longer stands, and the cycle keeps it
-// standing until a round passes over that claim.
+// standing until a round passes over that claim. The match is by exact text,
+// which is why the block asks for a VERBATIM restatement: a reworded one is
+// indistinguishable from a drop plus a new deviation, so a re-punctuation would
+// cost a round, or ship the same deviation twice at the top of a PR body.
 function cycleDeviationsBlock(deviations) {
   if (!deviations || !deviations.length) return "";
-  return `\n## Deviations from LOCKED decisions standing after the last pass (verbatim)\n\nRestate in your \`deviations\` every one that STILL stands once this pass is done, and leave out only one that genuinely no longer does (say in \`summary\` what closed it): the cycle's result describes the FINAL state, not the history. Leaving one out is a CLAIM, not an effect — it keeps standing, and this round's reviewer is shown the claim beside it, until a round passes over it — so a deviation you drop on the final confirmation pass still ships to the maintainer. Do NOT conform a deviation away to shorten this list — report, don't correct; the maintainer ratifies it or asks for conformance, and has ratified one and reversed their own earlier decision before.\n\n${JSON.stringify(deviations, null, 2)}\n`;
+  return `\n## Deviations from LOCKED decisions standing after the last pass (verbatim)\n\nRestate in your \`deviations\`, VERBATIM, every one that STILL stands once this pass is done, and leave out only one that genuinely no longer does (say in \`summary\` what closed it): the cycle's result describes the FINAL state, not the history. Copy each one's text exactly — the cycle matches these by exact text, so a reworded restatement reads as a drop plus a brand-new deviation. Leaving one out is a CLAIM, not an effect — it keeps standing, and this round's reviewer is shown the claim beside it, until a round passes over it; a claim you make on the final confirmation pass earns one more round rather than ending the cycle undecided. Do NOT conform a deviation away to shorten this list — report, don't correct; the maintainer ratifies it or asks for conformance, and has ratified one and reversed their own earlier decision before.\n\n${JSON.stringify(deviations, null, 2)}\n`;
 }
 
 function cycleFixPrompt(cycle, state) {
@@ -483,7 +486,7 @@ ${cycleItemsBlock(cycle)}${cycleFindingsBlock(state.findings)}${cycleOpenQuestio
 - A sweep ("fix this pattern everywhere") is ENUMERATED, never asserted: return the explicit search space with a per-item verdict, and claim a completed sweep in a commit message only where you enumerated that space. This round's reviewer redoes the enumeration rather than spot-checking yours.
 - ${CYCLE_CARRIED_CLAIMS}
 - ${CYCLE_FINISH_IN_TURN} ${CYCLE_NO_SELF_PEER}
-- If you must deliver something other than a decision the maintainer LOCKED, do not silently conform or correct: report it in \`deviations\` — what you delivered instead and the constraint that forced it — and restate it on every later pass while it stands. The cycle surfaces it for the human (report, don't correct), who ratifies it or asks you to conform; it buys no slack in the meantime, since completeness, tests, and regressions are graded exactly as strictly.
+- If you must deliver something other than a decision the maintainer LOCKED, do not silently conform or correct: report it in \`deviations\` — what you delivered instead and the constraint that forced it — and restate it VERBATIM on every later pass while it stands. The cycle surfaces it for the human (report, don't correct), who ratifies it or asks you to conform; it buys no slack in the meantime, since completeness, tests, and regressions are graded exactly as strictly.
 - Every \`escalated\` disposition gets an \`openQuestions\` entry in the schema's pinned format, under an id no earlier pass used (re-using one reads as a re-report of that pass's question, which the cycle keeps instead of yours), with authoritative artifact pointers (file:line, refs) — never paraphrase — and its \`questionId\` back-reference — which must name a question this cycle carries LIVE (the one you just raised, or one an earlier pass raised that no retirement has claimed); an absent, empty, or settled id names no decision the maintainer will be asked to make and comes back to the next pass as a disposition error. Raise a question only for a decision still open: a \`fixed\` or \`declined\` disposition that SETTLES a still-live question from an EARLIER pass names that question's \`id\` in \`retiresQuestionIds\` instead (only those two dispositions retire; a question this pass raises cannot also be retired by it; and retiring an id the cycle does not carry open from an earlier pass comes back to the next pass as a disposition error).
 - Before returning, the worktree MUST be clean AND idle: \`git status --porcelain\` empty with every intended change committed, and no Git operation in progress — check \`git rev-parse --git-path rebase-merge\` and \`rebase-apply\` for an existing path, plus \`MERGE_HEAD\`, \`CHERRY_PICK_HEAD\`, \`REVERT_HEAD\`, \`BISECT_LOG\` (a tree left mid-rebase or mid-cherry-pick can print empty porcelain). Set \`clean\` and \`finalSha\` accordingly; either condition failing is resolved or reported as a \`blocker\`, never handed to review.
 - Pushing is governed by the assignment above; do nothing PR-side, and do NOT use the \`TaskCreate\`/\`TaskUpdate\`/\`TaskList\` tools.
@@ -891,11 +894,14 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 // pass's set, not every pass's, so the result describes the FINAL state and
 // `deviationHistory` — named as history — is where the rounds live. Dropping
 // one is a CLAIM a round must pass over, exactly like a retirement: until then
-// it keeps standing in `deviations`, so no terminal pass can erase a live
-// deviation on its way out (the claims still open are `deviations` minus the
-// last `deviationHistory` entry). A consumer publishing a PR comment or summary
-// from this result leads with `deviations`; they are the maintainer's call to
-// ratify or conform, never the loop's.
+// it keeps standing in `deviations` (the claims still open are `deviations`
+// minus the last `deviationHistory` entry), and a claim the final confirmation
+// pass makes holds the cycle open for the round that decides it rather than
+// ending it undecided. So a `pass` verdict carries no open claim; an open one
+// is what an `error` or `review-cap` exit leaves behind, neither having reached
+// the round that would have settled it. A consumer publishing a PR comment or
+// summary from this result leads with `deviations`; they are the maintainer's
+// call to ratify or conform, never the loop's.
 // An `openQuestions` entry a later pass settled carries a `retired` mark; a
 // consumer serving these to a human (resolve-open-questions) skips those. A
 // retirement no reviewer round has accepted carries `retirementPending`
@@ -1036,9 +1042,10 @@ async function runReviewCycle(cycle) {
     // forgot it" look identical in the packet, so a dropped deviation KEEPS
     // STANDING until a round passes with the claim in view, exactly as a
     // retirement does. Otherwise the final confirmation pass — asked for an
-    // empty `dispositions` array, and followed by no further round — could
-    // erase a live deviation on its way out, leaving the one call the loop is
-    // not allowed to make recorded nowhere the maintainer reads.
+    // empty `dispositions` array — could erase a live deviation on its way out,
+    // leaving the one call the loop is not allowed to make recorded nowhere the
+    // maintainer reads; the terminal check below is what keeps such a claim
+    // from being the cycle's last word.
     const restated = [...(fix.deviations || [])];
     for (const gone of deviations.filter((d) => !restated.includes(d) && !pendingDeviationDrops.includes(d))) {
       log(`fixer pass ${fixerPasses} did not restate deviation ${JSON.stringify(gone)}; it KEEPS STANDING as a claimed drop until a round passes with the claim in view.`);
@@ -1109,7 +1116,18 @@ async function runReviewCycle(cycle) {
     // Terminal condition of the disposition rule: the reviewer has passed and
     // the fixer's last pass disposed nothing new (and changed nothing that
     // would need a fresh review). Nothing left for a reviewer to look at.
-    if (confirming && !fix.changed && (fix.dispositions || []).length === 0) {
+    //
+    // A claimed deviation drop IS something left to look at. It is the one
+    // thing a pass takes off the maintainer's list by OMISSION rather than on a
+    // disposition — which is why a retirement claim can never reach this check
+    // (it rides in `dispositions`, so the array is not empty) while a drop
+    // otherwise would, ending the cycle with the claim unadjudicated. The
+    // conjunct gives the two claim kinds the same shape: the claim earns a
+    // round, a passing round promotes it, and the next confirmation pass —
+    // restating nothing, the drop now in effect — terminates here. One extra
+    // round, only where a confirmation pass genuinely closed a deviation, and
+    // bounded by the same cap check below.
+    if (confirming && !fix.changed && (fix.dispositions || []).length === 0 && pendingDeviationDrops.length === 0) {
       return result("pass", "reviewer passed; final confirmation pass disposed nothing new");
     }
 
