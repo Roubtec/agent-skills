@@ -44,7 +44,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 53;
+const CHECKS_PER_LEG = 57;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -247,6 +247,10 @@ const confirmRetireAgain = {
 // this one is a pass that has stopped restating it — the claimed drop.
 const DEV = "delivered a stub adapter instead of the locked one (upstream API absent)";
 const deviate = { ...PASS_PACKET, deviations: [DEV] };
+// A confirmation-shaped pass (nothing changed, nothing disposed) that RESTATES
+// the deviation. `idle` is the same pass DROPPING it, since `PASS_PACKET`
+// carries `deviations: []`.
+const confirmDeviate = { ...idle, deviations: [DEV] };
 
 async function run(src, { fixes, reviews, cycle }) {
   const seen = { fixPrompts: [], reviewPrompts: [] };
@@ -601,19 +605,42 @@ for (const name of WORKFLOWS) {
   //     stops restating one is CLAIMING it no longer stands, so the claim needs
   //     a round exactly as a retirement does. The terminating confirmation pass
   //     is where that matters — it is asked to return an empty `dispositions`
-  //     array and no round follows it — so without the claim rule a
-  //     schema-driven fixer echoing `deviations: []` there erases a live
-  //     deviation, leaving the one call the loop may not make in a log line.
+  //     array — so without the claim rule a schema-driven fixer echoing
+  //     `deviations: []` there erases a live deviation, leaving the one call
+  //     the loop may not make in a log line.
+  //
+  //     A retirement claim rides IN `dispositions`, so it can never reach the
+  //     terminal check; a drop is an OMISSION, so it would, and the check takes
+  //     the open claim as its own reason to run one more round. That is what
+  //     makes the two claim kinds converge alike rather than leaving the drop
+  //     unadjudicated on the cycle's ordinary exit.
   await scenario("24. a dropped deviation needs a passing round", async () => {
-    const dropped = await run(src, { fixes: [deviate, idle], reviews: [OK] });
-    check("a deviation the terminal confirmation pass drops still ships", dropped.res.verdict === "pass" && JSON.stringify(dropped.res.deviations) === JSON.stringify([DEV]), `${dropped.res.verdict}/${JSON.stringify(dropped.res.deviations)}`);
-    check("the per-pass history rides beside it, named as history", Array.isArray(dropped.res.deviationHistory) && dropped.res.deviationHistory.length === 2 && dropped.res.deviationHistory[1].deviations.length === 0, JSON.stringify(dropped.res.deviationHistory));
+    const dropped = await run(src, { fixes: [deviate, idle, idle], reviews: [OK, OK] });
+    check("a drop claimed on the terminal confirmation pass earns a round", dropped.seen.reviewPrompts.length === 2 && /no longer restates/.test(dropped.seen.reviewPrompts[1] || "") && (dropped.seen.reviewPrompts[1] || "").includes(DEV), `${dropped.seen.reviewPrompts.length} review prompt(s)`);
+    check("the round that passes over it clears the deviation", dropped.res.verdict === "pass" && (dropped.res.deviations || []).length === 0, `${dropped.res.verdict}/${JSON.stringify(dropped.res.deviations)}`);
+    check("the per-pass history rides beside it, named as history", Array.isArray(dropped.res.deviationHistory) && dropped.res.deviationHistory.length === 3 && dropped.res.deviationHistory[0].deviations.length === 1 && dropped.res.deviationHistory[2].deviations.length === 0, JSON.stringify(dropped.res.deviationHistory));
+
+    // The conjunct is narrow: only an OPEN claim holds the cycle open. A
+    // confirmation pass that restates what stands still terminates on the spot,
+    // so an ordinary cycle carrying a deviation pays no extra round for it.
+    const restated = await run(src, { fixes: [deviate, confirmDeviate], reviews: [OK] });
+    check("a confirmation pass that restates costs no extra round", restated.res.verdict === "pass" && restated.seen.reviewPrompts.length === 1, `${restated.res.verdict}/${restated.seen.reviewPrompts.length} review prompt(s)`);
+    check("and the restated deviation ships as the final state", JSON.stringify(restated.res.deviations) === JSON.stringify([DEV]), JSON.stringify(restated.res.deviations));
 
     // The no-latching half, unchanged: a drop a round passed over takes effect,
     // so the result still describes the FINAL state rather than every round's.
     const accepted = await run(src, { fixes: [deviate, fixOn("r1-1"), idle], reviews: [FAIL("r1"), OK] });
     check("a drop a round passes over takes effect", accepted.res.verdict === "pass" && (accepted.res.deviations || []).length === 0, JSON.stringify(accepted.res.deviations));
     check("the round that decides it is SHOWN the claim", /no longer restates/.test(accepted.seen.reviewPrompts[1] || "") && (accepted.seen.reviewPrompts[1] || "").includes(DEV), "round-2 review prompt");
+
+    // The round a confirmation-pass claim earns can also REJECT it — the half
+    // that was unreachable while such a claim ended the cycle instead.
+    const disputed = await run(src, {
+      fixes: [deviate, idle, fixOn("r2-1")],
+      reviews: [OK, FAIL("that deviation still stands"), FAIL("it still stands")],
+      cycle: { maxRounds: 3 },
+    });
+    check("a confirmation-pass claim the round rejects leaves the deviation standing", disputed.res.verdict === "review-cap" && JSON.stringify(disputed.res.deviations) === JSON.stringify([DEV]), `${disputed.res.verdict}/${JSON.stringify(disputed.res.deviations)}`);
 
     // A reviewer that keeps rejecting the claim -> round cap -> still standing.
     const rejected = await run(src, {
