@@ -1669,13 +1669,21 @@ function taskCycleConfig(task, remote, peerMode) {
   };
 }
 
-function prPrompt(task, notes, remote) {
+// `deviations` are the cycle's still-standing departures from a LOCKED
+// maintainer decision (final state, not round history). They LEAD the PR body:
+// the maintainer ratifies one or asks for conformance, and a deviation reported
+// below a wall of summary is one nobody rules on.
+function prPrompt(task, notes, remote, deviations) {
+  const dev = Array.isArray(deviations) ? deviations : [];
   if (!remote) {
     return `Remote push/PR is unavailable this run. Verify branch \`${task.branch}\` and its commits are intact: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && git -C "$WT" log --oneline ${shq(task.base)}..${shq(task.branch)}\` shows the work. Return \`opened: false\`, \`pushed: false\`, \`reason: "no remote auth this run"\`. Do not fail.
 
 ${DESTROY_BOUNDARY}`;
   }
   const caveats = notes ? `\n\nReviewer caveats to surface in the PR body:\n${notes}` : "";
+  const deviationLead = dev.length
+    ? `\n\nLEAD the PR body with a "Deviation from a locked decision" section, above everything else, carrying these verbatim — each is the maintainer's to ratify or ask conformance on, so neither correct nor soften one:\n${JSON.stringify(dev, null, 2)}`
+    : "";
   return `Open a pull request for branch \`${task.branch}\` against base \`${task.base}\`. Work from this task's worktree: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && cd "$WT"\` (rerun-safe resolve of the existing worktree; if it errors, STOP and report).
 
 ${DESTROY_BOUNDARY}
@@ -1683,7 +1691,7 @@ ${DESTROY_BOUNDARY}
 1. Ensure the branch is pushed: \`git push -u origin ${shq(task.branch)}\` (or \`git push\`).
 2. \`gh pr create --base ${shq(task.base)} --head ${shq(task.branch)} --title "<concise title>" --body "<summary>"\`.
    - Reference the task file (${task.path}); don't restate the whole task unless it adds review value.
-   - Note tradeoffs / intentional divergences / uncertainties.${caveats}
+   - Note tradeoffs / intentional divergences / uncertainties.${deviationLead}${caveats}
 
 Return \`opened: true\` with the \`url\` ONLY if \`gh pr create\` actually produced a PR URL. If the push succeeded but the PR could not be created (auth, API, or base-branch error), return \`opened: false\`, \`pushed: true\`, and \`reason\`. Do not claim a PR that was not created.`;
 }
@@ -1832,7 +1840,7 @@ async function implementTask(task, remote, peerMode) {
 }
 
 async function deliverTask(task, ready, remote) {
-  const pr = await agent(prPrompt(task, ready.notes, remote), {
+  const pr = await agent(prPrompt(task, ready.notes, remote, ready.deviations), {
     label: `pr:${task.slug}`,
     schema: PR_SCHEMA,
   });
