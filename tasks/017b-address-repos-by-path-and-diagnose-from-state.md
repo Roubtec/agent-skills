@@ -18,7 +18,7 @@ Included:
 - **Do not outlaw the guarded forms already shipped.** An audit of the current text found every `cd` in shipped guidance is already checked or confined: `( cd "$WT_BASE/pr-<N>" && gh pr checkout N )` in `address-reviews`, `cd "$worktree" || exit 125` in `review-cycle`'s peer launch, and `WT="$(wt-enter …)" && cd "$WT"` in `wf-address-tasks.js`. The defect was an *unchecked* `cd` with a glob-derived target followed by `;`-chained state changes, and the new clause must be written narrowly enough that those three keep passing. Prefer stating the requirement positively (`git -C`, and check any `cd`) over prohibiting `cd` outright.
 - **Replace the transcript instrument in the diagnosis-discipline rule.** Verification is against **observable state** — reflog, refs, working tree, file contents, command output — with a transcript named only as a fallback where the harness exposes a greppable one. The rule's premise is correct and stays: a subagent's environment or infrastructure diagnosis is a hypothesis, not a finding.
 - **Both mirrors of every touched file**, which must stay in parity apart from harness-specific wording.
-- **An assertion for the addressing clause** in `scripts/test-subagent-destroy-boundary.mjs`, over the prompt paths that suite already renders.
+- **An assertion for the addressing clause** in `scripts/test-subagent-destroy-boundary.mjs`, added as one more entry in that suite's boundary-content clause list, which is checked once per boundary constant. The suite's existing exact-containment presence check then carries the clause into every rendered prompt for free.
 
 Out of scope:
 
@@ -31,12 +31,12 @@ Out of scope:
 
 - 017 — the parent task; item 4 delivered the diagnosis-discipline one-liner and item 5 delivered the destroy boundary. Both are the text this task corrects, so this is a follow-up under 017's number rather than a new claim.
 - 017a — states `rebase-stack`'s own destroy boundary; disjoint from this, but it surveys where the boundary is embedded and is the best map of that surface.
-- 045 — adds an output-destination assertion to `scripts/test-subagent-destroy-boundary.mjs`, and its Scope already states the design fork any new assertion over that suite must resolve: the existing PRESENCE check works by exact containment of a boundary constant declared in the prompt's own file, and text that is not one constant needs a different check. **This task's assertion should resolve that fork the same way 045 resolves it rather than inventing a second mechanism**; if 045 lands first, follow it, and if this task lands first, state the choice so 045 can follow.
-- The destroy boundary currently ships in six skills across both trees (`address-review`, `address-reviews`, `address-tasks`, `address-tasks-serialized`, `resolve-open-questions`, `review-cycle`), plus `plugins/dev-skills/workflows/README.md`. The diagnosis-discipline rule ships in three across both trees (`address-tasks`, `address-tasks-serialized`, `address-reviews`). Re-derive the exact set before editing; 017a's survey is a starting point, not a current census.
+- 045 — adds an output-destination assertion to `scripts/test-subagent-destroy-boundary.mjs`, and its Scope states a design fork this task does **not** face. That fork exists because the destination text is not one shared constant and applies only to a subset of builders, so 045 must first decide *which* rendered prompts order a build. The addressing clause has neither problem: it goes inside each `*DESTROY_BOUNDARY` constant, and the suite already checks every such constant against its clause list while separately proving, by exact containment, that each rendered brief carries a whole constant. **So extend that existing clause list — do not import 045's mechanism, and do not invent a second one.** The two tasks are independent here and may land in either order.
+- The destroy boundary currently ships in seven skills across both trees (`address-review`, `address-reviews`, `address-tasks`, `address-tasks-serialized`, `reap-tasks`, `resolve-open-questions`, `review-cycle`), plus `plugins/dev-skills/workflows/README.md`. `reap-tasks` is the one easiest to miss, and the one that can least afford to be: its sweep has no worktree isolation at all — every subagent it spawns shares the single checkout — and it requires the boundary in every verification-subagent prompt it composes, so it belongs in the edit sweep and the acceptance check alongside the other six. The diagnosis-discipline rule ships in three across both trees (`address-tasks`, `address-tasks-serialized`, `address-reviews`). Re-derive the exact set before editing; 017a's survey is a starting point, not a current census.
 
 ## Target files or areas
 
-- `plugins/dev-skills/skills/{address-review,address-reviews,address-tasks,address-tasks-serialized,resolve-open-questions,review-cycle}/SKILL.md` and the `codex/` mirrors
+- `plugins/dev-skills/skills/{address-review,address-reviews,address-tasks,address-tasks-serialized,reap-tasks,resolve-open-questions,review-cycle}/SKILL.md` and the `codex/` mirrors
 - `plugins/dev-skills/workflows/README.md`, and any workflow prompt builder that renders the boundary
 - `scripts/test-subagent-destroy-boundary.mjs`
 
@@ -51,15 +51,15 @@ Out of scope:
 - Every rendering of the destroy boundary states that a repository other than the subagent's own worktree is addressed by path (`git -C <absolute path>`), that a working directory is never derived from a glob, and that state-changing git commands are never chained after an unchecked `cd`.
 - The three guarded `cd` forms already shipped (`address-reviews`'s subshell checkout, `review-cycle`'s `|| exit 125` peer launch, `wf-address-tasks.js`'s `&& cd "$WT"`) remain valid under the new clause, and are not edited to satisfy it.
 - No rendering of the diagnosis-discipline rule instructs the orchestrator to read or grep a subagent transcript as its primary instrument; each names observable state instead, and the hypothesis-not-a-finding premise is unchanged.
-- `scripts/test-subagent-destroy-boundary.mjs` fails when a rendered subagent prompt carries the boundary without the addressing clause.
+- `scripts/test-subagent-destroy-boundary.mjs` fails when a boundary constant lacks the addressing clause, through one added entry in its existing per-constant clause list rather than a second detection mechanism.
 - Both mirrors carry both changes and differ only in harness-specific wording.
 
 ## Validation
 
-- Run `node scripts/test-subagent-destroy-boundary.mjs`, and confirm it fails when the addressing clause is deleted from one rendered prompt path and passes when it is restored.
+- Run `node scripts/test-subagent-destroy-boundary.mjs`, and confirm it fails when the addressing clause is deleted from one boundary constant and passes when it is restored.
 - Reproduce the original failure shape in a scratch repository to confirm the clause describes it: create two sibling directories matching one glob, run `cd "$(ls -d <glob>)" ; git commit --allow-empty -m x` from a third repository, and observe the commit landing in the third repository rather than either sibling.
 - Grep both trees for the diagnosis-discipline paragraph and confirm no rendering still names a transcript as the primary instrument.
 
 ## Review plan
 
-Reviewer confirms the addressing clause is stated positively rather than as a blanket prohibition on `cd`, and specifically checks the three shipped guarded forms still comply — a clause that reads as "never `cd`" is a finding, because it would invalidate working recipes this task explicitly protects. Reviewer also confirms the diagnosis rule's premise survived the instrument swap, that the new assertion resolves 045's design fork the same way rather than adding a second mechanism, and that both mirrors stay in parity.
+Reviewer confirms the addressing clause is stated positively rather than as a blanket prohibition on `cd`, and specifically checks the three shipped guarded forms still comply — a clause that reads as "never `cd`" is a finding, because it would invalidate working recipes this task explicitly protects. Reviewer also confirms the diagnosis rule's premise survived the instrument swap, that the new assertion is one more clause on the existing per-constant check rather than a second detection mechanism, that `reap-tasks` was swept with the other six skills, and that both mirrors stay in parity.
