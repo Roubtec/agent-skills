@@ -158,6 +158,7 @@ For a wave of tasks `T1..Tn`:
 2. **Run each task's loop, fanned out by phase.** Each task runs its own implement→review→fix loop, but you advance all of the wave's tasks **in lockstep by phase** so that same-phase subagents (which live in different worktrees) can be spawned **together in one natural-language turn or tool-call batch and run concurrently**:
 
    - **Phase A — implement:** spawn one `worker` per still-unfinished task in the wave, each pointed at its own worktree path, all together. Wait until every implementer has completed, then close the finished implementer threads.
+   - Adopt each returned implementation packet only under `review-cycle`'s packet hard-check: `git -C <worktree> status --porcelain` empty **and** no Git operation in progress (`rebase-merge`/`rebase-apply` paths, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG` — a tree left mid-rebase prints empty porcelain). Either failing means redrive or resume that task's Phase A rather than handing Phase B a worktree nobody can build on. The rest of that skill's *The loop and its gates* binds this loop whole too, later additions included.
    - **Phase B — review:** only after *all* Phase-A implementers have returned, spawn one fresh `explorer` reviewer per task, each in its task's worktree, all together. At the same moment, unless `peer-opinions=off`, launch one background peer per task while the peer remains available, per the `review-cycle` skill's peer step — its pinned-strength launch, unique per-invocation prompt/output/stderr paths under each task's own artifact directory (never a shared filename, never inside a task worktree), timeout-and-retry, and examination-only contract are defined there and are not restated here. Before triage, wait for every task's own reviewer and for every peer actually launched; then close the finished own-reviewer threads.
    - A task exits the loop only when its round passes the `review-cycle` gate; tasks with issues carry both reports verbatim as separately labeled blocks into the next round's Phase A, under that skill's grounding, blocking-and-minor gating, dispute, timeout/retry, and forfeit rules — never re-summarized.
    - Repeat A→B until each task converges or hits the `review-cycle` round cap; a task still failing at the cap does **not** get a PR — surface its outstanding findings to the user.
@@ -258,7 +259,7 @@ On a fix-up round, spawn a fresh `worker` implementer for the task; do not conti
 Same fresh-eyes contract and code-quality checklist as `address-tasks-serialized`.
 A reviewer is always a **fresh** `explorer` subagent spawn, never a `send_input` continuation of the implementer, launched only **after** every Phase-A implementer in the wave has returned.
 
-Include in each reviewer prompt:
+Include in each reviewer prompt, beyond that inherited contract — which binds whole, later additions to it included:
 
 - The same **WORKTREE CONTRACT** first: "Your worktree is `<absolute worktree path>`. `cd` into it and confirm `git rev-parse --show-toplevel` matches before doing anything. Review only this worktree."
 - The **full task file content** (same source of truth the implementer got).

@@ -137,6 +137,7 @@ It is launched in the **foreground** (not background) since the feedback loop mu
   - **Issues** — a numbered list of specific, actionable findings. Each finding must include: the category (criteria gap vs. quality), where in the code the gap is, and what needs to change.
 - **Instruction to be strict but fair** — flag genuine gaps and functional problems, not style preferences or minor nitpicks.
 - **Instruction NOT to edit any files** — the reviewer only reads and reports. It must not create, update, or delete follow-up task files; any suggested follow-up work belongs in the review report only.
+- **The `review-cycle` Reviewer contract, whole** — every rule that skill states for a Reviewer binds here, later additions included; the bullets above are this loop's deltas, not a closed list. It carries the lifecycle rule this prompt states outright: nothing resumes a subagent, so the reviewer never ends its turn waiting for a notification, a callback, or a child it launched, it bounds and reaps anything it starts before reporting, and it launches no review of its own beside the loop's sanctioned peer step.
 - **Instruction not to use the shared task-tracker** — like the implementer, tell the reviewer not to use the `TaskCreate`/`TaskUpdate`/`TaskList` tools; a subagent's task entries bleed into the orchestrator's view.
 
 #### Code quality dimensions to check
@@ -213,7 +214,7 @@ For each task file in the input set:
 2. **Create a dedicated implementation branch** for the task.
 3. **Read the task file** enough to construct a good implementer prompt. Identify the acceptance criteria so you can later evaluate the reviewer's report.
 4. **Spawn the implementer agent** with a well-structured prompt (see Implementer Agent section). Wait for completion. Spawn nothing else in this turn — the reviewer comes in a later turn, after the implementer's commits exist on disk.
-5. **Evaluate the implementer's report.** If the implementer hit a blocker it could not resolve, stop and surface it to the user before spawning a reviewer.
+5. **Evaluate the implementer's packet.** Apply `review-cycle`'s packet hard-check before adopting it: `git status --porcelain` empty **and** no Git operation in progress — check `git rev-parse --git-path rebase-merge` and `rebase-apply` for an existing path, plus `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`, since a tree left mid-rebase or mid-cherry-pick prints empty porcelain. Either condition failing means redrive or resume that implementer, never silent adoption. If the implementer hit a blocker it could not resolve, stop and surface it to the user before spawning a reviewer.
 6. **Only after step 5, spawn the reviewer agent** with a fresh prompt (see Reviewer Agent section) and launch the peer second opinion in the background at the same moment (unless unavailable or `peer-opinions=off`). Always wait for the reviewer before triage, and also wait for the peer when one was launched. Do not spawn the reviewer in the same turn or parallel tool block as the implementer — you share one working tree, so a reviewer started before the commit reviews an unfinished branch.
 7. **Evaluate the reviewer's report:**
    - If the report says the branch is **empty / has no implementation / shows an empty diff**, do not trust it at face value — that is the signature of a race (reviewer started before the implementer committed) or a wrong-branch checkout, not a real gap. Verify with `git diff --name-only <base>...HEAD`; if the work is actually present, spawn a fresh reviewer and use that verdict instead.
@@ -277,6 +278,8 @@ Deltas for this serialized skill:
 - Every implementer round counts toward the feedback-loop cap, whichever reviewer triggered it; invoke the peer on every round while it remains available, and mention an unavailable or forfeited peer once in the final summary.
 
 ## Feedback Loop
+
+This loop is `review-cycle`'s: every rule that skill states under *The loop and its gates* binds it whole — the packet hard-check above, the no-latched-flags rule for whatever this loop carries into its final summary, the round cap, and every later addition — and the steps below are only this skill's deltas.
 
 When either reviewer reports material issues:
 
