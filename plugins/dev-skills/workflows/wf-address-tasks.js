@@ -622,7 +622,7 @@ const CYCLE_FIX_SCHEMA = {
           origin: { type: "string", description: "reviewer | peer" },
           disposition: { type: "string", description: "fixed | declined | escalated — nothing else counts as a disposition." },
           detail: { type: "string", description: "fixed: what changed + commit. declined: the reason (a decline is verified by the next fresh reviewer, never final here). escalated: one line naming the question." },
-          questionId: { type: "string", description: "REQUIRED when disposition is `escalated`: the id of the openQuestions entry this raised. It must name a question the cycle carries LIVE — the one this pass raises, or one an earlier pass raised that no retirement has claimed. An absent, empty, or already-retired id names no decision the maintainer will be asked to make and is reported back, never a silent no-op." },
+          questionId: { type: "string", description: "MUST be set when disposition is `escalated`: the id of the openQuestions entry this raised. It must name a question the cycle carries LIVE — the one this pass raises, or one an earlier pass raised that no retirement has claimed. An absent, empty, or already-retired id names no decision the maintainer will be asked to make and is reported back, never a silent no-op." },
           retiresQuestionIds: { type: "array", items: { type: "string", minLength: 1 }, description: "Ids of STILL-LIVE open questions from EARLIER passes that this disposition SETTLES, so the cycle stops carrying decisions the maintainer no longer has to make. Only `fixed` and `declined` retire (an `escalated` disposition raises a question rather than settling one), and only a question that was already open: a question this same packet RAISES cannot also be settled by it — that is a contradiction, not a retirement. Naming an id the cycle does not carry open from an earlier pass — an empty string included, which names nothing — is reported back, never a silent no-op. Retire nothing you did not actually settle: the retirement takes effect only once a reviewer round passes with it in view." },
         },
         required: ["finding", "origin", "disposition", "detail"],
@@ -1044,10 +1044,10 @@ Return a verdict per finding. Edit nothing.`;
 // fails to cover, and the finding comes back carried, which IS the report — but
 // a SPONTANEOUS disposition (no `findingId`, and every disposition on a pass
 // handed nothing, which the final confirmation pass always is) covers nothing
-// by construction, so that channel says nothing at all and the REQUIRED
-// back-reference would no-op silently. Reporting it there and only there also
-// keeps one breach to one entry, rather than spending an extra round on a
-// second report of a finding already carried.
+// by construction, so that channel says nothing at all and the back-reference
+// the contract requires would no-op silently. Reporting it there and only
+// there also keeps one breach to one entry, rather than spending an extra
+// round on a second report of a finding already carried.
 //
 // RETIRABLE and KNOWN are deliberately DIFFERENT sets. An `escalated`
 // disposition names the question its own packet just raised, so
@@ -1138,10 +1138,11 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
     // trying to converge — another round for nothing.
     //
     // An absent or non-string id normalizes to the empty string, which names
-    // nothing and is exactly the breach worth reporting: the schema asks for a
-    // non-empty id on every `escalated` disposition, so letting the empty one
-    // through would make the single shape it still admits as a `string` the
-    // one shape that no-ops.
+    // nothing and is exactly the breach worth reporting: the contract asks for
+    // a non-empty id on every `escalated` disposition — a conditional no schema
+    // keyword here expresses, so this guard is the only thing that states it —
+    // and letting the empty one through would make the one breach still typed
+    // as a `string` the one shape that no-ops.
     if (!handed.length || !d.findingId) {
       if (d.disposition === "escalated") {
         const qid = typeof d.questionId === "string" ? d.questionId : "";
@@ -1149,7 +1150,7 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
           stray.set(`question:${qid}`, {
             id: `question:${qid}`,
             category: "disposition-error",
-            problem: `An \`escalated\` disposition named questionId ${JSON.stringify(qid)}, which this cycle does not carry as a LIVE open question — no pass raised it (an absent or empty id names nothing), or a retirement has already settled it, or claimed to (a claim still awaiting the reviewer round that decides it has already spoken for the question), or this same pass retires it (settling a decision rather than escalating to it) — so the REQUIRED back-reference points at no decision the maintainer will be asked to make. Re-issue the escalation with an \`openQuestions\` entry under an id no earlier pass used and name THAT id, or dispose what you escalated some other way, and dispose this entry (e.g. declined) explaining the stray.`,
+            problem: `An \`escalated\` disposition named questionId ${JSON.stringify(qid)}, which this cycle does not carry as a LIVE open question — no pass raised it (an absent or empty id names nothing), or a retirement has already settled it, or claimed to (a claim still awaiting the reviewer round that decides it has already spoken for the question), or this same pass retires it (settling a decision rather than escalating to it) — so the back-reference points at no decision the maintainer will be asked to make. Re-issue the escalation with an \`openQuestions\` entry under an id no earlier pass used and name THAT id, or dispose what you escalated some other way, and dispose this entry (e.g. declined) explaining the stray.`,
           });
         }
       }

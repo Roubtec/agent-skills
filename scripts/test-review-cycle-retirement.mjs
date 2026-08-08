@@ -529,9 +529,10 @@ for (const name of WORKFLOWS) {
   // 20. The gap this whole guard exists for: a pass handed NOTHING escalates to
   //     a question that does not exist. The coverage walk never judges such a
   //     disposition — it covers nothing by construction — so before the guard
-  //     the schema's REQUIRED back-reference was the one shape that no-op'd.
+  //     the back-reference the contract requires was the one shape that no-op'd.
   //     The empty/absent id is pinned beside the invented one deliberately:
-  //     the schema asks for a non-empty id, so an id that is not there names
+  //     the contract asks for a non-empty id — no schema keyword here says so,
+  //     which is why the guard has to — so an id that is not there names
   //     nothing and is precisely the breach worth reporting.
   await scenario("20. spontaneous escalation naming no question", async () => {
     const { res, carried, carriedIds } = await run(src, {
