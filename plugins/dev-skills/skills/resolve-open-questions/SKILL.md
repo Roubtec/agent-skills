@@ -291,7 +291,7 @@ In **pointed mode** for review work, re-derive these: for each PR read its commi
 - **Publish** each passing change *only after the maintainer confirms the push* — this interactive
   skill never pushes or edits review threads unprompted (a one-line "publish these fixes now?"
   question, pre-answered by a `push`/`ping-*` flag): these are commits *on top of* an already-pushed
-  tip, so the push is a normal **fast-forward** (not a lease rewrite) — except a host branch that re-homing rule 2 rebased, whose already-pushed commits that rebase rewrote: that one publishes with an exact expected-OID lease exactly as `address-review`'s push step defines, never a bare `--force`. Then post a **follow-up reply
+  tip, so the push is a normal **fast-forward** (not a lease rewrite) — except a branch that re-homing rule 2 rebased (the host, and for a stacked host its parent), whose already-pushed commits that rebase rewrote: those publish with an exact expected-OID lease exactly as `address-review`'s push step defines, never a bare `--force`, and a rebased parent publishes before the host — until it does, the host's PR diff shows the parent's replayed commits. Then post a **follow-up reply
   on the now-implemented thread** ("now implemented in `<sha>`" — append "task moved to
   `tasks/done/`" only when the commit actually archived it; a partially-satisfied task stays in
   `tasks/` and its thread is left as it stands — do **not** reopen a thread a prior run already
@@ -362,7 +362,7 @@ file; preserve that target while applying the source-agnostic hygiene.
       wrap-up, finish + persist the current item, then stop with a resume-ready ledger.
 - [ ] Adjacent-invariant audit run whenever a resolution relies on/introduces one; findings reported
       before implementing.
-- [ ] Code-writing decisions verified (tests, build, isolated validation) through a scoped `review-cycle` on each applied decision's diff, with only disputed judgment calls surfaced for the maintainer's judgment; review-case fix-now items additionally use a worktree per owning branch and **fast-forward** publish (thread reply, Summary, re-ping) — an exact expected-OID lease only where re-homing rebased the host branch — with no atomic change split across branches.
+- [ ] Code-writing decisions verified (tests, build, isolated validation) through a scoped `review-cycle` on each applied decision's diff, with only disputed judgment calls surfaced for the maintainer's judgment; review-case fix-now items additionally use a worktree per owning branch and **fast-forward** publish (thread reply, Summary, re-ping) — an exact expected-OID lease only where re-homing rule 2 rebased a branch (the host, and for a stacked host its parent, published parent-first) — with no atomic change split across branches.
 - [ ] Decisions recorded under the `tasks/` convention follow **"When decisions live in task files
       (the `tasks/` convention)"**; review-case follow-up-task items preserve the file their resolved
       thread already points at.
