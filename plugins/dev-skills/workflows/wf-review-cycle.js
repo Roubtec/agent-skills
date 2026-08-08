@@ -289,7 +289,7 @@ const CYCLE_REVIEW_SCHEMA = {
     notes: { type: "string", description: "Pass-notes: caveats and stray remarks worth carrying. The cycle's final fixer pass disposes anything actionable here rather than letting it drop." },
     deviationAssessments: {
       type: "array",
-      description: "Your half of report-don't-correct: ONE entry per deviation from a LOCKED decision that still stands on this packet (every one you were shown except the claimed drops you accept). Empty when the packet carries none. A round that leaves a standing deviation unassessed does NOT pass — it would reach the maintainer carrying only the implementer's half.",
+      description: "Your half of report-don't-correct: ONE entry per deviation from a LOCKED decision that still stands on this packet (every one you were shown except the claimed drops you accept). Empty when the packet carries none. A round that leaves a standing deviation unassessed does NOT pass — it would reach the maintainer carrying only the implementer's half. Exactly one usable entry per deviation is published: a second entry for a deviation already assessed, and any entry the round cannot use, is dropped rather than sent on beside the usable one — a hedge here buys nothing.",
       items: {
         type: "object",
         properties: {
@@ -922,10 +922,10 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 // Returns the cycle result contract (lean; bulk prose stays behind artifactDir):
 // { verdict: "pass"|"review-cap"|"error", detail, rounds, findingDispositions,
 //   openQuestions, deviations, deviationAssessments (the reviewer's half for
-//   each deviation still standing, present only for the ones a passing round
-//   judged), deviationHistory (only once some pass reported
-//   one), workReport, proactive, finalSha, notes, reviewerNotes, peerRounds,
-//   discardedPeerFindings, undisposed, outstanding, artifactDir,
+//   each deviation still standing — at most ONE entry per deviation, and only
+//   an entry the passing round could use), deviationHistory (only once some
+//   pass reported one), workReport, proactive, finalSha, notes, reviewerNotes,
+//   peerRounds, discardedPeerFindings, undisposed, outstanding, artifactDir,
 //   artifactDirAnomalies (present only when a later pass tried
 //   to move the artifact directory) }
 // NO per-round condition latches into that result: `deviations` is the LAST
@@ -1323,11 +1323,20 @@ async function runReviewCycle(cycle) {
     // dispose a finding the next reviewer answers by itself.
     const wouldPass = !!review.pass && peerGating.length === 0 && undisposed.length === 0;
     const assessments = Array.isArray(review.deviationAssessments) ? review.deviationAssessments : [];
-    const assessed = new Set(
-      assessments
-        .filter((a) => a && typeof a.deviation === "string" && String(a.inSpecRoute || "").trim() && cycleDeviationVerdict(a.recommendation))
-        .map((a) => a.deviation),
-    );
+    // Keyed by deviation text, the FIRST usable entry winning, because what the
+    // round gates on is exactly what it may publish. The gate needs only ONE
+    // usable entry per standing deviation, so recording the raw array instead
+    // would let a second, hedged entry for the same deviation ride to the
+    // maintainer beside the valid one — reinstating in what SHIPS the
+    // present-or-absent reading `cycleDeviationVerdict` closed in what is
+    // CHECKED. An entry the gate could not use is nobody's half of anything.
+    const usableAssessments = new Map();
+    for (const a of assessments) {
+      if (!a || typeof a.deviation !== "string") continue;
+      if (!String(a.inSpecRoute || "").trim() || !cycleDeviationVerdict(a.recommendation)) continue;
+      if (!usableAssessments.has(a.deviation)) usableAssessments.set(a.deviation, a);
+    }
+    const assessed = new Set(usableAssessments.keys());
     const unassessedDeviations = wouldPass ? restated.filter((d) => !assessed.has(d)) : [];
     // Handed to the next fixer as findings of their own, because that is the
     // only channel this loop has back into a round. The fixer cannot supply the
@@ -1387,11 +1396,12 @@ async function runReviewCycle(cycle) {
       deviations = deviations.filter((d) => !pendingDeviationDrops.includes(d));
       pendingDeviationDrops = [];
     }
-    // And the same verdict accepts the reviewer's half for what still stands.
-    // Recorded only on a PASSING round, beside the claims it settles: an
-    // assessment from a round that failed judged a packet the fixer has since
-    // changed.
-    deviationAssessments = assessments;
+    // And the same verdict accepts the reviewer's half for what still stands —
+    // the entries the gate above found usable, at most one per deviation, not
+    // the raw array it read them out of. Recorded only on a PASSING round,
+    // beside the claims it settles: an assessment from a round that failed
+    // judged a packet the fixer has since changed.
+    deviationAssessments = [...usableAssessments.values()];
 
     // Round passed. light mode ends here, recording undisposed remarks as such.
     if (cycle.mode === "light") {

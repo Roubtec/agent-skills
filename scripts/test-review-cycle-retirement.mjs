@@ -44,7 +44,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 73;
+const CHECKS_PER_LEG = 74;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -766,6 +766,19 @@ for (const name of WORKFLOWS) {
       cycle: { maxRounds: 3 },
     });
     check("a recommendation that is not RATIFY or CONFORM does not count either", /This is fix-up round 2/.test(hedged.seen.fixPrompts[1] || "") && hedged.res.verdict === "pass" && JSON.stringify(hedged.res.deviationAssessments) === JSON.stringify([ASSESS]), `${hedged.res.verdict}/${JSON.stringify(hedged.res.deviationAssessments)}`);
+
+    // What the round GATED on is what it PUBLISHES. One usable entry lets the
+    // round pass, so a reviewer that also emits a hedged second entry for the
+    // same deviation would — if the raw array were recorded — hand the
+    // maintainer a RATIFY beside an UNSURE for one decision, which is the
+    // present-or-absent reading the verdict parse closed one level up. Only
+    // the usable entry ships, and only one of it.
+    const alsoHedged = await run(src, {
+      fixes: [deviate, confirmDeviate],
+      reviews: [{ pass: true, issues: [], notes: "", deviationAssessments: [ASSESS, { deviation: DEV, inSpecRoute: "unclear", recommendation: "UNSURE — could go either way" }] }, OK_DEV],
+      cycle: { maxRounds: 3 },
+    });
+    check("a hedged duplicate does not ride to the maintainer beside the usable entry", alsoHedged.res.verdict === "pass" && JSON.stringify(alsoHedged.res.deviationAssessments) === JSON.stringify([ASSESS]), `${alsoHedged.res.verdict}/${JSON.stringify(alsoHedged.res.deviationAssessments)}`);
 
     // A deviation the pass CLAIMS no longer stands is exempt: passing the round
     // is what removes it, so demanding a ratify-or-conform recommendation on
