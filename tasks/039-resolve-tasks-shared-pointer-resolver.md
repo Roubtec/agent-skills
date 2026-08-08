@@ -31,7 +31,7 @@ Out of scope: changing the consumers' existing path/glob handling (raw paths kee
 ## Implementation notes
 
 - The module is prose-only like its siblings — a skill instruction file, not a shipped binary; keep its contract crisp enough that a subagent following it returns a mechanically usable list.
-- This spec's parenthetical parsing gloss in Scope is argument, not delivered text (the naming-while-arguing allowance 033 states): for this repo's convention, the shipped `resolve-tasks` prose points at the one parsing definition 027 established rather than restating it; a repo on another convention has no 027 to cite and rests on Scope's inference rule instead.
+- This spec's parenthetical parsing gloss in Scope is argument, not delivered text (the naming-while-arguing allowance 033 states): for this repo's convention, the shipped `resolve-tasks` prose points at the one parsing definition 027 established rather than restating it, and it states the infer-the-folder's-convention instruction itself — one sentence — so a consumer repo on another convention gets a self-contained contract with no 027 to cite.
 - A number with letter suffix (`015b`) is a full number matching exactly one file; a bare primary (`015`) matches only the primary, not its suffixed follow-ups — spell this out, it is the likeliest ambiguity in practice.
 - Classification is per full number across the whole subtree: `active` beats nothing, but a number found in both `tasks/` and `done/` is `ambiguous` (a relocation half-done), not `active`.
 - Keep consumer deltas small: the consumers state when they invoke the resolver and what each classification means for them; the resolution mechanics live only in `resolve-tasks`.
