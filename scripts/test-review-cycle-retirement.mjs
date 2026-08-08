@@ -64,7 +64,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 120;
+const CHECKS_PER_LEG = 121;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -1072,6 +1072,19 @@ for (const name of WORKFLOWS) {
     // the outcome the policy asks for on every required round, `light` mode's
     // last one included, and drive a conforming cycle to its cap.
     check("the reviewer's flake gate admits a cited ACTIVE task, not only a new commit", /ACTIVE existing task the pass cited/.test(cycleReviewChecks("code", "delivery")) && /NEW one committed on this branch/.test(cycleReviewChecks("code", "delivery")), cycleReviewChecks("code", "delivery"));
+
+    // Admitting the shape is only half of it: the gate must also point the
+    // reviewer at a record it HOLDS. `cycleReviewPrompt` never renders the
+    // pass's `flakeRecord` — deliberately, and the light-mode scenario below
+    // rests on that — so a gate telling the reviewer to "check the pass's flake
+    // record" sent it to the one artifact its brief withholds, leaving the
+    // cited-task shape unverifiable and blocking anyway: the exact failure the
+    // check above exists to prevent, reintroduced one sentence later. What the
+    // reviewer does hold is its own failing run and the repository's task
+    // folder, which the flake rule makes greppable by requiring the suite name
+    // in the task TITLE. Both halves are asserted positively so the gate cannot
+    // regress by naming the record again while keeping the grep.
+    check("the reviewer's flake gate points the citation check at a record the reviewer HOLDS", /grep the repository's task folder/.test(cycleReviewChecks("code", "delivery")) && /not shown the pass's own flake record/.test(cycleReviewChecks("code", "delivery")), cycleReviewChecks("code", "delivery"));
 
     // And the cycle states each round's tier, so no in-cycle round relies on
     // the default: an intermediate round is told ROUND, the round a
