@@ -447,11 +447,16 @@ if (!cycle) {
 // under `artifactDir`. It is for-the-human data of the same class as
 // openQuestions/deviations, so every result that carries the pointer also
 // carries the anomaly record beside it.
-const anomalies = cycle.artifactDirAnomalies
-  ? { artifactDirAnomalies: cycle.artifactDirAnomalies }
-  : {};
+// `deviationHistory` rides in the same carrier and for the same reason: the
+// cycle's `deviations` is by contract the FINAL standing set, so the per-pass
+// record is the only place a maintainer reading this result can see that a pass
+// stopped restating one. The cycle sets it once any pass reported a deviation.
+const carried = {
+  ...(cycle.artifactDirAnomalies ? { artifactDirAnomalies: cycle.artifactDirAnomalies } : {}),
+  ...(cycle.deviationHistory ? { deviationHistory: cycle.deviationHistory } : {}),
+};
 if (cycle.verdict === "error") {
-  return { error: `Review cycle failed: ${cycle.detail}`, pr: packet.pr, rounds: cycle.rounds, dispositions: cycle.workReport, openQuestions: cycle.openQuestions, deviations: cycle.deviations, peerRounds: cycle.peerRounds, artifactDir: cycle.artifactDir, ...anomalies };
+  return { error: `Review cycle failed: ${cycle.detail}`, pr: packet.pr, rounds: cycle.rounds, dispositions: cycle.workReport, openQuestions: cycle.openQuestions, deviations: cycle.deviations, peerRounds: cycle.peerRounds, artifactDir: cycle.artifactDir, ...carried };
 }
 
 const passed = cycle.verdict === "pass";
@@ -648,7 +653,7 @@ if (!flags.push) {
     deviations: cycle.deviations,
     peerRounds: cycle.peerRounds,
     artifactDir: cycle.artifactDir,
-    ...anomalies,
+    ...carried,
     outstanding: passed ? null : cycle.outstanding || null,
     ...(uncoveredItems.length
       ? { uncoveredItems: uncoveredRefs, coverageNote: `${uncoveredItems.length} gathered item(s) have no workReport entry; a later publish replay would skip them.` }
@@ -675,7 +680,7 @@ if (!passed) {
     deviations: cycle.deviations,
     peerRounds: cycle.peerRounds,
     artifactDir: cycle.artifactDir,
-    ...anomalies,
+    ...carried,
     outstanding: cycle.outstanding || null,
     note: "Hit the review cycle's round cap without a passing review; nothing was pushed.",
   };
@@ -696,7 +701,7 @@ if (uncoveredItems.length) {
     deviations: cycle.deviations,
     peerRounds: cycle.peerRounds,
     artifactDir: cycle.artifactDir,
-    ...anomalies,
+    ...carried,
     uncoveredItems: uncoveredRefs,
     note: `${uncoveredItems.length} gathered item(s) have no workReport entry; nothing was pushed. Re-run so every item carries its disposition.`,
   };
@@ -717,7 +722,7 @@ if (duplicatedItems.length) {
     deviations: cycle.deviations,
     peerRounds: cycle.peerRounds,
     artifactDir: cycle.artifactDir,
-    ...anomalies,
+    ...carried,
     duplicatedItems: duplicatedRefs,
     note: `${duplicatedItems.length} gathered item(s) carry more than one workReport entry (listed with the kinds that clash); nothing was pushed. Re-run so every item carries exactly one disposition.`,
   };
@@ -738,7 +743,7 @@ if (badDispDefect) {
     deviations: cycle.deviations,
     peerRounds: cycle.peerRounds,
     artifactDir: cycle.artifactDir,
-    ...anomalies,
+    ...carried,
     malformedDisposition: badDispRef,
     malformedDispositions: dispDefects,
     note: `Disposition "${badDispRef}" is not publishable: ${badDispDefect}. Nothing was pushed.${moreDefects} Re-run so every entry carries its gathered type, identifiers, and echoed author fields plus the full per-item report contract (kind, detail, author, authorIsBot, newFinding).`,
@@ -830,7 +835,7 @@ return {
   deviations: cycle.deviations,
   peerRounds: cycle.peerRounds,
   artifactDir: cycle.artifactDir,
-  ...anomalies,
+  ...carried,
   publishReport: publishReport || { published: false, aborted: "publisher returned nothing" },
   note: published
     ? (notes.length ? notes.join(" ") : undefined)

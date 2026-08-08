@@ -1834,11 +1834,16 @@ Do NOT open any PR and do NOT remove any worktree — the workflow re-reviews ea
 // that the round history may not ALL sit under `artifactDir` — so it rides
 // beside the pointer wherever it goes. Works on both the raw cycle result and
 // any task result derived from it: the field names are identical.
+// `deviationHistory` rides beside `deviations` for the same reason: the cycle's
+// `deviations` is by contract the FINAL standing set, so the per-pass record is
+// the only place the Summary's reader can see that a pass stopped restating
+// one. Present only once some pass reported a deviation.
 function cycleCarried(result) {
   return {
     rounds: result.rounds,
     openQuestions: result.openQuestions,
     deviations: result.deviations,
+    ...(result.deviationHistory ? { deviationHistory: result.deviationHistory } : {}),
     peerRounds: result.peerRounds,
     artifactDir: result.artifactDir,
     ...(result.artifactDirAnomalies ? { artifactDirAnomalies: result.artifactDirAnomalies } : {}),
