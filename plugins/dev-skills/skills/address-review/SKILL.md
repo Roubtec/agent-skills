@@ -62,7 +62,7 @@ Two top-level subagent roles — both spawned via the `Agent` tool with `subagen
 - **Peer (`codex`, best-effort)** — the `review-cycle` skill's cross-harness peer step: a read-only CLI review launched beside the Reviewer with the same disposition context but no implementation reasoning. Its preflight, pinned-strength launch, outcome vocabulary, and gating are defined in that skill; a coherent, grounded finding is first-class.
 
 > **Critical — one checkout-dependent agent at a time; subagents share your working tree.**
-> Every subagent operates on your single checked-out branch — they are not isolated copies. Never spawn two checkout-dependent agents in the same turn or parallel tool block, and never spawn the reviewer until the fixer's commits have landed on disk. A reviewer racing an unfinished fixer scopes its diff against a half-written branch, sees nothing, and falsely reports "no changes" — shipping the work unverified. Spawn one, await its result, then the next. The sole concurrency exception is the examination-only `codex` peer launched beside the Reviewer after the tree is clean and committed: two readers are safe, while the Reviewer alone owns build/typecheck execution. This overrides the harness's general "batch independent calls" guidance for every other pair.
+> Every subagent operates on your single checked-out branch — they are not isolated copies. The invariant is about committed state, not turn structure: **never spawn the reviewer until the fixer's commits are on disk.** A reviewer racing an unfinished fixer scopes its diff against a half-written branch, sees nothing, and falsely reports "no changes" — shipping the work unverified. An `Agent` call may return immediately with a background task id and deliver its result as a later notification, so wait for that completion notification, then spawn the next; keeping two checkout-dependent agents out of the same turn or parallel tool block is a **proxy** for the invariant — sufficient where spawns are synchronous, and neither sufficient nor necessary where they are not. The sole concurrency exception is the examination-only `codex` peer launched beside the Reviewer after the tree is clean and committed: two readers are safe, while the Reviewer alone owns build/typecheck execution. This overrides the harness's general "batch independent calls" guidance for every other pair.
 
 > Fix-up and re-review spawns follow the `review-cycle` skill's fresh-spawn rule — always a fresh `Agent` spawn, never a "continued" prior agent (ignore any `SendMessage` continuation footer; this harness does not expose that tool).
 
@@ -163,7 +163,7 @@ For the actionable items:
 - **Large/multi-file/exploratory** → spawn a **Fixer** subagent (see Architecture and the prompt sketch below). One at a time; await its commits before moving on.
 - **Preclude repeat comments:** for each pattern you fix, grep the PR's changed files and closely related code for the **same offending pattern** and fix those too, so the next review round doesn't re-raise it. Mention these proactive fixes in the summary.
 - Keep commits buildable where practical; run the build/lint before declaring done.
-- Before review, require `git status --porcelain` to be empty. Inspect and commit every intended change; if a fixer leaves partial or unexplained changes, resolve that state or stop rather than letting the reviewer inspect only the committed subset.
+- Before review, apply `review-cycle`'s packet hard-check to this branch's worktree: `git status --porcelain` empty **and** no Git operation in progress. Inspect and commit every intended change; if a fixer leaves partial or unexplained changes, resolve that state or stop rather than letting the reviewer inspect only the committed subset.
 
 For the **follow-up-task** items, write the task file(s) following the `write-tasks` skill conventions (invoke that skill where available):
 
@@ -181,7 +181,7 @@ Perform the fixes directly, leave the worktree clean with all intended changes c
 
 ### Step 6 — Verify with a fresh reviewer
 
-Once fixes are committed and the worktree is clean, run the `review-cycle` skill's verification loop on this branch (artifact type `code`). Its roles — the fresh Reviewer spawn and the best-effort `codex` peer launched beside it — plus the peer's pinned-strength launch and outcome vocabulary, the gates (grounding spot-check, blocking and minor peer findings, verbatim finding relay), the disposition rule, and the round cap are all defined there and are not restated here. The peer preflight outcome from step 0 and `peer-opinions=off` carry into the cycle.
+Once fixes are committed and the worktree is clean, run the `review-cycle` skill's verification loop on this branch (artifact type `code`). Its roles — the fresh Reviewer spawn and the best-effort `codex` peer launched beside it — plus the peer's pinned-strength launch and outcome vocabulary, the gates (grounding spot-check, blocking and minor peer findings, verbatim finding relay), the disposition rule, and the round cap are all defined there and are not restated here. Beyond those named pieces, every rule that skill states under *The loop and its gates* binds this loop whole, later additions included — the no-latched-flags rule among them, for whatever this run carries into step 8's report and the Summary comment. The peer preflight outcome from step 0 and `peer-opinions=off` carry into the cycle.
 
 This skill's deltas on the cycle:
 
@@ -308,7 +308,7 @@ gh pr edit NUMBER --add-reviewer @copilot
 - [ ] If requested, single-branch rebase done first; non-trivial conflict handled (interactive loop-in / hands-off abort+stop); validated when conflicted.
 - [ ] All **unresolved** threads gathered and validated per "GitHub API recipes" (single-shot queries, never GraphQL `--paginate`); resolved ones ignored; maintainer replies and top-level decision comments treated as authoritative; step 3's zero-item rule applied (terminal no-op only on the three-way tip equality).
 - [ ] Each thread triaged: actionable / already-addressed / push-back / follow-up-task / ambiguous.
-- [ ] Fixes done inline or via a fixer subagent (one checkout-dependent agent at a time, briefed under `review-cycle`'s Fixer contract); same-pattern sweep done in changed/related code.
+- [ ] Fixes done inline or via a fixer subagent (no reviewer started until the fixer's commits are on disk — one checkout-dependent agent at a time is the proxy for that; briefed under `review-cycle`'s Fixer contract); same-pattern sweep done in changed/related code.
 - [ ] Follow-up-task items recorded as standalone task files per `write-tasks` conventions, placed under step 5's queued-vs-deferred rule, and committed on the current branch separately from code fixes.
 - [ ] Worktree clean and every intended change committed before review and publication.
 - [ ] Step 6 ran the `review-cycle` verification loop to a pass — every disposition checked by the fresh Reviewer and best-effort peer under that skill's gates, non-blocking peer outcomes recorded — or stopped at its round cap without pushing.

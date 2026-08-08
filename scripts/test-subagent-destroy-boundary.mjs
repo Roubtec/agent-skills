@@ -247,6 +247,17 @@ const peerState = { round: 2, packet: { dispositions: [] } };
 const fixStateRound1 = { ...fixState, round: 1, findings: null, artifactDir: "" };
 const reviewStateNoArtifact = { ...reviewState, round: 1, artifactDir: "" };
 
+// Locked-decision deviations reach two delivery builders — `prPrompt` and
+// `publishPrompt` — and each branches twice over them: standing deviations with
+// the reviewing round's assessments, and standing deviations the cycle recorded
+// none for. Four arms, so four renders; the same "new branch inside an existing
+// builder" gap, closed the same way.
+const deviations = ["Delivered a polling loop instead of the locked webhook: the webhook endpoint is not reachable from CI."];
+const deviationAssessments = [
+  { deviation: deviations[0], inSpecRoute: "None — the locked route needs an endpoint this environment cannot expose.", recommendation: "RATIFY — conforming would block the release on an infrastructure change." },
+];
+const publishPacket = { pr: { number: 42, url: "https://example.invalid/pr/42", branch: "b", workingBranch: "b", base: "main", headOid: "deadbeef", rebased: false }, items: [] };
+
 // The cycle briefs, each rendered under BOTH configurations, because
 // cycleContract() branches on whether the consumer overrode the role.
 const cycleCases = {
@@ -287,6 +298,8 @@ const FIXTURES = {
     prPrompt: [
       ["prPrompt (remote)", (f) => f.prPrompt(task, "caveat", true)],
       ["prPrompt (no remote)", (f) => f.prPrompt(task, "", false)],
+      ["prPrompt (remote, deviation + assessment)", (f) => f.prPrompt(task, "caveat", true, deviations, deviationAssessments)],
+      ["prPrompt (remote, deviation, cycle recorded no assessment)", (f) => f.prPrompt(task, "", true, deviations, [])],
     ],
     cleanupNote: [["cleanupNote", (f) => f.cleanupNote(task)]],
     collisionScanPrompt: [["collisionScanPrompt", (f) => f.collisionScanPrompt([{ slug: task.slug, branch: task.branch, base: task.base }])]],
@@ -298,15 +311,9 @@ const FIXTURES = {
   "wf-address-review.js": {
     gatherPrompt: [["gatherPrompt", (f) => f.gatherPrompt("#42 push")]],
     publishPrompt: [
-      [
-        "publishPrompt",
-        (f) =>
-          f.publishPrompt(
-            { pr: { number: 42, url: "https://example.invalid/pr/42", branch: "b", workingBranch: "b", base: "main", headOid: "deadbeef", rebased: false }, items: [] },
-            [],
-            { push: true, pingCodex: false }
-          ),
-      ],
+      ["publishPrompt", (f) => f.publishPrompt(publishPacket, [], { push: true, pingCodex: false })],
+      ["publishPrompt (deviation + assessment)", (f) => f.publishPrompt(publishPacket, [], { push: true, pingCodex: false }, deviations, deviationAssessments)],
+      ["publishPrompt (deviation, cycle recorded no assessment)", (f) => f.publishPrompt(publishPacket, [], { push: true, pingCodex: false }, deviations, [])],
     ],
   },
 };
@@ -433,6 +440,46 @@ if (missing.length || drifted.length) {
   rows.push(["(all)", "DESTROY_BOUNDARY identity", "FAIL", why]);
 } else {
   rows.push(["(all)", "DESTROY_BOUNDARY identity", "ok", `${copies.length} copies byte-identical, ${Buffer.byteLength(copies[0][1])} bytes each`]);
+}
+
+// The same question for the finish-in-turn rule, which now exists twice over:
+// `CYCLE_FINISH_IN_TURN` inside the mirrored `review-cycle-core` section binds
+// the cycle's roles, and each workflow that also briefs deputies of its own
+// out here declares `DEPUTY_FINISH_IN_TURN` for them, because out-of-section
+// code does not reach into the section. Two spellings of one rule are two
+// rules the moment one is edited, so the canonical text is read from
+// `wf-review-cycle.js` — the section's source — and every deputy copy must
+// match it exactly. A file declaring no deputy copy simply has no deputies;
+// that is not a failure. A file declaring one that no longer matches is — and
+// so is a file whose prompts interpolate `${DEPUTY_FINISH_IN_TURN}` while the
+// declaration pattern below finds nothing to compare, since "has no deputies"
+// and "declares its copy in a shape this check cannot read" are the same
+// silence otherwise, and the second one would exempt exactly the file the
+// check exists for. The `DESTROY_BOUNDARY` check above fails closed on a
+// missing declaration because every workflow must carry one; this one cannot,
+// so the interpolation is what says a declaration was owed.
+const rule = (file, name) =>
+  (readFileSync(join(workflows, file), "utf8").match(new RegExp(`^const ${name} = ("(?:\\\\.|[^"\\\\])*");$`, "m")) || [])[1];
+const canonicalRule = rule("wf-review-cycle.js", "CYCLE_FINISH_IN_TURN");
+const deputyRuleReads = shippedWorkflows().map((file) => [file, rule(file, "DEPUTY_FINISH_IN_TURN")]);
+const deputyRules = deputyRuleReads.filter(([, text]) => text !== undefined);
+const unreadableDeputyRules = deputyRuleReads
+  .filter(([file, text]) => text === undefined && readFileSync(join(workflows, file), "utf8").includes("${DEPUTY_FINISH_IN_TURN}"))
+  .map(([file]) => file);
+if (!canonicalRule) {
+  failures++;
+  rows.push(["(all)", "FINISH_IN_TURN identity", "FAIL", "no top-level `const CYCLE_FINISH_IN_TURN` in wf-review-cycle.js"]);
+} else if (unreadableDeputyRules.length) {
+  failures++;
+  rows.push(["(all)", "FINISH_IN_TURN identity", "FAIL", `interpolates \`\${DEPUTY_FINISH_IN_TURN}\` but declares no readable top-level \`const DEPUTY_FINISH_IN_TURN = "…";\`: ${unreadableDeputyRules.join(", ")}`]);
+} else {
+  const ruleDrifted = deputyRules.filter(([, text]) => text !== canonicalRule).map(([file]) => file);
+  if (ruleDrifted.length) {
+    failures++;
+    rows.push(["(all)", "FINISH_IN_TURN identity", "FAIL", `DEPUTY_FINISH_IN_TURN differs from the cycle's rule in ${ruleDrifted.join(", ")}`]);
+  } else {
+    rows.push(["(all)", "FINISH_IN_TURN identity", "ok", `${deputyRules.length} deputy copy(ies) match the cycle's rule`]);
+  }
 }
 
 report();

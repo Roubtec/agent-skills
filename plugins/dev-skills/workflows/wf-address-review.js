@@ -200,6 +200,18 @@ Forbidden: \`rm -rf\`, \`git reset --hard\`, \`git clean\`, \`git branch -f\`, \
 A worktree is not a blast radius: it isolates the working tree, not the repository, so \`branch -f\`, \`reset\`, \`update-ref\`, and \`gc\` reach every sibling worktree through the shared \`.git\`.
 Empirical verification that could change state belongs ONLY in a disposable clone. Run \`command -v dc-enter\`; where it is found, work in \`DC="$(dc-enter <slug>)"\` — it prints one absolute path on stdout, \`dc-remove <slug>\` drops it, and a reused slug is REFUSED rather than re-derived, so pass \`--replace\` or remove the slug first if this may run twice. Where the helper is absent, use an absolute path outside the repository — never a relative one, and never the repository itself.`;
 
+// Subagent lifecycle for this workflow's OWN deputies, out here beyond the
+// review cycle. The cycle's roles get the same rule from CYCLE_FINISH_IN_TURN
+// inside the byte-mirrored `review-cycle-core` section, which out-of-section
+// code does not reach into — the reason CYCLE_REDIRECTED_OUTPUT is written out
+// again rather than shared. It binds a deputy for the same reason it binds a
+// fixer: nothing resumes a subagent, and one that ended its turn waiting on a
+// background child it had launched left a dirty worktree and no packet until
+// the orchestrator hunted the child down by hand. The sentence is kept
+// byte-identical to the cycle's, and `test-subagent-destroy-boundary.mjs`
+// asserts that rather than trusting this comment.
+const DEPUTY_FINISH_IN_TURN = "Finish inside your own turn: nothing resumes you afterwards, so never end it waiting for a notification, a callback, or a child you started. Bound and wait on anything you launch, and reap it before you return — no process of yours may outlive your turn.";
+
 // The rebase branch of this brief orders a build, so it needs a destination for
 // that build's output — this gather agent is assigned no artifact path anywhere,
 // and a role with no assigned path picks the session scratchpad, which is shared
@@ -207,6 +219,8 @@ Empirical verification that could change state belongs ONLY in a disposable clon
 // worktree, so the destination is a unique directory outside it.
 function gatherPrompt(input) {
   return `You are preparing a pull request for review-addressing. Read \`AGENTS.md\` / \`CLAUDE.md\` first.
+
+${DEPUTY_FINISH_IN_TURN}
 
 ${DESTROY_BOUNDARY}
 
@@ -269,8 +283,30 @@ Each entry's \`author\` and \`authorIsBot\` must match the gathered item they ar
 You may reclassify any item.`;
 }
 
-function publishPrompt(packet, dispositions, flags) {
+// A deviation from a locked decision LEADS the summary comment: the maintainer
+// ratifies it or asks for conformance, so anything that buries it below the fix
+// list is how it goes unseen — and publication never corrects one on their
+// behalf. The cycle reports the ones still standing at the end, not every one
+// ever raised, so this is the final state rather than a round's history.
+// The reviewer's half of that protocol travels with them: the maintainer is
+// being asked to ratify or conform, and the two things that decision needs —
+// whether an in-spec route existed, and which way the reviewer leaned — are
+// produced by the round that passed the deviation. Publishing the deviation
+// without them hands over the implementer's half alone, which is the shape the
+// cycle spends a whole extra round avoiding.
+function publishPrompt(packet, dispositions, flags, deviations, deviationAssessments) {
+  const dev = Array.isArray(deviations) ? deviations : [];
+  const assessments = Array.isArray(deviationAssessments) ? deviationAssessments : [];
+  const deviationLead = dev.length
+    ? `\n\n## Locked-decision deviations — LEAD the summary comment with these\n\nOpen the comment with a "Deviation from a locked decision" section carrying these verbatim, above everything else. Each is the maintainer's to ratify or ask conformance on; publication neither corrects nor softens one.\n\n${JSON.stringify(dev, null, 2)}${
+        assessments.length
+          ? `\n\nThe reviewing round's assessment of each — carry \`inSpecRoute\` and \`recommendation\` into that same section, beside the deviation they name, so the maintainer reads both halves at once. Relay them; do not re-argue or soften one.\n\n${JSON.stringify(assessments, null, 2)}`
+          : `\n\nThe review cycle recorded no assessment for these (it stopped before a round passed over them), so the section carries the implementer's half only — say so plainly rather than supplying a judgment of your own.`
+      }`
+    : "";
   return `Publish the addressed review for PR #${packet.pr.number} (branch \`${packet.pr.branch}\`). A fresh reviewer has PASSED. Read \`AGENTS.md\` / \`CLAUDE.md\` first.
+
+${DEPUTY_FINISH_IN_TURN}
 
 ${DESTROY_BOUNDARY}
 
@@ -290,8 +326,8 @@ Report a STRUCTURED result: set \`published: true\` ONLY if the push and every r
      - ambiguous-skipped → leave open.
    - \`standalone\` items (no thread to resolve): address them only in the Summary comment below; do NOT call \`resolveReviewThread\`. Record their outcome by \`url\`.
    Avoid duplicate replies (check for an equivalent prior reply by the authed user); resolve only after the reply succeeds.
-5. Summary comment: post a top-level "Summary of Review Fixes" (\`gh pr comment\`) — what was fixed (with proactive same-pattern fixes), a prominent "Pushed back — please re-examine" section, a "Deferred to follow-up tasks" section listing each deferral with its committed task file (agent-proposed deferrals flagged for confirmation), and any ambiguous/skipped or newly-arrived items. Write "codex"/"claude"/"copilot" plain (no bare @-mentions) so only the dedicated pings below trigger a re-review. Put its URL in \`summaryCommentUrl\`.
-6. Pings (only after push + summary succeeded, AND only when the push ACTUALLY advanced the remote branch with new commits or rewritten history — never on an \`Everything up-to-date\` no-op push): ${flags.pingCodex ? "post a dedicated comment \`@codex review\`. " : ""}${flags.pingClaude ? "post a dedicated comment \`@claude review\`. " : ""}${flags.pingCopilot ? "request a fresh Copilot review with \`gh pr edit <PR#> --add-reviewer @copilot\` (the canonical CLI request; needs gh >= 2.88.0). Do NOT post an \`@copilot review\` comment — a bare \`@copilot\` mention drives Copilot's coding agent (it can start editing the branch), not its reviewer. The add-reviewer request re-triggers Copilot's review even on a PR it already reviewed (tested working — not a silent no-op), and never misfires into the coding agent. GUARD: before issuing it, confirm the installed \`gh\` supports the \`@copilot\` reviewer value (gh >= 2.88.0 — e.g. check \`gh --version\`); on an older powbox base image where \`gh pr edit --add-reviewer @copilot\` errors, SKIP the Copilot request WITHOUT failing publication — the push and summary already succeeded, so this is non-fatal: keep \`published: true\`, record it in \`pings\` as 'copilot: skipped (gh too old)', and note that the base image needs refreshing (\`agent-update\`) or a one-off manual re-request from the PR's web reviewer menu." : ""}${!flags.pingCodex && !flags.pingClaude && !flags.pingCopilot ? "none requested. " : "If more than one ping was requested, perform each as its own dedicated action (never one comment mentioning several bots). "}If nothing new was pushed this run (the remote ref already pointed at your HEAD — e.g. every disposition was already-addressed/push-back, or the branch was up to date), SKIP all pings even if requested above: re-requesting a review with nothing new to look at would spin the review->address->review loop forever. Set \`pushedNewCommits\` to whether the push advanced the branch, and record which pings (if any) you posted in \`pings\`.
+5. Summary comment: post a top-level "Summary of Review Fixes" (\`gh pr comment\`) — ${dev.length ? "opening with the locked-decision deviation section defined below, then " : ""}what was fixed (with proactive same-pattern fixes), a prominent "Pushed back — please re-examine" section, a "Deferred to follow-up tasks" section listing each deferral with its committed task file (agent-proposed deferrals flagged for confirmation), and any ambiguous/skipped or newly-arrived items. Write "codex"/"claude"/"copilot" plain (no bare @-mentions) so only the dedicated pings below trigger a re-review. Put its URL in \`summaryCommentUrl\`.
+6. Pings (only after push + summary succeeded, AND only when the push ACTUALLY advanced the remote branch with new commits or rewritten history — never on an \`Everything up-to-date\` no-op push): ${flags.pingCodex ? "post a dedicated comment \`@codex review\`. " : ""}${flags.pingClaude ? "post a dedicated comment \`@claude review\`. " : ""}${flags.pingCopilot ? "request a fresh Copilot review with \`gh pr edit <PR#> --add-reviewer @copilot\` (the canonical CLI request; needs gh >= 2.88.0). Do NOT post an \`@copilot review\` comment — a bare \`@copilot\` mention drives Copilot's coding agent (it can start editing the branch), not its reviewer. The add-reviewer request re-triggers Copilot's review even on a PR it already reviewed (tested working — not a silent no-op), and never misfires into the coding agent. GUARD: before issuing it, confirm the installed \`gh\` supports the \`@copilot\` reviewer value (gh >= 2.88.0 — e.g. check \`gh --version\`); on an older powbox base image where \`gh pr edit --add-reviewer @copilot\` errors, SKIP the Copilot request WITHOUT failing publication — the push and summary already succeeded, so this is non-fatal: keep \`published: true\`, record it in \`pings\` as 'copilot: skipped (gh too old)', and note that the base image needs refreshing (\`agent-update\`) or a one-off manual re-request from the PR's web reviewer menu." : ""}${!flags.pingCodex && !flags.pingClaude && !flags.pingCopilot ? "none requested. " : "If more than one ping was requested, perform each as its own dedicated action (never one comment mentioning several bots). "}If nothing new was pushed this run (the remote ref already pointed at your HEAD — e.g. every disposition was already-addressed/push-back, or the branch was up to date), SKIP all pings even if requested above: re-requesting a review with nothing new to look at would spin the review->address->review loop forever. Set \`pushedNewCommits\` to whether the push advanced the branch, and record which pings (if any) you posted in \`pings\`.${deviationLead}
 
 ## Dispositions to publish
 
@@ -438,11 +474,22 @@ if (!cycle) {
 // under `artifactDir`. It is for-the-human data of the same class as
 // openQuestions/deviations, so every result that carries the pointer also
 // carries the anomaly record beside it.
-const anomalies = cycle.artifactDirAnomalies
-  ? { artifactDirAnomalies: cycle.artifactDirAnomalies }
-  : {};
+// `deviationHistory` rides in the same carrier and for the same reason: the
+// cycle's `deviations` is by contract the FINAL standing set, so the per-pass
+// record is the only place a maintainer reading this result can see that a pass
+// stopped restating one. The cycle sets it once any pass reported a deviation.
+// `deviationAssessments` rides here too — the reviewer's in-spec-route judgment
+// and RATIFY/CONFORM recommendation for each deviation still standing. The
+// publisher leads its summary comment with it, and every OTHER exit reports the
+// deviations without publishing anything, so those exits are the only place a
+// reader of this result meets them at all.
+const carried = {
+  ...(cycle.artifactDirAnomalies ? { artifactDirAnomalies: cycle.artifactDirAnomalies } : {}),
+  ...(cycle.deviationAssessments ? { deviationAssessments: cycle.deviationAssessments } : {}),
+  ...(cycle.deviationHistory ? { deviationHistory: cycle.deviationHistory } : {}),
+};
 if (cycle.verdict === "error") {
-  return { error: `Review cycle failed: ${cycle.detail}`, pr: packet.pr, rounds: cycle.rounds, dispositions: cycle.workReport, openQuestions: cycle.openQuestions, deviations: cycle.deviations, peerRounds: cycle.peerRounds, artifactDir: cycle.artifactDir, ...anomalies };
+  return { error: `Review cycle failed: ${cycle.detail}`, pr: packet.pr, rounds: cycle.rounds, dispositions: cycle.workReport, openQuestions: cycle.openQuestions, deviations: cycle.deviations, peerRounds: cycle.peerRounds, artifactDir: cycle.artifactDir, ...carried };
 }
 
 const passed = cycle.verdict === "pass";
@@ -639,7 +686,7 @@ if (!flags.push) {
     deviations: cycle.deviations,
     peerRounds: cycle.peerRounds,
     artifactDir: cycle.artifactDir,
-    ...anomalies,
+    ...carried,
     outstanding: passed ? null : cycle.outstanding || null,
     ...(uncoveredItems.length
       ? { uncoveredItems: uncoveredRefs, coverageNote: `${uncoveredItems.length} gathered item(s) have no workReport entry; a later publish replay would skip them.` }
@@ -666,7 +713,7 @@ if (!passed) {
     deviations: cycle.deviations,
     peerRounds: cycle.peerRounds,
     artifactDir: cycle.artifactDir,
-    ...anomalies,
+    ...carried,
     outstanding: cycle.outstanding || null,
     note: "Hit the review cycle's round cap without a passing review; nothing was pushed.",
   };
@@ -687,7 +734,7 @@ if (uncoveredItems.length) {
     deviations: cycle.deviations,
     peerRounds: cycle.peerRounds,
     artifactDir: cycle.artifactDir,
-    ...anomalies,
+    ...carried,
     uncoveredItems: uncoveredRefs,
     note: `${uncoveredItems.length} gathered item(s) have no workReport entry; nothing was pushed. Re-run so every item carries its disposition.`,
   };
@@ -708,7 +755,7 @@ if (duplicatedItems.length) {
     deviations: cycle.deviations,
     peerRounds: cycle.peerRounds,
     artifactDir: cycle.artifactDir,
-    ...anomalies,
+    ...carried,
     duplicatedItems: duplicatedRefs,
     note: `${duplicatedItems.length} gathered item(s) carry more than one workReport entry (listed with the kinds that clash); nothing was pushed. Re-run so every item carries exactly one disposition.`,
   };
@@ -729,7 +776,7 @@ if (badDispDefect) {
     deviations: cycle.deviations,
     peerRounds: cycle.peerRounds,
     artifactDir: cycle.artifactDir,
-    ...anomalies,
+    ...carried,
     malformedDisposition: badDispRef,
     malformedDispositions: dispDefects,
     note: `Disposition "${badDispRef}" is not publishable: ${badDispDefect}. Nothing was pushed.${moreDefects} Re-run so every entry carries its gathered type, identifiers, and echoed author fields plus the full per-item report contract (kind, detail, author, authorIsBot, newFinding).`,
@@ -783,7 +830,7 @@ const publishFlags = {
 };
 
 phase("Publish");
-const publishReport = await agent(publishPrompt(packet, workReport, publishFlags), {
+const publishReport = await agent(publishPrompt(packet, workReport, publishFlags, cycle.deviations, cycle.deviationAssessments), {
   label: "publish",
   schema: PUBLISH_SCHEMA,
 });
@@ -821,7 +868,7 @@ return {
   deviations: cycle.deviations,
   peerRounds: cycle.peerRounds,
   artifactDir: cycle.artifactDir,
-  ...anomalies,
+  ...carried,
   publishReport: publishReport || { published: false, aborted: "publisher returned nothing" },
   note: published
     ? (notes.length ? notes.join(" ") : undefined)

@@ -15,15 +15,15 @@ The roles (orchestrator / implementer / reviewer), the implementer and reviewer 
 
 ## Why worktrees change the rules
 
-`address-tasks-serialized` forbids running two checkout-dependent Codex subagents at once because they normally share the orchestrator's single working tree — a reviewer spawned alongside its implementer scopes its diff against a branch the implementer hasn't finished committing to, sees nothing, and ships the work unreviewed.
+`address-tasks-serialized` will not let a reviewer start before its implementer's commits are on disk, because checkout-dependent Codex subagents normally share the orchestrator's single working tree — a reviewer spawned alongside its implementer scopes its diff against a branch the implementer hasn't finished committing to, sees nothing, and ships the work unreviewed.
 
 A git worktree removes that constraint.
 Each worktree is a **separate working directory with its own `HEAD` and index** (`.git/worktrees/<name>/`), while sharing the one common object store (`.git/objects`, append-only and concurrency-safe) and refs (lock-protected).
 So:
 
 - **Two subagents in two different worktrees never corrupt each other.** They touch different files, different indexes, different HEADs. Concurrent commits land on different branches under separate ref locks.
-- Therefore the base skill's "one subagent at a time" rule is replaced by: **Codex subagents that operate in distinct worktrees may run concurrently; Codex subagents sharing one worktree must be serialized.** The inherited examination-only peer CLI is the deliberate exception during review.
-- **Within a single task, the implementer and its reviewer still share that task's worktree** — so they still run one-at-a-time, implementer first. The parallelism is strictly *across* independent tasks, never between a task's own implementer and reviewer.
+- Therefore the base skill's "one subagent at a time" rule is replaced by: **Codex subagents that operate in distinct worktrees may run concurrently; within one worktree, a subagent may not start until the previous subagent's commits are on disk.** The inherited examination-only peer CLI is the deliberate exception during review.
+- **Within a single task, the implementer and its reviewer still share that task's worktree** — so that reviewer may not start until that implementer's commits are on disk. That is committed state, not turn structure: a spawn may return immediately and report completion as a later notification, so wait for that notification; "one-at-a-time, implementer first" is the proxy for it. The parallelism is strictly *across* independent tasks, never between a task's own implementer and reviewer.
 
 ### Durability
 
@@ -66,7 +66,7 @@ After each subagent finishes, close that agent thread when it is no longer neede
 No custom agent personas (`~/.codex/agents/*.toml`) are required.
 
 Parallelism is allowed only across subagents that are assigned distinct worktree paths.
-Within one task's worktree, spawn the implementer, wait for completion, then spawn a fresh reviewer.
+Within one task's worktree the rule is committed state: that reviewer may not start until that implementer's commits are on disk. A spawn call returns an agent id immediately and reports completion later, so spawn the implementer, wait for that completion, close it, and only then spawn a fresh reviewer — waiting is what puts the commits there, and the spawn-wait-spawn ordering is the proxy, not the rule.
 Never continue the implementer thread for review.
 If the current session exposes no subagent capability, tell the user this skill requires Codex multi-agent support.
 Only fall back to doing the implementation locally if the user explicitly approves that change in workflow.
@@ -158,11 +158,12 @@ For a wave of tasks `T1..Tn`:
 2. **Run each task's loop, fanned out by phase.** Each task runs its own implement→review→fix loop, but you advance all of the wave's tasks **in lockstep by phase** so that same-phase subagents (which live in different worktrees) can be spawned **together in one natural-language turn or tool-call batch and run concurrently**:
 
    - **Phase A — implement:** spawn one `worker` per still-unfinished task in the wave, each pointed at its own worktree path, all together. Wait until every implementer has completed, then close the finished implementer threads.
-   - **Phase B — review:** only after *all* Phase-A implementers have returned, spawn one fresh `explorer` reviewer per task, each in its task's worktree, all together. At the same moment, unless `peer-opinions=off`, launch one background peer per task while the peer remains available, per the `review-cycle` skill's peer step — its pinned-strength launch, unique per-invocation prompt/output/stderr paths under each task's own artifact directory (never a shared filename, never inside a task worktree), timeout-and-retry, and examination-only contract are defined there and are not restated here. Before triage, wait for every task's own reviewer and for every peer actually launched; then close the finished own-reviewer threads.
+   - Adopt each returned implementation packet only under `review-cycle`'s packet hard-check: `git -C <worktree> status --porcelain` empty **and** no Git operation in progress (`rebase-merge`/`rebase-apply` paths, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG` — a tree left mid-rebase prints empty porcelain). Either failing means redrive or resume that task's Phase A rather than handing Phase B a worktree nobody can build on. The rest of that skill's *The loop and its gates* binds this loop whole too, later additions included.
+   - **Phase B — review:** spawn one fresh `explorer` reviewer per task only once that task's implementer's commits are on disk — its packet returned and adopted under the hard-check above — each in its task's worktree, all together; waiting for and closing *all* Phase-A implementers is the proxy for that committed state in this lockstep loop, not the rule. At the same moment, unless `peer-opinions=off`, launch one background peer per task while the peer remains available, per the `review-cycle` skill's peer step — its pinned-strength launch, unique per-invocation prompt/output/stderr paths under each task's own artifact directory (never a shared filename, never inside a task worktree), timeout-and-retry, and examination-only contract are defined there and are not restated here. Before triage, wait for every task's own reviewer and for every peer actually launched; then close the finished own-reviewer threads.
    - A task exits the loop only when its round passes the `review-cycle` gate; tasks with issues carry both reports verbatim as separately labeled blocks into the next round's Phase A, under that skill's grounding, blocking-and-minor gating, dispute, timeout/retry, and forfeit rules — never re-summarized.
    - Repeat A→B until each task converges or hits the `review-cycle` round cap; a task still failing at the cap does **not** get a PR — surface its outstanding findings to the user.
 
-   > Phase ordering is what preserves the per-task discipline: a task's reviewer never starts until that task's implementer (and every sibling implementer) has finished and committed. You get cross-task parallelism without ever running a task's own implementer and reviewer at the same time.
+   > The per-task discipline is committed state: a task's reviewer never starts until that task's implementer's commits are on disk. Phase ordering is the proxy that keeps them there — waiting out every sibling implementer as well is more than the rule needs, and it is what buys cross-task parallelism without ever running a task's own implementer and reviewer at the same time.
 
    Concurrency is safe here **only because each subagent has its own worktree**.
    If for any reason a task is not running in its own worktree, fall back to serializing that task as in `address-tasks-serialized`.
@@ -248,6 +249,7 @@ Include in each implementer prompt:
   - Run the project build/lint periodically and a full build check before reporting done.
   - Any build or check output that must land in a file goes inside this worktree (a gitignored path, removed before any commit), never a shared scratchpad filename — two concurrent agents both redirecting to `<scratchpad>/verify.log` once crossed results between worktrees.
 - **Coordination:** it must not revert unrelated or concurrent edits, and must accommodate that its base branch may itself be a sibling task's branch.
+- **Finish inside your own turn.** Nothing resumes a subagent, so tell the implementer never to end its turn waiting for a notification or for a child it launched: it bounds and waits on anything it starts and reaps it before returning, leaving no process of its own running. It launches no peer review of its own either — the loop's peer step is the sanctioned second opinion (see `review-cycle`).
 - **Reporting:** when done, report what was implemented, decisions/tradeoffs/deviations, and any areas needing focused review.
 
 On a fix-up round, spawn a fresh `worker` implementer for the task; do not continue the prior implementer thread with `send_input`. Fresh context is intentional because the fix-up agent should read the committed worktree plus the findings without attachment to earlier choices. Paste both reports verbatim as separately labeled own-reviewer and peer blocks, omitting only a peer report forfeited under the `review-cycle` protocol, and instruct the implementer to address each finding specifically and report what changed (same branch, same worktree).
@@ -255,9 +257,9 @@ On a fix-up round, spawn a fresh `worker` implementer for the task; do not conti
 ## Reviewer Agent
 
 Same fresh-eyes contract and code-quality checklist as `address-tasks-serialized`.
-A reviewer is always a **fresh** `explorer` subagent spawn, never a `send_input` continuation of the implementer, launched only **after** every Phase-A implementer in the wave has returned.
+A reviewer is always a **fresh** `explorer` subagent spawn, never a `send_input` continuation of the implementer, launched only once that task's implementer's commits are on disk — wait for its completion notification and close it. In this lockstep loop that means **after** every Phase-A implementer in the wave has returned, which is the proxy for the commits being there rather than the rule itself.
 
-Include in each reviewer prompt:
+Include in each reviewer prompt, beyond that inherited contract — which binds whole, later additions to it included:
 
 - The same **WORKTREE CONTRACT** first: "Your worktree is `<absolute worktree path>`. `cd` into it and confirm `git rev-parse --show-toplevel` matches before doing anything. Review only this worktree."
 - The **full task file content** (same source of truth the implementer got).
