@@ -2318,7 +2318,7 @@ ${DESTROY_BOUNDARY}`;
       }`
     : "";
   const flakeRecord = rec
-    ? `\n\nThe cycle concluded over a FAILED delivery run, on the flake rule's evidenced-unrelated disposition${rec.range ? `, and over a final commit (\`${rec.range}\`) no fresh reviewer saw — the diagnosis-only follow-up task that failure earned` : ", and over no post-run commit of its own, so there is no commit for you to point at"}. Carry a "Delivery-run failure — recorded, not reviewed" section in the body with these verbatim, so the maintainer sees the gap here and decides how to absorb it; do not re-diagnose, soften, or omit it:\n${JSON.stringify({ note: rec.note || "", ...(rec.range ? { rangeCheck: rec.verified || "" } : {}) }, null, 2)}`
+    ? `\n\nThe cycle concluded over a FAILED delivery run, on the flake rule's evidenced-unrelated disposition${rec.range ? `, and over a final commit (\`${rec.range}\`) no fresh reviewer saw — the diagnosis-only follow-up task that failure earned` : ", and over no post-run commit this record points you at, so cite none"}. Carry a "Delivery-run failure — recorded, not reviewed" section in the body with these verbatim, so the maintainer sees the gap here and decides how to absorb it; do not re-diagnose, soften, or omit it:\n${JSON.stringify({ note: rec.note || "", ...(rec.range ? { rangeCheck: rec.verified || "" } : {}) }, null, 2)}`
     : "";
   return `Open a pull request for branch \`${task.branch}\` against base \`${task.base}\`. Work from this task's worktree: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && cd "$WT"\` (rerun-safe resolve of the existing worktree; if it errors, STOP and report).
 
@@ -2457,8 +2457,10 @@ Do NOT open any PR and do NOT remove any worktree — the workflow re-reviews ea
 // records a cycle that CONCLUDED over something no fresh reviewer saw — the
 // close-out's non-semantic edits, and for `recordOnly` a delivery run that
 // FAILED on the flake rule's evidenced-unrelated disposition (with the
-// tolerated post-run flake commit where there was one) — so this carrier is
-// the only thing between that fact and the maintainer. `recordOnly` also
+// tolerated post-run flake commit where the record still names one — "still"
+// because the collision guard's re-review empties that pair on a branch it
+// renamed, see `collisionReviewedRecord`) — so this carrier is the only thing
+// between that fact and the maintainer. `recordOnly` also
 // carries the pass's `note` of what the delivery run surfaced, which is how
 // item 2's PR-body-or-batch-summary record survives the exits that have no
 // later reviewer round to write it. `flakeHistory` rides for the half that
@@ -2518,13 +2520,17 @@ function cycleCarried(result) {
 // it on, and the maintainer is owed it whoever has since read the commit. What
 // goes is only the unreviewed-commit claim, and emptying the pair is how the
 // cycle itself already encodes "this record names no post-run commit of its
-// own" — see `flakeCarried` and the three conclusions that use it. Nothing new
-// is invented for a consumer to interpret.
+// own" — see `flakeCarried`, which IS the record on the three conclusions that
+// spread it. The read declaring `flakeCarried` counts FOUR conclusions carrying
+// the flake record and this counts three for one reason, not a contradiction:
+// the fourth is the record-only close, which builds its own richer record
+// around the same note over a range that NAMES a commit — the very record this
+// correction empties. Nothing new is invented for a consumer to interpret.
 //
 // Present-only and range-only, so it composes as a spread: a result with no
 // record, or one whose record already names no commit, is left exactly alone.
 function collisionReviewedRecord(result) {
-  const rec = result && result.recordOnly;
+  const rec = result.recordOnly;
   if (!rec || !rec.range) return {};
   return { recordOnly: { ...rec, range: "", verified: "" } };
 }

@@ -24,10 +24,19 @@
 //
 // The workflows are runtime scripts (top-level await/return, injected
 // `agent`/`parallel`/`log` globals), so they cannot be imported. Each subject is
-// extracted from the ACTUAL shipped source — the declarations before the
-// workflow's first executable statement for the prompt builders, the literal
-// object for `wf-address-review.js`'s inline carrier — and evaluated in
-// isolation. No second copy of anything under test lives here.
+// extracted from the ACTUAL shipped source, by one of three methods:
+//   1. the declarations before the workflow's first executable statement,
+//      evaluated together — the prompt builders, and `collisionReviewedRecord`;
+//   2. the subject's own source text, matched out and evaluated in isolation —
+//      `wf-address-tasks.js`'s `cycleCarried` function and
+//      `wf-address-review.js`'s inline `carried` object literal;
+//   3. the shipped statement held here VERBATIM as a regex and asserted against
+//      the source rather than evaluated — the collision dispatch's call site,
+//      which is executable body no harness can drive.
+// Of the subjects this suite evaluates (1 and 2), no second copy lives here.
+// Method 3 is a second copy on purpose: a copy is the only thing that can fail
+// when the call site it pins is edited away, and it buys coverage of a line
+// nothing else here can reach.
 //
 // Run: node scripts/test-unreviewed-close-carriage.mjs
 
@@ -82,9 +91,11 @@ const RECORD = { pass: 3, range: "aaaa..bbbb", verified: "only a new diagnosis-o
 // close-out conclusions (what they committed is accounted for elsewhere in the
 // result), and of a record `collisionReviewedRecord` has corrected below (a
 // fresh reviewer has since read the commit). Whichever of the four it is, the
-// note is then the whole record of the failure: there
-// is no commit for a consumer to point at, and still a failed delivery run the
-// maintainer must be told about.
+// note is then the whole record of the failure: the record points the consumer
+// at no commit, and there is still a failed delivery run the maintainer must be
+// told about. The rendered clause says exactly that much and no more — it does
+// not say why the record points at none, because the four members disagree on
+// the why and the fourth one has a commit still sitting on the branch.
 const CITED_NOTE = "the delivery run's only failure was the payments suite, which reproduces on the base; already queued as tasks/041-flaky-payments-suite.md, cited rather than re-filed";
 const CITED_RECORD = { pass: 3, range: "", verified: "", note: CITED_NOTE };
 const CLOSE_OUT = { pass: 3, range: "aaaa..bbbb", edits: ["reworded a comment"], verified: "every hunk non-semantic" };
@@ -168,7 +179,7 @@ const cycleResult = (extra) => ({
   // nor hand the writer an empty range check to copy verbatim.
   const cited = prPrompt(task, { notes: "reviewer caveat", deviations: [], recordOnly: CITED_RECORD }, true);
   check("a record with no commit behind it still gets the recorded-not-reviewed section", /Delivery-run failure — recorded, not reviewed/.test(cited) && cited.includes(CITED_NOTE), "pr prompt");
-  check("and names no final commit, saying only that this record names none of its own", !/final commit/.test(cited) && /no post-run commit of its own/.test(cited), "pr prompt");
+  check("and names no final commit, saying only that the record points at none and asserting no reason why", !/final commit/.test(cited) && /no post-run commit this record points you at, so cite none/.test(cited) && !/of its own/.test(cited), "pr prompt");
   check("and hands the writer no empty range check to copy", !/rangeCheck/.test(cited), "pr prompt");
 
   // The no-remote branch opens no PR at all, so it must not be handed a record
@@ -198,10 +209,13 @@ const cycleResult = (extra) => ({
 
   // And the call site actually applies it — a helper nothing spreads into the
   // delivered result corrects nothing. Checked against the source text because
-  // the collision dispatch is executable body, which no harness can drive.
+  // the collision dispatch is executable body, which no harness can drive (the
+  // header's third extraction method). What the pin establishes is exactly that
+  // this statement still ships verbatim: it reads no surrounding guard, so it
+  // does not establish which arm of the dispatch holds it.
   const dispatchSrc = readFileSync(join(workflows, "wf-address-tasks.js"), "utf8");
   const APPLIED = /deliverable\.push\(\{ task, result: \{ \.\.\.result, notes: verdict\.notes \|\| result\.notes, \.\.\.collisionReviewedRecord\(result\) \} \}\);/;
-  check("the collision re-review's passing arm spreads the correction into what it delivers", APPLIED.test(dispatchSrc), "wf-address-tasks.js");
+  check("the collision dispatch's delivering push spreads the correction into the result it delivers", APPLIED.test(dispatchSrc), "wf-address-tasks.js");
 }
 
 // --- wf-address-review.js: the sibling consumer's inline carrier -----------
@@ -237,7 +251,7 @@ const cycleResult = (extra) => ({
   const CROSS_REF = /plus the delivery-run failure section defined below/;
   check("and step 5 cross-references it, so the writer meets it while composing the comment", CROSS_REF.test(withRecord) && !CROSS_REF.test(withoutRecord), "publish prompt");
   const cited = publishPrompt(pkt, [], { push: true }, [], [], CITED_RECORD);
-  check("the no-commit record reaches the summary comment too, naming no commit and no empty range check", /Delivery-run failure — recorded, not reviewed/.test(cited) && cited.includes(CITED_NOTE) && !/final commit/.test(cited) && /no post-run commit of its own/.test(cited) && !/rangeCheck/.test(cited), "publish prompt");
+  check("the no-commit record reaches the summary comment too, naming no commit and no empty range check", /Delivery-run failure — recorded, not reviewed/.test(cited) && cited.includes(CITED_NOTE) && !/final commit/.test(cited) && /no post-run commit this record points you at, so cite none/.test(cited) && !/of its own/.test(cited) && !/rangeCheck/.test(cited), "publish prompt");
 }
 
 check(`suite ran all ${EXPECTED_CHECKS} checks`, ran === EXPECTED_CHECKS, `ran ${ran}`);
