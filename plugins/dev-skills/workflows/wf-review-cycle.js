@@ -266,7 +266,7 @@ const CYCLE_FIX_SCHEMA = {
     workReport: { type: "array", items: { type: "object" }, description: "One entry per work item in the scope, in the per-item shape the scope's instructions define (a consumer contract rides through here untyped); echoed into the cycle result." },
     proactive: { type: "string", description: "Same-pattern fixes made beyond the literal items, or empty." },
     closeOutEdits: { type: "array", items: { type: "string" }, description: "OFFER of a trivial-round close-out (only where the assignment says the invoker granted it): one entry per edit, where this pass's WHOLE change was non-semantic — wording, typos, comment phrasing, formatting; nothing touching behavior, logic, or the meaning of an acceptance criterion. Empty otherwise. The offer is not the license: the cycle re-reads the close-out diff itself, and any executable or behavioral change in it, however it got there, forfeits the close-out for a normal reviewer round — as does an empty range, an edit listed here that the range does not actually carry, or a finding disposed `fixed` that the range holds no change for, since this list cannot vouch for a fix it does not mention." },
-    flakeRecord: { type: "string", description: "REQUIRED when this pass's own validation run hit a failure the cycle's flake rule defers as evidenced-unrelated: what failed, the evidence that established unrelatedness, and the follow-up task carrying it — the NEW one this pass committed, or the ACTIVE existing one it cites instead of editing. Empty otherwise, and never a restatement of an earlier pass's record — report only what YOUR OWN run surfaced. The cycle keeps every pass's, so copying an earlier one forward would republish it as your run's; a failure your own run hit AGAIN is your run's record and no restatement at all, so report it. This is the maintainer's only notice that a validation run FAILED, so the cycle carries EVERY pass's record in the run report it returns (the batch summary, where the consumer has one), and publishes the CONCLUDING pass's in the PR body or summary comment besides — including where citing an existing task left that pass with nothing to commit. It buys no exit and skips no round." },
+    flakeRecord: { type: "string", description: "REQUIRED when this pass's own validation run hit a failure the cycle's flake rule defers as evidenced-unrelated: what failed, the evidence that established unrelatedness, and the follow-up task carrying it — the NEW one this pass committed, or the ACTIVE existing one it cites instead of editing. Empty otherwise, and never a restatement of an earlier pass's record — report only what YOUR OWN run surfaced. The cycle keeps every pass's, so copying an earlier one forward would republish it as your run's; a failure your own run hit AGAIN is your run's record and no restatement at all, so report it. This is the maintainer's only notice that a validation run FAILED, so the cycle carries EVERY pass's record in the run report it returns (the batch summary, where the consumer has one), and publishes the CONCLUDING pass's in the PR body or summary comment besides — including where citing an existing task left that pass with nothing to commit. It buys no exit and skips no round of its own — what a conclusion may skip is licensed by a read of the DIFF — but omitting a record your run owes costs the round that record would have skipped." },
     finalSha: { type: "string", description: "HEAD sha after this pass, with everything committed." },
     clean: { type: "boolean", description: "True only if the worktree is CLEAN and IDLE: `git status --porcelain` empty with every intended change committed, AND no Git operation in progress (`git rev-parse --git-path rebase-merge` / `rebase-apply`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`). A packet returned mid-rebase or mid-cherry-pick can print empty porcelain; the cycle refuses it either way." },
     artifactDir: { type: "string", description: "Absolute path of this cycle's unique artifact directory — REQUIRED every pass: round 1 creates it (outside the worktree) and reports it, later passes echo the directory they were given. The result contract promises full round history reachable through it." },
@@ -1256,10 +1256,12 @@ async function runReviewCycle(cycle) {
     // drop it. Only a pass that returned NOTHING has no record to read; every
     // return from here on carries this pass's.
     //
-    // It buys no exit and skips no round — every conclusion below is decided
-    // exactly as it would be without it — but the gate that admits a FAILED
+    // It buys no exit — no conclusion below is licensed by anything this field
+    // says. It can WITHHOLD one, though: the record-only close skips a round
+    // for the sole purpose of carrying this record, so a pass that reported
+    // none takes the normal round instead. And the gate that admits a FAILED
     // delivery run admits it only on the promise that the failure reaches the
-    // maintainer, and these conclusions are the ones no later reviewer round
+    // maintainer, with these conclusions the ones no later reviewer round
     // follows. So `flakeCarried` rides on all FOUR of them — the terminal
     // check, the trivial-round close-out, the record-only close (where it rides
     // inside that exit's own richer record), and the light-mode exit — and on
@@ -1578,11 +1580,11 @@ async function runReviewCycle(cycle) {
     // render a section announcing a FAILED delivery run under an empty note,
     // which tells the maintainer less than the round this exit skipped would
     // have. `flakeNote` is that structural half, exactly as `fix.changed` is the
-    // close-out's — it settles the exit with no agent call, which is why the
-    // check is not even run without one. Refusing costs nothing but the normal
-    // reviewer round, and every earlier pass's record still rides in
-    // `flakeHistory`. It is a conjunct of the EXIT rather than of the block, so
-    // this seam keeps the property that every refusal here says why.
+    // close-out's, and it settles the exit with no agent call — which is why
+    // the check is not run at all without one, and why it gates the CHECK
+    // rather than the block: this seam's property that every refusal here says
+    // WHY is worth keeping. Refusing costs nothing but the normal reviewer
+    // round, and every earlier pass's record still rides in `flakeHistory`.
     if (confirming && fix.changed && passBase && (fix.dispositions || []).length === 0 && deviationSetChanges === 0) {
       const record = flakeNote
         ? await agent(cycleRecordOnlyPrompt(cycle, { passBase }), {
