@@ -632,6 +632,8 @@ const CYCLE_FIX_SCHEMA = {
     deviations: { type: "array", items: { type: "string" }, description: "Each deviation from a LOCKED maintainer decision that STILL STANDS after this pass — what was delivered instead and the constraint that forced it. Report, don't correct; the cycle surfaces these for the human. Restate every standing one on every pass — VERBATIM, since the cycle matches these by exact text and a reworded restatement reads as a drop plus a brand-new deviation — and leave out only one that genuinely no longer stands: the result describes the FINAL state and keeps the per-pass reports as history." },
     workReport: { type: "array", items: { type: "object" }, description: "One entry per work item in the scope, in the per-item shape the scope's instructions define (a consumer contract rides through here untyped); echoed into the cycle result." },
     proactive: { type: "string", description: "Same-pattern fixes made beyond the literal items, or empty." },
+    closeOutEdits: { type: "array", items: { type: "string" }, description: "OFFER of a trivial-round close-out (only where the assignment says the invoker granted it): one entry per edit, where this pass's WHOLE change was non-semantic — wording, typos, comment phrasing, formatting; nothing touching behavior, logic, or the meaning of an acceptance criterion. Empty otherwise. The offer is not the license: the cycle re-reads the close-out diff itself, and any executable or behavioral change in it, however it got there, forfeits the close-out for a normal reviewer round — as does an empty range, or an edit listed here that the range does not actually carry." },
+    flakeRecord: { type: "string", description: "REQUIRED when this pass's own validation run hit a failure the cycle's flake rule defers as evidenced-unrelated: what failed, the evidence that established unrelatedness, and the follow-up task carrying it — the NEW one this pass committed, or the ACTIVE existing one it cites instead of editing. Empty otherwise. This is the maintainer's only notice that a delivery run FAILED, so the cycle carries it to the PR body or batch summary on every conclusion, including the one where citing an existing task leaves this pass with nothing to commit. It buys no exit and skips no round." },
     finalSha: { type: "string", description: "HEAD sha after this pass, with everything committed." },
     clean: { type: "boolean", description: "True only if the worktree is CLEAN and IDLE: `git status --porcelain` empty with every intended change committed, AND no Git operation in progress (`git rev-parse --git-path rebase-merge` / `rebase-apply`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`). A packet returned mid-rebase or mid-cherry-pick can print empty porcelain; the cycle refuses it either way." },
     artifactDir: { type: "string", description: "Absolute path of this cycle's unique artifact directory — REQUIRED every pass: round 1 creates it (outside the worktree) and reports it, later passes echo the directory they were given. The result contract promises full round history reachable through it." },
@@ -689,6 +691,40 @@ const CYCLE_PEER_SCHEMA = {
   required: ["outcome", "findings"],
 };
 
+// Verdict of the trivial-round close-out's diff check — the orchestrator's own
+// look at what would ship unreviewed, delegated the only way a script that
+// cannot run git can look at a diff. It asks TWO questions, one per direction
+// the list and the diff can disagree: `nonSemantic` stops the list licensing
+// what the diff actually holds, and `editsPresent` stops the pass claiming a
+// fix the diff never received. Only the first was asked at first, which left
+// an empty range VACUOUSLY non-semantic — so a pass reporting findings `fixed`
+// with nothing committed concluded the cycle, its claims adjudicated by
+// exactly nobody, since the round that would have caught it is the round this
+// exit skips.
+const CYCLE_CLOSEOUT_SCHEMA = {
+  type: "object",
+  properties: {
+    nonSemantic: { type: "boolean", description: "True ONLY if every hunk of the close-out diff is non-semantic. Any executable or behavioral change — however it got there, listed or not — is false, which simply buys the normal reviewer round." },
+    editsPresent: { type: "boolean", description: "True ONLY if the range is NON-EMPTY and carries every edit the pass claims it shipped. An EMPTY range is false: it holds no fix at all, so a finding reported `fixed` over it never landed. A claimed edit you cannot find in the diff is false too. Extra non-semantic hunks beyond the list do not make it false — `nonSemantic` judges those on their own merits." },
+    why: { type: "string", description: "One line: what the diff held, or the semantic change or missing claimed edit that forfeits the close-out." },
+  },
+  required: ["nonSemantic", "editsPresent", "why"],
+};
+
+// Verdict of the record-only check — the same look at a diff, asked of the one
+// post-run commit the delivery gate tolerates. Nothing about the pass's own
+// account of that commit reaches this check: a tolerance a fixer could
+// self-certify is the evasion route the flake rule's evidence requirement
+// exists to close, so the range is the only evidence there is.
+const CYCLE_RECORD_ONLY_SCHEMA = {
+  type: "object",
+  properties: {
+    recordOnly: { type: "boolean", description: "True ONLY if the range holds nothing but the unrelated-flake RECORD: a NEW diagnosis-only follow-up task file, plus any PR-body or summary note recording what the delivery run surfaced. Any other hunk — a source, test, config, or contract edit, a change to the failing test itself, anything touching the artifact under review — is false, which simply buys the normal reviewer round." },
+    why: { type: "string", description: "One line: what the range held, or the change that forfeits the tolerance." },
+  },
+  required: ["recordOnly", "why"],
+};
+
 const CYCLE_GROUNDING_SCHEMA = {
   type: "object",
   properties: {
@@ -738,6 +774,29 @@ const CYCLE_REDIRECTED_OUTPUT = "Any build or validation output you redirect to 
 // briefs alike. Two claims relayed from an earlier round were wrong in a real
 // run and reached a maintainer decision; only roles told to re-derive caught it.
 const CYCLE_CARRIED_CLAIMS = "Provenance: only what you verify against the committed tree yourself is established this turn. Every finding, disposition, open question, and citation relayed to you here is CARRIED — not verified this turn, whatever its source; it may be stale, or have been wrong when written — so re-derive one before you rely on it.";
+
+// Unrelated-flake deferral, carried by the fixer: one batch run had every
+// implementer independently burn most of its rounds stabilizing the same
+// unrelated flaky suite. "Unrelated" is a DEMONSTRATED property (it reproduces
+// on the base), never an assertion of convenience and never an inference from
+// which code paths the failure happens to run through.
+const CYCLE_FLAKE_POLICY = `When a test fails in an area this branch did not touch, do NOT iterate on stabilizing it here — but establish unrelatedness with EVIDENCE first: the failure must REPRODUCE on the base, or on an equivalently controlled comparison holding this branch's own changes out, with at most ONE rerun to confirm intermittence. That reproduction is the proof and nothing else substitutes for it: a failure confined to code paths the branch never edited is a supporting signal ONLY, since a change to a shared utility, a dependency, an environment setting, or a generated input breaks tests whose whole execution stays in untouched code. Evidenced unrelated: queue a follow-up task carrying ONLY the diagnosis already in hand (no further investigation), written under the repository's \`write-tasks\` conventions and committed on this branch, record the flake in \`flakeRecord\` — the field the cycle carries to the PR body or batch summary — so the maintainer can judge, and proceed to delivery with the failure documented — where the DELIVERY run itself surfaced it, commit that task after the run WITHOUT rerunning the suite (that record-only commit is the one thing a completed delivery pass survives). Name the failing suite or test in the task TITLE so a sibling's copy is greppable, and grep the task folder for an existing task on that suite first: an ACTIVE match means the queue entry already exists, so cite it in \`flakeRecord\` and carry your new evidence there rather than editing that task file (a base-landed file edited from several sibling branches at once turns cheap duplicate cleanup into a merge conflict at every merge) — that path commits nothing, and \`flakeRecord\` is then the whole record the maintainer gets, while a match only under \`done/\`/\`deferred/\` is context to cite beside a new schedulable queue entry. Duplicate flake tasks are ACCEPTABLE — far cheaper than concurrent stabilization attempts — and that grep BOUNDS the duplication rather than preventing it: it sees an already-landed task and one this same branch wrote, never a concurrent sibling implementer's, which lives on that sibling's branch and is invisible from here; consolidating whatever lands is the maintainer's next reaping sweep. INCONCLUSIVE is the third outcome, and for an intermittent failure the common one: an attempt that neither confirms nor refutes within the one-rerun bound is recorded as inconclusive, which is NOT unrelated — do not enter the stabilization loop and do not deliver; return it as your \`blocker\` with the failure, what the attempt showed, and any supporting signal, for the maintainer's defer-or-stabilize decision.`;
+
+// The reviewer's half of the same policy — a gate amendment, stated where the
+// gate is: the automatic-blocker rule is build/typecheck-specific, and this
+// extends its spirit to tests without extending it one step further.
+const CYCLE_FLAKE_REVIEW = `A documented, evidenced UNRELATED test failure — reproduced on the base per the cycle's flake rule, with its diagnosis-only follow-up task committed on this branch — is NON-BLOCKING for you. Any failure this branch plausibly caused, and any reproduction attempt recorded as inconclusive, stays blocking.`;
+
+// Which validation tier a pass owes, decided by position: an intermediate pass
+// owes the ROUND tier (the cheapest signal covering what it changed), while any
+// pass that can be the cycle's LAST owes the DELIVERY tier — the confirmation
+// pass, and every pass under `light`, which skips that confirmation pass and so
+// can end the cycle on any passing round. A pass offering a trivial-round
+// close-out is the third such case; its brief says so rather than being
+// detectable here, since the offer arrives with the packet.
+function cycleValidationTier(cycle, state) {
+  return state.confirming || cycle.mode === "light" ? "delivery" : "round";
+}
 
 // Subagent lifecycle, carried by every role that can start a process. A subagent
 // is never resumed, so one that ended its turn "waiting for the monitor
@@ -835,6 +894,12 @@ function cycleFixPrompt(cycle, state) {
     ? `This cycle's artifact directory is \`${state.artifactDir}\` — report it back as \`artifactDir\` and write this pass's packet prose (what you did, dispositions, question drafts) under it as \`round-${state.round}/\`.`
     : `Create this cycle's UNIQUE artifact directory first — outside the worktree, e.g. \`mktemp -d "\${TMPDIR:-/tmp}/review-cycle-"${cycleShq(cycleSlugSegment(cycle.slug))}".XXXXXX"\` (never a fixed shared name: parallel cycles share scratch space) — report it as \`artifactDir\` (REQUIRED: the cycle refuses to run rounds with no home for their history), and write this pass's packet prose under it as \`round-${state.round}/\`.`;
   const artifactLine = `${artifactHome} ${CYCLE_REDIRECTED_OUTPUT}`;
+  const tierLine = cycleValidationTier(cycle, state) === "delivery"
+    ? `DELIVERY TIER — this pass can be the cycle's last, so validate the FINAL state with the full applicable sanity set: lint, typecheck, build, tests, whichever this repository has. The cycle may not conclude or publish on less, and nothing downstream re-runs it. Two bounded exceptions, and no others: a completed run whose ONLY failures carry the evidenced-unrelated disposition below counts as this pass, with those failures documented for the maintainer; and the pass survives that rule's record-only follow-up commit (the flake task file, plus any PR-body or summary note recording what this run surfaced). Any other change committed after the run voids the pass and reruns the tier — prose here carries behavior (a prompt's text, a config or contract expressed as text), and no later check exists to catch what a wider tolerance would admit.`
+    : `ROUND TIER — the cheapest signal that catches what YOU changed: typecheck/lint for ordinary code edits, targeted tests for touched behavior, and no build at all where this round's diff holds no executable change (comments, prose, docs). When in doubt about blast radius run more, not less, and always build a round touching build configuration, dependencies, or generated contracts. Intermediate pushes the assignment mandates for durability are not delivery events and never raise this tier. Say in \`summary\` what you actually ran: this round's reviewer is told the tier and will not block on a heavier suite it did not cover.`;
+  const closeOutLine = cycle.closeOut === "on"
+    ? `\n- TRIVIAL-ROUND CLOSE-OUT is granted for this cycle (the invoker's bounded discretion, distinct from \`light\`): where this round's REMAINING findings are exclusively NON-SEMANTIC — wording, typos, comment phrasing, formatting; nothing touching behavior, logic, or the meaning of an acceptance criterion — and you FIXED every one of them, list the edits you shipped in \`closeOutEdits\` and the cycle may conclude without another reviewer round. Every finding still gets its explicit disposition; the offer never swallows one — and a \`declined\` or \`escalated\` disposition anywhere on this pass forfeits the offer outright, since that claim is the next fresh reviewer's to adjudicate and leaves NOTHING in the diff for the check below to see. Offer it on the merits only: the license is judged on the DIFF, not on your list, so any executable or behavioral change in the same diff forfeits the close-out and buys a normal round — and the same read checks your list back the other way, so an empty range, or an edit you list that the range does not carry, forfeits it too. Offering it is offering to CONCLUDE the cycle, so run the DELIVERY tier over the final state as well — the close-out skips the re-review, never that gate.`
+    : "";
   return `You are the fixer for one review cycle (branch \`${cycle.branch}\`, review base \`${cycle.base}\`, artifact type ${cycle.artifactType}).
 
 ## WORKTREE CONTRACT (do this before anything else)
@@ -854,7 +919,8 @@ ${cycleItemsBlock(cycle)}${cycleFindingsBlock(state.findings)}${cycleOpenQuestio
 ## Rules
 
 - ${artifactLine}
-- Commit at logical milestones; run the project's build/lint before declaring done (code artifacts).
+- Commit at logical milestones, and validate at THIS PASS'S TIER (code artifacts). ${tierLine}${closeOutLine}
+- ${CYCLE_FLAKE_POLICY}
 - A sweep ("fix this pattern everywhere") is ENUMERATED, never asserted: return the explicit search space with a per-item verdict, and claim a completed sweep in a commit message only where you enumerated that space. This round's reviewer redoes the enumeration rather than spot-checking yours.
 - ${CYCLE_CARRIED_CLAIMS}
 - ${CYCLE_FINISH_IN_TURN} ${CYCLE_NO_SELF_PEER}
@@ -866,14 +932,25 @@ ${cycleItemsBlock(cycle)}${cycleFindingsBlock(state.findings)}${cycleOpenQuestio
 Return the structured packet, including \`workReport\` per the assignment's per-item contract when it defines one.`;
 }
 
-function cycleReviewChecks(artifactType) {
+function cycleReviewChecks(artifactType, tier) {
   if (artifactType === "prose") {
     return `This is a PROSE artifact (a drafted task file or document); there is no build to run. Check verbiage, scoping, internal consistency, and the repository's house conventions — for task files, the documented numbering style (see the tasks folder's AGENTS.md where present). Read each drafted file in full.`;
   }
+  // The build-first rule applies AT the tier the orchestrator stated, not
+  // unconditionally: told "round tier", a reviewer must not block on a suite
+  // this round deliberately did not run; told nothing, it runs the full set.
+  // Only the ROUND tier is opt-in, and the default is that way round on
+  // purpose: an unstated tier is exactly what a caller with no cycle behind it
+  // renders — the pre-PR collision re-review does — and the fail-safe answer
+  // for a pass that can be the last thing before publication is the heavier
+  // suite, never the cheaper one.
+  const tierLine = tier === "round"
+    ? `the ROUND tier — the cheapest signal that catches what this round's diff changed (typecheck/lint for ordinary code edits, targeted tests for touched behavior, and no build at all where the diff holds no executable change), so do NOT block on a heavier suite this tier does not run; when in doubt about blast radius run more, not less, and always build where the diff touches build configuration, dependencies, or generated contracts`
+    : `the DELIVERY tier — the full applicable sanity set (lint, typecheck, build, tests, whichever this repository has), because the cycle concludes on this state`;
   if (artifactType === "decision") {
-    return `This is an APPLIED-DECISION diff. Verify the diff implements exactly the locked option and nothing beyond it, then do the quality pass (logic, error handling, edge cases, dead code, consistency, duplication, type safety) on the touched files. Run the build/type-check first; a failure is an automatic blocker.`;
+    return `This is an APPLIED-DECISION diff. Verify the diff implements exactly the locked option and nothing beyond it, then do the quality pass (logic, error handling, edge cases, dead code, consistency, duplication, type safety) on the touched files. Run the build/type-check first at ${tierLine}; a failure at that tier is an automatic blocker. ${CYCLE_FLAKE_REVIEW}`;
   }
-  return `This is a CODE artifact. Run the full build/type-check FIRST; a failure is an automatic blocker (\`pass: false\`). Check every acceptance criterion the work items state against the actual code, then do the quality pass (logic, error handling, edge cases, dead code, consistency, duplication, type safety) on the touched files.`;
+  return `This is a CODE artifact. Run the build/type-check FIRST at ${tierLine}; a failure at that tier is an automatic blocker (\`pass: false\`). ${CYCLE_FLAKE_REVIEW} Check every acceptance criterion the work items state against the actual code, then do the quality pass (logic, error handling, edge cases, dead code, consistency, duplication, type safety) on the touched files.`;
 }
 
 function cycleReviewPrompt(cycle, state) {
@@ -906,8 +983,8 @@ function cycleReviewPrompt(cycle, state) {
   const deviationsBlock = Array.isArray(state.deviations) && state.deviations.length
     ? `\n## Deviations from LOCKED decisions standing on this packet (verbatim)\n\nFor each, say in \`notes\` whether an in-spec route existed and recommend RATIFY or CONFORM — the maintainer decides, so a deviation is neither a finding to be corrected away nor a license for unfinished work: grade completeness, tests, and regressions exactly as strictly.\n\n${JSON.stringify(state.deviations, null, 2)}\n${deviationDrops.length ? `\nOf those, the fixer no longer restates the ones below, CLAIMING each no longer stands. Verify that against the committed state exactly as you would a \`declined\`: passing this round is what drops them, so raise one you do not accept as an issue rather than letting it go.\n\n${JSON.stringify(deviationDrops, null, 2)}\n` : ""}`
     : "";
-  // This brief orders a full build, so the reviewer needs a destination for the
-  // build's output as much as for its own report — including on the pass that
+  // This brief can order a build — at the round's stated tier — so the reviewer
+  // needs a destination for its output as much as for its own report — including on the pass that
   // runs with no cycle behind it (the collision re-review), where leaving the
   // path to the reviewer is exactly how a shared scratch name gets chosen.
   const persistLine = state.artifactDir
@@ -923,7 +1000,7 @@ ${CYCLE_DESTROY_BOUNDARY}
 
 Read the repository's agent-context files (\`AGENTS.md\` / \`CLAUDE.md\`) first for conventions.
 
-${cycleReviewChecks(cycle.artifactType)}
+${cycleReviewChecks(cycle.artifactType, state.tier)}
 
 Where the work claims a same-pattern sweep ("fixed everywhere"), REDO the enumeration of its search space yourself rather than spot-checking the enumeration supplied; a sweep asserted with no enumeration behind it is a finding in its own right.
 
@@ -1045,6 +1122,52 @@ async function runCyclePeerStage(cycle, state) {
     // A thrown stage must not drop the round (or, under pipeline(), the item).
     return { outcome: "forfeited", findings: [], notes: "", detail: `peer stage threw (${e && e.message ? e.message : String(e)}); recorded non-blocking`, synthesized: true };
   }
+}
+
+// The close-out's diff check. Cheap and read-only like the grounding
+// spot-check, and for the same reason: it is what lets the cycle skip a whole
+// reviewer-plus-peer round. Neither question lets the fixer's list decide
+// anything: question 1 judges the DIFF against the list's claim of triviality
+// — the difference between a bounded discretion and a self-granted licence —
+// and question 2 judges the list against the diff, which is the only thing
+// standing between a `fixed` disposition and a range that never received it.
+function cycleCloseOutPrompt(cycle, state) {
+  return `Trivial-round close-out check, read-only. The cycle is about to conclude WITHOUT another reviewer round, so this diff would ship unreviewed. Read \`git diff ${cycleShq(state.passBase)}..HEAD\` in full and answer TWO questions about it.
+
+1. \`nonSemantic\` — is EVERY hunk non-semantic: wording, typos, comment phrasing, formatting, with nothing touching behavior, logic, or the meaning of an acceptance criterion? Judge the DIFF, not the list below, and remember that prose can carry behavior here: a prompt's text, a config or contract expressed as text, an instruction an agent follows. Anything else is \`nonSemantic: false\`.
+
+2. \`editsPresent\` — is the range NON-EMPTY, and does it actually carry every edit the pass claims below? An EMPTY range is \`false\`: nothing landed, so a finding this pass reported \`fixed\` was never fixed at all. A claimed edit you cannot find in the diff is \`false\` too. Extra non-semantic hunks beyond the list are fine here — question 1 already judges those.
+
+Either question answered \`false\` costs nothing but the normal reviewer round.
+
+${cycleContract(cycle, "reviewer")}
+
+${CYCLE_DESTROY_BOUNDARY}
+
+${CYCLE_FINISH_IN_TURN} ${CYCLE_NO_SELF_PEER}
+
+## Edits the pass claims it shipped (verbatim)
+
+${JSON.stringify(state.edits, null, 2)}
+
+Edit nothing.`;
+}
+
+// The record-only check: the close-out check's counterpart for the ONE post-run
+// commit the delivery tier tolerates. Deliberately given NO list to compare
+// against — the close-out has one because a pass OFFERS a close-out, while
+// nothing is offered here and a self-report is precisely what must not be able
+// to buy this exit. The diff is the whole evidence.
+function cycleRecordOnlyPrompt(cycle, state) {
+  return `Record-only follow-up check, read-only. The cycle is about to conclude WITHOUT another reviewer round, so this diff would ship unreviewed. Read \`git diff ${cycleShq(state.passBase)}..HEAD\` in full and answer ONE question: does the range hold NOTHING but the unrelated-flake RECORD — a NEW follow-up task file carrying the diagnosis already in hand, plus any PR-body or summary note recording what the delivery run surfaced? Judge the DIFF, and only the diff: you were given no account of it on purpose, and none would settle it. Anything else in the range, however it got there — a source, test, config, or contract edit, an attempt at the failing test itself, an edit to a file the work under review delivers — is \`recordOnly: false\`, which costs nothing but the normal reviewer round.
+
+${cycleContract(cycle, "reviewer")}
+
+${CYCLE_DESTROY_BOUNDARY}
+
+${CYCLE_FINISH_IN_TURN} ${CYCLE_NO_SELF_PEER}
+
+Edit nothing.`;
 }
 
 function cycleGroundingPrompt(cycle, findings) {
@@ -1241,6 +1364,10 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //   scope: { title, instructions, items },
 //   maxRounds (validated through cycleRoundCap), peer ("on"|"off"),
 //   mode ("full"|"light"),
+//   closeOut ("off" default | "on") — the invoker's grant of the trivial-round
+//     close-out, a SECOND bounded discretion beside `light` and a different
+//     one: `light` skips the final no-op fixer pass, close-out skips the
+//     re-review of a pass whose whole change was non-semantic,
 //   contracts: { fixer, reviewer, peer } — optional per-role preamble text
 //     (a worktree-lifecycle consumer passes its own wt-enter contract here),
 //   labelPrefix — optional, prefixes agent labels for fan-out consumers,
@@ -1259,6 +1386,17 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //   openQuestions, deviations, deviationHistory (only once some pass reported
 //   one), workReport, proactive, finalSha, notes, reviewerNotes, peerRounds,
 //   discardedPeerFindings, undisposed, outstanding, artifactDir,
+//   closeOut (present only when a trivial-round close-out ENDED the cycle:
+//     the pass, the range, and the non-semantic edits that shipped unreviewed),
+//   recordOnly (present only when the cycle concluded over a delivery run that
+//     FAILED on the flake rule's evidenced-unrelated disposition: the pass, and
+//     the pass's own `note` of what that run surfaced, which rides here because
+//     no later reviewer round exists to carry it in `reviewerNotes`. Where the
+//     record was a post-run COMMIT — the delivery gate's one tolerated one —
+//     `range` names it and `verified` is what the diff check found in it; both
+//     are EMPTY where the evidence cited an already-active task and the pass
+//     therefore committed nothing, which is the discriminator a consumer
+//     rendering the record reads),
 //   artifactDirAnomalies (present only when a later pass tried
 //   to move the artifact directory) }
 // NO per-round condition latches into that result: `deviations` is the LAST
@@ -1445,11 +1583,41 @@ async function runReviewCycle(cycle) {
     // empty `dispositions` array — an empty `workReport` (or blank `finalSha`)
     // alongside it would otherwise wipe the per-item report consumers replay
     // (wf-address-review publishes thread replies/resolves from it).
+    // The SHA this pass started from — the range a trivial-round close-out is
+    // judged on. Captured BEFORE the accumulation below overwrites it, and
+    // empty on pass 1, which is also why no close-out can conclude round 1.
+    const passBase = (packet && packet.finalSha) || "";
     packet = packet || {};
     if (Array.isArray(fix.workReport) && fix.workReport.length) packet.workReport = fix.workReport;
     if (typeof fix.summary === "string" && fix.summary) packet.summary = fix.summary;
     if (typeof fix.proactive === "string" && fix.proactive) packet.proactive = fix.proactive;
     if (typeof fix.finalSha === "string" && fix.finalSha) packet.finalSha = fix.finalSha;
+
+    // The evidenced-unrelated delivery-run failure THIS pass reported, if any.
+    // It buys no exit and skips no round — every conclusion below is decided
+    // exactly as it would be without it — but the gate that admits a FAILED
+    // delivery run admits it only on the promise that the failure reaches the
+    // maintainer, and these conclusions are the ones no later reviewer round
+    // follows. So it rides on all FOUR of them — the terminal check, the
+    // trivial-round close-out, the record-only close (where it rides inside
+    // that exit's own richer record), and the light-mode exit — and on those
+    // only: an `error` or `review-cap` exit publishes nothing on the strength
+    // of that admission and hands the maintainer the stopped run itself.
+    // The terminal check is not the exotic case there but the common one: the
+    // flake rule tells a pass whose evidence matches an ALREADY-ACTIVE task to
+    // cite that task rather than edit it, which leaves nothing to commit, so
+    // the pass returns `changed: false` with nothing disposed — by following
+    // the contract exactly — and would otherwise conclude the cycle carrying
+    // no record at all.
+    //
+    // A self-report is safe here for the very reason it is refused on the
+    // record-only exit below: that one BUYS something (a skipped round), so it
+    // is judged on the diff; this one buys nothing and only ever adds a caveat
+    // to the maintainer's copy. Read from `fix`, never the accumulated
+    // `packet`: under a heading about a failed delivery run, an earlier pass's
+    // record is a wrong answer where an absent one is merely no answer.
+    const flakeNote = typeof fix.flakeRecord === "string" ? fix.flakeRecord.trim() : "";
+    const flakeCarried = flakeNote ? { recordOnly: { pass: fixerPasses, range: "", verified: "", note: flakeNote } } : {};
 
     // Disposition coverage: every handed finding must be validly disposed by
     // id. Anything uncovered gates the round below and is carried forward.
@@ -1518,7 +1686,99 @@ async function runReviewCycle(cycle) {
     // round, only where a confirmation pass actually moved the set, and
     // bounded by the same cap check below.
     if (confirming && !fix.changed && (fix.dispositions || []).length === 0 && deviationSetChanges === 0) {
-      return result("pass", "reviewer passed; final confirmation pass disposed nothing new");
+      return result("pass", flakeNote ? "reviewer passed; final confirmation pass disposed nothing new, over a delivery run whose evidenced-unrelated failure cites an already-active follow-up task" : "reviewer passed; final confirmation pass disposed nothing new", flakeCarried);
+    }
+
+    // Trivial-round close-out: the second bounded discretion beside `light`,
+    // and a different one — `light` skips the final no-op fixer pass, this
+    // skips the RE-REVIEW of a pass whose whole change was non-semantic,
+    // knowingly amending the rule that anything the final pass fixes buys
+    // another reviewer round (which still holds for anything semantic). Only
+    // the invoker grants it, and the fixer's offer is not the licence: the
+    // diff is judged by a cheap read-only check, and a semantic hunk in it —
+    // however it got there — forfeits the close-out for the normal round. It
+    // can swallow nothing else either. Every handed finding must already be
+    // validly disposed, and every disposition on the pass must be `fixed`: a
+    // `declined` or an `escalated` one is a CLAIM the next fresh reviewer
+    // adjudicates, and the diff check cannot stand in for that reviewer
+    // because neither disposition leaves anything in the diff to look at — a
+    // decline dismissing a semantic finding ships as an empty hunk, so a pass
+    // fixing two typos beside it would otherwise conclude the cycle with the
+    // decline never adjudicated, against this file's own contract that a
+    // decline is verified by the next fresh reviewer, never final here. A pass
+    // that moved the deviation set or claimed a retirement still owes the
+    // round that adjudicates it, so those claims hold the cycle open exactly
+    // as they do at the terminal check above.
+    //
+    // The check answers TWO questions, because a diff read for triviality
+    // alone is blind in the other direction: an EMPTY range is vacuously
+    // non-semantic, so a pass reporting its findings `fixed` while committing
+    // nothing — or fixing something else instead — would conclude the cycle
+    // over fixes that never landed, adjudicated by nobody, since the round
+    // that catches exactly that is the round this exit skips. `editsPresent`
+    // is that second question, and `fix.changed` is its structural half: a
+    // pass that says it changed nothing has nothing to close out over, and
+    // saying so while listing `closeOutEdits` is a contradiction the gate
+    // settles here rather than spending an agent call on.
+    const closeOutOnlyFixes = (fix.dispositions || []).every((d) => d && d.disposition === "fixed");
+    if (cycle.closeOut === "on" && passBase && fix.changed && (fix.closeOutEdits || []).length && undisposed.length === 0 && closeOutOnlyFixes && deviationSetChanges === 0 && pendingRetirements.length === 0) {
+      const closeOut = await agent(cycleCloseOutPrompt(cycle, { passBase, edits: fix.closeOutEdits }), {
+        label: `${lp}closeout#${fixerPasses}`,
+        schema: CYCLE_CLOSEOUT_SCHEMA,
+        effort: "low",
+      });
+      if (closeOut && closeOut.nonSemantic === true && closeOut.editsPresent === true) {
+        return result("pass", `trivial-round close-out on fixer pass ${fixerPasses}: non-semantic fixes concluded the cycle without a further reviewer round`, {
+          ...flakeCarried,
+          closeOut: { pass: fixerPasses, range: `${passBase}..${fix.finalSha || "HEAD"}`, edits: fix.closeOutEdits, verified: (closeOut && closeOut.why) || "" },
+        });
+      }
+      log(`fixer pass ${fixerPasses} offered a trivial-round close-out; the diff check ${!closeOut ? "returned nothing" : closeOut.nonSemantic !== true ? "found a semantic change" : "did not find every claimed edit in the range"}, so the normal reviewer round runs.`);
+    }
+
+    // Record-only close: the terminal check above, with its one conjunct taken
+    // from the packet — `changed` — decided by a read of the actual diff
+    // instead. The delivery tier a confirmation pass owes survives ONE post-run
+    // commit, the flake rule's diagnosis-only task file and the note recording
+    // what that run surfaced; and tiered validation makes the delivery run the
+    // first FULL-suite run of most cycles, so the run that surfaces a flake is
+    // usually this one. Without this exit that commit is the only thing between
+    // the pass and the terminal check: the cycle buys a round told the DELIVERY
+    // tier, whose reviewer runs the whole suite, and the confirmation pass
+    // after it owes that tier again — three runs of the suite the tolerance
+    // exists to spare, plus a reviewer-and-peer round, bought by a commit that
+    // adds a queue entry and a note. Every other conjunct is the terminal
+    // check's, unchanged: a disposition, a deviation-set move, or a retirement
+    // claim (which rides in `dispositions`) still earns its round here exactly
+    // as it does there. And the pass neither offers this nor is asked about it
+    // — a tolerance a fixer could claim would be the evasion route item 2's own
+    // evidence requirement exists to close, so a cheap read-only check judges
+    // the range, and anything beyond the record forfeits the exit for the
+    // normal round.
+    //
+    // The pass's own note of what the run surfaced rides IN the record, from
+    // the same `flakeRecord` the terminal check above carries — one field, one
+    // meaning, whichever conclusion the cycle reaches. This exit is one of the
+    // conclusions NO reviewer round follows, so the reviewer pass-notes a
+    // consumer publishes as PR caveats were written before the failure
+    // existed, and the record is the only carrier the note has left. That is
+    // what makes item 2's "note the flake in the PR body or batch summary"
+    // reachable on the very path item 1 names as the tolerated one. `verified`
+    // stays the independent check's line about the diff and `note` is the
+    // pass's own account; they are not interchangeable, and the check never
+    // sees the note.
+    if (confirming && fix.changed && passBase && (fix.dispositions || []).length === 0 && deviationSetChanges === 0) {
+      const record = await agent(cycleRecordOnlyPrompt(cycle, { passBase }), {
+        label: `${lp}record#${fixerPasses}`,
+        schema: CYCLE_RECORD_ONLY_SCHEMA,
+        effort: "low",
+      });
+      if (record && record.recordOnly === true) {
+        return result("pass", "reviewer passed; the final confirmation pass committed only the unrelated-flake record, which its delivery-tier pass survives", {
+          recordOnly: { pass: fixerPasses, range: `${passBase}..${fix.finalSha || "HEAD"}`, verified: record.why || "", note: flakeNote },
+        });
+      }
+      log(`fixer pass ${fixerPasses} changed the tree with nothing to dispose; the record-only check ${record ? "found more than the flake record" : "returned nothing"}, so the normal reviewer round runs.`);
     }
 
     // Anything else needs a (re-)review — bounded by the cap. This check is
@@ -1550,6 +1810,9 @@ async function runReviewCycle(cycle) {
       packet: { ...packet, dispositions: fix.dispositions || [] },
       artifactDir,
       handedFindings: findings,
+      // The tier the pass just run owed, so the reviewer's build-first rule
+      // applies at it rather than unconditionally.
+      tier: cycleValidationTier(cycle, { confirming }),
       proposedRetirements: pendingRetirements,
       peerPreflighted: peerState.preflighted,
       // What still stands after the pass just made — the reviewer adds the
@@ -1668,8 +1931,16 @@ async function runReviewCycle(cycle) {
     }
 
     // Round passed. light mode ends here, recording undisposed remarks as such.
+    // It carries the flake record too, and is the exit that needs it MOST:
+    // `cycleValidationTier` makes every light-mode pass a delivery-tier pass
+    // precisely because light skips the confirmation pass, so light is the mode
+    // where the run that surfaces a flake is most likely to be a delivery run —
+    // and the reviewer round that just passed is no substitute carrier, since
+    // its brief is never shown this pass's `flakeRecord` and its notes were
+    // written without it.
     if (cycle.mode === "light") {
       return result("pass", "reviewer passed (light mode: final confirmation pass skipped)", {
+        ...flakeCarried,
         undisposed: [review.notes, peer.notes].filter(Boolean),
       });
     }
@@ -1739,8 +2010,19 @@ function taskCycleConfig(task, remote, peerMode) {
 // maintainer decision (final state, not round history). They LEAD the PR body:
 // the maintainer ratifies one or asks for conformance, and a deviation reported
 // below a wall of summary is one nobody rules on.
-function prPrompt(task, notes, remote, deviations) {
-  const dev = Array.isArray(deviations) ? deviations : [];
+//
+// `recordOnly` is the other thing the body must carry, for a related reason:
+// the cycle concluded over a delivery run that FAILED, on the flake rule's
+// evidenced-unrelated disposition, and the gate that allows that says the
+// failures are documented where the maintainer sees them at the PR. The batch
+// Summary carries the same record, but the person judging the gap reads the PR.
+// Reading the fields off the whole ready result rather than taking each as its
+// own parameter is what keeps that list one edit long the next time the cycle
+// grows a record worth publishing.
+function prPrompt(task, ready, remote) {
+  const dev = Array.isArray(ready && ready.deviations) ? ready.deviations : [];
+  const notes = (ready && ready.notes) || "";
+  const rec = (ready && ready.recordOnly) || null;
   if (!remote) {
     return `Remote push/PR is unavailable this run. Verify branch \`${task.branch}\` and its commits are intact: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && git -C "$WT" log --oneline ${shq(task.base)}..${shq(task.branch)}\` shows the work. Return \`opened: false\`, \`pushed: false\`, \`reason: "no remote auth this run"\`. Do not fail.
 
@@ -1750,6 +2032,9 @@ ${DESTROY_BOUNDARY}`;
   const deviationLead = dev.length
     ? `\n\nLEAD the PR body with a "Deviation from a locked decision" section, above everything else, carrying these verbatim — each is the maintainer's to ratify or ask conformance on, so neither correct nor soften one:\n${JSON.stringify(dev, null, 2)}`
     : "";
+  const flakeRecord = rec
+    ? `\n\nThe cycle concluded over a FAILED delivery run, on the flake rule's evidenced-unrelated disposition${rec.range ? `, and over a final commit (\`${rec.range}\`) no fresh reviewer saw — the diagnosis-only follow-up task that failure earned` : ", whose evidence cites an already-active follow-up task, so the pass committed nothing and this note is the whole record"}. Carry a "Delivery-run failure — recorded, not reviewed" section in the body with these verbatim, so the maintainer sees the gap here and decides how to absorb it; do not re-diagnose, soften, or omit it:\n${JSON.stringify({ note: rec.note || "", ...(rec.range ? { rangeCheck: rec.verified || "" } : {}) }, null, 2)}`
+    : "";
   return `Open a pull request for branch \`${task.branch}\` against base \`${task.base}\`. Work from this task's worktree: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && cd "$WT"\` (rerun-safe resolve of the existing worktree; if it errors, STOP and report).
 
 ${DESTROY_BOUNDARY}
@@ -1757,7 +2042,7 @@ ${DESTROY_BOUNDARY}
 1. Ensure the branch is pushed: \`git push -u origin ${shq(task.branch)}\` (or \`git push\`).
 2. \`gh pr create --base ${shq(task.base)} --head ${shq(task.branch)} --title "<concise title>" --body "<summary>"\`.
    - Reference the task file (${task.path}); don't restate the whole task unless it adds review value.
-   - Note tradeoffs / intentional divergences / uncertainties.${deviationLead}${caveats}
+   - Note tradeoffs / intentional divergences / uncertainties.${deviationLead}${flakeRecord}${caveats}
 
 Return \`opened: true\` with the \`url\` ONLY if \`gh pr create\` actually produced a PR URL. If the push succeeded but the PR could not be created (auth, API, or base-branch error), return \`opened: false\`, \`pushed: true\`, and \`reason\`. Do not claim a PR that was not created.`;
 }
@@ -1876,6 +2161,26 @@ Do NOT open any PR and do NOT remove any worktree — the workflow re-reviews ea
 // `deviations` is by contract the FINAL standing set, so the per-pass record is
 // the only place the Summary's reader can see that a pass stopped restating
 // one. Present only once some pass reported a deviation.
+// `closeOut` and `recordOnly` are ONE class and ride here for one reason: each
+// records a cycle that CONCLUDED over something no fresh reviewer saw — the
+// close-out's non-semantic edits, and for `recordOnly` a delivery run that
+// FAILED on the flake rule's evidenced-unrelated disposition (with the
+// tolerated post-run flake commit where there was one) — so this carrier is
+// the only thing between that fact and the maintainer. `recordOnly` also
+// carries the pass's `note` of what the delivery run surfaced, which is how
+// item 2's PR-body-or-batch-summary record survives the exits that have no
+// later reviewer round to write it. A cycle this workflow
+// configures cannot report `closeOut` today — `taskCycleConfig` grants no
+// close-out and only the invoker's grant opens that exit — so that conditional
+// forwards nothing yet; it is written anyway because the two records are one
+// rule, and granting the close-out later then needs no second edit here. That
+// is the gap this carrier has already dropped a new result field into twice.
+// Both present only when that exit actually ended the cycle.
+// Deliberately NOT forwarded: the cycle result's `notes` (the last pass's
+// `summary`). This carrier is applied to the raw cycle result AND to task
+// results derived from it, where `notes` already means the reviewer's PR-body
+// caveats — one name, two meanings, and the second pass through the carrier
+// would silently overwrite the first.
 function cycleCarried(result) {
   return {
     rounds: result.rounds,
@@ -1885,6 +2190,8 @@ function cycleCarried(result) {
     peerRounds: result.peerRounds,
     artifactDir: result.artifactDir,
     ...(result.artifactDirAnomalies ? { artifactDirAnomalies: result.artifactDirAnomalies } : {}),
+    ...(result.closeOut ? { closeOut: result.closeOut } : {}),
+    ...(result.recordOnly ? { recordOnly: result.recordOnly } : {}),
   };
 }
 
@@ -1911,7 +2218,7 @@ async function implementTask(task, remote, peerMode) {
 }
 
 async function deliverTask(task, ready, remote) {
-  const pr = await agent(prPrompt(task, ready.notes, remote, ready.deviations), {
+  const pr = await agent(prPrompt(task, ready, remote), {
     label: `pr:${task.slug}`,
     schema: PR_SCHEMA,
   });
@@ -1919,9 +2226,10 @@ async function deliverTask(task, ready, remote) {
   // Best-effort cleanup once the work is durable (pushed/committed).
   await agent(cleanupNote(task), { label: `cleanup:${task.slug}` });
 
-  // Open questions, deviations, and the artifact pointer (with any anomaly
-  // record beside it) bubble up with the delivery result — they exist for the
-  // human and must survive to Summary.
+  // Open questions, deviations, the artifact pointer (with any anomaly record
+  // beside it), and any record of a conclusion no fresh reviewer saw bubble up
+  // with the delivery result — they exist for the human and must survive to
+  // Summary.
   const carried = cycleCarried(ready);
   if (pr && pr.opened && pr.url) {
     return { slug: task.slug, branch: task.branch, status: "done", prUrl: pr.url, ...carried };
@@ -2296,7 +2604,15 @@ try {
           // specifies exactly this — "re-review each changed task with fresh
           // eyes" — a single-reviewer pass that predates the shared cycle.
           // Hold on failure rather than loop.
-          const verdict = await agent(cycleReviewPrompt(taskCycleConfig(task, remote, peerMode), { round: 1, packet: null, artifactDir: "" }), { label: `re-review:${task.slug}`, schema: CYCLE_REVIEW_SCHEMA });
+          //
+          // At the DELIVERY tier, stated rather than inherited. The resolver
+          // renamed files and regenerated artifacts AFTER the cycle's own
+          // delivery-tier pass, and this is the last check before the PR
+          // opens: that post-run change voids the earlier pass and owes the
+          // tier again, which this reviewer is the only remaining pass able to
+          // run. (An unstated tier renders the delivery tier anyway — that is
+          // the fail-safe default — but a gate this load-bearing says so.)
+          const verdict = await agent(cycleReviewPrompt(taskCycleConfig(task, remote, peerMode), { round: 1, packet: null, artifactDir: "", tier: "delivery" }), { label: `re-review:${task.slug}`, schema: CYCLE_REVIEW_SCHEMA });
           if (verdict && verdict.pass && !verdict.emptyDiffFlag) {
             deliverable.push({ task, result: { ...result, notes: verdict.notes || result.notes } });
           } else {

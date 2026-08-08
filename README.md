@@ -23,6 +23,7 @@ scripts/
   test-checkout-cleanliness-report.mjs  # regression coverage for the batch workflow's checkout report
   test-review-cycle-retirement.mjs      # behavior coverage for the review cycle's claim lifecycles (question retirement, locked-decision deviations)
   test-subagent-destroy-boundary.mjs    # renders every workflow subagent prompt and asserts the destroy boundary is in it
+  test-unreviewed-close-carriage.mjs    # asserts each consumer carries a cycle that concluded with no fresh reviewer through to the maintainer
   verify-014-peer-strength-pin.md       # harness-neutral prompt: observe the peer step's pinned review strength (task 014)
 ```
 
@@ -92,9 +93,11 @@ Run `bash scripts/test-dc-helpers.sh` after any behavior change to `plugins/dev-
 
 Run `node scripts/test-checkout-cleanliness-report.mjs` after changing the batch workflow's checkout-report behavior.
 
-Run `node scripts/test-review-cycle-retirement.mjs` after changing how the review cycle raises, retires, or serves open questions, or how it carries a locked-decision deviation — the two things a pass can claim off the maintainer's list, both of which need a round to pass over the claim — as does a deviation a pass first puts ON that list on its way out, which needs the reviewer's half of the protocol just as much; it drives the shipped `review-cycle-core` section of both workflows through scripted rounds.
+Run `node scripts/test-review-cycle-retirement.mjs` after changing how the review cycle raises, retires, or serves open questions, or how it carries a locked-decision deviation — the two things a pass can claim off the maintainer's list, both of which need a round to pass over the claim — as does a deviation a pass first puts ON that list on its way out, which needs the reviewer's half of the protocol just as much — and after changing any gate that decides what ends a cycle without a fresh reviewer seeing it: the trivial-round close-out, the record-only close over the delivery gate's one tolerated post-run commit, or the validation tier a reviewer's brief states; it drives the shipped `review-cycle-core` section of both workflows through scripted rounds. It also covers how `wf-review-cycle.js` parses the invoker's GRANT of that close-out, which decides whether the gate is reachable at all: the grant is read from the same prose string that carries the review TARGET, so it counts only as a standalone token and a branch named `feature/close-out-ui` grants nothing.
 
 Run `node scripts/test-subagent-destroy-boundary.mjs` after changing any workflow prompt; it renders every brief the three workflows hand a spawned subagent — discovering the set from their own `agent()` call sites — and fails when one is missing the destroy boundary, when a newly added prompt builder has no rendered case, when a workflow is added to that directory without being given a cut marker, when a cut marker names a workflow that is no longer there, or when the three out-of-section boundary constants have drifted apart.
+
+Run `node scripts/test-unreviewed-close-carriage.mjs` after changing what a review-cycle consumer does with a cycle that CONCLUDED without a fresh reviewer seeing the final content — the trivial-round close-out and the record of a delivery run that failed on the evidenced-unrelated flake disposition, whether that record was the gate's one tolerated post-run commit or, where the evidence cited an already-active task, no commit at all. The cycle records both, and the delivery gate admits a failed delivery run only on the promise that the failures reach the maintainer, so the suite drives the shipped result carriers and PR-body/summary-comment briefs of `wf-address-tasks.js` and `wf-address-review.js` and fails when either drops or stops rendering that record.
 
 Parse-check any changed dynamic workflow under `plugins/dev-skills/workflows/`. That check is not a `scripts/` suite: the command, and what a pass does and does not establish, live in `plugins/dev-skills/workflows/README.md`'s Validation section rather than here.
 
@@ -112,6 +115,6 @@ The `enable-worktrees`, `declare-shadows`, and `session-learnings` skills intent
 
 This repo runs focused tests and Claude automation against its own PRs via three workflows in `.github/workflows/`. The two Claude workflows require a `CLAUDE_CODE_OAUTH_TOKEN` repo secret.
 
-- **`tests.yml`** — runs five regression suites on every PR: the hermetic `gh-review-threads` and disposable-clone helper suites, the checkout-cleanliness report test, the review-cycle open-question retirement lifecycle test, and the subagent destroy-boundary rendering test.
+- **`tests.yml`** — runs six regression suites on every PR: the hermetic `gh-review-threads` and disposable-clone helper suites, the checkout-cleanliness report test, the review-cycle open-question retirement lifecycle test, the subagent destroy-boundary rendering test, and the unreviewed-close carriage test.
 - **`claude.yml`** — a mention bot. Comment `@claude ...` on an issue or PR (or in a PR review) to summon it; only OWNER/MEMBER/COLLABORATOR authors can trigger it, since the job runs with write permissions.
 - **`claude-code-review.yml`** — runs Anthropic's `code-review` plugin automatically when a PR is opened (or reopened / marked ready for review) and posts inline review comments; later pushes are not auto-reviewed — ask for a re-review with an `@claude` mention. Skipped on PRs from forks, which don't receive the secret.

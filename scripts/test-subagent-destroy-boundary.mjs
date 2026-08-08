@@ -244,6 +244,11 @@ const peerState = { round: 2, packet: { dispositions: [] } };
 // re-review calls the reviewer builder outside any cycle with `artifactDir: ""`.
 // That is the "new branch inside an existing builder" gap the header names, so
 // each is rendered rather than argued to be the same text.
+const closeOutState = { passBase: "abc1234", edits: ["typo in a comment"] };
+// The record-only check is handed a range and nothing else — deliberately no
+// list of what the pass says is in it (see the builder), so this state is the
+// whole input.
+const recordOnlyState = { passBase: "abc1234" };
 const fixStateRound1 = { ...fixState, round: 1, findings: null, artifactDir: "" };
 const reviewStateNoArtifact = { ...reviewState, round: 1, artifactDir: "" };
 
@@ -268,6 +273,14 @@ const cycleCases = {
     ["cycleGroundingPrompt (standalone)", (f) => f.cycleGroundingPrompt(cycleStandalone, [{ id: "p1", text: "y", severity: "minor" }])],
     ["cycleGroundingPrompt (batch/overridden)", (f) => f.cycleGroundingPrompt(cycleOverridden, [{ id: "p1", text: "y", severity: "minor" }])],
   ],
+  cycleCloseOutPrompt: [
+    ["cycleCloseOutPrompt (standalone)", (f) => f.cycleCloseOutPrompt(cycleStandalone, closeOutState)],
+    ["cycleCloseOutPrompt (batch/overridden)", (f) => f.cycleCloseOutPrompt(cycleOverridden, closeOutState)],
+  ],
+  cycleRecordOnlyPrompt: [
+    ["cycleRecordOnlyPrompt (standalone)", (f) => f.cycleRecordOnlyPrompt(cycleStandalone, recordOnlyState)],
+    ["cycleRecordOnlyPrompt (batch/overridden)", (f) => f.cycleRecordOnlyPrompt(cycleOverridden, recordOnlyState)],
+  ],
 };
 
 const FIXTURES = {
@@ -285,8 +298,9 @@ const FIXTURES = {
     ],
     resolvePrompt: [["resolvePrompt", (f) => f.resolvePrompt("tasks/*.md")]],
     prPrompt: [
-      ["prPrompt (remote)", (f) => f.prPrompt(task, "caveat", true)],
-      ["prPrompt (no remote)", (f) => f.prPrompt(task, "", false)],
+      ["prPrompt (remote)", (f) => f.prPrompt(task, { notes: "caveat", deviations: [] }, true)],
+      ["prPrompt (remote, record-only close)", (f) => f.prPrompt(task, { notes: "caveat", deviations: [], recordOnly: { pass: 2, range: "a..b", verified: "only the flake task", note: "the payments suite failed on the base too" } }, true)],
+      ["prPrompt (no remote)", (f) => f.prPrompt(task, { notes: "", deviations: [] }, false)],
     ],
     cleanupNote: [["cleanupNote", (f) => f.cleanupNote(task)]],
     collisionScanPrompt: [["collisionScanPrompt", (f) => f.collisionScanPrompt([{ slug: task.slug, branch: task.branch, base: task.base }])]],
@@ -305,6 +319,17 @@ const FIXTURES = {
             { pr: { number: 42, url: "https://example.invalid/pr/42", branch: "b", workingBranch: "b", base: "main", headOid: "deadbeef", rebased: false }, items: [] },
             [],
             { push: true, pingCodex: false }
+          ),
+      ],
+      [
+        "publishPrompt (record-only close)",
+        (f) =>
+          f.publishPrompt(
+            { pr: { number: 42, url: "https://example.invalid/pr/42", branch: "b", workingBranch: "b", base: "main", headOid: "deadbeef", rebased: false }, items: [] },
+            [],
+            { push: true, pingCodex: false },
+            [],
+            { pass: 2, range: "a..b", verified: "only the flake task", note: "the payments suite failed on the base too" }
           ),
       ],
     ],
