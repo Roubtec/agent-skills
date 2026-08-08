@@ -702,6 +702,20 @@ const CYCLE_CLOSEOUT_SCHEMA = {
   required: ["nonSemantic", "why"],
 };
 
+// Verdict of the record-only check — the same look at a diff, asked of the one
+// post-run commit the delivery gate tolerates. Nothing about the pass's own
+// account of that commit reaches this check: a tolerance a fixer could
+// self-certify is the evasion route the flake rule's evidence requirement
+// exists to close, so the range is the only evidence there is.
+const CYCLE_RECORD_ONLY_SCHEMA = {
+  type: "object",
+  properties: {
+    recordOnly: { type: "boolean", description: "True ONLY if the range holds nothing but the unrelated-flake RECORD: a NEW diagnosis-only follow-up task file, plus any PR-body or summary note recording what the delivery run surfaced. Any other hunk — a source, test, config, or contract edit, a change to the failing test itself, anything touching the artifact under review — is false, which simply buys the normal reviewer round." },
+    why: { type: "string", description: "One line: what the range held, or the change that forfeits the tolerance." },
+  },
+  required: ["recordOnly", "why"],
+};
+
 const CYCLE_GROUNDING_SCHEMA = {
   type: "object",
   properties: {
@@ -1121,6 +1135,23 @@ ${JSON.stringify(state.edits, null, 2)}
 Edit nothing.`;
 }
 
+// The record-only check: the close-out check's counterpart for the ONE post-run
+// commit the delivery tier tolerates. Deliberately given NO list to compare
+// against — the close-out has one because a pass OFFERS a close-out, while
+// nothing is offered here and a self-report is precisely what must not be able
+// to buy this exit. The diff is the whole evidence.
+function cycleRecordOnlyPrompt(cycle, state) {
+  return `Record-only follow-up check, read-only. The cycle is about to conclude WITHOUT another reviewer round, so this diff would ship unreviewed. Read \`git diff ${cycleShq(state.passBase)}..HEAD\` in full and answer ONE question: does the range hold NOTHING but the unrelated-flake RECORD — a NEW follow-up task file carrying the diagnosis already in hand, plus any PR-body or summary note recording what the delivery run surfaced? Judge the DIFF, and only the diff: you were given no account of it on purpose, and none would settle it. Anything else in the range, however it got there — a source, test, config, or contract edit, an attempt at the failing test itself, an edit to a file the work under review delivers — is \`recordOnly: false\`, which costs nothing but the normal reviewer round.
+
+${cycleContract(cycle, "reviewer")}
+
+${CYCLE_DESTROY_BOUNDARY}
+
+${CYCLE_FINISH_IN_TURN} ${CYCLE_NO_SELF_PEER}
+
+Edit nothing.`;
+}
+
 function cycleGroundingPrompt(cycle, findings) {
   return `Cheap grounding spot-check, read-only. The fresh reviewer PASSED this round; only the peer findings below would gate it. For each, check that its \`file:line\` (or referenced site) exists in the worktree and that the claim is not self-evidently false. Do NOT re-review or judge severity — discard is only for nonexistent references and self-evidently false claims; when in doubt, \`grounded: true\`.
 
@@ -1339,6 +1370,9 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //   discardedPeerFindings, undisposed, outstanding, artifactDir,
 //   closeOut (present only when a trivial-round close-out ENDED the cycle:
 //     the pass, the range, and the non-semantic edits that shipped unreviewed),
+//   recordOnly (present only when the confirmation pass's unrelated-flake
+//     record ENDED the cycle — the delivery gate's one tolerated post-run
+//     commit: the pass, the range, and what the diff check found in it),
 //   artifactDirAnomalies (present only when a later pass tried
 //   to move the artifact directory) }
 // NO per-round condition latches into that result: `deviations` is the LAST
@@ -1638,6 +1672,39 @@ async function runReviewCycle(cycle) {
         });
       }
       log(`fixer pass ${fixerPasses} offered a trivial-round close-out; the diff check ${closeOut ? "found a semantic change" : "returned nothing"}, so the normal reviewer round runs.`);
+    }
+
+    // Record-only close: the terminal check above, with its one conjunct taken
+    // from the packet — `changed` — decided by a read of the actual diff
+    // instead. The delivery tier a confirmation pass owes survives ONE post-run
+    // commit, the flake rule's diagnosis-only task file and the note recording
+    // what that run surfaced; and tiered validation makes the delivery run the
+    // first FULL-suite run of most cycles, so the run that surfaces a flake is
+    // usually this one. Without this exit that commit is the only thing between
+    // the pass and the terminal check: the cycle buys a round told the DELIVERY
+    // tier, whose reviewer runs the whole suite, and the confirmation pass
+    // after it owes that tier again — three runs of the suite the tolerance
+    // exists to spare, plus a reviewer-and-peer round, bought by a commit that
+    // adds a queue entry and a note. Every other conjunct is the terminal
+    // check's, unchanged: a disposition, a deviation-set move, or a retirement
+    // claim (which rides in `dispositions`) still earns its round here exactly
+    // as it does there. And the pass neither offers this nor is asked about it
+    // — a tolerance a fixer could claim would be the evasion route item 2's own
+    // evidence requirement exists to close, so a cheap read-only check judges
+    // the range, and anything beyond the record forfeits the exit for the
+    // normal round.
+    if (confirming && fix.changed && passBase && (fix.dispositions || []).length === 0 && deviationSetChanges === 0) {
+      const record = await agent(cycleRecordOnlyPrompt(cycle, { passBase }), {
+        label: `${lp}record#${fixerPasses}`,
+        schema: CYCLE_RECORD_ONLY_SCHEMA,
+        effort: "low",
+      });
+      if (record && record.recordOnly === true) {
+        return result("pass", "reviewer passed; the final confirmation pass committed only the unrelated-flake record, which its delivery-tier pass survives", {
+          recordOnly: { pass: fixerPasses, range: `${passBase}..${fix.finalSha || "HEAD"}`, verified: record.why || "" },
+        });
+      }
+      log(`fixer pass ${fixerPasses} changed the tree with nothing to dispose; the record-only check ${record ? "found more than the flake record" : "returned nothing"}, so the normal reviewer round runs.`);
     }
 
     // Anything else needs a (re-)review — bounded by the cap. This check is
