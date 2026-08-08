@@ -21,25 +21,25 @@ Out of scope: changing any destination wording that shipped with 017; extending 
 - Task 017 — the sweep this task makes enforceable. Its acceptance criterion is reviewer-shaped ("a reviewer told to run a build is told where that build's output goes"), which is why the non-reviewer sites had to be derived rather than listed, and why nothing asserts them.
 - PR #47 — the four rounds above. Both its final reviewer and the codex peer judged this gap worth recording and not worth another round on that branch.
 - `scripts/test-subagent-destroy-boundary.mjs` header — the "why rendering rather than reading" rationale, and the exact-containment principle this task must either honor or knowingly depart from.
-- The suite is described in more than one place — root README's focused-tests paragraph, scripts-tree comment, and tests.yml enumeration line, and `plugins/dev-skills/workflows/README.md`'s detailed paragraph — and no list here is authoritative: widening the suite is a documented-contract change, so enumerate the description sites by grepping the repo for the suite's filename and move every description the widened remit falsifies.
+- The suite is described in more than one place — root README's focused-tests paragraph, scripts-tree comment, and tests.yml enumeration line, and `plugins/dev-skills/workflows/README.md`'s detailed paragraph — and no list here is authoritative: widening the suite is a documented-contract change, so enumerate the description sites by grepping the repo for the suite's name stem `destroy-boundary` — prose labels carry the stem where the filename does not appear, as in root README's tests.yml line — cross-check the hits against the examples here, and move every description the widened remit falsifies.
 
 ## Target files or areas
 
 - `scripts/test-subagent-destroy-boundary.mjs`
-- `README.md` and `plugins/dev-skills/workflows/README.md` — every description of the suite that the widened remit falsifies, enumerated by grepping for the suite's filename rather than from this line (no codex mirror of the workflows README exists)
+- `README.md` and `plugins/dev-skills/workflows/README.md` — every description of the suite that the widened remit falsifies, enumerated by grepping for the stem `destroy-boundary`, with this line's examples as a cross-check (no codex mirror of the workflows README exists)
 - `plugins/dev-skills/skills/review-cycle/SKILL.md` and `codex/dev-skills/skills/review-cycle/SKILL.md` — the Fixer-contract cross-reference, both mirrors in lockstep
 - The `SKILL.md` mirror pairs carrying 017's destination clauses — read as assertion inputs; this task does not modify them
 
 ## Implementation notes
 
-Reuse the existing declaration-prefix and `new Function` harness and the prompt paths it already renders; the rendered side needs no new rendering machinery, only a second assertion over the same renders, and the prose side needs only file reads — there is nothing to render. If the suite's remit widens, say so in its header comment and in every description of the suite the widened remit falsifies — grep the repo for the suite's filename to enumerate them rather than trusting any list, including this file's — so the code and the documented contract do not drift. Keep the two skill mirrors byte-identical in the added clause and confirm the pair's divergence count is unchanged.
+Reuse the existing declaration-prefix and `new Function` harness and the prompt paths it already renders; the rendered side needs no new rendering machinery, only a second assertion over the same renders, and the prose side needs only file reads — there is nothing to render. If the suite's remit widens, say so in its header comment and in every description of the suite the widened remit falsifies — grep the repo for the stem `destroy-boundary` to enumerate them, treating this file's examples as a cross-check rather than the authority — so the code and the documented contract do not drift. Keep the two skill mirrors byte-identical in the added clause and confirm the pair's divergence count is unchanged.
 
 ## Acceptance criteria
 
 - Every rendered prompt that orders a build or validation is asserted to name a destination, and the mechanism for deciding "orders a build" is stated in the source together with what it does and does not catch.
 - Every shipped prose brief carrying a 017 destination clause is deletion-guarded in both mirrors, and the suite header and the README descriptions state that prose briefs are guarded against deletion but not discovered.
 - Removing a shipped destination clause from any one brief — a rendered workflow prompt or a Markdown skill brief, in either mirror — makes the suite fail, demonstrated by actually doing it, not asserted.
-- Every description of the suite matches what it now checks, with the description sites enumerated by grepping for the suite's filename at implementation time rather than taken from this task.
+- Every description of the suite matches what it now checks, with the description sites enumerated by grepping for the stem `destroy-boundary` at implementation time and cross-checked against this task's examples.
 - The `review-cycle` Fixer contract points at the Artifacts all-roles rule in both mirrors, with that pair's divergence count unchanged.
 
 ## Validation
