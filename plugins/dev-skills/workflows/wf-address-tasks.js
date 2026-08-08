@@ -1265,9 +1265,9 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 // one is a CLAIM a round must pass over, exactly like a retirement: until then
 // it keeps standing in `deviations`, so no terminal pass can erase a live
 // deviation on its way out (the claims still open are `deviations` minus the
-// last `deviationHistory` entry). A consumer
-// publishing a PR comment or summary from this result leads with `deviations`;
-// they are the maintainer's call to ratify or conform, never the loop's.
+// last `deviationHistory` entry). A consumer publishing a PR comment or summary
+// from this result leads with `deviations`; they are the maintainer's call to
+// ratify or conform, never the loop's.
 // An `openQuestions` entry a later pass settled carries a `retired` mark; a
 // consumer serving these to a human (resolve-open-questions) skips those. A
 // retirement no reviewer round has accepted carries `retirementPending`
