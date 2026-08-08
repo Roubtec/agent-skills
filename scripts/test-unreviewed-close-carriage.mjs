@@ -47,7 +47,7 @@ function check(name, cond, detail) {
 // does not count. Bump it deliberately when adding or removing one — a check
 // that silently stops running is invisible to a suite that only gates on
 // failures.
-const EXPECTED_CHECKS = 24;
+const EXPECTED_CHECKS = 25;
 
 // Evaluate a workflow's declarations up to its first executable statement and
 // hand back the named ones. Each is returned by an explicit reference, so a
@@ -193,6 +193,13 @@ const cycleResult = (extra) => ({
   check("the summary comment brief carries the recorded-not-reviewed section with the run's note", /Delivery-run failure — recorded, not reviewed/.test(withRecord) && withRecord.includes(NOTE) && withRecord.includes(RECORD.range), "publish prompt");
   const withoutRecord = publishPrompt(pkt, [], { push: true }, []);
   check("and omits it for a cycle that concluded normally", !/recorded, not reviewed/.test(withoutRecord), "publish prompt");
+  // The section sits BELOW the numbered instructions, so the step that writes
+  // the summary comment has to name it. A section defined below and referenced
+  // nowhere is one the writer can compose the whole comment without ever
+  // reaching — and the checks above, which only ask whether the text is
+  // present, would stay green through exactly that loss.
+  const CROSS_REF = /plus the delivery-run failure section defined below/;
+  check("and step 5 cross-references it, so the writer meets it while composing the comment", CROSS_REF.test(withRecord) && !CROSS_REF.test(withoutRecord), "publish prompt");
   const cited = publishPrompt(pkt, [], { push: true }, [], [], CITED_RECORD);
   check("the no-commit record reaches the summary comment too, naming no commit and no empty range check", /Delivery-run failure — recorded, not reviewed/.test(cited) && cited.includes(CITED_NOTE) && !/final commit/.test(cited) && /no post-run commit of its own/.test(cited) && !/rangeCheck/.test(cited), "publish prompt");
 }

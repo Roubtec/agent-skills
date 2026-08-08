@@ -305,11 +305,12 @@ function publishPrompt(packet, dispositions, flags, deviations, deviationAssessm
       }`
     : "";
   // The cycle concluded over a FAILED delivery run (the flake rule's
-  // evidenced-unrelated disposition) and over one commit no fresh reviewer saw.
-  // The gate that permits that requires the failure to be documented where the
-  // maintainer sees it, and this comment is this run's only PR-facing surface.
+  // evidenced-unrelated disposition), and — where there was one — over the
+  // tolerated post-run flake commit no fresh reviewer saw. The gate that
+  // permits that requires the failure to be documented where the maintainer
+  // sees it, and this comment is this run's only PR-facing surface.
   const flakeRecord = recordOnly
-    ? `\n\n## Delivery-run failure — recorded, not reviewed\n\nThe review cycle concluded over a FAILED delivery run, on its evidenced-unrelated flake disposition${recordOnly.range ? `, and over a final commit (\`${recordOnly.range}\`) no fresh reviewer saw — the diagnosis-only follow-up task that failure earned` : ", and over no post-run commit of its own, so this note is the whole record the cycle has of that failure"}. Carry a section under this exact heading in the summary comment with these verbatim, so the maintainer sees the gap and decides how to absorb it; do not re-diagnose, soften, or omit it.\n\n${JSON.stringify({ note: recordOnly.note || "", ...(recordOnly.range ? { rangeCheck: recordOnly.verified || "" } : {}) }, null, 2)}`
+    ? `\n\n## Delivery-run failure — recorded, not reviewed\n\nThe review cycle concluded over a FAILED delivery run, on its evidenced-unrelated flake disposition${recordOnly.range ? `, and over a final commit (\`${recordOnly.range}\`) no fresh reviewer saw — the diagnosis-only follow-up task that failure earned` : ", and over no post-run commit of its own, so there is no commit for you to point at"}. Carry a section under this exact heading in the summary comment with these verbatim, so the maintainer sees the gap and decides how to absorb it; do not re-diagnose, soften, or omit it.\n\n${JSON.stringify({ note: recordOnly.note || "", ...(recordOnly.range ? { rangeCheck: recordOnly.verified || "" } : {}) }, null, 2)}`
     : "";
   return `Publish the addressed review for PR #${packet.pr.number} (branch \`${packet.pr.branch}\`). A fresh reviewer has PASSED. Read \`AGENTS.md\` / \`CLAUDE.md\` first.
 
@@ -497,7 +498,13 @@ if (!cycle) {
 // post-run flake commit where there was one), whose `note` is that run's own
 // account of what failed.
 // This run pushes to a PR and reports back to the maintainer who started it, so
-// the carrier is where that fact reaches them; every return below spreads it.
+// the carrier is where that fact reaches them, and every return of this run's
+// RESULT spreads it — enumerated rather than swept, since they are not the only
+// returns below: the failed-cycle error, the no-push report, the
+// cap-not-published report, the three publish-abort guards (an uncovered item, a
+// doubly-covered one, a malformed covering entry), and the published report.
+// Seven. The many other returns below sit inside `dispositionDefect` and hand
+// back a diagnostic string rather than a result, so they spread nothing.
 // The nested cycle is granted no close-out above, so `closeOut` cannot arise
 // here today — it rides in the same conditional because the two records are one
 // rule, and granting the close-out later then needs no second edit HERE; the
