@@ -22,7 +22,7 @@ This separation keeps your context window clean across long batches and ensures 
 
 > **Critical — one agent at a time; subagents share your working tree.**
 > Every subagent operates on your single checked-out branch and working tree — they are **not** isolated copies of the repo. Two checkout-dependent agents running at once corrupt each other. The most common failure: a reviewer spawned alongside its implementer scopes `git diff <base>...HEAD` against a branch the implementer has not finished committing to, sees nothing, and falsely reports "no implementation" — so the work ships **unreviewed**.
-> Therefore: **never place two such agents in the same turn or parallel tool block.** Spawn one agent, wait for its result, then spawn the next — even though they all run in the foreground. The harness's general "batch independent tool calls together" guidance does **not** apply to these spawns: the implementer and its reviewer are *not* independent — they contend for the same working tree.
+> The invariant is about committed state, not about turn structure: **a reviewer may not start until its implementer's commits are on disk.** A harness may run spawns asynchronously — an `Agent` call can return immediately with a background task id and deliver its result as a later notification — so your obligation is to wait for that completion notification before spawning the reviewer. Keeping the two out of the same turn or parallel tool block is a **proxy** for that invariant: sufficient where spawns are synchronous, and neither sufficient nor necessary where they are not. The harness's general "batch independent tool calls together" guidance does **not** apply to these spawns: the implementer and its reviewer are *not* independent — they contend for the same working tree.
 > The examination-only peer CLI described below is the sole exception: launch it alongside the reviewer only after the implementation is committed, and forbid it from running builds or tests, so it remains a concurrent reader while the own reviewer may build.
 
 **Trivial-task escape hatch:** for genuinely trivial tasks (a single obvious change with unambiguous criteria), you may implement directly without delegating.
@@ -62,7 +62,7 @@ State this in every subagent prompt this skill composes. A reviewer subagent aut
 ## Implementer Agent
 
 The implementer receives a focused, self-contained prompt and works autonomously on a single task.
-It is launched in the **foreground** (not background) and **on its own**: the orchestrator needs its result — and its commits on disk — before spawning the reviewer, so do not start any other checkout-dependent agent in the same turn (see the shared-working-tree rule in Architecture).
+It is spawned **on its own**: the reviewer may not start until this implementer's commits are on disk, so wait for its completion notification — however the harness delivers it — before starting any other checkout-dependent agent (see the shared-working-tree rule in Architecture).
 
 ### What to include in the implementer prompt
 
@@ -122,8 +122,8 @@ Read `AGENTS.md` first for project conventions.
 The reviewer is a **fresh** subagent with no knowledge of the implementation process.
 It evaluates the current codebase state against two orthogonal dimensions: acceptance criteria compliance and implementation quality.
 It must be a **new** `Agent` invocation — a fresh-eyes agent with no implementation context, never a continuation of the implementer. Ignore any `SendMessage` continuation footer from earlier `Agent` results; this harness does not expose that tool.
-Spawn it only **after** the implementer has fully completed and its commits have landed — never concurrently with the implementer, and never in the same turn or parallel tool block. You share one working tree, so a concurrent reviewer scans an empty or half-finished branch and wrongly reports "no implementation" (see the shared-working-tree rule in Architecture).
-It is launched in the **foreground** (not background) since the feedback loop must complete before the orchestrator can advance branches or start the next task.
+Spawn it only **after** the implementer's commits are on disk — wait for that completion notification; keeping it out of the implementer's turn or parallel tool block is only a proxy for the same thing. You share one working tree, so a concurrent reviewer scans an empty or half-finished branch and wrongly reports "no implementation" (see the shared-working-tree rule in Architecture).
+Wait for its result before advancing branches or starting the next task — the feedback loop must complete first.
 
 ### What to include in the reviewer prompt
 

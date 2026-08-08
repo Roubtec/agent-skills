@@ -22,7 +22,7 @@ This separation keeps your context window clean across long batches and ensures 
 
 > **Critical — one agent at a time; Codex subagents share your working tree.**
 > Unless you explicitly configured per-agent git worktrees, each subagent operates on the same checked-out branch and working tree as the orchestrator. Two checkout-dependent subagents running at once can race or corrupt each other's view of the repo. The most common failure: a reviewer spawned alongside its implementer scopes `git diff <base>...HEAD` before the implementer has finished committing, sees nothing, and falsely reports "no implementation" — so the work ships **unreviewed**.
-> Therefore: **never spawn or request two checkout-dependent subagents in the same natural-language turn, same tool block, or before the previous subagent has been waited on and closed.** Start one subagent, wait for its result, close it, then start the next. The general guidance to batch independent tool calls does not apply here: implementers and reviewers are not independent because they contend for one working tree.
+> The invariant is about committed state, not about turn structure: **a reviewer may not start until its implementer's commits are on disk.** A harness may run spawns asynchronously — a spawn call can return immediately with an agent id and deliver its result as a later notification — so your obligation is to wait for that completion (and close the agent) before starting the reviewer. Keeping the two out of the same natural-language turn or tool block is a **proxy** for that invariant: sufficient where spawns are synchronous, and neither sufficient nor necessary where they are not. The general guidance to batch independent tool calls does not apply here: implementers and reviewers are not independent because they contend for one working tree.
 > The examination-only peer CLI described below is the sole exception: launch it alongside the reviewer only after the implementation is committed, and forbid it from running builds or tests, so it remains a concurrent reader while the own reviewer may build.
 
 ### How to spawn a subagent in Codex
@@ -76,7 +76,7 @@ State this in every subagent prompt this skill composes. A reviewer subagent aut
 ## Implementer Agent
 
 The implementer receives a focused, self-contained prompt and works autonomously on a single task.
-Spawn it **on its own**, then wait for completion and close the agent thread before proceeding. The orchestrator needs both the implementer's result and its committed work on disk before spawning a reviewer, so do not start any other checkout-dependent subagent in the same turn or tool block.
+Spawn it **on its own**, then wait for completion and close the agent thread before proceeding. The reviewer may not start until this implementer's commits are on disk, so wait for that completion — however the session reports it — before starting any other checkout-dependent subagent.
 
 ### What to include in the implementer prompt
 
@@ -136,7 +136,7 @@ Read `AGENTS.md` first for project conventions.
 The reviewer is a **fresh** subagent with no knowledge of the implementation process.
 It evaluates the current codebase state against two orthogonal dimensions: acceptance criteria compliance and implementation quality.
 It must be a **fresh** subagent spawn — never a continuation of the implementer's thread.
-Spawn it only **after** the implementer has fully completed and its commits have landed — never concurrently with the implementer, and never in the same natural-language turn or tool block. You share one working tree, so a concurrent reviewer can scan an empty or half-finished branch and wrongly report "no implementation" (see the shared-working-tree rule in Architecture).
+Spawn it only **after** the implementer's commits are on disk — wait for that completion and close the implementer; keeping it out of the implementer's natural-language turn or tool block is only a proxy for the same thing. You share one working tree, so a concurrent reviewer can scan an empty or half-finished branch and wrongly report "no implementation" (see the shared-working-tree rule in Architecture).
 Wait for completion and close the reviewer before the orchestrator advances branches or starts the next task.
 
 ### What to include in the reviewer prompt
