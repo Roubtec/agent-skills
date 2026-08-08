@@ -659,17 +659,17 @@ ${CYCLE_FINISH_IN_TURN} That is why the launch below is one supervised foregroun
 ${preflightStep}
 2. Prepare unique per-attempt paths under this cycle's artifact directory: \`round_dir=${cycleShq(`${state.artifactDir}/round-${state.round}`)}\`, \`mkdir -p "$round_dir"\`, with \`prompt_file\`, \`outfile\`, \`stderr_file\` inside it (suffix \`-attempt2\` on a retry; never reuse a path).
 3. Write the peer prompt below VERBATIM to \`$prompt_file\` with a quoted heredoc (\`<<'PEER_PROMPT'\`) — never assemble it through shell interpolation.
-4. Launch the peer as ONE supervised foreground call, bounded UNDER your own Bash tool limit so the tool can never kill it mid-run unaccounted (set the Bash tool timeout to 600000 ms and bound the peer tighter with \`timeout\`):
+4. Launch the peer as ONE supervised foreground call, bounded UNDER your own Bash tool limit so the tool can never kill it mid-run unaccounted (set the Bash tool timeout to 600000 ms and bound the peer tighter with \`timeout\` — including its hard-kill escalation, because expiry alone sends only TERM, which a hung provider can catch or block and so outlive you into the tool's own kill):
 
    \`\`\`bash
    worktree="<the worktree path from the contract above>"
    # Pin peer effort per invocation; never changes the container's saved config.
-   timeout 540 codex exec --sandbox read-only --cd "$worktree" -o "$outfile" \\
+   timeout --kill-after=30 540 codex exec --sandbox read-only --cd "$worktree" -o "$outfile" \\
      -c mcp_servers={} -c model_reasoning_effort=medium "$(<"$prompt_file")" \\
      < /dev/null 2> "$stderr_file"
    \`\`\`
 
-   Exit 124 means the bounded timeout fired: retry ONCE with fresh attempt paths, then return outcome \`timeout\`. Any other failure (crash, non-zero exit with no usable output): retry once, then return \`failed\`. Auth/usage errors: \`unavailable\` without retry.
+   Exit 124 means the bounded timeout fired — as does 137, when the peer rode out TERM and the \`--kill-after\` grace ended in an uncatchable KILL (540 s + 30 s still lands under the 600 s tool limit): retry ONCE with fresh attempt paths, then return outcome \`timeout\`. Any other failure (crash, non-zero exit with no usable output): retry once, then return \`failed\`. Auth/usage errors: \`unavailable\` without retry.
 5. Read \`$outfile\`. A \`VERDICT: PASS\` line → outcome \`passed\` (anything after it goes to \`notes\` verbatim). A \`VERDICT: ISSUES\` line → outcome \`issues\`, with every numbered finding mapped verbatim into \`findings\` (severity from its \`blocking\`/\`minor\` tag — default \`blocking\` when untagged — plus its \`file:line\` as \`location\` and the finding text as \`claim\`; do not summarize, merge, or rewrite). No verdict line, or empty/unintelligible output → \`forfeited\`.
 
 ## Peer prompt (write this text to the prompt file verbatim, filling only the placeholders)
