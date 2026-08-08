@@ -274,10 +274,21 @@ You may reclassify any item.`;
 // list is how it goes unseen — and publication never corrects one on their
 // behalf. The cycle reports the ones still standing at the end, not every one
 // ever raised, so this is the final state rather than a round's history.
-function publishPrompt(packet, dispositions, flags, deviations) {
+// The reviewer's half of that protocol travels with them: the maintainer is
+// being asked to ratify or conform, and the two things that decision needs —
+// whether an in-spec route existed, and which way the reviewer leaned — are
+// produced by the round that passed the deviation. Publishing the deviation
+// without them hands over the implementer's half alone, which is the shape the
+// cycle spends a whole extra round avoiding.
+function publishPrompt(packet, dispositions, flags, deviations, deviationAssessments) {
   const dev = Array.isArray(deviations) ? deviations : [];
+  const assessments = Array.isArray(deviationAssessments) ? deviationAssessments : [];
   const deviationLead = dev.length
-    ? `\n\n## Locked-decision deviations — LEAD the summary comment with these\n\nOpen the comment with a "Deviation from a locked decision" section carrying these verbatim, above everything else. Each is the maintainer's to ratify or ask conformance on; publication neither corrects nor softens one.\n\n${JSON.stringify(dev, null, 2)}`
+    ? `\n\n## Locked-decision deviations — LEAD the summary comment with these\n\nOpen the comment with a "Deviation from a locked decision" section carrying these verbatim, above everything else. Each is the maintainer's to ratify or ask conformance on; publication neither corrects nor softens one.\n\n${JSON.stringify(dev, null, 2)}${
+        assessments.length
+          ? `\n\nThe reviewing round's assessment of each — carry \`inSpecRoute\` and \`recommendation\` into that same section, beside the deviation they name, so the maintainer reads both halves at once. Relay them; do not re-argue or soften one.\n\n${JSON.stringify(assessments, null, 2)}`
+          : `\n\nThe review cycle recorded no assessment for these (it stopped before a round passed over them), so the section carries the implementer's half only — say so plainly rather than supplying a judgment of your own.`
+      }`
     : "";
   return `Publish the addressed review for PR #${packet.pr.number} (branch \`${packet.pr.branch}\`). A fresh reviewer has PASSED. Read \`AGENTS.md\` / \`CLAUDE.md\` first.
 
@@ -451,8 +462,14 @@ if (!cycle) {
 // cycle's `deviations` is by contract the FINAL standing set, so the per-pass
 // record is the only place a maintainer reading this result can see that a pass
 // stopped restating one. The cycle sets it once any pass reported a deviation.
+// `deviationAssessments` rides here too — the reviewer's in-spec-route judgment
+// and RATIFY/CONFORM recommendation for each deviation still standing. The
+// publisher leads its summary comment with it, and every OTHER exit reports the
+// deviations without publishing anything, so those exits are the only place a
+// reader of this result meets them at all.
 const carried = {
   ...(cycle.artifactDirAnomalies ? { artifactDirAnomalies: cycle.artifactDirAnomalies } : {}),
+  ...(cycle.deviationAssessments ? { deviationAssessments: cycle.deviationAssessments } : {}),
   ...(cycle.deviationHistory ? { deviationHistory: cycle.deviationHistory } : {}),
 };
 if (cycle.verdict === "error") {
@@ -797,7 +814,7 @@ const publishFlags = {
 };
 
 phase("Publish");
-const publishReport = await agent(publishPrompt(packet, workReport, publishFlags, cycle.deviations), {
+const publishReport = await agent(publishPrompt(packet, workReport, publishFlags, cycle.deviations, cycle.deviationAssessments), {
   label: "publish",
   schema: PUBLISH_SCHEMA,
 });
