@@ -5,7 +5,7 @@ description: Run the canonical implement/fix → fresh-eyes review → best-effo
 
 Run one complete review cycle — fix → own fresh-eyes review → best-effort peer review → fix — on a single artifact.
 
-**Arguments:** `[<target: worktree, branch, diff range, task/doc file, or nothing for the current change>] [artifact-type: code | prose | decision] [light] [peer-opinions=off] [max-rounds=N]`
+**Arguments:** `[<target: worktree, branch, diff range, task/doc file, or nothing for the current change>] [artifact-type: code | prose | decision] [light] [close-out] [peer-opinions=off] [max-rounds=N]`
 
 Explicit Codex invocation uses `$review-cycle`; natural-language equivalents are fine.
 
@@ -62,7 +62,7 @@ Each round is: a fixer pass (whenever there is work to implement or findings to 
 Every reviewer and peer finding is dispatched to a fixer that explicitly disposes each item: **fixed**, **declined** (with a reason — a decline is verified by the next fresh Reviewer, never final on the fixer's say-so), or **escalated** to an open question (format below).
 The cycle ends only when the Reviewer passes **and** the fixer's last pass disposed nothing new: after a passing round, hand the passing reports to one final fixer pass so any pass-notes or stray remarks get considered by an agent with full context rather than dropped by the orchestrator; if that pass disposes nothing new, the cycle is done, and anything it fixes or disputes goes through another reviewer round first.
 This costs one extra fixer turn per cycle — the accepted price for "no finding dropped unconsidered" on meaningful changes.
-**`light` mode**, at the invoker's explicit choice for small mechanical changes, skips that final no-op fixer pass and ends the cycle at the passing round, recording any undisposed remarks as such.
+**`light` mode**, at the invoker's explicit choice for small mechanical changes, skips that final no-op fixer pass and ends the cycle at the passing round, recording any undisposed remarks as such — it skips that pass, never the delivery-tier gate, so under `light` the last fixer pass is the one that owes it.
 **Trivial-round close-out** is the second bounded invoker/orchestrator discretion, and a different one: `light` skips the final no-op fixer pass, while close-out skips the re-review of trivially-fixed findings.
 When a passing-adjacent round's remaining findings are exclusively non-semantic — wording, typos, comment phrasing, formatting; nothing touching behavior, logic, or the meaning of an acceptance criterion — the orchestrator may have the fixes applied and conclude the cycle without another reviewer-plus-peer round, which deliberately amends the rule above that anything the final pass fixes goes through another reviewer round: that rule keeps holding for anything semantic, and the close-out is never a way to swallow a finding without disposition, since every finding still receives an explicit one.
 The license is judged on the diff, not the findings list: before concluding, the orchestrator reads the close-out diff itself and confirms it holds only the listed non-semantic edits — any executable or behavioral change in it, however it got there, forfeits the close-out and buys a normal reviewer round.
@@ -174,7 +174,7 @@ Open questions always surface structurally in the cycle's result — they exist 
 
 The cycle reviews more than code; the invoker names the type and the Reviewer and peer briefs adapt:
 
-- **code** (default) — a committed diff. Build/typecheck first, acceptance criteria where a task or spec is in scope, then the quality pass.
+- **code** (default) — a committed diff. Build/typecheck first at the round's stated tier, acceptance criteria where a task or spec is in scope, then the quality pass.
 - **prose** — a drafted task file or document. The Reviewer checks verbiage, scoping, internal consistency, and the repo's house conventions (for task files: the documented numbering style); there is no build to run.
 - **decision** — an applied decision's diff. The Reviewer verifies the diff implements exactly the locked option and nothing beyond it, then the quality pass on the touched files.
 
