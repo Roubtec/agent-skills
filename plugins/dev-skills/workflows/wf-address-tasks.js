@@ -658,7 +658,7 @@ const CYCLE_FIX_SCHEMA = {
     clean: { type: "boolean", description: "True only if the worktree is CLEAN and IDLE: `git status --porcelain` empty with every intended change committed, AND no Git operation in progress (`git rev-parse --git-path rebase-merge` / `rebase-apply`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`). A packet returned mid-rebase or mid-cherry-pick can print empty porcelain; the cycle refuses it either way." },
     artifactDir: { type: "string", description: "Absolute path of this cycle's unique artifact directory — REQUIRED every pass: round 1 creates it (outside the worktree) and reports it, later passes echo the directory they were given. The result contract promises full round history reachable through it." },
   },
-  required: ["changed", "dispositions", "openQuestions", "deviations", "clean", "artifactDir"],
+  required: ["changed", "dispositions", "openQuestions", "deviations", "flakeRecord", "clean", "artifactDir"],
 };
 
 const CYCLE_REVIEW_SCHEMA = {
