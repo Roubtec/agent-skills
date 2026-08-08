@@ -891,8 +891,10 @@ Return \`pass: true\` only if everything holds and no material issue remains; el
 // The peer invocation happens INSIDE this subagent prompt, never in the
 // script (a workflow cannot shell out). Baseline destination: the
 // `peer-review-run` helper (schema powbox.peer-review-run/v1) — retained
-// pinned raw launch until powbox's review-strength passthrough lands; see the
-// header comment. The launch pins review strength per invocation
+// pinned raw launch until that helper can carry the codex peer's CONFIGURED
+// high-capability model, the one half of the review-strength passthrough still
+// outstanding; its effort passthrough and strength reporting have landed. See
+// the header comment. The launch pins review strength per invocation
 // (-c model_reasoning_effort=medium; the model stays the peer's configured
 // high-capability default from ~/.codex/config.toml) and never writes back to
 // saved configuration.

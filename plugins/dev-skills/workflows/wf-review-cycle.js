@@ -72,18 +72,28 @@
  * round outcome. The peer is never required for the cycle to conclude.
  *
  * The peer's baseline interface is powbox's `peer-review-run` helper (result
- * schema powbox.peer-review-run/v1) — but NOT YET: as baked today the helper
- * accepts no model or effort argument and its codex adapter discards the user
- * config, so a peer launched through it runs at `reasoning effort: none` on a
- * bare default model. Until powbox delivers the review-strength passthrough,
- * the stage's subagent runs the PINNED RAW LAUNCH (codex exec with
- * `-c model_reasoning_effort=medium`; the model stays the peer's configured
- * high-capability default from ~/.codex/config.toml). When the passthrough
+ * schema powbox.peer-review-run/v1) — but NOT YET, and only for the MODEL
+ * dimension. The effort half already works: the helper takes `--model` and
+ * `--effort`, defaults effort to `high` for BOTH providers, re-injects
+ * `-c model_reasoning_effort=<effort>` in its codex adapter specifically to
+ * survive that adapter's own `--ignore-user-config`, and reports the strength
+ * it actually applied as `model`/`effort` in its result — which is the
+ * reporting half this stage asked for. What it still cannot carry is the codex
+ * peer's CONFIGURED high-capability model: `--ignore-user-config` discards
+ * ~/.codex/config.toml, the source of that model, and the helper's own
+ * `--model` default (`opus`) applies to claude only, so a codex peer launched
+ * through it runs on the CLI's bare default; naming a concrete codex ID instead
+ * is barred by the never-dated-model-IDs rule. Until powbox carries that
+ * configured model through, the stage's subagent runs the PINNED RAW LAUNCH
+ * (codex exec with `-c model_reasoning_effort=medium`; the model stays the
+ * peer's configured high-capability default from ~/.codex/config.toml). When it
  * lands, the swap to `peer-review-run --provider codex --worktree ...
- * --prompt-file ... --artifact-root ... --timeout N` (flag spelling transcribed
- * from the shipped helper, with --timeout sized under the subagent's own
- * Bash-tool limit) is task 015's; the outcome vocabulary below already matches
- * the helper's, so the swap is a prompt change, not a control-flow change.
+ * --prompt-file ... --artifact-root ... --timeout N --effort medium` (flag
+ * spelling transcribed from the shipped helper, with --timeout sized under the
+ * subagent's own Bash-tool limit, and --effort stated explicitly because the
+ * helper's own default is `high`) is task 015's; the outcome vocabulary below
+ * already matches the helper's, so the swap is a prompt change, not a
+ * control-flow change.
  *
  * Peer concurrency policy is task 015's, singly stated there; this script sets
  * no cap, floor, or fan-out shape of its own.
@@ -509,8 +519,10 @@ Return \`pass: true\` only if everything holds and no material issue remains; el
 // The peer invocation happens INSIDE this subagent prompt, never in the
 // script (a workflow cannot shell out). Baseline destination: the
 // `peer-review-run` helper (schema powbox.peer-review-run/v1) — retained
-// pinned raw launch until powbox's review-strength passthrough lands; see the
-// header comment. The launch pins review strength per invocation
+// pinned raw launch until that helper can carry the codex peer's CONFIGURED
+// high-capability model, the one half of the review-strength passthrough still
+// outstanding; its effort passthrough and strength reporting have landed. See
+// the header comment. The launch pins review strength per invocation
 // (-c model_reasoning_effort=medium; the model stays the peer's configured
 // high-capability default from ~/.codex/config.toml) and never writes back to
 // saved configuration.
