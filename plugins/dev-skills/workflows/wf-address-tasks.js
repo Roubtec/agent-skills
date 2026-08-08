@@ -1139,10 +1139,10 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
     //
     // An absent or non-string id normalizes to the empty string, which names
     // nothing and is exactly the breach worth reporting: the contract asks for
-    // a non-empty id on every `escalated` disposition — a conditional no schema
-    // keyword here expresses, so this guard is the only thing that states it —
-    // and letting the empty one through would make the one breach still typed
-    // as a `string` the one shape that no-ops.
+    // a non-empty id on every `escalated` disposition — a conditional no
+    // schema keyword here expresses, so this guard is the only thing that
+    // enforces it — and letting the empty one through would make the one
+    // breach still typed as a `string` the one shape that no-ops.
     if (!handed.length || !d.findingId) {
       if (d.disposition === "escalated") {
         const qid = typeof d.questionId === "string" ? d.questionId : "";
