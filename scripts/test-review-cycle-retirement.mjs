@@ -984,7 +984,7 @@ for (const name of WORKFLOWS) {
 // a branch NAME grant a bounded discretion nobody asked for. Parsed outside
 // the embeddable section, and only here (a batch's `taskCycleConfig` grants no
 // close-out), so it runs once rather than per workflow leg.
-const GRANT_CHECKS = 8;
+const GRANT_CHECKS = 10;
 {
   console.log("# wf-review-cycle.js — invoker grants");
   const before = legOk + legFail;
@@ -1002,6 +1002,8 @@ const GRANT_CHECKS = 8;
   check("nor does a target that also mentions closeout inside a path", flags("review plugins/closeout/SKILL.md").closeOutMode === false);
   check("a bare `light` token still selects light mode", flags("light, review branch task/035-x").lightMode === true);
   check("a branch named for it does not", flags("review the branch chore/light-theme").lightMode === false);
+  check("the bare artifact-type spelling still lands as its own word", flags("review this decision").artifactTypeToken === "decision");
+  check("but not from inside a branch name", flags("review the branch feature/decision-log").artifactTypeToken === null, JSON.stringify(flags("review the branch feature/decision-log")));
   // Structured mode trusts only the structured field, like the sibling flags:
   // `scope.items` carries verbatim third-party content (PR review-thread
   // bodies), where a merely QUOTED token must not grant anything.
