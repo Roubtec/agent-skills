@@ -1110,7 +1110,10 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //   recordOnly (present only when the cycle concluded over a delivery run that
 //     FAILED on the flake rule's evidenced-unrelated disposition: the pass, and
 //     the pass's own `note` of what that run surfaced, which rides here because
-//     no later reviewer round exists to carry it in `reviewerNotes`. Where the
+//     no later reviewer round exists to carry it in `reviewerNotes`. That note
+//     is what the field exists to carry, so no exit publishes the field without
+//     one: a concluding pass that reported no record simply carries none, and
+//     the record-only exit is refused for the normal reviewer round. Where the
 //     record was a post-run COMMIT — the delivery gate's one tolerated one —
 //     `range` names it and `verified` is what the diff check found in it; both
 //     are EMPTY on the other three conclusions, where this field names no
@@ -1566,18 +1569,34 @@ async function runReviewCycle(cycle) {
     // stays the independent check's line about the diff and `note` is the
     // pass's own account; they are not interchangeable, and the check never
     // sees the note.
+    //
+    // So the note is a CONJUNCT of the exit, not merely its payload. The
+    // tolerance is granted precisely so the failure reaches the maintainer, and
+    // the diff check cannot supply it — it is asked about the RANGE and is never
+    // shown the packet — so a pass that committed the record while reporting
+    // none of it leaves the result nothing to publish: the consumers would
+    // render a section announcing a FAILED delivery run under an empty note,
+    // which tells the maintainer less than the round this exit skipped would
+    // have. `flakeNote` is that structural half, exactly as `fix.changed` is the
+    // close-out's — it settles the exit with no agent call, which is why the
+    // check is not even run without one. Refusing costs nothing but the normal
+    // reviewer round, and every earlier pass's record still rides in
+    // `flakeHistory`. It is a conjunct of the EXIT rather than of the block, so
+    // this seam keeps the property that every refusal here says why.
     if (confirming && fix.changed && passBase && (fix.dispositions || []).length === 0 && deviationSetChanges === 0) {
-      const record = await agent(cycleRecordOnlyPrompt(cycle, { passBase }), {
-        label: `${lp}record#${fixerPasses}`,
-        schema: CYCLE_RECORD_ONLY_SCHEMA,
-        effort: "low",
-      });
+      const record = flakeNote
+        ? await agent(cycleRecordOnlyPrompt(cycle, { passBase }), {
+          label: `${lp}record#${fixerPasses}`,
+          schema: CYCLE_RECORD_ONLY_SCHEMA,
+          effort: "low",
+        })
+        : null;
       if (record && record.recordOnly === true) {
         return result("pass", "reviewer passed; the final confirmation pass committed only the unrelated-flake record, which its delivery-tier pass survives", {
           recordOnly: { pass: fixerPasses, range: `${passBase}..${fix.finalSha || "HEAD"}`, verified: record.why || "", note: flakeNote },
         });
       }
-      log(`fixer pass ${fixerPasses} changed the tree with nothing to dispose; the record-only check ${record ? "found more than the flake record" : "returned nothing"}, so the normal reviewer round runs.`);
+      log(`fixer pass ${fixerPasses} changed the tree with nothing to dispose; the record-only check ${!flakeNote ? "was not run — the pass reported no record of what its delivery run surfaced, so the exit would publish a failed delivery run with no account of it" : record ? "found more than the flake record" : "returned nothing"}, so the normal reviewer round runs.`);
     }
 
     // Every pass past that check is adopted work another round must pass over,

@@ -316,16 +316,19 @@ const closeOutUnchanged = (findingId) => ({ ...closeOutFix(findingId), changed: 
 const closeOutRetire = (findingId) => ({ ...retireOn(findingId), closeOutEdits: CLOSE_OUT_EDITS });
 
 // A confirmation pass that committed the unrelated-flake RECORD: it changed the
-// tree, disposed nothing, and moved no deviation, which is exactly the packet
-// the delivery gate's post-run tolerance describes. `PASS_PACKET` already has
-// that shape; the alias is what makes the scenarios below readable.
-const confirmRecordOnly = { ...PASS_PACKET, dispositions: [] };
-// The same pass carrying the flake note where the cycle's own flake rule sends
-// it — `flakeRecord`, "for the PR body or batch summary". No reviewer round
-// follows this exit, so `reviewerNotes` was written before the failure existed
-// and the record is the only carrier that note has to a consumer.
+// tree, disposed nothing, moved no deviation, and reported what its delivery run
+// surfaced in `flakeRecord` — where the cycle's own flake rule sends it, "for the
+// PR body or batch summary". That is exactly the packet the delivery gate's
+// post-run tolerance describes, and `PASS_PACKET` supplies the rest of the shape.
+// No reviewer round follows this exit, so `reviewerNotes` was written before the
+// failure existed and the record is the only carrier that note has to a
+// consumer — which is why the note is a conjunct of the exit and not merely its
+// payload.
 const FLAKE_NOTE = "the delivery run's only failure was the payments suite, which reproduces on the base; queued as tasks/046-flaky-payments-suite.md";
-const confirmRecordOnlyNoting = { ...confirmRecordOnly, flakeRecord: FLAKE_NOTE };
+const confirmRecordOnly = { ...PASS_PACKET, dispositions: [], flakeRecord: FLAKE_NOTE };
+// The same pass with no record of its OWN: it committed the same range and says
+// nothing about what failed, so there is nothing for the conclusion to publish.
+const confirmRecordOnlySilent = { ...PASS_PACKET, dispositions: [] };
 // The flake rule's OTHER outcome: the evidence matched an ALREADY-ACTIVE task,
 // so the pass cites it instead of editing it and has nothing at all to commit.
 // A confirmation pass shaped exactly like `idle` — which is the point.
@@ -1113,6 +1116,8 @@ for (const name of WORKFLOWS) {
   //     is asked about it: a cheap read-only check judges the RANGE, exactly
   //     as the close-out's does, and every other conjunct of the terminal
   //     check still holds the cycle open — which is what the bounds below pin.
+  //     The pass's own record of the failure is a conjunct too, since carrying
+  //     that record to the maintainer is the whole reason the round is skipped.
   await scenario("28. a record-only commit concludes without buying a round", async () => {
     const concluded = await run(src, { fixes: [PASS_PACKET, confirmRecordOnly], reviews: [OK], cycle: { maxRounds: 3 } });
     check("a confirmation pass that only committed the record concludes with no further round", concluded.res.verdict === "pass" && concluded.seen.reviewPrompts.length === 1 && !!concluded.res.recordOnly, `${concluded.res.verdict}/${concluded.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(concluded.res.recordOnly)}`);
@@ -1124,18 +1129,20 @@ for (const name of WORKFLOWS) {
     // tell a consumer's PR body or batch summary what the delivery run
     // surfaced — and the two fields must stay distinguishable, since one is
     // the pass's account and the other the independent check's.
-    const noted = await run(src, { fixes: [PASS_PACKET, confirmRecordOnlyNoting], reviews: [OK], cycle: { maxRounds: 3 } });
-    check("the record carries the pass's own note of what the run surfaced, distinct from the check's line", !!noted.res.recordOnly && noted.res.recordOnly.note === FLAKE_NOTE && noted.res.recordOnly.verified !== noted.res.recordOnly.note, JSON.stringify(noted.res.recordOnly));
+    check("the record carries the pass's own note of what the run surfaced, distinct from the check's line", !!concluded.res.recordOnly && concluded.res.recordOnly.note === FLAKE_NOTE && concluded.res.recordOnly.verified !== concluded.res.recordOnly.note, JSON.stringify(concluded.res.recordOnly));
 
     // The other half of "the pass's OWN note", and the half a single fixture
     // cannot see: a record reading anything the cycle ACCUMULATES would
     // publish an earlier pass's account under a heading about a failed
-    // delivery run. Empty is thin; an earlier pass's account is wrong.
-    // Together with the check above, this pins the record to THIS pass's
-    // `flakeRecord`: one fails if a populated one stops reaching the note, the
-    // other if an absent one starts falling back on a predecessor's.
-    const silent = await run(src, { fixes: [{ ...PASS_PACKET, flakeRecord: FLAKE_NOTE }, confirmRecordOnly], reviews: [OK], cycle: { maxRounds: 3 } });
-    check("a confirming pass that reports no flake record leaves the note empty rather than republishing an earlier pass's", !!silent.res.recordOnly && silent.res.recordOnly.note === "", JSON.stringify(silent.res.recordOnly));
+    // delivery run. So a pass that reports nothing is REFUSED the exit rather
+    // than publishing an empty one: the heading announces a failed delivery run
+    // either way, and announcing one with no account of it tells the maintainer
+    // less than the round this exit skips would have. Together with the check
+    // above, this pins the record to THIS pass's `flakeRecord`: one fails if a
+    // populated one stops reaching the note, the other if an absent one buys
+    // the exit at all — whether left empty or filled from a predecessor's.
+    const silent = await run(src, { fixes: [{ ...PASS_PACKET, flakeRecord: FLAKE_NOTE }, confirmRecordOnlySilent, idle], reviews: [OK, OK], cycle: { maxRounds: 3 } });
+    check("a confirming pass that reports no flake record is refused the exit, buying the normal round rather than publishing an empty record", silent.res.recordOnly === undefined && silent.seen.recordPrompts.length === 0 && silent.seen.reviewPrompts.length === 2, `${JSON.stringify(silent.res.recordOnly)}/${silent.seen.recordPrompts.length} record check(s)/${silent.seen.reviewPrompts.length} review prompt(s)`);
 
     // The other side of that rule, and the reason it is not a data loss: what
     // the record may not PUBLISH as this conclusion's, `flakeHistory` keeps.
