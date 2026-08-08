@@ -200,6 +200,18 @@ Forbidden: \`rm -rf\`, \`git reset --hard\`, \`git clean\`, \`git branch -f\`, \
 A worktree is not a blast radius: it isolates the working tree, not the repository, so \`branch -f\`, \`reset\`, \`update-ref\`, and \`gc\` reach every sibling worktree through the shared \`.git\`.
 Empirical verification that could change state belongs ONLY in a disposable clone. Run \`command -v dc-enter\`; where it is found, work in \`DC="$(dc-enter <slug>)"\` — it prints one absolute path on stdout, \`dc-remove <slug>\` drops it, and a reused slug is REFUSED rather than re-derived, so pass \`--replace\` or remove the slug first if this may run twice. Where the helper is absent, use an absolute path outside the repository — never a relative one, and never the repository itself.`;
 
+// Subagent lifecycle for this workflow's OWN deputies, out here beyond the
+// review cycle. The cycle's roles get the same rule from CYCLE_FINISH_IN_TURN
+// inside the byte-mirrored `review-cycle-core` section, which out-of-section
+// code does not reach into — the reason CYCLE_REDIRECTED_OUTPUT is written out
+// again rather than shared. It binds a deputy for the same reason it binds a
+// fixer: nothing resumes a subagent, and one that ended its turn waiting on a
+// background child it had launched left a dirty worktree and no packet until
+// the orchestrator hunted the child down by hand. The sentence is kept
+// byte-identical to the cycle's, and `test-subagent-destroy-boundary.mjs`
+// asserts that rather than trusting this comment.
+const DEPUTY_FINISH_IN_TURN = "Finish inside your own turn: nothing resumes you afterwards, so never end it waiting for a notification, a callback, or a child you started. Bound and wait on anything you launch, and reap it before you return — no process of yours may outlive your turn.";
+
 // The rebase branch of this brief orders a build, so it needs a destination for
 // that build's output — this gather agent is assigned no artifact path anywhere,
 // and a role with no assigned path picks the session scratchpad, which is shared
@@ -207,6 +219,8 @@ Empirical verification that could change state belongs ONLY in a disposable clon
 // worktree, so the destination is a unique directory outside it.
 function gatherPrompt(input) {
   return `You are preparing a pull request for review-addressing. Read \`AGENTS.md\` / \`CLAUDE.md\` first.
+
+${DEPUTY_FINISH_IN_TURN}
 
 ${DESTROY_BOUNDARY}
 
@@ -291,6 +305,8 @@ function publishPrompt(packet, dispositions, flags, deviations, deviationAssessm
       }`
     : "";
   return `Publish the addressed review for PR #${packet.pr.number} (branch \`${packet.pr.branch}\`). A fresh reviewer has PASSED. Read \`AGENTS.md\` / \`CLAUDE.md\` first.
+
+${DEPUTY_FINISH_IN_TURN}
 
 ${DESTROY_BOUNDARY}
 

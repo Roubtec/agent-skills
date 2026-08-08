@@ -435,4 +435,32 @@ if (missing.length || drifted.length) {
   rows.push(["(all)", "DESTROY_BOUNDARY identity", "ok", `${copies.length} copies byte-identical, ${Buffer.byteLength(copies[0][1])} bytes each`]);
 }
 
+// The same question for the finish-in-turn rule, which now exists twice over:
+// `CYCLE_FINISH_IN_TURN` inside the mirrored `review-cycle-core` section binds
+// the cycle's roles, and each workflow that also briefs deputies of its own
+// out here declares `DEPUTY_FINISH_IN_TURN` for them, because out-of-section
+// code does not reach into the section. Two spellings of one rule are two
+// rules the moment one is edited, so the canonical text is read from
+// `wf-review-cycle.js` — the section's source — and every deputy copy must
+// match it exactly. A file declaring no deputy copy simply has no deputies;
+// that is not a failure. A file declaring one that no longer matches is.
+const rule = (file, name) =>
+  (readFileSync(join(workflows, file), "utf8").match(new RegExp(`^const ${name} = ("(?:\\\\.|[^"\\\\])*");$`, "m")) || [])[1];
+const canonicalRule = rule("wf-review-cycle.js", "CYCLE_FINISH_IN_TURN");
+const deputyRules = shippedWorkflows()
+  .map((file) => [file, rule(file, "DEPUTY_FINISH_IN_TURN")])
+  .filter(([, text]) => text !== undefined);
+if (!canonicalRule) {
+  failures++;
+  rows.push(["(all)", "FINISH_IN_TURN identity", "FAIL", "no top-level `const CYCLE_FINISH_IN_TURN` in wf-review-cycle.js"]);
+} else {
+  const ruleDrifted = deputyRules.filter(([, text]) => text !== canonicalRule).map(([file]) => file);
+  if (ruleDrifted.length) {
+    failures++;
+    rows.push(["(all)", "FINISH_IN_TURN identity", "FAIL", `DEPUTY_FINISH_IN_TURN differs from the cycle's rule in ${ruleDrifted.join(", ")}`]);
+  } else {
+    rows.push(["(all)", "FINISH_IN_TURN identity", "ok", `${deputyRules.length} deputy copy(ies) match the cycle's rule`]);
+  }
+}
+
 report();

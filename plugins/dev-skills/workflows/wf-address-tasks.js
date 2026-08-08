@@ -208,6 +208,26 @@ Forbidden: \`rm -rf\`, \`git reset --hard\`, \`git clean\`, \`git branch -f\`, \
 A worktree is not a blast radius: it isolates the working tree, not the repository, so \`branch -f\`, \`reset\`, \`update-ref\`, and \`gc\` reach every sibling worktree through the shared \`.git\`.
 Empirical verification that could change state belongs ONLY in a disposable clone. Run \`command -v dc-enter\`; where it is found, work in \`DC="$(dc-enter <slug>)"\` — it prints one absolute path on stdout, \`dc-remove <slug>\` drops it, and a reused slug is REFUSED rather than re-derived, so pass \`--replace\` or remove the slug first if this may run twice. Where the helper is absent, use an absolute path outside the repository — never a relative one, and never the repository itself.`;
 
+// Subagent lifecycle for this workflow's OWN deputies, out here beyond the
+// review cycle. The cycle's roles get the same rule from CYCLE_FINISH_IN_TURN
+// inside the byte-mirrored `review-cycle-core` section, which out-of-section
+// code does not reach into — the reason CYCLE_REDIRECTED_OUTPUT is written out
+// again rather than shared. It binds a deputy for the same reason it binds a
+// fixer: nothing resumes a subagent, and one that ended its turn waiting on a
+// background child it had launched left a dirty worktree and no packet until
+// the orchestrator hunted the child down by hand. The sentence is kept
+// byte-identical to the cycle's, and `test-subagent-destroy-boundary.mjs`
+// asserts that rather than trusting this comment.
+const DEPUTY_FINISH_IN_TURN = "Finish inside your own turn: nothing resumes you afterwards, so never end it waiting for a notification, a callback, or a child you started. Bound and wait on anything you launch, and reap it before you return — no process of yours may outlive your turn.";
+
+// The cycle's companion rule, for the one deputy it applies to: the collision
+// resolver's changed branches go straight back through this workflow's own
+// re-review, so a second opinion it launches for itself is both redundant and
+// the shape that once outlived its launcher, orphaned, and wandered into an
+// unrelated sibling worktree. Worded for a deputy rather than a cycle role, so
+// it is this workflow's sentence rather than a copy of CYCLE_NO_SELF_PEER.
+const DEPUTY_NO_SELF_REVIEW = "This workflow re-reviews every branch you change and runs the sanctioned second opinion itself — launch no review of your own; a detached one has outlived its launcher and wandered into a sibling worktree.";
+
 function bootstrapPrompt() {
   return `Prepare this container for a worktree-isolated task batch. This is setup only — edit no project files.
 
@@ -1838,6 +1858,8 @@ ${DESTROY_BOUNDARY}`;
     : "";
   return `Open a pull request for branch \`${task.branch}\` against base \`${task.base}\`. Work from this task's worktree: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && cd "$WT"\` (rerun-safe resolve of the existing worktree; if it errors, STOP and report).
 
+${DEPUTY_FINISH_IN_TURN}
+
 ${DESTROY_BOUNDARY}
 
 1. Ensure the branch is pushed: \`git push -u origin ${shq(task.branch)}\` (or \`git push\`).
@@ -1931,6 +1953,8 @@ function resolveCollisionsPrompt(tasks, waveCollisions, remote) {
 Each held branch's commits persist in the shared \`.git\`; its worktree may have been reclaimed after review to bound disk use. For each branch you CHANGE, \`cd\` into its worktree using the exact, ready-to-run \`wt-enter\` command listed for that branch under "Held branches" below — its slug and branch are already shell-quoted there because a generated/task-derived branch name can contain shell metacharacters (\`$\`, backticks, \`;\`). NEVER hand-substitute a raw \`<branch>\` into \`wt-enter\` — copy the listed command verbatim. No base argument is needed: the branch already exists and \`wt-enter\` is rerun-safe, re-attaching the worktree if it was reclaimed.
 
 If \`wt-enter\` errors, STOP and report it. Verify \`git rev-parse --show-toplevel\` is that worktree and \`git branch --show-current\` is that branch before editing. Touch ONLY the worktree of the branch you are changing; never edit a sibling's worktree. Read \`AGENTS.md\` / \`CLAUDE.md\` for the project's regen and build commands.
+
+${DEPUTY_FINISH_IN_TURN} ${DEPUTY_NO_SELF_REVIEW}
 
 ${DESTROY_BOUNDARY}
 
