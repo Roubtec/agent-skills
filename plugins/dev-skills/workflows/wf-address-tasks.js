@@ -785,8 +785,9 @@ const CYCLE_FLAKE_REVIEW = `A documented, evidenced UNRELATED test failure — r
 // answerable — rationale that fails the test has somewhere to go.
 const CYCLE_COMMENT_DISCIPLINE = `Ship only comments that outlive the PR. A code comment earns its keep only where it still does once the PR closes — why an arbitrary constant or choice is what it is, an external constraint that shaped a decision, a non-obvious invariant or tradeoff the code relies on but cannot express (why an ordering prevents a deadlock, why apparently redundant synchronization is needed), or a still-standing deliberately-overruled review decision, which you MAY record so the point is not re-raised. Never ship prose restating what adjacent code does — an outcome matrix, condition-by-condition narration, anything the code itself gives a reader with minimal effort; self-documenting code is the goal and the comment is the bounded exception for what code cannot show, not a default channel. Reasoning that fails the test still has a home: rationale addressed to the people watching this diff goes in a PR reply or the summary comment, which the closing PR leaves behind exactly as it should, and durable knowledge too bulky for a why-comment goes to the repository's docs area (commonly \`docs/\`) — a routing option, never a per-PR ritual. Carry CURRENT rationale only: where a change supersedes a commented decision, the standing overruled one included, replace that comment rather than appending to it (version control holds the history), and delete a comment the code has outgrown instead of precision-editing it.`;
 
-// The reviewer's half of the same rule, so a narration comment is deleted
-// rather than iterated on, and its absence is never itself a finding.
+// The reviewer's half of the same rule — an amendment to what counts as a
+// finding, stated where findings are opened: the fixer's half cannot stop the
+// churn a review round starts.
 const CYCLE_COMMENT_REVIEW = `Weight code comments by whether they outlive the PR: one re-implementing adjacent code in prose — an outcome matrix, condition-by-condition narration — is removable noise to flag for DELETION rather than material to precision-edit, and absent behavior-narration is never a gap to report.`;
 
 // Which validation tier a pass owes, decided by position: an intermediate pass
