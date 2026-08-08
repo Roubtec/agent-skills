@@ -53,7 +53,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 92;
+const CHECKS_PER_LEG = 98;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -125,7 +125,7 @@ function scriptedAgent(fixes, reviews, seen, closeOuts = [], records = []) {
     if (label.startsWith("closeout#")) {
       seen.closeOutPrompts.push(prompt);
       const p = closeOutQueue.shift();
-      return p === undefined ? { nonSemantic: true, why: "scripted: every hunk non-semantic" } : p;
+      return p === undefined ? { nonSemantic: true, editsPresent: true, why: "scripted: every hunk non-semantic, every claimed edit present" } : p;
     }
     if (label.startsWith("record#")) {
       seen.recordPrompts.push(prompt);
@@ -293,6 +293,11 @@ const closeOutEscalate = (findingId) => ({
 // close-out range against.
 const closeOutRound1 = { ...PASS_PACKET, dispositions: [], closeOutEdits: CLOSE_OUT_EDITS };
 
+// The same offer from a pass that reports its findings `fixed` while saying it
+// CHANGED NOTHING — the shape whose range is empty, and so vacuously
+// non-semantic, if the gate takes the offer at face value.
+const closeOutUnchanged = (findingId) => ({ ...closeOutFix(findingId), changed: false });
+
 // The same offer from a pass that also CLAIMS A RETIREMENT — the claim the
 // close-out's own conjunct must hold the cycle open for.
 const closeOutRetire = (findingId) => ({ ...retireOn(findingId), closeOutEdits: CLOSE_OUT_EDITS });
@@ -303,11 +308,16 @@ const closeOutRetire = (findingId) => ({ ...retireOn(findingId), closeOutEdits: 
 // that shape; the alias is what makes the scenarios below readable.
 const confirmRecordOnly = { ...PASS_PACKET, dispositions: [] };
 // The same pass carrying the flake note where the cycle's own flake rule sends
-// it — `summary`, "for the PR body or batch summary". No reviewer round follows
-// this exit, so `reviewerNotes` was written before the failure existed and the
-// record is the only carrier that note has to a consumer.
+// it — `flakeRecord`, "for the PR body or batch summary". No reviewer round
+// follows this exit, so `reviewerNotes` was written before the failure existed
+// and the record is the only carrier that note has to a consumer.
 const FLAKE_NOTE = "the delivery run's only failure was the payments suite, which reproduces on the base; queued as tasks/046-flaky-payments-suite.md";
-const confirmRecordOnlyNoting = { ...confirmRecordOnly, summary: FLAKE_NOTE };
+const confirmRecordOnlyNoting = { ...confirmRecordOnly, flakeRecord: FLAKE_NOTE };
+// The flake rule's OTHER outcome: the evidence matched an ALREADY-ACTIVE task,
+// so the pass cites it instead of editing it and has nothing at all to commit.
+// A confirmation pass shaped exactly like `idle` — which is the point.
+const CITED_NOTE = "the delivery run's only failure was the payments suite, which reproduces on the base; already queued as tasks/041-flaky-payments-suite.md, cited rather than re-filed";
+const confirmCitingActiveTask = { ...idle, flakeRecord: CITED_NOTE };
 
 // A deviation from a LOCKED maintainer decision, and a pass that reports one.
 // Every other packet above carries `deviations: []`, so any of them following
@@ -790,10 +800,34 @@ for (const name of WORKFLOWS) {
     const vetoed = await run(src, {
       fixes: [PASS_PACKET, closeOutFix("r1-1"), idle],
       reviews: [FAIL("a wording nit"), OK],
-      closeOuts: [{ nonSemantic: false, why: "an executable hunk rode along" }],
+      closeOuts: [{ nonSemantic: false, editsPresent: true, why: "an executable hunk rode along" }],
       cycle: { closeOut: "on" },
     });
     check("a semantic hunk in the diff still forfeits the close-out", vetoed.seen.closeOutPrompts.length === 1 && vetoed.seen.reviewPrompts.length === 2 && !vetoed.res.closeOut, `${vetoed.seen.closeOutPrompts.length} close-out check(s)/${vetoed.seen.reviewPrompts.length} review prompt(s)`);
+
+    // The check's OTHER direction, and the one a triviality read is blind to:
+    // an empty range is vacuously non-semantic, so without it a pass could
+    // report every finding `fixed`, commit nothing, and conclude the cycle
+    // with the claim adjudicated by nobody — the round that catches exactly
+    // that being the round this exit skips.
+    const missing = await run(src, {
+      fixes: [PASS_PACKET, closeOutFix("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      closeOuts: [{ nonSemantic: true, editsPresent: false, why: "the range does not carry the claimed edit" }],
+      cycle: { closeOut: "on" },
+    });
+    check("a claimed edit the range does not carry forfeits the close-out", missing.seen.closeOutPrompts.length === 1 && missing.seen.reviewPrompts.length === 2 && !missing.res.closeOut, `${missing.seen.closeOutPrompts.length} close-out check(s)/${missing.seen.reviewPrompts.length} review prompt(s)`);
+    check("and the check is asked both questions about the range", /`editsPresent`/.test(missing.seen.closeOutPrompts[0] || "") && /NON-EMPTY/.test(missing.seen.closeOutPrompts[0] || "") && /every edit the pass claims/.test(missing.seen.closeOutPrompts[0] || ""), "close-out check prompt");
+
+    // The structural half of the same guard: a pass claiming `fixed` while
+    // reporting it changed nothing contradicts its own offer, and the gate
+    // settles that without spending a check on it.
+    const unchanged = await run(src, {
+      fixes: [PASS_PACKET, closeOutUnchanged("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      cycle: { closeOut: "on" },
+    });
+    check("a pass that changed nothing cannot close out over its `fixed` claims", unchanged.seen.closeOutPrompts.length === 0 && unchanged.seen.reviewPrompts.length === 2 && !unchanged.res.closeOut, `${unchanged.seen.closeOutPrompts.length} close-out check(s)/${unchanged.seen.reviewPrompts.length} review prompt(s)`);
 
     // Round 1 has no previous SHA, so there is no range to judge — the offer
     // cannot conclude a cycle nothing has reviewed yet.
@@ -888,16 +922,28 @@ for (const name of WORKFLOWS) {
     check("the record carries the pass's own note of what the run surfaced, distinct from the check's line", !!noted.res.recordOnly && noted.res.recordOnly.note === FLAKE_NOTE && noted.res.recordOnly.verified !== noted.res.recordOnly.note, JSON.stringify(noted.res.recordOnly));
 
     // The other half of "the pass's OWN note", and the half a single fixture
-    // cannot see: the packet the cycle accumulates keeps an earlier pass's
-    // `summary` when a later one comes back empty, so a record reading THAT
-    // would publish a round-1 implementation summary under a heading about a
-    // failed delivery run. Empty is thin; an earlier pass's account is wrong.
-    // Together with the check above, this pins the record to `fix.summary`:
-    // one fails if a populated own-summary stops reaching the note, the other
-    // if an empty one starts falling back.
-    const EARLIER_SUMMARY = "round 1: implemented the adapter and wired the config";
-    const silent = await run(src, { fixes: [{ ...PASS_PACKET, summary: EARLIER_SUMMARY }, { ...confirmRecordOnly, summary: "" }], reviews: [OK], cycle: { maxRounds: 3 } });
-    check("a confirming pass that reports no summary leaves the note empty rather than republishing an earlier pass's", !!silent.res.recordOnly && silent.res.recordOnly.note === "", JSON.stringify(silent.res.recordOnly));
+    // cannot see: a record reading anything the cycle ACCUMULATES would
+    // publish an earlier pass's account under a heading about a failed
+    // delivery run. Empty is thin; an earlier pass's account is wrong.
+    // Together with the check above, this pins the record to THIS pass's
+    // `flakeRecord`: one fails if a populated one stops reaching the note, the
+    // other if an absent one starts falling back on a predecessor's.
+    const silent = await run(src, { fixes: [{ ...PASS_PACKET, flakeRecord: FLAKE_NOTE }, confirmRecordOnly], reviews: [OK], cycle: { maxRounds: 3 } });
+    check("a confirming pass that reports no flake record leaves the note empty rather than republishing an earlier pass's", !!silent.res.recordOnly && silent.res.recordOnly.note === "", JSON.stringify(silent.res.recordOnly));
+
+    // The no-commit half of the same rule, and the reachable one: the flake
+    // policy tells a pass whose evidence matches an ALREADY-ACTIVE task to
+    // cite it rather than edit it, which leaves nothing to commit. That pass
+    // is `idle` — nothing changed, nothing disposed — so it exits at the
+    // TERMINAL check above, before the record path's `changed` gate. Without
+    // the record riding that exit too, a delivery run that FAILED reaches the
+    // maintainer nowhere: the consumers publish this record, and the reviewer
+    // pass-notes they publish beside it were written before the failure
+    // existed.
+    const cited = await run(src, { fixes: [PASS_PACKET, confirmCitingActiveTask], reviews: [OK], cycle: { maxRounds: 3 } });
+    check("a pass citing an active flake task still concludes without buying a round", cited.res.verdict === "pass" && cited.seen.reviewPrompts.length === 1 && cited.seen.recordPrompts.length === 0, `${cited.res.verdict}/${cited.seen.reviewPrompts.length} review prompt(s)/${cited.seen.recordPrompts.length} record check(s)`);
+    check("and its record carries the note with an EMPTY range, the no-commit discriminator", !!cited.res.recordOnly && cited.res.recordOnly.note === CITED_NOTE && cited.res.recordOnly.range === "" && cited.res.recordOnly.verified === "", JSON.stringify(cited.res.recordOnly));
+    check("while an ordinary conclusion carries no record at all", (await run(src, { fixes: [PASS_PACKET, idle], reviews: [OK] })).res.recordOnly === undefined, "plain terminal exit");
 
     // The check's own veto, the close-out's rule in its own words: the range is
     // the licence, and anything beyond the record in it buys the normal round.
@@ -930,6 +976,40 @@ for (const name of WORKFLOWS) {
   check(`suite ran all ${CHECKS_PER_LEG} checks`, ran === CHECKS_PER_LEG, `ran ${ran}`);
   legOk = 0;
   legFail = 0;
+}
+
+// The invoker's GRANT of the trivial-round close-out, which decides whether
+// the gate above is reachable at all. It is parsed from the prose invocation —
+// the ONE string that also carries the target — so a bare-word match would let
+// a branch NAME grant a bounded discretion nobody asked for. Parsed outside
+// the embeddable section, and only here (a batch's `taskCycleConfig` grants no
+// close-out), so it runs once rather than per workflow leg.
+const GRANT_CHECKS = 8;
+{
+  console.log("# wf-review-cycle.js — invoker grants");
+  const before = legOk + legFail;
+  const src = readFileSync(join(here, "..", "plugins", "dev-skills", "workflows", "wf-review-cycle.js"), "utf8");
+  const cut = src.indexOf('phase("Scope");');
+  if (cut < 0) throw new Error("wf-review-cycle.js: the scope phase call this cuts at is gone");
+  const prefix = src.slice(0, cut).replace(/^export const meta/m, "const meta");
+  const flags = (input) =>
+    // eslint-disable-next-line no-new-func
+    new Function("args", "phase", "log", `"use strict";\n${prefix}\nreturn { lightMode, closeOutMode, artifactTypeToken };`)(input, () => {}, () => {});
+
+  check("a bare `close-out` token grants the close-out", flags("close-out; review branch task/035-x").closeOutMode === true);
+  check("the `closeout` spelling grants it too", flags("review branch task/035-x, closeout").closeOutMode === true);
+  check("a TARGET whose name merely contains the words grants nothing", flags("review the branch feature/close-out-ui").closeOutMode === false);
+  check("nor does a target that also mentions closeout inside a path", flags("review plugins/closeout/SKILL.md").closeOutMode === false);
+  check("a bare `light` token still selects light mode", flags("light, review branch task/035-x").lightMode === true);
+  check("a branch named for it does not", flags("review the branch chore/light-theme").lightMode === false);
+  // Structured mode trusts only the structured field, like the sibling flags:
+  // `scope.items` carries verbatim third-party content (PR review-thread
+  // bodies), where a merely QUOTED token must not grant anything.
+  check("a structured invocation grants it through its own field", flags({ branch: "b", base: "main", closeOut: "on" }).closeOutMode === true);
+  check("and a token quoted inside structured scope items grants nothing", flags({ branch: "b", base: "main", scope: { items: ["the reviewer wrote: close-out"] } }).closeOutMode === false);
+
+  const granted = legOk + legFail - before;
+  check(`grant checks ran all ${GRANT_CHECKS}`, granted === GRANT_CHECKS, `ran ${granted}`);
 }
 
 if (failures) {

@@ -284,7 +284,7 @@ function publishPrompt(packet, dispositions, flags, deviations, recordOnly) {
   // The gate that permits that requires the failure to be documented where the
   // maintainer sees it, and this comment is this run's only PR-facing surface.
   const flakeRecord = recordOnly
-    ? `\n\n## Delivery-run failure — recorded, not reviewed\n\nThe review cycle concluded over a FAILED delivery run, on its evidenced-unrelated flake disposition, and over a final commit (\`${recordOnly.range}\`) no fresh reviewer saw — the diagnosis-only follow-up task that failure earned. Carry a section under this exact heading in the summary comment with these verbatim, so the maintainer sees the gap and decides how to absorb it; do not re-diagnose, soften, or omit it.\n\n${JSON.stringify({ note: recordOnly.note || "", rangeCheck: recordOnly.verified || "" }, null, 2)}`
+    ? `\n\n## Delivery-run failure — recorded, not reviewed\n\nThe review cycle concluded over a FAILED delivery run, on its evidenced-unrelated flake disposition${recordOnly.range ? `, and over a final commit (\`${recordOnly.range}\`) no fresh reviewer saw — the diagnosis-only follow-up task that failure earned` : ", whose evidence cites an already-active follow-up task, so the pass committed nothing and this note is the whole record"}. Carry a section under this exact heading in the summary comment with these verbatim, so the maintainer sees the gap and decides how to absorb it; do not re-diagnose, soften, or omit it.\n\n${JSON.stringify({ note: recordOnly.note || "", ...(recordOnly.range ? { rangeCheck: recordOnly.verified || "" } : {}) }, null, 2)}`
     : "";
   return `Publish the addressed review for PR #${packet.pr.number} (branch \`${packet.pr.branch}\`). A fresh reviewer has PASSED. Read \`AGENTS.md\` / \`CLAUDE.md\` first.
 
@@ -459,9 +459,11 @@ if (!cycle) {
 // record is the only place a maintainer reading this result can see that a pass
 // stopped restating one. The cycle sets it once any pass reported a deviation.
 // `closeOut` and `recordOnly` are one class and ride here for one reason: each
-// records a cycle that CONCLUDED on content no fresh reviewer saw — the
-// close-out's non-semantic edits, the record-only close's tolerated post-run
-// flake commit, whose `note` is the delivery run's own account of what failed.
+// records a cycle that CONCLUDED over something no fresh reviewer saw — the
+// close-out's non-semantic edits, and for `recordOnly` a delivery run that
+// FAILED on the evidenced-unrelated flake disposition (with the tolerated
+// post-run flake commit where there was one), whose `note` is that run's own
+// account of what failed.
 // This run pushes to a PR and reports back to the maintainer who started it, so
 // the carrier is where that fact reaches them; every return below spreads it.
 // The nested cycle is granted no close-out above, so `closeOut` cannot arise
