@@ -1315,12 +1315,17 @@ async function runReviewCycle(cycle) {
     // exactly as it would be without it — but the gate that admits a FAILED
     // delivery run admits it only on the promise that the failure reaches the
     // maintainer, and these conclusions are the ones no later reviewer round
-    // follows. So it rides on all of them. The terminal check is not the
-    // exotic case there but the common one: the flake rule tells a pass whose
-    // evidence matches an ALREADY-ACTIVE task to cite that task rather than
-    // edit it, which leaves nothing to commit, so the pass returns `changed:
-    // false` with nothing disposed — by following the contract exactly — and
-    // would otherwise conclude the cycle carrying no record at all.
+    // follows. So it rides on all FOUR of them — the terminal check, the
+    // trivial-round close-out, the record-only close (where it rides inside
+    // that exit's own richer record), and the light-mode exit — and on those
+    // only: an `error` or `review-cap` exit publishes nothing on the strength
+    // of that admission and hands the maintainer the stopped run itself.
+    // The terminal check is not the exotic case there but the common one: the
+    // flake rule tells a pass whose evidence matches an ALREADY-ACTIVE task to
+    // cite that task rather than edit it, which leaves nothing to commit, so
+    // the pass returns `changed: false` with nothing disposed — by following
+    // the contract exactly — and would otherwise conclude the cycle carrying
+    // no record at all.
     //
     // A self-report is safe here for the very reason it is refused on the
     // record-only exit below: that one BUYS something (a skipped round), so it
@@ -1704,8 +1709,16 @@ async function runReviewCycle(cycle) {
     deviationAssessments = [...usableAssessments.values()];
 
     // Round passed. light mode ends here, recording undisposed remarks as such.
+    // It carries the flake record too, and is the exit that needs it MOST:
+    // `cycleValidationTier` makes every light-mode pass a delivery-tier pass
+    // precisely because light skips the confirmation pass, so light is the mode
+    // where the run that surfaces a flake is most likely to be a delivery run —
+    // and the reviewer round that just passed is no substitute carrier, since
+    // its brief is never shown this pass's `flakeRecord` and its notes were
+    // written without it.
     if (cycle.mode === "light") {
       return result("pass", "reviewer passed (light mode: final confirmation pass skipped)", {
+        ...flakeCarried,
         undisposed: [review.notes, peer.notes].filter(Boolean),
       });
     }

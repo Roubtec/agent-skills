@@ -20,9 +20,10 @@
 // fresh reviewer seeing it: a locked-decision deviation a pass moves on or off
 // the maintainer's list (24), the trivial-round close-out, which concludes with
 // no reviewer round at all (25), the validation tier a reviewer's brief states,
-// whose default decides what an unstated one runs (26), and the record-only
+// whose default decides what an unstated one runs (26), the record-only
 // close over the delivery gate's one tolerated post-run commit, which concludes
-// with no reviewer round either (27).
+// with no reviewer round either (27), and the light-mode conclusion, the fourth
+// such exit and the one every pass reaches at the delivery tier (28).
 //
 // The workflows are runtime scripts (top-level await/return, injected
 // `agent`/`parallel`/`log` globals), so they cannot be imported. This evaluates
@@ -63,7 +64,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 113;
+const CHECKS_PER_LEG = 117;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -1132,6 +1133,29 @@ for (const name of WORKFLOWS) {
 
     const intermediate = await run(src, { fixes: [PASS_PACKET, PASS_PACKET], reviews: [FAIL("r1"), OK], cycle: { maxRounds: 2 } });
     check("an intermediate pass never reaches the check, so no finding leaves undisposed", intermediate.seen.recordPrompts.length === 0 && intermediate.res.verdict === "review-cap" && intermediate.carriedIds.includes("r1-1"), `${intermediate.seen.recordPrompts.length} record check(s)/${intermediate.res.verdict}/${intermediate.carried}`);
+  });
+
+  // 28. The same record on the LIGHT-mode conclusion — the fourth exit no
+  //     reviewer round follows, and the one that needs the record most.
+  //     `cycleValidationTier` makes EVERY light-mode pass a delivery-tier pass
+  //     precisely because light skips the confirmation pass (26 pins that
+  //     default), so light is the mode where the run that surfaces a flake is
+  //     most likely to be the delivery run. The round that just passed is no
+  //     substitute carrier: its brief carries only the packet's dispositions
+  //     and work report, never `flakeRecord`, so its notes were written without
+  //     the failure in view. Scenario 27's exits and this one are one rule.
+  await scenario("28. a light-mode conclusion carries the same flake record", async () => {
+    const REVIEWER_CAVEAT = "reviewer caveat";
+    const lit = await run(src, {
+      fixes: [{ ...PASS_PACKET, flakeRecord: FLAKE_NOTE }],
+      reviews: [{ pass: true, issues: [], notes: REVIEWER_CAVEAT }],
+      cycle: { mode: "light" },
+    });
+    check("a light conclusion carries the delivery-tier pass's flake record", lit.res.verdict === "pass" && !!lit.res.recordOnly && lit.res.recordOnly.note === FLAKE_NOTE && lit.res.recordOnly.pass === 1, `${lit.res.verdict}/${JSON.stringify(lit.res.recordOnly)}`);
+    check("with the EMPTY range and check line, the same no-commit discriminator", !!lit.res.recordOnly && lit.res.recordOnly.range === "" && lit.res.recordOnly.verified === "", JSON.stringify(lit.res.recordOnly));
+    check("and the exit still records the round's undisposed remarks beside it", (lit.res.undisposed || []).includes(REVIEWER_CAVEAT), JSON.stringify(lit.res.undisposed));
+    const clean = await run(src, { fixes: [PASS_PACKET], reviews: [OK], cycle: { mode: "light" } });
+    check("while a light conclusion over a clean delivery run carries no record at all", clean.res.verdict === "pass" && clean.res.recordOnly === undefined, `${clean.res.verdict}/${JSON.stringify(clean.res.recordOnly)}`);
   });
 
   const ran = legOk + legFail;
