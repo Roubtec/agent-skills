@@ -15,6 +15,13 @@
 // documented where the maintainer sees them, and these two consumers are the
 // only things standing between that record and the maintainer.
 //
+// Forwarding it faithfully is not the whole duty, though: one consumer runs a
+// stage AFTER the cycle that can falsify part of the record — the pre-PR
+// collision guard's fresh re-review of a renamed branch, which sees the very
+// commit the record says no fresh reviewer saw. `collisionReviewedRecord` is
+// covered here too, on both halves: what it must correct, and what it must
+// leave alone.
+//
 // The workflows are runtime scripts (top-level await/return, injected
 // `agent`/`parallel`/`log` globals), so they cannot be imported. Each subject is
 // extracted from the ACTUAL shipped source — the declarations before the
@@ -47,7 +54,7 @@ function check(name, cond, detail) {
 // does not count. Bump it deliberately when adding or removing one — a check
 // that silently stops running is invisible to a suite that only gates on
 // failures.
-const EXPECTED_CHECKS = 25;
+const EXPECTED_CHECKS = 31;
 
 // Evaluate a workflow's declarations up to its first executable statement and
 // hand back the named ones. Each is returned by an explicit reference, so a
@@ -166,6 +173,33 @@ const cycleResult = (extra) => ({
   // it has nowhere to put.
   const noRemote = prPrompt(task, { notes: "", deviations: [], recordOnly: RECORD }, false);
   check("the no-remote brief, which opens no PR, carries no record", !noRemote.includes(NOTE) && !/recorded, not reviewed/.test(noRemote), "pr prompt");
+
+  // The one stage that can FALSIFY the record between the cycle and the PR.
+  // A branch the pre-PR collision guard's resolver renamed gets a fresh
+  // DELIVERY-tier reviewer over the cumulative range before it may deliver, so
+  // that reviewer has seen the tolerated post-run commit the record-only exit
+  // let through — and the body would otherwise still tell the maintainer no
+  // fresh reviewer saw it. The correction is narrow on purpose: the failed
+  // delivery run is still the maintainer's to absorb, so only the
+  // unreviewed-commit claim goes.
+  const { collisionReviewedRecord } = loadDeclarations("wf-address-tasks.js", "\nconst peerMode = /", ["collisionReviewedRecord"]);
+  const reviewed = collisionReviewedRecord({ recordOnly: RECORD });
+  check("a re-reviewed branch's record stops naming a commit no fresh reviewer saw", reviewed.recordOnly && reviewed.recordOnly.range === "" && reviewed.recordOnly.verified === "", JSON.stringify(reviewed));
+  check("while the failed delivery run it exists to report survives the correction", reviewed.recordOnly && reviewed.recordOnly.note === NOTE && reviewed.recordOnly.pass === RECORD.pass, JSON.stringify(reviewed));
+  check("a record that already names no commit of its own is left alone, inventing no key", JSON.stringify(collisionReviewedRecord({ recordOnly: CITED_RECORD })) === "{}", JSON.stringify(collisionReviewedRecord({ recordOnly: CITED_RECORD })));
+  check("and a cycle that concluded normally gets no record from this correction either", JSON.stringify(collisionReviewedRecord({ notes: "x" })) === "{}", JSON.stringify(collisionReviewedRecord({ notes: "x" })));
+
+  // End to end through the consumer that publishes it: the corrected record
+  // must render the no-commit shape, note intact.
+  const afterReReview = prPrompt(task, { notes: "reviewer caveat", deviations: [], ...collisionReviewedRecord({ recordOnly: RECORD }) }, true);
+  check("so the PR body of a re-reviewed branch reports the failure without claiming an unreviewed commit", /Delivery-run failure — recorded, not reviewed/.test(afterReReview) && afterReReview.includes(NOTE) && !/final commit/.test(afterReReview) && !afterReReview.includes(RECORD.range) && !/rangeCheck/.test(afterReReview), "pr prompt");
+
+  // And the call site actually applies it — a helper nothing spreads into the
+  // delivered result corrects nothing. Checked against the source text because
+  // the collision dispatch is executable body, which no harness can drive.
+  const dispatchSrc = readFileSync(join(workflows, "wf-address-tasks.js"), "utf8");
+  const APPLIED = /deliverable\.push\(\{ task, result: \{ \.\.\.result, notes: verdict\.notes \|\| result\.notes, \.\.\.collisionReviewedRecord\(result\) \} \}\);/;
+  check("the collision re-review's passing arm spreads the correction into what it delivers", APPLIED.test(dispatchSrc), "wf-address-tasks.js");
 }
 
 // --- wf-address-review.js: the sibling consumer's inline carrier -----------

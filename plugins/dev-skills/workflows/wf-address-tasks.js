@@ -2496,6 +2496,39 @@ function cycleCarried(result) {
   };
 }
 
+// The correction the collision dispatch's re-review owes the record above.
+//
+// `recordOnly`'s `range` answers ONE question for a consumer rendering it —
+// whether the record names a post-run commit NO FRESH REVIEWER SAW — and the
+// cycle's result contract says exactly that, and that the consumer reads
+// nothing else off it ("never why it does not"). The cycle answers YES only on
+// the record-only exit, correctly: no round of its own follows that exit.
+//
+// This workflow then adds a stage the cycle has no view of. When the pre-PR
+// collision guard's resolver renames a file on an already-reviewed branch, the
+// `isChanged` arm runs a fresh DELIVERY-tier reviewer over the CUMULATIVE range
+// (`base...HEAD` — the reviewer brief fixes that scope), so a pass there has
+// seen every commit on the branch, the tolerated post-run one included. That
+// puts the commit in precisely the light conclusion's position — seen by the
+// round that just passed — and leaves the record's `range` asserting the
+// opposite of what this workflow just arranged.
+//
+// So empty the range and the check line that describes it. The `note` and the
+// `pass` stay: the delivery run really did FAIL, that is what the gate admitted
+// it on, and the maintainer is owed it whoever has since read the commit. What
+// goes is only the unreviewed-commit claim, and emptying the pair is how the
+// cycle itself already encodes "this record names no post-run commit of its
+// own" — see `flakeCarried` and the three conclusions that use it. Nothing new
+// is invented for a consumer to interpret.
+//
+// Present-only and range-only, so it composes as a spread: a result with no
+// record, or one whose record already names no commit, is left exactly alone.
+function collisionReviewedRecord(result) {
+  const rec = result && result.recordOnly;
+  if (!rec || !rec.range) return {};
+  return { recordOnly: { ...rec, range: "", verified: "" } };
+}
+
 async function implementTask(task, remote, peerMode) {
   // The loop is the embedded runReviewCycle above. Sequential fixer -> reviewer
   // awaits inside the cycle plus a SHARED on-disk worktree mean the implementer
@@ -2915,7 +2948,11 @@ try {
           // the fail-safe default — but a gate this load-bearing says so.)
           const verdict = await agent(cycleReviewPrompt(taskCycleConfig(task, remote, peerMode), { round: 1, packet: null, artifactDir: "", tier: "delivery" }), { label: `re-review:${task.slug}`, schema: CYCLE_REVIEW_SCHEMA });
           if (verdict && verdict.pass && !verdict.emptyDiffFlag) {
-            deliverable.push({ task, result: { ...result, notes: verdict.notes || result.notes } });
+            // A pass here is a fresh reviewer's read of the whole branch, so it
+            // settles the one claim the cycle's `recordOnly` can no longer
+            // make — see `collisionReviewedRecord`. Only that claim: the record
+            // and its note still ride to the PR body, unchanged otherwise.
+            deliverable.push({ task, result: { ...result, notes: verdict.notes || result.notes, ...collisionReviewedRecord(result) } });
           } else {
             const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "rename did not pass fresh re-review; held before PR delivery", outstanding: verdict ? verdict.issues : null, collisions: related, ...cycleCarried(result) };
             statusBySlug.set(task.slug, held.status);
