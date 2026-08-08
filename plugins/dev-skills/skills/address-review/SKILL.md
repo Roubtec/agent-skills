@@ -163,7 +163,7 @@ For the actionable items:
 - **Large/multi-file/exploratory** → spawn a **Fixer** subagent (see Architecture and the prompt sketch below). One at a time; await its commits before moving on.
 - **Preclude repeat comments:** for each pattern you fix, grep the PR's changed files and closely related code for the **same offending pattern** and fix those too, so the next review round doesn't re-raise it. Mention these proactive fixes in the summary.
 - Keep commits buildable where practical; run the build/lint before declaring done.
-- Before review, require `git status --porcelain` to be empty. Inspect and commit every intended change; if a fixer leaves partial or unexplained changes, resolve that state or stop rather than letting the reviewer inspect only the committed subset.
+- Before review, apply `review-cycle`'s packet hard-check to this branch's worktree: `git status --porcelain` empty **and** no Git operation in progress. Inspect and commit every intended change; if a fixer leaves partial or unexplained changes, resolve that state or stop rather than letting the reviewer inspect only the committed subset.
 
 For the **follow-up-task** items, write the task file(s) following the `write-tasks` skill conventions (invoke that skill where available):
 
