@@ -54,7 +54,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 74;
+const CHECKS_PER_LEG = 76;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -776,6 +776,31 @@ for (const name of WORKFLOWS) {
       cycle: { maxRounds: 3 },
     });
     check("a recommendation that is not RATIFY or CONFORM does not count either", /This is fix-up round 2/.test(hedged.seen.fixPrompts[1] || "") && hedged.res.verdict === "pass" && JSON.stringify(hedged.res.deviationAssessments) === JSON.stringify([ASSESS]), `${hedged.res.verdict}/${JSON.stringify(hedged.res.deviationAssessments)}`);
+
+    // The hedge that opens WITH a verdict, and the only one an ordinary round
+    // reaches: the brief renders "START with RATIFY or CONFORM", so a reviewer
+    // that opens its recommendation with the phrase it was told to start with
+    // is echoing the brief's surface form rather than crafting input. Read by
+    // first word alone it would count as RATIFY, and the maintainer would be
+    // handed a verdict from a reviewer that explicitly refused to choose.
+    const bothVerdicts = await run(src, {
+      fixes: [deviate, deviateDeclining("r1-1"), confirmDeviate],
+      reviews: [{ pass: true, issues: [], notes: "", deviationAssessments: [{ deviation: DEV, inSpecRoute: "none existed", recommendation: "RATIFY or CONFORM — needs investigation" }] }, OK_DEV],
+      cycle: { maxRounds: 3 },
+    });
+    check("opening with BOTH verdicts is a refusal to choose, not a RATIFY", /This is fix-up round 2/.test(bothVerdicts.seen.fixPrompts[1] || "") && bothVerdicts.res.verdict === "pass" && JSON.stringify(bothVerdicts.res.deviationAssessments) === JSON.stringify([ASSESS]), `${bothVerdicts.res.verdict}/${JSON.stringify(bothVerdicts.res.deviationAssessments)}`);
+
+    // The positive control the rule above is bounded by, and the reason it
+    // tests for a bare `or` rather than for the other verdict occurring: a real
+    // choice may name the verdict it rejected in its reason, and must still
+    // count. It rides one round with no fix-up in between.
+    const NAMES_OTHER = { deviation: DEV, inSpecRoute: "none existed", recommendation: "RATIFY — CONFORM costs a release" };
+    const reasonNamesOther = await run(src, {
+      fixes: [deviate, confirmDeviate],
+      reviews: [{ pass: true, issues: [], notes: "", deviationAssessments: [NAMES_OTHER] }, OK_DEV],
+      cycle: { maxRounds: 3 },
+    });
+    check("a verdict whose reason names the other verdict still counts", reasonNamesOther.res.verdict === "pass" && /FINAL CONFIRMATION PASS/.test(reasonNamesOther.seen.fixPrompts[1] || "") && JSON.stringify(reasonNamesOther.res.deviationAssessments) === JSON.stringify([NAMES_OTHER]), `${reasonNamesOther.res.verdict}/${JSON.stringify(reasonNamesOther.res.deviationAssessments)}`);
 
     // What the round GATED on is what it PUBLISHES. One usable entry lets the
     // round pass, so a reviewer that also emits a hedged second entry for the

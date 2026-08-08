@@ -687,7 +687,7 @@ const CYCLE_REVIEW_SCHEMA = {
         properties: {
           deviation: { type: "string", description: "The deviation's text, copied VERBATIM from the list you were shown — the cycle matches it by exact text." },
           inSpecRoute: { type: "string", description: "Whether a route inside the locked decision existed, and which one — the first thing the maintainer's ratify-or-conform call needs." },
-          recommendation: { type: "string", description: "Your verdict as the FIRST word — RATIFY or CONFORM, the whole vocabulary — then the one-line reason. A hedge (`UNSURE`, `needs investigation`) is not a verdict and leaves the deviation unassessed, which does not pass the round. The first word is taken literally, so do not open with both — `RATIFY or CONFORM …` is read as RATIFY; lead with neither if you cannot choose. You recommend; the maintainer decides." },
+          recommendation: { type: "string", description: "Your verdict as the FIRST word — RATIFY or CONFORM, the whole vocabulary — then the one-line reason. A hedge (`UNSURE`, `needs investigation`) is not a verdict and leaves the deviation unassessed, which does not pass the round. Opening with both — `RATIFY or CONFORM …` — is a refusal to choose and is rejected as one, not read as RATIFY; otherwise the first word is taken literally, so lead with the verdict you mean, and lead with neither if you cannot choose. You recommend; the maintainer decides." },
         },
         required: ["deviation", "inSpecRoute", "recommendation"],
       },
@@ -709,19 +709,28 @@ const CYCLE_REVIEW_SCHEMA = {
 //
 // What the rule buys is stated exactly, because the crude version is the one
 // worth having: the FIRST word decides, and a string opening with neither
-// verdict is not a verdict. It does NOT catch a hedge that opens with one and
-// then retracts it — `RATIFY or CONFORM — needs investigation` reads as RATIFY
-// — which is why the schema and the brief warn the reviewer that the first word
-// is taken literally. Nothing here can separate that string from `RATIFY —
-// CONFORM costs a release`, a real choice whose reason names the other verdict;
-// a rule rejecting the first would reject the second, and the maintainer reads
-// the whole `recommendation` text either way.
+// verdict is not a verdict. One hedge opens with one and is still not a choice,
+// and it is the one an ordinary round reaches rather than hand-crafted input:
+// the brief renders `START with RATIFY or CONFORM` and the schema repeats that
+// the two are the whole vocabulary, so `RATIFY or CONFORM — needs
+// investigation` is the brief's own surface form echoed back, and reading it as
+// RATIFY would hand the maintainer a verdict from a reviewer that explicitly
+// refused to give one. That exact shape is rejected by name — the two verdicts
+// joined by a bare `or`. It leaves `RATIFY — CONFORM costs a release` alone, a
+// real choice whose reason names the other verdict, because what follows the
+// verdict there is a separator rather than the word `or`. Nothing wider is
+// claimed: a reason that retracts its verdict in any other wording still reads
+// as that verdict, which is why the schema and the brief also warn that the
+// first word is taken literally, and the maintainer reads the whole
+// `recommendation` text either way.
 const CYCLE_DEVIATION_VERDICTS = ["RATIFY", "CONFORM"];
+const CYCLE_DEVIATION_HEDGE = /^(?:RATIFY|CONFORM)\s+OR\s+(?:RATIFY|CONFORM)\b/;
 function cycleDeviationVerdict(recommendation) {
   // Leading punctuation and emphasis are stripped, so `**RATIFY** — …` reads as
   // the verdict it plainly is. A longer word that merely starts with one does
   // not: the character after the verdict must not continue it.
   const text = String(recommendation || "").trim().toUpperCase().replace(/^[^A-Z]+/, "");
+  if (CYCLE_DEVIATION_HEDGE.test(text)) return "";
   return CYCLE_DEVIATION_VERDICTS.find((v) => text.startsWith(v) && !/[A-Z]/.test(text.charAt(v.length))) || "";
 }
 
@@ -970,7 +979,7 @@ function cycleReviewPrompt(cycle, state) {
   // round is gated on, one entry per deviation that still stands.
   const deviationDrops = Array.isArray(state.deviationDrops) ? state.deviationDrops : [];
   const deviationsBlock = Array.isArray(state.deviations) && state.deviations.length
-    ? `\n## Deviations from LOCKED decisions standing on this packet (verbatim)\n\nReturn ONE \`deviationAssessments\` entry for each of these the fixer still restates — every one below except the claimed drops you accept — copying its text VERBATIM into \`deviation\` and giving \`inSpecRoute\` (whether an in-spec route existed, and which) and \`recommendation\` (START with ${CYCLE_DEVIATION_VERDICTS.join(" or ")} — those two verdicts are the whole vocabulary, and a hedge such as "UNSURE" is not one of them — then the one-line reason; the first word is taken literally as your verdict, so do not open with both, and lead with neither if you cannot choose). This round does not pass while one of them is unassessed: the maintainer decides, and would otherwise be handed the deviation with only the implementer's half of it. A deviation is neither a finding to be corrected away nor a license for unfinished work — grade completeness, tests, and regressions exactly as strictly.\n\n${JSON.stringify(state.deviations, null, 2)}\n${deviationDrops.length ? `\nOf those, the fixer no longer restates the ones below, CLAIMING each no longer stands. Verify that against the committed state exactly as you would a \`declined\`: passing this round is what drops them, so raise one you do not accept as an issue rather than letting it go — a drop you reject is assessed by the round after it, once the fixer restates it.\n\n${JSON.stringify(deviationDrops, null, 2)}\n` : ""}`
+    ? `\n## Deviations from LOCKED decisions standing on this packet (verbatim)\n\nReturn ONE \`deviationAssessments\` entry for each of these the fixer still restates — every one below except the claimed drops you accept — copying its text VERBATIM into \`deviation\` and giving \`inSpecRoute\` (whether an in-spec route existed, and which) and \`recommendation\` (START with ${CYCLE_DEVIATION_VERDICTS.join(" or ")} — those two verdicts are the whole vocabulary, and a hedge such as "UNSURE" is not one of them — then the one-line reason; opening with both, as in "${CYCLE_DEVIATION_VERDICTS.join(" or ")} — needs investigation", is a refusal to choose and is rejected as one rather than read as the first of them, and otherwise the first word is taken literally as your verdict, so lead with the verdict you mean, or with neither if you cannot choose). This round does not pass while one of them is unassessed: the maintainer decides, and would otherwise be handed the deviation with only the implementer's half of it. A deviation is neither a finding to be corrected away nor a license for unfinished work — grade completeness, tests, and regressions exactly as strictly.\n\n${JSON.stringify(state.deviations, null, 2)}\n${deviationDrops.length ? `\nOf those, the fixer no longer restates the ones below, CLAIMING each no longer stands. Verify that against the committed state exactly as you would a \`declined\`: passing this round is what drops them, so raise one you do not accept as an issue rather than letting it go — a drop you reject is assessed by the round after it, once the fixer restates it.\n\n${JSON.stringify(deviationDrops, null, 2)}\n` : ""}`
     : "";
   // This brief orders a full build, so the reviewer needs a destination for the
   // build's output as much as for its own report — including on the pass that

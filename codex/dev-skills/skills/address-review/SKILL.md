@@ -324,7 +324,7 @@ gh pr edit NUMBER --add-reviewer @copilot
 - [ ] If requested, single-branch rebase done first; non-trivial conflict handled (interactive loop-in / hands-off abort+stop); validated when conflicted.
 - [ ] All **unresolved** threads gathered and validated per "GitHub API recipes" (single-shot queries, never GraphQL `--paginate`); resolved ones ignored; maintainer replies and top-level decision comments treated as authoritative; step 3's zero-item rule applied (terminal no-op only on the three-way tip equality).
 - [ ] Each thread triaged: actionable / already-addressed / push-back / follow-up-task / ambiguous.
-- [ ] Fixes done inline or via a fixer subagent (one checkout-dependent agent at a time, briefed under `review-cycle`'s Fixer contract); same-pattern sweep done in changed/related code.
+- [ ] Fixes done inline or via a fixer subagent (no reviewer started until the fixer's commits are on disk — one checkout-dependent agent at a time is the proxy for that; briefed under `review-cycle`'s Fixer contract); same-pattern sweep done in changed/related code.
 - [ ] Follow-up-task items recorded as standalone task files per `write-tasks` conventions, placed under step 5's queued-vs-deferred rule, and committed on the current branch separately from code fixes.
 - [ ] Worktree clean and every intended change committed before review and publication.
 - [ ] Step 6 ran the `review-cycle` verification loop to a pass — every disposition checked by the fresh Reviewer and best-effort peer under that skill's gates, non-blocking peer outcomes recorded — or stopped at its round cap without pushing.

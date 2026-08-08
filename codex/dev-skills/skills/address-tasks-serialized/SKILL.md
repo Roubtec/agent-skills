@@ -33,7 +33,7 @@ In tool-enabled sessions, this capability is typically exposed through tools suc
 Spawn implementers as `worker` agents and reviewers as `explorer` agents.
 Do not fork context; instead, pass a self-contained prompt.
 Omit model overrides unless the user explicitly asks for a different model.
-Because each task step depends on the subagent result, spawn exactly one checkout-dependent subagent at a time: spawn it, wait for completion, then close the agent thread when it is no longer needed before spawning the next one.
+Because a reviewer may not start until its implementer's commits are on disk, spawn exactly one checkout-dependent subagent at a time: spawn it, wait for completion, then close the agent thread when it is no longer needed before spawning the next one — the one-at-a-time shape is the **proxy**, and waiting for that completion is what actually puts the commits there.
 No custom agent personas (`~/.codex/agents/*.toml`) are required.
 
 If the current session exposes no subagent capability, tell the user this skill requires Codex multi-agent support.
@@ -52,7 +52,7 @@ Your responsibilities are:
 1. Resolve the input arguments to a list of task files.
 2. Read each task file enough to understand dependencies and sequencing — do not deeply analyze implementation details.
 3. Manage branch creation and PR base determination.
-4. Construct focused prompts and spawn subagents **one at a time** — implementer, await and close it, then a fresh reviewer — for each task. Never batch the implementer and reviewer into one natural-language request or tool block (see the shared-working-tree rule above).
+4. Construct focused prompts and spawn subagents **one at a time** — implementer, await and close it, then a fresh reviewer — for each task. The rule is that the reviewer does not start until its implementer's commits are on disk, so wait for that completion; keeping the two out of one natural-language request or tool block is the **proxy** for that, not the rule (see the shared-working-tree rule above).
 5. Handle the review feedback loop.
 6. Open PRs once a task passes review.
 7. Advance to the next task or stop on blockers.
@@ -211,7 +211,7 @@ The PR base branch for this task is `<base-branch>`. The current branch is `<tas
 
 ## Execution Model
 
-Process the batch **sequentially**, not in parallel — and within each task, run the implementer and its reviewer one at a time, never concurrently (they share your single working tree; see the rule in Architecture).
+Process the batch **sequentially**, not in parallel — and within each task, never start the reviewer until its implementer's commits are on disk, waiting for the completion however the harness reports it; running the two one at a time rather than concurrently is the **proxy** for that invariant, since they share your single working tree (see the rule in Architecture).
 Each task is its own delivery unit, but stack later task branches on top of earlier ones when needed so dependent work can continue without waiting for review.
 
 ### Determining the PR base
@@ -229,9 +229,9 @@ For each task file in the input set:
 1. **Record the PR base branch** for this task (see precedence rules above).
 2. **Create a dedicated implementation branch** for the task.
 3. **Read the task file** enough to construct a good implementer prompt. Identify the acceptance criteria so you can later evaluate the reviewer's report.
-4. **Spawn the implementer agent** with a well-structured prompt (see Implementer Agent section). Wait for completion and close the agent. Spawn nothing else in the same natural-language turn or tool block — the reviewer comes only after the implementer's commits exist on disk.
+4. **Spawn the implementer agent** with a well-structured prompt (see Implementer Agent section). Wait for completion and close the agent — the reviewer comes only once this implementer's commits exist on disk, and spawning nothing else in the same natural-language turn or tool block is the **proxy** that keeps it there, not the rule itself.
 5. **Evaluate the implementer's packet.** Apply `review-cycle`'s packet hard-check before adopting it: `git status --porcelain` empty **and** no Git operation in progress — check `git rev-parse --git-path rebase-merge` and `rebase-apply` for an existing path, plus `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`, since a tree left mid-rebase or mid-cherry-pick prints empty porcelain. Either condition failing means redrive or resume that implementer, never silent adoption. If the implementer hit a blocker it could not resolve, stop and surface it to the user before spawning a reviewer.
-6. **Only after step 5, spawn the reviewer agent** with a fresh prompt (see Reviewer Agent section) and launch the peer second opinion in the background at the same moment (unless unavailable or `peer-opinions=off`). Always wait for the reviewer before triage, and also wait for the peer when one was launched; then close the reviewer agent. Do not spawn the reviewer in the same natural-language turn or tool block as the implementer — you share one working tree, so a reviewer started before the commit reviews an unfinished branch.
+6. **Only after step 5, spawn the reviewer agent** with a fresh prompt (see Reviewer Agent section) and launch the peer second opinion in the background at the same moment (unless unavailable or `peer-opinions=off`). Always wait for the reviewer before triage, and also wait for the peer when one was launched; then close the reviewer agent. The gate is the implementer's commits being on disk — you share one working tree, so a reviewer started before the commit reviews an unfinished branch; keeping it out of the implementer's natural-language turn or tool block is only the **proxy** for that gate.
 7. **Evaluate the reviewer's report:**
    - If the report says the branch is **empty / has no implementation / shows an empty diff**, do not trust it at face value — that is the signature of a race (reviewer started before the implementer committed) or a wrong-branch checkout, not a real gap. Verify with `git diff --name-only <base>...HEAD`; if the work is actually present, spawn a fresh reviewer and use that verdict instead.
    - If the own reviewer **passes** and the peer has no unaddressed grounded findings under the protocol below: proceed to step 8.
@@ -307,7 +307,7 @@ When either reviewer reports issues:
    - The branch name (same as before).
    - Instruction to address each finding specifically and report what was fixed.
    - The same project context and validation instructions as the original implementer prompt.
-2. After the fix-up implementer completes — and only then, in a later turn — **spawn a new reviewer agent** and launch the peer per the protocol above to re-check (same fresh prompt structure as before; never concurrent with the fix-up implementer).
+2. Once the fix-up implementer's commits are on disk — wait for its completion, and only then, in a later turn as the **proxy** for that — **spawn a new reviewer agent** and launch the peer per the protocol above to re-check (same fresh prompt structure as before; never concurrent with the fix-up implementer).
 3. Repeat until the own reviewer passes and the peer has no unaddressed grounded findings under the protocol above.
 4. **Cap the feedback loop at the `review-cycle` skill's round cap.** If issues persist at the cap, stop iterating and do not open a PR for this task. Surface the outstanding findings clearly to the user in the final summary and ask for guidance on how to proceed.
 
