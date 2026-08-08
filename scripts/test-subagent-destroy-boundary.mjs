@@ -309,10 +309,11 @@ const FIXTURES = {
     ],
     resolvePrompt: [["resolvePrompt", (f) => f.resolvePrompt("tasks/*.md")]],
     prPrompt: [
-      ["prPrompt (remote)", (f) => f.prPrompt(task, "caveat", true)],
-      ["prPrompt (no remote)", (f) => f.prPrompt(task, "", false)],
-      ["prPrompt (remote, deviation + assessment)", (f) => f.prPrompt(task, "caveat", true, deviations, deviationAssessments)],
-      ["prPrompt (remote, deviation, cycle recorded no assessment)", (f) => f.prPrompt(task, "", true, deviations, [])],
+      ["prPrompt (remote)", (f) => f.prPrompt(task, { notes: "caveat", deviations: [] }, true)],
+      ["prPrompt (remote, record-only close)", (f) => f.prPrompt(task, { notes: "caveat", deviations: [], recordOnly: { pass: 2, range: "a..b", verified: "only the flake task", note: "the payments suite failed on the base too" } }, true)],
+      ["prPrompt (no remote)", (f) => f.prPrompt(task, { notes: "", deviations: [] }, false)],
+      ["prPrompt (remote, deviation + assessment)", (f) => f.prPrompt(task, { notes: "caveat", deviations, deviationAssessments }, true)],
+      ["prPrompt (remote, deviation, cycle recorded no assessment)", (f) => f.prPrompt(task, { notes: "", deviations, deviationAssessments: [] }, true)],
     ],
     cleanupNote: [["cleanupNote", (f) => f.cleanupNote(task)]],
     collisionScanPrompt: [["collisionScanPrompt", (f) => f.collisionScanPrompt([{ slug: task.slug, branch: task.branch, base: task.base }])]],
@@ -327,6 +328,7 @@ const FIXTURES = {
       ["publishPrompt", (f) => f.publishPrompt(publishPacket, [], { push: true, pingCodex: false })],
       ["publishPrompt (deviation + assessment)", (f) => f.publishPrompt(publishPacket, [], { push: true, pingCodex: false }, deviations, deviationAssessments)],
       ["publishPrompt (deviation, cycle recorded no assessment)", (f) => f.publishPrompt(publishPacket, [], { push: true, pingCodex: false }, deviations, [])],
+      ["publishPrompt (record-only close)", (f) => f.publishPrompt(publishPacket, [], { push: true, pingCodex: false }, [], [], { pass: 2, range: "a..b", verified: "only the flake task", note: "the payments suite failed on the base too" })],
     ],
   },
 };

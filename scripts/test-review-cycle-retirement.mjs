@@ -63,7 +63,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 105;
+const CHECKS_PER_LEG = 106;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -312,6 +312,12 @@ const closeOutRetire = (findingId) => ({ ...retireOn(findingId), closeOutEdits: 
 // the delivery gate's post-run tolerance describes. `PASS_PACKET` already has
 // that shape; the alias is what makes the scenarios below readable.
 const confirmRecordOnly = { ...PASS_PACKET, dispositions: [] };
+// The same pass carrying the flake note where the cycle's own flake rule sends
+// it — `summary`, "for the PR body or batch summary". No reviewer round follows
+// this exit, so `reviewerNotes` was written before the failure existed and the
+// record is the only carrier that note has to a consumer.
+const FLAKE_NOTE = "the delivery run's only failure was the payments suite, which reproduces on the base; queued as tasks/046-flaky-payments-suite.md";
+const confirmRecordOnlyNoting = { ...confirmRecordOnly, summary: FLAKE_NOTE };
 
 // A deviation from a LOCKED maintainer decision, and a pass that reports one.
 // Every other packet above carries `deviations: []`, so any of them following
@@ -1034,6 +1040,14 @@ for (const name of WORKFLOWS) {
     check("a confirmation pass that only committed the record concludes with no further round", concluded.res.verdict === "pass" && concluded.seen.reviewPrompts.length === 1 && !!concluded.res.recordOnly, `${concluded.res.verdict}/${concluded.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(concluded.res.recordOnly)}`);
     check("and the result records the pass, the range and what the check found", !!concluded.res.recordOnly && concluded.res.recordOnly.pass === 2 && concluded.res.recordOnly.range === "sha..sha" && /nothing but the flake record/.test(concluded.res.recordOnly.verified || ""), JSON.stringify(concluded.res.recordOnly));
     check("the check is asked one question about the DIFF", /Record-only follow-up check/.test(concluded.seen.recordPrompts[0] || "") && /git diff/.test(concluded.seen.recordPrompts[0] || "") && /NOTHING but the unrelated-flake RECORD/.test(concluded.seen.recordPrompts[0] || ""), "record-only check prompt");
+
+    // The record carries the pass's OWN note beside the check's verdict. This
+    // exit has no later reviewer round, so nothing else the result carries can
+    // tell a consumer's PR body or batch summary what the delivery run
+    // surfaced — and the two fields must stay distinguishable, since one is
+    // the pass's account and the other the independent check's.
+    const noted = await run(src, { fixes: [PASS_PACKET, confirmRecordOnlyNoting], reviews: [OK], cycle: { maxRounds: 3 } });
+    check("the record carries the pass's own note of what the run surfaced, distinct from the check's line", !!noted.res.recordOnly && noted.res.recordOnly.note === FLAKE_NOTE && noted.res.recordOnly.verified !== noted.res.recordOnly.note, JSON.stringify(noted.res.recordOnly));
 
     // The check's own veto, the close-out's rule in its own words: the range is
     // the licence, and anything beyond the record in it buys the normal round.
