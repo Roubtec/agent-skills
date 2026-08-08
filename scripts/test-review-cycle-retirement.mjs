@@ -15,6 +15,17 @@
 // is the scenarios whose titles name a deviation — anchored that way rather
 // than by ordinal, which every inserted scenario moves.
 //
+// It has grown to cover the section's other terminal gates, which live beside
+// that one and decide the same question — what may leave the cycle without a
+// fresh reviewer seeing it: a locked-decision deviation a pass moves on or off
+// the maintainer's list, the trivial-round close-out, which concludes with no
+// reviewer round at all, the validation tier a reviewer's brief states, whose
+// default decides what an unstated one runs, the record-only close over the
+// delivery gate's one tolerated post-run commit, which concludes with no
+// reviewer round either, and the light-mode conclusion, the fourth such exit
+// and the one every pass reaches at the delivery tier. Each clause names its
+// scenario's subject rather than its ordinal, for the reason stated just above.
+//
 // The workflows are runtime scripts (top-level await/return, injected
 // `agent`/`parallel`/`log` globals), so they cannot be imported. This evaluates
 // the ACTUAL shipped `review-cycle-core` section — no second copy — with those
@@ -54,7 +65,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 78;
+const CHECKS_PER_LEG = 129;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -82,8 +93,12 @@ function loadCycle(src, agent) {
   const pipeline = async () => [];
   const log = () => {};
   const phase = () => {};
+  // `cycleReviewChecks` comes back beside the cycle because its TIER DEFAULT is
+  // reachable no other way: `runReviewCycle` always states a tier, and so does
+  // every renderer outside a cycle today, so driving the cycle can never
+  // exercise the default and only a direct call can.
   // eslint-disable-next-line no-new-func
-  return new Function("agent", "parallel", "pipeline", "log", "phase", `${section}\nreturn runReviewCycle;`)(
+  return new Function("agent", "parallel", "pipeline", "log", "phase", `${section}\nreturn { runReviewCycle, cycleReviewChecks };`)(
     agent,
     parallel,
     pipeline,
@@ -95,9 +110,18 @@ function loadCycle(src, agent) {
 // Scripted agent: fixer and reviewer packets are consumed in order. An
 // exhausted fixer queue returns nothing, which the cycle treats as an error
 // exit — the shape scenario 3 needs.
-function scriptedAgent(fixes, reviews, seen) {
+//
+// The close-out and record-only diff checks default to the PERMISSIVE verdict
+// (every hunk non-semantic; nothing in the range but the flake record) rather
+// than a refusal, so a scenario that reaches either gate concludes. That
+// direction is deliberate: both gates' failure mode is firing when they should
+// not, and a permissive check makes a broken gate visible as a concluded cycle
+// instead of hiding behind a scripted veto.
+function scriptedAgent(fixes, reviews, seen, closeOuts = [], records = []) {
   const fixQueue = [...fixes];
   const reviewQueue = [...reviews];
+  const closeOutQueue = [...closeOuts];
+  const recordQueue = [...records];
   return async function agent(prompt, opts) {
     const label = (opts && opts.label) || "";
     if (label.startsWith("fix#")) {
@@ -109,6 +133,16 @@ function scriptedAgent(fixes, reviews, seen) {
       seen.reviewPrompts.push(prompt);
       const p = reviewQueue.shift();
       return p === undefined ? { pass: true, issues: [], notes: "" } : p;
+    }
+    if (label.startsWith("closeout#")) {
+      seen.closeOutPrompts.push(prompt);
+      const p = closeOutQueue.shift();
+      return p === undefined ? { nonSemantic: true, editsPresent: true, why: "scripted: every hunk non-semantic, every claimed edit present" } : p;
+    }
+    if (label.startsWith("record#")) {
+      seen.recordPrompts.push(prompt);
+      const p = recordQueue.shift();
+      return p === undefined ? { recordOnly: true, why: "scripted: nothing but the flake record" } : p;
     }
     if (label.startsWith("ground#")) return { verdicts: [] };
     return null;
@@ -252,6 +286,55 @@ const confirmRetireAgain = {
   dispositions: [{ finding: "a pass-note", origin: "reviewer", disposition: "fixed", detail: "settled it again", retiresQuestionIds: ["q1"] }],
 };
 
+// Trivial-round close-out packets (the close-out scenario). Each OFFERS a
+// close-out — the same non-semantic edit list — and differs only in how it
+// disposed the one finding it was handed, which is the whole question the
+// gate answers.
+const CLOSE_OUT_EDITS = ["reworded a comment"];
+const closeOutFix = (findingId) => ({ ...fixOn(findingId), closeOutEdits: CLOSE_OUT_EDITS });
+const closeOutDecline = (findingId) => ({
+  ...PASS_PACKET,
+  dispositions: [{ findingId, finding: "off-by-one in the cap check", origin: "reviewer", disposition: "declined", detail: "reads fine to me" }],
+  closeOutEdits: CLOSE_OUT_EDITS,
+});
+const closeOutEscalate = (findingId) => ({
+  ...escalateOn(findingId, "q1"),
+  openQuestions: [Q1],
+  closeOutEdits: CLOSE_OUT_EDITS,
+});
+// The same offer on round 1, where there is no previous pass's SHA to judge a
+// close-out range against.
+const closeOutRound1 = { ...PASS_PACKET, dispositions: [], closeOutEdits: CLOSE_OUT_EDITS };
+
+// The same offer from a pass that reports its findings `fixed` while saying it
+// CHANGED NOTHING — the shape whose range is empty, and so vacuously
+// non-semantic, if the gate takes the offer at face value.
+const closeOutUnchanged = (findingId) => ({ ...closeOutFix(findingId), changed: false });
+
+// The same offer from a pass that also CLAIMS A RETIREMENT — the claim the
+// close-out's own conjunct must hold the cycle open for.
+const closeOutRetire = (findingId) => ({ ...retireOn(findingId), closeOutEdits: CLOSE_OUT_EDITS });
+
+// A confirmation pass that committed the unrelated-flake RECORD: it changed the
+// tree, disposed nothing, moved no deviation, and reported what its delivery run
+// surfaced in `flakeRecord` — where the cycle's own flake rule sends it, "for the
+// PR body or batch summary". That is exactly the packet the delivery gate's
+// post-run tolerance describes, and `PASS_PACKET` supplies the rest of the shape.
+// No reviewer round follows this exit, so `reviewerNotes` was written before the
+// failure existed and the record is the only carrier that note has to a
+// consumer — which is why the note is a conjunct of the exit and not merely its
+// payload.
+const FLAKE_NOTE = "the delivery run's only failure was the payments suite, which reproduces on the base; queued as tasks/046-flaky-payments-suite.md";
+const confirmRecordOnly = { ...PASS_PACKET, dispositions: [], flakeRecord: FLAKE_NOTE };
+// The same pass with no record of its OWN: it committed the same range and says
+// nothing about what failed, so there is nothing for the conclusion to publish.
+const confirmRecordOnlySilent = { ...PASS_PACKET, dispositions: [] };
+// The flake rule's OTHER outcome: the evidence matched an ALREADY-ACTIVE task,
+// so the pass cites it instead of editing it and has nothing at all to commit.
+// A confirmation pass shaped exactly like `idle` — which is the point.
+const CITED_NOTE = "the delivery run's only failure was the payments suite, which reproduces on the base; already queued as tasks/041-flaky-payments-suite.md, cited rather than re-filed";
+const confirmCitingActiveTask = { ...idle, flakeRecord: CITED_NOTE };
+
 // A deviation from a LOCKED maintainer decision, and a pass that reports one.
 // Every other packet above carries `deviations: []`, so any of them following
 // this one is a pass that has stopped restating it — the claimed drop.
@@ -290,8 +373,8 @@ const deviateDeclining = (findingId) => ({
   dispositions: [{ findingId, finding: "f", origin: "reviewer", disposition: "declined", detail: "the deviation stands; the assessment is the reviewer's to supply" }],
 });
 
-async function run(src, { fixes, reviews, cycle }) {
-  const seen = { fixPrompts: [], reviewPrompts: [] };
+async function run(src, { fixes, reviews, closeOuts, records, cycle }) {
+  const seen = { fixPrompts: [], reviewPrompts: [], closeOutPrompts: [], recordPrompts: [] };
   // Deep-clone every scripted packet. The cycle MUTATES the question objects it
   // accumulates — that is how a retirement mark lands — and the packets above
   // are module-level literals shared by every scenario and BOTH workflow legs.
@@ -299,7 +382,7 @@ async function run(src, { fixes, reviews, cycle }) {
   // shared `Q1` and each later scenario silently exercises the volunteered-mark
   // STRIP path instead of the clean one it means to test.
   const clone = (v) => JSON.parse(JSON.stringify(v));
-  const runReviewCycle = loadCycle(src, scriptedAgent(clone(fixes), clone(reviews), seen));
+  const { runReviewCycle } = loadCycle(src, scriptedAgent(clone(fixes), clone(reviews), seen, clone(closeOuts || []), clone(records || [])));
   const res = await runReviewCycle({ ...CYCLE, ...cycle });
   const questionOf = (id) => (res.openQuestions || []).find((x) => x && x.id === id);
   // The three states a claimed question can be in, as a CONSUMER sees them:
@@ -847,10 +930,388 @@ for (const name of WORKFLOWS) {
     check("and a result with no standing deviation ships no assessments", dropOnly.res.deviationAssessments === undefined, JSON.stringify(dropOnly.res.deviationAssessments));
   });
 
+  // 26. The trivial-round close-out ends a cycle with NO fresh reviewer ever
+  //     seeing the pass, so what it may swallow is a gate, not a detail. It is
+  //     checked on the DIFF — and that check is structurally blind to a
+  //     disposition that leaves no diff. A `declined` finding ships as an empty
+  //     hunk, so a pass fixing two typos beside a declined off-by-one would
+  //     otherwise conclude the cycle with the decline adjudicated by nobody,
+  //     against the cycle's own contract that a decline is verified by the next
+  //     fresh reviewer and never final on the fixer's say-so. `escalated` is
+  //     the same shape. Hence: fixed-only, checked structurally, beside the
+  //     retirement and deviation claims that already hold the cycle open.
+  await scenario("26. a close-out concludes only over fixes", async () => {
+    const concluded = await run(src, {
+      fixes: [PASS_PACKET, closeOutFix("r1-1")],
+      reviews: [FAIL("a wording nit")],
+      cycle: { closeOut: "on" },
+    });
+    check("a fix-only non-semantic pass concludes with no further round", concluded.res.verdict === "pass" && concluded.seen.reviewPrompts.length === 1 && !!concluded.res.closeOut, `${concluded.res.verdict}/${concluded.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(concluded.res.closeOut)}`);
+    check("and the result records the pass, range and unreviewed edits", !!concluded.res.closeOut && concluded.res.closeOut.pass === 2 && concluded.res.closeOut.range === "sha..sha" && JSON.stringify(concluded.res.closeOut.edits) === JSON.stringify(CLOSE_OUT_EDITS), JSON.stringify(concluded.res.closeOut));
+
+    const declined = await run(src, {
+      fixes: [PASS_PACKET, closeOutDecline("r1-1"), idle],
+      reviews: [FAIL("off-by-one in the cap check"), OK],
+      cycle: { closeOut: "on" },
+    });
+    check("a DECLINED disposition forfeits the close-out for a normal round", declined.res.verdict === "pass" && declined.seen.closeOutPrompts.length === 0 && declined.seen.reviewPrompts.length === 2 && !declined.res.closeOut, `${declined.seen.closeOutPrompts.length} close-out check(s)/${declined.seen.reviewPrompts.length} review prompt(s)`);
+    check("and the round it buys is shown the decline to adjudicate", /"disposition": "declined"/.test(declined.seen.reviewPrompts[1] || ""), "round-2 review prompt");
+
+    const escalated = await run(src, {
+      fixes: [PASS_PACKET, closeOutEscalate("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      cycle: { closeOut: "on" },
+    });
+    check("an ESCALATED disposition forfeits it too", escalated.res.verdict === "pass" && escalated.seen.closeOutPrompts.length === 0 && escalated.seen.reviewPrompts.length === 2, `${escalated.seen.closeOutPrompts.length} close-out check(s)/${escalated.seen.reviewPrompts.length} review prompt(s)`);
+
+    // The diff check's own veto, unchanged: the offer is never the licence.
+    const vetoed = await run(src, {
+      fixes: [PASS_PACKET, closeOutFix("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      closeOuts: [{ nonSemantic: false, editsPresent: true, why: "an executable hunk rode along" }],
+      cycle: { closeOut: "on" },
+    });
+    check("a semantic hunk in the diff still forfeits the close-out", vetoed.seen.closeOutPrompts.length === 1 && vetoed.seen.reviewPrompts.length === 2 && !vetoed.res.closeOut, `${vetoed.seen.closeOutPrompts.length} close-out check(s)/${vetoed.seen.reviewPrompts.length} review prompt(s)`);
+
+    // The check's OTHER direction, and the one a triviality read is blind to:
+    // an empty range is vacuously non-semantic, so without it a pass could
+    // report every finding `fixed`, commit nothing, and conclude the cycle
+    // with the claim adjudicated by nobody — the round that catches exactly
+    // that being the round this exit skips.
+    const missing = await run(src, {
+      fixes: [PASS_PACKET, closeOutFix("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      closeOuts: [{ nonSemantic: true, editsPresent: false, why: "the range does not carry the claimed edit" }],
+      cycle: { closeOut: "on" },
+    });
+    check("a claimed edit the range does not carry forfeits the close-out", missing.seen.closeOutPrompts.length === 1 && missing.seen.reviewPrompts.length === 2 && !missing.res.closeOut, `${missing.seen.closeOutPrompts.length} close-out check(s)/${missing.seen.reviewPrompts.length} review prompt(s)`);
+    check("and the check is asked both questions about the range", /`editsPresent`/.test(missing.seen.closeOutPrompts[0] || "") && /NON-EMPTY/.test(missing.seen.closeOutPrompts[0] || "") && /everything the pass claims below/.test(missing.seen.closeOutPrompts[0] || ""), "close-out check prompt");
+
+    // The second question's OTHER input, and the reason it answers the case it
+    // is named for. The edit list is the pass's account of what it shipped; the
+    // `fixed` dispositions are its account of what it was ASKED for, and only
+    // the second names a fix that never landed. Handed the list alone, a pass
+    // that forgot one requested fix while shipping and listing an unrelated
+    // tidy-up clears every question here — non-empty range, listed edit
+    // present, nothing semantic — and concludes the cycle with the omission
+    // adjudicated by nobody, since the round that catches it is the one this
+    // exit skips.
+    check("and it is handed the pass's `fixed` findings beside the edit list", /## Findings the pass disposed `fixed`/.test(missing.seen.closeOutPrompts[0] || "") && /"finding": "f"/.test(missing.seen.closeOutPrompts[0] || "") && /a change answering every FINDING it disposed `fixed`/.test(missing.seen.closeOutPrompts[0] || ""), "close-out check prompt");
+
+    // And a pass with nothing disposed `fixed` is told so, rather than handed
+    // an empty array under a heading that reads as work to go find.
+    const noFixes = await run(src, {
+      fixes: [PASS_PACKET, { ...PASS_PACKET, dispositions: [], closeOutEdits: CLOSE_OUT_EDITS }],
+      reviews: [OK],
+      cycle: { closeOut: "on" },
+    });
+    check("a close-out over no `fixed` disposition says so rather than listing none", noFixes.seen.closeOutPrompts.length === 1 && /this pass disposed no finding `fixed`/.test(noFixes.seen.closeOutPrompts[0] || "") && !!noFixes.res.closeOut, `${noFixes.seen.closeOutPrompts.length} close-out check(s)/${JSON.stringify(noFixes.res.closeOut)}`);
+
+    // The structural half of the same guard: a pass claiming `fixed` while
+    // reporting it changed nothing contradicts its own offer, and the gate
+    // settles that without spending a check on it.
+    const unchanged = await run(src, {
+      fixes: [PASS_PACKET, closeOutUnchanged("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      cycle: { closeOut: "on" },
+    });
+    check("a pass that changed nothing cannot close out over its `fixed` claims", unchanged.seen.closeOutPrompts.length === 0 && unchanged.seen.reviewPrompts.length === 2 && !unchanged.res.closeOut, `${unchanged.seen.closeOutPrompts.length} close-out check(s)/${unchanged.seen.reviewPrompts.length} review prompt(s)`);
+
+    // Round 1 has no previous SHA, so there is no range to judge — the offer
+    // cannot conclude a cycle nothing has reviewed yet.
+    const first = await run(src, { fixes: [closeOutRound1, idle], reviews: [OK], cycle: { closeOut: "on" } });
+    check("round 1 cannot close out", first.seen.closeOutPrompts.length === 0 && first.seen.reviewPrompts.length === 1 && !first.res.closeOut, `${first.seen.closeOutPrompts.length} close-out check(s)`);
+
+    // And with the grant withheld the offer is inert, however it arrives.
+    const ungranted = await run(src, { fixes: [PASS_PACKET, closeOutFix("r1-1"), idle], reviews: [FAIL("a wording nit"), OK] });
+    check("an offer with no invoker grant is inert", ungranted.seen.closeOutPrompts.length === 0 && ungranted.seen.reviewPrompts.length === 2 && !ungranted.res.closeOut, `${ungranted.seen.closeOutPrompts.length} close-out check(s)`);
+
+    // The two claims scenario 24 and the retirement suite hold the TERMINAL
+    // check open for, made on a pass that also offers a close-out. Both are
+    // invisible to the diff check — a dropped deviation and a retirement claim
+    // ship as no hunk at all — so if this gate did not carry the same two
+    // conjuncts, a pass fixing two typos beside either one would conclude the
+    // cycle with the claim adjudicated by nobody. Neither is hypothetical: the
+    // close-out is offered on a passing-adjacent round, which is exactly where
+    // a pass settles the last open question or stops restating a deviation.
+    const movedDeviation = await run(src, {
+      fixes: [deviate, closeOutFix("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      cycle: { closeOut: "on" },
+    });
+    check("a deviation-set move forfeits the close-out for a normal round", movedDeviation.seen.closeOutPrompts.length === 0 && movedDeviation.seen.reviewPrompts.length === 2 && !movedDeviation.res.closeOut, `${movedDeviation.seen.closeOutPrompts.length} close-out check(s)/${movedDeviation.seen.reviewPrompts.length} review prompt(s)`);
+    check("and the round it buys is shown the claimed drop", /no longer restates/.test(movedDeviation.seen.reviewPrompts[1] || "") && (movedDeviation.seen.reviewPrompts[1] || "").includes(DEV), "round-2 review prompt");
+
+    const claimedRetirement = await run(src, {
+      fixes: [escalate, closeOutRetire("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      cycle: { closeOut: "on" },
+    });
+    check("a retirement claim forfeits the close-out for a normal round", claimedRetirement.seen.closeOutPrompts.length === 0 && claimedRetirement.seen.reviewPrompts.length === 2 && !claimedRetirement.res.closeOut, `${claimedRetirement.seen.closeOutPrompts.length} close-out check(s)/${claimedRetirement.seen.reviewPrompts.length} review prompt(s)`);
+    check("and the round it buys is the one that adjudicates the claim", /proposed for RETIREMENT/.test(claimedRetirement.seen.reviewPrompts[1] || "") && claimedRetirement.stateOf("q1") === "retired", `${claimedRetirement.stateOf("q1")}`);
+  });
+
+  // 27. The reviewer's build-first rule is conditioned on the tier the
+  //     orchestrator states, so the default decides what a renderer that states
+  //     none would get. No shipped caller is in that position today — every one
+  //     states its tier, wf-address-tasks' pre-PR collision re-review included
+  //     — so the default is purely defensive, and pinning it is what keeps it
+  //     the DELIVERY tier: a renderer with no cycle behind it is one whose pass
+  //     can be the last check before a PR opens, and a round-tier default would
+  //     silently weaken the next one written.
+  await scenario("27. an unstated tier means the delivery tier", async () => {
+    const { cycleReviewChecks } = loadCycle(src, async () => null);
+    const unstated = cycleReviewChecks("code", undefined);
+    check("an unstated tier renders the DELIVERY tier", /DELIVERY tier/.test(unstated) && !/ROUND tier/.test(unstated), unstated.slice(0, 200));
+    check("an unstated tier renders it for an applied-decision diff too", /DELIVERY tier/.test(cycleReviewChecks("decision", undefined)));
+    check("`round` is the tier that must be asked for", /ROUND tier/.test(cycleReviewChecks("code", "round")) && !/DELIVERY tier/.test(cycleReviewChecks("code", "round")));
+    check("`delivery` renders the delivery tier", /DELIVERY tier/.test(cycleReviewChecks("code", "delivery")));
+    // The round-tier brief tells the reviewer to skip a heavier suite, so it
+    // owes the same escalation guard the fixer's tier line carries.
+    check("the round-tier brief carries the escalation guard", /run more, not less/.test(cycleReviewChecks("code", "round")) && /build configuration, dependencies, or generated contracts/.test(cycleReviewChecks("code", "round")), cycleReviewChecks("code", "round"));
+
+    // The reviewer's half of the flake rule has to admit BOTH shapes the
+    // fixer's half prescribes. The cited-active-task outcome commits nothing by
+    // design — that is the point of citing rather than editing a base-landed
+    // file — so a gate that recognized only a newly committed task would block
+    // the outcome the policy asks for on every required round, `light` mode's
+    // last one included, and drive a conforming cycle to its cap.
+    check("the reviewer's flake gate admits a cited ACTIVE task, not only a new commit", /ACTIVE existing task the pass cited/.test(cycleReviewChecks("code", "delivery")) && /NEW one committed on this branch/.test(cycleReviewChecks("code", "delivery")), cycleReviewChecks("code", "delivery"));
+
+    // Admitting the shape is only half of it: the gate must also point the
+    // reviewer at a record it HOLDS. `cycleReviewPrompt` never renders the
+    // pass's `flakeRecord` — deliberately, and the light-mode scenario below
+    // rests on that — so a gate telling the reviewer to "check the pass's flake
+    // record" sent it to the one artifact its brief withholds, leaving the
+    // cited-task shape unverifiable and blocking anyway: the exact failure the
+    // check above exists to prevent, reintroduced one sentence later. What the
+    // reviewer does hold is its own failing run and the repository's task
+    // folder, which the flake rule makes greppable by requiring the suite name
+    // in the task TITLE. Both halves are asserted positively so the gate cannot
+    // regress by naming the record again while keeping the grep.
+    check("the reviewer's flake gate points the citation check at a record the reviewer HOLDS", /grep the repository's task folder/.test(cycleReviewChecks("code", "delivery")) && /not shown the pass's own flake record/.test(cycleReviewChecks("code", "delivery")), cycleReviewChecks("code", "delivery"));
+
+    // And the cycle states each round's tier, so no in-cycle round relies on
+    // the default: an intermediate round is told ROUND, the round a
+    // confirmation pass earns is told DELIVERY (it can be the cycle's last).
+    const intermediate = await run(src, { fixes: [PASS_PACKET, fixOn("r1-1"), idle], reviews: [FAIL("r1"), OK] });
+    check("an intermediate round's reviewer is told the ROUND tier", /ROUND tier/.test(intermediate.seen.reviewPrompts[0] || ""), "round-1 review prompt");
+    const confirmed = await run(src, { fixes: [PASS_PACKET, confirmDeviate, confirmDeviate], reviews: [OK, OK] });
+    check("the round a confirmation pass earns is told the DELIVERY tier", /DELIVERY tier/.test(confirmed.seen.reviewPrompts[1] || ""), "round-2 review prompt");
+  });
+
+  // 28. The record-only close, which is the unstated-tier scenario's rule read
+  //     to its conclusion. The delivery tier a confirmation pass owes survives
+  //     ONE post-run commit — the flake rule's diagnosis-only task file and the
+  //     note recording what that run surfaced — and tiered validation makes
+  //     the delivery run the first FULL-suite run of most cycles, so the run
+  //     that surfaces a flake is usually that one. Without this exit the
+  //     commit is the only thing between the pass and the terminal check: the
+  //     cycle buys a round told the DELIVERY tier (that scenario pins it), whose
+  //     reviewer runs the whole suite, and the confirmation pass after it owes
+  //     that tier again — three runs of the suite the tolerance exists to
+  //     spare, for a commit that adds a queue entry and a note.
+  //
+  //     What keeps it from being a hole is that the pass neither offers it nor
+  //     is asked about it: a cheap read-only check judges the RANGE, exactly
+  //     as the close-out's does, and every other conjunct of the terminal
+  //     check still holds the cycle open — which is what the bounds below pin.
+  //     The pass's own record of the failure is a conjunct too, since carrying
+  //     that record to the maintainer is the whole reason the round is skipped.
+  await scenario("28. a record-only commit concludes without buying a round", async () => {
+    const concluded = await run(src, { fixes: [PASS_PACKET, confirmRecordOnly], reviews: [OK], cycle: { maxRounds: 3 } });
+    check("a confirmation pass that only committed the record concludes with no further round", concluded.res.verdict === "pass" && concluded.seen.reviewPrompts.length === 1 && !!concluded.res.recordOnly, `${concluded.res.verdict}/${concluded.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(concluded.res.recordOnly)}`);
+    check("and the result records the pass, the range and what the check found", !!concluded.res.recordOnly && concluded.res.recordOnly.pass === 2 && concluded.res.recordOnly.range === "sha..sha" && /nothing but the flake record/.test(concluded.res.recordOnly.verified || ""), JSON.stringify(concluded.res.recordOnly));
+    check("the check is asked one question about the DIFF", /Record-only follow-up check/.test(concluded.seen.recordPrompts[0] || "") && /git diff/.test(concluded.seen.recordPrompts[0] || "") && /NOTHING but the unrelated-flake RECORD/.test(concluded.seen.recordPrompts[0] || ""), "record-only check prompt");
+
+    // The record carries the pass's OWN note beside the check's verdict. This
+    // exit has no later reviewer round, so nothing else the result carries can
+    // tell a consumer's PR body or batch summary what the delivery run
+    // surfaced — and the two fields must stay distinguishable, since one is
+    // the pass's account and the other the independent check's.
+    check("the record carries the pass's own note of what the run surfaced, distinct from the check's line", !!concluded.res.recordOnly && concluded.res.recordOnly.note === FLAKE_NOTE && concluded.res.recordOnly.verified !== concluded.res.recordOnly.note, JSON.stringify(concluded.res.recordOnly));
+
+    // The other half of "the pass's OWN note", and the half a single fixture
+    // cannot see: a record reading anything the cycle ACCUMULATES would
+    // publish an earlier pass's account under a heading about a failed
+    // delivery run. So a pass that reports nothing is REFUSED the exit rather
+    // than publishing an empty one: the heading announces a failed delivery run
+    // either way, and announcing one with no account of it tells the maintainer
+    // less than the round this exit skips would have. Together with the check
+    // above, this pins the record to THIS pass's `flakeRecord`: one fails if a
+    // populated one stops reaching the note, the other if an absent one buys
+    // the exit at all — whether left empty or filled from a predecessor's.
+    const silent = await run(src, { fixes: [{ ...PASS_PACKET, flakeRecord: FLAKE_NOTE }, confirmRecordOnlySilent, idle], reviews: [OK, OK], cycle: { maxRounds: 3 } });
+    check("a confirming pass that reports no flake record is refused the exit, buying the normal round rather than publishing an empty record", silent.res.recordOnly === undefined && silent.seen.recordPrompts.length === 0 && silent.seen.reviewPrompts.length === 2, `${JSON.stringify(silent.res.recordOnly)}/${silent.seen.recordPrompts.length} record check(s)/${silent.seen.reviewPrompts.length} review prompt(s)`);
+
+    // The other side of that rule, and the reason it is not a data loss: what
+    // the record may not PUBLISH as this conclusion's, `flakeHistory` keeps.
+    // The two answer different questions — the record speaks for a conclusion
+    // whose heading is about a failed DELIVERY run, and only a pass that can
+    // conclude the cycle runs that tier — so an INTERMEDIATE pass's record is
+    // wrong under that heading and still owed to the maintainer. The terminal
+    // exit is where dropping it would bite hardest: nothing is left in the diff
+    // to show it either, once the flake rule's cited-active-task outcome has
+    // committed nothing.
+    check("but the earlier pass's record is not lost with it — `flakeHistory` keeps every pass's", JSON.stringify(silent.res.flakeHistory) === JSON.stringify([{ pass: 1, note: FLAKE_NOTE }]), JSON.stringify(silent.res.flakeHistory));
+    const superseded = await run(src, { fixes: [{ ...PASS_PACKET, flakeRecord: FLAKE_NOTE }, idle], reviews: [OK], cycle: { maxRounds: 3 } });
+    check("including where a clean confirming pass concludes at the TERMINAL exit, which carries no record at all", superseded.res.verdict === "pass" && superseded.res.recordOnly === undefined && JSON.stringify(superseded.res.flakeHistory) === JSON.stringify([{ pass: 1, note: FLAKE_NOTE }]), `${JSON.stringify(superseded.res.recordOnly)}/${JSON.stringify(superseded.res.flakeHistory)}`);
+    check("while a cycle no pass reported a flake on carries no history at all", (await run(src, { fixes: [PASS_PACKET, idle], reviews: [OK] })).res.flakeHistory === undefined, "plain terminal exit");
+
+    // The exits that are not conclusions at all. `flakeHistory` is a log, so
+    // the contract promises one entry per reporting pass on EVERY exit — and
+    // that binds hardest exactly where the pass did not get to finish: a packet
+    // that reports a failed validation run and THEN blocks, or comes back from
+    // a worktree that is not clean and idle, or names no artifact directory, is
+    // the run whose failure the maintainer most needs told, and it is the one a
+    // late append silently loses. Every check the cycle makes on a packet
+    // returns before the conclusions do, so the record has to be read the
+    // moment the packet is in hand; nothing but these pins would notice it
+    // sliding back below them, since a spread on all 14 returns looks correct
+    // while the array they spread is still empty. Enumerated, one per error
+    // return that can follow a readable packet.
+    const blocked = await run(src, { fixes: [{ ...PASS_PACKET, flakeRecord: FLAKE_NOTE, blocker: "the base would not build" }], reviews: [] });
+    check("a pass that reports a flake and then BLOCKS still carries that pass's record", blocked.res.verdict === "error" && JSON.stringify(blocked.res.flakeHistory) === JSON.stringify([{ pass: 1, note: FLAKE_NOTE }]), `${blocked.res.verdict}/${JSON.stringify(blocked.res.flakeHistory)}`);
+    const unclean = await run(src, { fixes: [{ ...PASS_PACKET, flakeRecord: FLAKE_NOTE, clean: false }], reviews: [] });
+    check("so does one whose worktree comes back not clean and idle", unclean.res.verdict === "error" && JSON.stringify(unclean.res.flakeHistory) === JSON.stringify([{ pass: 1, note: FLAKE_NOTE }]), `${unclean.res.verdict}/${JSON.stringify(unclean.res.flakeHistory)}`);
+    const homeless = await run(src, { fixes: [{ ...PASS_PACKET, flakeRecord: FLAKE_NOTE, artifactDir: "" }], reviews: [] });
+    check("and so does one the cycle refuses for having no home for its round history", homeless.res.verdict === "error" && JSON.stringify(homeless.res.flakeHistory) === JSON.stringify([{ pass: 1, note: FLAKE_NOTE }]), `${homeless.res.verdict}/${JSON.stringify(homeless.res.flakeHistory)}`);
+
+    // The no-commit half of the same rule, and the reachable one: the flake
+    // policy tells a pass whose evidence matches an ALREADY-ACTIVE task to
+    // cite it rather than edit it, which leaves nothing to commit. That pass
+    // is `idle` — nothing changed, nothing disposed — so it exits at the
+    // TERMINAL check above, before the record path's `changed` gate. Without
+    // the record riding that exit too, a delivery run that FAILED reaches the
+    // maintainer nowhere: the consumers publish this record, and the reviewer
+    // pass-notes they publish beside it were written before the failure
+    // existed.
+    const cited = await run(src, { fixes: [PASS_PACKET, confirmCitingActiveTask], reviews: [OK], cycle: { maxRounds: 3 } });
+    check("a pass citing an active flake task still concludes without buying a round", cited.res.verdict === "pass" && cited.seen.reviewPrompts.length === 1 && cited.seen.recordPrompts.length === 0, `${cited.res.verdict}/${cited.seen.reviewPrompts.length} review prompt(s)/${cited.seen.recordPrompts.length} record check(s)`);
+    check("and its record carries the note with an EMPTY range — this pass cited an active task, so the record names no post-run commit of its own", !!cited.res.recordOnly && cited.res.recordOnly.note === CITED_NOTE && cited.res.recordOnly.range === "" && cited.res.recordOnly.verified === "", JSON.stringify(cited.res.recordOnly));
+    check("while an ordinary conclusion carries no record at all", (await run(src, { fixes: [PASS_PACKET, idle], reviews: [OK] })).res.recordOnly === undefined, "plain terminal exit");
+
+    // The check's own veto, the close-out's rule in its own words: the range is
+    // the licence, and anything beyond the record in it buys the normal round.
+    const vetoed = await run(src, {
+      fixes: [PASS_PACKET, confirmRecordOnly, idle],
+      reviews: [OK, OK],
+      records: [{ recordOnly: false, why: "a source edit rode along" }],
+    });
+    check("anything beyond the record in the range buys the normal round", vetoed.res.verdict === "pass" && vetoed.seen.recordPrompts.length === 1 && vetoed.seen.reviewPrompts.length === 2 && !vetoed.res.recordOnly, `${vetoed.seen.recordPrompts.length} record check(s)/${vetoed.seen.reviewPrompts.length} review prompt(s)`);
+    check("and the round it buys is still told the DELIVERY tier", /DELIVERY tier/.test(vetoed.seen.reviewPrompts[1] || ""), "round-2 review prompt");
+
+    // The bounds. Each is a conjunct the terminal check already carries, so
+    // this exit may not be looser than the check it stands in for: a
+    // disposition and a deviation-set move are claims a fresh reviewer
+    // adjudicates (a retirement claim rides IN `dispositions`, so the first
+    // bound covers it), and a pass that is not the CONFIRMATION pass may not
+    // reach the check at all — that one is load-bearing beyond cost, since an
+    // intermediate pass can leave findings undisposed.
+    const disposed = await run(src, { fixes: [PASS_PACKET, confirmSpontaneousFix, idle], reviews: [OK, OK] });
+    check("a disposition on the same pass still earns its round", disposed.seen.recordPrompts.length === 0 && disposed.seen.reviewPrompts.length === 2 && !disposed.res.recordOnly, `${disposed.seen.recordPrompts.length} record check(s)/${disposed.seen.reviewPrompts.length} review prompt(s)`);
+
+    const moved = await run(src, { fixes: [PASS_PACKET, { ...confirmRecordOnly, deviations: [DEV] }, confirmDeviate], reviews: [OK, OK_DEV] });
+    check("a deviation-set move on the same pass still earns its round", moved.seen.recordPrompts.length === 0 && moved.seen.reviewPrompts.length === 2 && JSON.stringify(moved.res.deviations) === JSON.stringify([DEV]), `${moved.seen.recordPrompts.length} record check(s)/${moved.seen.reviewPrompts.length} review prompt(s)`);
+
+    const intermediate = await run(src, { fixes: [PASS_PACKET, PASS_PACKET], reviews: [FAIL("r1"), OK], cycle: { maxRounds: 2 } });
+    check("an intermediate pass never reaches the check, so no finding leaves undisposed", intermediate.seen.recordPrompts.length === 0 && intermediate.res.verdict === "review-cap" && intermediate.carriedIds.includes("r1-1"), `${intermediate.seen.recordPrompts.length} record check(s)/${intermediate.res.verdict}/${intermediate.carried}`);
+  });
+
+  // 29. The same record on the LIGHT-mode conclusion — the fourth exit no
+  //     reviewer round follows, and the one that needs the record most.
+  //     `cycleValidationTier` makes EVERY light-mode pass a delivery-tier pass
+  //     precisely because light skips the confirmation pass, so light is the
+  //     mode where the run that surfaces a flake is most likely to be the
+  //     delivery run. The round that just passed is no substitute carrier: its
+  //     brief carries only the packet's dispositions and work report, never
+  //     `flakeRecord` — the reviewer's flake gate says so in as many words, the
+  //     unstated-tier scenario pins that it SAYS so, and the check below pins
+  //     that it is TRUE — so its notes were written without the failure in
+  //     view. The record-only scenario's exits and this one are one rule.
+  await scenario("29. a light-mode conclusion carries the same flake record", async () => {
+    const REVIEWER_CAVEAT = "reviewer caveat";
+    const lit = await run(src, {
+      fixes: [{ ...PASS_PACKET, flakeRecord: FLAKE_NOTE }],
+      reviews: [{ pass: true, issues: [], notes: REVIEWER_CAVEAT }],
+      cycle: { mode: "light" },
+    });
+    check("a light conclusion carries the delivery-tier pass's flake record", lit.res.verdict === "pass" && !!lit.res.recordOnly && lit.res.recordOnly.note === FLAKE_NOTE && lit.res.recordOnly.pass === 1, `${lit.res.verdict}/${JSON.stringify(lit.res.recordOnly)}`);
+    check("with the EMPTY range and check line: a light conclusion's record names no post-run commit of its own either, its pass's commits having been seen by the round that just passed", !!lit.res.recordOnly && lit.res.recordOnly.range === "" && lit.res.recordOnly.verified === "", JSON.stringify(lit.res.recordOnly));
+    // The omission this whole exit rests on, asserted against a rendered brief
+    // rather than against the gate's description of itself. Scenario 27 pins
+    // that the gate SAYS the reviewer is not shown the record; nothing pinned
+    // that it is so. If a later change plumbs `flakeRecord` onto the brief, the
+    // gate would be telling the reviewer a falsehood AND sending it to grep for
+    // something it now holds — and without this line the suite would stay green
+    // while both this exit's justification and scenario 27's went false.
+    check("and the round that passed was never shown that record", !(lit.seen.reviewPrompts[0] || "").includes(FLAKE_NOTE), "round-1 review prompt");
+    // `cycleValidationTier`'s light branch, which no other scenario PINS.
+    // Reached it certainly is — the light-mode scenario above and this
+    // scenario's own clean run below both execute it — but nothing asserts on
+    // what it returns: the unstated-tier scenario asserts on the confirming
+    // branch and the round branch, and neither is this one. It is the branch
+    // that makes the sentence above true — light has no confirmation pass, so
+    // THIS round's reviewer is the delivery-tier one — so leaving it unpinned
+    // would let a change make a light-mode round's reviewer skip the suite the
+    // exit concludes on while every scenario that runs the branch stayed green.
+    check("and that round's reviewer was told the DELIVERY tier, light having no confirmation pass to owe it", /DELIVERY tier/.test(lit.seen.reviewPrompts[0] || "") && !/ROUND tier/.test(lit.seen.reviewPrompts[0] || ""), "round-1 review prompt");
+    check("and the exit still records the round's undisposed remarks beside it", (lit.res.undisposed || []).includes(REVIEWER_CAVEAT), JSON.stringify(lit.res.undisposed));
+    const clean = await run(src, { fixes: [PASS_PACKET], reviews: [OK], cycle: { mode: "light" } });
+    check("while a light conclusion over a clean delivery run carries no record at all", clean.res.verdict === "pass" && clean.res.recordOnly === undefined, `${clean.res.verdict}/${JSON.stringify(clean.res.recordOnly)}`);
+  });
+
   const ran = legOk + legFail;
   check(`suite ran all ${CHECKS_PER_LEG} checks`, ran === CHECKS_PER_LEG, `ran ${ran}`);
   legOk = 0;
   legFail = 0;
+}
+
+// The invoker's GRANT of the trivial-round close-out, which decides whether
+// the gate above is reachable at all. It is parsed from the prose invocation —
+// the ONE string that also carries the target — so a bare-word match would let
+// a branch NAME grant a bounded discretion nobody asked for. Parsed outside
+// the embeddable section, and only here (a batch's `taskCycleConfig` grants no
+// close-out), so it runs once rather than per workflow leg.
+const GRANT_CHECKS = 13;
+{
+  console.log("# wf-review-cycle.js — invoker grants");
+  const before = legOk + legFail;
+  const src = readFileSync(join(here, "..", "plugins", "dev-skills", "workflows", "wf-review-cycle.js"), "utf8");
+  const cut = src.indexOf('phase("Scope");');
+  if (cut < 0) throw new Error("wf-review-cycle.js: the scope phase call this cuts at is gone");
+  const prefix = src.slice(0, cut).replace(/^export const meta/m, "const meta");
+  const flags = (input) =>
+    // eslint-disable-next-line no-new-func
+    new Function("args", "phase", "log", `"use strict";\n${prefix}\nreturn { lightMode, closeOutMode, artifactTypeToken };`)(input, () => {}, () => {});
+
+  check("a bare `close-out` token grants the close-out", flags("close-out; review branch task/035-x").closeOutMode === true);
+  check("a TARGET whose name merely contains the words grants nothing", flags("review the branch feature/close-out-ui").closeOutMode === false);
+  check("nor does a target that mentions the bare token inside a path", flags("review plugins/close-out/SKILL.md").closeOutMode === false);
+  // The token rule's COST, pinned because it is a behavior change from the `\b`
+  // regex it replaced and every part of it fails closed. The `closeout` case is
+  // there because the documented spelling is the HYPHENATED bare token and
+  // nothing — not the scope prompt's recognized-tokens line, not either SKILL
+  // mirror's Arguments line, not the task — ever named the other one; an alias
+  // no enumeration mentions grants a discretion nobody asked for. The last case
+  // is why the change is a fix rather than a trade: the old boundary read the
+  // grant out of an explicit REFUSAL.
+  check("the spaced `close out` no longer grants it", flags("close out, review branch task/035-x").closeOutMode === false);
+  check("nor does the unhyphenated `closeout` spelling", flags("review branch task/035-x, closeout").closeOutMode === false);
+  check("nor does the assigned `close-out=on` spelling", flags("close-out=on, review branch task/035-x").closeOutMode === false);
+  check("and `close-out=off` no longer grants it either, as the old boundary regex did", flags("close-out=off, review branch task/035-x").closeOutMode === false);
+  check("a bare `light` token still selects light mode", flags("light, review branch task/035-x").lightMode === true);
+  check("a branch named for it does not", flags("review the branch chore/light-theme").lightMode === false);
+  check("the bare artifact-type spelling still lands as its own word", flags("review this decision").artifactTypeToken === "decision");
+  check("but not from inside a branch name", flags("review the branch feature/decision-log").artifactTypeToken === null, JSON.stringify(flags("review the branch feature/decision-log")));
+  // Structured mode trusts only the structured field, like the sibling flags:
+  // `scope.items` carries verbatim third-party content (PR review-thread
+  // bodies), where a merely QUOTED token must not grant anything.
+  check("a structured invocation grants it through its own field", flags({ branch: "b", base: "main", closeOut: "on" }).closeOutMode === true);
+  check("and a token quoted inside structured scope items grants nothing", flags({ branch: "b", base: "main", scope: { items: ["the reviewer wrote: close-out"] } }).closeOutMode === false);
+
+  const granted = legOk + legFail - before;
+  check(`grant checks ran all ${GRANT_CHECKS}`, granted === GRANT_CHECKS, `ran ${granted}`);
 }
 
 if (failures) {
