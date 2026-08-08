@@ -1808,6 +1808,20 @@ const peerOff = structured
 // land). `\b` is not that boundary — it matches inside a path — so
 // `feature/close-out-ui` or `chore/light-theme` would grant a bounded
 // discretion the caller never asked for and only ever named a branch.
+//
+// What the rule costs, stated because it is a BEHAVIOR CHANGE from the `\b`
+// regex it replaced, and every part of it fails CLOSED: the spaced `close out`
+// and the assigned `close-out=on` no longer grant — the documented spelling is
+// the bare token — and neither does `close-out=off`, which the old regex read
+// as a grant, turning an explicit refusal into the very grant it refused.
+// What the rule does NOT close, and cannot: a target that IS the bare token, or
+// names it as its own word — `review branch close-out`, `review the close-out
+// section`, a branch named `light`. One prose string carries both the reserved
+// tokens and the target (see the "Recognized tokens" line above), so that
+// residual is the interface's, not the regex's; a wider pattern only trades it
+// for the path-name grants this rule exists to stop. Structured invocation is
+// the unambiguous channel, and the grant only ever buys a bounded, diff-checked
+// exit.
 const argTokens = new Set(lowerArgs.split(/\s+/).map((t) => t.replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "")).filter(Boolean));
 const lightMode = structured ? args.mode === "light" : argTokens.has("light");
 // The trivial-round close-out is granted, never assumed: absent this flag the
