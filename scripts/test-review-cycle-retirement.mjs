@@ -1,9 +1,19 @@
 #!/usr/bin/env node
-// Focused behavior test for the review cycle's open-question RETIREMENT
-// lifecycle. A retirement is the one disposition that takes a decision OFF the
-// maintainer's list, so what the TERMINAL result says about a claimed question
-// is a contract, not an implementation detail: it may read as settled only
-// where a reviewer round actually accepted the claim.
+// Focused behavior test for the review cycle's two CLAIM LIFECYCLES: the
+// open-question RETIREMENT lifecycle, and the LOCKED-DECISION DEVIATION
+// lifecycle including the reviewer's half of it. Both turn on the same
+// contract. A retirement is the disposition that takes a decision OFF the
+// maintainer's list, and a dropped deviation takes one off the same list, so
+// what the TERMINAL result says about either claim is a contract rather than an
+// implementation detail: it may read as settled only where a reviewer round
+// actually accepted the claim. A deviation the cycle first states puts a
+// decision ON that list instead, and reaches the maintainer only carrying the
+// reviewer's in-spec-route judgment and RATIFY/CONFORM recommendation — a round
+// does not pass while a standing deviation lacks them.
+//
+// The file name says "retirement" for the older half only. The deviation half
+// is the scenarios whose titles name a deviation — anchored that way rather
+// than by ordinal, which every inserted scenario moves.
 //
 // The workflows are runtime scripts (top-level await/return, injected
 // `agent`/`parallel`/`log` globals), so they cannot be imported. This evaluates
