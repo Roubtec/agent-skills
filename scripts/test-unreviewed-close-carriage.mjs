@@ -87,15 +87,17 @@ const RECORD = { pass: 3, range: "aaaa..bbbb", verified: "only a new diagnosis-o
 // already-ACTIVE task, so the pass cited it rather than editing it and had
 // nothing to commit. An empty `range` is the discriminator, and it says one
 // thing only — this record names no post-run commit of its own, which is true
-// of this outcome (nothing was committed) and equally of the light and
-// close-out conclusions (what they committed is accounted for elsewhere in the
-// result), and of a record `collisionReviewedRecord` has corrected below (a
-// fresh reviewer has since read the commit). Whichever of the four it is, the
-// note is then the whole record of the failure: the record points the consumer
-// at no commit, and there is still a failed delivery run the maintainer must be
-// told about. The rendered clause says exactly that much and no more — it does
-// not say why the record points at none, because the four members disagree on
-// the why and the fourth one has a commit still sitting on the branch.
+// of this outcome (nothing was committed), of the light conclusion (its
+// commits were seen by the round that just passed), of the close-out
+// conclusion (what it committed rides in the `closeOut` record this same
+// result carries), and of a record `collisionReviewedRecord` has corrected
+// below (a fresh reviewer has since read the commit). Whichever of the four it
+// is, the note is then the whole record of the failure: the record points the
+// consumer at no commit, and there is still a failed delivery run the
+// maintainer must be told about. The rendered clause says exactly that much
+// and no more — it does not say why the record points at none, because the
+// four members disagree on the why and the fourth one has a commit still
+// sitting on the branch.
 const CITED_NOTE = "the delivery run's only failure was the payments suite, which reproduces on the base; already queued as tasks/041-flaky-payments-suite.md, cited rather than re-filed";
 const CITED_RECORD = { pass: 3, range: "", verified: "", note: CITED_NOTE };
 const CLOSE_OUT = { pass: 3, range: "aaaa..bbbb", edits: ["reworded a comment"], verified: "every hunk non-semantic" };
