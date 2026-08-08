@@ -295,7 +295,7 @@ const CYCLE_REVIEW_SCHEMA = {
         properties: {
           deviation: { type: "string", description: "The deviation's text, copied VERBATIM from the list you were shown — the cycle matches it by exact text." },
           inSpecRoute: { type: "string", description: "Whether a route inside the locked decision existed, and which one — the first thing the maintainer's ratify-or-conform call needs." },
-          recommendation: { type: "string", description: "Your verdict as the FIRST word — RATIFY or CONFORM, the whole vocabulary — then the one-line reason. A hedge (`UNSURE`, `needs investigation`) is not a verdict and leaves the deviation unassessed, which does not pass the round. You recommend; the maintainer decides." },
+          recommendation: { type: "string", description: "Your verdict as the FIRST word — RATIFY or CONFORM, the whole vocabulary — then the one-line reason. A hedge (`UNSURE`, `needs investigation`) is not a verdict and leaves the deviation unassessed, which does not pass the round. The first word is taken literally, so do not open with both — `RATIFY or CONFORM …` is read as RATIFY; lead with neither if you cannot choose. You recommend; the maintainer decides." },
         },
         required: ["deviation", "inSpecRoute", "recommendation"],
       },
@@ -311,9 +311,19 @@ const CYCLE_REVIEW_SCHEMA = {
 // trims to something non-empty, so it would count as the reviewer's half while
 // answering the only question that half exists to answer. So the verdict is
 // parsed, and must LEAD the string exactly as the schema and the brief ask.
-// Leading rather than merely occurring: a reason may legitimately name the
-// other verdict ("RATIFY — conforming would cost a release"), and a hedge that
-// mentions both has still chosen neither.
+// Leading rather than merely occurring, because a reason may legitimately name
+// the other verdict ("RATIFY — conforming would cost a release") and an
+// occurrence test would have to reject that.
+//
+// What the rule buys is stated exactly, because the crude version is the one
+// worth having: the FIRST word decides, and a string opening with neither
+// verdict is not a verdict. It does NOT catch a hedge that opens with one and
+// then retracts it — `RATIFY or CONFORM — needs investigation` reads as RATIFY
+// — which is why the schema and the brief warn the reviewer that the first word
+// is taken literally. Nothing here can separate that string from `RATIFY —
+// CONFORM costs a release`, a real choice whose reason names the other verdict;
+// a rule rejecting the first would reject the second, and the maintainer reads
+// the whole `recommendation` text either way.
 const CYCLE_DEVIATION_VERDICTS = ["RATIFY", "CONFORM"];
 function cycleDeviationVerdict(recommendation) {
   // Leading punctuation and emphasis are stripped, so `**RATIFY** — …` reads as
@@ -568,7 +578,7 @@ function cycleReviewPrompt(cycle, state) {
   // round is gated on, one entry per deviation that still stands.
   const deviationDrops = Array.isArray(state.deviationDrops) ? state.deviationDrops : [];
   const deviationsBlock = Array.isArray(state.deviations) && state.deviations.length
-    ? `\n## Deviations from LOCKED decisions standing on this packet (verbatim)\n\nReturn ONE \`deviationAssessments\` entry for each of these the fixer still restates — every one below except the claimed drops you accept — copying its text VERBATIM into \`deviation\` and giving \`inSpecRoute\` (whether an in-spec route existed, and which) and \`recommendation\` (START with ${CYCLE_DEVIATION_VERDICTS.join(" or ")} — those two verdicts are the whole vocabulary, and a hedge such as "UNSURE" is not one of them — then the one-line reason). This round does not pass while one of them is unassessed: the maintainer decides, and would otherwise be handed the deviation with only the implementer's half of it. A deviation is neither a finding to be corrected away nor a license for unfinished work — grade completeness, tests, and regressions exactly as strictly.\n\n${JSON.stringify(state.deviations, null, 2)}\n${deviationDrops.length ? `\nOf those, the fixer no longer restates the ones below, CLAIMING each no longer stands. Verify that against the committed state exactly as you would a \`declined\`: passing this round is what drops them, so raise one you do not accept as an issue rather than letting it go — a drop you reject is assessed by the round after it, once the fixer restates it.\n\n${JSON.stringify(deviationDrops, null, 2)}\n` : ""}`
+    ? `\n## Deviations from LOCKED decisions standing on this packet (verbatim)\n\nReturn ONE \`deviationAssessments\` entry for each of these the fixer still restates — every one below except the claimed drops you accept — copying its text VERBATIM into \`deviation\` and giving \`inSpecRoute\` (whether an in-spec route existed, and which) and \`recommendation\` (START with ${CYCLE_DEVIATION_VERDICTS.join(" or ")} — those two verdicts are the whole vocabulary, and a hedge such as "UNSURE" is not one of them — then the one-line reason; the first word is taken literally as your verdict, so do not open with both, and lead with neither if you cannot choose). This round does not pass while one of them is unassessed: the maintainer decides, and would otherwise be handed the deviation with only the implementer's half of it. A deviation is neither a finding to be corrected away nor a license for unfinished work — grade completeness, tests, and regressions exactly as strictly.\n\n${JSON.stringify(state.deviations, null, 2)}\n${deviationDrops.length ? `\nOf those, the fixer no longer restates the ones below, CLAIMING each no longer stands. Verify that against the committed state exactly as you would a \`declined\`: passing this round is what drops them, so raise one you do not accept as an issue rather than letting it go — a drop you reject is assessed by the round after it, once the fixer restates it.\n\n${JSON.stringify(deviationDrops, null, 2)}\n` : ""}`
     : "";
   // This brief orders a full build, so the reviewer needs a destination for the
   // build's output as much as for its own report — including on the pass that
