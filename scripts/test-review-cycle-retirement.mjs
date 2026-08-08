@@ -1008,7 +1008,7 @@ for (const name of WORKFLOWS) {
 // a branch NAME grant a bounded discretion nobody asked for. Parsed outside
 // the embeddable section, and only here (a batch's `taskCycleConfig` grants no
 // close-out), so it runs once rather than per workflow leg.
-const GRANT_CHECKS = 10;
+const GRANT_CHECKS = 13;
 {
   console.log("# wf-review-cycle.js — invoker grants");
   const before = legOk + legFail;
@@ -1024,6 +1024,13 @@ const GRANT_CHECKS = 10;
   check("the `closeout` spelling grants it too", flags("review branch task/035-x, closeout").closeOutMode === true);
   check("a TARGET whose name merely contains the words grants nothing", flags("review the branch feature/close-out-ui").closeOutMode === false);
   check("nor does a target that also mentions closeout inside a path", flags("review plugins/closeout/SKILL.md").closeOutMode === false);
+  // The token rule's COST, pinned because it is a behavior change from the `\b`
+  // regex it replaced and every part of it fails closed. The last case is why
+  // the change is a fix rather than a trade: the old boundary read the grant
+  // out of an explicit REFUSAL.
+  check("the spaced `close out` no longer grants it", flags("close out, review branch task/035-x").closeOutMode === false);
+  check("nor does the assigned `close-out=on` spelling", flags("close-out=on, review branch task/035-x").closeOutMode === false);
+  check("and `close-out=off` no longer grants it either, as the old boundary regex did", flags("close-out=off, review branch task/035-x").closeOutMode === false);
   check("a bare `light` token still selects light mode", flags("light, review branch task/035-x").lightMode === true);
   check("a branch named for it does not", flags("review the branch chore/light-theme").lightMode === false);
   check("the bare artifact-type spelling still lands as its own word", flags("review this decision").artifactTypeToken === "decision");
