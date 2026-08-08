@@ -734,6 +734,11 @@ Empirical verification that could change state belongs ONLY in a disposable clon
 // branch. The brief names the destination rather than leaving it to be chosen.
 const CYCLE_REDIRECTED_OUTPUT = "Any build or validation output you redirect to a file goes under that same round directory, under any name you like — never a fixed shared scratchpad name: parallel cycles share one scratch directory.";
 
+// Provenance of a brief's claims, carried by the fixer, reviewer, and peer
+// briefs alike. Two claims relayed from an earlier round were wrong in a real
+// run and reached a maintainer decision; only roles told to re-derive caught it.
+const CYCLE_CARRIED_CLAIMS = "Provenance: only what you verify against the committed tree yourself is established this turn. Every finding, disposition, open question, and citation relayed to you here is CARRIED — not verified this turn, whatever its source; it may be stale, or have been wrong when written — so re-derive one before you rely on it.";
+
 // Default worktree/branch contract when the consumer supplies none. A consumer
 // with its own worktree lifecycle (wt-enter etc.) passes richer per-role
 // contract text via cycle.contracts instead.
@@ -773,7 +778,7 @@ function cycleFindingsBlock(findings) {
   if (findings.peerNotes) {
     parts.push(`### Peer (codex) notes\n\n${findings.peerNotes}`);
   }
-  return parts.length ? `\n## Findings to dispose (each given VERBATIM — reconcile overlap or conflict yourself)\n\n${parts.join("\n\n")}\n` : "";
+  return parts.length ? `\n## Findings to dispose (each given VERBATIM — reconcile overlap or conflict yourself)\n\nWhere the reviewer and the peer name the SAME fact and differ only in whether it gates, the two channels agree on the substance and split on severity: dispose it on the merits and say which way, rather than re-litigating a fact neither disputes. Framing only — the gate is unchanged, and a grounded finding keeps its full force.\n\n${parts.join("\n\n")}\n` : "";
 }
 
 // The still-live open questions, shown to every fixer pass after the one that
@@ -798,7 +803,7 @@ function cycleFixPrompt(cycle, state) {
   const roundIntro = state.confirming
     ? `The fresh reviewer has PASSED this cycle. This is the FINAL CONFIRMATION PASS of the disposition rule: read the passing reports below and dispose anything in them still worth acting on (pass-notes, stray remarks) — \`fixed\`, \`declined\` (with reason), or \`escalated\`. If nothing needs acting on, return \`changed: false\` with an empty \`dispositions\` array; that ends the cycle. Anything you fix or dispute will go through another reviewer round.`
     : state.findings
-      ? `This is fix-up round ${state.round}. Address the findings below: dispose EVERY one explicitly — \`fixed\`, \`declined\` (with a reason; the next fresh reviewer verifies declines), or \`escalated\` to an open question in the pinned format — echoing each finding's \`id\` as your disposition's \`findingId\`, exactly ONE disposition per finding (coverage is checked structurally; an uncovered or double-disposed finding comes back to the next pass and blocks the round). Never drop one silently, and never implement a fix you believe is wrong just to clear a finding.`
+      ? `This is fix-up round ${state.round}. Address the findings below: dispose EVERY one explicitly — \`fixed\`, \`declined\` (with a reason; the next fresh reviewer verifies declines), or \`escalated\` to an open question in the pinned format — echoing each finding's \`id\` as your disposition's \`findingId\`, exactly ONE disposition per finding (coverage is checked structurally; an uncovered or double-disposed finding comes back to the next pass and blocks the round). Never drop one silently, and never implement a fix you believe is wrong just to clear a finding. Two convergence heuristics apply once rounds start repeating themselves. If consecutive rounds each puncture a NARROWER residual of the same finding, the artifact is over-claiming rather than under-specified: "bound the claim honestly" — state the premises, name the residual outright, give the operator definite branches — is a legitimate COMPLETE \`fixed\` disposition, but only where the bounded claim is one the artifact actually keeps; weakening a criterion to dodge the finding is not bounding it. If TWO consecutive rounds land findings of the same CLASS in the same section, stop patching instances and ask whether the structure is the defect — the two observed triggers are a closed enumeration standing in for an open set (replace it with an exclusion rule) and a spec keeping several options open so every criterion must hold under all of them (lock one option) — and if you raise that threshold for a section under heavy churn, state in \`summary\` the number you raised it to.`
       : `This is round 1: carry out the assignment below.`;
   const artifactHome = state.artifactDir
     ? `This cycle's artifact directory is \`${state.artifactDir}\` — report it back as \`artifactDir\` and write this pass's packet prose (what you did, dispositions, question drafts) under it as \`round-${state.round}/\`.`
@@ -824,6 +829,8 @@ ${cycleItemsBlock(cycle)}${cycleFindingsBlock(state.findings)}${cycleOpenQuestio
 
 - ${artifactLine}
 - Commit at logical milestones; run the project's build/lint before declaring done (code artifacts).
+- A sweep ("fix this pattern everywhere") is ENUMERATED, never asserted: return the explicit search space with a per-item verdict, and claim a completed sweep in a commit message only where you enumerated that space. This round's reviewer redoes the enumeration rather than spot-checking yours.
+- ${CYCLE_CARRIED_CLAIMS}
 - If you must deliver something other than a decision the maintainer LOCKED, do not silently conform or correct: report it in \`deviations\` — what you delivered instead and the constraint that forced it. The cycle surfaces it for the human (report, don't correct).
 - Every \`escalated\` disposition gets an \`openQuestions\` entry in the schema's pinned format, under an id no earlier pass used (re-using one reads as a re-report of that pass's question, which the cycle keeps instead of yours), with authoritative artifact pointers (file:line, refs) — never paraphrase — and its \`questionId\` back-reference — which must name a question this cycle carries LIVE (the one you just raised, or one an earlier pass raised that no retirement has claimed); an absent, empty, or settled id names no decision the maintainer will be asked to make and comes back to the next pass as a disposition error. Raise a question only for a decision still open: a \`fixed\` or \`declined\` disposition that SETTLES a still-live question from an EARLIER pass names that question's \`id\` in \`retiresQuestionIds\` instead (only those two dispositions retire; a question this pass raises cannot also be retired by it; and retiring an id the cycle does not carry open from an earlier pass comes back to the next pass as a disposition error).
 - Before returning, \`git status --porcelain\` MUST be empty with every intended change committed; set \`clean\` and \`finalSha\` accordingly. An unclean tree is resolved or reported as a \`blocker\`, never handed to review.
@@ -839,7 +846,7 @@ function cycleReviewChecks(artifactType) {
   if (artifactType === "decision") {
     return `This is an APPLIED-DECISION diff. Verify the diff implements exactly the locked option and nothing beyond it, then do the quality pass (logic, error handling, edge cases, dead code, consistency, duplication, type safety) on the touched files. Run the build/type-check first; a failure is an automatic blocker.`;
   }
-  return `This is a CODE artifact. Run the full build/type-check FIRST; a failure is an automatic blocker (\`pass: false\`). Check every acceptance criterion the work items state against the actual code, then do the quality pass (logic, error handling, edge cases, dead code, consistency, duplication, type safety) on the touched files, and confirm any claimed same-pattern sweep did not miss a sibling occurrence.`;
+  return `This is a CODE artifact. Run the full build/type-check FIRST; a failure is an automatic blocker (\`pass: false\`). Check every acceptance criterion the work items state against the actual code, then do the quality pass (logic, error handling, edge cases, dead code, consistency, duplication, type safety) on the touched files.`;
 }
 
 function cycleReviewPrompt(cycle, state) {
@@ -883,7 +890,11 @@ Read the repository's agent-context files (\`AGENTS.md\` / \`CLAUDE.md\`) first 
 
 ${cycleReviewChecks(cycle.artifactType)}
 
-Scope with \`git diff --name-only ${cycleShq(cycle.base)}...HEAD\`, then read each touched file IN FULL — do not read commit messages or diff content (both anchor you to the fixer's intent); follow references into untouched files when needed. If the diff looks empty despite claimed work, set \`emptyDiffFlag\` and stop — that signals a wrong worktree/branch, not real absence.
+Where the work claims a same-pattern sweep ("fixed everywhere"), REDO the enumeration of its search space yourself rather than spot-checking the enumeration supplied; a sweep asserted with no enumeration behind it is a finding in its own right.
+
+${CYCLE_CARRIED_CLAIMS}
+
+Scope with \`git diff --name-only ${cycleShq(cycle.base)}...HEAD\` — deliberately the CUMULATIVE range, the whole change against \`base\` rather than an incremental since-the-last-round diff, because each round re-reviews the work as a whole. Then read each touched file IN FULL — do not read commit messages or diff content (both anchor you to the fixer's intent); follow references into untouched files when needed. If the diff looks empty despite claimed work, set \`emptyDiffFlag\` and stop — that signals a wrong worktree/branch, not real absence.
 ${persistLine}${cycle.scope && cycle.scope.reviewInstructions ? `\n## Consumer review criteria (verify each item against these too)\n\n${cycle.scope.reviewInstructions}\n` : ""}${cycleItemsBlock(cycle)}${handedBlock}${dispositionsBlock}${proposedRetirementsBlock}${workBlock}
 Return \`pass: true\` only if everything holds and no material issue remains; else \`pass: false\` with numbered, actionable \`issues\`. Be strict but fair — real gaps and functional problems, not style nits. Put pass-worthy caveats in \`notes\` (the cycle disposes them rather than dropping them).`;
 }
@@ -941,7 +952,7 @@ ${preflightStep}
 
 ## Peer prompt (write this text to the prompt file verbatim, filling only the placeholders)
 
-You are an independent read-only peer reviewer. Review the committed state of branch ${JSON.stringify(cycle.branch)} against base ${JSON.stringify(cycle.base)} in the current directory (artifact type: ${cycle.artifactType}). Read the actual files; edit nothing; run no builds or tests. Verify the work items and any proposed dispositions below in the committed code; a declined finding must be technically justified. Evidence (verbatim):
+You are an independent read-only peer reviewer. Review the committed state of branch ${JSON.stringify(cycle.branch)} against base ${JSON.stringify(cycle.base)} in the current directory (artifact type: ${cycle.artifactType}). Read the actual files; edit nothing; run no builds or tests. Verify the work items and any proposed dispositions below in the committed code; a declined finding must be technically justified. ${CYCLE_CARRIED_CLAIMS} Evidence (verbatim):
 
 ${JSON.stringify(evidence, null, 2)}
 
@@ -1181,6 +1192,12 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //
 // cycle: {
 //   slug, worktree, branch, base, artifactType ("code"|"prose"|"decision"),
+//   `base` must not MOVE under the cycle: never a movable remote-tracking name
+//     like `origin/main`, never a pre-rebase SHA (unreachable afterwards — so
+//     re-record it); pin it to an immutable OID or a recorded snapshot wherever
+//     it can move mid-run. Rounds review the CUMULATIVE `base...HEAD` by
+//     design: an INCREMENTAL re-review needs the recorded prior-round SHA, not
+//     a fix commit's parent — after an amend `HEAD~1` spans the whole fix set.
 //   scope: { title, instructions, items },
 //   maxRounds (validated through cycleRoundCap), peer ("on"|"off"),
 //   mode ("full"|"light"),

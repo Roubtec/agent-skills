@@ -266,7 +266,7 @@ function reviewCriteria() {
 - \`ambiguous-skipped\` must genuinely require an authoritative decision.
 Every gathered work item must have EXACTLY ONE \`workReport\` entry (a \`review-thread\` matched by its \`threadId\`, a \`standalone\` by its \`url\`): an item with none was silently dropped, and an item named by two entries carries dispositions publication cannot choose between — it would post a reply per entry and resolve on whichever it routed first. Either is a blocking issue. So is one entry naming TWO gathered items — a \`review-thread\` entry that also carries a gathered standalone's \`url\`, or a \`standalone\` entry that also carries a gathered \`threadId\` — since that reads as covering both while publication only ever serves one.
 Each entry's \`author\` and \`authorIsBot\` must match the gathered item they are echoed from — they decide which bot is re-pinged and whether a thread may be auto-resolved, so a "corrected" value is a blocking issue even when it looks more accurate.
-You may reclassify any item. Confirm the claimed same-pattern sweep did not miss a sibling occurrence.`;
+You may reclassify any item.`;
 }
 
 function publishPrompt(packet, dispositions, flags) {
