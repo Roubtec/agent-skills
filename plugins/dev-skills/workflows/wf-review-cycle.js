@@ -1728,7 +1728,12 @@ log(`review-cycle ${cycleConfig.slug}: ${cycleResult.verdict} after ${cycleResul
 return {
   target: { slug: cycleConfig.slug, worktree: cycleConfig.worktree, branch: cycleConfig.branch, base: cycleConfig.base, artifactType: cycleConfig.artifactType },
   mode: cycleConfig.mode,
-  closeOut: cycleConfig.closeOut,
+  // The MODE flag ("on"/"off"), deliberately not named `closeOut`: the cycle
+  // result's own `closeOut` is the RECORD of a close-out that ended the cycle,
+  // and the spread below would overwrite this string with it on exactly the
+  // runs where the grant mattered — leaving the field a string everywhere
+  // except where a reader most needs to tell the two apart.
+  closeOutMode: cycleConfig.closeOut,
   peer: cycleConfig.peer,
   ...cycleResult,
 };
