@@ -27,7 +27,7 @@ Included:
 
 Out of scope:
 
-- Changes to `peer-review-run` itself (powbox-owned) — including the model/effort passthrough this task depends on, which must be filed and delivered against powbox rather than worked around here.
+- Changes to `peer-review-run` itself (powbox-owned) — including the codex peer's configured-model passthrough this task still depends on, which must be filed and delivered against powbox rather than worked around here. The effort half is already delivered and is not a prerequisite: the helper accepts `--effort`, defaults it to `high` for both providers, and re-injects it past its own config isolation, so what this task passes explicitly is `medium`, per the strength-baseline bullet above.
 - The GitHub-bot re-ping flows (unrelated to the CLI peer).
 
 ## Context and references
