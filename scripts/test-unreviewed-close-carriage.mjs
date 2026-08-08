@@ -63,7 +63,7 @@ function check(name, cond, detail) {
 // does not count. Bump it deliberately when adding or removing one — a check
 // that silently stops running is invisible to a suite that only gates on
 // failures.
-const EXPECTED_CHECKS = 31;
+const EXPECTED_CHECKS = 39;
 
 // Evaluate a workflow's declarations up to its first executable statement and
 // hand back the named ones. Each is returned by an explicit reference, so a
@@ -209,15 +209,46 @@ const cycleResult = (extra) => ({
   const afterReReview = prPrompt(task, { notes: "reviewer caveat", deviations: [], ...collisionReviewedRecord({ recordOnly: RECORD }) }, true);
   check("so the PR body of a re-reviewed branch reports the failure without claiming an unreviewed commit", /Delivery-run failure — recorded, not reviewed/.test(afterReReview) && afterReReview.includes(NOTE) && !/final commit/.test(afterReReview) && !afterReReview.includes(RECORD.range) && !/rangeCheck/.test(afterReReview), "pr prompt");
 
+  // The re-review's OWN record. That standalone pass runs the branch's last
+  // delivery-tier validation — after the resolver changed the branch, with no
+  // fixer pass anywhere around it — so a failure it passes over as
+  // evidenced-unrelated must come back through its verdict and be published,
+  // or the PR opens over a failed final run the maintainer never hears of.
+  const { collisionReReviewFlakeRecord, collisionReReviewPrompt, COLLISION_RE_REVIEW_SCHEMA, CYCLE_REVIEW_SCHEMA } = loadDeclarations("wf-address-tasks.js", "\nconst peerMode = /", [
+    "collisionReReviewFlakeRecord",
+    "collisionReReviewPrompt",
+    "COLLISION_RE_REVIEW_SCHEMA",
+    "CYCLE_REVIEW_SCHEMA",
+  ]);
+  const RE_NOTE = "the re-review run's only failure was the payments suite, which reproduces on the base; tied to the ACTIVE tasks/041-flaky-payments-suite.md";
+  const own = collisionReReviewFlakeRecord(cycleResult({ recordOnly: RECORD, flakeHistory: FLAKE_HISTORY }), { pass: true, flakeRecord: RE_NOTE });
+  check("the re-review's own deferred failure becomes a published record in the no-commit shape, under a named pass", own.recordOnly && own.recordOnly.note === RE_NOTE && own.recordOnly.range === "" && own.recordOnly.verified === "" && own.recordOnly.pass === "collision-re-review", JSON.stringify(own.recordOnly));
+  check("and is appended to the flake history without dropping an earlier pass's entry", JSON.stringify(own.flakeHistory) === JSON.stringify([...FLAKE_HISTORY, { pass: "collision-re-review", note: RE_NOTE }]), JSON.stringify(own.flakeHistory));
+  check("a cycle no pass reported a flake on starts the history at this pass", JSON.stringify(collisionReReviewFlakeRecord(cycleResult(), { pass: true, flakeRecord: RE_NOTE }).flakeHistory) === JSON.stringify([{ pass: "collision-re-review", note: RE_NOTE }]), "helper");
+  check("a verdict carrying no record — absent, empty, or whitespace — is spread-neutral", JSON.stringify(collisionReReviewFlakeRecord(cycleResult({ recordOnly: RECORD }), { pass: true })) === "{}" && JSON.stringify(collisionReReviewFlakeRecord(cycleResult(), { pass: true, flakeRecord: "  " })) === "{}" && JSON.stringify(collisionReReviewFlakeRecord(cycleResult(), null)) === "{}", "helper");
+
+  // Through the call site's spread order and the publishing consumer: the
+  // re-review's record replaces the corrected one — it speaks for the branch's
+  // actual last delivery-tier run — and renders citing no commit.
+  const superseded = { ...collisionReviewedRecord({ recordOnly: RECORD }), ...collisionReReviewFlakeRecord({ recordOnly: RECORD, flakeHistory: FLAKE_HISTORY }, { pass: true, flakeRecord: RE_NOTE }) };
+  const ownRendered = prPrompt(task, { notes: "", deviations: [], recordOnly: superseded.recordOnly }, true);
+  check("so the PR body of a re-reviewed branch whose re-review run failed reports THAT run's record, naming no commit", /Delivery-run failure — recorded, not reviewed/.test(ownRendered) && ownRendered.includes(RE_NOTE) && !ownRendered.includes(NOTE) && !ownRendered.includes(RECORD.range) && !/rangeCheck/.test(ownRendered), "pr prompt");
+
+  check("the re-review schema is the reviewer schema plus the recording field, gating nothing new", "flakeRecord" in COLLISION_RE_REVIEW_SCHEMA.properties && Object.keys(CYCLE_REVIEW_SCHEMA.properties).every((k) => k in COLLISION_RE_REVIEW_SCHEMA.properties) && JSON.stringify(COLLISION_RE_REVIEW_SCHEMA.required) === JSON.stringify(CYCLE_REVIEW_SCHEMA.required), JSON.stringify(Object.keys(COLLISION_RE_REVIEW_SCHEMA.properties)));
+  const brief = collisionReReviewPrompt(task, true, "on");
+  check("the re-review brief states the delivery tier and demands the record for a failure it passes over", /DELIVERY tier/.test(brief) && /MUST come back in `flakeRecord`/.test(brief) && /stays blocking/.test(brief), "re-review brief");
+
   // And the call site actually applies it — a helper nothing spreads into the
   // delivered result corrects nothing. Checked against the source text because
   // the collision dispatch is executable body, which no harness can drive (the
-  // header's third extraction method). What the pin establishes is exactly that
-  // this statement still ships verbatim: it reads no surrounding guard, so it
-  // does not establish which arm of the dispatch holds it.
+  // header's third extraction method). What each pin establishes is exactly
+  // that its statement still ships verbatim: it reads no surrounding guard, so
+  // it does not establish which arm of the dispatch holds it.
   const dispatchSrc = readFileSync(join(workflows, "wf-address-tasks.js"), "utf8");
-  const APPLIED = /deliverable\.push\(\{ task, result: \{ \.\.\.result, notes: verdict\.notes \|\| result\.notes, \.\.\.collisionReviewedRecord\(result\) \} \}\);/;
-  check("the collision dispatch's delivering push spreads the correction into the result it delivers", APPLIED.test(dispatchSrc), "wf-address-tasks.js");
+  const APPLIED = /deliverable\.push\(\{ task, result: \{ \.\.\.result, notes: verdict\.notes \|\| result\.notes, \.\.\.collisionReviewedRecord\(result\), \.\.\.collisionReReviewFlakeRecord\(result, verdict\) \} \}\);/;
+  check("the collision dispatch's delivering push spreads the correction and the re-review's own record into the result it delivers", APPLIED.test(dispatchSrc), "wf-address-tasks.js");
+  const RE_REVIEW_CALL = /await agent\(collisionReReviewPrompt\(task, remote, peerMode\), \{ label: `re-review:\$\{task\.slug\}`, schema: COLLISION_RE_REVIEW_SCHEMA \}\)/;
+  check("and its re-review runs the extended brief under the extended schema", RE_REVIEW_CALL.test(dispatchSrc), "wf-address-tasks.js");
 }
 
 // --- wf-address-review.js: the sibling consumer's inline carrier -----------

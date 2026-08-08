@@ -321,6 +321,10 @@ const FIXTURES = {
       ["resolveCollisionsPrompt (remote)", (f) => f.resolveCollisionsPrompt([task], [{ kind: "path", name: "src/a.ts", branches: [task.branch, "task/043-x"] }], true)],
       ["resolveCollisionsPrompt (no remote)", (f) => f.resolveCollisionsPrompt([task], [{ kind: "path", name: "src/a.ts", branches: [task.branch, "task/043-x"] }], false)],
     ],
+    collisionReReviewPrompt: [
+      ["collisionReReviewPrompt (remote)", (f) => f.collisionReReviewPrompt(task, true, "on")],
+      ["collisionReReviewPrompt (no remote)", (f) => f.collisionReReviewPrompt(task, false, "on")],
+    ],
   },
   "wf-address-review.js": {
     gatherPrompt: [["gatherPrompt", (f) => f.gatherPrompt("#42 push")]],

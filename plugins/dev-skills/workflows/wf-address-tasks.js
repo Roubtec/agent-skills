@@ -2535,6 +2535,45 @@ function collisionReviewedRecord(result) {
   return { recordOnly: { ...rec, range: "", verified: "" } };
 }
 
+// The re-review's OWN half of that duty. Inside the cycle a reviewer never
+// records a flake — a fixer pass with a `flakeRecord` field runs the delivery
+// tier around it — but no fixer pass exists anywhere around this standalone
+// pass: its run is the branch's last before the PR opens, so a failure it
+// passes over under the flake rule's cited-active-task outcome must come back
+// through the verdict or reach the maintainer nowhere. Hence the one delta on
+// the reviewer's schema and brief, and the carrier below that publishes what
+// comes back.
+const COLLISION_RE_REVIEW_SCHEMA = {
+  ...CYCLE_REVIEW_SCHEMA,
+  properties: {
+    ...CYCLE_REVIEW_SCHEMA.properties,
+    flakeRecord: { type: "string", description: "REQUIRED when your own validation run hit a failure you are passing over as evidenced-unrelated under the flake rule: what failed, the ACTIVE follow-up task you tied it to, and the evidence. Empty otherwise. No pass follows this one, so this field is the maintainer's only notice that this run FAILED." },
+  },
+};
+
+function collisionReReviewPrompt(task, remote, peerMode) {
+  return `${cycleReviewPrompt(taskCycleConfig(task, remote, peerMode), { round: 1, packet: null, artifactDir: "", tier: "delivery" })}
+
+One addition to the flake rule above: no pass follows this one, so a failure your own validation run hit and you are passing over as evidenced-unrelated MUST come back in \`flakeRecord\` — what failed, the ACTIVE follow-up task you tied it to, and the evidence; leave it empty otherwise. You commit nothing yourself, so a failure you can tie to no ACTIVE task stays blocking (\`pass: false\`), exactly as that rule says.`;
+}
+
+// Publishes the record the re-review returned. `recordOnly` speaks for the
+// branch's last delivery-tier run, which this pass now is, so at the call site
+// this record is spread AFTER the corrected one and replaces it; every earlier
+// reporting pass's record stays in `flakeHistory`, where this one is appended
+// too. The empty `range` pair is the no-commit shape — this pass commits
+// nothing — and `pass` is named rather than numbered because no fixer-pass
+// number exists for it (no consumer reads the field as a number).
+function collisionReReviewFlakeRecord(result, verdict) {
+  const note = verdict && typeof verdict.flakeRecord === "string" ? verdict.flakeRecord.trim() : "";
+  if (!note) return {};
+  const history = Array.isArray(result.flakeHistory) ? result.flakeHistory : [];
+  return {
+    recordOnly: { pass: "collision-re-review", range: "", verified: "", note },
+    flakeHistory: [...history, { pass: "collision-re-review", note }],
+  };
+}
+
 async function implementTask(task, remote, peerMode) {
   // The loop is the embedded runReviewCycle above. Sequential fixer -> reviewer
   // awaits inside the cycle plus a SHARED on-disk worktree mean the implementer
@@ -2952,13 +2991,17 @@ try {
           // tier again, which this reviewer is the only remaining pass able to
           // run. (An unstated tier renders the delivery tier anyway — that is
           // the fail-safe default — but a gate this load-bearing says so.)
-          const verdict = await agent(cycleReviewPrompt(taskCycleConfig(task, remote, peerMode), { round: 1, packet: null, artifactDir: "", tier: "delivery" }), { label: `re-review:${task.slug}`, schema: CYCLE_REVIEW_SCHEMA });
+          // The brief, its stated tier, and the `flakeRecord` recording delta
+          // live in `collisionReReviewPrompt` / `COLLISION_RE_REVIEW_SCHEMA`.
+          const verdict = await agent(collisionReReviewPrompt(task, remote, peerMode), { label: `re-review:${task.slug}`, schema: COLLISION_RE_REVIEW_SCHEMA });
           if (verdict && verdict.pass && !verdict.emptyDiffFlag) {
             // A pass here is a fresh reviewer's read of the whole branch, so it
             // settles the one claim the cycle's `recordOnly` can no longer
             // make — see `collisionReviewedRecord`. Only that claim: the record
-            // and its note still ride to the PR body, unchanged otherwise.
-            deliverable.push({ task, result: { ...result, notes: verdict.notes || result.notes, ...collisionReviewedRecord(result) } });
+            // and its note still ride to the PR body, unchanged otherwise —
+            // unless this pass's own run deferred a failure, whose record then
+            // supersedes it (see `collisionReReviewFlakeRecord`).
+            deliverable.push({ task, result: { ...result, notes: verdict.notes || result.notes, ...collisionReviewedRecord(result), ...collisionReReviewFlakeRecord(result, verdict) } });
           } else {
             const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "rename did not pass fresh re-review; held before PR delivery", outstanding: verdict ? verdict.issues : null, collisions: related, ...cycleCarried(result) };
             statusBySlug.set(task.slug, held.status);
