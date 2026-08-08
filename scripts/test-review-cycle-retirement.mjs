@@ -5,6 +5,13 @@
 // is a contract, not an implementation detail: it may read as settled only
 // where a reviewer round actually accepted the claim.
 //
+// It has grown to cover the section's other terminal gates, which live beside
+// that one and decide the same question — what may leave the cycle without a
+// fresh reviewer seeing it: a locked-decision deviation a pass moves on or off
+// the maintainer's list (24), the trivial-round close-out, which concludes with
+// no reviewer round at all (25), and the validation tier a reviewer's brief
+// states, whose default decides what an unstated one runs (26).
+//
 // The workflows are runtime scripts (top-level await/return, injected
 // `agent`/`parallel`/`log` globals), so they cannot be imported. This evaluates
 // the ACTUAL shipped `review-cycle-core` section — no second copy — with those
@@ -44,7 +51,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 63;
+const CHECKS_PER_LEG = 78;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -72,8 +79,12 @@ function loadCycle(src, agent) {
   const pipeline = async () => [];
   const log = () => {};
   const phase = () => {};
+  // `cycleReviewChecks` comes back beside the cycle because its TIER DEFAULT is
+  // reachable no other way: an unstated tier is what a caller with no cycle
+  // behind it renders (wf-address-tasks' pre-PR collision re-review), so
+  // driving `runReviewCycle` — which always states one — can never exercise it.
   // eslint-disable-next-line no-new-func
-  return new Function("agent", "parallel", "pipeline", "log", "phase", `${section}\nreturn runReviewCycle;`)(
+  return new Function("agent", "parallel", "pipeline", "log", "phase", `${section}\nreturn { runReviewCycle, cycleReviewChecks };`)(
     agent,
     parallel,
     pipeline,
@@ -85,9 +96,16 @@ function loadCycle(src, agent) {
 // Scripted agent: fixer and reviewer packets are consumed in order. An
 // exhausted fixer queue returns nothing, which the cycle treats as an error
 // exit — the shape scenario 3 needs.
-function scriptedAgent(fixes, reviews, seen) {
+//
+// The close-out diff check defaults to the PERMISSIVE verdict (every hunk
+// non-semantic) rather than a refusal, so a scenario that reaches the gate
+// concludes. That direction is deliberate: the gate's failure mode is firing
+// when it should not, and a permissive check makes a broken gate visible as a
+// concluded cycle instead of hiding behind a scripted veto.
+function scriptedAgent(fixes, reviews, seen, closeOuts = []) {
   const fixQueue = [...fixes];
   const reviewQueue = [...reviews];
+  const closeOutQueue = [...closeOuts];
   return async function agent(prompt, opts) {
     const label = (opts && opts.label) || "";
     if (label.startsWith("fix#")) {
@@ -99,6 +117,11 @@ function scriptedAgent(fixes, reviews, seen) {
       seen.reviewPrompts.push(prompt);
       const p = reviewQueue.shift();
       return p === undefined ? { pass: true, issues: [], notes: "" } : p;
+    }
+    if (label.startsWith("closeout#")) {
+      seen.closeOutPrompts.push(prompt);
+      const p = closeOutQueue.shift();
+      return p === undefined ? { nonSemantic: true, why: "scripted: every hunk non-semantic" } : p;
     }
     if (label.startsWith("ground#")) return { verdicts: [] };
     return null;
@@ -242,6 +265,25 @@ const confirmRetireAgain = {
   dispositions: [{ finding: "a pass-note", origin: "reviewer", disposition: "fixed", detail: "settled it again", retiresQuestionIds: ["q1"] }],
 };
 
+// Trivial-round close-out packets (scenario 25). Each OFFERS a close-out — the
+// same non-semantic edit list — and differs only in how it disposed the one
+// finding it was handed, which is the whole question the gate answers.
+const CLOSE_OUT_EDITS = ["reworded a comment"];
+const closeOutFix = (findingId) => ({ ...fixOn(findingId), closeOutEdits: CLOSE_OUT_EDITS });
+const closeOutDecline = (findingId) => ({
+  ...PASS_PACKET,
+  dispositions: [{ findingId, finding: "off-by-one in the cap check", origin: "reviewer", disposition: "declined", detail: "reads fine to me" }],
+  closeOutEdits: CLOSE_OUT_EDITS,
+});
+const closeOutEscalate = (findingId) => ({
+  ...escalateOn(findingId, "q1"),
+  openQuestions: [Q1],
+  closeOutEdits: CLOSE_OUT_EDITS,
+});
+// The same offer on round 1, where there is no previous pass's SHA to judge a
+// close-out range against.
+const closeOutRound1 = { ...PASS_PACKET, dispositions: [], closeOutEdits: CLOSE_OUT_EDITS };
+
 // A deviation from a LOCKED maintainer decision, and a pass that reports one.
 // Every other packet above carries `deviations: []`, so any of them following
 // this one is a pass that has stopped restating it — the claimed drop.
@@ -255,8 +297,8 @@ const deviate = { ...PASS_PACKET, deviations: [DEV] };
 // one rule — whether the pass moved the set — not three cases.
 const confirmDeviate = { ...idle, deviations: [DEV] };
 
-async function run(src, { fixes, reviews, cycle }) {
-  const seen = { fixPrompts: [], reviewPrompts: [] };
+async function run(src, { fixes, reviews, closeOuts, cycle }) {
+  const seen = { fixPrompts: [], reviewPrompts: [], closeOutPrompts: [] };
   // Deep-clone every scripted packet. The cycle MUTATES the question objects it
   // accumulates — that is how a retirement mark lands — and the packets above
   // are module-level literals shared by every scenario and BOTH workflow legs.
@@ -264,7 +306,7 @@ async function run(src, { fixes, reviews, cycle }) {
   // shared `Q1` and each later scenario silently exercises the volunteered-mark
   // STRIP path instead of the clean one it means to test.
   const clone = (v) => JSON.parse(JSON.stringify(v));
-  const runReviewCycle = loadCycle(src, scriptedAgent(clone(fixes), clone(reviews), seen));
+  const { runReviewCycle } = loadCycle(src, scriptedAgent(clone(fixes), clone(reviews), seen, clone(closeOuts || [])));
   const res = await runReviewCycle({ ...CYCLE, ...cycle });
   const questionOf = (id) => (res.openQuestions || []).find((x) => x && x.id === id);
   // The three states a claimed question can be in, as a CONSUMER sees them:
@@ -683,6 +725,87 @@ for (const name of WORKFLOWS) {
     const addedAtCap = await run(src, { fixes: [PASS_PACKET, confirmDeviate], reviews: [OK], cycle: { maxRounds: 1 } });
     check("an add the cap leaves unreviewed exits review-cap, deviation standing", addedAtCap.res.verdict === "review-cap" && JSON.stringify(addedAtCap.res.deviations) === JSON.stringify([DEV]), `${addedAtCap.res.verdict}/${JSON.stringify(addedAtCap.res.deviations)}`);
     check("and the cap exit's note names the deviation-set move", /newly stated deviation/.test(((addedAtCap.res.outstanding || {}).note) || ""), JSON.stringify(addedAtCap.res.outstanding || {}));
+  });
+
+  // 25. The trivial-round close-out ends a cycle with NO fresh reviewer ever
+  //     seeing the pass, so what it may swallow is a gate, not a detail. It is
+  //     checked on the DIFF — and that check is structurally blind to a
+  //     disposition that leaves no diff. A `declined` finding ships as an empty
+  //     hunk, so a pass fixing two typos beside a declined off-by-one would
+  //     otherwise conclude the cycle with the decline adjudicated by nobody,
+  //     against the cycle's own contract that a decline is verified by the next
+  //     fresh reviewer and never final on the fixer's say-so. `escalated` is
+  //     the same shape. Hence: fixed-only, checked structurally, beside the
+  //     retirement and deviation claims that already hold the cycle open.
+  await scenario("25. a close-out concludes only over fixes", async () => {
+    const concluded = await run(src, {
+      fixes: [PASS_PACKET, closeOutFix("r1-1")],
+      reviews: [FAIL("a wording nit")],
+      cycle: { closeOut: "on" },
+    });
+    check("a fix-only non-semantic pass concludes with no further round", concluded.res.verdict === "pass" && concluded.seen.reviewPrompts.length === 1 && !!concluded.res.closeOut, `${concluded.res.verdict}/${concluded.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(concluded.res.closeOut)}`);
+    check("and the result records the pass, range and unreviewed edits", !!concluded.res.closeOut && concluded.res.closeOut.pass === 2 && concluded.res.closeOut.range === "sha..sha" && JSON.stringify(concluded.res.closeOut.edits) === JSON.stringify(CLOSE_OUT_EDITS), JSON.stringify(concluded.res.closeOut));
+
+    const declined = await run(src, {
+      fixes: [PASS_PACKET, closeOutDecline("r1-1"), idle],
+      reviews: [FAIL("off-by-one in the cap check"), OK],
+      cycle: { closeOut: "on" },
+    });
+    check("a DECLINED disposition forfeits the close-out for a normal round", declined.res.verdict === "pass" && declined.seen.closeOutPrompts.length === 0 && declined.seen.reviewPrompts.length === 2 && !declined.res.closeOut, `${declined.seen.closeOutPrompts.length} close-out check(s)/${declined.seen.reviewPrompts.length} review prompt(s)`);
+    check("and the round it buys is shown the decline to adjudicate", /"disposition": "declined"/.test(declined.seen.reviewPrompts[1] || ""), "round-2 review prompt");
+
+    const escalated = await run(src, {
+      fixes: [PASS_PACKET, closeOutEscalate("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      cycle: { closeOut: "on" },
+    });
+    check("an ESCALATED disposition forfeits it too", escalated.res.verdict === "pass" && escalated.seen.closeOutPrompts.length === 0 && escalated.seen.reviewPrompts.length === 2, `${escalated.seen.closeOutPrompts.length} close-out check(s)/${escalated.seen.reviewPrompts.length} review prompt(s)`);
+
+    // The diff check's own veto, unchanged: the offer is never the licence.
+    const vetoed = await run(src, {
+      fixes: [PASS_PACKET, closeOutFix("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      closeOuts: [{ nonSemantic: false, why: "an executable hunk rode along" }],
+      cycle: { closeOut: "on" },
+    });
+    check("a semantic hunk in the diff still forfeits the close-out", vetoed.seen.closeOutPrompts.length === 1 && vetoed.seen.reviewPrompts.length === 2 && !vetoed.res.closeOut, `${vetoed.seen.closeOutPrompts.length} close-out check(s)/${vetoed.seen.reviewPrompts.length} review prompt(s)`);
+
+    // Round 1 has no previous SHA, so there is no range to judge — the offer
+    // cannot conclude a cycle nothing has reviewed yet.
+    const first = await run(src, { fixes: [closeOutRound1, idle], reviews: [OK], cycle: { closeOut: "on" } });
+    check("round 1 cannot close out", first.seen.closeOutPrompts.length === 0 && first.seen.reviewPrompts.length === 1 && !first.res.closeOut, `${first.seen.closeOutPrompts.length} close-out check(s)`);
+
+    // And with the grant withheld the offer is inert, however it arrives.
+    const ungranted = await run(src, { fixes: [PASS_PACKET, closeOutFix("r1-1"), idle], reviews: [FAIL("a wording nit"), OK] });
+    check("an offer with no invoker grant is inert", ungranted.seen.closeOutPrompts.length === 0 && ungranted.seen.reviewPrompts.length === 2 && !ungranted.res.closeOut, `${ungranted.seen.closeOutPrompts.length} close-out check(s)`);
+  });
+
+  // 26. The reviewer's build-first rule is conditioned on the tier the
+  //     orchestrator states, so the UNSTATED case is a real input, not a
+  //     defensive default: wf-address-tasks' pre-PR collision re-review renders
+  //     this brief with no cycle behind it. It must land on the DELIVERY tier —
+  //     that pass is the last check before a PR opens, over a state the
+  //     collision resolver changed after the task's own delivery-tier pass.
+  //     Defaulting to the round tier there would have weakened a pre-PR gate
+  //     that previously built unconditionally.
+  await scenario("26. an unstated tier means the delivery tier", async () => {
+    const { cycleReviewChecks } = loadCycle(src, async () => null);
+    const unstated = cycleReviewChecks("code", undefined);
+    check("an unstated tier renders the DELIVERY tier", /DELIVERY tier/.test(unstated) && !/ROUND tier/.test(unstated), unstated.slice(0, 200));
+    check("an unstated tier renders it for an applied-decision diff too", /DELIVERY tier/.test(cycleReviewChecks("decision", undefined)));
+    check("`round` is the tier that must be asked for", /ROUND tier/.test(cycleReviewChecks("code", "round")) && !/DELIVERY tier/.test(cycleReviewChecks("code", "round")));
+    check("`delivery` renders the delivery tier", /DELIVERY tier/.test(cycleReviewChecks("code", "delivery")));
+    // The round-tier brief tells the reviewer to skip a heavier suite, so it
+    // owes the same escalation guard the fixer's tier line carries.
+    check("the round-tier brief carries the escalation guard", /run more, not less/.test(cycleReviewChecks("code", "round")) && /build configuration, dependencies, or generated contracts/.test(cycleReviewChecks("code", "round")), cycleReviewChecks("code", "round"));
+
+    // And the cycle states each round's tier, so no in-cycle round relies on
+    // the default: an intermediate round is told ROUND, the round a
+    // confirmation pass earns is told DELIVERY (it can be the cycle's last).
+    const intermediate = await run(src, { fixes: [PASS_PACKET, fixOn("r1-1"), idle], reviews: [FAIL("r1"), OK] });
+    check("an intermediate round's reviewer is told the ROUND tier", /ROUND tier/.test(intermediate.seen.reviewPrompts[0] || ""), "round-1 review prompt");
+    const confirmed = await run(src, { fixes: [PASS_PACKET, confirmDeviate, confirmDeviate], reviews: [OK, OK] });
+    check("the round a confirmation pass earns is told the DELIVERY tier", /DELIVERY tier/.test(confirmed.seen.reviewPrompts[1] || ""), "round-2 review prompt");
   });
 
   const ran = legOk + legFail;
