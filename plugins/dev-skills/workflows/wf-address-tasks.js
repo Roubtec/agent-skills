@@ -1333,8 +1333,9 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 // Returns the cycle result contract (lean; bulk prose stays behind artifactDir):
 // { verdict: "pass"|"review-cap"|"error", detail, rounds, findingDispositions,
 //   openQuestions, deviations, deviationAssessments (the reviewer's half for
-//   each deviation still standing — at most ONE entry per deviation, and only
-//   an entry the passing round could use), deviationHistory (only once some
+//   each deviation still standing — at most ONE entry per deviation, only an
+//   entry the passing round could use, and only while no later pass adopted
+//   work that round never saw), deviationHistory (only once some
 //   pass reported one), workReport, proactive, finalSha, notes, reviewerNotes,
 //   peerRounds, discardedPeerFindings, undisposed, outstanding, artifactDir,
 //   artifactDirAnomalies (present only when a later pass tried
@@ -1399,15 +1400,20 @@ async function runReviewCycle(cycle) {
   let reviewerNotes = ""; // the latest reviewer's pass-notes (PR-body caveats for consumers)
   // The reviewer's half of report-don't-correct, as accepted by the last round
   // that PASSED. Replaced rather than accumulated, for the reason `deviations`
-  // is: it describes the deviations standing now, not every judgment ever made.
+  // is: it describes the deviations standing now, not every judgment ever made
+  // — and emptied again the moment a later pass adopts work that round never
+  // saw (the invalidation past the terminal check below).
   let deviationAssessments = [];
 
   const result = (verdict, detail, extra) => {
     // An assessment travels only beside the deviation it judges: one whose
     // deviation a later round dropped would re-latch exactly what `deviations`
-    // stopped latching. A deviation with no entry here reached no round that
-    // passed over it — an `error` or `review-cap` exit, which ships it standing
-    // and unjudged rather than pretending otherwise.
+    // stopped latching (a passing round may volunteer an entry for the very
+    // drop it accepts, so this filter still earns its keep beside the
+    // invalidation below). A deviation with no entry here reached no round
+    // that passed over it in its CURRENT state — an `error` or `review-cap`
+    // exit, which ships it standing and unjudged rather than pretending a
+    // pre-change judgment still holds.
     const standingAssessments = deviationAssessments.filter((a) => a && deviations.includes(a.deviation));
     return {
       verdict,
@@ -1618,6 +1624,18 @@ async function runReviewCycle(cycle) {
     if (confirming && !fix.changed && (fix.dispositions || []).length === 0 && deviationSetChanges === 0) {
       return result("pass", "reviewer passed; final confirmation pass disposed nothing new");
     }
+
+    // Every pass past that check is adopted work another round must pass over,
+    // so the assessments the last passing round accepted stop describing this
+    // branch: the fixer has changed it (or its claims) since the round that
+    // judged it — even where it restates the same deviation text, which is the
+    // deviation still matching, not the packet. Invalidated HERE, before
+    // either cap exit below, so no exit ships a pre-change in-spec-route
+    // judgment and recommendation beside work no round approved; the round
+    // that passes over this work re-records the reviewer's half in full below,
+    // since the assessment gate holds a round open while any standing
+    // deviation lacks one.
+    deviationAssessments = [];
 
     // Anything else needs a (re-)review — bounded by the cap. This check is
     // reachable at the cap only through a confirmation pass that produced new

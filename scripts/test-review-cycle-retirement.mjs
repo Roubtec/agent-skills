@@ -54,7 +54,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 76;
+const CHECKS_PER_LEG = 78;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -814,6 +814,29 @@ for (const name of WORKFLOWS) {
       cycle: { maxRounds: 3 },
     });
     check("a hedged duplicate does not ride to the maintainer beside the usable entry", alsoHedged.res.verdict === "pass" && JSON.stringify(alsoHedged.res.deviationAssessments) === JSON.stringify([ASSESS]), `${alsoHedged.res.verdict}/${JSON.stringify(alsoHedged.res.deviationAssessments)}`);
+
+    // The judgment does not outlive the packet it judged. A later pass that
+    // changes the branch while RESTATING the same deviation text invalidates
+    // the accepted assessment on adoption — the text still matching is not the
+    // packet still matching — so a failed round at the cap ships the deviation
+    // standing and UNJUDGED instead of carrying a pre-change in-spec-route
+    // judgment beside work no round approved.
+    const staleAtFailedCap = await run(src, {
+      fixes: [deviate, deviate],
+      reviews: [OK_DEV, FAIL("the changed work regressed")],
+      cycle: { maxRounds: 2 },
+    });
+    check("adopting changed work invalidates the accepted assessment", staleAtFailedCap.res.verdict === "review-cap" && JSON.stringify(staleAtFailedCap.res.deviations) === JSON.stringify([DEV]) && staleAtFailedCap.res.deviationAssessments === undefined, `${staleAtFailedCap.res.verdict}/${JSON.stringify(staleAtFailedCap.res.deviationAssessments)}`);
+
+    // The same invalidation on the OTHER cap exit — a confirmation pass whose
+    // adopted work the cap leaves no round to review. Nothing re-judged the
+    // changed packet, so nothing rides beside it.
+    const staleAtAdoptCap = await run(src, {
+      fixes: [deviate, deviate],
+      reviews: [OK_DEV],
+      cycle: { maxRounds: 1 },
+    });
+    check("the cap exit before any re-review ships no stale assessment either", staleAtAdoptCap.res.verdict === "review-cap" && JSON.stringify(staleAtAdoptCap.res.deviations) === JSON.stringify([DEV]) && staleAtAdoptCap.res.deviationAssessments === undefined, `${staleAtAdoptCap.res.verdict}/${JSON.stringify(staleAtAdoptCap.res.deviationAssessments)}`);
 
     // A deviation the pass CLAIMS no longer stands is exempt: passing the round
     // is what removes it, so demanding a ratify-or-conform recommendation on
