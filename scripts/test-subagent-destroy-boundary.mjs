@@ -247,6 +247,17 @@ const peerState = { round: 2, packet: { dispositions: [] } };
 const fixStateRound1 = { ...fixState, round: 1, findings: null, artifactDir: "" };
 const reviewStateNoArtifact = { ...reviewState, round: 1, artifactDir: "" };
 
+// Locked-decision deviations reach two delivery builders — `prPrompt` and
+// `publishPrompt` — and each branches twice over them: standing deviations with
+// the reviewing round's assessments, and standing deviations the cycle recorded
+// none for. Four arms, so four renders; the same "new branch inside an existing
+// builder" gap, closed the same way.
+const deviations = ["Delivered a polling loop instead of the locked webhook: the webhook endpoint is not reachable from CI."];
+const deviationAssessments = [
+  { deviation: deviations[0], inSpecRoute: "None — the locked route needs an endpoint this environment cannot expose.", recommendation: "RATIFY — conforming would block the release on an infrastructure change." },
+];
+const publishPacket = { pr: { number: 42, url: "https://example.invalid/pr/42", branch: "b", workingBranch: "b", base: "main", headOid: "deadbeef", rebased: false }, items: [] };
+
 // The cycle briefs, each rendered under BOTH configurations, because
 // cycleContract() branches on whether the consumer overrode the role.
 const cycleCases = {
@@ -287,6 +298,8 @@ const FIXTURES = {
     prPrompt: [
       ["prPrompt (remote)", (f) => f.prPrompt(task, "caveat", true)],
       ["prPrompt (no remote)", (f) => f.prPrompt(task, "", false)],
+      ["prPrompt (remote, deviation + assessment)", (f) => f.prPrompt(task, "caveat", true, deviations, deviationAssessments)],
+      ["prPrompt (remote, deviation, cycle recorded no assessment)", (f) => f.prPrompt(task, "", true, deviations, [])],
     ],
     cleanupNote: [["cleanupNote", (f) => f.cleanupNote(task)]],
     collisionScanPrompt: [["collisionScanPrompt", (f) => f.collisionScanPrompt([{ slug: task.slug, branch: task.branch, base: task.base }])]],
@@ -298,15 +311,9 @@ const FIXTURES = {
   "wf-address-review.js": {
     gatherPrompt: [["gatherPrompt", (f) => f.gatherPrompt("#42 push")]],
     publishPrompt: [
-      [
-        "publishPrompt",
-        (f) =>
-          f.publishPrompt(
-            { pr: { number: 42, url: "https://example.invalid/pr/42", branch: "b", workingBranch: "b", base: "main", headOid: "deadbeef", rebased: false }, items: [] },
-            [],
-            { push: true, pingCodex: false }
-          ),
-      ],
+      ["publishPrompt", (f) => f.publishPrompt(publishPacket, [], { push: true, pingCodex: false })],
+      ["publishPrompt (deviation + assessment)", (f) => f.publishPrompt(publishPacket, [], { push: true, pingCodex: false }, deviations, deviationAssessments)],
+      ["publishPrompt (deviation, cycle recorded no assessment)", (f) => f.publishPrompt(publishPacket, [], { push: true, pingCodex: false }, deviations, [])],
     ],
   },
 };
