@@ -21,7 +21,7 @@ scripts/
   test-gh-review-threads.sh             # hermetic contract coverage for the review-thread helper
   test-dc-helpers.sh                    # hermetic contract coverage for the disposable-clone helpers
   test-checkout-cleanliness-report.mjs  # regression coverage for the batch workflow's checkout report
-  test-review-cycle-retirement.mjs      # behavior coverage for the review cycle's open-question retirement lifecycle
+  test-review-cycle-retirement.mjs      # behavior coverage for the review cycle's claim lifecycles (question retirement, deviation drops)
   test-subagent-destroy-boundary.mjs    # renders every workflow subagent prompt and asserts the destroy boundary is in it
   verify-014-peer-strength-pin.md       # harness-neutral prompt: observe the peer step's pinned review strength (task 014)
 ```
@@ -92,7 +92,7 @@ Run `bash scripts/test-dc-helpers.sh` after any behavior change to `plugins/dev-
 
 Run `node scripts/test-checkout-cleanliness-report.mjs` after changing the batch workflow's checkout-report behavior.
 
-Run `node scripts/test-review-cycle-retirement.mjs` after changing how the review cycle raises, retires, or serves open questions; it drives the shipped `review-cycle-core` section of both workflows through scripted rounds.
+Run `node scripts/test-review-cycle-retirement.mjs` after changing how the review cycle raises, retires, or serves open questions, or how it carries a locked-decision deviation — the two things a pass can claim off the maintainer's list, both of which need a round to pass over the claim; it drives the shipped `review-cycle-core` section of both workflows through scripted rounds.
 
 Run `node scripts/test-subagent-destroy-boundary.mjs` after changing any workflow prompt; it renders every brief the three workflows hand a spawned subagent — discovering the set from their own `agent()` call sites — and fails when one is missing the destroy boundary, when a newly added prompt builder has no rendered case, when a workflow is added to that directory without being given a cut marker, when a cut marker names a workflow that is no longer there, or when the three out-of-section boundary constants have drifted apart.
 
