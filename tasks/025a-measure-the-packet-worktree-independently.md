@@ -23,7 +23,7 @@ Whichever shape wins, the measurement must be a reading rather than a repair: no
 ## Context and references
 
 - The self-report the task replaces: `CYCLE_FIX_SCHEMA`'s `clean` property (`plugins/dev-skills/workflows/wf-review-cycle.js:264`, mirrored at `wf-address-tasks.js:656`) and the packet hard-check in `runReviewCycle` (`wf-review-cycle.js:1015`, mirrored at `wf-address-tasks.js:1407`). Line numbers are as of PR #55's head; the anchors are the `clean` schema property and the `if (!fix.clean)` guard.
-- The instruction the fixer receives is the last bullet of `cycleFixPrompt`'s Rules block ("Before returning, the worktree MUST be clean AND idle...") — it stays either way; this task adds the check that does not depend on it being followed.
+- The instruction the fixer receives is a bullet in `cycleFixPrompt`'s Rules block ("Before returning, the worktree MUST be clean AND idle...") — it stays either way; this task adds the check that does not depend on it being followed.
 - The skill flavor needs no change: `plugins/dev-skills/skills/review-cycle/SKILL.md`'s "Packet hard-check" bullet already tells a skill-driven orchestrator to run the commands itself, and a skill orchestrator has a shell. Only the workflow rendering is short of it. Keep the two mirrors in step if the bullet is touched at all.
 - The non-destructive reading to model: `mainCheckoutStatusPrompt` and `MAIN_CHECKOUT_STATUS_SCHEMA` in `plugins/dev-skills/workflows/wf-address-tasks.js`.
 - `plugins/dev-skills/workflows/README.md` — Validation section; both workflows are parse-checked and the `review-cycle-core` section must stay byte-identical between the two files.
