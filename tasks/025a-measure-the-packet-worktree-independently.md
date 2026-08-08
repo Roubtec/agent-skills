@@ -15,7 +15,7 @@ Give the two shipped copies of `review-cycle-core` an independent measurement of
 Choose between (at least) these shapes and state why in the delivery:
 
 1. **A dedicated checker turn after each fixer pass.** Most faithful to 025's wording, and the only shape that also covers the FINAL confirmation pass, which terminates the cycle without a reviewer round. Costs one extra agent turn per fixer pass — up to thirteen in a capped cycle.
-2. **Fold the measurement into the reviewer's round.** Costs nothing extra: the reviewer already enters the same worktree at the same commit and already runs the build. It would report the porcelain and operation-state readings structurally, and an unclean or mid-operation tree would gate the round exactly as an unassessed deviation now does. Its gap is the confirmation pass, which no reviewer sees — bound that honestly, or close it with a single checker turn on that one pass.
+2. **Fold the measurement into the reviewer's round.** Costs nothing extra: the reviewer already enters the same worktree at the same commit and already runs the build. It would report the porcelain and operation-state readings structurally, and an unclean or mid-operation tree would gate the round exactly as an unassessed deviation now does. Its gap is the confirmation pass, which no reviewer sees — close it with a single checker turn on that one pass, which is one turn per cycle rather than shape 1's one per fixer pass; the acceptance criteria below do not accept documenting the gap instead of closing it.
 3. **Ask the peer stage for the reading.** Rejected on its face unless argued: the peer is best-effort and non-blocking by contract, so a gate resting on it is a gate that vanishes when the peer is unavailable.
 
 Whichever shape wins, the measurement must be a reading rather than a repair: no stage may stage, commit, reset, stash, or abort anything to make the tree clean. That is the same posture `mainCheckoutStatusPrompt` already takes in `wf-address-tasks.js`, and its schema and prompt are the model to copy — including its `measured: false` degradation, so a reading that cannot be taken is reported as unknown rather than silently passing as clean.
@@ -42,15 +42,16 @@ Implement AFTER task 035 (proportionate effort in the review cycle). 035 is deci
 - A fixer packet reporting `clean: true` from a worktree whose measured state is dirty, or which is mid-rebase/mid-cherry-pick/mid-merge/mid-revert/mid-bisect, does not reach the next round: the cycle redrives or resumes that pass and says which condition failed.
 - The measurement is taken by something other than the pass that produced the packet, and never modifies the worktree.
 - A measurement that cannot be taken is reported as unknown and is not treated as clean.
-- Whatever gap the chosen shape leaves — the confirmation pass, most likely — is stated in the code comment and in the result contract rather than implied away.
+- EVERY fixer packet the cycle adopts is measured, the final confirmation pass included — that one is measured when its packet returns, before either terminal exit branches on it, since no reviewer round follows it. A shape that no reviewer round covers there takes the dedicated checker turn on that pass alone; stating the gap in a comment does not discharge this criterion. Task 025's item 3 binds the orchestrator on every returned packet, and a cycle whose last packet is unmeasured is the hole that item forbids.
+- If the chosen shape genuinely cannot measure some pass even with that turn, the cycle does not end as though it had: that pass is reported `measured: false`, the residual gap is named in the code comment and in the result contract, and the result says the cycle finished on an unverified worktree rather than reporting a clean finish.
 - Both `review-cycle-core` copies carry the change and remain byte-identical.
 
 ## Validation
 
-- A scripted scenario per direction in the retirement suite's style, driven through both workflow legs: a measured-clean packet proceeds; a measured-dirty or mid-operation one does not; an unmeasurable one does not pass as clean.
+- A scripted scenario per direction in the retirement suite's style, driven through both workflow legs: a measured-clean packet proceeds; a measured-dirty or mid-operation one does not; an unmeasurable one does not pass as clean. At least one of them puts the failing packet on the FINAL confirmation pass, so the gate is proven on the pass no reviewer round follows.
 - Break each new gate deliberately and confirm the suite fails on both legs before believing it.
 - `wf-check` (or the README's hand-rolled parse wrapper) on every changed workflow, and the `awk`/`diff` byte-identity check on the section.
 
 ## Review plan
 
-Reviewer confirms the measurement is genuinely independent of the packet it judges (not a second question to the same turn), that no stage can repair the tree it is measuring, and that the stated residual gap matches the shape actually implemented.
+Reviewer confirms the measurement is genuinely independent of the packet it judges (not a second question to the same turn), that no stage can repair the tree it is measuring, and that no packet the cycle adopts — the final confirmation pass most of all — reaches a terminal exit unmeasured, with any residual gap reported as unknown rather than left silent.
