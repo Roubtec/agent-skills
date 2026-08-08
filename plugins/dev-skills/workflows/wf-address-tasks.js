@@ -2541,14 +2541,19 @@ function collisionReviewedRecord(result) {
 // pass: its run is the branch's last before the PR opens, so a failure it
 // passes over under the flake rule's cited-active-task outcome must come back
 // through the verdict or reach the maintainer nowhere. Hence the one delta on
-// the reviewer's schema and brief, and the carrier below that publishes what
-// comes back.
+// the reviewer's schema and brief — the recording field, in the schema's
+// `required` list exactly as the fixer packet's is and for the same reason: an
+// ordinarily omitted field is a schema violation rather than an undisclosed
+// failed final run, since the delivering arm admits the branch on `pass` alone
+// and the carrier reads omission as no-flake. The empty string stays the
+// no-flake value. The carrier below publishes what comes back.
 const COLLISION_RE_REVIEW_SCHEMA = {
   ...CYCLE_REVIEW_SCHEMA,
   properties: {
     ...CYCLE_REVIEW_SCHEMA.properties,
     flakeRecord: { type: "string", description: "REQUIRED when your own validation run hit a failure you are passing over as evidenced-unrelated under the flake rule: what failed, the ACTIVE follow-up task you tied it to, and the evidence. Empty otherwise. No pass follows this one, so this field is the maintainer's only notice that this run FAILED." },
   },
+  required: [...CYCLE_REVIEW_SCHEMA.required, "flakeRecord"],
 };
 
 function collisionReReviewPrompt(task, remote, peerMode) {
