@@ -266,7 +266,7 @@ const CYCLE_FIX_SCHEMA = {
     workReport: { type: "array", items: { type: "object" }, description: "One entry per work item in the scope, in the per-item shape the scope's instructions define (a consumer contract rides through here untyped); echoed into the cycle result." },
     proactive: { type: "string", description: "Same-pattern fixes made beyond the literal items, or empty." },
     closeOutEdits: { type: "array", items: { type: "string" }, description: "OFFER of a trivial-round close-out (only where the assignment says the invoker granted it): one entry per edit, where this pass's WHOLE change was non-semantic — wording, typos, comment phrasing, formatting; nothing touching behavior, logic, or the meaning of an acceptance criterion. Empty otherwise. The offer is not the license: the cycle re-reads the close-out diff itself, and any executable or behavioral change in it, however it got there, forfeits the close-out for a normal reviewer round — as does an empty range, an edit listed here that the range does not actually carry, or a finding disposed `fixed` that the range holds no change for, since this list cannot vouch for a fix it does not mention." },
-    flakeRecord: { type: "string", description: "REQUIRED when this pass's own validation run hit a failure the cycle's flake rule defers as evidenced-unrelated: what failed, the evidence that established unrelatedness, and the follow-up task carrying it — the NEW one this pass committed, or the ACTIVE existing one it cites instead of editing. Empty otherwise. This is the maintainer's only notice that a delivery run FAILED, so the cycle carries it to the PR body or batch summary on every conclusion, including the one where citing an existing task leaves this pass with nothing to commit. It buys no exit and skips no round." },
+    flakeRecord: { type: "string", description: "REQUIRED when this pass's own validation run hit a failure the cycle's flake rule defers as evidenced-unrelated: what failed, the evidence that established unrelatedness, and the follow-up task carrying it — the NEW one this pass committed, or the ACTIVE existing one it cites instead of editing. Empty otherwise, and never a restatement of an earlier pass's record: the cycle keeps every pass's, and restating one would republish it as your run's. This is the maintainer's only notice that a validation run FAILED, so the cycle carries EVERY pass's record to the batch summary, and publishes the CONCLUDING pass's in the PR body or summary comment besides — including where citing an existing task left that pass with nothing to commit. It buys no exit and skips no round." },
     finalSha: { type: "string", description: "HEAD sha after this pass, with everything committed." },
     clean: { type: "boolean", description: "True only if the worktree is CLEAN and IDLE: `git status --porcelain` empty with every intended change committed, AND no Git operation in progress (`git rev-parse --git-path rebase-merge` / `rebase-apply`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`). A packet returned mid-rebase or mid-cherry-pick can print empty porcelain; the cycle refuses it either way." },
     artifactDir: { type: "string", description: "Absolute path of this cycle's unique artifact directory — REQUIRED every pass: round 1 creates it (outside the worktree) and reports it, later passes echo the directory they were given. The result contract promises full round history reachable through it." },
@@ -641,10 +641,11 @@ function cycleReviewChecks(artifactType, tier) {
   // unconditionally: told "round tier", a reviewer must not block on a suite
   // this round deliberately did not run; told nothing, it runs the full set.
   // Only the ROUND tier is opt-in, and the default is that way round on
-  // purpose: an unstated tier is exactly what a caller with no cycle behind it
-  // renders — the pre-PR collision re-review does — and the fail-safe answer
-  // for a pass that can be the last thing before publication is the heavier
-  // suite, never the cheaper one.
+  // purpose: an unstated tier is what a renderer with no cycle behind it would
+  // leave, and no shipped caller is in that position today — every one states
+  // its tier — so the default is purely defensive, and the fail-safe answer for
+  // a renderer whose pass could be the last thing before publication is the
+  // heavier suite, never the cheaper one.
   const tierLine = tier === "round"
     ? `the ROUND tier — the cheapest signal that catches what this round's diff changed (typecheck/lint for ordinary code edits, targeted tests for touched behavior, and no build at all where the diff holds no executable change), so do NOT block on a heavier suite this tier does not run; when in doubt about blast radius run more, not less, and always build where the diff touches build configuration, dependencies, or generated contracts`
     : `the DELIVERY tier — the full applicable sanity set (lint, typecheck, build, tests, whichever this repository has), because the cycle concludes on this state`;
@@ -1115,6 +1116,11 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     are EMPTY where the evidence cited an already-active task and the pass
 //     therefore committed nothing, which is the discriminator a consumer
 //     rendering the record reads),
+//   flakeHistory (present once ANY pass reported a `flakeRecord`, and on every
+//     exit including the stopped ones, since it is a log rather than a claim
+//     about the conclusion: one { pass, note } entry per pass that reported
+//     one. `recordOnly` above speaks FOR the conclusion, so it may carry only
+//     the concluding pass's record; this is where every other pass's survives),
 //   artifactDirAnomalies (present only when a later pass tried
 //   to move the artifact directory) }
 // NO per-round condition latches into that result: `deviations` is the LAST
@@ -1154,6 +1160,14 @@ async function runReviewCycle(cycle) {
   // than accumulated: see the result contract above.
   let deviations = [];
   const deviationHistory = [];
+  // Every pass's `flakeRecord`, in order, and accumulated for the reason
+  // `deviationHistory` is: the conclusion's `recordOnly` speaks for the
+  // CONCLUDING pass alone (see the record below), so without this an
+  // INTERMEDIATE pass's evidenced-unrelated failure reaches the maintainer
+  // nowhere the moment a later pass concludes clean — and that pass's record
+  // can be the whole of it, where the evidence cited an already-active task and
+  // left nothing to commit.
+  const flakeHistory = [];
   // Drops claimed but not yet adjudicated, re-presented to each round until one
   // passes over them — the retirement machinery's rule, for its reason too.
   let pendingDeviationDrops = [];
@@ -1201,6 +1215,7 @@ async function runReviewCycle(cycle) {
       deviations,
       ...(standingAssessments.length ? { deviationAssessments: standingAssessments } : {}),
       ...(deviationHistory.some((h) => h.deviations.length) ? { deviationHistory } : {}),
+      ...(flakeHistory.length ? { flakeHistory } : {}),
       workReport: (packet && packet.workReport) || [],
       proactive: (packet && packet.proactive) || "",
       finalSha: (packet && packet.finalSha) || "",
@@ -1345,7 +1360,8 @@ async function runReviewCycle(cycle) {
     // trivial-round close-out, the record-only close (where it rides inside
     // that exit's own richer record), and the light-mode exit — and on those
     // only: an `error` or `review-cap` exit publishes nothing on the strength
-    // of that admission and hands the maintainer the stopped run itself.
+    // of that admission and hands the maintainer the stopped run itself (which
+    // still carries `flakeHistory`, a log rather than a published claim).
     // The terminal check is not the exotic case there but the common one: the
     // flake rule tells a pass whose evidence matches an ALREADY-ACTIVE task to
     // cite that task rather than edit it, which leaves nothing to commit, so
@@ -1356,10 +1372,22 @@ async function runReviewCycle(cycle) {
     // A self-report is safe here for the very reason it is refused on the
     // record-only exit below: that one BUYS something (a skipped round), so it
     // is judged on the diff; this one buys nothing and only ever adds a caveat
-    // to the maintainer's copy. Read from `fix`, never the accumulated
-    // `packet`: under a heading about a failed delivery run, an earlier pass's
-    // record is a wrong answer where an absent one is merely no answer.
+    // to the maintainer's copy. Read from `fix`, never accumulated: every pass
+    // that can CONCLUDE the cycle is a delivery-tier pass, which is what makes
+    // the consumers' heading about a failed delivery run true of the concluding
+    // pass's record and of no other — an earlier pass's is a wrong answer under
+    // it where an absent one is merely no answer.
+    //
+    // That is a rule about what may be PUBLISHED as this conclusion's, not a
+    // licence to lose the earlier record. Every pass's rides in `flakeHistory`,
+    // on every exit, so an intermediate pass's failure still reaches the
+    // maintainer once a later pass concludes clean — which it otherwise would
+    // not, the flake rule's cited-active-task outcome having committed nothing
+    // for the diff to show either. The two carriers answer different questions
+    // and neither substitutes for the other; nor does either reach the reviewer,
+    // whose brief renders no flake record at all.
     const flakeNote = typeof fix.flakeRecord === "string" ? fix.flakeRecord.trim() : "";
+    if (flakeNote) flakeHistory.push({ pass: fixerPasses, note: flakeNote });
     const flakeCarried = flakeNote ? { recordOnly: { pass: fixerPasses, range: "", verified: "", note: flakeNote } } : {};
 
     // Disposition coverage: every handed finding must be validly disposed by

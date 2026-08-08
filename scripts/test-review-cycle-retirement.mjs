@@ -65,7 +65,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 121;
+const CHECKS_PER_LEG = 125;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -94,9 +94,9 @@ function loadCycle(src, agent) {
   const log = () => {};
   const phase = () => {};
   // `cycleReviewChecks` comes back beside the cycle because its TIER DEFAULT is
-  // reachable no other way: an unstated tier is what a caller with no cycle
-  // behind it renders (wf-address-tasks' pre-PR collision re-review), so
-  // driving `runReviewCycle` — which always states one — can never exercise it.
+  // reachable no other way: `runReviewCycle` always states a tier, and so does
+  // every renderer outside a cycle today, so driving the cycle can never
+  // exercise the default and only a direct call can.
   // eslint-disable-next-line no-new-func
   return new Function("agent", "parallel", "pipeline", "log", "phase", `${section}\nreturn { runReviewCycle, cycleReviewChecks };`)(
     agent,
@@ -1049,13 +1049,13 @@ for (const name of WORKFLOWS) {
   });
 
   // 27. The reviewer's build-first rule is conditioned on the tier the
-  //     orchestrator states, so the UNSTATED case is a real input, not a
-  //     defensive default: wf-address-tasks' pre-PR collision re-review renders
-  //     this brief with no cycle behind it. It must land on the DELIVERY tier —
-  //     that pass is the last check before a PR opens, over a state the
-  //     collision resolver changed after the task's own delivery-tier pass.
-  //     Defaulting to the round tier there would have weakened a pre-PR gate
-  //     that previously built unconditionally.
+  //     orchestrator states, so the default decides what a renderer that states
+  //     none would get. No shipped caller is in that position today — every one
+  //     states its tier, wf-address-tasks' pre-PR collision re-review included
+  //     — so the default is purely defensive, and pinning it is what keeps it
+  //     the DELIVERY tier: a renderer with no cycle behind it is one whose pass
+  //     can be the last check before a PR opens, and a round-tier default would
+  //     silently weaken the next one written.
   await scenario("27. an unstated tier means the delivery tier", async () => {
     const { cycleReviewChecks } = loadCycle(src, async () => null);
     const unstated = cycleReviewChecks("code", undefined);
@@ -1137,6 +1137,20 @@ for (const name of WORKFLOWS) {
     const silent = await run(src, { fixes: [{ ...PASS_PACKET, flakeRecord: FLAKE_NOTE }, confirmRecordOnly], reviews: [OK], cycle: { maxRounds: 3 } });
     check("a confirming pass that reports no flake record leaves the note empty rather than republishing an earlier pass's", !!silent.res.recordOnly && silent.res.recordOnly.note === "", JSON.stringify(silent.res.recordOnly));
 
+    // The other side of that rule, and the reason it is not a data loss: what
+    // the record may not PUBLISH as this conclusion's, `flakeHistory` keeps.
+    // The two answer different questions — the record speaks for a conclusion
+    // whose heading is about a failed DELIVERY run, and only a pass that can
+    // conclude the cycle runs that tier — so an INTERMEDIATE pass's record is
+    // wrong under that heading and still owed to the maintainer. The terminal
+    // exit is where dropping it would bite hardest: nothing is left in the diff
+    // to show it either, once the flake rule's cited-active-task outcome has
+    // committed nothing.
+    check("but the earlier pass's record is not lost with it — `flakeHistory` keeps every pass's", JSON.stringify(silent.res.flakeHistory) === JSON.stringify([{ pass: 1, note: FLAKE_NOTE }]), JSON.stringify(silent.res.flakeHistory));
+    const superseded = await run(src, { fixes: [{ ...PASS_PACKET, flakeRecord: FLAKE_NOTE }, idle], reviews: [OK], cycle: { maxRounds: 3 } });
+    check("including where a clean confirming pass concludes at the TERMINAL exit, which carries no record at all", superseded.res.verdict === "pass" && superseded.res.recordOnly === undefined && JSON.stringify(superseded.res.flakeHistory) === JSON.stringify([{ pass: 1, note: FLAKE_NOTE }]), `${JSON.stringify(superseded.res.recordOnly)}/${JSON.stringify(superseded.res.flakeHistory)}`);
+    check("while a cycle no pass reported a flake on carries no history at all", (await run(src, { fixes: [PASS_PACKET, idle], reviews: [OK] })).res.flakeHistory === undefined, "plain terminal exit");
+
     // The no-commit half of the same rule, and the reachable one: the flake
     // policy tells a pass whose evidence matches an ALREADY-ACTIVE task to
     // cite it rather than edit it, which leaves nothing to commit. That pass
@@ -1185,10 +1199,10 @@ for (const name of WORKFLOWS) {
   //     mode where the run that surfaces a flake is most likely to be the
   //     delivery run. The round that just passed is no substitute carrier: its
   //     brief carries only the packet's dispositions and work report, never
-  //     `flakeRecord` — the reviewer's flake gate says so in as many words, and
-  //     the unstated-tier scenario pins that it does — so its notes were
-  //     written without the failure in view. The record-only scenario's exits
-  //     and this one are one rule.
+  //     `flakeRecord` — the reviewer's flake gate says so in as many words, the
+  //     unstated-tier scenario pins that it SAYS so, and the check below pins
+  //     that it is TRUE — so its notes were written without the failure in
+  //     view. The record-only scenario's exits and this one are one rule.
   await scenario("29. a light-mode conclusion carries the same flake record", async () => {
     const REVIEWER_CAVEAT = "reviewer caveat";
     const lit = await run(src, {
@@ -1198,6 +1212,14 @@ for (const name of WORKFLOWS) {
     });
     check("a light conclusion carries the delivery-tier pass's flake record", lit.res.verdict === "pass" && !!lit.res.recordOnly && lit.res.recordOnly.note === FLAKE_NOTE && lit.res.recordOnly.pass === 1, `${lit.res.verdict}/${JSON.stringify(lit.res.recordOnly)}`);
     check("with the EMPTY range and check line, the same no-commit discriminator", !!lit.res.recordOnly && lit.res.recordOnly.range === "" && lit.res.recordOnly.verified === "", JSON.stringify(lit.res.recordOnly));
+    // The omission this whole exit rests on, asserted against a rendered brief
+    // rather than against the gate's description of itself. Scenario 27 pins
+    // that the gate SAYS the reviewer is not shown the record; nothing pinned
+    // that it is so. If a later change plumbs `flakeRecord` onto the brief, the
+    // gate would be telling the reviewer a falsehood AND sending it to grep for
+    // something it now holds — and without this line the suite would stay green
+    // while both this exit's justification and scenario 27's went false.
+    check("and the round that passed was never shown that record", !(lit.seen.reviewPrompts[0] || "").includes(FLAKE_NOTE), "round-1 review prompt");
     check("and the exit still records the round's undisposed remarks beside it", (lit.res.undisposed || []).includes(REVIEWER_CAVEAT), JSON.stringify(lit.res.undisposed));
     const clean = await run(src, { fixes: [PASS_PACKET], reviews: [OK], cycle: { mode: "light" } });
     check("while a light conclusion over a clean delivery run carries no record at all", clean.res.verdict === "pass" && clean.res.recordOnly === undefined, `${clean.res.verdict}/${JSON.stringify(clean.res.recordOnly)}`);

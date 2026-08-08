@@ -1,7 +1,10 @@
 #!/usr/bin/env node
 // Focused behavior test for what the review cycle's CONSUMERS do with a record
 // of a conclusion no fresh reviewer saw — the trivial-round close-out and the
-// record-only close over the delivery gate's one tolerated post-run commit.
+// record-only close over the delivery gate's one tolerated post-run commit —
+// plus the per-pass flake history that rides beside them, which is where an
+// INTERMEDIATE pass's evidenced-unrelated failure reaches the maintainer once a
+// later pass has concluded clean and the record speaks only for that pass.
 //
 // The cycle produces those records; `test-review-cycle-retirement.mjs` covers
 // that half. This covers the other half, which is where the same gap has now
@@ -44,7 +47,7 @@ function check(name, cond, detail) {
 // does not count. Bump it deliberately when adding or removing one — a check
 // that silently stops running is invisible to a suite that only gates on
 // failures.
-const EXPECTED_CHECKS = 21;
+const EXPECTED_CHECKS = 24;
 
 // Evaluate a workflow's declarations up to its first executable statement and
 // hand back the named ones. Each is returned by an explicit reference, so a
@@ -72,6 +75,12 @@ const RECORD = { pass: 3, range: "aaaa..bbbb", verified: "only a new diagnosis-o
 const CITED_NOTE = "the delivery run's only failure was the payments suite, which reproduces on the base; already queued as tasks/041-flaky-payments-suite.md, cited rather than re-filed";
 const CITED_RECORD = { pass: 3, range: "", verified: "", note: CITED_NOTE };
 const CLOSE_OUT = { pass: 3, range: "aaaa..bbbb", edits: ["reworded a comment"], verified: "every hunk non-semantic" };
+// The record `recordOnly` cannot carry: an INTERMEDIATE pass's. That record
+// speaks for the conclusion, and the heading the consumers publish it under is
+// about a failed DELIVERY run, so only the concluding pass's belongs there —
+// which is exactly why a pass-1 failure a later clean pass superseded reaches
+// the maintainer through this list or not at all.
+const FLAKE_HISTORY = [{ pass: 1, note: "the round-tier run's only failure was the payments suite, which reproduces on the base; already queued as tasks/041-flaky-payments-suite.md, cited rather than re-filed" }];
 // A cycle result that concluded on one of those exits, and one that did not.
 const cycleResult = (extra) => ({
   verdict: "pass",
@@ -109,6 +118,14 @@ const cycleResult = (extra) => ({
   // reader would have to interpret.
   const plain = cycleCarried(cycleResult());
   check("a cycle that concluded normally carries neither key", !("recordOnly" in plain) && !("closeOut" in plain), JSON.stringify(plain));
+
+  // And the third field of the same class, present-only for the same reason:
+  // the batch Summary this carrier feeds is the only place an intermediate
+  // pass's flake record reaches the maintainer once a later pass concluded
+  // clean, so dropping it here drops the record entirely.
+  const withHistory = cycleCarried(cycleResult({ flakeHistory: FLAKE_HISTORY }));
+  check("the batch carrier forwards every pass's flake record, with no conclusion-level record beside it", JSON.stringify(withHistory.flakeHistory) === JSON.stringify(FLAKE_HISTORY) && !("recordOnly" in withHistory), JSON.stringify(withHistory));
+  check("and carries no history key for a cycle no pass reported a flake on", !("flakeHistory" in plain), JSON.stringify(Object.keys(plain)));
 
   // The field that must NOT ride: `notes` means the cycle's last-pass summary
   // on the raw result and the reviewer's PR-body caveats on a task result
@@ -163,6 +180,8 @@ const cycleResult = (extra) => ({
   check("the review-addressing carrier forwards both records too", JSON.stringify(carried.recordOnly) === JSON.stringify(RECORD) && JSON.stringify(carried.closeOut) === JSON.stringify(CLOSE_OUT), JSON.stringify(carried));
   const plain = carriedOf(cycleResult());
   check("and carries neither key when the cycle concluded normally", !("recordOnly" in plain) && !("closeOut" in plain), JSON.stringify(plain));
+  const withHistory = carriedOf(cycleResult({ flakeHistory: FLAKE_HISTORY }));
+  check("it forwards every pass's flake record too, and only when some pass reported one", JSON.stringify(withHistory.flakeHistory) === JSON.stringify(FLAKE_HISTORY) && !("flakeHistory" in plain), JSON.stringify(withHistory));
 
   const { publishPrompt } = loadDeclarations("wf-address-review.js", "\nconst raw = flattenArgs(args);", ["publishPrompt"]);
   const pkt = { pr: { number: 42, url: "https://example.invalid/pr/42", branch: "b", workingBranch: "b", base: "main", headOid: "deadbeef", rebased: false }, items: [] };

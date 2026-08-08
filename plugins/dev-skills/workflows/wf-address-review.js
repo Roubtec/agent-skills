@@ -501,12 +501,18 @@ if (!cycle) {
 // The nested cycle is granted no close-out above, so `closeOut` cannot arise
 // here today — it rides in the same conditional because the two records are one
 // rule, and granting the close-out later then needs no second edit.
+// `flakeHistory` rides beside them for the half `recordOnly` cannot cover: that
+// record speaks for the CONCLUDING pass, so an intermediate pass's
+// evidenced-unrelated failure would reach the maintainer nowhere once a later
+// pass concluded clean, and the cited-active-task outcome leaves nothing in the
+// diff either. Present once any pass reported one.
 const carried = {
   ...(cycle.artifactDirAnomalies ? { artifactDirAnomalies: cycle.artifactDirAnomalies } : {}),
   ...(cycle.deviationAssessments ? { deviationAssessments: cycle.deviationAssessments } : {}),
   ...(cycle.deviationHistory ? { deviationHistory: cycle.deviationHistory } : {}),
   ...(cycle.closeOut ? { closeOut: cycle.closeOut } : {}),
   ...(cycle.recordOnly ? { recordOnly: cycle.recordOnly } : {}),
+  ...(cycle.flakeHistory ? { flakeHistory: cycle.flakeHistory } : {}),
 };
 if (cycle.verdict === "error") {
   return { error: `Review cycle failed: ${cycle.detail}`, pr: packet.pr, rounds: cycle.rounds, dispositions: cycle.workReport, openQuestions: cycle.openQuestions, deviations: cycle.deviations, peerRounds: cycle.peerRounds, artifactDir: cycle.artifactDir, ...carried };
