@@ -64,7 +64,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 117;
+const CHECKS_PER_LEG = 120;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -980,7 +980,27 @@ for (const name of WORKFLOWS) {
       cycle: { closeOut: "on" },
     });
     check("a claimed edit the range does not carry forfeits the close-out", missing.seen.closeOutPrompts.length === 1 && missing.seen.reviewPrompts.length === 2 && !missing.res.closeOut, `${missing.seen.closeOutPrompts.length} close-out check(s)/${missing.seen.reviewPrompts.length} review prompt(s)`);
-    check("and the check is asked both questions about the range", /`editsPresent`/.test(missing.seen.closeOutPrompts[0] || "") && /NON-EMPTY/.test(missing.seen.closeOutPrompts[0] || "") && /every edit the pass claims/.test(missing.seen.closeOutPrompts[0] || ""), "close-out check prompt");
+    check("and the check is asked both questions about the range", /`editsPresent`/.test(missing.seen.closeOutPrompts[0] || "") && /NON-EMPTY/.test(missing.seen.closeOutPrompts[0] || "") && /everything the pass claims below/.test(missing.seen.closeOutPrompts[0] || ""), "close-out check prompt");
+
+    // The second question's OTHER input, and the reason it answers the case it
+    // is named for. The edit list is the pass's account of what it shipped; the
+    // `fixed` dispositions are its account of what it was ASKED for, and only
+    // the second names a fix that never landed. Handed the list alone, a pass
+    // that forgot one requested fix while shipping and listing an unrelated
+    // tidy-up clears every question here — non-empty range, listed edit
+    // present, nothing semantic — and concludes the cycle with the omission
+    // adjudicated by nobody, since the round that catches it is the one this
+    // exit skips.
+    check("and it is handed the pass's `fixed` findings beside the edit list", /## Findings the pass disposed `fixed`/.test(missing.seen.closeOutPrompts[0] || "") && /"finding": "f"/.test(missing.seen.closeOutPrompts[0] || "") && /a change answering every FINDING it disposed `fixed`/.test(missing.seen.closeOutPrompts[0] || ""), "close-out check prompt");
+
+    // And a pass with nothing disposed `fixed` is told so, rather than handed
+    // an empty array under a heading that reads as work to go find.
+    const noFixes = await run(src, {
+      fixes: [PASS_PACKET, { ...PASS_PACKET, dispositions: [], closeOutEdits: CLOSE_OUT_EDITS }],
+      reviews: [OK],
+      cycle: { closeOut: "on" },
+    });
+    check("a close-out over no `fixed` disposition says so rather than listing none", noFixes.seen.closeOutPrompts.length === 1 && /this pass disposed no finding `fixed`/.test(noFixes.seen.closeOutPrompts[0] || "") && !!noFixes.res.closeOut, `${noFixes.seen.closeOutPrompts.length} close-out check(s)/${JSON.stringify(noFixes.res.closeOut)}`);
 
     // The structural half of the same guard: a pass claiming `fixed` while
     // reporting it changed nothing contradicts its own offer, and the gate
@@ -1044,6 +1064,14 @@ for (const name of WORKFLOWS) {
     // The round-tier brief tells the reviewer to skip a heavier suite, so it
     // owes the same escalation guard the fixer's tier line carries.
     check("the round-tier brief carries the escalation guard", /run more, not less/.test(cycleReviewChecks("code", "round")) && /build configuration, dependencies, or generated contracts/.test(cycleReviewChecks("code", "round")), cycleReviewChecks("code", "round"));
+
+    // The reviewer's half of the flake rule has to admit BOTH shapes the
+    // fixer's half prescribes. The cited-active-task outcome commits nothing by
+    // design — that is the point of citing rather than editing a base-landed
+    // file — so a gate that recognized only a newly committed task would block
+    // the outcome the policy asks for on every required round, `light` mode's
+    // last one included, and drive a conforming cycle to its cap.
+    check("the reviewer's flake gate admits a cited ACTIVE task, not only a new commit", /ACTIVE existing task the pass cited/.test(cycleReviewChecks("code", "delivery")) && /NEW one committed on this branch/.test(cycleReviewChecks("code", "delivery")), cycleReviewChecks("code", "delivery"));
 
     // And the cycle states each round's tier, so no in-cycle round relies on
     // the default: an intermediate round is told ROUND, the round a

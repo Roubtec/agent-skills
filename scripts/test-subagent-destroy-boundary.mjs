@@ -244,7 +244,7 @@ const peerState = { round: 2, packet: { dispositions: [] } };
 // re-review calls the reviewer builder outside any cycle with `artifactDir: ""`.
 // That is the "new branch inside an existing builder" gap the header names, so
 // each is rendered rather than argued to be the same text.
-const closeOutState = { passBase: "abc1234", edits: ["typo in a comment"] };
+const closeOutState = { passBase: "abc1234", edits: ["typo in a comment"], fixes: [{ finding: "the comment misspells the field name", detail: "reworded it" }] };
 // The record-only check is handed a range and nothing else — deliberately no
 // list of what the pass says is in it (see the builder), so this state is the
 // whole input.

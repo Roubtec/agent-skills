@@ -265,7 +265,7 @@ const CYCLE_FIX_SCHEMA = {
     deviations: { type: "array", items: { type: "string" }, description: "Each deviation from a LOCKED maintainer decision that STILL STANDS after this pass — what was delivered instead and the constraint that forced it. Report, don't correct; the cycle surfaces these for the human. Restate every standing one on every pass — VERBATIM, since the cycle matches these by exact text and a reworded restatement reads as a drop plus a brand-new deviation — and leave out only one that genuinely no longer stands: the result describes the FINAL state and keeps the per-pass reports as history." },
     workReport: { type: "array", items: { type: "object" }, description: "One entry per work item in the scope, in the per-item shape the scope's instructions define (a consumer contract rides through here untyped); echoed into the cycle result." },
     proactive: { type: "string", description: "Same-pattern fixes made beyond the literal items, or empty." },
-    closeOutEdits: { type: "array", items: { type: "string" }, description: "OFFER of a trivial-round close-out (only where the assignment says the invoker granted it): one entry per edit, where this pass's WHOLE change was non-semantic — wording, typos, comment phrasing, formatting; nothing touching behavior, logic, or the meaning of an acceptance criterion. Empty otherwise. The offer is not the license: the cycle re-reads the close-out diff itself, and any executable or behavioral change in it, however it got there, forfeits the close-out for a normal reviewer round — as does an empty range, or an edit listed here that the range does not actually carry." },
+    closeOutEdits: { type: "array", items: { type: "string" }, description: "OFFER of a trivial-round close-out (only where the assignment says the invoker granted it): one entry per edit, where this pass's WHOLE change was non-semantic — wording, typos, comment phrasing, formatting; nothing touching behavior, logic, or the meaning of an acceptance criterion. Empty otherwise. The offer is not the license: the cycle re-reads the close-out diff itself, and any executable or behavioral change in it, however it got there, forfeits the close-out for a normal reviewer round — as does an empty range, an edit listed here that the range does not actually carry, or a finding disposed `fixed` that the range holds no change for, since this list cannot vouch for a fix it does not mention." },
     flakeRecord: { type: "string", description: "REQUIRED when this pass's own validation run hit a failure the cycle's flake rule defers as evidenced-unrelated: what failed, the evidence that established unrelatedness, and the follow-up task carrying it — the NEW one this pass committed, or the ACTIVE existing one it cites instead of editing. Empty otherwise. This is the maintainer's only notice that a delivery run FAILED, so the cycle carries it to the PR body or batch summary on every conclusion, including the one where citing an existing task leaves this pass with nothing to commit. It buys no exit and skips no round." },
     finalSha: { type: "string", description: "HEAD sha after this pass, with everything committed." },
     clean: { type: "boolean", description: "True only if the worktree is CLEAN and IDLE: `git status --porcelain` empty with every intended change committed, AND no Git operation in progress (`git rev-parse --git-path rebase-merge` / `rebase-apply`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`). A packet returned mid-rebase or mid-cherry-pick can print empty porcelain; the cycle refuses it either way." },
@@ -385,12 +385,21 @@ const CYCLE_PEER_SCHEMA = {
 // with nothing committed concluded the cycle, its claims adjudicated by
 // exactly nobody, since the round that would have caught it is the round this
 // exit skips.
+//
+// `editsPresent` is asked about the pass's WHOLE claim — the edits it listed
+// AND the findings it disposed `fixed` — because the two can come apart while
+// the range stays non-empty. A pass that forgot one requested fix and shipped
+// an unrelated comment tidy-up it did list satisfies a check that only knows
+// the list: every listed edit is there, the range is not empty, and the
+// forgotten fix is checked by nobody, since the round that would have caught
+// it is again the one this exit skips. The `fixed` dispositions therefore
+// travel with the list.
 const CYCLE_CLOSEOUT_SCHEMA = {
   type: "object",
   properties: {
     nonSemantic: { type: "boolean", description: "True ONLY if every hunk of the close-out diff is non-semantic. Any executable or behavioral change — however it got there, listed or not — is false, which simply buys the normal reviewer round." },
-    editsPresent: { type: "boolean", description: "True ONLY if the range is NON-EMPTY and carries every edit the pass claims it shipped. An EMPTY range is false: it holds no fix at all, so a finding reported `fixed` over it never landed. A claimed edit you cannot find in the diff is false too. Extra non-semantic hunks beyond the list do not make it false — `nonSemantic` judges those on their own merits." },
-    why: { type: "string", description: "One line: what the diff held, or the semantic change or missing claimed edit that forfeits the close-out." },
+    editsPresent: { type: "boolean", description: "True ONLY if the range is NON-EMPTY and carries everything the pass claims it shipped: every edit it listed, AND a change answering every finding it disposed `fixed`. An EMPTY range is false: it holds no fix at all, so a finding reported `fixed` over it never landed. A claimed edit, or a claimed fix, you cannot find in the diff is false too — an unrelated tidy-up that IS in the range does not stand in for a requested fix that is not. Extra non-semantic hunks beyond the list do not make it false — `nonSemantic` judges those on their own merits." },
+    why: { type: "string", description: "One line: what the diff held, or the semantic change, missing claimed edit, or unlanded `fixed` claim that forfeits the close-out." },
   },
   required: ["nonSemantic", "editsPresent", "why"],
 };
@@ -469,7 +478,15 @@ const CYCLE_FLAKE_POLICY = `When a test fails in an area this branch did not tou
 // The reviewer's half of the same policy — a gate amendment, stated where the
 // gate is: the automatic-blocker rule is build/typecheck-specific, and this
 // extends its spirit to tests without extending it one step further.
-const CYCLE_FLAKE_REVIEW = `A documented, evidenced UNRELATED test failure — reproduced on the base per the cycle's flake rule, with its diagnosis-only follow-up task committed on this branch — is NON-BLOCKING for you. Any failure this branch plausibly caused, and any reproduction attempt recorded as inconclusive, stays blocking.`;
+//
+// It names BOTH outcomes the fixer's half admits, because the two are one
+// disposition with two shapes: a NEW diagnosis task committed here, or an
+// already-ACTIVE task cited instead — which that half prescribes precisely so
+// a sibling branch does not edit a base-landed file. Recognizing only the
+// committed one would make this gate block the outcome the policy asks for,
+// on every required round and especially `light` mode's last one, and drive a
+// conforming cycle to its cap over a task file the policy told it not to write.
+const CYCLE_FLAKE_REVIEW = `A documented, evidenced UNRELATED test failure — reproduced on the base per the cycle's flake rule, with the diagnosis-only follow-up task that rule requires on record: either a NEW one committed on this branch, or the ACTIVE existing task the pass cited instead of duplicating or editing it — is NON-BLOCKING for you. The cited-task shape leaves nothing in this branch's diff by design, so check the pass's flake record for the citation rather than expecting a new file. Any failure this branch plausibly caused, and any reproduction attempt recorded as inconclusive, stays blocking.`;
 
 // Which validation tier a pass owes, decided by position: an intermediate pass
 // owes the ROUND tier (the cheapest signal covering what it changed), while any
@@ -582,7 +599,7 @@ function cycleFixPrompt(cycle, state) {
     ? `DELIVERY TIER — this pass can be the cycle's last, so validate the FINAL state with the full applicable sanity set: lint, typecheck, build, tests, whichever this repository has. The cycle may not conclude or publish on less, and nothing downstream re-runs it. Two bounded exceptions, and no others: a completed run whose ONLY failures carry the evidenced-unrelated disposition below counts as this pass, with those failures documented for the maintainer; and the pass survives that rule's record-only follow-up commit (the flake task file, plus any PR-body or summary note recording what this run surfaced). Any other change committed after the run voids the pass and reruns the tier — prose here carries behavior (a prompt's text, a config or contract expressed as text), and no later check exists to catch what a wider tolerance would admit.`
     : `ROUND TIER — the cheapest signal that catches what YOU changed: typecheck/lint for ordinary code edits, targeted tests for touched behavior, and no build at all where this round's diff holds no executable change (comments, prose, docs). When in doubt about blast radius run more, not less, and always build a round touching build configuration, dependencies, or generated contracts. Intermediate pushes the assignment mandates for durability are not delivery events and never raise this tier. Say in \`summary\` what you actually ran: this round's reviewer is told the tier and will not block on a heavier suite it did not cover.`;
   const closeOutLine = cycle.closeOut === "on"
-    ? `\n- TRIVIAL-ROUND CLOSE-OUT is granted for this cycle (the invoker's bounded discretion, distinct from \`light\`): where this round's REMAINING findings are exclusively NON-SEMANTIC — wording, typos, comment phrasing, formatting; nothing touching behavior, logic, or the meaning of an acceptance criterion — and you FIXED every one of them, list the edits you shipped in \`closeOutEdits\` and the cycle may conclude without another reviewer round. Every finding still gets its explicit disposition; the offer never swallows one — and a \`declined\` or \`escalated\` disposition anywhere on this pass forfeits the offer outright, since that claim is the next fresh reviewer's to adjudicate and leaves NOTHING in the diff for the check below to see. Offer it on the merits only: the license is judged on the DIFF, not on your list, so any executable or behavioral change in the same diff forfeits the close-out and buys a normal round — and the same read checks your list back the other way, so an empty range, or an edit you list that the range does not carry, forfeits it too. Offering it is offering to CONCLUDE the cycle, so run the DELIVERY tier over the final state as well — the close-out skips the re-review, never that gate.`
+    ? `\n- TRIVIAL-ROUND CLOSE-OUT is granted for this cycle (the invoker's bounded discretion, distinct from \`light\`): where this round's REMAINING findings are exclusively NON-SEMANTIC — wording, typos, comment phrasing, formatting; nothing touching behavior, logic, or the meaning of an acceptance criterion — and you FIXED every one of them, list the edits you shipped in \`closeOutEdits\` and the cycle may conclude without another reviewer round. Every finding still gets its explicit disposition; the offer never swallows one — and a \`declined\` or \`escalated\` disposition anywhere on this pass forfeits the offer outright, since that claim is the next fresh reviewer's to adjudicate and leaves NOTHING in the diff for the check below to see. Offer it on the merits only: the license is judged on the DIFF, not on your list, so any executable or behavioral change in the same diff forfeits the close-out and buys a normal round — and the same read checks your whole claim back the other way, against the \`fixed\` dispositions as well as the list, so an empty range, an edit you list that the range does not carry, or a finding you report \`fixed\` that the range holds no change for, forfeits it too. Offering it is offering to CONCLUDE the cycle, so run the DELIVERY tier over the final state as well — the close-out skips the re-review, never that gate.`
     : "";
   return `You are the fixer for one review cycle (branch \`${cycle.branch}\`, review base \`${cycle.base}\`, artifact type ${cycle.artifactType}).
 
@@ -817,14 +834,19 @@ async function runCyclePeerStage(cycle, state) {
 // reviewer-plus-peer round. Neither question lets the fixer's list decide
 // anything: question 1 judges the DIFF against the list's claim of triviality
 // — the difference between a bounded discretion and a self-granted licence —
-// and question 2 judges the list against the diff, which is the only thing
-// standing between a `fixed` disposition and a range that never received it.
+// and question 2 judges the pass's whole claim against the diff, which is the
+// only thing standing between a `fixed` disposition and a range that never
+// received it. That claim is the list AND the `fixed` dispositions, because a
+// list is silent about the fix it omits: a pass that skipped one requested fix
+// and listed an unrelated tidy-up would otherwise clear a list-only check with
+// the skipped fix seen by nobody.
 function cycleCloseOutPrompt(cycle, state) {
+  const fixes = Array.isArray(state.fixes) ? state.fixes : [];
   return `Trivial-round close-out check, read-only. The cycle is about to conclude WITHOUT another reviewer round, so this diff would ship unreviewed. Read \`git diff ${cycleShq(state.passBase)}..HEAD\` in full and answer TWO questions about it.
 
 1. \`nonSemantic\` — is EVERY hunk non-semantic: wording, typos, comment phrasing, formatting, with nothing touching behavior, logic, or the meaning of an acceptance criterion? Judge the DIFF, not the list below, and remember that prose can carry behavior here: a prompt's text, a config or contract expressed as text, an instruction an agent follows. Anything else is \`nonSemantic: false\`.
 
-2. \`editsPresent\` — is the range NON-EMPTY, and does it actually carry every edit the pass claims below? An EMPTY range is \`false\`: nothing landed, so a finding this pass reported \`fixed\` was never fixed at all. A claimed edit you cannot find in the diff is \`false\` too. Extra non-semantic hunks beyond the list are fine here — question 1 already judges those.
+2. \`editsPresent\` — is the range NON-EMPTY, and does it actually carry everything the pass claims below: every EDIT it listed, and a change answering every FINDING it disposed \`fixed\`? An EMPTY range is \`false\`: nothing landed, so a finding this pass reported \`fixed\` was never fixed at all. A claimed edit you cannot find in the diff is \`false\` too, and so is a \`fixed\` finding the range holds no change for — the two lists are checked separately on purpose, because a tidy-up that IS in the range does not stand in for a requested fix that is not. Extra non-semantic hunks beyond the list are fine here — question 1 already judges those.
 
 Either question answered \`false\` costs nothing but the normal reviewer round.
 
@@ -837,6 +859,10 @@ ${CYCLE_FINISH_IN_TURN} ${CYCLE_NO_SELF_PEER}
 ## Edits the pass claims it shipped (verbatim)
 
 ${JSON.stringify(state.edits, null, 2)}
+
+## Findings the pass disposed \`fixed\` (verbatim)
+
+${fixes.length ? JSON.stringify(fixes, null, 2) : "(none — this pass disposed no finding `fixed`, so only the edits above are yours to find)"}
 
 Edit nothing.`;
 }
@@ -1437,9 +1463,20 @@ async function runReviewCycle(cycle) {
     // pass that says it changed nothing has nothing to close out over, and
     // saying so while listing `closeOutEdits` is a contradiction the gate
     // settles here rather than spending an agent call on.
+    //
+    // The `fixed` dispositions go to that question BESIDE the edit list, and
+    // that pairing is what makes it answer the case it is named for. The list
+    // is the pass's account of what it shipped; the dispositions are its
+    // account of what it was ASKED for, and only the second names a fix that
+    // never landed. Checked against the list alone, a pass that forgot one
+    // requested fix while shipping and listing an unrelated comment tidy-up
+    // clears every question here — non-empty range, every listed edit present,
+    // nothing semantic — and concludes the cycle with the omission adjudicated
+    // by nobody.
     const closeOutOnlyFixes = (fix.dispositions || []).every((d) => d && d.disposition === "fixed");
+    const closeOutFixes = (fix.dispositions || []).filter((d) => d && d.disposition === "fixed").map((d) => ({ finding: (d && d.finding) || "", detail: (d && d.detail) || "" }));
     if (cycle.closeOut === "on" && passBase && fix.changed && (fix.closeOutEdits || []).length && undisposed.length === 0 && closeOutOnlyFixes && deviationSetChanges === 0 && pendingRetirements.length === 0) {
-      const closeOut = await agent(cycleCloseOutPrompt(cycle, { passBase, edits: fix.closeOutEdits }), {
+      const closeOut = await agent(cycleCloseOutPrompt(cycle, { passBase, edits: fix.closeOutEdits, fixes: closeOutFixes }), {
         label: `${lp}closeout#${fixerPasses}`,
         schema: CYCLE_CLOSEOUT_SCHEMA,
         effort: "low",
@@ -1450,7 +1487,7 @@ async function runReviewCycle(cycle) {
           closeOut: { pass: fixerPasses, range: `${passBase}..${fix.finalSha || "HEAD"}`, edits: fix.closeOutEdits, verified: (closeOut && closeOut.why) || "" },
         });
       }
-      log(`fixer pass ${fixerPasses} offered a trivial-round close-out; the diff check ${!closeOut ? "returned nothing" : closeOut.nonSemantic !== true ? "found a semantic change" : "did not find every claimed edit in the range"}, so the normal reviewer round runs.`);
+      log(`fixer pass ${fixerPasses} offered a trivial-round close-out; the diff check ${!closeOut ? "returned nothing" : closeOut.nonSemantic !== true ? "found a semantic change" : "did not find every claimed edit and fix in the range"}, so the normal reviewer round runs.`);
     }
 
     // Record-only close: the terminal check above, with its one conjunct taken
