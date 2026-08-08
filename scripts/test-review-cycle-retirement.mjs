@@ -44,7 +44,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 47;
+const CHECKS_PER_LEG = 53;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -241,6 +241,12 @@ const confirmRetireAgain = {
   changed: false,
   dispositions: [{ finding: "a pass-note", origin: "reviewer", disposition: "fixed", detail: "settled it again", retiresQuestionIds: ["q1"] }],
 };
+
+// A deviation from a LOCKED maintainer decision, and a pass that reports one.
+// Every other packet above carries `deviations: []`, so any of them following
+// this one is a pass that has stopped restating it — the claimed drop.
+const DEV = "delivered a stub adapter instead of the locked one (upstream API absent)";
+const deviate = { ...PASS_PACKET, deviations: [DEV] };
 
 async function run(src, { fixes, reviews, cycle }) {
   const seen = { fixPrompts: [], reviewPrompts: [] };
@@ -589,6 +595,35 @@ for (const name of WORKFLOWS) {
     });
     check("escalating onto a question the same pass retires is reported", carriedIds.includes("question:q1"), carried);
     check("the same pass's own retirement still takes effect as a claim", stateOf("q1") === "pending", stateOf("q1"));
+  });
+
+  // 24. The same rule on the other thing a pass can silently take off the
+  //     maintainer's list: a deviation from a LOCKED decision. A pass that
+  //     stops restating one is CLAIMING it no longer stands, so the claim needs
+  //     a round exactly as a retirement does. The terminating confirmation pass
+  //     is where that matters — it is asked to return an empty `dispositions`
+  //     array and no round follows it — so without the claim rule a
+  //     schema-driven fixer echoing `deviations: []` there erases a live
+  //     deviation, leaving the one call the loop may not make in a log line.
+  await scenario("24. a dropped deviation needs a passing round", async () => {
+    const dropped = await run(src, { fixes: [deviate, idle], reviews: [OK] });
+    check("a deviation the terminal confirmation pass drops still ships", dropped.res.verdict === "pass" && JSON.stringify(dropped.res.deviations) === JSON.stringify([DEV]), `${dropped.res.verdict}/${JSON.stringify(dropped.res.deviations)}`);
+    check("the per-pass history rides beside it, named as history", Array.isArray(dropped.res.deviationHistory) && dropped.res.deviationHistory.length === 2 && dropped.res.deviationHistory[1].deviations.length === 0, JSON.stringify(dropped.res.deviationHistory));
+
+    // The no-latching half, unchanged: a drop a round passed over takes effect,
+    // so the result still describes the FINAL state rather than every round's.
+    const accepted = await run(src, { fixes: [deviate, fixOn("r1-1"), idle], reviews: [FAIL("r1"), OK] });
+    check("a drop a round passes over takes effect", accepted.res.verdict === "pass" && (accepted.res.deviations || []).length === 0, JSON.stringify(accepted.res.deviations));
+    check("the round that decides it is SHOWN the claim", /no longer restates/.test(accepted.seen.reviewPrompts[1] || "") && (accepted.seen.reviewPrompts[1] || "").includes(DEV), "round-2 review prompt");
+
+    // A reviewer that keeps rejecting the claim -> round cap -> still standing.
+    const rejected = await run(src, {
+      fixes: [deviate, fixOn("r1-1"), fixOn("r2-1")],
+      reviews: [FAIL("r1"), FAIL("that deviation still stands"), FAIL("it still stands")],
+      cycle: { maxRounds: 3 },
+    });
+    check("a claim no round passed is re-presented to the next one", /no longer restates/.test(rejected.seen.reviewPrompts[2] || ""), "round-3 review prompt");
+    check("a rejected drop leaves the deviation standing at the cap", rejected.res.verdict === "review-cap" && JSON.stringify(rejected.res.deviations) === JSON.stringify([DEV]), `${rejected.res.verdict}/${JSON.stringify(rejected.res.deviations)}`);
   });
 
   const ran = legOk + legFail;

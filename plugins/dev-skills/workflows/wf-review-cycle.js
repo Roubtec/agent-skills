@@ -442,10 +442,11 @@ function cycleOpenQuestionsBlock(openQuestions) {
 // carried a round's flag straight into its final result reported a deviation
 // rounds after the work had conformed, sending a maintainer to "restore"
 // something already present. Restating is what makes replacing safe — a pass
-// that omits one is saying it no longer stands, which the cycle logs.
+// that omits one is CLAIMING it no longer stands, and the cycle keeps it
+// standing until a round passes over that claim.
 function cycleDeviationsBlock(deviations) {
   if (!deviations || !deviations.length) return "";
-  return `\n## Deviations from LOCKED decisions standing after the last pass (verbatim)\n\nRestate in your \`deviations\` every one that STILL stands once this pass is done, and leave out only one that genuinely no longer does (say in \`summary\` what closed it): the cycle's result describes the FINAL state, not the history. Do NOT conform a deviation away to shorten this list — report, don't correct; the maintainer ratifies it or asks for conformance, and has ratified one and reversed their own earlier decision before.\n\n${JSON.stringify(deviations, null, 2)}\n`;
+  return `\n## Deviations from LOCKED decisions standing after the last pass (verbatim)\n\nRestate in your \`deviations\` every one that STILL stands once this pass is done, and leave out only one that genuinely no longer does (say in \`summary\` what closed it): the cycle's result describes the FINAL state, not the history. Leaving one out is a CLAIM, not an effect — it keeps standing, and this round's reviewer is shown the claim beside it, until a round passes over it — so a deviation you drop on the final confirmation pass still ships to the maintainer. Do NOT conform a deviation away to shorten this list — report, don't correct; the maintainer ratifies it or asks for conformance, and has ratified one and reversed their own earlier decision before.\n\n${JSON.stringify(deviations, null, 2)}\n`;
 }
 
 function cycleFixPrompt(cycle, state) {
@@ -526,8 +527,9 @@ function cycleReviewPrompt(cycle, state) {
   // deviation, so the review adds the two things that decision needs — whether
   // an in-spec route existed, and a recommendation — without conforming it away
   // and without grading the rest of the work any more gently for it.
+  const deviationDrops = Array.isArray(state.deviationDrops) ? state.deviationDrops : [];
   const deviationsBlock = Array.isArray(state.deviations) && state.deviations.length
-    ? `\n## Deviations from LOCKED decisions this packet reports (verbatim)\n\nFor each, say in \`notes\` whether an in-spec route existed and recommend RATIFY or CONFORM — the maintainer decides, so a deviation is neither a finding to be corrected away nor a license for unfinished work: grade completeness, tests, and regressions exactly as strictly.\n\n${JSON.stringify(state.deviations, null, 2)}\n`
+    ? `\n## Deviations from LOCKED decisions standing on this packet (verbatim)\n\nFor each, say in \`notes\` whether an in-spec route existed and recommend RATIFY or CONFORM — the maintainer decides, so a deviation is neither a finding to be corrected away nor a license for unfinished work: grade completeness, tests, and regressions exactly as strictly.\n\n${JSON.stringify(state.deviations, null, 2)}\n${deviationDrops.length ? `\nOf those, the fixer no longer restates the ones below, CLAIMING each no longer stands. Verify that against the committed state exactly as you would a \`declined\`: passing this round is what drops them, so raise one you do not accept as an issue rather than letting it go.\n\n${JSON.stringify(deviationDrops, null, 2)}\n` : ""}`
     : "";
   // This brief orders a full build, so the reviewer needs a destination for the
   // build's output as much as for its own report — including on the pass that
@@ -887,7 +889,11 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //   to move the artifact directory) }
 // NO per-round condition latches into that result: `deviations` is the LAST
 // pass's set, not every pass's, so the result describes the FINAL state and
-// `deviationHistory` — named as history — is where the rounds live. A consumer
+// `deviationHistory` — named as history — is where the rounds live. Dropping
+// one is a CLAIM a round must pass over, exactly like a retirement: until then
+// it keeps standing in `deviations`, so no terminal pass can erase a live
+// deviation on its way out (the claims still open are `deviations` minus the
+// last `deviationHistory` entry). A consumer
 // publishing a PR comment or summary from this result leads with `deviations`;
 // they are the maintainer's call to ratify or conform, never the loop's.
 // An `openQuestions` entry a later pass settled carries a `retired` mark; a
@@ -905,11 +911,14 @@ async function runReviewCycle(cycle) {
   // each element IS the accumulated question object, so accepting one mutates
   // what the result already carries.
   const pendingRetirements = [];
-  // The deviations still standing (the last pass's set) plus the per-pass
-  // record. Re-evaluated every pass rather than accumulated: see the result
-  // contract above.
+  // The deviations still standing (the last pass's set, plus any drop no round
+  // has accepted yet) and the per-pass record. Re-evaluated every pass rather
+  // than accumulated: see the result contract above.
   let deviations = [];
   const deviationHistory = [];
+  // Drops claimed but not yet adjudicated, re-presented to each round until one
+  // passes over them — the retirement machinery's rule, for its reason too.
+  let pendingDeviationDrops = [];
   const peerRounds = [];
   const discardedPeerFindings = [];
   const artifactDirAnomalies = [];
@@ -1023,13 +1032,22 @@ async function runReviewCycle(cycle) {
     // Deviations describe the state AFTER this pass, so the pass's own set
     // replaces the standing one it was shown rather than adding to it — a
     // latched flag reported a deviation rounds after the work had conformed.
-    // A dropped one is logged: "no longer stands" and "the fixer forgot it"
-    // look identical in the packet, and the reviewer is shown only what stands.
-    for (const gone of deviations.filter((d) => !(fix.deviations || []).includes(d))) {
-      log(`fixer pass ${fixerPasses} did not restate deviation ${JSON.stringify(gone)}; recording it as no longer standing (deviationHistory keeps it).`);
+    // But a drop is a CLAIM, not an effect: "no longer stands" and "the fixer
+    // forgot it" look identical in the packet, so a dropped deviation KEEPS
+    // STANDING until a round passes with the claim in view, exactly as a
+    // retirement does. Otherwise the final confirmation pass — asked for an
+    // empty `dispositions` array, and followed by no further round — could
+    // erase a live deviation on its way out, leaving the one call the loop is
+    // not allowed to make recorded nowhere the maintainer reads.
+    const restated = [...(fix.deviations || [])];
+    for (const gone of deviations.filter((d) => !restated.includes(d) && !pendingDeviationDrops.includes(d))) {
+      log(`fixer pass ${fixerPasses} did not restate deviation ${JSON.stringify(gone)}; it KEEPS STANDING as a claimed drop until a round passes with the claim in view.`);
     }
-    deviationHistory.push({ pass: fixerPasses, deviations: [...(fix.deviations || [])] });
-    deviations = [...(fix.deviations || [])];
+    // `deviations` is the set this pass was shown, so what it left out is
+    // exactly the claim set: a drop the pass restates after all is withdrawn.
+    pendingDeviationDrops = deviations.filter((d) => !restated.includes(d));
+    deviationHistory.push({ pass: fixerPasses, deviations: restated });
+    deviations = [...restated, ...pendingDeviationDrops];
     // Accumulate the pass packet field-by-field. A later pass updates what it
     // actually reports, and an explicitly EMPTY field never clobbers a
     // populated one from an earlier pass: schema-driven agents commonly emit
@@ -1126,8 +1144,11 @@ async function runReviewCycle(cycle) {
       proposedRetirements: pendingRetirements,
       peerPreflighted: peerState.preflighted,
       // What still stands after the pass just made — the reviewer adds the
-      // in-spec-route judgment and a ratify/conform recommendation to it.
+      // in-spec-route judgment and a ratify/conform recommendation to it — plus
+      // the ones this pass claims no longer stand, which the same reviewer
+      // accepts by passing the round or rejects by raising an issue.
       deviations,
+      deviationDrops: pendingDeviationDrops,
     };
     // The peer launches BESIDE the fresh reviewer — the canonical concurrent
     // launch (the examination-only peer is the protocol's sole same-checkout
@@ -1228,6 +1249,14 @@ async function runReviewCycle(cycle) {
       delete q.retirementPending;
     }
     pendingRetirements.length = 0;
+    // The same verdict settles the deviation drops this round was shown: the
+    // fresh reviewer saw each claim beside what still stands and passed, so
+    // those deviations stop standing. Promoted HERE too, before either terminal
+    // pass path, so no exit can drop a deviation no round accepted.
+    if (pendingDeviationDrops.length) {
+      deviations = deviations.filter((d) => !pendingDeviationDrops.includes(d));
+      pendingDeviationDrops = [];
+    }
 
     // Round passed. light mode ends here, recording undisposed remarks as such.
     if (cycle.mode === "light") {
