@@ -365,7 +365,7 @@ const CYCLE_REDIRECTED_OUTPUT = "Any build or validation output you redirect to 
 // Provenance of a brief's claims, carried by the fixer, reviewer, and peer
 // briefs alike. Two claims relayed from an earlier round were wrong in a real
 // run and reached a maintainer decision; only roles told to re-derive caught it.
-const CYCLE_CARRIED_CLAIMS = "Provenance: only what you verify against the committed tree yourself is established this turn. Every finding, disposition, open question, and citation relayed to you here is CARRIED from an earlier round's report — it may be stale, or have been wrong when written — so re-derive one before you rely on it.";
+const CYCLE_CARRIED_CLAIMS = "Provenance: only what you verify against the committed tree yourself is established this turn. Every finding, disposition, open question, and citation relayed to you here is CARRIED — not verified this turn, whatever its source; it may be stale, or have been wrong when written — so re-derive one before you rely on it.";
 
 // Default worktree/branch contract when the consumer supplies none. A consumer
 // with its own worktree lifecycle (wt-enter etc.) passes richer per-role
