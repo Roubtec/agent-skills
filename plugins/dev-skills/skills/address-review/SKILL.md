@@ -155,6 +155,8 @@ Classify each into one of:
 - **follow-up-task** — the concern is real, but at least one condition applies: fixing it here would expand the PR's scope considerably while the branch is defendable as it stands (it builds and covers its main paths); the work meets step 5's condition-bound deferred-placement criteria; or the maintainer has already requested a follow-up (reply or decision comment). Do **not** implement it; record it as a committed task file instead (step 5). Never use this to dodge a cheap fix.
 - **Ambiguous** — the right fix needs an authoritative decision you cannot make from the code/history. **Interactive:** ask the user. **Hands-off:** make a best-effort call only when stakes are low; otherwise skip and document it — do not guess where an authoritative determination is required.
 
+A thread asking you to **document** some behavior is satisfied by a minimal why-comment under `review-cycle`'s comment rule, by a reply on the thread carrying the fuller rationale, or by push-back — never by adjacent code re-implemented in prose. Where such a push-back is sustained, that rule's carve-out for a standing overruled decision is worth the comment precisely here: an external reviewer re-raises the same point across PR rounds and runs, and nothing in this run's replies is in front of it next time.
+
 ### Step 5 — Fix
 
 For the actionable items:
