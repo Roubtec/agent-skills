@@ -82,6 +82,7 @@ Construct a prompt that contains:
   - A concise summary of what was implemented.
   - Any decisions, tradeoffs, or deviations from the task description.
   - Any uncertainties or areas that may need focused review.
+- **The `review-cycle` Fixer contract, whole** — the implementer is that cycle's Fixer on round 1, so every rule that skill states for a Fixer binds here, later additions included; the bullets above are this loop's deltas, not a closed list. It carries the deviation protocol, and a task-implementation loop is exactly where that was broken: where the task hands down a decision the maintainer LOCKED and the implementer must deliver something else, it reports what it delivered instead and the constraint that forced it rather than conforming the deviation away — report, don't correct; the maintainer ratifies it or asks for conformance, and has ratified one and reversed their own earlier decision. It buys no slack meanwhile: completeness, tests, and regressions are graded exactly as strictly.
 
 ### What the implementer should NOT receive
 
@@ -112,6 +113,7 @@ Read `AGENTS.md` first for project conventions.
 - Finish inside this turn: do not end it waiting to be resumed, block on and reap anything you launch, and do not launch your own peer review.
 - Run the project's build and lint commands periodically. Run a full build check before reporting completion.
 - Any build or lint output that must land in a file goes to `<validation-output path allocated above>`, never anywhere else.
+- If a decision the task marks LOCKED is one you cannot deliver, report what you delivered instead and the constraint that forced it — do not conform it away.
 - When done, report: what you did, any decisions/tradeoffs, any uncertainties.
 ```
 
