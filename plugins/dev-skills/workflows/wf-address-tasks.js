@@ -1663,10 +1663,14 @@ async function runReviewCycle(cycle) {
     // the contract exactly — and would otherwise conclude the cycle carrying
     // no record at all.
     //
-    // A self-report is safe here for the very reason it is refused on the
-    // record-only exit below: that one BUYS something (a skipped round), so it
-    // is judged on the diff; this one buys nothing and only ever adds a caveat
-    // to the maintainer's copy. Read from `fix`, never accumulated: every pass
+    // The self-report is taken UNVERIFIED in both places; what differs is what
+    // it is allowed to buy. On the record-only exit below it never buys the
+    // skip — the diff check decides that, and is never shown the note — it only
+    // rides in the record that exit exists to carry, which is why its ABSENCE
+    // withholds the exit rather than its presence granting one. Where it rides
+    // in `flakeCarried` instead it buys nothing either way, licensing no exit
+    // and adding a caveat to the maintainer's copy. Read from `fix`, never
+    // accumulated: every pass
     // that can CONCLUDE the cycle is a delivery-tier pass, which is what makes
     // the consumers' heading about a failed delivery run true of the concluding
     // pass's record and of no other — an earlier pass's is a wrong answer under
@@ -1938,10 +1942,15 @@ async function runReviewCycle(cycle) {
     // tier, whose reviewer runs the whole suite, and the confirmation pass
     // after it owes that tier again — three runs of the suite the tolerance
     // exists to spare, plus a reviewer-and-peer round, bought by a commit that
-    // adds a queue entry and a note. Every other conjunct is the terminal
-    // check's, unchanged: a disposition, a deviation-set move, or a retirement
-    // claim (which rides in `dispositions`) still earns its round here exactly
-    // as it does there. And the pass neither offers this nor is asked about it
+    // adds a queue entry and a note. Besides `changed`, just accounted for, the
+    // three conjuncts it shares with the terminal check — `confirming`, an
+    // empty `dispositions`, an unmoved deviation set — are unchanged: a
+    // disposition, a deviation-set move, or a retirement claim (which rides in
+    // `dispositions`) still earns its round here exactly as it does there. The
+    // two it does not share are `passBase` — the diff check needs a range to
+    // read — and, beyond the `if` itself, `flakeNote`: the record the exit
+    // exists to carry, which gates the check and is taken up below. And the
+    // pass neither offers this nor is asked about it
     // — a tolerance a fixer could claim would be the evasion route item 2's own
     // evidence requirement exists to close, so a cheap read-only check judges
     // the range, and anything beyond the record forfeits the exit for the
