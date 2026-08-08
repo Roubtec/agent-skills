@@ -90,6 +90,7 @@ Construct a prompt that contains:
   - Commit at logical milestones, keeping each commit buildable when practical.
   - **An absolute path for validation output**, which you allocate — namespaced by this task's number or created with `mktemp -d`, and outside the working tree the implementer commits from. Any build or lint output that must land in a file goes there, never a fixed shared scratchpad name: one session's agents share that directory. Never leave the choice to the implementer.
 - **Coordination instructions** — remind the implementer that it is not alone in the codebase, must not revert unrelated edits made by others, and should accommodate concurrent changes.
+- **Finish inside your own turn.** Nothing resumes a subagent, so tell the implementer never to end its turn waiting for a notification or for a child it launched: it bounds and waits on anything it starts and reaps it before returning, leaving no process of its own running. It launches no peer review of its own either — the loop's peer step is the sanctioned second opinion (see `review-cycle`).
 - **No shared task/plan tracker.** Tell the implementer not to write to any shared task or plan tracker (e.g. a shared todo/plan list). A subagent's entries leak into the orchestrator's view and linger there as stale, misleading items (e.g. a child step still shown as in-progress after it finished), adding noise to every later turn without helping the orchestrator spot a struggling task — that signal comes from the implement→review→fix result, not from a child's micro-steps. The implementer should track its own steps however it likes and surface progress only in its final report.
 - **Reporting instructions** — when done, report back with:
   - A concise summary of what was implemented.
@@ -122,6 +123,7 @@ Read `AGENTS.md` first for project conventions.
 - Implement the task according to its description and acceptance criteria.
 - Commit at logical milestones. Aim for one commit per logical unit of work.
 - Do not revert unrelated or concurrent edits. Accommodate changes made by others.
+- Finish inside this turn: do not end it waiting to be resumed, block on and reap anything you launch, and do not launch your own peer review.
 - Run the project's build and lint commands periodically. Run a full build check before reporting completion.
 - Any build or lint output that must land in a file goes to `<validation-output path allocated above>`, never anywhere else.
 - When done, report: what you did, any decisions/tradeoffs, any uncertainties.
