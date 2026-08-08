@@ -22,7 +22,7 @@ This separation keeps your context window clean across long batches and ensures 
 
 > **Critical — one agent at a time; subagents share your working tree.**
 > Every subagent operates on your single checked-out branch and working tree — they are **not** isolated copies of the repo. Two checkout-dependent agents running at once corrupt each other. The most common failure: a reviewer spawned alongside its implementer scopes `git diff <base>...HEAD` against a branch the implementer has not finished committing to, sees nothing, and falsely reports "no implementation" — so the work ships **unreviewed**.
-> Therefore: **never place two such agents in the same turn or parallel tool block.** Spawn one agent, wait for its result, then spawn the next — even though they all run in the foreground. The harness's general "batch independent tool calls together" guidance does **not** apply to these spawns: the implementer and its reviewer are *not* independent — they contend for the same working tree.
+> The invariant is about committed state, not about turn structure: **a reviewer may not start until its implementer's commits are on disk.** A harness may run spawns asynchronously — an `Agent` call can return immediately with a background task id and deliver its result as a later notification — so your obligation is to wait for that completion notification before spawning the reviewer. Keeping the two out of the same turn or parallel tool block is a **proxy** for that invariant: sufficient where spawns are synchronous, and neither sufficient nor necessary where they are not. The harness's general "batch independent tool calls together" guidance does **not** apply to these spawns: the implementer and its reviewer are *not* independent — they contend for the same working tree.
 > The examination-only peer CLI described below is the sole exception: launch it alongside the reviewer only after the implementation is committed, and forbid it from running builds or tests, so it remains a concurrent reader while the own reviewer may build.
 
 **Trivial-task escape hatch:** for genuinely trivial tasks (a single obvious change with unambiguous criteria), you may implement directly without delegating.
@@ -38,7 +38,7 @@ Your responsibilities are:
 1. Resolve the input arguments to a list of task files.
 2. Read each task file enough to understand dependencies and sequencing — do not deeply analyze implementation details.
 3. Manage branch creation and PR base determination.
-4. Construct focused prompts and spawn subagents **one at a time** — implementer, await its result, then a fresh reviewer — for each task. Never batch the implementer and reviewer into one turn (see the shared-working-tree rule above).
+4. Construct focused prompts and spawn subagents **one at a time** — implementer, await its result, then a fresh reviewer — for each task. The rule is that the reviewer does not start until its implementer's commits are on disk, so wait for the completion notification; keeping the two out of one turn is the **proxy** for that, not the rule (see the shared-working-tree rule above).
 5. Handle the review feedback loop.
 6. Open PRs once a task passes review.
 7. Advance to the next task or stop on blockers.
@@ -62,7 +62,7 @@ State this in every subagent prompt this skill composes. A reviewer subagent aut
 ## Implementer Agent
 
 The implementer receives a focused, self-contained prompt and works autonomously on a single task.
-It is launched in the **foreground** (not background) and **on its own**: the orchestrator needs its result — and its commits on disk — before spawning the reviewer, so do not start any other checkout-dependent agent in the same turn (see the shared-working-tree rule in Architecture).
+It is spawned **on its own**: the reviewer may not start until this implementer's commits are on disk, so wait for its completion notification — however the harness delivers it — before starting any other checkout-dependent agent (see the shared-working-tree rule in Architecture).
 
 ### What to include in the implementer prompt
 
@@ -76,11 +76,13 @@ Construct a prompt that contains:
   - Commit at logical milestones, keeping each commit buildable when practical.
   - **An absolute path for validation output**, which you allocate — namespaced by this task's number or created with `mktemp -d`, and outside the working tree the implementer commits from. Any build or lint output that must land in a file goes there, never a fixed shared scratchpad name: one session's agents share that directory. Never leave the choice to the implementer.
 - **Coordination instructions** — remind the implementer that it is not alone in the codebase, must not revert unrelated edits made by others, and should accommodate concurrent changes.
+- **Finish inside your own turn.** Nothing resumes a subagent, so tell the implementer never to end its turn waiting for a notification or for a child it launched: it bounds and waits on anything it starts and reaps it before returning, leaving no process of its own running. It launches no peer review of its own either — the loop's peer step is the sanctioned second opinion (see `review-cycle`).
 - **No shared task-tracker.** Tell the implementer not to use the `TaskCreate`/`TaskUpdate`/`TaskList` tools. A subagent's entries leak into the orchestrator's task view and linger there as stale, misleading items (e.g. a child's `in_progress` step that has already finished), adding noise to every later turn without helping the orchestrator spot a struggling task — that signal comes from the implement→review→fix result, not from a child's micro-steps. The implementer should track its own steps however it likes and surface progress only in its final report.
 - **Reporting instructions** — when done, report back with:
   - A concise summary of what was implemented.
   - Any decisions, tradeoffs, or deviations from the task description.
   - Any uncertainties or areas that may need focused review.
+- **The `review-cycle` Fixer contract, whole** — the implementer is that cycle's Fixer on round 1, so every rule that skill states for a Fixer binds here, later additions included; the bullets above are this loop's deltas, not a closed list. It carries the deviation protocol, and a task-implementation loop is exactly where that was broken: where the task hands down a decision the maintainer LOCKED and the implementer must deliver something else, it reports what it delivered instead and the constraint that forced it rather than conforming the deviation away — report, don't correct; the maintainer ratifies it or asks for conformance, and has ratified one and reversed their own earlier decision. It buys no slack meanwhile: completeness, tests, and regressions are graded exactly as strictly.
 
 ### What the implementer should NOT receive
 
@@ -108,8 +110,10 @@ Read `AGENTS.md` first for project conventions.
 - Implement the task according to its description and acceptance criteria.
 - Commit at logical milestones. Aim for one commit per logical unit of work.
 - Do not revert unrelated or concurrent edits. Accommodate changes made by others.
+- Finish inside this turn: do not end it waiting to be resumed, block on and reap anything you launch, and do not launch your own peer review.
 - Run the project's build and lint commands periodically. Run a full build check before reporting completion.
 - Any build or lint output that must land in a file goes to `<validation-output path allocated above>`, never anywhere else.
+- If a decision the task marks LOCKED is one you cannot deliver, report what you delivered instead and the constraint that forced it — do not conform it away.
 - When done, report: what you did, any decisions/tradeoffs, any uncertainties.
 ```
 
@@ -118,8 +122,8 @@ Read `AGENTS.md` first for project conventions.
 The reviewer is a **fresh** subagent with no knowledge of the implementation process.
 It evaluates the current codebase state against two orthogonal dimensions: acceptance criteria compliance and implementation quality.
 It must be a **new** `Agent` invocation — a fresh-eyes agent with no implementation context, never a continuation of the implementer. Ignore any `SendMessage` continuation footer from earlier `Agent` results; this harness does not expose that tool.
-Spawn it only **after** the implementer has fully completed and its commits have landed — never concurrently with the implementer, and never in the same turn or parallel tool block. You share one working tree, so a concurrent reviewer scans an empty or half-finished branch and wrongly reports "no implementation" (see the shared-working-tree rule in Architecture).
-It is launched in the **foreground** (not background) since the feedback loop must complete before the orchestrator can advance branches or start the next task.
+Spawn it only **after** the implementer's commits are on disk — wait for that completion notification; keeping it out of the implementer's turn or parallel tool block is only a proxy for the same thing. You share one working tree, so a concurrent reviewer scans an empty or half-finished branch and wrongly reports "no implementation" (see the shared-working-tree rule in Architecture).
+Wait for its result before advancing branches or starting the next task — the feedback loop must complete first.
 
 ### What to include in the reviewer prompt
 
@@ -135,6 +139,7 @@ It is launched in the **foreground** (not background) since the feedback loop mu
   - **Issues** — a numbered list of specific, actionable findings. Each finding must include: the category (criteria gap vs. quality), where in the code the gap is, and what needs to change.
 - **Instruction to be strict but fair** — flag genuine gaps and functional problems, not style preferences or minor nitpicks.
 - **Instruction NOT to edit any files** — the reviewer only reads and reports. It must not create, update, or delete follow-up task files; any suggested follow-up work belongs in the review report only.
+- **The `review-cycle` Reviewer contract, whole** — every rule that skill states for a Reviewer binds here, later additions included; the bullets above are this loop's deltas, not a closed list. It carries the lifecycle rule this prompt states outright: nothing resumes a subagent, so the reviewer never ends its turn waiting for a notification, a callback, or a child it launched, it bounds and reaps anything it starts before reporting, and it launches no review of its own beside the loop's sanctioned peer step.
 - **Instruction not to use the shared task-tracker** — like the implementer, tell the reviewer not to use the `TaskCreate`/`TaskUpdate`/`TaskList` tools; a subagent's task entries bleed into the orchestrator's view.
 
 #### Code quality dimensions to check
@@ -192,7 +197,7 @@ The PR base branch for this task is `<base-branch>`. The current branch is `<tas
 
 ## Execution Model
 
-Process the batch **sequentially**, not in parallel — and within each task, run the implementer and its reviewer one at a time, never concurrently (they share your single working tree; see the rule in Architecture).
+Process the batch **sequentially**, not in parallel — and within each task, never start the reviewer until its implementer's commits are on disk, waiting for the completion however the harness reports it; running the two one at a time rather than concurrently is the **proxy** for that invariant, since they share your single working tree (see the rule in Architecture).
 Each task is its own delivery unit, but stack later task branches on top of earlier ones when needed so dependent work can continue without waiting for review.
 
 ### Determining the PR base
@@ -210,9 +215,9 @@ For each task file in the input set:
 1. **Record the PR base branch** for this task (see precedence rules above).
 2. **Create a dedicated implementation branch** for the task.
 3. **Read the task file** enough to construct a good implementer prompt. Identify the acceptance criteria so you can later evaluate the reviewer's report.
-4. **Spawn the implementer agent** with a well-structured prompt (see Implementer Agent section). Wait for completion. Spawn nothing else in this turn — the reviewer comes in a later turn, after the implementer's commits exist on disk.
-5. **Evaluate the implementer's report.** If the implementer hit a blocker it could not resolve, stop and surface it to the user before spawning a reviewer.
-6. **Only after step 5, spawn the reviewer agent** with a fresh prompt (see Reviewer Agent section) and launch the peer second opinion in the background at the same moment (unless unavailable or `peer-opinions=off`). Always wait for the reviewer before triage, and also wait for the peer when one was launched. Do not spawn the reviewer in the same turn or parallel tool block as the implementer — you share one working tree, so a reviewer started before the commit reviews an unfinished branch.
+4. **Spawn the implementer agent** with a well-structured prompt (see Implementer Agent section). Wait for its completion notification — the reviewer comes only once this implementer's commits exist on disk, and spawning nothing else in this turn is the **proxy** that keeps it there, not the rule itself.
+5. **Evaluate the implementer's packet.** Apply `review-cycle`'s packet hard-check before adopting it: `git status --porcelain` empty **and** no Git operation in progress — check `git rev-parse --git-path rebase-merge` and `rebase-apply` for an existing path, plus `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`, since a tree left mid-rebase or mid-cherry-pick prints empty porcelain. Either condition failing means redrive or resume that implementer, never silent adoption. If the implementer hit a blocker it could not resolve, stop and surface it to the user before spawning a reviewer.
+6. **Only after step 5, spawn the reviewer agent** with a fresh prompt (see Reviewer Agent section) and launch the peer second opinion in the background at the same moment (unless unavailable or `peer-opinions=off`). Always wait for the reviewer before triage, and also wait for the peer when one was launched. The gate is the implementer's commits being on disk — you share one working tree, so a reviewer started before the commit reviews an unfinished branch; keeping it out of the implementer's turn or parallel tool block is only the **proxy** for that gate.
 7. **Evaluate the reviewer's report:**
    - If the report says the branch is **empty / has no implementation / shows an empty diff**, do not trust it at face value — that is the signature of a race (reviewer started before the implementer committed) or a wrong-branch checkout, not a real gap. Verify with `git diff --name-only <base>...HEAD`; if the work is actually present, spawn a fresh reviewer and use that verdict instead.
    - If the own reviewer **passes** and the peer has no unaddressed grounded findings under the protocol below: proceed to step 8.
@@ -276,6 +281,8 @@ Deltas for this serialized skill:
 
 ## Feedback Loop
 
+This loop is `review-cycle`'s: every rule that skill states under *The loop and its gates* binds it whole — the packet hard-check above, the no-latched-flags rule for whatever this loop carries into its final summary, the round cap, and every later addition — and the steps below are only this skill's deltas.
+
 When either reviewer reports material issues:
 
 > **Fix-ups always use a fresh `Agent` spawn — never a "continued" prior implementer.** If an `Agent` result prints a `SendMessage` continuation footer, ignore it; this harness does not expose that tool. A fresh spawn is the preferred path: the fix-up agent reads the already-committed branch plus the reviewer's verbatim findings with no attachment to its earlier choices.
@@ -286,7 +293,7 @@ When either reviewer reports material issues:
    - The branch name (same as before).
    - Instruction to address each finding specifically and report what was fixed.
    - The same project context and validation instructions as the original implementer prompt.
-2. After the fix-up implementer completes — and only then, in a later turn — **spawn a new reviewer agent** and launch the peer per the protocol above to re-check (same fresh prompt structure as before; never concurrent with the fix-up implementer).
+2. Once the fix-up implementer's commits are on disk — wait for its completion, and only then, in a later turn as the **proxy** for that — **spawn a new reviewer agent** and launch the peer per the protocol above to re-check (same fresh prompt structure as before; never concurrent with the fix-up implementer).
 3. Repeat until the own reviewer passes and the peer has no unaddressed grounded findings under the protocol above.
 4. **Cap the feedback loop at the `review-cycle` skill's round cap.** If issues persist at the cap, stop iterating and do not open a PR for this task. Surface the outstanding findings clearly to the user in the final summary and ask for guidance on how to proceed.
 

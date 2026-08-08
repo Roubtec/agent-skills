@@ -61,7 +61,7 @@ For any rebase target that is not a just-rebased parent tip, **pin it to an exac
 
 Each PR runs in its **own git worktree** — a separate working directory with its own `HEAD` and index, sharing the one append-only object store and lock-protected refs.
 Two subagents in two worktrees never corrupt each other, so they run **concurrently**.
-The only serialization rule that survives: agents sharing *one* worktree must run one-at-a-time. Across distinct PR head branches, same-phase agents may run concurrently.
+The only serialization rule that survives is about committed state, not turn structure: within *one* worktree, an agent may not start until the previous agent's commits are on disk — so wait for that completion notification, however the harness delivers it, and treat "one-at-a-time" as the proxy it is. Across distinct PR head branches, same-phase agents may run concurrently.
 See `address-tasks` → "Why worktrees change the rules" and "Durability & host isolation" for the full model.
 The durability rule here is **commit early, but do not push before `address-review`'s reviewed publication step**: committed objects and branch refs survive in the shared `.git`, while premature pushes would publish unreviewed fixes and break no-push runs.
 
@@ -146,6 +146,7 @@ Every prompt starts with:
 - **Repo context:** "Read `AGENTS.md` / `CLAUDE.md` first for conventions."
 - **Validation in a worktree:** "If verifying fixes needs a build, install dependencies in this worktree first — cheap when the package manager's store hardlinks (e.g. pnpm on the same filesystem). Point Playwright at a system Chromium if your environment provides one. App-server / `next build` e2e may not run from a nested worktree path; defer it per `address-tasks`'s app-server caveat and note that in your report rather than forcing it. Any output that must land in a file goes inside this worktree (a gitignored path, removed before any commit), never a shared scratchpad filename — two concurrent entries both redirecting to `<scratchpad>/verify.log` once crossed results between worktrees."
 - **No shared task-tracker:** "Do not use the `TaskCreate`/`TaskUpdate`/`TaskList` tools — their entries leak into the orchestrator's view."
+- **The `review-cycle` contract for the role, whole:** brief each agent under that skill's contract for what it is — Fixer, Reviewer, or Peer — every rule that skill states for the role binding here, later additions included, rather than importing named rules one at a time. That is where the lifecycle rule lives, and this batch is exactly where it was broken: nothing resumes a subagent, so it must never end its turn waiting for a notification, a callback, or a child it launched; it bounds, waits on, and reaps anything it starts before returning its packet; and a fix agent launches no peer review of its own, the peer beside the Reviewer being the sanctioned second opinion.
 
 ### Diagnosis discipline
 
@@ -167,23 +168,24 @@ Before launching Phase A, topologically partition rebase-enabled stack entries i
 Prompt one agent per PR to invoke the `address-review` skill with arguments `#N hands-off delegated-fix <optional rebase target>` (or read the supplied absolute skill path and follow that mode).
 Record both the entry's exact starting `HEAD` and its recorded PR `headRefOid`, and tell the agent to make no PR mutations and to return the complete review packet defined by `address-review` whenever the final local tip differs from either value even if no review items remain; that is a zero-item packet, not a terminal no-op. If the agent reports that step 1's reconciliation fast-forwarded the branch, adopt its new tip as this entry's recorded starting `HEAD`; keeping the pre-reconciliation value would make a fast-forwarded entry look changed, forfeit the zero-feedback shortcut, and drive a full zero-item review and a no-op publish.
 If it reports a successful no-op because no actionable review items remain, apply the **terminal zero-feedback shortcut**: accept it without a reviewer or publisher only when `final HEAD == starting HEAD == recorded PR headRefOid`, and treat that published-tip completion as satisfying each dependent's topological gate. A rebase-changed tip or an unchanged but already ahead/diverged local tip does not qualify: it requires a complete zero-item packet, Phase B, and, unless `no-push`, the normal publication waves.
+Adopt a returned packet only under `review-cycle`'s packet hard-check: that entry's worktree must have `git -C <worktree> status --porcelain` empty **and** no Git operation in progress (`rebase-merge`/`rebase-apply` paths, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG` — a tree left mid-rebase or mid-cherry-pick prints empty porcelain, so a porcelain-only check hands Phase B a worktree nobody can build on). Either condition failing means redrive or resume that entry, never silent adoption.
 
 ### Phase B — fresh review
 
-After all Phase-A agents in the current dependency wave return, spawn one fresh reviewer per packet-bearing PR and, at the same moment for each entry, launch a background `codex` peer unless disabled or unavailable. Complete every required fix-up and re-review in that wave before releasing dependents into Phase A, so an ordinary parent fix-up changes the tip that dependents are later pinned to rather than leaving already-reviewed dependents on the old tip; a parent tip changed again by a later rerun goes through **Descendant invalidation** above.
+Spawn one fresh reviewer per packet-bearing PR only once that entry's fixer commits are on disk — its packet returned and adopted under the hard-check above — and, at the same moment for each entry, launch a background `codex` peer unless disabled or unavailable. Waiting out every Phase-A agent in the current dependency wave is the proxy for that committed state, not the rule. Complete every required fix-up and re-review in that wave before releasing dependents into Phase A, so an ordinary parent fix-up changes the tip that dependents are later pinned to rather than leaving already-reviewed dependents on the old tip; a parent tip changed again by a later rerun goes through **Descendant invalidation** above.
 Give it the verbatim review items and proposed dispositions from that PR's packet, its effective review base, branch, and worktree path — never the fixer's reasoning.
 Use `address-review` step 6's reviewer contract.
 It edits nothing and reports Pass or numbered Issues.
 
 Give the peer those same inputs verbatim, not the fixer's reasoning or the Reviewer's execution steps, under the `review-cycle` skill's peer contract.
 Launch each entry's peer per that skill's peer step — pinned strength, unique per-entry/per-attempt paths outside every worktree, timeout-and-retry — from that entry's worktree; an auth/usage failure on a classify-at-first-invocation attempt makes the peer unavailable for all later entries and rounds. Always wait for the Reviewer; when a peer was launched, wait for it too before deciding this entry's outcome, otherwise carry the disabled or unavailable outcome forward explicitly.
-Decide each entry's round by the `review-cycle` gate, relaying findings verbatim per that skill.
+Decide each entry's round by the `review-cycle` gate, relaying findings verbatim per that skill. Every rule that skill states under *The loop and its gates* binds this loop whole, later additions included — the no-latched-flags rule among them, for whatever an entry carries into its final summary and publication, which must describe that entry's final state rather than a condition some round latched.
 
 ### Fix-up rounds
 
 For each failed entry, spawn a fresh fix-up agent with that PR's packet and the complete available outputs verbatim as separate `Reviewer findings` and, when present, `Peer (codex) findings` blocks; omit the peer block when disabled, unavailable, or forfeited.
 It works only in that worktree, addresses each finding directly, runs validation, commits everything, leaves a clean worktree, and returns an updated packet.
-Then spawn a fresh reviewer and, when enabled and available, peer round; the next Reviewer adjudicates any evidence-backed push-back on a peer claim.
+Spawn a fresh reviewer — and, when enabled and available, a peer round — only once that fix-up agent's commits are on disk, its updated packet returned and adopted under Phase A's hard-check; waiting the agent out is the proxy for that committed state, not the rule. The next Reviewer adjudicates any evidence-backed push-back on a peer claim.
 The `review-cycle` round cap bounds each entry, counting every fix-up regardless of which reviewer triggered it; an entry still failing at the cap is blocked and must not publish, and every outstanding finding set is surfaced verbatim.
 
 ### Publication

@@ -257,11 +257,11 @@ const CYCLE_FIX_SCHEMA = {
       },
     },
     openQuestions: { type: "array", items: CYCLE_OPEN_QUESTION_SCHEMA, description: "One entry per `escalated` disposition, in the pinned wire format." },
-    deviations: { type: "array", items: { type: "string" }, description: "Each: a deviation from a LOCKED maintainer decision — what was delivered instead and the constraint that forced it. Report, don't correct; the cycle surfaces these for the human." },
+    deviations: { type: "array", items: { type: "string" }, description: "Each deviation from a LOCKED maintainer decision that STILL STANDS after this pass — what was delivered instead and the constraint that forced it. Report, don't correct; the cycle surfaces these for the human. Restate every standing one on every pass — VERBATIM, since the cycle matches these by exact text and a reworded restatement reads as a drop plus a brand-new deviation — and leave out only one that genuinely no longer stands: the result describes the FINAL state and keeps the per-pass reports as history." },
     workReport: { type: "array", items: { type: "object" }, description: "One entry per work item in the scope, in the per-item shape the scope's instructions define (a consumer contract rides through here untyped); echoed into the cycle result." },
     proactive: { type: "string", description: "Same-pattern fixes made beyond the literal items, or empty." },
     finalSha: { type: "string", description: "HEAD sha after this pass, with everything committed." },
-    clean: { type: "boolean", description: "True only if `git status --porcelain` is empty with every intended change committed." },
+    clean: { type: "boolean", description: "True only if the worktree is CLEAN and IDLE: `git status --porcelain` empty with every intended change committed, AND no Git operation in progress (`git rev-parse --git-path rebase-merge` / `rebase-apply`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`). A packet returned mid-rebase or mid-cherry-pick can print empty porcelain; the cycle refuses it either way." },
     artifactDir: { type: "string", description: "Absolute path of this cycle's unique artifact directory — REQUIRED every pass: round 1 creates it (outside the worktree) and reports it, later passes echo the directory they were given. The result contract promises full round history reachable through it." },
   },
   required: ["changed", "dispositions", "openQuestions", "deviations", "clean", "artifactDir"],
@@ -287,9 +287,60 @@ const CYCLE_REVIEW_SCHEMA = {
     },
     emptyDiffFlag: { type: "boolean", description: "True if the diff against the base looked empty despite claimed work — signals a race/wrong-worktree, not real absence." },
     notes: { type: "string", description: "Pass-notes: caveats and stray remarks worth carrying. The cycle's final fixer pass disposes anything actionable here rather than letting it drop." },
+    deviationAssessments: {
+      type: "array",
+      description: "Your half of report-don't-correct: ONE entry per deviation from a LOCKED decision that still stands on this packet (every one you were shown except the claimed drops you accept). Empty when the packet carries none. A round that leaves a standing deviation unassessed does NOT pass — it would reach the maintainer carrying only the implementer's half. Exactly one usable entry per deviation is published: a second entry for a deviation already assessed, and any entry the round cannot use, is dropped rather than sent on beside the usable one — a hedge here buys nothing.",
+      items: {
+        type: "object",
+        properties: {
+          deviation: { type: "string", description: "The deviation's text, copied VERBATIM from the list you were shown — the cycle matches it by exact text." },
+          inSpecRoute: { type: "string", description: "Whether a route inside the locked decision existed, and which one — the first thing the maintainer's ratify-or-conform call needs." },
+          recommendation: { type: "string", description: "Your verdict as the FIRST word — RATIFY or CONFORM, the whole vocabulary — then the one-line reason. A hedge (`UNSURE`, `needs investigation`) is not a verdict and leaves the deviation unassessed, which does not pass the round. Opening with both — `RATIFY or CONFORM …` — is a refusal to choose and is rejected as one, not read as RATIFY; otherwise the first word is taken literally, so lead with the verdict you mean, and lead with neither if you cannot choose. You recommend; the maintainer decides." },
+        },
+        required: ["deviation", "inSpecRoute", "recommendation"],
+      },
+    },
   },
   required: ["pass", "issues"],
 };
+
+// The recommendation is a two-valued VERDICT carrying a reason, not free prose:
+// what reaches the maintainer is a ratify-or-conform list. Reading it as
+// present-or-absent left, one level down, the same hole the structural field
+// closed one level up — `UNSURE — needs investigation` is schema-valid and
+// trims to something non-empty, so it would count as the reviewer's half while
+// answering the only question that half exists to answer. So the verdict is
+// parsed, and must LEAD the string exactly as the schema and the brief ask.
+// Leading rather than merely occurring, because a reason may legitimately name
+// the other verdict ("RATIFY — conforming would cost a release") and an
+// occurrence test would have to reject that.
+//
+// What the rule buys is stated exactly, because the crude version is the one
+// worth having: the FIRST word decides, and a string opening with neither
+// verdict is not a verdict. One hedge opens with one and is still not a choice,
+// and it is the one an ordinary round reaches rather than hand-crafted input:
+// the brief renders `START with RATIFY or CONFORM` and the schema repeats that
+// the two are the whole vocabulary, so `RATIFY or CONFORM — needs
+// investigation` is the brief's own surface form echoed back, and reading it as
+// RATIFY would hand the maintainer a verdict from a reviewer that explicitly
+// refused to give one. That exact shape is rejected by name — the two verdicts
+// joined by a bare `or`. It leaves `RATIFY — CONFORM costs a release` alone, a
+// real choice whose reason names the other verdict, because what follows the
+// verdict there is a separator rather than the word `or`. Nothing wider is
+// claimed: a reason that retracts its verdict in any other wording still reads
+// as that verdict, which is why the schema and the brief also warn that the
+// first word is taken literally, and the maintainer reads the whole
+// `recommendation` text either way.
+const CYCLE_DEVIATION_VERDICTS = ["RATIFY", "CONFORM"];
+const CYCLE_DEVIATION_HEDGE = /^(?:RATIFY|CONFORM)\s+OR\s+(?:RATIFY|CONFORM)\b/;
+function cycleDeviationVerdict(recommendation) {
+  // Leading punctuation and emphasis are stripped, so `**RATIFY** — …` reads as
+  // the verdict it plainly is. A longer word that merely starts with one does
+  // not: the character after the verdict must not continue it.
+  const text = String(recommendation || "").trim().toUpperCase().replace(/^[^A-Z]+/, "");
+  if (CYCLE_DEVIATION_HEDGE.test(text)) return "";
+  return CYCLE_DEVIATION_VERDICTS.find((v) => text.startsWith(v) && !/[A-Z]/.test(text.charAt(v.length))) || "";
+}
 
 // Peer-stage result. `outcome` uses the peer-review-run vocabulary
 // (powbox.peer-review-run/v1) so the eventual helper swap changes the prompt,
@@ -367,6 +418,17 @@ const CYCLE_REDIRECTED_OUTPUT = "Any build or validation output you redirect to 
 // run and reached a maintainer decision; only roles told to re-derive caught it.
 const CYCLE_CARRIED_CLAIMS = "Provenance: only what you verify against the committed tree yourself is established this turn. Every finding, disposition, open question, and citation relayed to you here is CARRIED — not verified this turn, whatever its source; it may be stale, or have been wrong when written — so re-derive one before you rely on it.";
 
+// Subagent lifecycle, carried by every role that can start a process. A subagent
+// is never resumed, so one that ended its turn "waiting for the monitor
+// notification" from a background child it had launched left a dirty worktree
+// and no packet until the orchestrator hunted the child down by hand.
+const CYCLE_FINISH_IN_TURN = "Finish inside your own turn: nothing resumes you afterwards, so never end it waiting for a notification, a callback, or a child you started. Bound and wait on anything you launch, and reap it before you return — no process of yours may outlive your turn.";
+
+// On top of that, for every role except the peer stage itself: an implementer
+// that launched its own detached second opinion outlived it, orphaned, and
+// wandered into an unrelated sibling worktree for want of a tight working dir.
+const CYCLE_NO_SELF_PEER = "The cycle runs the sanctioned second opinion itself, beside the reviewer — do not launch a peer review of your own.";
+
 // Default worktree/branch contract when the consumer supplies none. A consumer
 // with its own worktree lifecycle (wt-enter etc.) passes richer per-role
 // contract text via cycle.contracts instead.
@@ -426,6 +488,21 @@ function cycleOpenQuestionsBlock(openQuestions) {
   return `\n## Open questions still live from earlier passes (verbatim)\n\nThese are queued for the maintainer as they stand. If a disposition you make now SETTLES one — you fixed the underlying issue, or you are declining it on grounds that dispose of the decision itself — name that question's \`id\` in the disposition's \`retiresQuestionIds\`, so the cycle stops carrying a decision the maintainer no longer has to make. Retire nothing you did not actually settle: an unretired question is served to the maintainer, and a wrongly retired one takes a real decision off the table. A retirement is a claim, not an effect — this round's fresh reviewer is shown it and the question stays live for the maintainer until a round passes over it. A claim also cannot be WITHDRAWN once made: no later pass can retract it, so it is re-presented to each following round until one passes over it and ships to the maintainer as still-live if none ever does. Name only what you would stand behind.\n\n${JSON.stringify(live, null, 2)}\n`;
 }
 
+// The deviations standing after the previous pass, shown to every later pass so
+// the result field can describe the FINAL state instead of latching: a loop that
+// carried a round's flag straight into its final result reported a deviation
+// rounds after the work had conformed, sending a maintainer to "restore"
+// something already present. Restating is what makes replacing safe — a pass
+// that omits one is CLAIMING it no longer stands, and the cycle keeps it
+// standing until a round passes over that claim. The match is by exact text,
+// which is why the block asks for a VERBATIM restatement: a reworded one is
+// indistinguishable from a drop plus a new deviation, so a re-punctuation would
+// cost a round, or ship the same deviation twice at the top of a PR body.
+function cycleDeviationsBlock(deviations) {
+  if (!deviations || !deviations.length) return "";
+  return `\n## Deviations from LOCKED decisions standing after the last pass (verbatim)\n\nRestate in your \`deviations\`, VERBATIM, every one that STILL stands once this pass is done, and leave out only one that genuinely no longer does (say in \`summary\` what closed it): the cycle's result describes the FINAL state, not the history. Copy each one's text exactly — the cycle matches these by exact text, so a reworded restatement reads as a drop plus a brand-new deviation. Leaving one out is a CLAIM, not an effect — it keeps standing, and this round's reviewer is shown the claim beside it, until a round passes over it; a claim you make on the final confirmation pass earns one more round rather than ending the cycle undecided. Do NOT conform a deviation away to shorten this list — report, don't correct; the maintainer ratifies it or asks for conformance, and has ratified one and reversed their own earlier decision before.\n\n${JSON.stringify(deviations, null, 2)}\n`;
+}
+
 function cycleFixPrompt(cycle, state) {
   const scope = cycle.scope || {};
   const roundIntro = state.confirming
@@ -452,16 +529,17 @@ ${roundIntro}
 ## Assignment
 
 ${scope.instructions || "Address the work items below."}
-${cycleItemsBlock(cycle)}${cycleFindingsBlock(state.findings)}${cycleOpenQuestionsBlock(state.openQuestions)}
+${cycleItemsBlock(cycle)}${cycleFindingsBlock(state.findings)}${cycleOpenQuestionsBlock(state.openQuestions)}${cycleDeviationsBlock(state.deviations)}
 ## Rules
 
 - ${artifactLine}
 - Commit at logical milestones; run the project's build/lint before declaring done (code artifacts).
 - A sweep ("fix this pattern everywhere") is ENUMERATED, never asserted: return the explicit search space with a per-item verdict, and claim a completed sweep in a commit message only where you enumerated that space. This round's reviewer redoes the enumeration rather than spot-checking yours.
 - ${CYCLE_CARRIED_CLAIMS}
-- If you must deliver something other than a decision the maintainer LOCKED, do not silently conform or correct: report it in \`deviations\` — what you delivered instead and the constraint that forced it. The cycle surfaces it for the human (report, don't correct).
+- ${CYCLE_FINISH_IN_TURN} ${CYCLE_NO_SELF_PEER}
+- If you must deliver something other than a decision the maintainer LOCKED, do not silently conform or correct: report it in \`deviations\` — what you delivered instead and the constraint that forced it — and restate it VERBATIM on every later pass while it stands. The cycle surfaces it for the human (report, don't correct), who ratifies it or asks you to conform; it buys no slack in the meantime, since completeness, tests, and regressions are graded exactly as strictly.
 - Every \`escalated\` disposition gets an \`openQuestions\` entry in the schema's pinned format, under an id no earlier pass used (re-using one reads as a re-report of that pass's question, which the cycle keeps instead of yours), with authoritative artifact pointers (file:line, refs) — never paraphrase — and its \`questionId\` back-reference — which must name a question this cycle carries LIVE (the one you just raised, or one an earlier pass raised that no retirement has claimed); an absent, empty, or settled id names no decision the maintainer will be asked to make and comes back to the next pass as a disposition error. Raise a question only for a decision still open: a \`fixed\` or \`declined\` disposition that SETTLES a still-live question from an EARLIER pass names that question's \`id\` in \`retiresQuestionIds\` instead (only those two dispositions retire; a question this pass raises cannot also be retired by it; and retiring an id the cycle does not carry open from an earlier pass comes back to the next pass as a disposition error).
-- Before returning, \`git status --porcelain\` MUST be empty with every intended change committed; set \`clean\` and \`finalSha\` accordingly. An unclean tree is resolved or reported as a \`blocker\`, never handed to review.
+- Before returning, the worktree MUST be clean AND idle: \`git status --porcelain\` empty with every intended change committed, and no Git operation in progress — check \`git rev-parse --git-path rebase-merge\` and \`rebase-apply\` for an existing path, plus \`MERGE_HEAD\`, \`CHERRY_PICK_HEAD\`, \`REVERT_HEAD\`, \`BISECT_LOG\` (a tree left mid-rebase or mid-cherry-pick can print empty porcelain). Set \`clean\` and \`finalSha\` accordingly; either condition failing is resolved or reported as a \`blocker\`, never handed to review.
 - Pushing is governed by the assignment above; do nothing PR-side, and do NOT use the \`TaskCreate\`/\`TaskUpdate\`/\`TaskList\` tools.
 
 Return the structured packet, including \`workReport\` per the assignment's per-item contract when it defines one.`;
@@ -499,6 +577,18 @@ function cycleReviewPrompt(cycle, state) {
   const workBlock = state.packet && Array.isArray(state.packet.workReport) && state.packet.workReport.length
     ? `\n## Fixer's per-item report (verify the claims hold in the committed state; you were NOT given its reasoning)\n\n${JSON.stringify(state.packet.workReport, null, 2)}\n`
     : "";
+  // The reviewer's half of report-don't-correct: the maintainer rules on a
+  // deviation, so the review adds the two things that decision needs — whether
+  // an in-spec route existed, and a recommendation — without conforming it away
+  // and without grading the rest of the work any more gently for it. Asked for
+  // in prose alone it was optional in fact: a schema-valid `{pass: true,
+  // issues: [], notes: ""}` passed a round carrying a deviation, and the result
+  // then claimed a judgment nobody had made. So it is a STRUCTURAL field the
+  // round is gated on, one entry per deviation that still stands.
+  const deviationDrops = Array.isArray(state.deviationDrops) ? state.deviationDrops : [];
+  const deviationsBlock = Array.isArray(state.deviations) && state.deviations.length
+    ? `\n## Deviations from LOCKED decisions standing on this packet (verbatim)\n\nReturn ONE \`deviationAssessments\` entry for each of these the fixer still restates — every one below except the claimed drops you accept — copying its text VERBATIM into \`deviation\` and giving \`inSpecRoute\` (whether an in-spec route existed, and which) and \`recommendation\` (START with ${CYCLE_DEVIATION_VERDICTS.join(" or ")} — those two verdicts are the whole vocabulary, and a hedge such as "UNSURE" is not one of them — then the one-line reason; opening with both, as in "${CYCLE_DEVIATION_VERDICTS.join(" or ")} — needs investigation", is a refusal to choose and is rejected as one rather than read as the first of them, and otherwise the first word is taken literally as your verdict, so lead with the verdict you mean, or with neither if you cannot choose). This round does not pass while one of them is unassessed: the maintainer decides, and would otherwise be handed the deviation with only the implementer's half of it. A deviation is neither a finding to be corrected away nor a license for unfinished work — grade completeness, tests, and regressions exactly as strictly.\n\n${JSON.stringify(state.deviations, null, 2)}\n${deviationDrops.length ? `\nOf those, the fixer no longer restates the ones below, CLAIMING each no longer stands. Verify that against the committed state exactly as you would a \`declined\`: passing this round is what drops them, so raise one you do not accept as an issue rather than letting it go — a drop you reject is assessed by the round after it, once the fixer restates it.\n\n${JSON.stringify(deviationDrops, null, 2)}\n` : ""}`
+    : "";
   // This brief orders a full build, so the reviewer needs a destination for the
   // build's output as much as for its own report — including on the pass that
   // runs with no cycle behind it (the collision re-review), where leaving the
@@ -522,8 +612,10 @@ Where the work claims a same-pattern sweep ("fixed everywhere"), REDO the enumer
 
 ${CYCLE_CARRIED_CLAIMS}
 
+${CYCLE_FINISH_IN_TURN} ${CYCLE_NO_SELF_PEER}
+
 Scope with \`git diff --name-only ${cycleShq(cycle.base)}...HEAD\` — deliberately the CUMULATIVE range, the whole change against \`base\` rather than an incremental since-the-last-round diff, because each round re-reviews the work as a whole. Then read each touched file IN FULL — do not read commit messages or diff content (both anchor you to the fixer's intent); follow references into untouched files when needed. If the diff looks empty despite claimed work, set \`emptyDiffFlag\` and stop — that signals a wrong worktree/branch, not real absence.
-${persistLine}${cycle.scope && cycle.scope.reviewInstructions ? `\n## Consumer review criteria (verify each item against these too)\n\n${cycle.scope.reviewInstructions}\n` : ""}${cycleItemsBlock(cycle)}${handedBlock}${dispositionsBlock}${proposedRetirementsBlock}${workBlock}
+${persistLine}${cycle.scope && cycle.scope.reviewInstructions ? `\n## Consumer review criteria (verify each item against these too)\n\n${cycle.scope.reviewInstructions}\n` : ""}${cycleItemsBlock(cycle)}${handedBlock}${dispositionsBlock}${proposedRetirementsBlock}${workBlock}${deviationsBlock}
 Return \`pass: true\` only if everything holds and no material issue remains; else \`pass: false\` with numbered, actionable \`issues\`. Be strict but fair — real gaps and functional problems, not style nits. Put pass-worthy caveats in \`notes\` (the cycle disposes them rather than dropping them).`;
 }
 
@@ -560,22 +652,24 @@ ${CYCLE_DESTROY_BOUNDARY}
 
 The peer examines this worktree READ-ONLY; you edit nothing either. The cycle's fresh reviewer is examining the same committed state concurrently — two readers are safe, and the reviewer alone owns builds/execution.
 
+${CYCLE_FINISH_IN_TURN} That is why the launch below is one supervised foreground call: you return its outcome, never a promise to report the peer's result later.
+
 ## Steps
 
 ${preflightStep}
 2. Prepare unique per-attempt paths under this cycle's artifact directory: \`round_dir=${cycleShq(`${state.artifactDir}/round-${state.round}`)}\`, \`mkdir -p "$round_dir"\`, with \`prompt_file\`, \`outfile\`, \`stderr_file\` inside it (suffix \`-attempt2\` on a retry; never reuse a path).
 3. Write the peer prompt below VERBATIM to \`$prompt_file\` with a quoted heredoc (\`<<'PEER_PROMPT'\`) — never assemble it through shell interpolation.
-4. Launch the peer as ONE supervised foreground call, bounded UNDER your own Bash tool limit so the tool can never kill it mid-run unaccounted (set the Bash tool timeout to 600000 ms and bound the peer tighter with \`timeout\`):
+4. Launch the peer as ONE supervised foreground call, bounded UNDER your own Bash tool limit so the tool can never kill it mid-run unaccounted (set the Bash tool timeout to 600000 ms and bound the peer tighter with \`timeout\` — including its hard-kill escalation, because expiry alone sends only TERM, which a hung provider can catch or block and so outlive you into the tool's own kill):
 
    \`\`\`bash
    worktree="<the worktree path from the contract above>"
    # Pin peer effort per invocation; never changes the container's saved config.
-   timeout 540 codex exec --sandbox read-only --cd "$worktree" -o "$outfile" \\
+   timeout --kill-after=30 540 codex exec --sandbox read-only --cd "$worktree" -o "$outfile" \\
      -c mcp_servers={} -c model_reasoning_effort=medium "$(<"$prompt_file")" \\
      < /dev/null 2> "$stderr_file"
    \`\`\`
 
-   Exit 124 means the bounded timeout fired: retry ONCE with fresh attempt paths, then return outcome \`timeout\`. Any other failure (crash, non-zero exit with no usable output): retry once, then return \`failed\`. Auth/usage errors: \`unavailable\` without retry.
+   Exit 124 means the bounded timeout fired — as does 137, when the peer rode out TERM and the \`--kill-after\` grace ended in an uncatchable KILL (540 s + 30 s still lands under the 600 s tool limit): retry ONCE with fresh attempt paths, then return outcome \`timeout\`. Any other failure (crash, non-zero exit with no usable output): retry once, then return \`failed\`. Auth/usage errors: \`unavailable\` without retry.
 5. Read \`$outfile\`. A \`VERDICT: PASS\` line → outcome \`passed\` (anything after it goes to \`notes\` verbatim). A \`VERDICT: ISSUES\` line → outcome \`issues\`, with every numbered finding mapped verbatim into \`findings\` (severity from its \`blocking\`/\`minor\` tag — default \`blocking\` when untagged — plus its \`file:line\` as \`location\` and the finding text as \`claim\`; do not summarize, merge, or rewrite). No verdict line, or empty/unintelligible output → \`forfeited\`.
 
 ## Peer prompt (write this text to the prompt file verbatim, filling only the placeholders)
@@ -642,6 +736,8 @@ function cycleGroundingPrompt(cycle, findings) {
 ${cycleContract(cycle, "reviewer")}
 
 ${CYCLE_DESTROY_BOUNDARY}
+
+${CYCLE_FINISH_IN_TURN} ${CYCLE_NO_SELF_PEER}
 
 ## Findings
 
@@ -844,10 +940,31 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //
 // Returns the cycle result contract (lean; bulk prose stays behind artifactDir):
 // { verdict: "pass"|"review-cap"|"error", detail, rounds, findingDispositions,
-//   openQuestions, deviations, workReport, proactive, finalSha, notes,
-//   reviewerNotes, peerRounds, discardedPeerFindings, undisposed, outstanding,
-//   artifactDir, artifactDirAnomalies (present only when a later pass tried
+//   openQuestions, deviations, deviationAssessments (the reviewer's half for
+//   each deviation still standing — at most ONE entry per deviation, only an
+//   entry the passing round could use, and only while no later pass adopted
+//   work that round never saw), deviationHistory (only once some
+//   pass reported one), workReport, proactive, finalSha, notes, reviewerNotes,
+//   peerRounds, discardedPeerFindings, undisposed, outstanding, artifactDir,
+//   artifactDirAnomalies (present only when a later pass tried
 //   to move the artifact directory) }
+// NO per-round condition latches into that result: `deviations` is the LAST
+// pass's set, not every pass's, so the result describes the FINAL state and
+// `deviationHistory` — named as history — is where the rounds live. Dropping
+// one is a CLAIM a round must pass over, exactly like a retirement: until then
+// it keeps standing in `deviations` (the DROPS still open are `deviations`
+// minus the last `deviationHistory` entry), and ANY move the final
+// confirmation pass makes to this set — dropping one, or first stating one —
+// holds the cycle open for the round that decides it rather than ending it
+// undecided, and that round does not pass until the reviewer's in-spec-route
+// judgment and RATIFY/CONFORM recommendation for each standing deviation is in
+// `deviationAssessments`. So no deviation reaches the maintainer without them,
+// and none is taken away without a round accepting that it no longer stands. A
+// `pass` verdict carries no open claim; an open one
+// is what an `error` or `review-cap` exit leaves behind, neither having reached
+// the round that would have settled it. A consumer publishing a PR comment or
+// summary from this result leads with `deviations`; they are the maintainer's
+// call to ratify or conform, never the loop's.
 // An `openQuestions` entry a later pass settled carries a `retired` mark; a
 // consumer serving these to a human (resolve-open-questions) skips those. A
 // retirement no reviewer round has accepted carries `retirementPending`
@@ -863,7 +980,14 @@ async function runReviewCycle(cycle) {
   // each element IS the accumulated question object, so accepting one mutates
   // what the result already carries.
   const pendingRetirements = [];
-  const deviations = [];
+  // The deviations still standing (the last pass's set, plus any drop no round
+  // has accepted yet) and the per-pass record. Re-evaluated every pass rather
+  // than accumulated: see the result contract above.
+  let deviations = [];
+  const deviationHistory = [];
+  // Drops claimed but not yet adjudicated, re-presented to each round until one
+  // passes over them — the retirement machinery's rule, for its reason too.
+  let pendingDeviationDrops = [];
   const peerRounds = [];
   const discardedPeerFindings = [];
   const artifactDirAnomalies = [];
@@ -882,35 +1006,58 @@ async function runReviewCycle(cycle) {
   // safely between awaits.)
   const peerState = cycle.peerState || { preflighted: false, unavailable: false, unavailableDetail: "" };
   let reviewerNotes = ""; // the latest reviewer's pass-notes (PR-body caveats for consumers)
+  // The reviewer's half of report-don't-correct, as accepted by the last round
+  // that PASSED. Replaced rather than accumulated, for the reason `deviations`
+  // is: it describes the deviations standing now, not every judgment ever made
+  // — and emptied again the moment a later pass adopts work that round never
+  // saw (the invalidation past the terminal check below).
+  let deviationAssessments = [];
 
-  const result = (verdict, detail, extra) => ({
-    verdict,
-    detail: detail || "",
-    rounds,
-    findingDispositions,
-    openQuestions,
-    deviations,
-    workReport: (packet && packet.workReport) || [],
-    proactive: (packet && packet.proactive) || "",
-    finalSha: (packet && packet.finalSha) || "",
-    notes: (packet && packet.summary) || "",
-    reviewerNotes,
-    peerRounds,
-    discardedPeerFindings,
-    artifactDir,
-    ...(artifactDirAnomalies.length ? { artifactDirAnomalies } : {}),
-    ...(extra || {}),
-  });
+  const result = (verdict, detail, extra) => {
+    // An assessment travels only beside the deviation it judges: one whose
+    // deviation a later round dropped would re-latch exactly what `deviations`
+    // stopped latching (a passing round may volunteer an entry for the very
+    // drop it accepts, so this filter still earns its keep beside the
+    // invalidation below). A deviation with no entry here reached no round
+    // that passed over it in its CURRENT state — an `error` or `review-cap`
+    // exit, which ships it standing and unjudged rather than pretending a
+    // pre-change judgment still holds.
+    const standingAssessments = deviationAssessments.filter((a) => a && deviations.includes(a.deviation));
+    return {
+      verdict,
+      detail: detail || "",
+      rounds,
+      findingDispositions,
+      openQuestions,
+      deviations,
+      ...(standingAssessments.length ? { deviationAssessments: standingAssessments } : {}),
+      ...(deviationHistory.some((h) => h.deviations.length) ? { deviationHistory } : {}),
+      workReport: (packet && packet.workReport) || [],
+      proactive: (packet && packet.proactive) || "",
+      finalSha: (packet && packet.finalSha) || "",
+      notes: (packet && packet.summary) || "",
+      reviewerNotes,
+      peerRounds,
+      discardedPeerFindings,
+      artifactDir,
+      ...(artifactDirAnomalies.length ? { artifactDirAnomalies } : {}),
+      ...(extra || {}),
+    };
+  };
 
   while (true) {
     fixerPasses += 1;
-    const fix = await agent(cycleFixPrompt(cycle, { round: fixerPasses, findings, confirming, artifactDir, openQuestions }), {
+    const fix = await agent(cycleFixPrompt(cycle, { round: fixerPasses, findings, confirming, artifactDir, openQuestions, deviations }), {
       label: `${lp}fix#${fixerPasses}`,
       schema: CYCLE_FIX_SCHEMA,
     });
     if (!fix) return result("error", `fixer returned nothing on pass ${fixerPasses}`);
     if (fix.blocker) return result("error", `fixer blocked on pass ${fixerPasses}: ${fix.blocker}`);
-    if (!fix.clean) return result("error", `fixer left an unclean worktree on pass ${fixerPasses}; refusing to review a partial state`);
+    // Packet hard-check: a packet is adopted only from a worktree that is both
+    // clean AND idle. Never silently — the pass is redriven or resumed instead,
+    // because a tree left mid-rebase or mid-cherry-pick prints empty porcelain
+    // and would hand the next round a worktree nobody can safely build on.
+    if (!fix.clean) return result("error", `fixer returned a worktree that is not clean and idle on pass ${fixerPasses} (uncommitted changes, or a Git operation still in progress); refusing to adopt the packet — redrive or resume that pass`);
     // The result contract promises the FULL round history reachable through
     // ONE pointer, so the FIRST reported artifactDir is authoritative, and it
     // is validated once here: absolute, and outside the worktree when the
@@ -969,7 +1116,40 @@ async function runReviewCycle(cycle) {
       }
       openQuestions.push(q);
     }
-    for (const dev of fix.deviations || []) deviations.push(dev);
+    // Deviations describe the state AFTER this pass, so the pass's own set
+    // replaces the standing one it was shown rather than adding to it — a
+    // latched flag reported a deviation rounds after the work had conformed.
+    // But a drop is a CLAIM, not an effect: "no longer stands" and "the fixer
+    // forgot it" look identical in the packet, so a dropped deviation KEEPS
+    // STANDING until a round passes with the claim in view, exactly as a
+    // retirement does. Otherwise the final confirmation pass — asked for an
+    // empty `dispositions` array — could erase a live deviation on its way out,
+    // leaving the one call the loop is not allowed to make recorded nowhere the
+    // maintainer reads; the terminal check below is what keeps such a claim
+    // from being the cycle's last word.
+    // Deduplicated on the way in: the cycle matches deviations by exact text,
+    // so two identical entries are ONE deviation twice over, not two. Left as
+    // reported they would ride into `deviations` — and from there to the top of
+    // a PR body — as a doubled bullet, and count twice toward the set-move
+    // quantity below, which is the one place a set is being asked how far it
+    // moved rather than merely whether it did.
+    const restated = [...new Set(fix.deviations || [])];
+    for (const gone of deviations.filter((d) => !restated.includes(d) && !pendingDeviationDrops.includes(d))) {
+      log(`fixer pass ${fixerPasses} did not restate deviation ${JSON.stringify(gone)}; it KEEPS STANDING as a claimed drop until a round passes with the claim in view.`);
+    }
+    // `deviations` is the set this pass was shown, so what it left out is
+    // exactly the claim set: a drop the pass restates after all is withdrawn.
+    pendingDeviationDrops = deviations.filter((d) => !restated.includes(d));
+    // Adding one is the same event in the other direction — a deviation no
+    // round has been shown — so both count as ONE quantity: whether this pass
+    // moved the deviation set. That keeps the terminal check below a single
+    // question instead of a rule that gates drops and lets adds through. No
+    // carry-forward is needed: `confirming` is set only after a round PASSED,
+    // and that round was shown every deviation standing before this pass, so a
+    // pass's own adds are the only ones that can still be unadjudicated.
+    const deviationSetChanges = pendingDeviationDrops.length + restated.filter((d) => !deviations.includes(d)).length;
+    deviationHistory.push({ pass: fixerPasses, deviations: restated });
+    deviations = [...restated, ...pendingDeviationDrops];
     // Accumulate the pass packet field-by-field. A later pass updates what it
     // actually reports, and an explicitly EMPTY field never clobbers a
     // populated one from an earlier pass: schema-driven agents commonly emit
@@ -1031,15 +1211,46 @@ async function runReviewCycle(cycle) {
     // Terminal condition of the disposition rule: the reviewer has passed and
     // the fixer's last pass disposed nothing new (and changed nothing that
     // would need a fresh review). Nothing left for a reviewer to look at.
-    if (confirming && !fix.changed && (fix.dispositions || []).length === 0) {
+    //
+    // A MOVE OF THE DEVIATION SET is something left to look at, in either
+    // direction. The set moves by OMISSION and by first mention rather than on
+    // a disposition — which is why a retirement claim can never reach this
+    // check (it rides in `dispositions`, so the array is not empty) while a
+    // deviation move otherwise would, ending the cycle with it unadjudicated.
+    // Dropping one takes it off the maintainer's list unverified; adding one
+    // puts it on that list carrying only the implementer's half of the
+    // protocol — no reviewer judgment of whether an in-spec route existed, no
+    // RATIFY/CONFORM recommendation. Adding one is not an exotic input either:
+    // a pass is told to REPORT a deviation rather than correct it, and a
+    // deviation is not a finding, so a confirmation pass that first recognizes
+    // one leaves `changed` false and `dispositions` empty by following the
+    // contract exactly. The conjunct gives every such claim the same shape: it
+    // earns a round, a passing round settles it, and the next confirmation
+    // pass — restating the set it was shown — terminates here. One extra
+    // round, only where a confirmation pass actually moved the set, and
+    // bounded by the same cap check below.
+    if (confirming && !fix.changed && (fix.dispositions || []).length === 0 && deviationSetChanges === 0) {
       return result("pass", "reviewer passed; final confirmation pass disposed nothing new");
     }
 
+    // Every pass past that check is adopted work another round must pass over,
+    // so the assessments the last passing round accepted stop describing this
+    // branch: the fixer has changed it (or its claims) since the round that
+    // judged it — even where it restates the same deviation text, which is the
+    // deviation still matching, not the packet. Invalidated HERE, before
+    // either cap exit below, so no exit ships a pre-change in-spec-route
+    // judgment and recommendation beside work no round approved; the round
+    // that passes over this work re-records the reviewer's half in full below,
+    // since the assessment gate holds a round open while any standing
+    // deviation lacks one.
+    deviationAssessments = [];
+
     // Anything else needs a (re-)review — bounded by the cap. This check is
     // reachable at the cap only through a confirmation pass that produced new
-    // work: changed content, or dispositions of its own (a FAILED round at the
-    // cap returns below, before another fixer could run and leave
-    // never-reviewed changes behind).
+    // work: changed content, dispositions of its own, or a move it made to the
+    // deviation set — dropping one or first stating one — that no round has
+    // adjudicated (a FAILED round at the cap returns below, before another
+    // fixer could run and leave never-reviewed changes behind).
     //
     // Those dispositions can themselves breach a contract, and the retirement
     // guard binds on a pass handed nothing — so a confirmation pass that names
@@ -1051,7 +1262,7 @@ async function runReviewCycle(cycle) {
     if (rounds >= cap) {
       return result("review-cap", `hit the ${cap}-round cap without convergence`, {
         outstanding: {
-          note: "final confirmation pass produced work (content changes, dispositions, or both) that could not be re-reviewed within the cap",
+          note: "final confirmation pass produced work (content changes, dispositions of its own, or a move to the deviation set — a drop, or a newly stated deviation — that no round adjudicated) that could not be re-reviewed within the cap",
           ...(undisposed.length ? { carried: undisposed } : {}),
         },
       });
@@ -1065,6 +1276,12 @@ async function runReviewCycle(cycle) {
       handedFindings: findings,
       proposedRetirements: pendingRetirements,
       peerPreflighted: peerState.preflighted,
+      // What still stands after the pass just made — the reviewer adds the
+      // in-spec-route judgment and a ratify/conform recommendation to it — plus
+      // the ones this pass claims no longer stand, which the same reviewer
+      // accepts by passing the round or rejects by raising an issue.
+      deviations,
+      deviationDrops: pendingDeviationDrops,
     };
     // The peer launches BESIDE the fresh reviewer — the canonical concurrent
     // launch (the examination-only peer is the protocol's sole same-checkout
@@ -1128,11 +1345,54 @@ async function runReviewCycle(cycle) {
       }
     }
 
+    // Deviation coverage, the mirror of disposition coverage: every deviation
+    // this pass says still STANDS must carry the reviewer's half — in-spec
+    // route and a recommendation that actually reads as one of the two verdicts
+    // (`cycleDeviationVerdict`) — before a round may pass over
+    // it. A claimed drop is exempt because passing the round is what removes
+    // it; a drop the reviewer rejects raises an issue, which fails the round
+    // and brings the deviation back to the next one for assessment.
+    //
+    // Asked only of a round that would OTHERWISE pass, exactly as the grounding
+    // spot-check is: a round already failing on findings sends the fixer work
+    // it can do, and adding one it CANNOT — the reviewer's own judgment — would
+    // make every failed round carrying a deviation cost an extra pass to
+    // dispose a finding the next reviewer answers by itself.
+    const wouldPass = !!review.pass && peerGating.length === 0 && undisposed.length === 0;
+    const assessments = Array.isArray(review.deviationAssessments) ? review.deviationAssessments : [];
+    // Keyed by deviation text, the FIRST usable entry winning, because what the
+    // round gates on is exactly what it may publish. The gate needs only ONE
+    // usable entry per standing deviation, so recording the raw array instead
+    // would let a second, hedged entry for the same deviation ride to the
+    // maintainer beside the valid one — reinstating in what SHIPS the
+    // present-or-absent reading `cycleDeviationVerdict` closed in what is
+    // CHECKED. An entry the gate could not use is nobody's half of anything.
+    const usableAssessments = new Map();
+    for (const a of assessments) {
+      if (!a || typeof a.deviation !== "string") continue;
+      if (!String(a.inSpecRoute || "").trim() || !cycleDeviationVerdict(a.recommendation)) continue;
+      if (!usableAssessments.has(a.deviation)) usableAssessments.set(a.deviation, a);
+    }
+    const assessed = new Set(usableAssessments.keys());
+    const unassessedDeviations = wouldPass ? restated.filter((d) => !assessed.has(d)) : [];
+    // Handed to the next fixer as findings of their own, because that is the
+    // only channel this loop has back into a round. The fixer cannot supply the
+    // reviewer's judgment, so the fix text says outright what it must NOT do:
+    // conforming the deviation away to clear the finding is the exact move
+    // report-don't-correct exists to prevent.
+    const assessmentIssues = unassessedDeviations.map((d) => ({
+      category: "criteria-gap",
+      location: "locked-decision deviation standing on this packet",
+      problem: `This round's reviewer returned no usable \`deviationAssessments\` entry for a deviation that still stands: ${JSON.stringify(d)} — either no entry at all, or one missing the in-spec-route judgment, or one whose \`recommendation\` does not lead with ${CYCLE_DEVIATION_VERDICTS.join(" or ")} (a hedge is not a verdict). It would reach the maintainer carrying only the implementer's half of report-don't-correct — no judgment of whether an in-spec route existed, no RATIFY/CONFORM recommendation.`,
+      fix: "Do NOT conform, reword, or drop the deviation to clear this — report, don't correct: restate it VERBATIM as before. Decline this finding on that ground; the next fresh reviewer is asked for the missing assessment.",
+    }));
+
     // The round passes only when the reviewer passes, no grounded peer finding
-    // gates, AND every finding handed to this round's fixer was validly
-    // disposed — an uncovered finding fails the round and is carried forward,
-    // so the terminal pass can never leave a finding without a disposition.
-    const roundPassed = !!review.pass && peerGating.length === 0 && undisposed.length === 0;
+    // gates, every finding handed to this round's fixer was validly disposed —
+    // an uncovered finding fails the round and is carried forward, so the
+    // terminal pass can never leave a finding without a disposition — AND every
+    // standing deviation was assessed.
+    const roundPassed = wouldPass && unassessedDeviations.length === 0;
     if (!roundPassed) {
       confirming = false;
       findings = {
@@ -1141,7 +1401,7 @@ async function runReviewCycle(cycle) {
         // authoritative even when an agent's finding object volunteers its own
         // `id` field (coverage matching depends on these exact string ids; an
         // agent-supplied one — a number, say — would be uncoverable).
-        reviewer: (review.issues || []).map((f, i) => ({ ...f, id: `r${rounds}-${i + 1}` })),
+        reviewer: [...(review.issues || []), ...assessmentIssues].map((f, i) => ({ ...f, id: `r${rounds}-${i + 1}` })),
         reviewerNotes: review.notes || "",
         peer: peerGating.map((f, i) => ({ ...f, id: `p${rounds}-${i + 1}` })),
         peerNotes: peer.notes || "",
@@ -1165,6 +1425,20 @@ async function runReviewCycle(cycle) {
       delete q.retirementPending;
     }
     pendingRetirements.length = 0;
+    // The same verdict settles the deviation drops this round was shown: the
+    // fresh reviewer saw each claim beside what still stands and passed, so
+    // those deviations stop standing. Promoted HERE too, before either terminal
+    // pass path, so no exit can drop a deviation no round accepted.
+    if (pendingDeviationDrops.length) {
+      deviations = deviations.filter((d) => !pendingDeviationDrops.includes(d));
+      pendingDeviationDrops = [];
+    }
+    // And the same verdict accepts the reviewer's half for what still stands —
+    // the entries the gate above found usable, at most one per deviation, not
+    // the raw array it read them out of. Recorded only on a PASSING round,
+    // beside the claims it settles: an assessment from a round that failed
+    // judged a packet the fixer has since changed.
+    deviationAssessments = [...usableAssessments.values()];
 
     // Round passed. light mode ends here, recording undisposed remarks as such.
     if (cycle.mode === "light") {

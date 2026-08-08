@@ -1,9 +1,19 @@
 #!/usr/bin/env node
-// Focused behavior test for the review cycle's open-question RETIREMENT
-// lifecycle. A retirement is the one disposition that takes a decision OFF the
-// maintainer's list, so what the TERMINAL result says about a claimed question
-// is a contract, not an implementation detail: it may read as settled only
-// where a reviewer round actually accepted the claim.
+// Focused behavior test for the review cycle's two CLAIM LIFECYCLES: the
+// open-question RETIREMENT lifecycle, and the LOCKED-DECISION DEVIATION
+// lifecycle including the reviewer's half of it. Both turn on the same
+// contract. A retirement is the disposition that takes a decision OFF the
+// maintainer's list, and a dropped deviation takes one off the same list, so
+// what the TERMINAL result says about either claim is a contract rather than an
+// implementation detail: it may read as settled only where a reviewer round
+// actually accepted the claim. A deviation the cycle first states puts a
+// decision ON that list instead, and reaches the maintainer only carrying the
+// reviewer's in-spec-route judgment and RATIFY/CONFORM recommendation — a round
+// does not pass while a standing deviation lacks them.
+//
+// The file name says "retirement" for the older half only. The deviation half
+// is the scenarios whose titles name a deviation — anchored that way rather
+// than by ordinal, which every inserted scenario moves.
 //
 // The workflows are runtime scripts (top-level await/return, injected
 // `agent`/`parallel`/`log` globals), so they cannot be imported. This evaluates
@@ -44,7 +54,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 47;
+const CHECKS_PER_LEG = 78;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -241,6 +251,44 @@ const confirmRetireAgain = {
   changed: false,
   dispositions: [{ finding: "a pass-note", origin: "reviewer", disposition: "fixed", detail: "settled it again", retiresQuestionIds: ["q1"] }],
 };
+
+// A deviation from a LOCKED maintainer decision, and a pass that reports one.
+// Every other packet above carries `deviations: []`, so any of them following
+// this one is a pass that has stopped restating it — the claimed drop.
+const DEV = "delivered a stub adapter instead of the locked one (upstream API absent)";
+const deviate = { ...PASS_PACKET, deviations: [DEV] };
+// A confirmation-shaped pass (nothing changed, nothing disposed) that STATES
+// the deviation. Which move that is depends only on what preceded it: after
+// `deviate` it RESTATES, after a deviation-free pass it ADDS one no round has
+// seen. `idle` is the same pass DROPPING it, since `PASS_PACKET` carries
+// `deviations: []`. One packet covers all three because the rule under test is
+// one rule — whether the pass moved the set — not three cases.
+const confirmDeviate = { ...idle, deviations: [DEV] };
+// The same deviation reported twice in one packet. The cycle matches
+// deviations by exact text, so that is ONE deviation stated twice, and the
+// doubling has to be pinned on the LAST pass: an earlier pass's duplicate is
+// overwritten by whatever the next pass restates.
+const doubleDeviate = { ...PASS_PACKET, deviations: [DEV, DEV] };
+const confirmDoubleDeviate = { ...idle, deviations: [DEV, DEV] };
+// The Reviewer's half of report-don't-correct, and a passing review carrying
+// it. `OK` is deliberately kept WITHOUT one: a round shown a standing deviation
+// and answered with a bare pass is the shape scenario 25 pins, so every round
+// below that legitimately passes over a standing deviation says so explicitly.
+const ASSESS = {
+  deviation: DEV,
+  inSpecRoute: "none — the locked adapter's upstream API is absent on this platform",
+  recommendation: "RATIFY — the stub keeps the contract and is reversible once the API lands",
+};
+const OK_DEV = { pass: true, issues: [], notes: "", deviationAssessments: [ASSESS] };
+// A pass that RESTATES the deviation while disposing the finding it was handed.
+// That is what the missing-assessment finding asks for: conforming the
+// deviation away to clear the finding is the one move report-don't-correct
+// forbids, so the fixture that answers it must still carry the deviation.
+const deviateDeclining = (findingId) => ({
+  ...PASS_PACKET,
+  deviations: [DEV],
+  dispositions: [{ findingId, finding: "f", origin: "reviewer", disposition: "declined", detail: "the deviation stands; the assessment is the reviewer's to supply" }],
+});
 
 async function run(src, { fixes, reviews, cycle }) {
   const seen = { fixPrompts: [], reviewPrompts: [] };
@@ -589,6 +637,214 @@ for (const name of WORKFLOWS) {
     });
     check("escalating onto a question the same pass retires is reported", carriedIds.includes("question:q1"), carried);
     check("the same pass's own retirement still takes effect as a claim", stateOf("q1") === "pending", stateOf("q1"));
+  });
+
+  // 24. The same rule on the other thing a pass can silently take off the
+  //     maintainer's list: a deviation from a LOCKED decision. A pass that
+  //     stops restating one is CLAIMING it no longer stands, so the claim needs
+  //     a round exactly as a retirement does. The terminating confirmation pass
+  //     is where that matters — it is asked to return an empty `dispositions`
+  //     array — so without the claim rule a schema-driven fixer echoing
+  //     `deviations: []` there erases a live deviation, leaving the one call
+  //     the loop may not make in a log line.
+  //
+  //     A retirement claim rides IN `dispositions`, so it can never reach the
+  //     terminal check; a MOVE OF THE DEVIATION SET rides in neither, so it
+  //     would, and the check takes the open move as its own reason to run one
+  //     more round. That is what makes the claim kinds converge alike rather
+  //     than leaving one unadjudicated on the cycle's ordinary exit.
+  //
+  //     The rule is one question — did this pass move the set — so both
+  //     directions are pinned here: a drop takes a deviation off the
+  //     maintainer's list unverified, an add puts one on it carrying only the
+  //     implementer's half of the protocol.
+  await scenario("24. a confirmation pass that moves the deviation set needs a round", async () => {
+    const dropped = await run(src, { fixes: [deviate, idle, idle], reviews: [OK_DEV, OK] });
+    check("a drop claimed on the terminal confirmation pass earns a round", dropped.seen.reviewPrompts.length === 2 && /no longer restates/.test(dropped.seen.reviewPrompts[1] || "") && (dropped.seen.reviewPrompts[1] || "").includes(DEV), `${dropped.seen.reviewPrompts.length} review prompt(s)`);
+    check("the round that passes over it clears the deviation", dropped.res.verdict === "pass" && (dropped.res.deviations || []).length === 0, `${dropped.res.verdict}/${JSON.stringify(dropped.res.deviations)}`);
+    check("the per-pass history rides beside it, named as history", Array.isArray(dropped.res.deviationHistory) && dropped.res.deviationHistory.length === 3 && dropped.res.deviationHistory[0].deviations.length === 1 && dropped.res.deviationHistory[2].deviations.length === 0, JSON.stringify(dropped.res.deviationHistory));
+
+    // It is a SET. One deviation stated twice in a packet is one deviation, and
+    // left doubled it would ride to the top of a PR body twice and count twice
+    // toward the set move — the one place the quantity, not just its emptiness,
+    // is read.
+    const doubled = await run(src, { fixes: [doubleDeviate, confirmDoubleDeviate], reviews: [OK_DEV] });
+    check("a deviation stated twice in one packet is one deviation", JSON.stringify(doubled.res.deviations) === JSON.stringify([DEV]) && JSON.stringify((doubled.res.deviationHistory || [])[0]) === JSON.stringify({ pass: 1, deviations: [DEV] }), `${JSON.stringify(doubled.res.deviations)} / ${JSON.stringify((doubled.res.deviationHistory || [])[0])}`);
+
+    // The conjunct is narrow: only an OPEN claim holds the cycle open. A
+    // confirmation pass that restates what stands still terminates on the spot,
+    // so an ordinary cycle carrying a deviation pays no extra round for it.
+    const restated = await run(src, { fixes: [deviate, confirmDeviate], reviews: [OK_DEV] });
+    check("a confirmation pass that restates costs no extra round", restated.res.verdict === "pass" && restated.seen.reviewPrompts.length === 1, `${restated.res.verdict}/${restated.seen.reviewPrompts.length} review prompt(s)`);
+    check("and the restated deviation ships as the final state", JSON.stringify(restated.res.deviations) === JSON.stringify([DEV]), JSON.stringify(restated.res.deviations));
+    check("with the reviewing round's half beside it", JSON.stringify(restated.res.deviationAssessments) === JSON.stringify([ASSESS]), JSON.stringify(restated.res.deviationAssessments));
+
+    // The no-latching half, unchanged: a drop a round passed over takes effect,
+    // so the result still describes the FINAL state rather than every round's.
+    const accepted = await run(src, { fixes: [deviate, fixOn("r1-1"), idle], reviews: [FAIL("r1"), OK] });
+    check("a drop a round passes over takes effect", accepted.res.verdict === "pass" && (accepted.res.deviations || []).length === 0, JSON.stringify(accepted.res.deviations));
+    check("the round that decides it is SHOWN the claim", /no longer restates/.test(accepted.seen.reviewPrompts[1] || "") && (accepted.seen.reviewPrompts[1] || "").includes(DEV), "round-2 review prompt");
+
+    // The round a confirmation-pass claim earns can also REJECT it — the half
+    // that was unreachable while such a claim ended the cycle instead.
+    const disputed = await run(src, {
+      fixes: [deviate, idle, fixOn("r2-1")],
+      reviews: [OK_DEV, FAIL("that deviation still stands"), FAIL("it still stands")],
+      cycle: { maxRounds: 3 },
+    });
+    check("a confirmation-pass claim the round rejects leaves the deviation standing", disputed.res.verdict === "review-cap" && JSON.stringify(disputed.res.deviations) === JSON.stringify([DEV]), `${disputed.res.verdict}/${JSON.stringify(disputed.res.deviations)}`);
+
+    // A reviewer that keeps rejecting the claim -> round cap -> still standing.
+    const rejected = await run(src, {
+      fixes: [deviate, fixOn("r1-1"), fixOn("r2-1")],
+      reviews: [FAIL("r1"), FAIL("that deviation still stands"), FAIL("it still stands")],
+      cycle: { maxRounds: 3 },
+    });
+    check("a claim no round passed is re-presented to the next one", /no longer restates/.test(rejected.seen.reviewPrompts[2] || ""), "round-3 review prompt");
+    check("a rejected drop leaves the deviation standing at the cap", rejected.res.verdict === "review-cap" && JSON.stringify(rejected.res.deviations) === JSON.stringify([DEV]), `${rejected.res.verdict}/${JSON.stringify(rejected.res.deviations)}`);
+
+    // The SAME rule in the other direction. A deviation first stated on the
+    // confirmation pass is the mirror of a drop: the set moves, and no round
+    // has seen the move. It matters because the protocol has two halves — the
+    // implementer states the deviation and the constraint that forced it, the
+    // Reviewer adds whether an in-spec route existed and a RATIFY/CONFORM
+    // recommendation — and the maintainer reads this deviation at the top of
+    // the summary either way. Terminating here would hand it over carrying the
+    // implementer's half alone.
+    //
+    // Nor does reaching it take a misbehaving fixer: a pass is told to REPORT a
+    // deviation rather than correct it, and a deviation is not a finding, so a
+    // confirmation pass that first recognizes one returns exactly this packet
+    // — nothing changed, nothing disposed — by following the contract.
+    const added = await run(src, { fixes: [PASS_PACKET, confirmDeviate, confirmDeviate], reviews: [OK, OK_DEV] });
+    check("a deviation first stated on the confirmation pass earns a round", added.seen.reviewPrompts.length === 2 && (added.seen.reviewPrompts[1] || "").includes(DEV), `${added.seen.reviewPrompts.length} review prompt(s)`);
+    check("the round it earns is asked for the Reviewer's half of the protocol", /in-spec route existed/.test(added.seen.reviewPrompts[1] || "") && /RATIFY or CONFORM/.test(added.seen.reviewPrompts[1] || ""), "round-2 review prompt");
+    check("an ADD is not presented as a drop", !/no longer restates/.test(added.seen.reviewPrompts[1] || ""), "round-2 review prompt");
+    check("and the reviewed deviation ships as the final state", added.res.verdict === "pass" && JSON.stringify(added.res.deviations) === JSON.stringify([DEV]), `${added.res.verdict}/${JSON.stringify(added.res.deviations)}`);
+
+    // At the cap the move exits `review-cap` naming itself, exactly as a drop
+    // does — the deviation still standing, never silently passed off as judged.
+    const addedAtCap = await run(src, { fixes: [PASS_PACKET, confirmDeviate], reviews: [OK], cycle: { maxRounds: 1 } });
+    check("an add the cap leaves unreviewed exits review-cap, deviation standing", addedAtCap.res.verdict === "review-cap" && JSON.stringify(addedAtCap.res.deviations) === JSON.stringify([DEV]), `${addedAtCap.res.verdict}/${JSON.stringify(addedAtCap.res.deviations)}`);
+    check("and the cap exit's note names the deviation-set move", /newly stated deviation/.test(((addedAtCap.res.outstanding || {}).note) || ""), JSON.stringify(addedAtCap.res.outstanding || {}));
+  });
+
+  // 25. The OTHER half of the same protocol, and the reason scenario 24's
+  //     rounds now say `OK_DEV` where they once said `OK`. The implementer
+  //     states the deviation and the constraint that forced it; the Reviewer
+  //     adds whether an in-spec route existed and a RATIFY/CONFORM
+  //     recommendation, because that is what the maintainer's call needs. Asked
+  //     for in prose alone it was optional in fact — `{pass: true, issues: [],
+  //     notes: ""}` is schema-valid — so a round could pass a deviation
+  //     straight through to a PR body carrying the implementer's half only,
+  //     while the result claimed it had been reviewed. The assessment is a
+  //     structural item and the round is gated on it, exactly as it is gated on
+  //     every handed finding having a disposition.
+  await scenario("25. a standing deviation gates the round until the reviewer assesses it", async () => {
+    const gated = await run(src, {
+      fixes: [deviate, deviateDeclining("r1-1"), confirmDeviate],
+      reviews: [OK, OK_DEV],
+      cycle: { maxRounds: 3 },
+    });
+    // Read off the SECOND fixer prompt, not the round count: a round that did
+    // not pass sends a FIX-UP pass, while one that passed sends the final
+    // confirmation pass — and both shapes reach a second reviewer round here,
+    // so only the pass's own framing tells the two apart.
+    check("a bare pass does not end a round carrying a standing deviation", /This is fix-up round 2/.test(gated.seen.fixPrompts[1] || "") && gated.res.verdict === "pass", `${gated.res.verdict}/${gated.seen.reviewPrompts.length} review prompt(s)`);
+    check("the gap comes back to the fixer as a finding naming the deviation", /deviationAssessments/.test(gated.seen.fixPrompts[1] || "") && (gated.seen.fixPrompts[1] || "").includes(DEV), "round-2 fix prompt");
+    check("and that finding forbids conforming the deviation away", /Do NOT conform, reword, or drop the deviation/.test(gated.seen.fixPrompts[1] || ""), "round-2 fix prompt");
+    check("the assessment the passing round accepted ships with the deviation", JSON.stringify(gated.res.deviationAssessments) === JSON.stringify([ASSESS]), JSON.stringify(gated.res.deviationAssessments));
+
+    // Half an assessment is none. The maintainer's call needs both halves, so
+    // an entry that names the deviation and then says nothing about which way
+    // to rule leaves it exactly as unassessed as a missing entry does.
+    const halfAssessed = await run(src, {
+      fixes: [deviate, deviateDeclining("r1-1"), confirmDeviate],
+      reviews: [{ pass: true, issues: [], notes: "", deviationAssessments: [{ deviation: DEV, inSpecRoute: "none existed", recommendation: "   " }] }, OK_DEV],
+      cycle: { maxRounds: 3 },
+    });
+    check("an entry with no recommendation does not count as an assessment", /This is fix-up round 2/.test(halfAssessed.seen.fixPrompts[1] || "") && halfAssessed.res.verdict === "pass", `${halfAssessed.res.verdict}/${halfAssessed.seen.reviewPrompts.length} review prompt(s)`);
+
+    // And neither does a recommendation that answers something else. The
+    // maintainer's list is a ratify-or-conform list, so a hedge is a
+    // filled-in field rather than the choice the field exists to record —
+    // exactly as unassessed as the blank above, and caught only because the
+    // gate parses the verdict rather than measuring the string's length.
+    const hedged = await run(src, {
+      fixes: [deviate, deviateDeclining("r1-1"), confirmDeviate],
+      reviews: [{ pass: true, issues: [], notes: "", deviationAssessments: [{ deviation: DEV, inSpecRoute: "none existed", recommendation: "UNSURE — needs investigation" }] }, OK_DEV],
+      cycle: { maxRounds: 3 },
+    });
+    check("a recommendation that is not RATIFY or CONFORM does not count either", /This is fix-up round 2/.test(hedged.seen.fixPrompts[1] || "") && hedged.res.verdict === "pass" && JSON.stringify(hedged.res.deviationAssessments) === JSON.stringify([ASSESS]), `${hedged.res.verdict}/${JSON.stringify(hedged.res.deviationAssessments)}`);
+
+    // The hedge that opens WITH a verdict, and the only one an ordinary round
+    // reaches: the brief renders "START with RATIFY or CONFORM", so a reviewer
+    // that opens its recommendation with the phrase it was told to start with
+    // is echoing the brief's surface form rather than crafting input. Read by
+    // first word alone it would count as RATIFY, and the maintainer would be
+    // handed a verdict from a reviewer that explicitly refused to choose.
+    const bothVerdicts = await run(src, {
+      fixes: [deviate, deviateDeclining("r1-1"), confirmDeviate],
+      reviews: [{ pass: true, issues: [], notes: "", deviationAssessments: [{ deviation: DEV, inSpecRoute: "none existed", recommendation: "RATIFY or CONFORM — needs investigation" }] }, OK_DEV],
+      cycle: { maxRounds: 3 },
+    });
+    check("opening with BOTH verdicts is a refusal to choose, not a RATIFY", /This is fix-up round 2/.test(bothVerdicts.seen.fixPrompts[1] || "") && bothVerdicts.res.verdict === "pass" && JSON.stringify(bothVerdicts.res.deviationAssessments) === JSON.stringify([ASSESS]), `${bothVerdicts.res.verdict}/${JSON.stringify(bothVerdicts.res.deviationAssessments)}`);
+
+    // The positive control the rule above is bounded by, and the reason it
+    // tests for a bare `or` rather than for the other verdict occurring: a real
+    // choice may name the verdict it rejected in its reason, and must still
+    // count. It rides one round with no fix-up in between.
+    const NAMES_OTHER = { deviation: DEV, inSpecRoute: "none existed", recommendation: "RATIFY — CONFORM costs a release" };
+    const reasonNamesOther = await run(src, {
+      fixes: [deviate, confirmDeviate],
+      reviews: [{ pass: true, issues: [], notes: "", deviationAssessments: [NAMES_OTHER] }, OK_DEV],
+      cycle: { maxRounds: 3 },
+    });
+    check("a verdict whose reason names the other verdict still counts", reasonNamesOther.res.verdict === "pass" && /FINAL CONFIRMATION PASS/.test(reasonNamesOther.seen.fixPrompts[1] || "") && JSON.stringify(reasonNamesOther.res.deviationAssessments) === JSON.stringify([NAMES_OTHER]), `${reasonNamesOther.res.verdict}/${JSON.stringify(reasonNamesOther.res.deviationAssessments)}`);
+
+    // What the round GATED on is what it PUBLISHES. One usable entry lets the
+    // round pass, so a reviewer that also emits a hedged second entry for the
+    // same deviation would — if the raw array were recorded — hand the
+    // maintainer a RATIFY beside an UNSURE for one decision, which is the
+    // present-or-absent reading the verdict parse closed one level up. Only
+    // the usable entry ships, and only one of it.
+    const alsoHedged = await run(src, {
+      fixes: [deviate, confirmDeviate],
+      reviews: [{ pass: true, issues: [], notes: "", deviationAssessments: [ASSESS, { deviation: DEV, inSpecRoute: "unclear", recommendation: "UNSURE — could go either way" }] }, OK_DEV],
+      cycle: { maxRounds: 3 },
+    });
+    check("a hedged duplicate does not ride to the maintainer beside the usable entry", alsoHedged.res.verdict === "pass" && JSON.stringify(alsoHedged.res.deviationAssessments) === JSON.stringify([ASSESS]), `${alsoHedged.res.verdict}/${JSON.stringify(alsoHedged.res.deviationAssessments)}`);
+
+    // The judgment does not outlive the packet it judged. A later pass that
+    // changes the branch while RESTATING the same deviation text invalidates
+    // the accepted assessment on adoption — the text still matching is not the
+    // packet still matching — so a failed round at the cap ships the deviation
+    // standing and UNJUDGED instead of carrying a pre-change in-spec-route
+    // judgment beside work no round approved.
+    const staleAtFailedCap = await run(src, {
+      fixes: [deviate, deviate],
+      reviews: [OK_DEV, FAIL("the changed work regressed")],
+      cycle: { maxRounds: 2 },
+    });
+    check("adopting changed work invalidates the accepted assessment", staleAtFailedCap.res.verdict === "review-cap" && JSON.stringify(staleAtFailedCap.res.deviations) === JSON.stringify([DEV]) && staleAtFailedCap.res.deviationAssessments === undefined, `${staleAtFailedCap.res.verdict}/${JSON.stringify(staleAtFailedCap.res.deviationAssessments)}`);
+
+    // The same invalidation on the OTHER cap exit — a confirmation pass whose
+    // adopted work the cap leaves no round to review. Nothing re-judged the
+    // changed packet, so nothing rides beside it.
+    const staleAtAdoptCap = await run(src, {
+      fixes: [deviate, deviate],
+      reviews: [OK_DEV],
+      cycle: { maxRounds: 1 },
+    });
+    check("the cap exit before any re-review ships no stale assessment either", staleAtAdoptCap.res.verdict === "review-cap" && JSON.stringify(staleAtAdoptCap.res.deviations) === JSON.stringify([DEV]) && staleAtAdoptCap.res.deviationAssessments === undefined, `${staleAtAdoptCap.res.verdict}/${JSON.stringify(staleAtAdoptCap.res.deviationAssessments)}`);
+
+    // A deviation the pass CLAIMS no longer stands is exempt: passing the round
+    // is what removes it, so demanding a ratify-or-conform recommendation on
+    // something about to be gone would buy a round for nobody. A drop the
+    // reviewer does not accept is an issue, which fails the round on its own.
+    const dropOnly = await run(src, { fixes: [deviate, idle, idle], reviews: [OK_DEV, OK] });
+    check("a round carrying only a claimed drop passes without one", dropOnly.res.verdict === "pass" && /FINAL CONFIRMATION PASS/.test(dropOnly.seen.fixPrompts[2] || ""), `${dropOnly.res.verdict}/${dropOnly.seen.fixPrompts.length} fix prompt(s)`);
+    check("and a result with no standing deviation ships no assessments", dropOnly.res.deviationAssessments === undefined, JSON.stringify(dropOnly.res.deviationAssessments));
   });
 
   const ran = legOk + legFail;
