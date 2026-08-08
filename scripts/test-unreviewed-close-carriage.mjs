@@ -170,7 +170,7 @@ const cycleResult = (extra) => ({
   check("the summary comment brief carries the recorded-not-reviewed section with the run's note", /Delivery-run failure — recorded, not reviewed/.test(withRecord) && withRecord.includes(NOTE) && withRecord.includes(RECORD.range), "publish prompt");
   const withoutRecord = publishPrompt(pkt, [], { push: true }, []);
   check("and omits it for a cycle that concluded normally", !/recorded, not reviewed/.test(withoutRecord), "publish prompt");
-  const cited = publishPrompt(pkt, [], { push: true }, [], CITED_RECORD);
+  const cited = publishPrompt(pkt, [], { push: true }, [], [], CITED_RECORD);
   check("the no-commit record reaches the summary comment too, naming no commit and no empty range check", /Delivery-run failure — recorded, not reviewed/.test(cited) && cited.includes(CITED_NOTE) && !/final commit/.test(cited) && !/rangeCheck/.test(cited), "publish prompt");
 }
 
