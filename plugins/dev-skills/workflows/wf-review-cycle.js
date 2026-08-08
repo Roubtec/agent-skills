@@ -743,6 +743,16 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
     // disposition still owes, when it is `escalated`, is its question
     // back-reference, which nothing below it would ever look at.
     //
+    // The HANDED case is deliberately NOT given an entry here as well, because
+    // it is not silent and so needs no second carrier: `liveQuestion` in the
+    // coverage walk below refuses to mark the finding covered, so the finding
+    // returns as `outstanding.carried` under a header that names this very
+    // reason (task 014a's scenario 16 pins it). A `disposition-error` entry is
+    // this section's carrier of LAST resort — `stray:` and `retire:` exist
+    // because nothing else would surface those breaches at all — so raising
+    // one beside an already-carried finding would spend two entries, and two
+    // fixer obligations, on one mistake.
+    //
     // LIVE is the whole test, and a `retired`/`retirementPending` id is the
     // SAME breach as one no pass ever raised rather than a case of its own: in
     // both, the back-reference points at no decision the maintainer will be
