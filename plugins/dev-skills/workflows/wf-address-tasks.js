@@ -955,8 +955,8 @@ function cycleReviewPrompt(cycle, state) {
   const deviationsBlock = Array.isArray(state.deviations) && state.deviations.length
     ? `\n## Deviations from LOCKED decisions standing on this packet (verbatim)\n\nFor each, say in \`notes\` whether an in-spec route existed and recommend RATIFY or CONFORM — the maintainer decides, so a deviation is neither a finding to be corrected away nor a license for unfinished work: grade completeness, tests, and regressions exactly as strictly.\n\n${JSON.stringify(state.deviations, null, 2)}\n${deviationDrops.length ? `\nOf those, the fixer no longer restates the ones below, CLAIMING each no longer stands. Verify that against the committed state exactly as you would a \`declined\`: passing this round is what drops them, so raise one you do not accept as an issue rather than letting it go.\n\n${JSON.stringify(deviationDrops, null, 2)}\n` : ""}`
     : "";
-  // This brief orders a full build, so the reviewer needs a destination for the
-  // build's output as much as for its own report — including on the pass that
+  // This brief can order a build — at the round's stated tier — so the reviewer
+  // needs a destination for its output as much as for its own report — including on the pass that
   // runs with no cycle behind it (the collision re-review), where leaving the
   // path to the reviewer is exactly how a shared scratch name gets chosen.
   const persistLine = state.artifactDir

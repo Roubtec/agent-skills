@@ -111,7 +111,7 @@ Read `AGENTS.md` first for project conventions.
 - Commit at logical milestones. Aim for one commit per logical unit of work.
 - Do not revert unrelated or concurrent edits. Accommodate changes made by others.
 - Finish inside this turn: do not end it waiting to be resumed, block on and reap anything you launch, and do not launch your own peer review.
-- Run the project's build and lint commands periodically. Run a full build check before reporting completion.
+- Validate at the tier this round's brief states, per `review-cycle`'s two validation tiers: the round tier on an intermediate round, the delivery tier — the full applicable sanity set — on the state that concludes the task, before its PR. Say which you ran.
 - Any build or lint output that must land in a file goes to `<validation-output path allocated above>`, never anywhere else.
 - If a decision the task marks LOCKED is one you cannot deliver, report what you delivered instead and the constraint that forced it — do not conform it away.
 - When done, report: what you did, any decisions/tradeoffs, any uncertainties.
@@ -182,7 +182,7 @@ The PR base branch for this task is `<base-branch>`. The current branch is `<tas
 
 ## Instructions
 
-- Run a full build and verify there are no type errors before checking anything else. A build failure is an automatic blocker.
+- Run the build and type-check before checking anything else, at the validation tier this round states. A failure at that tier is an automatic blocker; a heavier suite the stated tier did not run is not.
 - Any build or check output that must land in a file goes to `<validation-output path allocated above>`, never anywhere else.
 - Identify the touched files with `git diff --name-only <base-branch>...HEAD`. Use this list to scope your code quality review. If no base branch was provided above, fall back to `main` and mention the fallback in your report.
 - Do NOT read commit messages (`git log`) and do NOT read diffs (`git diff` with content); read each touched file in full instead. You may follow references from touched files into untouched files when needed to evaluate consistency, call sites, or downstream effects.
