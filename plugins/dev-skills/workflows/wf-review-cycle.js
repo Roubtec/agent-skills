@@ -1807,8 +1807,10 @@ if (!structured) {
 }
 let artifactTypeToken = structured ? args.artifactType : null;
 if (!structured) {
-  const t = lowerArgs.match(/\bartifact[\s-]*type\s*[=:]?\s*(code|prose|decision)\b/) || lowerArgs.match(/\b(prose|decision)\b/);
-  if (t) artifactTypeToken = t[1];
+  // Same token rule for the bare fallback spelling: `review this decision`
+  // still names the type, while `feature/decision-log` names a branch.
+  const t = lowerArgs.match(/\bartifact[\s-]*type\s*[=:]?\s*(code|prose|decision)\b/);
+  artifactTypeToken = t ? t[1] : ["prose", "decision"].find((x) => argTokens.has(x)) || null;
 }
 
 // Validate the cap up front — an invalid value is a caller contract violation,
