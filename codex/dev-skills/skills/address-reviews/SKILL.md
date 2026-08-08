@@ -201,7 +201,7 @@ Decide each entry's round by the `review-cycle` gate, relaying findings verbatim
 
 For each failed entry, spawn a fresh `worker` fix-up agent with that PR's packet and the complete outputs verbatim as separate `Reviewer findings` and `Peer (claude) findings` blocks, omitting only a forfeited peer block.
 It works only in that worktree, addresses each finding directly, runs validation, commits everything, leaves a clean worktree, and returns an updated packet.
-Wait for and close the worker, then spawn a fresh `explorer` Reviewer and peer round; the next Reviewer adjudicates any evidence-backed push-back on a peer claim.
+Spawn a fresh `explorer` Reviewer and peer round only once that fix-up worker's commits are on disk, its updated packet returned and adopted under Phase A's hard-check; wait for and close the worker first — that wait is what puts the commits there, and the wait-then-spawn ordering is the proxy, not the rule. The next Reviewer adjudicates any evidence-backed push-back on a peer claim.
 The `review-cycle` round cap bounds each entry, counting every fix-up regardless of which reviewer triggered it; an entry still failing at the cap is blocked and must not publish, and every outstanding finding set is surfaced verbatim.
 
 ### Publication
