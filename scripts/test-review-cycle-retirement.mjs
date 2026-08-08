@@ -18,12 +18,13 @@
 // It has grown to cover the section's other terminal gates, which live beside
 // that one and decide the same question — what may leave the cycle without a
 // fresh reviewer seeing it: a locked-decision deviation a pass moves on or off
-// the maintainer's list (24), the trivial-round close-out, which concludes with
-// no reviewer round at all (25), the validation tier a reviewer's brief states,
-// whose default decides what an unstated one runs (26), the record-only
-// close over the delivery gate's one tolerated post-run commit, which concludes
-// with no reviewer round either (27), and the light-mode conclusion, the fourth
-// such exit and the one every pass reaches at the delivery tier (28).
+// the maintainer's list, the trivial-round close-out, which concludes with no
+// reviewer round at all, the validation tier a reviewer's brief states, whose
+// default decides what an unstated one runs, the record-only close over the
+// delivery gate's one tolerated post-run commit, which concludes with no
+// reviewer round either, and the light-mode conclusion, the fourth such exit
+// and the one every pass reaches at the delivery tier. Each clause names its
+// scenario's subject rather than its ordinal, for the reason stated just above.
 //
 // The workflows are runtime scripts (top-level await/return, injected
 // `agent`/`parallel`/`log` globals), so they cannot be imported. This evaluates
@@ -285,9 +286,10 @@ const confirmRetireAgain = {
   dispositions: [{ finding: "a pass-note", origin: "reviewer", disposition: "fixed", detail: "settled it again", retiresQuestionIds: ["q1"] }],
 };
 
-// Trivial-round close-out packets (scenario 25). Each OFFERS a close-out — the
-// same non-semantic edit list — and differs only in how it disposed the one
-// finding it was handed, which is the whole question the gate answers.
+// Trivial-round close-out packets (the close-out scenario). Each OFFERS a
+// close-out — the same non-semantic edit list — and differs only in how it
+// disposed the one finding it was handed, which is the whole question the
+// gate answers.
 const CLOSE_OUT_EDITS = ["reworded a comment"];
 const closeOutFix = (findingId) => ({ ...fixOn(findingId), closeOutEdits: CLOSE_OUT_EDITS });
 const closeOutDecline = (findingId) => ({
@@ -1095,14 +1097,14 @@ for (const name of WORKFLOWS) {
     check("the round a confirmation pass earns is told the DELIVERY tier", /DELIVERY tier/.test(confirmed.seen.reviewPrompts[1] || ""), "round-2 review prompt");
   });
 
-  // 27. The record-only close, which is scenario 26's tier rule read to its
-  //     conclusion. The delivery tier a confirmation pass owes survives ONE
-  //     post-run commit — the flake rule's diagnosis-only task file and the
+  // 28. The record-only close, which is the unstated-tier scenario's rule read
+  //     to its conclusion. The delivery tier a confirmation pass owes survives
+  //     ONE post-run commit — the flake rule's diagnosis-only task file and the
   //     note recording what that run surfaced — and tiered validation makes
   //     the delivery run the first FULL-suite run of most cycles, so the run
   //     that surfaces a flake is usually that one. Without this exit the
   //     commit is the only thing between the pass and the terminal check: the
-  //     cycle buys a round told the DELIVERY tier (26 pins that), whose
+  //     cycle buys a round told the DELIVERY tier (that scenario pins it), whose
   //     reviewer runs the whole suite, and the confirmation pass after it owes
   //     that tier again — three runs of the suite the tolerance exists to
   //     spare, for a commit that adds a queue entry and a note.
@@ -1111,7 +1113,7 @@ for (const name of WORKFLOWS) {
   //     is asked about it: a cheap read-only check judges the RANGE, exactly
   //     as the close-out's does, and every other conjunct of the terminal
   //     check still holds the cycle open — which is what the bounds below pin.
-  await scenario("27. a record-only commit concludes without buying a round", async () => {
+  await scenario("28. a record-only commit concludes without buying a round", async () => {
     const concluded = await run(src, { fixes: [PASS_PACKET, confirmRecordOnly], reviews: [OK], cycle: { maxRounds: 3 } });
     check("a confirmation pass that only committed the record concludes with no further round", concluded.res.verdict === "pass" && concluded.seen.reviewPrompts.length === 1 && !!concluded.res.recordOnly, `${concluded.res.verdict}/${concluded.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(concluded.res.recordOnly)}`);
     check("and the result records the pass, the range and what the check found", !!concluded.res.recordOnly && concluded.res.recordOnly.pass === 2 && concluded.res.recordOnly.range === "sha..sha" && /nothing but the flake record/.test(concluded.res.recordOnly.verified || ""), JSON.stringify(concluded.res.recordOnly));
@@ -1176,16 +1178,18 @@ for (const name of WORKFLOWS) {
     check("an intermediate pass never reaches the check, so no finding leaves undisposed", intermediate.seen.recordPrompts.length === 0 && intermediate.res.verdict === "review-cap" && intermediate.carriedIds.includes("r1-1"), `${intermediate.seen.recordPrompts.length} record check(s)/${intermediate.res.verdict}/${intermediate.carried}`);
   });
 
-  // 28. The same record on the LIGHT-mode conclusion — the fourth exit no
+  // 29. The same record on the LIGHT-mode conclusion — the fourth exit no
   //     reviewer round follows, and the one that needs the record most.
   //     `cycleValidationTier` makes EVERY light-mode pass a delivery-tier pass
-  //     precisely because light skips the confirmation pass (26 pins that
-  //     default), so light is the mode where the run that surfaces a flake is
-  //     most likely to be the delivery run. The round that just passed is no
-  //     substitute carrier: its brief carries only the packet's dispositions
-  //     and work report, never `flakeRecord`, so its notes were written without
-  //     the failure in view. Scenario 27's exits and this one are one rule.
-  await scenario("28. a light-mode conclusion carries the same flake record", async () => {
+  //     precisely because light skips the confirmation pass, so light is the
+  //     mode where the run that surfaces a flake is most likely to be the
+  //     delivery run. The round that just passed is no substitute carrier: its
+  //     brief carries only the packet's dispositions and work report, never
+  //     `flakeRecord` — the reviewer's flake gate says so in as many words, and
+  //     the unstated-tier scenario pins that it does — so its notes were
+  //     written without the failure in view. The record-only scenario's exits
+  //     and this one are one rule.
+  await scenario("29. a light-mode conclusion carries the same flake record", async () => {
     const REVIEWER_CAVEAT = "reviewer caveat";
     const lit = await run(src, {
       fixes: [{ ...PASS_PACKET, flakeRecord: FLAKE_NOTE }],
