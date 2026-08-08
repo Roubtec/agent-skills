@@ -65,7 +65,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 126;
+const CHECKS_PER_LEG = 129;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -1151,6 +1151,25 @@ for (const name of WORKFLOWS) {
     check("including where a clean confirming pass concludes at the TERMINAL exit, which carries no record at all", superseded.res.verdict === "pass" && superseded.res.recordOnly === undefined && JSON.stringify(superseded.res.flakeHistory) === JSON.stringify([{ pass: 1, note: FLAKE_NOTE }]), `${JSON.stringify(superseded.res.recordOnly)}/${JSON.stringify(superseded.res.flakeHistory)}`);
     check("while a cycle no pass reported a flake on carries no history at all", (await run(src, { fixes: [PASS_PACKET, idle], reviews: [OK] })).res.flakeHistory === undefined, "plain terminal exit");
 
+    // The exits that are not conclusions at all. `flakeHistory` is a log, so
+    // the contract promises one entry per reporting pass on EVERY exit — and
+    // that binds hardest exactly where the pass did not get to finish: a packet
+    // that reports a failed validation run and THEN blocks, or comes back from
+    // a worktree that is not clean and idle, or names no artifact directory, is
+    // the run whose failure the maintainer most needs told, and it is the one a
+    // late append silently loses. Every check the cycle makes on a packet
+    // returns before the conclusions do, so the record has to be read the
+    // moment the packet is in hand; nothing but these pins would notice it
+    // sliding back below them, since a spread on all 14 returns looks correct
+    // while the array they spread is still empty. Enumerated, one per error
+    // return that can follow a readable packet.
+    const blocked = await run(src, { fixes: [{ ...PASS_PACKET, flakeRecord: FLAKE_NOTE, blocker: "the base would not build" }], reviews: [] });
+    check("a pass that reports a flake and then BLOCKS still carries that pass's record", blocked.res.verdict === "error" && JSON.stringify(blocked.res.flakeHistory) === JSON.stringify([{ pass: 1, note: FLAKE_NOTE }]), `${blocked.res.verdict}/${JSON.stringify(blocked.res.flakeHistory)}`);
+    const unclean = await run(src, { fixes: [{ ...PASS_PACKET, flakeRecord: FLAKE_NOTE, clean: false }], reviews: [] });
+    check("so does one whose worktree comes back not clean and idle", unclean.res.verdict === "error" && JSON.stringify(unclean.res.flakeHistory) === JSON.stringify([{ pass: 1, note: FLAKE_NOTE }]), `${unclean.res.verdict}/${JSON.stringify(unclean.res.flakeHistory)}`);
+    const homeless = await run(src, { fixes: [{ ...PASS_PACKET, flakeRecord: FLAKE_NOTE, artifactDir: "" }], reviews: [] });
+    check("and so does one the cycle refuses for having no home for its round history", homeless.res.verdict === "error" && JSON.stringify(homeless.res.flakeHistory) === JSON.stringify([{ pass: 1, note: FLAKE_NOTE }]), `${homeless.res.verdict}/${JSON.stringify(homeless.res.flakeHistory)}`);
+
     // The no-commit half of the same rule, and the reachable one: the flake
     // policy tells a pass whose evidence matches an ALREADY-ACTIVE task to
     // cite it rather than edit it, which leaves nothing to commit. That pass
@@ -1162,7 +1181,7 @@ for (const name of WORKFLOWS) {
     // existed.
     const cited = await run(src, { fixes: [PASS_PACKET, confirmCitingActiveTask], reviews: [OK], cycle: { maxRounds: 3 } });
     check("a pass citing an active flake task still concludes without buying a round", cited.res.verdict === "pass" && cited.seen.reviewPrompts.length === 1 && cited.seen.recordPrompts.length === 0, `${cited.res.verdict}/${cited.seen.reviewPrompts.length} review prompt(s)/${cited.seen.recordPrompts.length} record check(s)`);
-    check("and its record carries the note with an EMPTY range, the no-commit discriminator", !!cited.res.recordOnly && cited.res.recordOnly.note === CITED_NOTE && cited.res.recordOnly.range === "" && cited.res.recordOnly.verified === "", JSON.stringify(cited.res.recordOnly));
+    check("and its record carries the note with an EMPTY range — this pass cited an active task, so the record names no post-run commit of its own", !!cited.res.recordOnly && cited.res.recordOnly.note === CITED_NOTE && cited.res.recordOnly.range === "" && cited.res.recordOnly.verified === "", JSON.stringify(cited.res.recordOnly));
     check("while an ordinary conclusion carries no record at all", (await run(src, { fixes: [PASS_PACKET, idle], reviews: [OK] })).res.recordOnly === undefined, "plain terminal exit");
 
     // The check's own veto, the close-out's rule in its own words: the range is
@@ -1211,7 +1230,7 @@ for (const name of WORKFLOWS) {
       cycle: { mode: "light" },
     });
     check("a light conclusion carries the delivery-tier pass's flake record", lit.res.verdict === "pass" && !!lit.res.recordOnly && lit.res.recordOnly.note === FLAKE_NOTE && lit.res.recordOnly.pass === 1, `${lit.res.verdict}/${JSON.stringify(lit.res.recordOnly)}`);
-    check("with the EMPTY range and check line, the same no-commit discriminator", !!lit.res.recordOnly && lit.res.recordOnly.range === "" && lit.res.recordOnly.verified === "", JSON.stringify(lit.res.recordOnly));
+    check("with the EMPTY range and check line: a light conclusion's record names no post-run commit of its own either, its pass's commits having been seen by the round that just passed", !!lit.res.recordOnly && lit.res.recordOnly.range === "" && lit.res.recordOnly.verified === "", JSON.stringify(lit.res.recordOnly));
     // The omission this whole exit rests on, asserted against a rendered brief
     // rather than against the gate's description of itself. Scenario 27 pins
     // that the gate SAYS the reviewer is not shown the record; nothing pinned
@@ -1220,12 +1239,15 @@ for (const name of WORKFLOWS) {
     // something it now holds — and without this line the suite would stay green
     // while both this exit's justification and scenario 27's went false.
     check("and the round that passed was never shown that record", !(lit.seen.reviewPrompts[0] || "").includes(FLAKE_NOTE), "round-1 review prompt");
-    // `cycleValidationTier`'s light branch, which no other scenario reaches:
-    // the unstated-tier scenario drives the confirming branch and the round
-    // branch, and neither is this one. It is the branch that makes the sentence
-    // above true — light has no confirmation pass, so THIS round's reviewer is
-    // the delivery-tier one — so leaving it unexercised would let a change make
-    // a light-mode round's reviewer skip the suite the exit concludes on.
+    // `cycleValidationTier`'s light branch, which no other scenario PINS.
+    // Reached it certainly is — the light-mode scenario above and this
+    // scenario's own clean run below both execute it — but nothing asserts on
+    // what it returns: the unstated-tier scenario asserts on the confirming
+    // branch and the round branch, and neither is this one. It is the branch
+    // that makes the sentence above true — light has no confirmation pass, so
+    // THIS round's reviewer is the delivery-tier one — so leaving it unpinned
+    // would let a change make a light-mode round's reviewer skip the suite the
+    // exit concludes on while every scenario that runs the branch stayed green.
     check("and that round's reviewer was told the DELIVERY tier, light having no confirmation pass to owe it", /DELIVERY tier/.test(lit.seen.reviewPrompts[0] || "") && !/ROUND tier/.test(lit.seen.reviewPrompts[0] || ""), "round-1 review prompt");
     check("and the exit still records the round's undisposed remarks beside it", (lit.res.undisposed || []).includes(REVIEWER_CAVEAT), JSON.stringify(lit.res.undisposed));
     const clean = await run(src, { fixes: [PASS_PACKET], reviews: [OK], cycle: { mode: "light" } });
@@ -1257,14 +1279,18 @@ const GRANT_CHECKS = 13;
     new Function("args", "phase", "log", `"use strict";\n${prefix}\nreturn { lightMode, closeOutMode, artifactTypeToken };`)(input, () => {}, () => {});
 
   check("a bare `close-out` token grants the close-out", flags("close-out; review branch task/035-x").closeOutMode === true);
-  check("the `closeout` spelling grants it too", flags("review branch task/035-x, closeout").closeOutMode === true);
   check("a TARGET whose name merely contains the words grants nothing", flags("review the branch feature/close-out-ui").closeOutMode === false);
-  check("nor does a target that also mentions closeout inside a path", flags("review plugins/closeout/SKILL.md").closeOutMode === false);
+  check("nor does a target that mentions the bare token inside a path", flags("review plugins/close-out/SKILL.md").closeOutMode === false);
   // The token rule's COST, pinned because it is a behavior change from the `\b`
-  // regex it replaced and every part of it fails closed. The last case is why
-  // the change is a fix rather than a trade: the old boundary read the grant
-  // out of an explicit REFUSAL.
+  // regex it replaced and every part of it fails closed. The `closeout` case is
+  // there because the documented spelling is the HYPHENATED bare token and
+  // nothing — not the scope prompt's recognized-tokens line, not either SKILL
+  // mirror's Arguments line, not the task — ever named the other one; an alias
+  // no enumeration mentions grants a discretion nobody asked for. The last case
+  // is why the change is a fix rather than a trade: the old boundary read the
+  // grant out of an explicit REFUSAL.
   check("the spaced `close out` no longer grants it", flags("close out, review branch task/035-x").closeOutMode === false);
+  check("nor does the unhyphenated `closeout` spelling", flags("review branch task/035-x, closeout").closeOutMode === false);
   check("nor does the assigned `close-out=on` spelling", flags("close-out=on, review branch task/035-x").closeOutMode === false);
   check("and `close-out=off` no longer grants it either, as the old boundary regex did", flags("close-out=off, review branch task/035-x").closeOutMode === false);
   check("a bare `light` token still selects light mode", flags("light, review branch task/035-x").lightMode === true);

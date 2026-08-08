@@ -69,9 +69,13 @@ const NOTE = "the delivery run's only failure was the payments suite, which repr
 const RECORD = { pass: 3, range: "aaaa..bbbb", verified: "only a new diagnosis-only task file", note: NOTE };
 // The SAME record from the flake rule's other outcome: the evidence matched an
 // already-ACTIVE task, so the pass cited it rather than editing it and had
-// nothing to commit. An empty `range` is the discriminator, and the note is
-// then the whole record — there is no commit for a consumer to point at, and
-// still a failed delivery run the maintainer must be told about.
+// nothing to commit. An empty `range` is the discriminator, and it says one
+// thing only — this record names no post-run commit of its own, which is true
+// of this outcome (nothing was committed) and equally of the light and
+// close-out conclusions (what they committed is accounted for elsewhere in the
+// result). Either way the note is then the whole record of the failure: there
+// is no commit for a consumer to point at, and still a failed delivery run the
+// maintainer must be told about.
 const CITED_NOTE = "the delivery run's only failure was the payments suite, which reproduces on the base; already queued as tasks/041-flaky-payments-suite.md, cited rather than re-filed";
 const CITED_RECORD = { pass: 3, range: "", verified: "", note: CITED_NOTE };
 const CLOSE_OUT = { pass: 3, range: "aaaa..bbbb", edits: ["reworded a comment"], verified: "every hunk non-semantic" };
@@ -155,7 +159,7 @@ const cycleResult = (extra) => ({
   // nor hand the writer an empty range check to copy verbatim.
   const cited = prPrompt(task, { notes: "reviewer caveat", deviations: [], recordOnly: CITED_RECORD }, true);
   check("a record with no commit behind it still gets the recorded-not-reviewed section", /Delivery-run failure — recorded, not reviewed/.test(cited) && cited.includes(CITED_NOTE), "pr prompt");
-  check("and names no final commit, since the pass committed nothing", !/final commit/.test(cited) && /already-active follow-up task/.test(cited), "pr prompt");
+  check("and names no final commit, saying only that this record names none of its own", !/final commit/.test(cited) && /no post-run commit of its own/.test(cited), "pr prompt");
   check("and hands the writer no empty range check to copy", !/rangeCheck/.test(cited), "pr prompt");
 
   // The no-remote branch opens no PR at all, so it must not be handed a record
@@ -190,7 +194,7 @@ const cycleResult = (extra) => ({
   const withoutRecord = publishPrompt(pkt, [], { push: true }, []);
   check("and omits it for a cycle that concluded normally", !/recorded, not reviewed/.test(withoutRecord), "publish prompt");
   const cited = publishPrompt(pkt, [], { push: true }, [], [], CITED_RECORD);
-  check("the no-commit record reaches the summary comment too, naming no commit and no empty range check", /Delivery-run failure — recorded, not reviewed/.test(cited) && cited.includes(CITED_NOTE) && !/final commit/.test(cited) && !/rangeCheck/.test(cited), "publish prompt");
+  check("the no-commit record reaches the summary comment too, naming no commit and no empty range check", /Delivery-run failure — recorded, not reviewed/.test(cited) && cited.includes(CITED_NOTE) && !/final commit/.test(cited) && /no post-run commit of its own/.test(cited) && !/rangeCheck/.test(cited), "publish prompt");
 }
 
 check(`suite ran all ${EXPECTED_CHECKS} checks`, ran === EXPECTED_CHECKS, `ran ${ran}`);

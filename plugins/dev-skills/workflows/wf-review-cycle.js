@@ -266,7 +266,7 @@ const CYCLE_FIX_SCHEMA = {
     workReport: { type: "array", items: { type: "object" }, description: "One entry per work item in the scope, in the per-item shape the scope's instructions define (a consumer contract rides through here untyped); echoed into the cycle result." },
     proactive: { type: "string", description: "Same-pattern fixes made beyond the literal items, or empty." },
     closeOutEdits: { type: "array", items: { type: "string" }, description: "OFFER of a trivial-round close-out (only where the assignment says the invoker granted it): one entry per edit, where this pass's WHOLE change was non-semantic — wording, typos, comment phrasing, formatting; nothing touching behavior, logic, or the meaning of an acceptance criterion. Empty otherwise. The offer is not the license: the cycle re-reads the close-out diff itself, and any executable or behavioral change in it, however it got there, forfeits the close-out for a normal reviewer round — as does an empty range, an edit listed here that the range does not actually carry, or a finding disposed `fixed` that the range holds no change for, since this list cannot vouch for a fix it does not mention." },
-    flakeRecord: { type: "string", description: "REQUIRED when this pass's own validation run hit a failure the cycle's flake rule defers as evidenced-unrelated: what failed, the evidence that established unrelatedness, and the follow-up task carrying it — the NEW one this pass committed, or the ACTIVE existing one it cites instead of editing. Empty otherwise, and never a restatement of an earlier pass's record: the cycle keeps every pass's, and restating one would republish it as your run's. This is the maintainer's only notice that a validation run FAILED, so the cycle carries EVERY pass's record to the batch summary, and publishes the CONCLUDING pass's in the PR body or summary comment besides — including where citing an existing task left that pass with nothing to commit. It buys no exit and skips no round." },
+    flakeRecord: { type: "string", description: "REQUIRED when this pass's own validation run hit a failure the cycle's flake rule defers as evidenced-unrelated: what failed, the evidence that established unrelatedness, and the follow-up task carrying it — the NEW one this pass committed, or the ACTIVE existing one it cites instead of editing. Empty otherwise, and never a restatement of an earlier pass's record — report only what YOUR OWN run surfaced. The cycle keeps every pass's, so copying an earlier one forward would republish it as your run's; a failure your own run hit AGAIN is your run's record and no restatement at all, so report it. This is the maintainer's only notice that a validation run FAILED, so the cycle carries EVERY pass's record in the run report it returns (the batch summary, where the consumer has one), and publishes the CONCLUDING pass's in the PR body or summary comment besides — including where citing an existing task left that pass with nothing to commit. It buys no exit and skips no round." },
     finalSha: { type: "string", description: "HEAD sha after this pass, with everything committed." },
     clean: { type: "boolean", description: "True only if the worktree is CLEAN and IDLE: `git status --porcelain` empty with every intended change committed, AND no Git operation in progress (`git rev-parse --git-path rebase-merge` / `rebase-apply`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`). A packet returned mid-rebase or mid-cherry-pick can print empty porcelain; the cycle refuses it either way." },
     artifactDir: { type: "string", description: "Absolute path of this cycle's unique artifact directory — REQUIRED every pass: round 1 creates it (outside the worktree) and reports it, later passes echo the directory they were given. The result contract promises full round history reachable through it." },
@@ -486,7 +486,7 @@ const CYCLE_FLAKE_POLICY = `When a test fails in an area this branch did not tou
 // committed one would make this gate block the outcome the policy asks for,
 // on every required round and especially `light` mode's last one, and drive a
 // conforming cycle to its cap over a task file the policy told it not to write.
-const CYCLE_FLAKE_REVIEW = `A documented, evidenced UNRELATED test failure — reproduced on the base per the cycle's flake rule, with the diagnosis-only follow-up task that rule requires on record: either a NEW one committed on this branch, or the ACTIVE existing task the pass cited instead of duplicating or editing it — is NON-BLOCKING for you. The cited-task shape leaves nothing in this branch's diff by design, and you are not shown the pass's own flake record, so verify the citation where you CAN see it: grep the repository's task folder for an ACTIVE task naming the suite that failed in your own run — the flake rule puts that name in the task TITLE for exactly this reason — rather than expecting a new file in the diff. Any failure this branch plausibly caused, and any reproduction attempt recorded as inconclusive, stays blocking.`;
+const CYCLE_FLAKE_REVIEW = `A documented, evidenced UNRELATED test failure — reproduced on the base per the cycle's flake rule, with the diagnosis-only follow-up task that rule requires on record: either a NEW one committed on this branch, or the ACTIVE existing task the pass cited instead of duplicating or editing it — is NON-BLOCKING for you once you have SEEN that task. The cited-task shape leaves nothing in this branch's diff by design, and you are not shown the pass's own flake record, so verify the citation where you CAN see it: grep the repository's task folder for an ACTIVE task naming the suite that failed in your own run — the flake rule puts that name in the task TITLE for exactly this reason — rather than expecting a new file in the diff; a failure you can tie to no such task is not documented, and stays blocking. So does any failure this branch plausibly caused, and any reproduction attempt recorded as inconclusive.`;
 
 // Which validation tier a pass owes, decided by position: an intermediate pass
 // owes the ROUND tier (the cheapest signal covering what it changed), while any
@@ -1113,9 +1113,14 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     no later reviewer round exists to carry it in `reviewerNotes`. Where the
 //     record was a post-run COMMIT — the delivery gate's one tolerated one —
 //     `range` names it and `verified` is what the diff check found in it; both
-//     are EMPTY where the evidence cited an already-active task and the pass
-//     therefore committed nothing, which is the discriminator a consumer
-//     rendering the record reads),
+//     are EMPTY on the other three conclusions, where this field names no
+//     commit of its OWN — the terminal check's pass committed nothing (the
+//     flake rule's cited-active-task outcome), the light conclusion's commits
+//     were seen by the round that just passed, and the close-out's ride in the
+//     `closeOut.range` this same result carries. So the discriminator a
+//     consumer rendering the record reads is exactly that, and no more:
+//     whether `recordOnly` names an unreviewed post-run commit, never why it
+//     does not),
 //   flakeHistory (present once ANY pass reported a `flakeRecord`, and on every
 //     exit including the stopped ones, since it is a log rather than a claim
 //     about the conclusion: one { pass, note } entry per pass that reported
@@ -1236,6 +1241,57 @@ async function runReviewCycle(cycle) {
       schema: CYCLE_FIX_SCHEMA,
     });
     if (!fix) return result("error", `fixer returned nothing on pass ${fixerPasses}`);
+
+    // The evidenced-unrelated delivery-run failure THIS pass reported, if any.
+    // Read and LOGGED here — above every error return below, and above the
+    // conclusions further down — because `flakeHistory` promises one entry per
+    // reporting pass on EVERY exit, and the stopped exits are not the exception
+    // to that: a packet that reports a failed validation run and THEN blocks,
+    // or comes back from a worktree that is not clean and idle, or names an
+    // artifact directory the cycle refuses, is precisely the run whose failure
+    // the maintainer is owed, and reading the field after those returns would
+    // drop it. Only a pass that returned NOTHING has no record to read; every
+    // return from here on carries this pass's.
+    //
+    // It buys no exit and skips no round — every conclusion below is decided
+    // exactly as it would be without it — but the gate that admits a FAILED
+    // delivery run admits it only on the promise that the failure reaches the
+    // maintainer, and these conclusions are the ones no later reviewer round
+    // follows. So `flakeCarried` rides on all FOUR of them — the terminal
+    // check, the trivial-round close-out, the record-only close (where it rides
+    // inside that exit's own richer record), and the light-mode exit — and on
+    // those only: an `error` or `review-cap` exit publishes nothing on the
+    // strength of that admission and hands the maintainer the stopped run
+    // itself (which still carries `flakeHistory`, a log rather than a published
+    // claim).
+    // The terminal check is not the exotic case there but the common one: the
+    // flake rule tells a pass whose evidence matches an ALREADY-ACTIVE task to
+    // cite that task rather than edit it, which leaves nothing to commit, so
+    // the pass returns `changed: false` with nothing disposed — by following
+    // the contract exactly — and would otherwise conclude the cycle carrying
+    // no record at all.
+    //
+    // A self-report is safe here for the very reason it is refused on the
+    // record-only exit below: that one BUYS something (a skipped round), so it
+    // is judged on the diff; this one buys nothing and only ever adds a caveat
+    // to the maintainer's copy. Read from `fix`, never accumulated: every pass
+    // that can CONCLUDE the cycle is a delivery-tier pass, which is what makes
+    // the consumers' heading about a failed delivery run true of the concluding
+    // pass's record and of no other — an earlier pass's is a wrong answer under
+    // it where an absent one is merely no answer.
+    //
+    // That is a rule about what may be PUBLISHED as this conclusion's, not a
+    // licence to lose the earlier record. Every pass's rides in `flakeHistory`,
+    // on every exit, so an intermediate pass's failure still reaches the
+    // maintainer once a later pass concludes clean — which it otherwise would
+    // not, the flake rule's cited-active-task outcome having committed nothing
+    // for the diff to show either. The two carriers answer different questions
+    // and neither substitutes for the other; nor does either reach the reviewer,
+    // whose brief renders no flake record at all.
+    const flakeNote = typeof fix.flakeRecord === "string" ? fix.flakeRecord.trim() : "";
+    if (flakeNote) flakeHistory.push({ pass: fixerPasses, note: flakeNote });
+    const flakeCarried = flakeNote ? { recordOnly: { pass: fixerPasses, range: "", verified: "", note: flakeNote } } : {};
+
     if (fix.blocker) return result("error", `fixer blocked on pass ${fixerPasses}: ${fix.blocker}`);
     // Packet hard-check: a packet is adopted only from a worktree that is both
     // clean AND idle. Never silently — the pass is redriven or resumed instead,
@@ -1350,45 +1406,6 @@ async function runReviewCycle(cycle) {
     if (typeof fix.summary === "string" && fix.summary) packet.summary = fix.summary;
     if (typeof fix.proactive === "string" && fix.proactive) packet.proactive = fix.proactive;
     if (typeof fix.finalSha === "string" && fix.finalSha) packet.finalSha = fix.finalSha;
-
-    // The evidenced-unrelated delivery-run failure THIS pass reported, if any.
-    // It buys no exit and skips no round — every conclusion below is decided
-    // exactly as it would be without it — but the gate that admits a FAILED
-    // delivery run admits it only on the promise that the failure reaches the
-    // maintainer, and these conclusions are the ones no later reviewer round
-    // follows. So it rides on all FOUR of them — the terminal check, the
-    // trivial-round close-out, the record-only close (where it rides inside
-    // that exit's own richer record), and the light-mode exit — and on those
-    // only: an `error` or `review-cap` exit publishes nothing on the strength
-    // of that admission and hands the maintainer the stopped run itself (which
-    // still carries `flakeHistory`, a log rather than a published claim).
-    // The terminal check is not the exotic case there but the common one: the
-    // flake rule tells a pass whose evidence matches an ALREADY-ACTIVE task to
-    // cite that task rather than edit it, which leaves nothing to commit, so
-    // the pass returns `changed: false` with nothing disposed — by following
-    // the contract exactly — and would otherwise conclude the cycle carrying
-    // no record at all.
-    //
-    // A self-report is safe here for the very reason it is refused on the
-    // record-only exit below: that one BUYS something (a skipped round), so it
-    // is judged on the diff; this one buys nothing and only ever adds a caveat
-    // to the maintainer's copy. Read from `fix`, never accumulated: every pass
-    // that can CONCLUDE the cycle is a delivery-tier pass, which is what makes
-    // the consumers' heading about a failed delivery run true of the concluding
-    // pass's record and of no other — an earlier pass's is a wrong answer under
-    // it where an absent one is merely no answer.
-    //
-    // That is a rule about what may be PUBLISHED as this conclusion's, not a
-    // licence to lose the earlier record. Every pass's rides in `flakeHistory`,
-    // on every exit, so an intermediate pass's failure still reaches the
-    // maintainer once a later pass concludes clean — which it otherwise would
-    // not, the flake rule's cited-active-task outcome having committed nothing
-    // for the diff to show either. The two carriers answer different questions
-    // and neither substitutes for the other; nor does either reach the reviewer,
-    // whose brief renders no flake record at all.
-    const flakeNote = typeof fix.flakeRecord === "string" ? fix.flakeRecord.trim() : "";
-    if (flakeNote) flakeHistory.push({ pass: fixerPasses, note: flakeNote });
-    const flakeCarried = flakeNote ? { recordOnly: { pass: fixerPasses, range: "", verified: "", note: flakeNote } } : {};
 
     // Disposition coverage: every handed finding must be validly disposed by
     // id. Anything uncovered gates the round below and is carried forward.
@@ -1875,10 +1892,15 @@ const peerOff = structured
 // discretion the caller never asked for and only ever named a branch.
 //
 // What the rule costs, stated because it is a BEHAVIOR CHANGE from the `\b`
-// regex it replaced, and every part of it fails CLOSED: the spaced `close out`
-// and the assigned `close-out=on` no longer grant — the documented spelling is
-// the bare token — and neither does `close-out=off`, which the old regex read
-// as a grant, turning an explicit refusal into the very grant it refused.
+// regex it replaced, and every part of it fails CLOSED: the spaced `close out`,
+// the unhyphenated `closeout`, and the assigned `close-out=on` no longer grant
+// — the documented spelling is the bare HYPHENATED token, the only one the
+// "Recognized tokens" line above, both SKILL mirrors' Arguments line, and the
+// task behind this rule name — and neither does `close-out=off`, which the old
+// regex read as a grant, turning an explicit refusal into the very grant it
+// refused. An alias no enumeration of the tokens mentions is a discretion
+// nobody asked for and nobody could have asked for: the scope agent, not told
+// the spelling is reserved, folds it into the TARGET.
 // What the rule does NOT close, and cannot: a target that IS the bare token, or
 // names it as its own word — `review branch close-out`, `review the close-out
 // section`, a branch named `light`. One prose string carries both the reserved
@@ -1891,7 +1913,7 @@ const argTokens = new Set(lowerArgs.split(/\s+/).map((t) => t.replace(/^[^a-z0-9
 const lightMode = structured ? args.mode === "light" : argTokens.has("light");
 // The trivial-round close-out is granted, never assumed: absent this flag the
 // cycle re-reviews every fix, exactly as before.
-const closeOutMode = structured ? args.closeOut === "on" : argTokens.has("close-out") || argTokens.has("closeout");
+const closeOutMode = structured ? args.closeOut === "on" : argTokens.has("close-out");
 let requestedRounds = structured ? args.maxRounds : null;
 if (!structured) {
   const m = lowerArgs.match(/\bmax[\s-]*rounds\s*[=:]\s*(-?\d+(?:\.\d+)?)\b/);
