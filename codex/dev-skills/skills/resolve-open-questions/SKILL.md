@@ -277,6 +277,13 @@ In **pointed mode** for review work, re-derive these: for each PR read its commi
 - One **git worktree per owning branch** (see the `address-reviews` skill's Session Bootstrap and
   isolation model). A coupled fix + sibling-analog may span two branches: each lands on **the
   branch that owns that code**; never split one atomic change across two worktrees.
+
+  **Re-homing an orphaned finding.** A long session outlives its own PRs: a maintainer merges an in-scope PR mid-run while non-blocking items on it are still open, so the file the finding concerns now lives on `main` and the branch that carried it is gone. The item still deserves to land — it just needs a different host, chosen by these rules:
+
+  1. **Match by code ownership.** Host it on the open PR that already touches that file or subsystem. When no open PR does, do **not** stretch an unrelated PR's scope to carry it: fall back to the skill's ordinary deferral — a committed queued follow-up task under **"When decisions live in task files (the `tasks/` convention)"** above, which is where a postponed item lands anyway.
+  2. **Rebase first, onto the host's own base ref.** Before applying the fix, bring the host branch forward so the finding's file — now on `main` — is actually present on it; otherwise the fix re-introduces or conflicts with merged content. Rebase onto the **host PR's actual base ref**, not onto the merge target by default: a host stacked on another open PR, rebased straight onto `main`, replays its parent's commits into its own diff, especially once the parent's merge rewrote their SHAs. **Fetch that base ref first and pin every rebase to an explicit commit that already contains the merge** — `rebase-stack` deliberately never fetches, so a local `main` still pointing before the merge lets the rebase succeed with the finding's file still absent, which is exactly the stale geometry this rule exists to prevent. For a stacked host, restack in the topological order the `address-reviews` and `rebase-stack` skills define (task 021's ordering rule, in the repos that track these skills' tasks) — parent onto its true base first, then the host onto the parent's new tip — rather than skipping to the merge target.
+  3. **State provenance, and split the publication between the two PRs.** Name the merged PR the finding came from in the commit message, and in the thread reply whenever the original thread still exists, so the host PR's reviewer can tell why an out-of-scope-looking hunk is there. That reply is the **only** action aimed at the merged source PR; the push, the Summary comment, and any reviewer ping below target the open PR(s) whose diff actually changed — the **host**, plus a stacked host's rebased parent, published parent-first as the publish bullet says. A ping on the merged PR summons no review of the new commit, and the host PR's reviewers never learn there is something to look at.
+  4. **Mid-run merge checkpoint.** When a batch discovers that an in-scope PR was merged mid-session, re-derive that PR's state and merge commit from the API *before* triaging its leftovers — never triage from the session's earlier snapshot, which is exactly the state the merge invalidated.
 - Delegate the implementation to a fresh subagent with the worktree contract, the task-file spec,
   and the decided option. Require: real **tests** (deterministic, clock-injected where the bug is a
   race — they verify the fix even when the production trigger is dormant), validation on an
@@ -298,7 +305,7 @@ In **pointed mode** for review work, re-derive these: for each PR read its commi
 - **Publish** each passing change *only after the maintainer confirms the push* — this interactive
   skill never pushes or edits review threads unprompted (a one-line "publish these fixes now?"
   question, pre-answered by a `push`/`ping-*` flag): these are commits *on top of* an already-pushed
-  tip, so the push is a normal **fast-forward** (not a lease rewrite). Then post a **follow-up reply
+  tip, so the push is a normal **fast-forward** (not a lease rewrite) — except a branch that re-homing rule 2 rebased (the host, and for a stacked host its parent), whose already-pushed commits that rebase rewrote: those publish with an exact expected-OID lease exactly as `address-review`'s push step defines, never a bare `--force`, and a rebased parent publishes before the host — until it does, the host's PR diff shows the parent's replayed commits. Then post a **follow-up reply
   on the now-implemented thread** ("now implemented in `<sha>`" — append "task moved to
   `tasks/done/`" only when the commit actually archived it; a partially-satisfied task stays in
   `tasks/` and its thread is left as it stands — do **not** reopen a thread a prior run already
@@ -369,7 +376,7 @@ file; preserve that target while applying the source-agnostic hygiene.
       end early — on which, finish + persist the current item, then stop with a resume-ready ledger.
 - [ ] Adjacent-invariant audit run whenever a resolution relies on/introduces one; findings reported
       before implementing.
-- [ ] Code-writing decisions verified (tests, build, isolated validation) through a scoped `review-cycle` on each applied decision's diff, with only disputed judgment calls surfaced for the maintainer's judgment; review-case fix-now items additionally use a worktree per owning branch and **fast-forward** publish (thread reply, Summary, re-ping), with no atomic change split across branches.
+- [ ] Code-writing decisions verified (tests, build, isolated validation) through a scoped `review-cycle` on each applied decision's diff, with only disputed judgment calls surfaced for the maintainer's judgment; review-case fix-now items additionally use a worktree per owning branch and **fast-forward** publish (thread reply, Summary, re-ping) — an exact expected-OID lease only where re-homing rule 2 rebased a branch (the host, and for a stacked host its parent, published parent-first) — with no atomic change split across branches.
 - [ ] Decisions recorded under the `tasks/` convention follow **"When decisions live in task files
       (the `tasks/` convention)"**; review-case follow-up-task items preserve the file their resolved
       thread already points at.
