@@ -53,7 +53,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 91;
+const CHECKS_PER_LEG = 92;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -886,6 +886,18 @@ for (const name of WORKFLOWS) {
     // the pass's account and the other the independent check's.
     const noted = await run(src, { fixes: [PASS_PACKET, confirmRecordOnlyNoting], reviews: [OK], cycle: { maxRounds: 3 } });
     check("the record carries the pass's own note of what the run surfaced, distinct from the check's line", !!noted.res.recordOnly && noted.res.recordOnly.note === FLAKE_NOTE && noted.res.recordOnly.verified !== noted.res.recordOnly.note, JSON.stringify(noted.res.recordOnly));
+
+    // The other half of "the pass's OWN note", and the half a single fixture
+    // cannot see: the packet the cycle accumulates keeps an earlier pass's
+    // `summary` when a later one comes back empty, so a record reading THAT
+    // would publish a round-1 implementation summary under a heading about a
+    // failed delivery run. Empty is thin; an earlier pass's account is wrong.
+    // Together with the check above, this pins the record to `fix.summary`:
+    // one fails if a populated own-summary stops reaching the note, the other
+    // if an empty one starts falling back.
+    const EARLIER_SUMMARY = "round 1: implemented the adapter and wired the config";
+    const silent = await run(src, { fixes: [{ ...PASS_PACKET, summary: EARLIER_SUMMARY }, { ...confirmRecordOnly, summary: "" }], reviews: [OK], cycle: { maxRounds: 3 } });
+    check("a confirming pass that reports no summary leaves the note empty rather than republishing an earlier pass's", !!silent.res.recordOnly && silent.res.recordOnly.note === "", JSON.stringify(silent.res.recordOnly));
 
     // The check's own veto, the close-out's rule in its own words: the range is
     // the licence, and anything beyond the record in it buys the normal round.

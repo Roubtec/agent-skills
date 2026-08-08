@@ -1705,7 +1705,12 @@ async function runReviewCycle(cycle) {
     // reachable on the very path item 1 names as the tolerated one. `verified`
     // stays the independent check's line about the diff and `note` is the
     // pass's own account; they are not interchangeable, and the check never
-    // sees the note.
+    // sees the note. `note` reads THIS pass's `summary`, not the accumulated
+    // `packet.summary`: the accumulator deliberately keeps an earlier pass's
+    // value when a later one comes back empty, which is right for the result's
+    // `notes` and wrong here — under a heading about a failed delivery run, a
+    // round-1 summary of the implementation is a wrong answer where an empty
+    // one is merely a thin one.
     if (confirming && fix.changed && passBase && (fix.dispositions || []).length === 0 && deviationSetChanges === 0) {
       const record = await agent(cycleRecordOnlyPrompt(cycle, { passBase }), {
         label: `${lp}record#${fixerPasses}`,
@@ -1714,7 +1719,7 @@ async function runReviewCycle(cycle) {
       });
       if (record && record.recordOnly === true) {
         return result("pass", "reviewer passed; the final confirmation pass committed only the unrelated-flake record, which its delivery-tier pass survives", {
-          recordOnly: { pass: fixerPasses, range: `${passBase}..${fix.finalSha || "HEAD"}`, verified: record.why || "", note: packet.summary || "" },
+          recordOnly: { pass: fixerPasses, range: `${passBase}..${fix.finalSha || "HEAD"}`, verified: record.why || "", note: fix.summary || "" },
         });
       }
       log(`fixer pass ${fixerPasses} changed the tree with nothing to dispose; the record-only check ${record ? "found more than the flake record" : "returned nothing"}, so the normal reviewer round runs.`);
