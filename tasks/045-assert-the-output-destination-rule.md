@@ -11,6 +11,7 @@ Included:
 - **The assertion**, over the prompt paths the suite already renders, that a brief ordering a build or validation names a destination for redirected output.
 - **The design fork it must resolve, stated rather than assumed.** The existing PRESENCE check works by exact containment of a boundary constant *declared in the prompt's own file*. The destination text is not one constant: `CYCLE_REDIRECTED_OUTPUT` covers only the `review-cycle-core` briefs, while `resolveCollisionsPrompt`, `gatherPrompt` and the skill sites carry bespoke per-site wording — deliberately, because the safe destination differs by whether the role commits from the tree it would write into. So the check must first decide *which* rendered prompts order a build, and both obvious routes are compromised: deriving it from the rendered prose is exactly what the suite's header rejects ("nothing is re-derived from prose"), while hardcoding the list of build-ordering builders reintroduces the failure mode this task exists to close — a new builder absent from the list is silently missed. Pick a route with that tension acknowledged; do not treat this as a cheap fourth check.
 - **A candidate third shape, offered not mandated:** make the destination a per-file constant in the `DESTROY_BOUNDARY` mould, so presence becomes exact containment again. The cost is that today's per-role wording must collapse into a small set of constants, which may not survive the roles' genuinely different safe destinations.
+- **The prose skill briefs, which nothing renders.** 017's destination clauses also live in Markdown `SKILL.md` briefs across both mirrors — `address-review`'s Fixer contract, the batch skills' implementer and reviewer templates, and their siblings; enumerate them by grepping for the shared-scratchpad warning, not from any list here — and several of 017's missed rounds were exactly such files, so an assertion over the rendered workflow prompts alone leaves a deleted prose clause green. There is no builder to render there: the file text is the brief, so the prose assertion is necessarily a deletion guard — a stable anchor of each shipped clause must remain present in its file, in both mirrors — and it cannot discover a *new* prose brief the way call-site accounting discovers a new builder. State that asymmetry in the suite header and README rather than implying prose parity with the rendered checks.
 - **A cross-reference at the `review-cycle` Fixer contract.** Its "commit/validation instructions" line reads as uncovered; the Artifacts all-roles rule ~93 lines below actually covers it, and PR #47 confirmed that by rendering. Point the first at the second so the next derivation does not re-raise it — a pointer, never a restatement, per 043.
 
 Out of scope: changing any destination wording that shipped with 017; extending the rule to artifacts other than redirected build/validation output; and any re-litigation of 017's per-role destination choices, which were reviewed and are settled.
@@ -27,15 +28,17 @@ Out of scope: changing any destination wording that shipped with 017; extending 
 - `scripts/test-subagent-destroy-boundary.mjs`
 - `README.md` — the paragraph listing the suite's failure conditions
 - `plugins/dev-skills/skills/review-cycle/SKILL.md` and `codex/dev-skills/skills/review-cycle/SKILL.md` — the Fixer-contract cross-reference, both mirrors in lockstep
+- The `SKILL.md` mirror pairs carrying 017's destination clauses — read as assertion inputs; this task does not modify them
 
 ## Implementation notes
 
-Reuse the existing declaration-prefix and `new Function` harness and the prompt paths it already renders; this needs no new rendering machinery, only a second assertion over the same renders. If the suite's remit widens, say so in both its header comment and README's entry rather than letting the code and the documented contract drift. Keep the two skill mirrors byte-identical in the added clause and confirm the pair's divergence count is unchanged.
+Reuse the existing declaration-prefix and `new Function` harness and the prompt paths it already renders; the rendered side needs no new rendering machinery, only a second assertion over the same renders, and the prose side needs only file reads — there is nothing to render. If the suite's remit widens, say so in both its header comment and README's entry rather than letting the code and the documented contract drift. Keep the two skill mirrors byte-identical in the added clause and confirm the pair's divergence count is unchanged.
 
 ## Acceptance criteria
 
 - Every rendered prompt that orders a build or validation is asserted to name a destination, and the mechanism for deciding "orders a build" is stated in the source together with what it does and does not catch.
-- Removing a shipped destination clause from any one brief makes the suite fail — demonstrated by actually doing it, not asserted.
+- Every shipped prose brief carrying a 017 destination clause is deletion-guarded in both mirrors, and the suite header and README state that prose briefs are guarded against deletion but not discovered.
+- Removing a shipped destination clause from any one brief — a rendered workflow prompt or a Markdown skill brief, in either mirror — makes the suite fail, demonstrated by actually doing it, not asserted.
 - README's enumeration of the suite's failure conditions matches what the suite now checks.
 - The `review-cycle` Fixer contract points at the Artifacts all-roles rule in both mirrors, with that pair's divergence count unchanged.
 
