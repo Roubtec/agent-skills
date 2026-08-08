@@ -44,7 +44,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 57;
+const CHECKS_PER_LEG = 63;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -247,9 +247,12 @@ const confirmRetireAgain = {
 // this one is a pass that has stopped restating it — the claimed drop.
 const DEV = "delivered a stub adapter instead of the locked one (upstream API absent)";
 const deviate = { ...PASS_PACKET, deviations: [DEV] };
-// A confirmation-shaped pass (nothing changed, nothing disposed) that RESTATES
-// the deviation. `idle` is the same pass DROPPING it, since `PASS_PACKET`
-// carries `deviations: []`.
+// A confirmation-shaped pass (nothing changed, nothing disposed) that STATES
+// the deviation. Which move that is depends only on what preceded it: after
+// `deviate` it RESTATES, after a deviation-free pass it ADDS one no round has
+// seen. `idle` is the same pass DROPPING it, since `PASS_PACKET` carries
+// `deviations: []`. One packet covers all three because the rule under test is
+// one rule — whether the pass moved the set — not three cases.
 const confirmDeviate = { ...idle, deviations: [DEV] };
 
 async function run(src, { fixes, reviews, cycle }) {
@@ -610,11 +613,16 @@ for (const name of WORKFLOWS) {
   //     the loop may not make in a log line.
   //
   //     A retirement claim rides IN `dispositions`, so it can never reach the
-  //     terminal check; a drop is an OMISSION, so it would, and the check takes
-  //     the open claim as its own reason to run one more round. That is what
-  //     makes the two claim kinds converge alike rather than leaving the drop
-  //     unadjudicated on the cycle's ordinary exit.
-  await scenario("24. a dropped deviation needs a passing round", async () => {
+  //     terminal check; a MOVE OF THE DEVIATION SET rides in neither, so it
+  //     would, and the check takes the open move as its own reason to run one
+  //     more round. That is what makes the claim kinds converge alike rather
+  //     than leaving one unadjudicated on the cycle's ordinary exit.
+  //
+  //     The rule is one question — did this pass move the set — so both
+  //     directions are pinned here: a drop takes a deviation off the
+  //     maintainer's list unverified, an add puts one on it carrying only the
+  //     implementer's half of the protocol.
+  await scenario("24. a confirmation pass that moves the deviation set needs a round", async () => {
     const dropped = await run(src, { fixes: [deviate, idle, idle], reviews: [OK, OK] });
     check("a drop claimed on the terminal confirmation pass earns a round", dropped.seen.reviewPrompts.length === 2 && /no longer restates/.test(dropped.seen.reviewPrompts[1] || "") && (dropped.seen.reviewPrompts[1] || "").includes(DEV), `${dropped.seen.reviewPrompts.length} review prompt(s)`);
     check("the round that passes over it clears the deviation", dropped.res.verdict === "pass" && (dropped.res.deviations || []).length === 0, `${dropped.res.verdict}/${JSON.stringify(dropped.res.deviations)}`);
@@ -650,6 +658,31 @@ for (const name of WORKFLOWS) {
     });
     check("a claim no round passed is re-presented to the next one", /no longer restates/.test(rejected.seen.reviewPrompts[2] || ""), "round-3 review prompt");
     check("a rejected drop leaves the deviation standing at the cap", rejected.res.verdict === "review-cap" && JSON.stringify(rejected.res.deviations) === JSON.stringify([DEV]), `${rejected.res.verdict}/${JSON.stringify(rejected.res.deviations)}`);
+
+    // The SAME rule in the other direction. A deviation first stated on the
+    // confirmation pass is the mirror of a drop: the set moves, and no round
+    // has seen the move. It matters because the protocol has two halves — the
+    // implementer states the deviation and the constraint that forced it, the
+    // Reviewer adds whether an in-spec route existed and a RATIFY/CONFORM
+    // recommendation — and the maintainer reads this deviation at the top of
+    // the summary either way. Terminating here would hand it over carrying the
+    // implementer's half alone.
+    //
+    // Nor does reaching it take a misbehaving fixer: a pass is told to REPORT a
+    // deviation rather than correct it, and a deviation is not a finding, so a
+    // confirmation pass that first recognizes one returns exactly this packet
+    // — nothing changed, nothing disposed — by following the contract.
+    const added = await run(src, { fixes: [PASS_PACKET, confirmDeviate, confirmDeviate], reviews: [OK, OK] });
+    check("a deviation first stated on the confirmation pass earns a round", added.seen.reviewPrompts.length === 2 && (added.seen.reviewPrompts[1] || "").includes(DEV), `${added.seen.reviewPrompts.length} review prompt(s)`);
+    check("the round it earns is asked for the Reviewer's half of the protocol", /in-spec route existed/.test(added.seen.reviewPrompts[1] || "") && /RATIFY or CONFORM/.test(added.seen.reviewPrompts[1] || ""), "round-2 review prompt");
+    check("an ADD is not presented as a drop", !/no longer restates/.test(added.seen.reviewPrompts[1] || ""), "round-2 review prompt");
+    check("and the reviewed deviation ships as the final state", added.res.verdict === "pass" && JSON.stringify(added.res.deviations) === JSON.stringify([DEV]), `${added.res.verdict}/${JSON.stringify(added.res.deviations)}`);
+
+    // At the cap the move exits `review-cap` naming itself, exactly as a drop
+    // does — the deviation still standing, never silently passed off as judged.
+    const addedAtCap = await run(src, { fixes: [PASS_PACKET, confirmDeviate], reviews: [OK], cycle: { maxRounds: 1 } });
+    check("an add the cap leaves unreviewed exits review-cap, deviation standing", addedAtCap.res.verdict === "review-cap" && JSON.stringify(addedAtCap.res.deviations) === JSON.stringify([DEV]), `${addedAtCap.res.verdict}/${JSON.stringify(addedAtCap.res.deviations)}`);
+    check("and the cap exit's note names the deviation-set move", /newly stated deviation/.test(((addedAtCap.res.outstanding || {}).note) || ""), JSON.stringify(addedAtCap.res.outstanding || {}));
   });
 
   const ran = legOk + legFail;

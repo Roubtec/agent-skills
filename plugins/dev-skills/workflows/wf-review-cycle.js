@@ -894,9 +894,13 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 // `deviationHistory` — named as history — is where the rounds live. Dropping
 // one is a CLAIM a round must pass over, exactly like a retirement: until then
 // it keeps standing in `deviations` (the claims still open are `deviations`
-// minus the last `deviationHistory` entry), and a claim the final confirmation
-// pass makes holds the cycle open for the round that decides it rather than
-// ending it undecided. So a `pass` verdict carries no open claim; an open one
+// minus the last `deviationHistory` entry), and ANY move the final
+// confirmation pass makes to this set — dropping one, or first stating one —
+// holds the cycle open for the round that decides it rather than ending it
+// undecided, so no deviation reaches the maintainer without the reviewer's
+// in-spec-route judgment and RATIFY/CONFORM recommendation on it, and none is
+// taken away without a round accepting that it no longer stands. So a `pass`
+// verdict carries no open claim; an open one
 // is what an `error` or `review-cap` exit leaves behind, neither having reached
 // the round that would have settled it. A consumer publishing a PR comment or
 // summary from this result leads with `deviations`; they are the maintainer's
@@ -1052,6 +1056,14 @@ async function runReviewCycle(cycle) {
     // `deviations` is the set this pass was shown, so what it left out is
     // exactly the claim set: a drop the pass restates after all is withdrawn.
     pendingDeviationDrops = deviations.filter((d) => !restated.includes(d));
+    // Adding one is the same event in the other direction — a deviation no
+    // round has been shown — so both count as ONE quantity: whether this pass
+    // moved the deviation set. That keeps the terminal check below a single
+    // question instead of a rule that gates drops and lets adds through. No
+    // carry-forward is needed: `confirming` is set only after a round PASSED,
+    // and that round was shown every deviation standing before this pass, so a
+    // pass's own adds are the only ones that can still be unadjudicated.
+    const deviationSetChanges = pendingDeviationDrops.length + restated.filter((d) => !deviations.includes(d)).length;
     deviationHistory.push({ pass: fixerPasses, deviations: restated });
     deviations = [...restated, ...pendingDeviationDrops];
     // Accumulate the pass packet field-by-field. A later pass updates what it
@@ -1116,26 +1128,33 @@ async function runReviewCycle(cycle) {
     // the fixer's last pass disposed nothing new (and changed nothing that
     // would need a fresh review). Nothing left for a reviewer to look at.
     //
-    // A claimed deviation drop IS something left to look at. It is the one
-    // thing a pass takes off the maintainer's list by OMISSION rather than on a
-    // disposition — which is why a retirement claim can never reach this check
-    // (it rides in `dispositions`, so the array is not empty) while a drop
-    // otherwise would, ending the cycle with the claim unadjudicated. The
-    // conjunct gives the two claim kinds the same shape: the claim earns a
-    // round, a passing round promotes it, and the next confirmation pass —
-    // restating nothing, the drop now in effect — terminates here. One extra
-    // round, only where a confirmation pass genuinely closed a deviation, and
+    // A MOVE OF THE DEVIATION SET is something left to look at, in either
+    // direction. The set moves by OMISSION and by first mention rather than on
+    // a disposition — which is why a retirement claim can never reach this
+    // check (it rides in `dispositions`, so the array is not empty) while a
+    // deviation move otherwise would, ending the cycle with it unadjudicated.
+    // Dropping one takes it off the maintainer's list unverified; adding one
+    // puts it on that list carrying only the implementer's half of the
+    // protocol — no reviewer judgment of whether an in-spec route existed, no
+    // RATIFY/CONFORM recommendation. Adding one is not an exotic input either:
+    // a pass is told to REPORT a deviation rather than correct it, and a
+    // deviation is not a finding, so a confirmation pass that first recognizes
+    // one leaves `changed` false and `dispositions` empty by following the
+    // contract exactly. The conjunct gives every such claim the same shape: it
+    // earns a round, a passing round settles it, and the next confirmation
+    // pass — restating the set it was shown — terminates here. One extra
+    // round, only where a confirmation pass actually moved the set, and
     // bounded by the same cap check below.
-    if (confirming && !fix.changed && (fix.dispositions || []).length === 0 && pendingDeviationDrops.length === 0) {
+    if (confirming && !fix.changed && (fix.dispositions || []).length === 0 && deviationSetChanges === 0) {
       return result("pass", "reviewer passed; final confirmation pass disposed nothing new");
     }
 
     // Anything else needs a (re-)review — bounded by the cap. This check is
     // reachable at the cap only through a confirmation pass that produced new
-    // work: changed content, dispositions of its own, or a deviation drop it
-    // claimed and no round has adjudicated (a FAILED round at the cap returns
-    // below, before another fixer could run and leave never-reviewed changes
-    // behind).
+    // work: changed content, dispositions of its own, or a move it made to the
+    // deviation set — dropping one or first stating one — that no round has
+    // adjudicated (a FAILED round at the cap returns below, before another
+    // fixer could run and leave never-reviewed changes behind).
     //
     // Those dispositions can themselves breach a contract, and the retirement
     // guard binds on a pass handed nothing — so a confirmation pass that names
@@ -1147,7 +1166,7 @@ async function runReviewCycle(cycle) {
     if (rounds >= cap) {
       return result("review-cap", `hit the ${cap}-round cap without convergence`, {
         outstanding: {
-          note: "final confirmation pass produced work (content changes, dispositions of its own, or a deviation drop no round adjudicated) that could not be re-reviewed within the cap",
+          note: "final confirmation pass produced work (content changes, dispositions of its own, or a move to the deviation set — a drop, or a newly stated deviation — that no round adjudicated) that could not be re-reviewed within the cap",
           ...(undisposed.length ? { carried: undisposed } : {}),
         },
       });
