@@ -63,7 +63,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 101;
+const CHECKS_PER_LEG = 105;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -302,6 +302,10 @@ const closeOutEscalate = (findingId) => ({
 // The same offer on round 1, where there is no previous pass's SHA to judge a
 // close-out range against.
 const closeOutRound1 = { ...PASS_PACKET, dispositions: [], closeOutEdits: CLOSE_OUT_EDITS };
+
+// The same offer from a pass that also CLAIMS A RETIREMENT — the claim the
+// close-out's own conjunct must hold the cycle open for.
+const closeOutRetire = (findingId) => ({ ...retireOn(findingId), closeOutEdits: CLOSE_OUT_EDITS });
 
 // A confirmation pass that committed the unrelated-flake RECORD: it changed the
 // tree, disposed nothing, and moved no deviation, which is exactly the packet
@@ -955,6 +959,30 @@ for (const name of WORKFLOWS) {
     // And with the grant withheld the offer is inert, however it arrives.
     const ungranted = await run(src, { fixes: [PASS_PACKET, closeOutFix("r1-1"), idle], reviews: [FAIL("a wording nit"), OK] });
     check("an offer with no invoker grant is inert", ungranted.seen.closeOutPrompts.length === 0 && ungranted.seen.reviewPrompts.length === 2 && !ungranted.res.closeOut, `${ungranted.seen.closeOutPrompts.length} close-out check(s)`);
+
+    // The two claims scenario 24 and the retirement suite hold the TERMINAL
+    // check open for, made on a pass that also offers a close-out. Both are
+    // invisible to the diff check — a dropped deviation and a retirement claim
+    // ship as no hunk at all — so if this gate did not carry the same two
+    // conjuncts, a pass fixing two typos beside either one would conclude the
+    // cycle with the claim adjudicated by nobody. Neither is hypothetical: the
+    // close-out is offered on a passing-adjacent round, which is exactly where
+    // a pass settles the last open question or stops restating a deviation.
+    const movedDeviation = await run(src, {
+      fixes: [deviate, closeOutFix("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      cycle: { closeOut: "on" },
+    });
+    check("a deviation-set move forfeits the close-out for a normal round", movedDeviation.seen.closeOutPrompts.length === 0 && movedDeviation.seen.reviewPrompts.length === 2 && !movedDeviation.res.closeOut, `${movedDeviation.seen.closeOutPrompts.length} close-out check(s)/${movedDeviation.seen.reviewPrompts.length} review prompt(s)`);
+    check("and the round it buys is shown the claimed drop", /no longer restates/.test(movedDeviation.seen.reviewPrompts[1] || "") && (movedDeviation.seen.reviewPrompts[1] || "").includes(DEV), "round-2 review prompt");
+
+    const claimedRetirement = await run(src, {
+      fixes: [escalate, closeOutRetire("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      cycle: { closeOut: "on" },
+    });
+    check("a retirement claim forfeits the close-out for a normal round", claimedRetirement.seen.closeOutPrompts.length === 0 && claimedRetirement.seen.reviewPrompts.length === 2 && !claimedRetirement.res.closeOut, `${claimedRetirement.seen.closeOutPrompts.length} close-out check(s)/${claimedRetirement.seen.reviewPrompts.length} review prompt(s)`);
+    check("and the round it buys is the one that adjudicates the claim", /proposed for RETIREMENT/.test(claimedRetirement.seen.reviewPrompts[1] || "") && claimedRetirement.stateOf("q1") === "retired", `${claimedRetirement.stateOf("q1")}`);
   });
 
   // 27. The reviewer's build-first rule is conditioned on the tier the
