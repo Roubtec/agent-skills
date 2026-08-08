@@ -687,7 +687,7 @@ const CYCLE_REVIEW_SCHEMA = {
         properties: {
           deviation: { type: "string", description: "The deviation's text, copied VERBATIM from the list you were shown — the cycle matches it by exact text." },
           inSpecRoute: { type: "string", description: "Whether a route inside the locked decision existed, and which one — the first thing the maintainer's ratify-or-conform call needs." },
-          recommendation: { type: "string", description: "RATIFY or CONFORM, plus the one-line reason. You recommend; the maintainer decides." },
+          recommendation: { type: "string", description: "Your verdict as the FIRST word — RATIFY or CONFORM, the whole vocabulary — then the one-line reason. A hedge (`UNSURE`, `needs investigation`) is not a verdict and leaves the deviation unassessed, which does not pass the round. You recommend; the maintainer decides." },
         },
         required: ["deviation", "inSpecRoute", "recommendation"],
       },
@@ -695,6 +695,25 @@ const CYCLE_REVIEW_SCHEMA = {
   },
   required: ["pass", "issues"],
 };
+
+// The recommendation is a two-valued VERDICT carrying a reason, not free prose:
+// what reaches the maintainer is a ratify-or-conform list. Reading it as
+// present-or-absent left, one level down, the same hole the structural field
+// closed one level up — `UNSURE — needs investigation` is schema-valid and
+// trims to something non-empty, so it would count as the reviewer's half while
+// answering the only question that half exists to answer. So the verdict is
+// parsed, and must LEAD the string exactly as the schema and the brief ask.
+// Leading rather than merely occurring: a reason may legitimately name the
+// other verdict ("RATIFY — conforming would cost a release"), and a hedge that
+// mentions both has still chosen neither.
+const CYCLE_DEVIATION_VERDICTS = ["RATIFY", "CONFORM"];
+function cycleDeviationVerdict(recommendation) {
+  // Leading punctuation and emphasis are stripped, so `**RATIFY** — …` reads as
+  // the verdict it plainly is. A longer word that merely starts with one does
+  // not: the character after the verdict must not continue it.
+  const text = String(recommendation || "").trim().toUpperCase().replace(/^[^A-Z]+/, "");
+  return CYCLE_DEVIATION_VERDICTS.find((v) => text.startsWith(v) && !/[A-Z]/.test(text.charAt(v.length))) || "";
+}
 
 // Peer-stage result. `outcome` uses the peer-review-run vocabulary
 // (powbox.peer-review-run/v1) so the eventual helper swap changes the prompt,
@@ -941,7 +960,7 @@ function cycleReviewPrompt(cycle, state) {
   // round is gated on, one entry per deviation that still stands.
   const deviationDrops = Array.isArray(state.deviationDrops) ? state.deviationDrops : [];
   const deviationsBlock = Array.isArray(state.deviations) && state.deviations.length
-    ? `\n## Deviations from LOCKED decisions standing on this packet (verbatim)\n\nReturn ONE \`deviationAssessments\` entry for each of these the fixer still restates — every one below except the claimed drops you accept — copying its text VERBATIM into \`deviation\` and giving \`inSpecRoute\` (whether an in-spec route existed, and which) and \`recommendation\` (RATIFY or CONFORM, with the one-line reason). This round does not pass while one of them is unassessed: the maintainer decides, and would otherwise be handed the deviation with only the implementer's half of it. A deviation is neither a finding to be corrected away nor a license for unfinished work — grade completeness, tests, and regressions exactly as strictly.\n\n${JSON.stringify(state.deviations, null, 2)}\n${deviationDrops.length ? `\nOf those, the fixer no longer restates the ones below, CLAIMING each no longer stands. Verify that against the committed state exactly as you would a \`declined\`: passing this round is what drops them, so raise one you do not accept as an issue rather than letting it go — a drop you reject is assessed by the round after it, once the fixer restates it.\n\n${JSON.stringify(deviationDrops, null, 2)}\n` : ""}`
+    ? `\n## Deviations from LOCKED decisions standing on this packet (verbatim)\n\nReturn ONE \`deviationAssessments\` entry for each of these the fixer still restates — every one below except the claimed drops you accept — copying its text VERBATIM into \`deviation\` and giving \`inSpecRoute\` (whether an in-spec route existed, and which) and \`recommendation\` (START with ${CYCLE_DEVIATION_VERDICTS.join(" or ")} — those two verdicts are the whole vocabulary, and a hedge such as "UNSURE" is not one of them — then the one-line reason). This round does not pass while one of them is unassessed: the maintainer decides, and would otherwise be handed the deviation with only the implementer's half of it. A deviation is neither a finding to be corrected away nor a license for unfinished work — grade completeness, tests, and regressions exactly as strictly.\n\n${JSON.stringify(state.deviations, null, 2)}\n${deviationDrops.length ? `\nOf those, the fixer no longer restates the ones below, CLAIMING each no longer stands. Verify that against the committed state exactly as you would a \`declined\`: passing this round is what drops them, so raise one you do not accept as an issue rather than letting it go — a drop you reject is assessed by the round after it, once the fixer restates it.\n\n${JSON.stringify(deviationDrops, null, 2)}\n` : ""}`
     : "";
   // This brief orders a full build, so the reviewer needs a destination for the
   // build's output as much as for its own report — including on the pass that
@@ -1683,7 +1702,8 @@ async function runReviewCycle(cycle) {
 
     // Deviation coverage, the mirror of disposition coverage: every deviation
     // this pass says still STANDS must carry the reviewer's half — in-spec
-    // route and a ratify/conform recommendation — before a round may pass over
+    // route and a recommendation that actually reads as one of the two verdicts
+    // (`cycleDeviationVerdict`) — before a round may pass over
     // it. A claimed drop is exempt because passing the round is what removes
     // it; a drop the reviewer rejects raises an issue, which fails the round
     // and brings the deviation back to the next one for assessment.
@@ -1697,7 +1717,7 @@ async function runReviewCycle(cycle) {
     const assessments = Array.isArray(review.deviationAssessments) ? review.deviationAssessments : [];
     const assessed = new Set(
       assessments
-        .filter((a) => a && typeof a.deviation === "string" && String(a.inSpecRoute || "").trim() && String(a.recommendation || "").trim())
+        .filter((a) => a && typeof a.deviation === "string" && String(a.inSpecRoute || "").trim() && cycleDeviationVerdict(a.recommendation))
         .map((a) => a.deviation),
     );
     const unassessedDeviations = wouldPass ? restated.filter((d) => !assessed.has(d)) : [];
@@ -1709,7 +1729,7 @@ async function runReviewCycle(cycle) {
     const assessmentIssues = unassessedDeviations.map((d) => ({
       category: "criteria-gap",
       location: "locked-decision deviation standing on this packet",
-      problem: `This round's reviewer returned no \`deviationAssessments\` entry for a deviation that still stands: ${JSON.stringify(d)}. It would reach the maintainer carrying only the implementer's half of report-don't-correct — no judgment of whether an in-spec route existed, no RATIFY/CONFORM recommendation.`,
+      problem: `This round's reviewer returned no usable \`deviationAssessments\` entry for a deviation that still stands: ${JSON.stringify(d)} — either no entry at all, or one missing the in-spec-route judgment, or one whose \`recommendation\` does not lead with ${CYCLE_DEVIATION_VERDICTS.join(" or ")} (a hedge is not a verdict). It would reach the maintainer carrying only the implementer's half of report-don't-correct — no judgment of whether an in-spec route existed, no RATIFY/CONFORM recommendation.`,
       fix: "Do NOT conform, reword, or drop the deviation to clear this — report, don't correct: restate it VERBATIM as before. Decline this finding on that ground; the next fresh reviewer is asked for the missing assessment.",
     }));
 

@@ -44,7 +44,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 72;
+const CHECKS_PER_LEG = 73;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -754,6 +754,18 @@ for (const name of WORKFLOWS) {
       cycle: { maxRounds: 3 },
     });
     check("an entry with no recommendation does not count as an assessment", /This is fix-up round 2/.test(halfAssessed.seen.fixPrompts[1] || "") && halfAssessed.res.verdict === "pass", `${halfAssessed.res.verdict}/${halfAssessed.seen.reviewPrompts.length} review prompt(s)`);
+
+    // And neither does a recommendation that answers something else. The
+    // maintainer's list is a ratify-or-conform list, so a hedge is a
+    // filled-in field rather than the choice the field exists to record —
+    // exactly as unassessed as the blank above, and caught only because the
+    // gate parses the verdict rather than measuring the string's length.
+    const hedged = await run(src, {
+      fixes: [deviate, deviateDeclining("r1-1"), confirmDeviate],
+      reviews: [{ pass: true, issues: [], notes: "", deviationAssessments: [{ deviation: DEV, inSpecRoute: "none existed", recommendation: "UNSURE — needs investigation" }] }, OK_DEV],
+      cycle: { maxRounds: 3 },
+    });
+    check("a recommendation that is not RATIFY or CONFORM does not count either", /This is fix-up round 2/.test(hedged.seen.fixPrompts[1] || "") && hedged.res.verdict === "pass" && JSON.stringify(hedged.res.deviationAssessments) === JSON.stringify([ASSESS]), `${hedged.res.verdict}/${JSON.stringify(hedged.res.deviationAssessments)}`);
 
     // A deviation the pass CLAIMS no longer stands is exempt: passing the round
     // is what removes it, so demanding a ratify-or-conform recommendation on
