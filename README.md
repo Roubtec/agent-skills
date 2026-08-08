@@ -22,7 +22,7 @@ scripts/
   test-dc-helpers.sh                    # hermetic contract coverage for the disposable-clone helpers
   test-checkout-cleanliness-report.mjs  # regression coverage for the batch workflow's checkout report
   test-review-cycle-retirement.mjs      # behavior coverage for the review cycle's claim lifecycles (question retirement, locked-decision deviations)
-  test-subagent-destroy-boundary.mjs    # renders every workflow subagent prompt and asserts the destroy boundary is in it
+  test-subagent-destroy-boundary.mjs    # renders every workflow subagent prompt and asserts the destroy boundary is in it (and that no copy of it, or of the finish-in-turn rule, has drifted)
   verify-014-peer-strength-pin.md       # harness-neutral prompt: observe the peer step's pinned review strength (task 014)
 ```
 
@@ -94,7 +94,7 @@ Run `node scripts/test-checkout-cleanliness-report.mjs` after changing the batch
 
 Run `node scripts/test-review-cycle-retirement.mjs` after changing how the review cycle raises, retires, or serves open questions, or how it carries a locked-decision deviation — the two things a pass can claim off the maintainer's list, both of which need a round to pass over the claim — as does a deviation a pass first puts ON that list on its way out, which needs the reviewer's half of the protocol just as much; it drives the shipped `review-cycle-core` section of both workflows through scripted rounds.
 
-Run `node scripts/test-subagent-destroy-boundary.mjs` after changing any workflow prompt; it renders every brief the three workflows hand a spawned subagent — discovering the set from their own `agent()` call sites — and fails when one is missing the destroy boundary, when a newly added prompt builder has no rendered case, when a workflow is added to that directory without being given a cut marker, when a cut marker names a workflow that is no longer there, when the three out-of-section boundary constants have drifted apart, or when a workflow's own deputy copy of the finish-in-turn rule has drifted from the review cycle's.
+Run `node scripts/test-subagent-destroy-boundary.mjs` after changing any workflow prompt; it renders every brief the three workflows hand a spawned subagent — discovering the set from their own `agent()` call sites — and fails when one is missing the destroy boundary, when a newly added prompt builder has no rendered case, when a workflow is added to that directory without being given a cut marker, when a cut marker names a workflow that is no longer there, when the three out-of-section boundary constants have drifted apart, or when a workflow's own deputy copy of the finish-in-turn rule has drifted from the review cycle's — or is interpolated by its prompts without a declaration the check can read.
 
 Parse-check any changed dynamic workflow under `plugins/dev-skills/workflows/`. That check is not a `scripts/` suite: the command, and what a pass does and does not establish, live in `plugins/dev-skills/workflows/README.md`'s Validation section rather than here.
 

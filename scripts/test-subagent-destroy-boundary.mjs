@@ -443,16 +443,28 @@ if (missing.length || drifted.length) {
 // rules the moment one is edited, so the canonical text is read from
 // `wf-review-cycle.js` — the section's source — and every deputy copy must
 // match it exactly. A file declaring no deputy copy simply has no deputies;
-// that is not a failure. A file declaring one that no longer matches is.
+// that is not a failure. A file declaring one that no longer matches is — and
+// so is a file whose prompts interpolate `${DEPUTY_FINISH_IN_TURN}` while the
+// declaration pattern below finds nothing to compare, since "has no deputies"
+// and "declares its copy in a shape this check cannot read" are the same
+// silence otherwise, and the second one would exempt exactly the file the
+// check exists for. The `DESTROY_BOUNDARY` check above fails closed on a
+// missing declaration because every workflow must carry one; this one cannot,
+// so the interpolation is what says a declaration was owed.
 const rule = (file, name) =>
   (readFileSync(join(workflows, file), "utf8").match(new RegExp(`^const ${name} = ("(?:\\\\.|[^"\\\\])*");$`, "m")) || [])[1];
 const canonicalRule = rule("wf-review-cycle.js", "CYCLE_FINISH_IN_TURN");
-const deputyRules = shippedWorkflows()
-  .map((file) => [file, rule(file, "DEPUTY_FINISH_IN_TURN")])
-  .filter(([, text]) => text !== undefined);
+const deputyRuleReads = shippedWorkflows().map((file) => [file, rule(file, "DEPUTY_FINISH_IN_TURN")]);
+const deputyRules = deputyRuleReads.filter(([, text]) => text !== undefined);
+const unreadableDeputyRules = deputyRuleReads
+  .filter(([file, text]) => text === undefined && readFileSync(join(workflows, file), "utf8").includes("${DEPUTY_FINISH_IN_TURN}"))
+  .map(([file]) => file);
 if (!canonicalRule) {
   failures++;
   rows.push(["(all)", "FINISH_IN_TURN identity", "FAIL", "no top-level `const CYCLE_FINISH_IN_TURN` in wf-review-cycle.js"]);
+} else if (unreadableDeputyRules.length) {
+  failures++;
+  rows.push(["(all)", "FINISH_IN_TURN identity", "FAIL", `interpolates \`\${DEPUTY_FINISH_IN_TURN}\` but declares no readable top-level \`const DEPUTY_FINISH_IN_TURN = "…";\`: ${unreadableDeputyRules.join(", ")}`]);
 } else {
   const ruleDrifted = deputyRules.filter(([, text]) => text !== canonicalRule).map(([file]) => file);
   if (ruleDrifted.length) {
