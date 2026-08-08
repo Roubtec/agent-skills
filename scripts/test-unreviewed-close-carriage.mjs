@@ -80,7 +80,9 @@ const RECORD = { pass: 3, range: "aaaa..bbbb", verified: "only a new diagnosis-o
 // thing only — this record names no post-run commit of its own, which is true
 // of this outcome (nothing was committed) and equally of the light and
 // close-out conclusions (what they committed is accounted for elsewhere in the
-// result). Either way the note is then the whole record of the failure: there
+// result), and of a record `collisionReviewedRecord` has corrected below (a
+// fresh reviewer has since read the commit). Whichever of the four it is, the
+// note is then the whole record of the failure: there
 // is no commit for a consumer to point at, and still a failed delivery run the
 // maintainer must be told about.
 const CITED_NOTE = "the delivery run's only failure was the payments suite, which reproduces on the base; already queued as tasks/041-flaky-payments-suite.md, cited rather than re-filed";
