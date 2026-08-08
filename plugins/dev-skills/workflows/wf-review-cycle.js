@@ -38,9 +38,10 @@
  *   - mode          "full" (default) | "light" — light skips the final no-op
  *                   fixer confirmation pass (small mechanical changes only)
  *   - closeOut      "off" (default) | "on" — grants the trivial-round
- *                   close-out: a pass whose whole change is non-semantic may
- *                   conclude the cycle without another reviewer round, once a
- *                   cheap read-only check confirms that on the DIFF
+ *                   close-out: a pass that FIXED every finding it was handed
+ *                   and whose whole change is non-semantic may conclude the
+ *                   cycle without another reviewer round, once a cheap
+ *                   read-only check confirms that on the DIFF
  *
  * Consumption modes
  * -----------------
@@ -556,9 +557,9 @@ function cycleFixPrompt(cycle, state) {
   const artifactLine = `${artifactHome} ${CYCLE_REDIRECTED_OUTPUT}`;
   const tierLine = cycleValidationTier(cycle, state) === "delivery"
     ? `DELIVERY TIER — this pass can be the cycle's last, so validate the FINAL state with the full applicable sanity set: lint, typecheck, build, tests, whichever this repository has. The cycle may not conclude or publish on less, and nothing downstream re-runs it. Two bounded exceptions, and no others: a completed run whose ONLY failures carry the evidenced-unrelated disposition below counts as this pass, with those failures documented for the maintainer; and the pass survives that rule's record-only follow-up commit (the flake task file, plus any PR-body or summary note recording what this run surfaced). Any other change committed after the run voids the pass and reruns the tier — prose here carries behavior (a prompt's text, a config or contract expressed as text), and no later check exists to catch what a wider tolerance would admit.`
-    : `ROUND TIER — the cheapest signal that catches what YOU changed: typecheck/lint for ordinary code edits, targeted tests for touched behavior, and no build at all where this round's diff holds no executable change (comments, prose, docs). When in doubt about blast radius run more, not less, and always build a round touching build configuration, dependencies, or generated contracts. Intermediate pushes the assignment mandates for durability are not delivery events and never raise this tier. Say in \`summary\` what you actually ran: this round's reviewer is told the tier and will not block on a heavier suite it did not cover. If you offer a trivial-round close-out below you are offering to CONCLUDE the cycle, so run the delivery tier over the final state as well — the close-out skips the re-review, never this gate.`;
+    : `ROUND TIER — the cheapest signal that catches what YOU changed: typecheck/lint for ordinary code edits, targeted tests for touched behavior, and no build at all where this round's diff holds no executable change (comments, prose, docs). When in doubt about blast radius run more, not less, and always build a round touching build configuration, dependencies, or generated contracts. Intermediate pushes the assignment mandates for durability are not delivery events and never raise this tier. Say in \`summary\` what you actually ran: this round's reviewer is told the tier and will not block on a heavier suite it did not cover.`;
   const closeOutLine = cycle.closeOut === "on"
-    ? `\n- TRIVIAL-ROUND CLOSE-OUT is granted for this cycle (the invoker's bounded discretion, distinct from \`light\`): where the findings you just fixed were exclusively NON-SEMANTIC — wording, typos, comment phrasing, formatting; nothing touching behavior, logic, or the meaning of an acceptance criterion — list the edits you shipped in \`closeOutEdits\` and the cycle may conclude without another reviewer round. Every finding still gets its explicit disposition; the offer never swallows one. Offer it on the merits only: the license is judged on the DIFF, not on your list, so any executable or behavioral change in the same diff forfeits the close-out and buys a normal round.`
+    ? `\n- TRIVIAL-ROUND CLOSE-OUT is granted for this cycle (the invoker's bounded discretion, distinct from \`light\`): where this round's REMAINING findings are exclusively NON-SEMANTIC — wording, typos, comment phrasing, formatting; nothing touching behavior, logic, or the meaning of an acceptance criterion — and you FIXED every one of them, list the edits you shipped in \`closeOutEdits\` and the cycle may conclude without another reviewer round. Every finding still gets its explicit disposition; the offer never swallows one — and a \`declined\` or \`escalated\` disposition anywhere on this pass forfeits the offer outright, since that claim is the next fresh reviewer's to adjudicate and leaves NOTHING in the diff for the check below to see. Offer it on the merits only: the license is judged on the DIFF, not on your list, so any executable or behavioral change in the same diff forfeits the close-out and buys a normal round. Offering it is offering to CONCLUDE the cycle, so run the DELIVERY tier over the final state as well — the close-out skips the re-review, never that gate.`
     : "";
   return `You are the fixer for one review cycle (branch \`${cycle.branch}\`, review base \`${cycle.base}\`, artifact type ${cycle.artifactType}).
 
@@ -599,9 +600,14 @@ function cycleReviewChecks(artifactType, tier) {
   // The build-first rule applies AT the tier the orchestrator stated, not
   // unconditionally: told "round tier", a reviewer must not block on a suite
   // this round deliberately did not run; told nothing, it runs the full set.
-  const tierLine = tier === "delivery"
-    ? `the DELIVERY tier — the full applicable sanity set (lint, typecheck, build, tests, whichever this repository has), because the cycle concludes on this state`
-    : `the ROUND tier — the cheapest signal that catches what this round's diff changed (typecheck/lint for ordinary code edits, targeted tests for touched behavior, and no build at all where the diff holds no executable change), so do NOT block on a heavier suite this tier does not run`;
+  // Only the ROUND tier is opt-in, and the default is that way round on
+  // purpose: an unstated tier is exactly what a caller with no cycle behind it
+  // renders — the pre-PR collision re-review does — and the fail-safe answer
+  // for a pass that can be the last thing before publication is the heavier
+  // suite, never the cheaper one.
+  const tierLine = tier === "round"
+    ? `the ROUND tier — the cheapest signal that catches what this round's diff changed (typecheck/lint for ordinary code edits, targeted tests for touched behavior, and no build at all where the diff holds no executable change), so do NOT block on a heavier suite this tier does not run; when in doubt about blast radius run more, not less, and always build where the diff touches build configuration, dependencies, or generated contracts`
+    : `the DELIVERY tier — the full applicable sanity set (lint, typecheck, build, tests, whichever this repository has), because the cycle concludes on this state`;
   if (artifactType === "decision") {
     return `This is an APPLIED-DECISION diff. Verify the diff implements exactly the locked option and nothing beyond it, then do the quality pass (logic, error handling, edge cases, dead code, consistency, duplication, type safety) on the touched files. Run the build/type-check first at ${tierLine}; a failure at that tier is an automatic blocker. ${CYCLE_FLAKE_REVIEW}`;
   }
@@ -1325,10 +1331,19 @@ async function runReviewCycle(cycle) {
     // diff is judged by a cheap read-only check, and a semantic hunk in it —
     // however it got there — forfeits the close-out for the normal round. It
     // can swallow nothing else either. Every handed finding must already be
-    // validly disposed; a pass that moved the deviation set or claimed a
-    // retirement still owes the round that adjudicates it, so those claims
-    // hold the cycle open exactly as they do at the terminal check above.
-    if (cycle.closeOut === "on" && passBase && (fix.closeOutEdits || []).length && undisposed.length === 0 && deviationSetChanges === 0 && pendingRetirements.length === 0) {
+    // validly disposed, and every disposition on the pass must be `fixed`: a
+    // `declined` or an `escalated` one is a CLAIM the next fresh reviewer
+    // adjudicates, and the diff check cannot stand in for that reviewer
+    // because neither disposition leaves anything in the diff to look at — a
+    // decline dismissing a semantic finding ships as an empty hunk, so a pass
+    // fixing two typos beside it would otherwise conclude the cycle with the
+    // decline never adjudicated, against this file's own contract that a
+    // decline is verified by the next fresh reviewer, never final here. A pass
+    // that moved the deviation set or claimed a retirement still owes the
+    // round that adjudicates it, so those claims hold the cycle open exactly
+    // as they do at the terminal check above.
+    const closeOutOnlyFixes = (fix.dispositions || []).every((d) => d && d.disposition === "fixed");
+    if (cycle.closeOut === "on" && passBase && (fix.closeOutEdits || []).length && undisposed.length === 0 && closeOutOnlyFixes && deviationSetChanges === 0 && pendingRetirements.length === 0) {
       const closeOut = await agent(cycleCloseOutPrompt(cycle, { passBase, edits: fix.closeOutEdits }), {
         label: `${lp}closeout#${fixerPasses}`,
         schema: CYCLE_CLOSEOUT_SCHEMA,
