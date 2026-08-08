@@ -44,7 +44,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 38;
+const CHECKS_PER_LEG = 47;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -193,6 +193,46 @@ const confirmEscalateOntoRetired = {
   changed: false,
   dispositions: [{ finding: "a pass-note", origin: "reviewer", disposition: "escalated", detail: "escalating the note", questionId: "q1" }],
   openQuestions: [{ ...Q1, question: "a different decision under the same id" }],
+};
+// A confirmation pass whose spontaneous escalations name questions that do not
+// exist: one an invented id, one no id at all (scenario 20).
+const confirmEscalateNowhere = {
+  ...PASS_PACKET,
+  dispositions: [
+    { finding: "a pass-note", origin: "reviewer", disposition: "escalated", detail: "escalating the note", questionId: "ghost" },
+    { finding: "another pass-note", origin: "reviewer", disposition: "escalated", detail: "escalating that one too" },
+  ],
+};
+// A pass that WAS handed a finding: it disposes that finding validly and adds a
+// SPONTANEOUS escalation naming nothing (scenario 21).
+const handedFixPlusSpontaneousGhost = {
+  ...PASS_PACKET,
+  dispositions: [
+    { findingId: "r1-1", finding: "f", origin: "reviewer", disposition: "fixed", detail: "d" },
+    { finding: "a pass-note", origin: "reviewer", disposition: "escalated", detail: "escalating the note", questionId: "ghost" },
+  ],
+};
+// A confirmation pass that spontaneously escalates onto the question its OWN
+// packet raises — the normal shape (scenario 22).
+const confirmEscalateRaisingOwn = {
+  ...PASS_PACKET,
+  dispositions: [{ finding: "a pass-note", origin: "reviewer", disposition: "escalated", detail: "escalating the note", questionId: "q2" }],
+  openQuestions: [Q2],
+};
+// A confirmation pass that spontaneously escalates onto an earlier pass's
+// STILL-LIVE `q1`, raising no question of its own (scenario 22).
+const confirmEscalateOntoLive = {
+  ...PASS_PACKET,
+  dispositions: [{ finding: "a pass-note", origin: "reviewer", disposition: "escalated", detail: "escalating the note", questionId: "q1" }],
+};
+// A confirmation pass that retires an earlier pass's still-live `q1` on one
+// disposition while spontaneously escalating onto that same `q1` (scenario 23).
+const confirmRetireAndEscalateSame = {
+  ...PASS_PACKET,
+  dispositions: [
+    { finding: "a pass-note", origin: "reviewer", disposition: "fixed", detail: "settled it", retiresQuestionIds: ["q1"] },
+    { finding: "another pass-note", origin: "reviewer", disposition: "escalated", detail: "escalating that one", questionId: "q1" },
+  ],
 };
 // A confirmation pass that claims to retire `q1` a SECOND time, after a round
 // already accepted the first claim (scenario 19).
@@ -434,20 +474,24 @@ for (const name of WORKFLOWS) {
 
   // 17. The CONFIRMATION pass is handed nothing, so a disposition it makes is
   //     spontaneous and carries no coverage obligation — there is no finding
-  //     for a question to validate. What must still hold is that its
-  //     escalation onto a RETIRED id changes nothing about that question: the
-  //     re-report rule (scenario 13) keeps the raising pass's entry, so the
-  //     settled decision is neither revived nor forked, and the disposition
-  //     itself stays in the result against the pass that made it. (A fixer
-  //     reusing a settled id is breaking the stated rule that an escalation
-  //     goes under an id no earlier pass used; what the cycle owes it is a
-  //     stable question state, not a resurrection.)
+  //     for a question to validate. Two things must hold anyway. First, a
+  //     SETTLED id is judged the same as one no pass ever raised: the
+  //     back-reference names no decision the maintainer will be asked to make,
+  //     so the escalation is reported rather than recorded silently. Second,
+  //     the report changes nothing about the question itself — the re-report
+  //     rule (scenario 13) keeps the raising pass's entry, so the settled
+  //     decision is neither revived nor forked, and the disposition stays in
+  //     the result against the pass that made it. (A fixer reusing a settled
+  //     id is breaking the stated rule that an escalation goes under an id no
+  //     earlier pass used; what the cycle owes it is a report and a stable
+  //     question state, not a resurrection.)
   await scenario("17. confirmation-pass escalation onto a retired id", async () => {
-    const { res, entriesOf, stateOf } = await run(src, {
-      fixes: [escalate, retireOn("r1-1"), confirmEscalateOntoRetired, idle],
-      reviews: [FAIL("r1"), OK, OK],
-      cycle: { maxRounds: 5 },
+    const { res, entriesOf, stateOf, carried, carriedIds } = await run(src, {
+      fixes: [escalate, retireOn("r1-1"), confirmEscalateOntoRetired],
+      reviews: [FAIL("r1"), OK],
+      cycle: { maxRounds: 2 },
     });
+    check("escalating onto a settled question is reported", carriedIds.includes("question:q1"), carried);
     check("a confirmation-pass escalation neither revives nor forks a retired question", entriesOf("q1").length === 1 && stateOf("q1") === "retired", `${entriesOf("q1").length} entries / ${stateOf("q1")}`);
     check("the spontaneous escalation is still recorded against its pass", (res.findingDispositions || []).some((d) => d && d.pass === 3 && d.disposition === "escalated" && d.questionId === "q1"), JSON.stringify(res.findingDispositions));
   });
@@ -480,6 +524,70 @@ for (const name of WORKFLOWS) {
     check("re-retiring a SETTLED question is reported", carriedIds.includes("retire:q1"), carried);
     check("a settled question is not re-offered as live", !/Open questions still live/.test(seen.fixPrompts[2] || ""));
     check("a rejected second claim leaves the accepted mark intact", stateOf("q1") === "retired" && !!q && !!q.retired && q.retired.pass === 2, `${stateOf("q1")}/${(q && q.retired && q.retired.pass) || "-"}`);
+  });
+
+  // 20. The gap this whole guard exists for: a pass handed NOTHING escalates to
+  //     a question that does not exist. The coverage walk never judges such a
+  //     disposition — it covers nothing by construction — so before the guard
+  //     the schema's REQUIRED back-reference was the one shape that no-op'd.
+  //     The empty/absent id is pinned beside the invented one deliberately:
+  //     the schema asks for a non-empty id, so an id that is not there names
+  //     nothing and is precisely the breach worth reporting.
+  await scenario("20. spontaneous escalation naming no question", async () => {
+    const { res, carried, carriedIds } = await run(src, {
+      fixes: [escalate, confirmEscalateNowhere],
+      reviews: [OK],
+      cycle: { maxRounds: 1 },
+    });
+    check("an escalation onto an unknown question id is reported", res.verdict === "review-cap" && carriedIds.includes("question:ghost"), `${res.verdict}/${carried}`);
+    check("an escalation with no question id at all is reported", carriedIds.includes("question:"), carried);
+  });
+
+  // 21. The other half of the same gap, on a pass that WAS handed findings: a
+  //     disposition with no `findingId` is spontaneous there too, so the
+  //     coverage walk skips it just the same. The handed finding it disposes
+  //     validly must still come out COVERED — the guard reports a dead
+  //     back-reference, it does not invent a coverage obligation for a
+  //     disposition that has none.
+  await scenario("21. spontaneous escalation on a pass that was handed findings", async () => {
+    const { carried, carriedIds } = await run(src, {
+      fixes: [escalate, handedFixPlusSpontaneousGhost],
+      reviews: [FAIL("r1"), OK],
+      cycle: { maxRounds: 2 },
+    });
+    check("a spontaneous escalation is judged even when findings were handed", carriedIds.includes("question:ghost"), carried);
+    check("the guard adds no coverage obligation to a disposed finding", !carriedIds.includes("r1-1"), carried);
+  });
+
+  // 22. The two shapes that must NOT be reported, or the guard would cost the
+  //     confirmation pass a round for nothing. A spontaneous escalation naming
+  //     the question its OWN packet raises is the normal shape; naming an
+  //     earlier pass's STILL-LIVE question is the documented re-report — the
+  //     cycle keeps the raising pass's entry (scenario 13), but the decision
+  //     itself does reach the maintainer, so the back-reference points at
+  //     something real.
+  await scenario("22. a live question back-reference is no breach", async () => {
+    const own = await run(src, { fixes: [escalate, confirmEscalateRaisingOwn], reviews: [OK], cycle: { maxRounds: 1 } });
+    check("escalating onto the question this same packet raises is accepted", own.carriedIds.length === 0 && own.stateOf("q2") === "live", `${JSON.stringify(own.carriedIds)}/${own.stateOf("q2")}`);
+    const live = await run(src, { fixes: [escalate, confirmEscalateOntoLive], reviews: [OK], cycle: { maxRounds: 1 } });
+    check("escalating onto an earlier pass's still-live question is accepted", live.carriedIds.length === 0 && live.stateOf("q1") === "live", `${JSON.stringify(live.carriedIds)}/${live.stateOf("q1")}`);
+  });
+
+  // 23. SAME-PASS retire-and-escalate, spontaneously. Scenario 10 pins this
+  //     contradiction only where the escalation covers a handed finding, where
+  //     the coverage walk catches it; here the pass is handed nothing, so only
+  //     the back-reference guard can. "Live" therefore means live AFTER this
+  //     pass's own retirements — the very predicate coverage uses — or a
+  //     confirmation pass could settle a decision and escalate to it in one
+  //     breath with nothing said.
+  await scenario("23. spontaneous escalation onto a question this pass retires", async () => {
+    const { carried, carriedIds, stateOf } = await run(src, {
+      fixes: [escalate, fixOn("r1-1"), confirmRetireAndEscalateSame],
+      reviews: [FAIL("r1"), OK],
+      cycle: { maxRounds: 2 },
+    });
+    check("escalating onto a question the same pass retires is reported", carriedIds.includes("question:q1"), carried);
+    check("the same pass's own retirement still takes effect as a claim", stateOf("q1") === "pending", stateOf("q1"));
   });
 
   const ran = legOk + legFail;
