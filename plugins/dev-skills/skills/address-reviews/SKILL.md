@@ -179,7 +179,7 @@ It edits nothing and reports Pass or numbered Issues.
 
 Give the peer those same inputs verbatim, not the fixer's reasoning or the Reviewer's execution steps, under the `review-cycle` skill's peer contract.
 Launch each entry's peer per that skill's peer step — pinned strength, unique per-entry/per-attempt paths outside every worktree, timeout-and-retry — from that entry's worktree; an auth/usage failure on a classify-at-first-invocation attempt makes the peer unavailable for all later entries and rounds. Always wait for the Reviewer; when a peer was launched, wait for it too before deciding this entry's outcome, otherwise carry the disabled or unavailable outcome forward explicitly.
-Decide each entry's round by the `review-cycle` gate, relaying findings verbatim per that skill.
+Decide each entry's round by the `review-cycle` gate, relaying findings verbatim per that skill. Every rule that skill states under *The loop and its gates* binds this loop whole, later additions included — the no-latched-flags rule among them, for whatever an entry carries into its final summary and publication, which must describe that entry's final state rather than a condition some round latched.
 
 ### Fix-up rounds
 

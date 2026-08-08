@@ -181,7 +181,7 @@ Perform the fixes directly, leave the worktree clean with all intended changes c
 
 ### Step 6 — Verify with a fresh reviewer
 
-Once fixes are committed and the worktree is clean, run the `review-cycle` skill's verification loop on this branch (artifact type `code`). Its roles — the fresh Reviewer spawn and the best-effort `codex` peer launched beside it — plus the peer's pinned-strength launch and outcome vocabulary, the gates (grounding spot-check, blocking and minor peer findings, verbatim finding relay), the disposition rule, and the round cap are all defined there and are not restated here. The peer preflight outcome from step 0 and `peer-opinions=off` carry into the cycle.
+Once fixes are committed and the worktree is clean, run the `review-cycle` skill's verification loop on this branch (artifact type `code`). Its roles — the fresh Reviewer spawn and the best-effort `codex` peer launched beside it — plus the peer's pinned-strength launch and outcome vocabulary, the gates (grounding spot-check, blocking and minor peer findings, verbatim finding relay), the disposition rule, and the round cap are all defined there and are not restated here. Beyond those named pieces, every rule that skill states under *The loop and its gates* binds this loop whole, later additions included — the no-latched-flags rule among them, for whatever this run carries into step 8's report and the Summary comment. The peer preflight outcome from step 0 and `peer-opinions=off` carry into the cycle.
 
 This skill's deltas on the cycle:
 
