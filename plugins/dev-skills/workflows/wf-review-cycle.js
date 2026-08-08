@@ -894,7 +894,7 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 // pass's set, not every pass's, so the result describes the FINAL state and
 // `deviationHistory` — named as history — is where the rounds live. Dropping
 // one is a CLAIM a round must pass over, exactly like a retirement: until then
-// it keeps standing in `deviations` (the claims still open are `deviations`
+// it keeps standing in `deviations` (the DROPS still open are `deviations`
 // minus the last `deviationHistory` entry), and ANY move the final
 // confirmation pass makes to this set — dropping one, or first stating one —
 // holds the cycle open for the round that decides it rather than ending it

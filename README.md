@@ -21,7 +21,7 @@ scripts/
   test-gh-review-threads.sh             # hermetic contract coverage for the review-thread helper
   test-dc-helpers.sh                    # hermetic contract coverage for the disposable-clone helpers
   test-checkout-cleanliness-report.mjs  # regression coverage for the batch workflow's checkout report
-  test-review-cycle-retirement.mjs      # behavior coverage for the review cycle's claim lifecycles (question retirement, deviation drops)
+  test-review-cycle-retirement.mjs      # behavior coverage for the review cycle's claim lifecycles (question retirement, locked-decision deviations)
   test-subagent-destroy-boundary.mjs    # renders every workflow subagent prompt and asserts the destroy boundary is in it
   verify-014-peer-strength-pin.md       # harness-neutral prompt: observe the peer step's pinned review strength (task 014)
 ```
