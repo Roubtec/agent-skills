@@ -13,13 +13,13 @@ This skill is the parallel sibling of `address-tasks-serialized`. The roles (orc
 
 ## Why worktrees change the rules
 
-`address-tasks-serialized` forbids running two checkout-dependent agents at once because every subagent shares the orchestrator's single working tree — a reviewer spawned alongside its implementer scopes its diff against a branch the implementer hasn't finished committing to, sees nothing, and ships the work unreviewed.
+`address-tasks-serialized` will not let a reviewer start before its implementer's commits are on disk, because every subagent shares the orchestrator's single working tree — a reviewer spawned alongside its implementer scopes its diff against a branch the implementer hasn't finished committing to, sees nothing, and ships the work unreviewed.
 
 A git worktree removes that constraint. Each worktree is a **separate working directory with its own `HEAD` and index** (`.git/worktrees/<name>/`), while sharing the one common object store (`.git/objects`, append-only and concurrency-safe) and refs (lock-protected). So:
 
 - **Two agents in two different worktrees never corrupt each other.** They touch different files, different indexes, different HEADs. Concurrent commits land on different branches under separate ref locks.
-- Therefore the base skill's "one agent at a time" rule is replaced by: **checkout-dependent `Agent` subagents that operate in distinct worktrees may run concurrently; checkout-dependent `Agent` subagents sharing one worktree must be serialized.** The inherited examination-only peer CLI is the deliberate exception during review.
-- **Within a single task, the implementer and its reviewer still share that task's worktree** — so they still run one-at-a-time, implementer first. The parallelism is strictly *across* independent tasks, never between a task's own implementer and reviewer.
+- Therefore the base skill's "one agent at a time" rule is replaced by: **checkout-dependent `Agent` subagents that operate in distinct worktrees may run concurrently; within one worktree, an agent may not start until the previous agent's commits are on disk.** The inherited examination-only peer CLI is the deliberate exception during review.
+- **Within a single task, the implementer and its reviewer still share that task's worktree** — so that reviewer may not start until that implementer's commits are on disk. That is committed state, not turn structure: a spawn may return immediately and report completion as a later notification, so wait for that notification; "one-at-a-time, implementer first" is the proxy for it. The parallelism is strictly *across* independent tasks, never between a task's own implementer and reviewer.
 
 ### Durability
 

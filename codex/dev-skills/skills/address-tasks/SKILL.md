@@ -15,15 +15,15 @@ The roles (orchestrator / implementer / reviewer), the implementer and reviewer 
 
 ## Why worktrees change the rules
 
-`address-tasks-serialized` forbids running two checkout-dependent Codex subagents at once because they normally share the orchestrator's single working tree — a reviewer spawned alongside its implementer scopes its diff against a branch the implementer hasn't finished committing to, sees nothing, and ships the work unreviewed.
+`address-tasks-serialized` will not let a reviewer start before its implementer's commits are on disk, because checkout-dependent Codex subagents normally share the orchestrator's single working tree — a reviewer spawned alongside its implementer scopes its diff against a branch the implementer hasn't finished committing to, sees nothing, and ships the work unreviewed.
 
 A git worktree removes that constraint.
 Each worktree is a **separate working directory with its own `HEAD` and index** (`.git/worktrees/<name>/`), while sharing the one common object store (`.git/objects`, append-only and concurrency-safe) and refs (lock-protected).
 So:
 
 - **Two subagents in two different worktrees never corrupt each other.** They touch different files, different indexes, different HEADs. Concurrent commits land on different branches under separate ref locks.
-- Therefore the base skill's "one subagent at a time" rule is replaced by: **Codex subagents that operate in distinct worktrees may run concurrently; Codex subagents sharing one worktree must be serialized.** The inherited examination-only peer CLI is the deliberate exception during review.
-- **Within a single task, the implementer and its reviewer still share that task's worktree** — so they still run one-at-a-time, implementer first. The parallelism is strictly *across* independent tasks, never between a task's own implementer and reviewer.
+- Therefore the base skill's "one subagent at a time" rule is replaced by: **Codex subagents that operate in distinct worktrees may run concurrently; within one worktree, a subagent may not start until the previous subagent's commits are on disk.** The inherited examination-only peer CLI is the deliberate exception during review.
+- **Within a single task, the implementer and its reviewer still share that task's worktree** — so that reviewer may not start until that implementer's commits are on disk. That is committed state, not turn structure: a spawn may return immediately and report completion as a later notification, so wait for that notification; "one-at-a-time, implementer first" is the proxy for it. The parallelism is strictly *across* independent tasks, never between a task's own implementer and reviewer.
 
 ### Durability
 

@@ -61,7 +61,7 @@ For any rebase target that is not a just-rebased parent tip, **pin it to an exac
 
 Each PR runs in its **own git worktree** — a separate working directory with its own `HEAD` and index, sharing the one append-only object store and lock-protected refs.
 Two subagents in two worktrees never corrupt each other, so they run **concurrently**.
-The only serialization rule that survives: agents sharing *one* worktree must run one-at-a-time. Across distinct PR head branches, same-phase agents may run concurrently.
+The only serialization rule that survives is about committed state, not turn structure: within *one* worktree, an agent may not start until the previous agent's commits are on disk — so wait for that completion notification, however the harness delivers it, and treat "one-at-a-time" as the proxy it is. Across distinct PR head branches, same-phase agents may run concurrently.
 See `address-tasks` → "Why worktrees change the rules" and "Durability & host isolation" for the full model.
 The durability rule here is **commit early, but do not push before `address-review`'s reviewed publication step**: committed objects and branch refs survive in the shared `.git`, while premature pushes would publish unreviewed fixes and break no-push runs.
 
