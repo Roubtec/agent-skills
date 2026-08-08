@@ -13,7 +13,7 @@ You are running in one harness (Claude Code or Codex). Exercise the peer step of
 
 ## Where the values are actually readable (the observability map)
 
-Verified in-container at codex-cli 0.146.0; re-verify if the CLI moved.
+Verified in-container at codex-cli 0.147.0; re-verify if the CLI moved.
 
 - **Codex peer (Claude-led run).** `codex exec` writes its `model:` and `reasoning effort:` header to **stderr**, and needs no terminal to do it: piped or fully backgrounded, the header still appears. Read it from the separately captured stderr file the pinned raw launch already keeps. Stdout carries nothing but the answer — a reading aimed there finds neither value and must not conclude the pin is absent.
 - **Codex under `--json`** (which the `peer-review-run` helper adds wherever the installed CLI supports it): the header is suppressed — stdout becomes thread/turn events, stderr falls silent, and `--ephemeral` persists no session file — so neither value reaches the helper's `provider.stdout`/`provider.stderr` artifacts. Read them off the helper instead: its `powbox.peer-review-run/v1` result reports the strength it actually applied as `model` and `effort`, each null only where that knob was not applied (an unpinned codex model, or a claude CLI whose probe finds no `--effort`). The header suppression is a property of the flag, not the helper: on a CLI whose probe finds no `--json` support, the header does land in `provider.stderr`.

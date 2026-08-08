@@ -875,6 +875,18 @@ const CYCLE_FLAKE_POLICY = `When a test fails in an area this branch did not tou
 // conforming cycle to its cap over a task file the policy told it not to write.
 const CYCLE_FLAKE_REVIEW = `A documented, evidenced UNRELATED test failure — reproduced on the base per the cycle's flake rule, with the diagnosis-only follow-up task that rule requires on record: either a NEW one committed on this branch, or the ACTIVE existing task the pass cited instead of duplicating or editing it — is NON-BLOCKING for you once you have SEEN that task. The cited-task shape leaves nothing in this branch's diff by design, and you are not shown the pass's own flake record, so verify the citation where you CAN see it: grep the repository's task folder for an ACTIVE task naming the suite that failed in your own run — the flake rule puts that name in the task TITLE for exactly this reason — rather than expecting a new file in the diff; a failure you can tie to no such task is not documented, and stays blocking. So does any failure this branch plausibly caused, and any reproduction attempt recorded as inconclusive.`;
 
+// Comment discipline, carried by the fixer. A review round asking for
+// documentation reliably produces the function re-implemented in prose right
+// above it: non-executable duplicate content that drifts, then spends rounds of
+// its own on comment correctness. The routing half is what makes the rule
+// answerable — rationale that fails the test has somewhere to go.
+const CYCLE_COMMENT_DISCIPLINE = `Ship only comments that outlive the PR. A code comment earns its keep only where it still does once the PR closes — why an arbitrary constant or choice is what it is, an external constraint that shaped a decision, a non-obvious invariant or tradeoff the code relies on but cannot express (why an ordering prevents a deadlock, why apparently redundant synchronization is needed), or a still-standing deliberately-overruled review decision, which you MAY record so the point is not re-raised. Never ship prose restating what adjacent code does — an outcome matrix, condition-by-condition narration, anything the code itself gives a reader with minimal effort; self-documenting code is the goal and the comment is the bounded exception for what code cannot show, not a default channel. The test governs explanatory comments, not the repository's own documented documentation convention: where one requires docstrings or API documentation on a public surface, that convention stands untouched. Reasoning that fails the test still has a home: rationale addressed to the people watching this diff goes in a PR reply or the summary comment, which the closing PR leaves behind exactly as it should, and durable knowledge too bulky for a why-comment goes to the repository's docs area (commonly \`docs/\`) — a routing option, never a per-PR ritual. Carry CURRENT rationale only: where a change supersedes a commented decision, the standing overruled one included, replace that comment rather than appending to it (version control holds the history), and delete a comment the code has outgrown instead of precision-editing it.`;
+
+// The reviewer's half of the same rule — an amendment to what counts as a
+// finding, stated where findings are opened: the fixer's half cannot stop the
+// churn a review round starts.
+const CYCLE_COMMENT_REVIEW = `Weight code comments by whether they outlive the PR: one re-implementing adjacent code in prose — an outcome matrix, condition-by-condition narration — is removable noise to flag for DELETION rather than material to precision-edit, and absent behavior-narration is never a gap to report unless the repository's own documented documentation convention requires it.`;
+
 // Which validation tier a pass owes, decided by position: an intermediate pass
 // owes the ROUND tier (the cheapest signal covering what it changed), while any
 // pass that can be the cycle's LAST owes the DELIVERY tier — the confirmation
@@ -1010,6 +1022,7 @@ ${cycleItemsBlock(cycle)}${cycleFindingsBlock(state.findings)}${cycleOpenQuestio
 - Commit at logical milestones, and validate at THIS PASS'S TIER (code artifacts). ${tierLine}${closeOutLine}
 - ${CYCLE_FLAKE_POLICY}
 - A sweep ("fix this pattern everywhere") is ENUMERATED, never asserted: return the explicit search space with a per-item verdict, and claim a completed sweep in a commit message only where you enumerated that space. This round's reviewer redoes the enumeration rather than spot-checking yours.
+- ${CYCLE_COMMENT_DISCIPLINE}
 - ${CYCLE_CARRIED_CLAIMS}
 - ${CYCLE_FINISH_IN_TURN} ${CYCLE_NO_SELF_PEER}
 - If you must deliver something other than a decision the maintainer LOCKED, do not silently conform or correct: report it in \`deviations\` — what you delivered instead and the constraint that forced it — and restate it VERBATIM on every later pass while it stands. The cycle surfaces it for the human (report, don't correct), who ratifies it or asks you to conform; it buys no slack in the meantime, since completeness, tests, and regressions are graded exactly as strictly.
@@ -1037,9 +1050,9 @@ function cycleReviewChecks(artifactType, tier) {
     ? `the ROUND tier — the cheapest signal that catches what this round's diff changed (typecheck/lint for ordinary code edits, targeted tests for touched behavior, and no build at all where the diff holds no executable change), so do NOT block on a heavier suite this tier does not run; when in doubt about blast radius run more, not less, and always build where the diff touches build configuration, dependencies, or generated contracts`
     : `the DELIVERY tier — the full applicable sanity set (lint, typecheck, build, tests, whichever this repository has), because the cycle concludes on this state`;
   if (artifactType === "decision") {
-    return `This is an APPLIED-DECISION diff. Verify the diff implements exactly the locked option and nothing beyond it, then do the quality pass (logic, error handling, edge cases, dead code, consistency, duplication, type safety) on the touched files. Run the build/type-check first at ${tierLine}; a failure at that tier is an automatic blocker. ${CYCLE_FLAKE_REVIEW}`;
+    return `This is an APPLIED-DECISION diff. Verify the diff implements exactly the locked option and nothing beyond it, then do the quality pass (logic, error handling, edge cases, dead code, consistency, duplication, type safety) on the touched files. ${CYCLE_COMMENT_REVIEW} Run the build/type-check first at ${tierLine}; a failure at that tier is an automatic blocker. ${CYCLE_FLAKE_REVIEW}`;
   }
-  return `This is a CODE artifact. Run the build/type-check FIRST at ${tierLine}; a failure at that tier is an automatic blocker (\`pass: false\`). ${CYCLE_FLAKE_REVIEW} Check every acceptance criterion the work items state against the actual code, then do the quality pass (logic, error handling, edge cases, dead code, consistency, duplication, type safety) on the touched files.`;
+  return `This is a CODE artifact. Run the build/type-check FIRST at ${tierLine}; a failure at that tier is an automatic blocker (\`pass: false\`). ${CYCLE_FLAKE_REVIEW} Check every acceptance criterion the work items state against the actual code, then do the quality pass (logic, error handling, edge cases, dead code, consistency, duplication, type safety) on the touched files. ${CYCLE_COMMENT_REVIEW}`;
 }
 
 function cycleReviewPrompt(cycle, state) {
@@ -1126,6 +1139,11 @@ function cyclePeerPrompt(cycle, state) {
     dispositions: (state.packet && state.packet.dispositions) || [],
     workReport: (state.packet && state.packet.workReport) || [],
   };
+  // Both peer severities gate and its findings reach the fixer, so a peer that
+  // never received the reviewer's comment weighting can keep asking for the
+  // narration the fixer is told not to ship. Gated on artifact type exactly as
+  // `cycleReviewChecks` gates it: a prose review has no code comments to weigh.
+  const commentWeighting = cycle.artifactType === "prose" ? "" : ` ${CYCLE_COMMENT_REVIEW}`;
   const preflightStep = state.peerPreflighted
     ? `1. Preflight: already done this run — an earlier round verified the \`codex\` binary and login, so skip the probes. An auth/usage error from the launch itself still returns \`unavailable\`.`
     : `1. Preflight: if \`command -v codex\` fails, return outcome \`unavailable\` (detail: missing binary). If \`codex login status\` exits non-zero and \`CODEX_API_KEY\` is unset, return \`unavailable\` (detail: logged out). An auth/usage error from the launch itself is also \`unavailable\`.`;
@@ -1161,7 +1179,7 @@ ${preflightStep}
 
 ## Peer prompt (write this text to the prompt file verbatim, filling only the placeholders)
 
-You are an independent read-only peer reviewer. Review the committed state of branch ${JSON.stringify(cycle.branch)} against base ${JSON.stringify(cycle.base)} in the current directory (artifact type: ${cycle.artifactType}). Read the actual files; edit nothing; run no builds or tests. Verify the work items and any proposed dispositions below in the committed code; a declined finding must be technically justified. ${CYCLE_CARRIED_CLAIMS} Evidence (verbatim):
+You are an independent read-only peer reviewer. Review the committed state of branch ${JSON.stringify(cycle.branch)} against base ${JSON.stringify(cycle.base)} in the current directory (artifact type: ${cycle.artifactType}). Read the actual files; edit nothing; run no builds or tests. Verify the work items and any proposed dispositions below in the committed code; a declined finding must be technically justified.${commentWeighting} ${CYCLE_CARRIED_CLAIMS} Evidence (verbatim):
 
 ${JSON.stringify(evidence, null, 2)}
 
