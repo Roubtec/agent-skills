@@ -207,7 +207,7 @@ On a fix-up round, spawn a **fresh** implementer for the task — a new `Agent`,
 
 ## Reviewer Agent
 
-Same fresh-eyes contract and code-quality checklist as `address-tasks-serialized`. A reviewer is always a **new** `Agent` invocation — a fresh-eyes spawn, never a continuation of the implementer — launched only **after** every Phase-A implementer in the wave has returned. Ignore any `SendMessage` continuation footer from earlier `Agent` results; this harness does not expose that tool.
+Same fresh-eyes contract and code-quality checklist as `address-tasks-serialized`. A reviewer is always a **new** `Agent` invocation — a fresh-eyes spawn, never a continuation of the implementer — launched only once that task's implementer's commits are on disk, so wait for its completion notification; in this lockstep loop that means **after** every Phase-A implementer in the wave has returned, which is the proxy for the commits being there rather than the rule itself. Ignore any `SendMessage` continuation footer from earlier `Agent` results; this harness does not expose that tool.
 
 Include in each reviewer prompt, beyond that inherited contract — which binds whole, later additions to it included:
 

@@ -77,7 +77,7 @@ After each same-phase batch returns, close those agent threads before advancing 
 No custom agent personas (`~/.codex/agents/*.toml`) are required.
 
 Parallelism is allowed only across subagents assigned distinct worktree paths.
-Within one PR's worktree, wait for and close the fixer before spawning its fresh reviewer, and wait for and close the reviewer before any fix-up or publisher. The examination-only `claude` peer is a plain shell process, not a Codex subagent, and is the sole same-worktree concurrency exception: launch it beside the Reviewer only after the tree is committed and clean, then collect both before advancing.
+Within one PR's worktree the rule is committed state: the reviewer may not start until that fixer's commits are on disk, and no fix-up or publisher may start until the reviewer has returned its verdict. A spawn call returns an agent id immediately and reports completion later, so wait for and close the fixer before spawning its fresh reviewer, and wait for and close the reviewer before any fix-up or publisher — that wait is what puts the commits there, and the wait-then-spawn ordering is the proxy, not the rule. The examination-only `claude` peer is a plain shell process, not a Codex subagent, and is the sole same-worktree concurrency exception: launch it beside the Reviewer only after the tree is committed and clean, then collect both before advancing.
 Never continue a fixer thread for review.
 If the session exposes no subagent capability, stop and tell the user this workflow requires Codex multi-agent support.
 
@@ -188,7 +188,7 @@ Adopt a returned packet only under `review-cycle`'s packet hard-check: that entr
 
 ### Phase B — fresh review
 
-After all Phase-A workers in the current dependency wave return and are closed, spawn one fresh `explorer` Reviewer per packet-bearing PR and, at the same moment for each entry, launch a background `claude` peer unless disabled or unavailable. Complete every required fix-up and re-review in that wave before releasing dependents into Phase A, so an ordinary parent fix-up changes the tip that dependents are later pinned to rather than leaving already-reviewed dependents on the old tip; a parent tip changed again by a later rerun goes through **Descendant invalidation** above.
+Spawn one fresh `explorer` Reviewer per packet-bearing PR only once that entry's fixer commits are on disk — its packet returned and adopted under the hard-check above — and, at the same moment for each entry, launch a background `claude` peer unless disabled or unavailable. Waiting for and closing every Phase-A worker in the current dependency wave is the proxy for that committed state, not the rule. Complete every required fix-up and re-review in that wave before releasing dependents into Phase A, so an ordinary parent fix-up changes the tip that dependents are later pinned to rather than leaving already-reviewed dependents on the old tip; a parent tip changed again by a later rerun goes through **Descendant invalidation** above.
 Give it the verbatim review items and proposed dispositions from that PR's packet, its effective review base, branch, and worktree path — never the fixer's reasoning.
 Use `address-review` step 6's reviewer contract.
 It edits nothing and reports Pass or numbered Issues.

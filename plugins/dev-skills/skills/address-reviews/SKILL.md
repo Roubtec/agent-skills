@@ -172,7 +172,7 @@ Adopt a returned packet only under `review-cycle`'s packet hard-check: that entr
 
 ### Phase B — fresh review
 
-After all Phase-A agents in the current dependency wave return, spawn one fresh reviewer per packet-bearing PR and, at the same moment for each entry, launch a background `codex` peer unless disabled or unavailable. Complete every required fix-up and re-review in that wave before releasing dependents into Phase A, so an ordinary parent fix-up changes the tip that dependents are later pinned to rather than leaving already-reviewed dependents on the old tip; a parent tip changed again by a later rerun goes through **Descendant invalidation** above.
+Spawn one fresh reviewer per packet-bearing PR only once that entry's fixer commits are on disk — its packet returned and adopted under the hard-check above — and, at the same moment for each entry, launch a background `codex` peer unless disabled or unavailable. Waiting out every Phase-A agent in the current dependency wave is the proxy for that committed state, not the rule. Complete every required fix-up and re-review in that wave before releasing dependents into Phase A, so an ordinary parent fix-up changes the tip that dependents are later pinned to rather than leaving already-reviewed dependents on the old tip; a parent tip changed again by a later rerun goes through **Descendant invalidation** above.
 Give it the verbatim review items and proposed dispositions from that PR's packet, its effective review base, branch, and worktree path — never the fixer's reasoning.
 Use `address-review` step 6's reviewer contract.
 It edits nothing and reports Pass or numbered Issues.

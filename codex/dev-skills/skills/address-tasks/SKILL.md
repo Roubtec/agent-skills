@@ -66,7 +66,7 @@ After each subagent finishes, close that agent thread when it is no longer neede
 No custom agent personas (`~/.codex/agents/*.toml`) are required.
 
 Parallelism is allowed only across subagents that are assigned distinct worktree paths.
-Within one task's worktree, spawn the implementer, wait for completion, then spawn a fresh reviewer.
+Within one task's worktree the rule is committed state: that reviewer may not start until that implementer's commits are on disk. A spawn call returns an agent id immediately and reports completion later, so spawn the implementer, wait for that completion, close it, and only then spawn a fresh reviewer — waiting is what puts the commits there, and the spawn-wait-spawn ordering is the proxy, not the rule.
 Never continue the implementer thread for review.
 If the current session exposes no subagent capability, tell the user this skill requires Codex multi-agent support.
 Only fall back to doing the implementation locally if the user explicitly approves that change in workflow.
@@ -257,7 +257,7 @@ On a fix-up round, spawn a fresh `worker` implementer for the task; do not conti
 ## Reviewer Agent
 
 Same fresh-eyes contract and code-quality checklist as `address-tasks-serialized`.
-A reviewer is always a **fresh** `explorer` subagent spawn, never a `send_input` continuation of the implementer, launched only **after** every Phase-A implementer in the wave has returned.
+A reviewer is always a **fresh** `explorer` subagent spawn, never a `send_input` continuation of the implementer, launched only once that task's implementer's commits are on disk — wait for its completion notification and close it. In this lockstep loop that means **after** every Phase-A implementer in the wave has returned, which is the proxy for the commits being there rather than the rule itself.
 
 Include in each reviewer prompt, beyond that inherited contract — which binds whole, later additions to it included:
 
