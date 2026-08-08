@@ -250,7 +250,7 @@ const CYCLE_FIX_SCHEMA = {
           origin: { type: "string", description: "reviewer | peer" },
           disposition: { type: "string", description: "fixed | declined | escalated — nothing else counts as a disposition." },
           detail: { type: "string", description: "fixed: what changed + commit. declined: the reason (a decline is verified by the next fresh reviewer, never final here). escalated: one line naming the question." },
-          questionId: { type: "string", description: "REQUIRED when disposition is `escalated`: the id of the openQuestions entry this raised." },
+          questionId: { type: "string", description: "MUST be set when disposition is `escalated`: the id of the openQuestions entry this raised. It must name a question the cycle carries LIVE — the one this pass raises, or one an earlier pass raised that no retirement has claimed. An absent, empty, or already-retired id names no decision the maintainer will be asked to make and is reported back, never a silent no-op." },
           retiresQuestionIds: { type: "array", items: { type: "string", minLength: 1 }, description: "Ids of STILL-LIVE open questions from EARLIER passes that this disposition SETTLES, so the cycle stops carrying decisions the maintainer no longer has to make. Only `fixed` and `declined` retire (an `escalated` disposition raises a question rather than settling one), and only a question that was already open: a question this same packet RAISES cannot also be settled by it — that is a contradiction, not a retirement. Naming an id the cycle does not carry open from an earlier pass — an empty string included, which names nothing — is reported back, never a silent no-op. Retire nothing you did not actually settle: the retirement takes effect only once a reviewer round passes with it in view." },
         },
         required: ["finding", "origin", "disposition", "detail"],
@@ -387,7 +387,7 @@ function cycleFindingsBlock(findings) {
   if (!findings) return "";
   const parts = [];
   if (Array.isArray(findings.carried) && findings.carried.length) {
-    parts.push(`### Findings carried forward — the previous pass gave these NO single valid disposition (missing \`findingId\`, duplicate dispositions for one id, an unrecognized disposition value, an \`escalated\` naming no live open question — including one that same pass retired, which settles a decision rather than escalating to it — or, for a \`disposition-error\` entry, a disposition naming a finding id never handed, or a retirement that settled nothing). Dispose EVERY one now, exactly one disposition each, echoing its \`id\` as \`findingId\`.\n\n${JSON.stringify(findings.carried, null, 2)}`);
+    parts.push(`### Findings carried forward — the previous pass gave these NO single valid disposition (missing \`findingId\`, duplicate dispositions for one id, an unrecognized disposition value, an \`escalated\` naming no live open question — including one that same pass retired, which settles a decision rather than escalating to it — or, for a \`disposition-error\` entry, a disposition naming a finding id never handed, a retirement that settled nothing, or a spontaneous \`escalated\` disposition whose \`questionId\` names no live question). Dispose EVERY one now, exactly one disposition each, echoing its \`id\` as \`findingId\`.\n\n${JSON.stringify(findings.carried, null, 2)}`);
   }
   if (Array.isArray(findings.reviewer) && findings.reviewer.length) {
     parts.push(`### Reviewer findings\n\n${JSON.stringify(findings.reviewer, null, 2)}`);
@@ -453,7 +453,7 @@ ${cycleItemsBlock(cycle)}${cycleFindingsBlock(state.findings)}${cycleOpenQuestio
 - ${artifactLine}
 - Commit at logical milestones; run the project's build/lint before declaring done (code artifacts).
 - If you must deliver something other than a decision the maintainer LOCKED, do not silently conform or correct: report it in \`deviations\` — what you delivered instead and the constraint that forced it. The cycle surfaces it for the human (report, don't correct).
-- Every \`escalated\` disposition gets an \`openQuestions\` entry in the schema's pinned format, under an id no earlier pass used (re-using one reads as a re-report of that pass's question, which the cycle keeps instead of yours), with authoritative artifact pointers (file:line, refs) — never paraphrase — and its \`questionId\` back-reference. Raise a question only for a decision still open: a \`fixed\` or \`declined\` disposition that SETTLES a still-live question from an EARLIER pass names that question's \`id\` in \`retiresQuestionIds\` instead (only those two dispositions retire; a question this pass raises cannot also be retired by it; and retiring an id the cycle does not carry open from an earlier pass comes back to the next pass as a disposition error).
+- Every \`escalated\` disposition gets an \`openQuestions\` entry in the schema's pinned format, under an id no earlier pass used (re-using one reads as a re-report of that pass's question, which the cycle keeps instead of yours), with authoritative artifact pointers (file:line, refs) — never paraphrase — and its \`questionId\` back-reference — which must name a question this cycle carries LIVE (the one you just raised, or one an earlier pass raised that no retirement has claimed); an absent, empty, or settled id names no decision the maintainer will be asked to make and comes back to the next pass as a disposition error. Raise a question only for a decision still open: a \`fixed\` or \`declined\` disposition that SETTLES a still-live question from an EARLIER pass names that question's \`id\` in \`retiresQuestionIds\` instead (only those two dispositions retire; a question this pass raises cannot also be retired by it; and retiring an id the cycle does not carry open from an earlier pass comes back to the next pass as a disposition error).
 - Before returning, \`git status --porcelain\` MUST be empty with every intended change committed; set \`clean\` and \`finalSha\` accordingly. An unclean tree is resolved or reported as a \`blocker\`, never handed to review.
 - Pushing is governed by the assignment above; do nothing PR-side, and do NOT use the \`TaskCreate\`/\`TaskUpdate\`/\`TaskList\` tools.
 
@@ -665,6 +665,18 @@ Return a verdict per finding. Edit nothing.`;
 // handed nothing, since a retirement is a claim about the cycle's own
 // accumulated questions rather than about this round's findings.
 //
+// An `escalated` disposition's `questionId` back-reference gets the same
+// treatment (id prefixed `question:`, collision-proof for the same reason)
+// wherever the coverage walk does not already judge it. Coverage judges it for
+// a disposition that names a handed finding — an id naming no live question
+// fails to cover, and the finding comes back carried, which IS the report — but
+// a SPONTANEOUS disposition (no `findingId`, and every disposition on a pass
+// handed nothing, which the final confirmation pass always is) covers nothing
+// by construction, so that channel says nothing at all and the back-reference
+// the contract requires would no-op silently. Reporting it there and only
+// there also keeps one breach to one entry, rather than spending an extra
+// round on a second report of a finding already carried.
+//
 // RETIRABLE and KNOWN are deliberately DIFFERENT sets. An `escalated`
 // disposition names the question its own packet just raised, so
 // `knownQuestionIds` must include this pass's new entries; a retirement asserts
@@ -706,6 +718,10 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
     if (d.disposition !== "fixed" && d.disposition !== "declined") continue;
     for (const qid of cycleRetiredQuestionIds(d)) if (retirableQuestionIds.has(qid)) retiring.add(qid);
   }
+  // The one liveness test both question guards below use: known to the cycle
+  // (this pass's own new questions included) and not being retired out from
+  // under the escalation by this very packet.
+  const liveQuestion = (qid) => knownQuestionIds.has(qid) && !retiring.has(qid);
   for (const d of dispositions) {
     const retires = cycleRetiredQuestionIds(d);
     if (retires.length) {
@@ -723,8 +739,51 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
     }
     // When NOTHING was handed there is no coverage contract to enforce (the
     // retirement guard above still binds), and a disposition with no findingId
-    // is spontaneous — neither carries a coverage obligation.
-    if (!handed.length || !d.findingId) continue;
+    // is spontaneous — neither carries a coverage obligation. What such a
+    // disposition still owes, when it is `escalated`, is its question
+    // back-reference, which nothing below it would ever look at.
+    //
+    // The HANDED case is deliberately NOT given an entry here as well, because
+    // it is not silent and so needs no second carrier: `liveQuestion` in the
+    // coverage walk below refuses to mark the finding covered, so the finding
+    // returns as `outstanding.carried` under a header that names this very
+    // reason (task 014a's scenario 16 pins it). A `disposition-error` entry is
+    // this section's carrier of LAST resort — `stray:` and `retire:` exist
+    // because nothing else would surface those breaches at all — so raising
+    // one beside an already-carried finding would spend two entries, and two
+    // fixer obligations, on one mistake.
+    //
+    // LIVE is the whole test, and a `retired`/`retirementPending` id is the
+    // SAME breach as one no pass ever raised rather than a case of its own: in
+    // both, the back-reference points at no decision the maintainer will be
+    // asked to make — a question this cycle settled, or claims to have settled
+    // pending the round that decides it, is off that list as surely as one
+    // that was never on it, so a disposition escalating to it escalates to
+    // nothing. Naming a STILL-LIVE id is no breach at all, even though the
+    // re-report rule then keeps the raising pass's question body over this
+    // pass's: that decision does reach the maintainer, and failing the round
+    // over a restatement would cost the confirmation pass — where the cycle is
+    // trying to converge — another round for nothing.
+    //
+    // An absent or non-string id normalizes to the empty string, which names
+    // nothing and is exactly the breach worth reporting: the contract asks for
+    // a non-empty id — a conditional no schema keyword here expresses, which
+    // is why this guard has to enforce it for the spontaneous dispositions it
+    // sees — and letting the empty one through would make the one breach still
+    // typed as a `string` the one shape that no-ops.
+    if (!handed.length || !d.findingId) {
+      if (d.disposition === "escalated") {
+        const qid = typeof d.questionId === "string" ? d.questionId : "";
+        if (!liveQuestion(qid)) {
+          stray.set(`question:${qid}`, {
+            id: `question:${qid}`,
+            category: "disposition-error",
+            problem: `An \`escalated\` disposition named questionId ${JSON.stringify(qid)}, which this cycle does not carry as a LIVE open question — no pass raised it (an absent or empty id names nothing), or a retirement has already settled it, or claimed to (a claim still awaiting the reviewer round that decides it has already spoken for the question), or this same pass retires it (settling a decision rather than escalating to it) — so the back-reference points at no decision the maintainer will be asked to make. Re-issue the escalation with an \`openQuestions\` entry under an id no earlier pass used and name THAT id, or dispose what you escalated some other way, and dispose this entry (e.g. declined) explaining the stray.`,
+          });
+        }
+      }
+      continue;
+    }
     if (!handedIds.has(d.findingId)) {
       stray.set(`stray:${d.findingId}`, {
         id: `stray:${d.findingId}`,
@@ -737,7 +796,7 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
     const valid =
       d.disposition === "fixed" ||
       d.disposition === "declined" ||
-      (d.disposition === "escalated" && d.questionId && knownQuestionIds.has(d.questionId) && !retiring.has(d.questionId));
+      (d.disposition === "escalated" && d.questionId && liveQuestion(d.questionId));
     if (valid) covered.add(d.findingId);
   }
   // Exactly one disposition per id: duplicates — conflicting or not — collapse

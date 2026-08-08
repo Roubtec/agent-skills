@@ -17,7 +17,7 @@ Nothing is silently *dropped* in the current shape: the fixer's own question, wh
 
 Included:
 
-- Validate every `escalated` disposition's `questionId` independently of the coverage walk, so a spontaneous one is judged too.
+- Validate the `escalated` dispositions the coverage walk does not judge — one carrying no `findingId`, and every disposition on a pass that was handed nothing — so a spontaneous one's `questionId` is judged too. A disposition naming a handed finding needs no second channel: a dead id already fails coverage there and the finding comes back carried, so one breach costs one carried entry rather than two. "Independently of the coverage walk" means the check does not hang off that walk's early return, not that it duplicates what the walk already reports.
 - Report an id that names no live question as a `disposition-error` carried entry, the way `stray:` and `retire:` breaches already are, under a prefix that cannot collide with a real round-scoped id.
 - Decide and state whether an id naming a question the cycle carries as `retired` or `retirementPending` is the same breach or a distinct one — a settled question cannot be escalated to, but a fixer restating a still-live question is the documented re-report, not an error.
 - Mirror every change into `wf-address-tasks.js`'s embedded `review-cycle-core` section (`wf-address-tasks.js:1022`, `:1032`, `:1156`, `:590`) and verify the two sections stay byte-identical.
