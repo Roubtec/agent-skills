@@ -65,7 +65,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 125;
+const CHECKS_PER_LEG = 126;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -1220,6 +1220,13 @@ for (const name of WORKFLOWS) {
     // something it now holds — and without this line the suite would stay green
     // while both this exit's justification and scenario 27's went false.
     check("and the round that passed was never shown that record", !(lit.seen.reviewPrompts[0] || "").includes(FLAKE_NOTE), "round-1 review prompt");
+    // `cycleValidationTier`'s light branch, which no other scenario reaches:
+    // the unstated-tier scenario drives the confirming branch and the round
+    // branch, and neither is this one. It is the branch that makes the sentence
+    // above true — light has no confirmation pass, so THIS round's reviewer is
+    // the delivery-tier one — so leaving it unexercised would let a change make
+    // a light-mode round's reviewer skip the suite the exit concludes on.
+    check("and that round's reviewer was told the DELIVERY tier, light having no confirmation pass to owe it", /DELIVERY tier/.test(lit.seen.reviewPrompts[0] || "") && !/ROUND tier/.test(lit.seen.reviewPrompts[0] || ""), "round-1 review prompt");
     check("and the exit still records the round's undisposed remarks beside it", (lit.res.undisposed || []).includes(REVIEWER_CAVEAT), JSON.stringify(lit.res.undisposed));
     const clean = await run(src, { fixes: [PASS_PACKET], reviews: [OK], cycle: { mode: "light" } });
     check("while a light conclusion over a clean delivery run carries no record at all", clean.res.verdict === "pass" && clean.res.recordOnly === undefined, `${clean.res.verdict}/${JSON.stringify(clean.res.recordOnly)}`);

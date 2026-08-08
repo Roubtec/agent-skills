@@ -500,7 +500,9 @@ if (!cycle) {
 // the carrier is where that fact reaches them; every return below spreads it.
 // The nested cycle is granted no close-out above, so `closeOut` cannot arise
 // here today — it rides in the same conditional because the two records are one
-// rule, and granting the close-out later then needs no second edit.
+// rule, and granting the close-out later then needs no second edit HERE; the
+// publish brief below renders `recordOnly` and not `closeOut`, so it would
+// still need teaching.
 // `flakeHistory` rides beside them for the half `recordOnly` cannot cover: that
 // record speaks for the CONCLUDING pass, so an intermediate pass's
 // evidenced-unrelated failure would reach the maintainer nowhere once a later
