@@ -244,6 +244,7 @@ const peerState = { round: 2, packet: { dispositions: [] } };
 // re-review calls the reviewer builder outside any cycle with `artifactDir: ""`.
 // That is the "new branch inside an existing builder" gap the header names, so
 // each is rendered rather than argued to be the same text.
+const closeOutState = { passBase: "abc1234", edits: ["typo in a comment"] };
 const fixStateRound1 = { ...fixState, round: 1, findings: null, artifactDir: "" };
 const reviewStateNoArtifact = { ...reviewState, round: 1, artifactDir: "" };
 
@@ -278,6 +279,10 @@ const cycleCases = {
   cycleGroundingPrompt: [
     ["cycleGroundingPrompt (standalone)", (f) => f.cycleGroundingPrompt(cycleStandalone, [{ id: "p1", text: "y", severity: "minor" }])],
     ["cycleGroundingPrompt (batch/overridden)", (f) => f.cycleGroundingPrompt(cycleOverridden, [{ id: "p1", text: "y", severity: "minor" }])],
+  ],
+  cycleCloseOutPrompt: [
+    ["cycleCloseOutPrompt (standalone)", (f) => f.cycleCloseOutPrompt(cycleStandalone, closeOutState)],
+    ["cycleCloseOutPrompt (batch/overridden)", (f) => f.cycleCloseOutPrompt(cycleOverridden, closeOutState)],
   ],
 };
 
