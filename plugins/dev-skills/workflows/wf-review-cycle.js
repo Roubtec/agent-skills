@@ -1005,7 +1005,9 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     the pass, the range, and the non-semantic edits that shipped unreviewed),
 //   recordOnly (present only when the confirmation pass's unrelated-flake
 //     record ENDED the cycle — the delivery gate's one tolerated post-run
-//     commit: the pass, the range, and what the diff check found in it),
+//     commit: the pass, the range, what the diff check found in it, and the
+//     pass's own `note` of what the run surfaced, which rides in the record
+//     because no later reviewer round exists to carry it in `reviewerNotes`),
 //   artifactDirAnomalies (present only when a later pass tried
 //   to move the artifact directory) }
 // NO per-round condition latches into that result: `deviations` is the LAST
@@ -1326,6 +1328,17 @@ async function runReviewCycle(cycle) {
     // evidence requirement exists to close, so a cheap read-only check judges
     // the range, and anything beyond the record forfeits the exit for the
     // normal round.
+    //
+    // The pass's own note of what the run surfaced rides IN the record. The
+    // flake rule routes that note through `summary`, and this exit is the one
+    // conclusion NO reviewer round follows — so the reviewer pass-notes a
+    // consumer publishes as PR caveats were written before the failure
+    // existed, and the record is the only carrier the note has left. That is
+    // what makes item 2's "note the flake in the PR body or batch summary"
+    // reachable on the very path item 1 names as the tolerated one. `verified`
+    // stays the independent check's line about the diff and `note` is the
+    // pass's own account; they are not interchangeable, and the check never
+    // sees the note.
     if (confirming && fix.changed && passBase && (fix.dispositions || []).length === 0 && deviationSetChanges === 0) {
       const record = await agent(cycleRecordOnlyPrompt(cycle, { passBase }), {
         label: `${lp}record#${fixerPasses}`,
@@ -1334,7 +1347,7 @@ async function runReviewCycle(cycle) {
       });
       if (record && record.recordOnly === true) {
         return result("pass", "reviewer passed; the final confirmation pass committed only the unrelated-flake record, which its delivery-tier pass survives", {
-          recordOnly: { pass: fixerPasses, range: `${passBase}..${fix.finalSha || "HEAD"}`, verified: record.why || "" },
+          recordOnly: { pass: fixerPasses, range: `${passBase}..${fix.finalSha || "HEAD"}`, verified: record.why || "", note: packet.summary || "" },
         });
       }
       log(`fixer pass ${fixerPasses} changed the tree with nothing to dispose; the record-only check ${record ? "found more than the flake record" : "returned nothing"}, so the normal reviewer round runs.`);

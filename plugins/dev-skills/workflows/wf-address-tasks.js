@@ -1372,7 +1372,9 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     the pass, the range, and the non-semantic edits that shipped unreviewed),
 //   recordOnly (present only when the confirmation pass's unrelated-flake
 //     record ENDED the cycle — the delivery gate's one tolerated post-run
-//     commit: the pass, the range, and what the diff check found in it),
+//     commit: the pass, the range, what the diff check found in it, and the
+//     pass's own `note` of what the run surfaced, which rides in the record
+//     because no later reviewer round exists to carry it in `reviewerNotes`),
 //   artifactDirAnomalies (present only when a later pass tried
 //   to move the artifact directory) }
 // NO per-round condition latches into that result: `deviations` is the LAST
@@ -1693,6 +1695,17 @@ async function runReviewCycle(cycle) {
     // evidence requirement exists to close, so a cheap read-only check judges
     // the range, and anything beyond the record forfeits the exit for the
     // normal round.
+    //
+    // The pass's own note of what the run surfaced rides IN the record. The
+    // flake rule routes that note through `summary`, and this exit is the one
+    // conclusion NO reviewer round follows — so the reviewer pass-notes a
+    // consumer publishes as PR caveats were written before the failure
+    // existed, and the record is the only carrier the note has left. That is
+    // what makes item 2's "note the flake in the PR body or batch summary"
+    // reachable on the very path item 1 names as the tolerated one. `verified`
+    // stays the independent check's line about the diff and `note` is the
+    // pass's own account; they are not interchangeable, and the check never
+    // sees the note.
     if (confirming && fix.changed && passBase && (fix.dispositions || []).length === 0 && deviationSetChanges === 0) {
       const record = await agent(cycleRecordOnlyPrompt(cycle, { passBase }), {
         label: `${lp}record#${fixerPasses}`,
@@ -1701,7 +1714,7 @@ async function runReviewCycle(cycle) {
       });
       if (record && record.recordOnly === true) {
         return result("pass", "reviewer passed; the final confirmation pass committed only the unrelated-flake record, which its delivery-tier pass survives", {
-          recordOnly: { pass: fixerPasses, range: `${passBase}..${fix.finalSha || "HEAD"}`, verified: record.why || "" },
+          recordOnly: { pass: fixerPasses, range: `${passBase}..${fix.finalSha || "HEAD"}`, verified: record.why || "", note: packet.summary || "" },
         });
       }
       log(`fixer pass ${fixerPasses} changed the tree with nothing to dispose; the record-only check ${record ? "found more than the flake record" : "returned nothing"}, so the normal reviewer round runs.`);
@@ -1928,8 +1941,19 @@ function taskCycleConfig(task, remote, peerMode) {
 // maintainer decision (final state, not round history). They LEAD the PR body:
 // the maintainer ratifies one or asks for conformance, and a deviation reported
 // below a wall of summary is one nobody rules on.
-function prPrompt(task, notes, remote, deviations) {
-  const dev = Array.isArray(deviations) ? deviations : [];
+//
+// `recordOnly` is the other thing the body must carry, for a related reason:
+// the cycle concluded over a delivery run that FAILED, on the flake rule's
+// evidenced-unrelated disposition, and the gate that allows that says the
+// failures are documented where the maintainer sees them at the PR. The batch
+// Summary carries the same record, but the person judging the gap reads the PR.
+// Reading the fields off the whole ready result rather than taking each as its
+// own parameter is what keeps that list one edit long the next time the cycle
+// grows a record worth publishing.
+function prPrompt(task, ready, remote) {
+  const dev = Array.isArray(ready && ready.deviations) ? ready.deviations : [];
+  const notes = (ready && ready.notes) || "";
+  const rec = (ready && ready.recordOnly) || null;
   if (!remote) {
     return `Remote push/PR is unavailable this run. Verify branch \`${task.branch}\` and its commits are intact: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && git -C "$WT" log --oneline ${shq(task.base)}..${shq(task.branch)}\` shows the work. Return \`opened: false\`, \`pushed: false\`, \`reason: "no remote auth this run"\`. Do not fail.
 
@@ -1939,6 +1963,9 @@ ${DESTROY_BOUNDARY}`;
   const deviationLead = dev.length
     ? `\n\nLEAD the PR body with a "Deviation from a locked decision" section, above everything else, carrying these verbatim — each is the maintainer's to ratify or ask conformance on, so neither correct nor soften one:\n${JSON.stringify(dev, null, 2)}`
     : "";
+  const flakeRecord = rec
+    ? `\n\nThe cycle concluded over a FAILED delivery run, on the flake rule's evidenced-unrelated disposition, and over a final commit (\`${rec.range}\`) no fresh reviewer saw — the diagnosis-only follow-up task that failure earned. Carry a "Delivery-run failure — recorded, not reviewed" section in the body with these verbatim, so the maintainer sees the gap here and decides how to absorb it; do not re-diagnose, soften, or omit it:\n${JSON.stringify({ note: rec.note || "", rangeCheck: rec.verified || "" }, null, 2)}`
+    : "";
   return `Open a pull request for branch \`${task.branch}\` against base \`${task.base}\`. Work from this task's worktree: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && cd "$WT"\` (rerun-safe resolve of the existing worktree; if it errors, STOP and report).
 
 ${DESTROY_BOUNDARY}
@@ -1946,7 +1973,7 @@ ${DESTROY_BOUNDARY}
 1. Ensure the branch is pushed: \`git push -u origin ${shq(task.branch)}\` (or \`git push\`).
 2. \`gh pr create --base ${shq(task.base)} --head ${shq(task.branch)} --title "<concise title>" --body "<summary>"\`.
    - Reference the task file (${task.path}); don't restate the whole task unless it adds review value.
-   - Note tradeoffs / intentional divergences / uncertainties.${deviationLead}${caveats}
+   - Note tradeoffs / intentional divergences / uncertainties.${deviationLead}${flakeRecord}${caveats}
 
 Return \`opened: true\` with the \`url\` ONLY if \`gh pr create\` actually produced a PR URL. If the push succeeded but the PR could not be created (auth, API, or base-branch error), return \`opened: false\`, \`pushed: true\`, and \`reason\`. Do not claim a PR that was not created.`;
 }
@@ -2065,6 +2092,24 @@ Do NOT open any PR and do NOT remove any worktree — the workflow re-reviews ea
 // `deviations` is by contract the FINAL standing set, so the per-pass record is
 // the only place the Summary's reader can see that a pass stopped restating
 // one. Present only once some pass reported a deviation.
+// `closeOut` and `recordOnly` are ONE class and ride here for one reason: each
+// records a cycle that CONCLUDED on content no fresh reviewer saw — the
+// close-out's non-semantic edits, the record-only close's tolerated post-run
+// flake commit — so this carrier is the only thing between that fact and the
+// maintainer. `recordOnly` also carries the pass's `note` of what the delivery
+// run surfaced, which is how item 2's PR-body-or-batch-summary record survives
+// the exit that has no later reviewer round to write it. A cycle this workflow
+// configures cannot report `closeOut` today — `taskCycleConfig` grants no
+// close-out and only the invoker's grant opens that exit — so that conditional
+// forwards nothing yet; it is written anyway because the two records are one
+// rule, and granting the close-out later then needs no second edit here. That
+// is the gap this carrier has already dropped a new result field into twice.
+// Both present only when that exit actually ended the cycle.
+// Deliberately NOT forwarded: the cycle result's `notes` (the last pass's
+// `summary`). This carrier is applied to the raw cycle result AND to task
+// results derived from it, where `notes` already means the reviewer's PR-body
+// caveats — one name, two meanings, and the second pass through the carrier
+// would silently overwrite the first.
 function cycleCarried(result) {
   return {
     rounds: result.rounds,
@@ -2074,6 +2119,8 @@ function cycleCarried(result) {
     peerRounds: result.peerRounds,
     artifactDir: result.artifactDir,
     ...(result.artifactDirAnomalies ? { artifactDirAnomalies: result.artifactDirAnomalies } : {}),
+    ...(result.closeOut ? { closeOut: result.closeOut } : {}),
+    ...(result.recordOnly ? { recordOnly: result.recordOnly } : {}),
   };
 }
 
@@ -2100,7 +2147,7 @@ async function implementTask(task, remote, peerMode) {
 }
 
 async function deliverTask(task, ready, remote) {
-  const pr = await agent(prPrompt(task, ready.notes, remote, ready.deviations), {
+  const pr = await agent(prPrompt(task, ready, remote), {
     label: `pr:${task.slug}`,
     schema: PR_SCHEMA,
   });
@@ -2108,9 +2155,10 @@ async function deliverTask(task, ready, remote) {
   // Best-effort cleanup once the work is durable (pushed/committed).
   await agent(cleanupNote(task), { label: `cleanup:${task.slug}` });
 
-  // Open questions, deviations, and the artifact pointer (with any anomaly
-  // record beside it) bubble up with the delivery result — they exist for the
-  // human and must survive to Summary.
+  // Open questions, deviations, the artifact pointer (with any anomaly record
+  // beside it), and any record of a conclusion no fresh reviewer saw bubble up
+  // with the delivery result — they exist for the human and must survive to
+  // Summary.
   const carried = cycleCarried(ready);
   if (pr && pr.opened && pr.url) {
     return { slug: task.slug, branch: task.branch, status: "done", prUrl: pr.url, ...carried };

@@ -298,8 +298,9 @@ const FIXTURES = {
     ],
     resolvePrompt: [["resolvePrompt", (f) => f.resolvePrompt("tasks/*.md")]],
     prPrompt: [
-      ["prPrompt (remote)", (f) => f.prPrompt(task, "caveat", true)],
-      ["prPrompt (no remote)", (f) => f.prPrompt(task, "", false)],
+      ["prPrompt (remote)", (f) => f.prPrompt(task, { notes: "caveat", deviations: [] }, true)],
+      ["prPrompt (remote, record-only close)", (f) => f.prPrompt(task, { notes: "caveat", deviations: [], recordOnly: { pass: 2, range: "a..b", verified: "only the flake task", note: "the payments suite failed on the base too" } }, true)],
+      ["prPrompt (no remote)", (f) => f.prPrompt(task, { notes: "", deviations: [] }, false)],
     ],
     cleanupNote: [["cleanupNote", (f) => f.cleanupNote(task)]],
     collisionScanPrompt: [["collisionScanPrompt", (f) => f.collisionScanPrompt([{ slug: task.slug, branch: task.branch, base: task.base }])]],
@@ -318,6 +319,17 @@ const FIXTURES = {
             { pr: { number: 42, url: "https://example.invalid/pr/42", branch: "b", workingBranch: "b", base: "main", headOid: "deadbeef", rebased: false }, items: [] },
             [],
             { push: true, pingCodex: false }
+          ),
+      ],
+      [
+        "publishPrompt (record-only close)",
+        (f) =>
+          f.publishPrompt(
+            { pr: { number: 42, url: "https://example.invalid/pr/42", branch: "b", workingBranch: "b", base: "main", headOid: "deadbeef", rebased: false }, items: [] },
+            [],
+            { push: true, pingCodex: false },
+            [],
+            { pass: 2, range: "a..b", verified: "only the flake task", note: "the payments suite failed on the base too" }
           ),
       ],
     ],
