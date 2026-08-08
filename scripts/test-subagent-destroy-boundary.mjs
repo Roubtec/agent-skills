@@ -245,6 +245,10 @@ const peerState = { round: 2, packet: { dispositions: [] } };
 // That is the "new branch inside an existing builder" gap the header names, so
 // each is rendered rather than argued to be the same text.
 const closeOutState = { passBase: "abc1234", edits: ["typo in a comment"] };
+// The record-only check is handed a range and nothing else — deliberately no
+// list of what the pass says is in it (see the builder), so this state is the
+// whole input.
+const recordOnlyState = { passBase: "abc1234" };
 const fixStateRound1 = { ...fixState, round: 1, findings: null, artifactDir: "" };
 const reviewStateNoArtifact = { ...reviewState, round: 1, artifactDir: "" };
 
@@ -283,6 +287,10 @@ const cycleCases = {
   cycleCloseOutPrompt: [
     ["cycleCloseOutPrompt (standalone)", (f) => f.cycleCloseOutPrompt(cycleStandalone, closeOutState)],
     ["cycleCloseOutPrompt (batch/overridden)", (f) => f.cycleCloseOutPrompt(cycleOverridden, closeOutState)],
+  ],
+  cycleRecordOnlyPrompt: [
+    ["cycleRecordOnlyPrompt (standalone)", (f) => f.cycleRecordOnlyPrompt(cycleStandalone, recordOnlyState)],
+    ["cycleRecordOnlyPrompt (batch/overridden)", (f) => f.cycleRecordOnlyPrompt(cycleOverridden, recordOnlyState)],
   ],
 };
 
