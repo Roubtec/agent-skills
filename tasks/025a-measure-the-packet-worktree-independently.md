@@ -14,8 +14,8 @@ Give the two shipped copies of `review-cycle-core` an independent measurement of
 
 Choose between (at least) these shapes and state why in the delivery:
 
-1. **A dedicated checker turn after each fixer pass.** Most faithful to 025's wording, and the only shape that also covers the FINAL confirmation pass, which terminates the cycle without a reviewer round. Costs one extra agent turn per fixer pass — up to thirteen in a capped cycle.
-2. **Fold the measurement into the reviewer's round.** Costs nothing extra: the reviewer already enters the same worktree at the same commit and already runs the build. It would report the porcelain and operation-state readings structurally, and an unclean or mid-operation tree would gate the round exactly as an unassessed deviation now does. Its gap is the confirmation pass, which no reviewer sees — close it with a single checker turn on that one pass, which is one turn per cycle rather than shape 1's one per fixer pass; the acceptance criteria below do not accept documenting the gap instead of closing it.
+1. **A dedicated checker turn after each fixer pass.** Most faithful to 025's wording, and the only shape that covers every pass through one mechanism — including the FINAL confirmation pass, which terminates the cycle without a reviewer round, rather than special-casing it. Costs one extra agent turn per fixer pass — up to thirteen in a capped cycle.
+2. **Fold the measurement into the reviewer's round.** Costs nothing extra on every pass a reviewer round follows: the reviewer already enters the same worktree at the same commit and already runs the build. It would report the porcelain and operation-state readings structurally, and an unclean or mid-operation tree would gate the round exactly as an unassessed deviation now does. Its gap is the confirmation pass, which no reviewer sees — close it with a single checker turn on that one pass, which is one turn per cycle rather than shape 1's one per fixer pass; the acceptance criteria below do not accept documenting the gap instead of closing it.
 3. **Ask the peer stage for the reading.** Rejected on its face unless argued: the peer is best-effort and non-blocking by contract, so a gate resting on it is a gate that vanishes when the peer is unavailable.
 
 Whichever shape wins, the measurement must be a reading rather than a repair: no stage may stage, commit, reset, stash, or abort anything to make the tree clean. That is the same posture `mainCheckoutStatusPrompt` already takes in `wf-address-tasks.js`, and its schema and prompt are the model to copy — including its `measured: false` degradation, so a reading that cannot be taken is reported as unknown rather than silently passing as clean.
@@ -30,7 +30,7 @@ Whichever shape wins, the measurement must be a reading rather than a repair: no
 
 ## Sequencing
 
-Implement AFTER task 035 (proportionate effort in the review cycle). 035 is deciding what each round is allowed to cost, and shape 1 above adds an unconditional agent turn per fixer pass while shape 2 adds none — a cost question 035 answers rather than this task. Land 035 first, then pick the shape its tiering makes affordable.
+Implement AFTER task 035 (proportionate effort in the review cycle). 035 is deciding what each round is allowed to cost, and the two live shapes price very differently: shape 1 above adds an unconditional agent turn per fixer pass, up to thirteen in a capped cycle, while shape 2 adds one turn per cycle, on the confirmation pass alone. That asymmetry is a cost question 035 answers rather than this task. Land 035 first, then pick the shape its tiering makes affordable.
 
 ## Target files or areas
 
