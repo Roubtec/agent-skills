@@ -734,9 +734,9 @@ Empirical verification that could change state belongs ONLY in a disposable clon
 // branch. The brief names the destination rather than leaving it to be chosen.
 const CYCLE_REDIRECTED_OUTPUT = "Any build or validation output you redirect to a file goes under that same round directory, under any name you like — never a fixed shared scratchpad name: parallel cycles share one scratch directory.";
 
-// Provenance of a brief's claims, carried by the fixer and reviewer briefs
-// alike. Two claims relayed from an earlier round were wrong in a real run and
-// reached a maintainer decision; only the roles told to re-derive them caught it.
+// Provenance of a brief's claims, carried by the fixer, reviewer, and peer
+// briefs alike. Two claims relayed from an earlier round were wrong in a real
+// run and reached a maintainer decision; only roles told to re-derive caught it.
 const CYCLE_CARRIED_CLAIMS = "Provenance: only what you verify against the committed tree yourself is established this turn. Every finding, disposition, open question, and citation relayed to you here is CARRIED from an earlier round's report — it may be stale, or have been wrong when written — so re-derive one before you rely on it.";
 
 // Default worktree/branch contract when the consumer supplies none. A consumer
@@ -894,7 +894,7 @@ Where the work claims a same-pattern sweep ("fixed everywhere"), REDO the enumer
 
 ${CYCLE_CARRIED_CLAIMS}
 
-Scope with \`git diff --name-only ${cycleShq(cycle.base)}...HEAD\`, then read each touched file IN FULL — do not read commit messages or diff content (both anchor you to the fixer's intent); follow references into untouched files when needed. If the diff looks empty despite claimed work, set \`emptyDiffFlag\` and stop — that signals a wrong worktree/branch, not real absence.
+Scope with \`git diff --name-only ${cycleShq(cycle.base)}...HEAD\` — deliberately the CUMULATIVE range, the whole change against \`base\` rather than an incremental since-the-last-round diff, because each round re-reviews the work as a whole. Then read each touched file IN FULL — do not read commit messages or diff content (both anchor you to the fixer's intent); follow references into untouched files when needed. If the diff looks empty despite claimed work, set \`emptyDiffFlag\` and stop — that signals a wrong worktree/branch, not real absence.
 ${persistLine}${cycle.scope && cycle.scope.reviewInstructions ? `\n## Consumer review criteria (verify each item against these too)\n\n${cycle.scope.reviewInstructions}\n` : ""}${cycleItemsBlock(cycle)}${handedBlock}${dispositionsBlock}${proposedRetirementsBlock}${workBlock}
 Return \`pass: true\` only if everything holds and no material issue remains; else \`pass: false\` with numbered, actionable \`issues\`. Be strict but fair — real gaps and functional problems, not style nits. Put pass-worthy caveats in \`notes\` (the cycle disposes them rather than dropping them).`;
 }
@@ -952,7 +952,7 @@ ${preflightStep}
 
 ## Peer prompt (write this text to the prompt file verbatim, filling only the placeholders)
 
-You are an independent read-only peer reviewer. Review the committed state of branch ${JSON.stringify(cycle.branch)} against base ${JSON.stringify(cycle.base)} in the current directory (artifact type: ${cycle.artifactType}). Read the actual files; edit nothing; run no builds or tests. Verify the work items and any proposed dispositions below in the committed code; a declined finding must be technically justified. Evidence (verbatim):
+You are an independent read-only peer reviewer. Review the committed state of branch ${JSON.stringify(cycle.branch)} against base ${JSON.stringify(cycle.base)} in the current directory (artifact type: ${cycle.artifactType}). Read the actual files; edit nothing; run no builds or tests. Verify the work items and any proposed dispositions below in the committed code; a declined finding must be technically justified. ${CYCLE_CARRIED_CLAIMS} Evidence (verbatim):
 
 ${JSON.stringify(evidence, null, 2)}
 
@@ -1191,12 +1191,12 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //
 // cycle: {
 //   slug, worktree, branch, base, artifactType ("code"|"prose"|"decision"),
-//   `base` must be a STABLE ref — an immutable OID or a recorded snapshot,
-//     never a movable remote-tracking name like `origin/main` and never a SHA
-//     captured before a rebase (unreachable after it; re-record it). Rounds
-//     review the CUMULATIVE `base...HEAD` deliberately: an INCREMENTAL
-//     re-review needs the recorded prior-round SHA, and a fix commit's parent
-//     is NOT it — after an amend `HEAD~1` spans the whole fix set.
+//   `base` must not MOVE under the cycle: never a movable remote-tracking name
+//     like `origin/main`, never a pre-rebase SHA (unreachable afterwards — so
+//     re-record it); pin it to an immutable OID or a recorded snapshot wherever
+//     it can move mid-run. Rounds review the CUMULATIVE `base...HEAD` by
+//     design: an INCREMENTAL re-review needs the recorded prior-round SHA, not
+//     a fix commit's parent — after an amend `HEAD~1` spans the whole fix set.
 //   scope: { title, instructions, items },
 //   maxRounds (validated through cycleRoundCap), peer ("on"|"off"),
 //   mode ("full"|"light"),
