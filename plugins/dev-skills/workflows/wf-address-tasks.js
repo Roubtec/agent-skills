@@ -6,10 +6,10 @@
  * plus a best-effort cross-harness codex peer review -> fix, bounded by the
  * cycle's canonical round cap — scan reviewed sibling branches for add/add
  * collisions before delivery and deconflict them (an orchestrator-deputy agent
- * renames one side, regenerates derived files, the changed branch is
- * re-reviewed, and a second scan of the refs decides which sides may deliver) —
- * or hold a name that must stay identical — then open PRs for
- * the delivered tasks and report. Invoke as
+ * renames one side, regenerates derived files, a second scan of the refs decides
+ * which sides may deliver, and every branch a cleared clash covered is
+ * re-reviewed first) — or hold a name that must stay identical — then open PRs
+ * for the delivered tasks and report. Invoke as
  * `/dev-skills:wf-address-tasks <glob-or-file-list> [peer-opinions=off]`.
  *
  * Why a workflow rather than a skill
@@ -85,8 +85,8 @@ export const meta = {
     { title: "Resolve batch", detail: "read task files, derive dependency waves and branches" },
     { title: "Peer review (codex)", detail: "best-effort cross-harness second opinion beside each task's reviewer rounds; its outcome never blocks" },
     { title: "Collision scan", detail: "diff added files across sibling branches for add/add clashes" },
-    { title: "Collision resolve", detail: "rename one side of each clash, regen, then re-review the changed side" },
-    { title: "Collision re-scan", detail: "re-derive the clashes from the refs; only a branch the re-scan clears delivers" },
+    { title: "Collision resolve", detail: "rename one side of each clash, regen, commit" },
+    { title: "Collision re-scan", detail: "re-derive the clashes from the refs; a branch the re-scan clears delivers only after a fresh re-review" },
     { title: "Summary" },
   ],
 };
@@ -2512,7 +2512,7 @@ Do NOT open any PR and do NOT remove any worktree — the workflow re-scans the 
 // FAILED on the flake rule's evidenced-unrelated disposition (with the
 // tolerated post-run flake commit where the record still names one — "still"
 // because the collision guard's re-review empties that pair on a branch it
-// renamed, see `collisionReviewedRecord`) — so this carrier is the only thing
+// clears, see `collisionReviewedRecord`) — so this carrier is the only thing
 // between that fact and the maintainer. `recordOnly` also
 // carries the pass's `note` of what the delivery run surfaced, which is how
 // item 2's PR-body-or-batch-summary record survives the exits that have no
@@ -2560,7 +2560,7 @@ function cycleCarried(result) {
 // the record-only exit, correctly: no round of its own follows that exit.
 //
 // This workflow then adds a stage the cycle has no view of. When the pre-PR
-// collision guard's resolver renames a file on an already-reviewed branch, the
+// collision guard's resolver has run over a wave's already-reviewed branches, the
 // re-review arm runs a fresh DELIVERY-tier reviewer over the CUMULATIVE range
 // (`base...HEAD` — the reviewer brief fixes that scope), so a pass there has
 // seen every commit on the branch, the tolerated post-run one included. That
