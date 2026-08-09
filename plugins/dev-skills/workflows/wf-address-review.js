@@ -106,7 +106,7 @@ const PACKET_SCHEMA = {
     },
     reconcile: {
       type: "object",
-      description: "What the gather brief's branch reconciliation did. Required whenever ok is true — the caller stops the run on any outcome but the two that let it continue.",
+      description: "What the gather brief's branch reconciliation did. Required whenever ok is true, the off-shoot case included — it reports `not-applicable`. ENFORCED only on a run whose workingBranch equals branch: there the caller stops the run on any outcome but the two that let it continue, an absent report among them. Where the names differ the caller does not read this field at all, because the brief skips reconciliation whole.",
       properties: {
         outcome: {
           type: "string",
@@ -248,7 +248,7 @@ Resolve the PR: explicit PR# wins (but sanity-check it shares history with the c
 
 Reconcile the checked-out branch with the PR head — ONLY when \`workingBranch\` equals \`branch\`. Where the two names DIFFER the supported local off-shoot of a merge-pending PR is in play: \`branch\`/\`headOid\` are publication metadata for a branch you are not on, "behind the PR head" is that case's normal state, and you MUST skip this step whole — no fetch, no branch move — reporting \`reconcile: { outcome: "not-applicable" }\`.
 
-Where the names match: fetch the PR's exact head ref WITHOUT moving the local branch, and confirm the recorded OID is a local object (\`git cat-file -e <headRefOid>^{commit}\`). If it is not, the head moved under you — re-read the PR head, fetch again, and record the refreshed OID as \`pr.headOid\` before continuing. Then with \`H\` = \`HEAD\` and \`R\` = that OID, run these two probes and take the FIRST outcome that applies:
+Where the names match: fetch the PR's exact head ref WITHOUT moving the local branch, then take \`R\` from what that fetch actually brought — \`git rev-parse FETCH_HEAD\` — NOT from the recorded \`headRefOid\`. A fetch brings whatever the ref names NOW, and whether the recorded OID is a local object says nothing about that: it is normally reachable from your own checkout, so an existence check passes even when a push has since advanced the head, leaving you to reconcile against the stale tip. Where \`R\` differs from the recorded OID the head moved under you, which is not a failure — record \`R\` as \`pr.headOid\` before continuing, so the lease the publish phase builds names the head you actually reconciled against. Then with \`H\` = \`HEAD\`, run these two probes and take the FIRST outcome that applies:
 1. \`git rev-list --right-only --cherry-pick H...R\` — the remote commits not represented in local. EMPTY → local already carries everything the remote has (identical, ahead by unpushed commits, rebased onto a newer base, restacked after a predecessor merged, or any combination). Report \`reconcile: { outcome: "work" }\` and proceed on \`H\` as it stands.
 2. Else \`git merge-base --is-ancestor H R\` — true means local is strictly behind and holds nothing the remote lacks. Run \`git merge --ff-only <R>\`, report \`reconcile: { outcome: "fast-forwarded" }\`, and proceed. This fast-forward is the ONE branch move this assignment authorizes, and only on this path.
 3. Else this run does not act on the branch. Return \`ok: true\` (this is NOT a failure and NOT a blocker), \`items: []\`, the \`pr\` object populated, and \`reconcile: { outcome: "unrecognized", detail: "<what you saw>" }\` — name both tips and the commits unique to each side. Do NOT pick a side, merge, rebase, reset, or force anything, and gather no threads: the caller stops the run and hands the branch back to the maintainer.
@@ -490,7 +490,14 @@ if (
   };
 }
 if (!packet.items || packet.items.length === 0) {
-  return { status: "no-op", detail: "No unresolved threads and no included standalone item — nothing to address.", pr: packet.pr };
+  // Carry the reconciliation record here too: on the `fast-forwarded` outcome
+  // this run MOVED the local branch, which a bare "nothing to address" hides.
+  return {
+    status: "no-op",
+    detail: `No unresolved threads and no included standalone item — nothing to address (branch reconciliation: ${reconcileOutcome || "none reported"}).`,
+    pr: packet.pr,
+    reconcile,
+  };
 }
 
 phase("Fix and verify");

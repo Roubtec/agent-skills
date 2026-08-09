@@ -33,8 +33,9 @@
 // The gate is only the CONSUMER of `packet.reconcile`. The producer is a
 // paragraph of the gather brief, which no scenario reaches because the gather
 // agent is stubbed — so the RULE it states is read out of the rendered brief
-// directly: both probes, the off-shoot skip, and the outcome strings, whose
-// agreement with the strings the gate keys on nothing else pins.
+// directly: both probes, the head they compare against, the off-shoot skip, and
+// the outcome strings, whose agreement with the strings the gate keys on
+// nothing else pins.
 //
 // It also covers the publication guard that landed beside the gate, which is
 // prompt prose rather than script logic: a HEAD that is a proper ancestor of
@@ -67,7 +68,7 @@ function check(name, cond, detail) {
 // does not count. Bump it deliberately when adding or removing one — a
 // scenario that silently stops running is invisible to a suite that only gates
 // on failures.
-const EXPECTED_CHECKS = 27;
+const EXPECTED_CHECKS = 29;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -179,6 +180,14 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile }) {
   );
   const ffClean = await run(gathered({ reconcile: { outcome: "fast-forwarded" } }));
   check("same-branch `fast-forwarded` with no threads is a plain no-op", ffClean.status === "no-op", JSON.stringify(ffClean.result));
+  // A no-op that had nothing to address may still have MOVED the branch, which
+  // is the one outcome a reader cannot infer from "nothing to address".
+  check(
+    "and that no-op still names the reconciliation and carries its record",
+    /fast-forwarded/.test((ffClean.result || {}).detail || "") &&
+      ((ffClean.result || {}).reconcile || {}).outcome === "fast-forwarded",
+    JSON.stringify(ffClean.result),
+  );
   const ffWorking = await run(gathered({ reconcile: { outcome: "fast-forwarded" }, items: [ITEM] }));
   check("same-branch `fast-forwarded` with threads proceeds to the nested cycle", ffWorking.status === "reached-cycle", ffWorking.status);
 }
@@ -275,6 +284,18 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile }) {
   const probes = ["git rev-list --right-only --cherry-pick", "git merge-base --is-ancestor"];
   const missing = probes.filter((p) => !brief.includes(p));
   check("the gather brief orders both reconciliation probes", missing.length === 0, `missing: ${missing.join("; ")}`);
+
+  // Where the probes' `R` comes from decides what they compare against. The
+  // OID `gh pr view` reported is normally reachable from the checkout itself,
+  // so testing that it exists locally passes just as well after the head moved
+  // — and every probe then runs against a stale tip.
+  const readsFetchedHead = brief.includes("git rev-parse FETCH_HEAD");
+  const testsObjectExistence = /cat-file -e/.test(brief);
+  check(
+    "and takes their `R` from the fetched ref, not from an existence test on the recorded OID",
+    readsFetchedHead && !testsObjectExistence,
+    `reads FETCH_HEAD: ${readsFetchedHead}; tests object existence: ${testsObjectExistence}`,
+  );
 
   // The off-shoot exemption is stated to the agent as well as enforced by the
   // gate: where the names differ the step is skipped WHOLE, which is what makes
