@@ -32,7 +32,7 @@ Implement AFTER task 027a, which reworks this same dispatch: it re-derives the c
 
 ## Context and references
 
-- The re-review call and its state object: the `re-review:${task.slug}` agent label in `plugins/dev-skills/workflows/wf-address-tasks.js`, in the `isChanged` arm of the `heldTasks` dispatch. Cited by anchor rather than by line on purpose: this file first carried a line number, and PR #55's own later commits — growing the `review-cycle-core` section above the call — moved it before the PR merged, while the label is a unique string that survives every such move.
+- The re-review call and its state object: the `re-review:${task.slug}` agent label in `plugins/dev-skills/workflows/wf-address-tasks.js`, in the re-review arm of the `heldTasks` dispatch — the final arm, which 027a widened from "the branches the resolver said it changed" to every held branch of a cleared clash. Cited by anchor rather than by line on purpose: this file first carried a line number, and PR #55's own later commits — growing the `review-cycle-core` section above the call — moved it before the PR merged, while the label is a unique string that survives every such move.
 - What the pass carries forward on success: the `deliverable.push({ task, result: { ...result, notes: ... } })` immediately below it.
 - Where the carried values surface: `deliverTask` and `prPrompt` in the same file, which lead the PR body with `deviations` and `deviationAssessments`.
 - The enforcement this path lacks: the deviation-coverage gate in `runReviewCycle` (the `unassessedDeviations` / `roundPassed` block) and the `deviationsBlock` prose in `cycleReviewPrompt`, both inside the `review-cycle-core` section.
@@ -42,11 +42,11 @@ Implement AFTER task 027a, which reworks this same dispatch: it re-derives the c
 ## Target files or areas
 
 - `plugins/dev-skills/workflows/wf-address-tasks.js` (out-of-section collision dispatch only).
-- A test harness for the collision dispatch. None exists: `scripts/test-review-cycle-retirement.mjs` evaluates only the marked `review-cycle-core` section, so the wave/collision code has never been driven as running code. 027a's validation needs the same harness; build it once, under whichever task lands first.
+- `scripts/test-collision-dispatch.mjs` — the harness 027a landed. It drives the shipped `settleWaveCollisions` directly with scripted resolver, re-scan, and re-review packets, so the dispatch already runs as code and this task extends that suite rather than building one. What it does not carry yet is deviation state: add a driver that gives a held branch's cycle result a standing `deviations` entry and asserts what the re-review is shown, what its `deviationAssessments` do to the delivered result, and that the brief this path renders says what this path enforces.
 
 ## Acceptance criteria
 
-- The collision re-review of a changed branch is shown the deviations still standing on that branch's cycle result.
+- The collision re-review is shown the deviations still standing on the cycle result of every branch it runs on.
 - A branch delivered out of the collision dispatch does not carry a `deviationAssessments` entry formed before the rename it just received.
 - A re-review that raises the deviation's staleness as an issue holds the branch rather than delivering it, with a detail that says what to do next.
 - The brief this path renders and the gate this path applies agree: either an unassessed standing deviation holds the branch, or the brief does not claim it does.
