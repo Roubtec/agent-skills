@@ -225,7 +225,11 @@ const cycleBase = {
 };
 // The two configurations that take different branches through cycleContract():
 // a standalone run with no per-role overrides, and a batch consumer that
-// overrides ALL THREE roles (wf-address-tasks does exactly this).
+// overrides ALL FOUR roles (wf-address-tasks does exactly this). Every role the
+// section can ask a contract for is listed, `measurer` included: with one
+// missing, its brief renders the DEFAULT contract under both configurations and
+// the pair is one text rendered twice rather than the two branches this pair
+// exists to cover.
 const cycleStandalone = { ...cycleBase, contracts: undefined };
 const cycleOverridden = {
   ...cycleBase,
@@ -233,6 +237,7 @@ const cycleOverridden = {
     fixer: "## WORKTREE CONTRACT\n(consumer-supplied fixer contract)",
     reviewer: "## WORKTREE CONTRACT\n(consumer-supplied reviewer contract)",
     peer: "## WORKTREE CONTRACT\n(consumer-supplied peer contract)",
+    measurer: "## WORKTREE CONTRACT\n(consumer-supplied measurer contract)",
   },
 };
 const fixState = { round: 2, findings: { reviewer: [{ id: "f1", text: "x" }] }, confirming: false, artifactDir: "/tmp/a", openQuestions: [] };
