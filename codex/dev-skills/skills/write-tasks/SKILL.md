@@ -141,6 +141,9 @@ Avoid:
 - acceptance criteria that are too vague to review
 - instructions that force the implementer to rediscover key decisions
 
+**Anchor code references to named symbols.** When a task cites existing code, name the symbol and the scope holding it — function, class, namespace, module, exported constant — within a named file or folder, and let the reader grep for it: the reference's job is to survive the code moving, and a line number rots on the next rebase or on any edit above it. Where one file holds several same-named symbols, disambiguate the way that file's own language does (`v1::parseInput()`, `V1Api.prototype.parseInput`, an enclosing class or namespace path) rather than by position. Cite a line number only when the thing referenced has no stable name — a data row, a region of a generated file, a specific literal — and then state that reason in the task and stamp the reference frame the numbers are as of (the commit, PR, or task that produced them), so a later reader knows to re-derive them.
+This rule governs durable task files. Ephemeral same-round artifacts — reviewer findings, the peer verdict's `file:line`, open-question artifact pointers, review replies — are read against the tip that produced them and stay maximally precise in their own formats.
+
 ## Quality guidance
 
 Encourage:
@@ -153,7 +156,7 @@ Encourage:
 
 ## Review the drafted tasks (the verbiage cycle)
 
-By default, after the task files are drafted and committed, run the `review-cycle` skill on them with artifact type `prose` — a fresh-eyes self-review plus that skill's best-effort cross-harness peer — checking verbiage, scoping, self-containedness, and the repo's documented numbering house style against the sections this skill requires.
+By default, after the task files are drafted and committed, run the `review-cycle` skill on them with artifact type `prose` — a fresh-eyes self-review plus that skill's best-effort cross-harness peer — checking verbiage, scoping, self-containedness, code references anchored to named symbols rather than line numbers, and the repo's documented numbering house style against the sections this skill requires.
 Findings follow the cycle's disposition rule; commit the fixes on the current branch so the reviewed text is what an implementer picks up.
 Suppress the cycle per invocation in prose — `no-review`, or any clear request to skip it — and pass `peer-opinions=off` through to the cycle when given. Skipping is the exception for throwaway drafts, not the default.
 
