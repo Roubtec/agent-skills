@@ -74,7 +74,7 @@ function check(name, cond, detail) {
 // does not count. Bump it deliberately when adding or removing one — a
 // scenario that silently stops running is invisible to a suite that only gates
 // on failures.
-const EXPECTED_CHECKS = 37;
+const EXPECTED_CHECKS = 38;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -239,6 +239,21 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "the off-shoot working location is selected by the `off-shoot` token, never inferred from the branch's shape",
     tokenRoutes && !inferredFromShape,
     `token route stated: ${tokenRoutes}; carries-the-head predicate present: ${inferredFromShape}`,
+  );
+  // The one check that survives beside the token is a stop for AMBIGUITY — the
+  // named branch is also another open PR's head — and it must not fire on the PR
+  // being addressed: where the branch IS that PR's head, a bare
+  // `gh pr list --head <branch>` answers with the very PR under work, so an
+  // unqualified stop halts an ordinary target-branch run on a token that is
+  // merely redundant there. Both qualifications are pinned: exclude the resolved
+  // PR by number, and identify the other head repository-qualified rather than
+  // by bare branch name, which a fork's same-named head also answers.
+  const excludesAddressedPr = /DIFFERENT number/.test(cases);
+  const repoQualifiedOtherHead = /headRepositoryOwner/.test(cases);
+  check(
+    "the conflicting-PR stop excludes the PR being addressed and identifies the other head by repository plus ref",
+    excludesAddressedPr && repoQualifiedOtherHead,
+    `different-number filter stated: ${excludesAddressedPr}; repository-qualified head stated: ${repoQualifiedOtherHead}`,
   );
 }
 
