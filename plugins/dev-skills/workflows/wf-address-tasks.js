@@ -1883,9 +1883,16 @@ async function runReviewCycle(cycle) {
     // failure the check exists to contain — a pass returning `clean: true` from
     // a tree still mid-rebase, which prints EMPTY porcelain — passes the
     // self-report unseen. So every packet the cycle ADOPTS is measured by a turn
-    // that did not produce it, before any of the packet's content is taken up
-    // and before any exit branches on it. The two refusals above are free, so
-    // they run first; nothing between them and here adopts anything.
+    // that did not produce it, before anything branches on the packet's
+    // SUBSTANCE — its work report, its dispositions, its diff, any conclusion
+    // drawn from them. What runs ahead of the measurement is only what costs no
+    // agent turn: the free refusals above, which would make measuring an
+    // already-refused packet pure waste; the artifact-directory capture the last
+    // of those refusals sits in; and this pass's flake record, logged where it
+    // is for the reason given there. Each of the three does read a field off the
+    // packet — the measurement is not the first line to touch it — but none of
+    // them takes up the WORK the packet claims to have done, which is what an
+    // unmeasured worktree would poison.
     //
     // Measured HERE rather than folded into the reviewer's round, which would
     // ride an existing turn: three of the four conclusions have no reviewer
