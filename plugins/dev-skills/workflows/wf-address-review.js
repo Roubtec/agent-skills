@@ -68,7 +68,8 @@
  * and the publisher; because every result echoes the `pr` object, a run that
  * HALTS reports the surviving worktree to the maintainer for free, while a run
  * that FINISHES (published, a local-only pass, or a no-op) gives it back
- * through the reclaim step.
+ * through the reclaim step — which refuses rather than forces, so a tree it
+ * declines to remove is reported by path in that result's own note.
  *
  * Runtime notes:
  *  - The script cannot run git/gh/file IO; the gather/fix/review/publish agents
@@ -112,13 +113,13 @@ const PACKET_SCHEMA = {
         url: { type: "string" },
         branch: { type: "string", description: "The PR's remote head ref (headRefName) — publication metadata, the push target. May differ from what is checked out." },
         workingBranch: { type: "string", description: "The branch checked out in the WORKING LOCATION (`git branch --show-current` there). Equals branch inline on the PR head ref and always in worktree mode; for a supported local-offshoot of a merge-pending PR it differs — the fixer edits THIS branch, not the remote head ref." },
-        locationMode: { type: "string", description: "`inline` (the work happens in the current checkout) or `worktree` (a worktree was attached for it). Absent is read as `inline`." },
+        locationMode: { type: "string", description: "REQUIRED: exactly `inline` (the work happens in the current checkout) or `worktree` (a worktree was attached for it). There is no default — the caller stops the run on an absent or unrecognized value, because reading one as `inline` would point every later phase at the main checkout, which in worktree mode is not on the PR branch at all." },
         worktree: { type: "string", description: "ABSOLUTE path of the attached worktree in `worktree` mode — required there, since it is where every later phase works. Empty in `inline` mode. It rides in `pr` so that every result echoing the PR object reports a worktree a halted run left standing." },
         base: { type: "string", description: "Effective review base — the rebase target if a rebase ran, else baseRefName." },
         headOid: { type: "string", description: "Expected remote head OID, for the publication lease. Populate from the PR's headRefOid." },
         rebased: { type: "boolean", description: "True if a rebase rewrote the branch tip (publish must use --force-with-lease)." },
       },
-      required: ["number", "url", "branch", "workingBranch", "base", "headOid"],
+      required: ["number", "url", "branch", "workingBranch", "locationMode", "base", "headOid"],
     },
     reconcile: {
       type: "object",
@@ -183,7 +184,7 @@ const PUBLISH_SCHEMA = {
 const RECLAIM_SCHEMA = {
   type: "object",
   properties: {
-    removed: { type: "boolean", description: "True only if the worktree is gone. False when the reclaim refused (a dirty or mid-operation tree, or a path that did not verify) — which is a report, not a failure of the run." },
+    removed: { type: "boolean", description: "True only if the worktree is gone. False when the reclaim refused (a dirty or mid-operation tree, or a path that did not verify) — which is a report, not a failure of the run: the run's status still names what happened to the PR, and the surviving path is carried into its `note` as well as this record." },
     path: { type: "string", description: "The worktree path this spoke for." },
     detail: { type: "string", description: "One line: how it was removed, or what is held there and why it was left." },
   },
@@ -271,15 +272,17 @@ Preflight (set \`ok: false\` with a \`blocker\` and stop on any failure):
 
 Resolve the PR: explicit PR# wins (but sanity-check it shares history with the branch it would be worked on — if genuinely unrelated, blocker and stop); else auto-detect via \`gh pr view\`. When \`ok\` is true you MUST populate the whole \`pr\` object: \`number\`, \`url\`, \`branch\` (the PR's remote headRefName — the push target), \`workingBranch\` (the branch checked out in the working location, from \`git branch --show-current\` there), \`base\`, \`headOid\` (the PR's headRefOid — the publish phase needs it for a safe \`--force-with-lease\`), \`rebased\`, and the \`locationMode\`/\`worktree\` pair the next step decides. \`workingBranch\` usually equals \`branch\` — in worktree mode it always does — but for a supported local off-shoot of a merge-pending PR it differs; downstream fixes edit \`workingBranch\`, while \`branch\`/\`headOid\` remain publication metadata for the push.
 
-Pick the WORKING LOCATION now — after resolving the PR, before reconciling below (reconciling can fast-forward a branch, and it must move the branch the work will land on). Let \`T\` be the PR's headRefName and \`C\` the current branch (\`git branch --show-current\`, EMPTY when detached). Fetch the PR's exact head ref WITHOUT moving any branch and let \`R\` be \`git rev-parse FETCH_HEAD\` — the same \`R\` the reconciliation below uses, so one fetch serves both. Take the FIRST case that applies:
-1. The request carried the \`inline\` token → work INLINE in this checkout. Where it is not already on a working location for this PR (case 2 or 3), check \`T\` out here first: \`gh pr checkout <N>\` for a fork head, else create a local tracking branch at \`R\`. The run ENDS on that branch; do not restore anything.
-2. \`C\` equals \`T\` and \`T\` passes the identity check below → work INLINE, exactly as this pipeline always has. The branch advances under whoever is standing on it, which is this case's contract rather than a side effect.
-3. \`C\` is a NAMED branch (not detached) that is neither \`T\` nor the PR's baseRefName, the PR is OPEN, and \`C\` already CARRIES the PR head — \`git rev-list --right-only --cherry-pick C...R\` prints nothing → this is the supported local off-shoot of a merge-pending PR, a location the maintainer chose. Work INLINE on \`C\` and report it as \`workingBranch\`.
-4. Anything else — any other branch, and a DETACHED HEAD, which has nothing to advance under anyone → work in a WORKTREE and leave this checkout alone: it is never switched, never dirtied, and never required to be clean, and whoever owns it may repoint it while you work. Attach \`T\` under the stable slug \`pr-<N>\` (stable so a halted run's worktree is found again rather than duplicated): prefer \`wt-enter pr-<N> <T>\` where \`command -v wt-enter\` finds it — it is rerun-safe and prints the absolute path — else place it yourself under the repository's ignored worktree base (\`<repo>/.worktrees/$CONTAINER_NAME/\`, the convention \`wt-enter\` uses; \`git worktree prune\` first to clear stale registrations) with \`git worktree add "<worktree base>/pr-<N>" <T>\` for a local \`T\`; where no local \`T\` exists, \`git fetch origin refs/heads/<T>\` then \`git worktree add -b <T> "<worktree base>/pr-<N>" <R>\`; for a fork head, \`git worktree add --detach\` followed by \`gh pr checkout <N>\` inside it, then verify for yourself that you landed on a NAMED branch carrying \`R\` (gh selects a same-named local branch even under \`--detach\`, and only declines to clobber it — that is not a check).
+Pick the WORKING LOCATION now — after resolving the PR, before reconciling below (reconciling can fast-forward a branch, and it must move the branch the work will land on). Let \`T\` be the PR's headRefName and \`C\` the current branch (\`git branch --show-current\`, EMPTY when detached). Fetch the PR's exact head ref WITHOUT moving any branch and let \`R\` be \`git rev-parse FETCH_HEAD\` — the same \`R\` the reconciliation below uses, so one fetch serves both.
 
-Report the choice as \`locationMode\` (\`inline\` or \`worktree\`) and, in worktree mode, its ABSOLUTE path as \`pr.worktree\` (empty inline). In worktree mode, \`cd\` into it and require \`git rev-parse --show-toplevel\` to print exactly that path before doing anything else; every step below — the reconciliation, the rebase, the thread gathering's git reads — happens there, and NOTHING touches the main checkout again.
+The identity check first, before any checkout or attach below — settling it afterwards would mean settling it on a ref already occupied. A branch is only this PR's when it shares recent history with the PR head (for a fork head, when its resolved push remote/ref matches the PR head repo/ref). A local ref that merely bears \`T\`'s NAME while carrying unrelated history is a name collision — reusing a name like \`minor-fixes\` across unrelated work is ordinary practice — and it must never become the working location, in any of the four cases. Attach nothing and substitute nothing: not a disambiguated branch name (it would carry no verified push target for the publication lease to match) and not a detached checkout (its commits are reachable from nothing once the worktree is reclaimed). Set \`ok: false\` with a \`blocker\` naming the rejected local ref, the verified PR head, and what each points at, and stop — branch hygiene is the maintainer's call.
 
-The identity check, and the one collision it exists for: a branch is only this PR's when it shares recent history with the PR head (for a fork head, when its resolved push remote/ref matches the PR head repo/ref). A local ref that merely bears \`T\`'s NAME while carrying unrelated history is a name collision — reusing a name like \`minor-fixes\` across unrelated work is ordinary practice — and it must never become the working location, in any of the four cases. Attach nothing and substitute nothing: not a disambiguated branch name (it would carry no verified push target for the publication lease to match) and not a detached checkout (its commits are reachable from nothing once the worktree is reclaimed). Set \`ok: false\` with a \`blocker\` naming the rejected local ref, the verified PR head, and what each points at, and stop — branch hygiene is the maintainer's call.
+Then take the FIRST case that applies:
+1. The request carried the \`inline\` token → work INLINE in this checkout. Where it is not already on a working location for this PR (case 2 or 3), run the clean-tree and no-rebase-in-progress checks on it FIRST and make a failure the blocker — a run that switches this checkout and only then discovers dirt has moved it for nothing — then check \`T\` out here: \`gh pr checkout <N>\` for a fork head, else create a local tracking branch at \`R\`. The run ENDS on that branch; do not restore anything.
+2. \`C\` equals \`T\` and \`T\` passes the identity check above → work INLINE, exactly as this pipeline always has. The branch advances under whoever is standing on it, which is this case's contract rather than a side effect.
+3. The request named the PR explicitly, the PR is OPEN, \`C\` is a NAMED branch (not detached) that is neither \`T\` nor the PR's baseRefName, \`C\` is not itself the head of another open PR (\`gh pr list --head <C> --state open\` finds none), and \`C\` already CARRIES the PR head — \`git rev-list --right-only --cherry-pick C...R\` prints nothing → this is the supported local off-shoot of a merge-pending PR, a location the maintainer chose. Work INLINE on \`C\` and report it as \`workingBranch\`. Those last two conditions are what keep the case an off-shoot: a branch STACKED on this PR's head satisfies everything else — routine in a stacked chain — and working there would publish the child's own commits onto this PR under \`T\`, while a PR this run auto-detected rather than being handed was resolved FROM \`C\`, which makes \`C\` that PR's own head. Where either fires, do not fall through to case 4 on that branch either: set \`ok: false\` with a \`blocker\` naming both branches and both PRs.
+4. Anything else — any other branch, and a DETACHED HEAD, which has nothing to advance under anyone → work in a WORKTREE and leave this checkout alone: it is never switched, never dirtied, and never required to be clean, and whoever owns it may repoint it while you work. Attach \`T\` under the stable slug \`pr-<N>\` (stable so a halted run's worktree is found again rather than duplicated), and branch on whether a local \`T\` exists, because the two need different commands. Where it EXISTS, attach it: prefer \`wt-enter pr-<N> <T>\` where \`command -v wt-enter\` finds it — it is rerun-safe and prints the absolute path — else place it yourself under the repository's ignored worktree base (\`<repo>/.worktrees/$CONTAINER_NAME/\`, the convention \`wt-enter\` uses; \`git worktree prune\` first to clear stale registrations) with \`git worktree add "<worktree base>/pr-<N>" <T>\`. Where NO local \`T\` exists — the commonest way this case is reached, since a PR head you have never checked out has no local ref — the branch must be CREATED at the verified head, which \`wt-enter\` REFUSES to do without a base (\`branch '<T>' does not exist and no <base> was given\`): either \`git fetch origin refs/heads/<T>\` then \`git worktree add -b <T> "<worktree base>/pr-<N>" <R>\`, or \`wt-enter pr-<N> <T> <R>\`, which consults the base only when the branch is missing. For a fork head, \`git worktree add --detach\` followed by \`gh pr checkout <N>\` inside it, then verify for yourself that you landed on a NAMED branch carrying \`R\` (gh selects a same-named local branch even under \`--detach\`, and only declines to clobber it — that is not a check).
+
+Report the choice as \`locationMode\` (\`inline\` or \`worktree\`) — both fields are REQUIRED of a successful gather, and an absent or unrecognized \`locationMode\` stops the run rather than defaulting to either — and, in worktree mode, its ABSOLUTE path as \`pr.worktree\` (empty inline). In worktree mode, \`cd\` into it and require \`git rev-parse --show-toplevel\` to print exactly that path before doing anything else; every step below — the reconciliation, the rebase, the thread gathering's git reads — happens there, and NOTHING touches the main checkout again.
 
 Reconcile the checked-out branch with the PR head — ONLY when \`workingBranch\` equals \`branch\`. Where the two names DIFFER the supported local off-shoot of a merge-pending PR is in play: \`branch\`/\`headOid\` are publication metadata for a branch you are not on, "behind the PR head" is that case's normal state, and you MUST skip this step whole — no probes, no branch move — reporting \`reconcile: { outcome: "not-applicable" }\`. (The location step's fetch is not this step: it moved nothing.)
 
@@ -534,18 +537,25 @@ if (flags.push && !packet.pr.headOid) {
 // The working location, per the gather brief's "Pick the WORKING LOCATION"
 // step. Everything after this — the nested cycle, the publisher, the reclaim —
 // is pointed at it, so the pair is validated once here rather than trusted at
-// each use. An absent `locationMode` reads as `inline`, which is the pre-018
-// shape and the only safe default: it asserts no path, so nothing is sent
-// anywhere. The unsafe direction is the other one, and it fails closed —
-// `worktree` mode with no absolute path would hand the cycle `worktree: ""`,
-// i.e. the main checkout, which in that mode is not on the branch at all and
-// may be dirty or mid-anything, and the fixer would commit wherever it landed.
-// An inline report carrying a path is refused for the mirror-image reason: one
-// of the two is wrong and there is no way to tell which, so a run that would
-// then work in the checkout while reporting a worktree (or the reverse) stops
-// instead.
-const locationMode = packet.pr.locationMode === "worktree" ? "worktree" : "inline";
+// each use, and there is NO default in either direction. Reading an absent
+// `locationMode` as `inline` looks like the safe fallback (it asserts no path)
+// and is not: a gather that attached a worktree and then failed to report the
+// pair would hand the cycle `worktree: ""`, i.e. the main checkout, which in
+// that mode is not on the PR branch at all and may be dirty or mid-anything —
+// and the fixer would commit wherever it landed. Absence and an unrecognized
+// value are therefore the same stop, before any phase is dispatched. So is
+// `worktree` mode with no absolute path, and so is an inline report carrying a
+// path: one of those two is wrong and there is no way to tell which, so a run
+// that would work in the checkout while reporting a worktree (or the reverse)
+// stops rather than picking.
+const locationMode = packet.pr.locationMode;
 const worktreePath = typeof packet.pr.worktree === "string" ? packet.pr.worktree.trim() : "";
+if (locationMode !== "inline" && locationMode !== "worktree") {
+  return {
+    error: `Gather returned no usable pr.locationMode (${JSON.stringify(locationMode === undefined ? null : locationMode)}); it must be exactly \`inline\` or \`worktree\`, and nothing is dispatched on a guess — a gather that attached a worktree without saying so would have the fix land in the main checkout.`,
+    pr: packet.pr,
+  };
+}
 if (locationMode === "worktree" && !worktreePath.startsWith("/")) {
   return {
     error: `Gather reported worktree mode but no absolute pr.worktree path (${JSON.stringify(packet.pr.worktree === undefined ? null : packet.pr.worktree)}); refusing to run the cycle in the main checkout, which in that mode is not on the PR branch.`,
@@ -571,6 +581,15 @@ async function reclaimWorktree(why) {
     schema: RECLAIM_SCHEMA,
   });
   return reclaimed || { removed: false, path: worktreePath, detail: "the reclaim agent returned nothing; the worktree may still be there" };
+}
+// A refused reclaim is not a failed run — the publication (or the local-only
+// pass) still happened, and the status says so. What it must not be is
+// discoverable only by reading `worktreeReclaim`: the run FINISHED with a tree
+// still standing, which is the one thing a finished run promises not to leave
+// behind, so the surviving path rides in the `note` a maintainer reads first.
+function survivingWorktreeNote(reclaimed) {
+  if (!reclaimed || reclaimed.removed) return "";
+  return ` The worktree \`${reclaimed.path || worktreePath}\` was NOT reclaimed and is still standing: ${reclaimed.detail || "no detail reported"}. Nothing here forces it — look at it, then remove it by hand.`;
 }
 // Branch reconciliation, per the gather brief's "Reconcile the checked-out
 // branch" step. Only a run on the PR's OWN branch reconciles: where
@@ -604,7 +623,7 @@ if (!packet.items || packet.items.length === 0) {
   const reclaimed = await reclaimWorktree("nothing to address; the run is a no-op");
   return {
     status: "no-op",
-    detail: `No unresolved threads and no included standalone item — nothing to address (branch reconciliation: ${reconcileOutcome || "none reported"}).`,
+    detail: `No unresolved threads and no included standalone item — nothing to address (branch reconciliation: ${reconcileOutcome || "none reported"}).${survivingWorktreeNote(reclaimed)}`,
     pr: packet.pr,
     reconcile,
     ...(reclaimed ? { worktreeReclaim: reclaimed } : {}),
@@ -915,7 +934,7 @@ if (!flags.push) {
     ...(badDispDefect
       ? { malformedDisposition: badDispRef, malformedDispositions: dispDefects, dispositionNote: `Disposition "${badDispRef}" is not publishable: ${badDispDefect}. A later publish replay would misroute or skip it.${moreDefects}` }
       : {}),
-    note: "Local-only run: no push, no replies/resolves, no comment. Re-run without `no-push` to publish with the default contributing-bot pings, or with `push` to publish quietly.",
+    note: `Local-only run: no push, no replies/resolves, no comment. Re-run without \`no-push\` to publish with the default contributing-bot pings, or with \`push\` to publish quietly.${survivingWorktreeNote(reclaimed)}`,
   };
 }
 
@@ -1096,6 +1115,6 @@ return {
   publishReport: publishReport || { published: false, aborted: "publisher returned nothing" },
   ...(reclaimed ? { worktreeReclaim: reclaimed } : {}),
   note: published
-    ? (notes.length ? notes.join(" ") : undefined)
+    ? (`${notes.join(" ")}${survivingWorktreeNote(reclaimed)}`.trim() || undefined)
     : "Fixes passed review but publication did not fully complete — see publishReport.aborted; nothing may have been pushed.",
 };

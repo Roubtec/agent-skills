@@ -42,6 +42,12 @@
 // the PR head must stop the publisher BEFORE the lease it would otherwise
 // match and rewind the branch with.
 //
+// And it covers the sibling gate that runs just ahead of this one (task 018):
+// the WORKING LOCATION, which decides not whether the run may act on the branch
+// but in which tree it acts. Both gates are the same shape — a gather-reported
+// field the caller must not read charitably — and both fail closed, so they are
+// driven through the same harness rather than a second copy of it.
+//
 // Run: node scripts/test-address-review-reconcile.mjs
 
 import { readFileSync } from "node:fs";
@@ -68,7 +74,7 @@ function check(name, cond, detail) {
 // does not count. Bump it deliberately when adding or removing one — a
 // scenario that silently stops running is invisible to a suite that only gates
 // on failures.
-const EXPECTED_CHECKS = 30;
+const EXPECTED_CHECKS = 36;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -148,8 +154,11 @@ const ITEM = {
   url: "https://example.invalid/pr/42#d1",
 };
 // A gather packet in the shape the schema requires. `reconcile` is spread in
-// last so a scenario can omit it entirely — the absent-report case.
-function gathered({ workingBranch = "feature/x", items = [], reconcile }) {
+// last so a scenario can omit it entirely — the absent-report case. The
+// location pair is written the same way: `locationMode` defaults to the inline
+// mode every reconciliation scenario runs in, and passing `null` omits the
+// field, which the working-location gate below rejects.
+function gathered({ workingBranch = "feature/x", items = [], reconcile, locationMode = "inline", worktree }) {
   const packet = {
     ok: true,
     pr: {
@@ -163,8 +172,50 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile }) {
     },
     items,
   };
+  if (locationMode !== null) packet.pr.locationMode = locationMode;
+  if (worktree !== undefined) packet.pr.worktree = worktree;
   if (reconcile !== undefined) packet.reconcile = reconcile;
   return packet;
+}
+
+// --- The working-location gate ----------------------------------------------
+// The other script-side gate ahead of all work (task 018): which tree this run
+// acts in. It is the gather agent's choice, and the caller validates the pair
+// rather than trusting it at each use, because BOTH ways of getting it wrong
+// send later phases somewhere they must not go. There is deliberately no
+// default: reading an absent mode as `inline` looks safe (it asserts no path)
+// and is not — a gather that attached a worktree and failed to report it would
+// hand the cycle the empty string, i.e. the main checkout, which in that mode
+// is not on the PR branch at all.
+{
+  const absent = await run(gathered({ locationMode: null, reconcile: { outcome: "work" }, items: [ITEM] }));
+  check(
+    "an absent locationMode stops the run and names the field",
+    absent.status === "error" && /locationMode/.test((absent.result || {}).error || ""),
+    JSON.stringify(absent.result),
+  );
+  const unknown = await run(gathered({ locationMode: "checkout", reconcile: { outcome: "work" }, items: [ITEM] }));
+  check("an unrecognized locationMode stops the run", unknown.status === "error", JSON.stringify(unknown.result));
+  const pathless = await run(gathered({ locationMode: "worktree", reconcile: { outcome: "work" }, items: [ITEM] }));
+  check(
+    "worktree mode with no absolute path stops the run rather than using the main checkout",
+    pathless.status === "error" && /worktree/.test((pathless.result || {}).error || ""),
+    JSON.stringify(pathless.result),
+  );
+  const contradictory = await run(gathered({ locationMode: "inline", worktree: "/w/.worktrees/c/pr-42", reconcile: { outcome: "work" }, items: [ITEM] }));
+  check("inline mode carrying a worktree path stops the run — one of the two is wrong", contradictory.status === "error", JSON.stringify(contradictory.result));
+  const wt = await run(gathered({ locationMode: "worktree", worktree: "/w/.worktrees/c/pr-42", reconcile: { outcome: "work" }, items: [ITEM] }));
+  check("worktree mode with an absolute path proceeds to the nested cycle", wt.status === "reached-cycle", wt.status);
+  const inline = await run(gathered({ reconcile: { outcome: "work" }, items: [ITEM] }));
+  check(
+    "and hands the cycle that worktree, where an inline run hands it the empty string (this checkout)",
+    wt.seen.cycleOpts && wt.seen.cycleOpts.opts.worktree === "/w/.worktrees/c/pr-42" &&
+      inline.seen.cycleOpts && inline.seen.cycleOpts.opts.worktree === "",
+    JSON.stringify({
+      worktreeRun: wt.seen.cycleOpts && wt.seen.cycleOpts.opts && wt.seen.cycleOpts.opts.worktree,
+      inlineRun: inline.seen.cycleOpts && inline.seen.cycleOpts.opts && inline.seen.cycleOpts.opts.worktree,
+    }),
+  );
 }
 
 // --- On the PR's own branch: the two outcomes that let a run continue -------
