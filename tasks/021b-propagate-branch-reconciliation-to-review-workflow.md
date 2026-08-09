@@ -37,13 +37,14 @@ Behaviour was verified against a scratch repository for each case below.
 | Local ahead by an unpushed commit | empty | no | work |
 | Rebased onto a newer base | empty | no | work |
 | Rebased *and* ahead | empty | no | work |
-| Predecessor squash-merged upstream, local restacked | empty | no | work |
+| Single-commit predecessor squash-merged upstream, local restacked | empty | no | work |
 | Strictly behind | non-empty | **yes** | fast-forward, then work |
 | Genuine divergence | non-empty | no | skip |
 | Local squashed or dropped commits | non-empty | no | skip |
+| Multi-commit predecessor squash-merged upstream, local restacked | non-empty | no | skip |
 | Remote head carries a merge the local branch lacks | non-empty | no | skip |
 
-The stacked-PR row matters because chained PRs are a normal use: a restack after a predecessor merged keeps the replayed commits' patch-ids, so it lands in the "work" bucket without special handling.
+The stacked-PR rows matter because chained PRs are a normal use, and they split on how many commits the merged predecessor had. A restack keeps the replayed commits' patch-ids either way, so this PR's own commits never enter `S`; the question is whether the predecessor's do. Squashing a *single* commit produces an identical patch-id, so the upstream squash represents it and the restacked branch lands in the "work" bucket without special handling. Squashing *two or more* produces a patch-id that matches none of the originals, so `S` is those commits and an otherwise ordinary restacked branch skips. That is the rule's safe direction — it asks the maintainer rather than guessing, and no work is lost — but it is an ask stacked-PR users will meet, and it is why the "work" row above is stated for the single-commit case only.
 
 **An unrepresented merge commit on the remote head is deliberately treated as ambiguous.** Patch-id cannot speak for a merge, so the probe reports it and the run stops. That costs one extra ask when the PR head was advanced by a UI "Update branch" merge while local is a linear rebase. Excluding merges from the probe would remove the ask, and must not be done: a merge that resolved conflicts would then read as represented and its resolution would be dropped on publication — the work-loss path PR #29 closed on the skill side. Distinguishing a trivial merge from a resolving one was considered and declined as more intricacy than the case is worth.
 
