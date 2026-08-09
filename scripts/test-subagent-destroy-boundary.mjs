@@ -225,7 +225,11 @@ const cycleBase = {
 };
 // The two configurations that take different branches through cycleContract():
 // a standalone run with no per-role overrides, and a batch consumer that
-// overrides ALL THREE roles (wf-address-tasks does exactly this).
+// overrides ALL FOUR roles (wf-address-tasks does exactly this). Every role the
+// section can ask a contract for is listed, `measurer` included: with one
+// missing, its brief renders the DEFAULT contract under both configurations and
+// the pair is one text rendered twice rather than the two branches this pair
+// exists to cover.
 const cycleStandalone = { ...cycleBase, contracts: undefined };
 const cycleOverridden = {
   ...cycleBase,
@@ -233,6 +237,7 @@ const cycleOverridden = {
     fixer: "## WORKTREE CONTRACT\n(consumer-supplied fixer contract)",
     reviewer: "## WORKTREE CONTRACT\n(consumer-supplied reviewer contract)",
     peer: "## WORKTREE CONTRACT\n(consumer-supplied peer contract)",
+    measurer: "## WORKTREE CONTRACT\n(consumer-supplied measurer contract)",
   },
 };
 const fixState = { round: 2, findings: { reviewer: [{ id: "f1", text: "x" }] }, confirming: false, artifactDir: "/tmp/a", openQuestions: [] };
@@ -249,6 +254,11 @@ const closeOutState = { passBase: "abc1234", edits: ["typo in a comment"], fixes
 // list of what the pass says is in it (see the builder), so this state is the
 // whole input.
 const recordOnlyState = { passBase: "abc1234" };
+// The packet measurement is handed the pass ORDINAL and nothing else, for the
+// record-only check's reason carried one step further: it is told nothing about
+// the pass whose worktree it measures, because the pass's `clean` self-report
+// is the very claim it exists to check independently.
+const packetCheckState = { pass: 2 };
 const fixStateRound1 = { ...fixState, round: 1, findings: null, artifactDir: "" };
 const reviewStateNoArtifact = { ...reviewState, round: 1, artifactDir: "" };
 
@@ -291,6 +301,10 @@ const cycleCases = {
   cycleRecordOnlyPrompt: [
     ["cycleRecordOnlyPrompt (standalone)", (f) => f.cycleRecordOnlyPrompt(cycleStandalone, recordOnlyState)],
     ["cycleRecordOnlyPrompt (batch/overridden)", (f) => f.cycleRecordOnlyPrompt(cycleOverridden, recordOnlyState)],
+  ],
+  cyclePacketCheckPrompt: [
+    ["cyclePacketCheckPrompt (standalone)", (f) => f.cyclePacketCheckPrompt(cycleStandalone, packetCheckState)],
+    ["cyclePacketCheckPrompt (batch/overridden)", (f) => f.cyclePacketCheckPrompt(cycleOverridden, packetCheckState)],
   ],
 };
 

@@ -513,7 +513,7 @@ function shq(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
 }
 
-function worktreeContract(task, { mayCreate = false } = {}) {
+function worktreeContract(task, { mayCreate = false, measuring = false } = {}) {
   // wt-enter encodes the rerun-safe lifecycle (reuse the existing worktree,
   // attach an existing branch, create off the base) so prompts never re-derive
   // it. Stages that must not create work (reviewer, PR) omit the base: a
@@ -521,6 +521,32 @@ function worktreeContract(task, { mayCreate = false } = {}) {
   const enter = mayCreate
     ? `WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)} ${shq(task.base)})" && cd "$WT"`
     : `WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && cd "$WT"`;
+  // The cycle's packet MEASUREMENT gets its own variant, and it is the one
+  // stage that must not RESOLVE a worktree at all. `wt-enter` is rerun-safe by
+  // design: where the worktree is gone it attaches the branch in a FRESH
+  // checkout, and a checkout built moments ago reads clean whatever the tree
+  // the pass returned from held — the one answer this step must never invent.
+  // So the measurer FINDS an already-registered worktree in git's own metadata
+  // instead, and a worktree that is not there is unknown rather than rebuilt.
+  // That also drops the branch assertion every other stage's contract carries,
+  // which the DETACHED HEAD a rebase or a bisect leaves would fail: the
+  // registration names the path whatever state the tree is in, `detached`
+  // included, so nothing has to be read out of a helper's refusal message.
+  if (measuring) {
+    return `## WORKTREE CONTRACT (do this before anything else)
+
+FIND this task's worktree — never RESOLVE it. \`wt-enter\` and every helper like it is rerun-safe by design: where the worktree is gone it attaches the branch in a fresh checkout, which would read clean whatever the tree you were sent to measure held. Run none of them.
+
+From the repository checkout you start in, take exactly one read-only reading there and nothing else:
+
+    git worktree list --porcelain
+
+Your worktree is the registered one whose directory is named \`${task.slug}\`. Read it with \`git -C <that path> …\`, and read nothing else. That entry names the path whatever state the tree is in — a rebase or a bisect leaves HEAD DETACHED, so the entry reads \`detached\` rather than naming \`${task.branch}\`, and that is one of the states you were sent to read rather than a mismatch to report.
+
+If no entry names that directory, if more than one does, or if the directory it names is missing or git will not run there, then the tree the pass returned from is not there to observe: report it as unknown, quoting what you found. Never build it, attach it, or prune it.
+
+Read only, and only there. Beyond that one query never touch the repo root, and never read a sibling worktree — other agents are working in their own concurrently — and run nothing that writes, switches, attaches, restores, continues, or aborts anything.`;
+  }
   return `## WORKTREE CONTRACT (do this before anything else)
 
 Resolve your worktree with the image-baked helper and \`cd\` into it:
@@ -690,10 +716,29 @@ const CYCLE_FIX_SCHEMA = {
     closeOutEdits: { type: "array", items: { type: "string" }, description: "OFFER of a trivial-round close-out (only where the assignment says the invoker granted it): one entry per edit, where this pass's WHOLE change was non-semantic — wording, typos, comment phrasing, formatting; nothing touching behavior, logic, or the meaning of an acceptance criterion. Empty otherwise. The offer is not the license: the cycle re-reads the close-out diff itself, and any executable or behavioral change in it, however it got there, forfeits the close-out for a normal reviewer round — as does an empty range, an edit listed here that the range does not actually carry, or a finding disposed `fixed` that the range holds no change for, since this list cannot vouch for a fix it does not mention." },
     flakeRecord: { type: "string", description: "REQUIRED when this pass's own validation run hit a failure the cycle's flake rule defers as evidenced-unrelated: what failed, the evidence that established unrelatedness, and the follow-up task carrying it — the NEW one this pass committed, or the ACTIVE existing one it cites instead of editing. Empty otherwise, and never a restatement of an earlier pass's record — report only what YOUR OWN run surfaced. The cycle keeps every pass's, so copying an earlier one forward would republish it as your run's; a failure your own run hit AGAIN is your run's record and no restatement at all, so report it. This is the maintainer's only notice that a validation run FAILED, so the cycle carries EVERY pass's record in the run report it returns (the batch summary, where the consumer has one), and publishes the CONCLUDING pass's in the PR body or summary comment besides — including where citing an existing task left that pass with nothing to commit. It buys no exit and skips no round of its own — what a conclusion may skip is licensed by a read of the DIFF — but omitting a record your run owes costs the round that record would have skipped." },
     finalSha: { type: "string", description: "HEAD sha after this pass, with everything committed." },
-    clean: { type: "boolean", description: "True only if the worktree is CLEAN and IDLE: `git status --porcelain` empty with every intended change committed, AND no Git operation in progress (`git rev-parse --git-path rebase-merge` / `rebase-apply`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`). A packet returned mid-rebase or mid-cherry-pick can print empty porcelain; the cycle refuses it either way." },
+    clean: { type: "boolean", description: "True only if the worktree is CLEAN and IDLE: `git status --porcelain` empty with every intended change committed, AND no Git operation in progress (`git rev-parse --git-path rebase-merge` / `rebase-apply`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`). A packet returned mid-rebase or mid-cherry-pick can print empty porcelain; the cycle refuses it either way. This is a self-report and is not taken as the answer: the cycle MEASURES the same worktree itself the moment your packet returns, so a `clean` the measurement contradicts costs the pass." },
     artifactDir: { type: "string", description: "Absolute path of this cycle's unique artifact directory — REQUIRED every pass: round 1 creates it (outside the worktree) and reports it, later passes echo the directory they were given. The result contract promises full round history reachable through it." },
   },
   required: ["changed", "dispositions", "openQuestions", "deviations", "flakeRecord", "clean", "artifactDir"],
+};
+
+// The INDEPENDENT measurement of the worktree a fix packet came back from —
+// what `clean` above only asks for. The precise failure the packet hard-check
+// exists to contain is a pass that returns `clean: true` from a tree still
+// mid-rebase or mid-cherry-pick: such a tree prints EMPTY porcelain, so the
+// fixer's own reading can be sincere and wrong, and nothing but the fixer ever
+// looked at it. Modelled on `wf-address-tasks.js`'s `MAIN_CHECKOUT_SCHEMA`,
+// its `measured: false` degradation included: a reading that could not be taken
+// is UNKNOWN, and the one thing it must never read as is clean.
+const CYCLE_PACKET_CHECK_SCHEMA = {
+  type: "object",
+  properties: {
+    measured: { type: "boolean", description: "True only if BOTH readings ran and produced definitive answers — the porcelain status AND every operation-state marker. False when either could not be taken; `dirty` and `operation` are then best-effort and must NOT be read as clean." },
+    dirty: { type: "array", items: { type: "string" }, description: "One `git status --porcelain -z --untracked-files=all` record per changed path: the 2-character `XY` status field, a space, then the repo-relative path (the current path for a rename/copy). The `XY ` prefix is kept verbatim — its first column can be a space. Empty when the tree is clean." },
+    operation: { type: "string", description: "The Git operation still in progress, named by the state marker that showed it — `rebase-merge`, `rebase-apply`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG` — or EMPTY when none is. Name the marker you actually found, never an inference: most of these leave the porcelain clean, which is the whole reason this reading is taken separately." },
+    detail: { type: "string", description: "One line: what the readings found, or — when `measured` is false — which reading could not be taken and why." },
+  },
+  required: ["measured", "dirty", "operation", "detail"],
 };
 
 const CYCLE_REVIEW_SCHEMA = {
@@ -947,17 +992,31 @@ const CYCLE_NO_SELF_PEER = "The cycle runs the sanctioned second opinion itself,
 // Default worktree/branch contract when the consumer supplies none. A consumer
 // with its own worktree lifecycle (wt-enter etc.) passes richer per-role
 // contract text via cycle.contracts instead.
-function cycleDefaultContract(cycle) {
+//
+// The branch assertion is every role's but the MEASURER's, and is dropped for
+// that role rather than excepted around: a rebase and a bisect leave HEAD
+// DETACHED, so `git branch --show-current` prints EMPTY — which "differs" from
+// the branch name — and a detached HEAD is one of the states the measurer is
+// sent to find. Asserting the branch stops it before either reading, so the
+// flagship case the measurement exists for (a tree left mid-rebase, whose
+// porcelain is empty) would come back `measured: false` instead of naming the
+// marker that failed. What a measurer needs is the right WORKTREE, which the
+// path assertion establishes on its own; the branch adds nothing to two
+// read-only readings and forbids the one they exist for.
+function cycleDefaultContract(cycle, role) {
   const where = cycle.worktree
     ? `Your worktree is \`${cycle.worktree}\`. Before anything else, \`cd\` into it and verify \`git rev-parse --show-toplevel\` prints exactly that path; if not, STOP and report — do not run any git or edit command outside it. Other agents may be working in other worktrees concurrently; stay in yours.`
     : `You work in the repository's current checkout — do NOT create a worktree and do NOT switch branches.`;
-  return `${where}
+  return role === "measurer"
+    ? `${where}
+HEAD there may be DETACHED — a rebase or a bisect leaves it so, and \`git branch --show-current\` then prints nothing at all. That is not a mismatch to stop on: it is one of the states you were sent to read. Switch, attach, or restore no branch.`
+    : `${where}
 You must be on branch \`${cycle.branch}\` — confirm with \`git branch --show-current\`; if it differs, STOP and report.`;
 }
 
 function cycleContract(cycle, role) {
   const contracts = cycle.contracts || {};
-  return contracts[role] || cycleDefaultContract(cycle);
+  return contracts[role] || cycleDefaultContract(cycle, role);
 }
 
 function cycleItemsBlock(cycle) {
@@ -1062,7 +1121,7 @@ ${cycleItemsBlock(cycle)}${cycleFindingsBlock(state.findings)}${cycleOpenQuestio
 - ${CYCLE_FINISH_IN_TURN} ${CYCLE_NO_SELF_PEER}
 - If you must deliver something other than a decision the maintainer LOCKED, do not silently conform or correct: report it in \`deviations\` — what you delivered instead and the constraint that forced it — and restate it VERBATIM on every later pass while it stands. The cycle surfaces it for the human (report, don't correct), who ratifies it or asks you to conform; it buys no slack in the meantime, since completeness, tests, and regressions are graded exactly as strictly.
 - Every \`escalated\` disposition gets an \`openQuestions\` entry in the schema's pinned format, under an id no earlier pass used (re-using one reads as a re-report of that pass's question, which the cycle keeps instead of yours), with authoritative artifact pointers (file:line, refs) — never paraphrase — and its \`questionId\` back-reference — which must name a question this cycle carries LIVE (the one you just raised, or one an earlier pass raised that no retirement has claimed); an absent, empty, or settled id names no decision the maintainer will be asked to make and comes back to the next pass as a disposition error. Raise a question only for a decision still open: a \`fixed\` or \`declined\` disposition that SETTLES a still-live question from an EARLIER pass names that question's \`id\` in \`retiresQuestionIds\` instead (only those two dispositions retire; a question this pass raises cannot also be retired by it; and retiring an id the cycle does not carry open from an earlier pass comes back to the next pass as a disposition error).
-- Before returning, the worktree MUST be clean AND idle: \`git status --porcelain\` empty with every intended change committed, and no Git operation in progress — check \`git rev-parse --git-path rebase-merge\` and \`rebase-apply\` for an existing path, plus \`MERGE_HEAD\`, \`CHERRY_PICK_HEAD\`, \`REVERT_HEAD\`, \`BISECT_LOG\` (a tree left mid-rebase or mid-cherry-pick can print empty porcelain). Set \`clean\` and \`finalSha\` accordingly; either condition failing is resolved or reported as a \`blocker\`, never handed to review.
+- Before returning, the worktree MUST be clean AND idle: \`git status --porcelain\` empty with every intended change committed, and no Git operation in progress — check \`git rev-parse --git-path rebase-merge\` and \`rebase-apply\` for an existing path, plus \`MERGE_HEAD\`, \`CHERRY_PICK_HEAD\`, \`REVERT_HEAD\`, \`BISECT_LOG\` (a tree left mid-rebase or mid-cherry-pick can print empty porcelain). Set \`clean\` and \`finalSha\` accordingly; either condition failing is resolved or reported as a \`blocker\`, never handed to review. The cycle MEASURES the same worktree itself the moment your packet returns, through a turn that is told nothing about your pass — so \`clean\` is checked, not taken, and a reading that contradicts it costs the pass. Report what is true rather than what ends the round.
 - Pushing is governed by the assignment above; do nothing PR-side, and do NOT use the \`TaskCreate\`/\`TaskUpdate\`/\`TaskList\` tools.
 
 Return the structured packet, including \`workReport\` per the assignment's per-item contract when it defines one.`;
@@ -1325,6 +1384,37 @@ ${CYCLE_FINISH_IN_TURN} ${CYCLE_NO_SELF_PEER}
 Edit nothing.`;
 }
 
+// The packet measurement: porcelain status and the operation-state markers,
+// taken by a turn that did NOT produce the packet it judges. A READING, never a
+// repair — the posture `wf-address-tasks.js`'s `mainCheckoutStatusPrompt` takes
+// for the shared main checkout, and for a sharper reason here: a stage that
+// "tidied" this tree would destroy the very evidence the cycle refuses the
+// packet on, and an `--abort` or a `reset` could take an unfinished operation's
+// work with it. The brief is given no account of the pass, deliberately: the
+// self-report is the thing being checked, and a measurer shown `clean: true`
+// has been handed the answer it is here to derive. Its contract is the
+// `measurer` one for a reason of the same kind: every other role's asserts the
+// BRANCH, and the two operations that detach HEAD — a rebase, a bisect — are
+// among the states this step is sent to find, so a reviewer's contract would
+// order it to stop precisely where the reading matters most.
+function cyclePacketCheckPrompt(cycle, state) {
+  return `Packet worktree measurement, read-only. Fixer pass ${state.pass} of this review cycle has returned a packet; before the cycle adopts it, MEASURE the worktree it came back from. OBSERVE ONLY — do NOT stage, commit, reset, clean, stash, abort, continue, or edit anything, and do not "tidy" the tree: an unclean or mid-operation worktree is the ANSWER this step exists to return, not a problem for you to solve, and repairing it would destroy the evidence and could take an unfinished operation's work with it.
+
+${cycleContract(cycle, "measurer")}
+
+${CYCLE_DESTROY_BOUNDARY}
+
+${CYCLE_FINISH_IN_TURN} ${CYCLE_NO_SELF_PEER}
+
+Take BOTH readings in that worktree:
+
+1. \`git status --porcelain -z --untracked-files=all\` (the \`-z\` form leaves paths unquoted, so parsing is unambiguous; \`--untracked-files=all\` lists every untracked FILE rather than collapsing it to its directory). Split the output on NUL and return one \`dirty\` entry per record: the record's 2-character \`XY\` status field, a space, then the repo-relative path — e.g. \` M src/app.ts\`, \`?? notes.txt\`. Keep the \`XY \` prefix verbatim; its first column can be a space. For a rename/copy record git emits the ORIGINAL path as a second NUL-separated field after the current one — keep only the current-path entry and drop that trailing original. An empty array means the tree is clean.
+
+2. The operation state, which the porcelain does NOT show. Check \`git rev-parse --git-path rebase-merge\` and \`rebase-apply\` — each PRINTS a path whether or not it exists, so test the path for existence rather than reading the exit status — plus \`MERGE_HEAD\`, \`CHERRY_PICK_HEAD\`, \`REVERT_HEAD\`, and \`BISECT_LOG\`. Return the marker that showed the operation in \`operation\`, or the empty string when none is in progress. A tree left mid-rebase or mid-cherry-pick prints EMPTY porcelain, so reading 1 alone would call it clean — that is the exact case this step exists for.
+
+Report only what YOU measured. You were given no account of what the pass did or claims, on purpose. If a reading cannot be taken at all — git will not run, the path is missing, it is not a checkout — return \`measured: false\` with whatever you have and say in \`detail\` which reading failed and why. Do not fail, and do not guess a clean answer: unknown is a usable result here and a wrong "clean" is not. Edit nothing.`;
+}
+
 function cycleGroundingPrompt(cycle, findings) {
   return `Cheap grounding spot-check, read-only. The fresh reviewer PASSED this round; only the peer findings below would gate it. For each, check that its \`file:line\` (or referenced site) exists in the worktree and that the claim is not self-evidently false. Do NOT re-review or judge severity — discard is only for nonexistent references and self-evidently false claims; when in doubt, \`grounded: true\`.
 
@@ -1524,8 +1614,12 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     close-out, a SECOND bounded discretion beside `light` and a different
 //     one: `light` skips the final no-op fixer pass, close-out skips the
 //     re-review of a pass whose whole change was non-semantic,
-//   contracts: { fixer, reviewer, peer } — optional per-role preamble text
-//     (a worktree-lifecycle consumer passes its own wt-enter contract here),
+//   contracts: { fixer, reviewer, peer, measurer } — optional per-role
+//     preamble text (a worktree-lifecycle consumer passes its own wt-enter
+//     contract here). A `measurer` contract states WHERE and nothing more: it
+//     must not assert the branch, because the packet measurement is sent to
+//     find the states that detach HEAD. Omitted, every role falls back to
+//     cycleDefaultContract, which drops that assertion for this role itself,
 //   labelPrefix — optional, prefixes agent labels for fan-out consumers,
 //   peerState — optional SHARED peer-availability state for a fan-out owner
 //     embedding many cycles: hand every cycle ONE object of the shape
@@ -1569,6 +1663,16 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     about the conclusion: one { pass, note } entry per pass that reported
 //     one. `recordOnly` above speaks FOR the conclusion, so it may carry only
 //     the concluding pass's record; this is where every other pass's survives),
+//   packetChecks (present once any packet was measured, and on every exit: one
+//     { pass, measured, dirty, operation, detail } entry per fixer pass whose
+//     worktree the cycle MEASURED, in order. Every packet the cycle adopts has
+//     one — the final confirmation pass included, since the measurement runs
+//     when the packet RETURNS rather than riding a later reviewer round, and
+//     three of the four conclusions have no such round. A `measured: false`
+//     entry is this shape's whole residual: the reading could not be taken, so
+//     the packet was REFUSED rather than adopted, and that entry sits under an
+//     `error` verdict saying the cycle stopped on an unverified worktree
+//     instead of finishing over one),
 //   artifactDirAnomalies (present only when a later pass tried
 //   to move the artifact directory) }
 // NO per-round condition latches into that result: `deviations` is the LAST
@@ -1616,6 +1720,12 @@ async function runReviewCycle(cycle) {
   // can be the whole of it, where the evidence cited an already-active task and
   // left nothing to commit.
   const flakeHistory = [];
+  // Every measured packet's reading, in order, accumulated for `flakeHistory`'s
+  // reason and one of its own: the result's claim is that no packet the cycle
+  // adopted went unmeasured, and only a per-pass log lets a consumer see that
+  // rather than take it. It is a log, so it rides every exit — the refusals
+  // most of all, since the entry that REFUSED a packet is the one worth reading.
+  const packetChecks = [];
   // Drops claimed but not yet adjudicated, re-presented to each round until one
   // passes over them — the retirement machinery's rule, for its reason too.
   let pendingDeviationDrops = [];
@@ -1664,6 +1774,7 @@ async function runReviewCycle(cycle) {
       ...(standingAssessments.length ? { deviationAssessments: standingAssessments } : {}),
       ...(deviationHistory.some((h) => h.deviations.length) ? { deviationHistory } : {}),
       ...(flakeHistory.length ? { flakeHistory } : {}),
+      ...(packetChecks.length ? { packetChecks } : {}),
       workReport: (packet && packet.workReport) || [],
       proactive: (packet && packet.proactive) || "",
       finalSha: (packet && packet.finalSha) || "",
@@ -1742,10 +1853,11 @@ async function runReviewCycle(cycle) {
     const flakeCarried = flakeNote ? { recordOnly: { pass: fixerPasses, range: "", verified: "", note: flakeNote } } : {};
 
     if (fix.blocker) return result("error", `fixer blocked on pass ${fixerPasses}: ${fix.blocker}`);
-    // Packet hard-check: a packet is adopted only from a worktree that is both
-    // clean AND idle. Never silently — the pass is redriven or resumed instead,
-    // because a tree left mid-rebase or mid-cherry-pick prints empty porcelain
-    // and would hand the next round a worktree nobody can safely build on.
+    // Packet hard-check, structural half: a packet is adopted only from a
+    // worktree that is both clean AND idle, and a pass that says its own is
+    // neither is refused here for free, never silently — redriven or resumed
+    // instead. The half that catches a `clean` that is sincere and wrong is the
+    // measurement below.
     if (!fix.clean) return result("error", `fixer returned a worktree that is not clean and idle on pass ${fixerPasses} (uncommitted changes, or a Git operation still in progress); refusing to adopt the packet — redrive or resume that pass`);
     // The result contract promises the FULL round history reachable through
     // ONE pointer, so the FIRST reported artifactDir is authoritative, and it
@@ -1770,6 +1882,73 @@ async function runReviewCycle(cycle) {
     }
     // A cycle with no home for its rounds' history may not run them.
     if (!artifactDir) return result("error", `fixer reported no artifactDir on pass ${fixerPasses}; refusing to run rounds whose history has no home`);
+
+    // The measuring half of the packet hard-check, and the half `fix.clean`
+    // cannot be: `clean` is the fixer's word about its own worktree, so the one
+    // failure the check exists to contain — a pass returning `clean: true` from
+    // a tree still mid-rebase, which prints EMPTY porcelain — passes the
+    // self-report unseen. So every packet the cycle ADOPTS is measured by a turn
+    // that did not produce it, before anything branches on the packet's
+    // SUBSTANCE — its work report, its dispositions, its diff, any conclusion
+    // drawn from them. What runs ahead of the measurement is only what costs no
+    // agent turn: the free refusals above, which would make measuring an
+    // already-refused packet pure waste; the artifact-directory capture the last
+    // of those refusals sits in; and this pass's flake record, logged where it
+    // is for the reason given there. Each of the three does read a field off the
+    // packet — the measurement is not the first line to touch it — but none of
+    // them takes up the WORK the packet claims to have done, which is what an
+    // unmeasured worktree would poison.
+    //
+    // Measured HERE rather than folded into the reviewer's round, which would
+    // ride an existing turn: three of the four conclusions have no reviewer
+    // round after the pass they conclude on (the terminal check, the
+    // trivial-round close-out, the record-only close), so a reviewer-borne
+    // reading would leave every one of them unmeasured — the final confirmation
+    // pass, the cycle's last word, most of all. And on the rounds it did cover
+    // it would arrive only after the reviewer and the peer had already been
+    // spent on the tree it turns out nobody could trust. One low-effort
+    // read-only turn per pass covers every pass through one mechanism, with no
+    // exit special-cased and no round spent ahead of the refusal.
+    //
+    // A reading that cannot be TAKEN is unknown, and unknown refuses the packet
+    // exactly as a dirty one does — the one thing it must never do is read as
+    // clean. That refusal is this shape's whole residual: an unmeasurable pass
+    // stops the cycle on an `error` verdict, whose `packetChecks` entry records
+    // `measured: false`, rather than letting it finish over a worktree nobody
+    // established the state of.
+    const measurement = await agent(cyclePacketCheckPrompt(cycle, { pass: fixerPasses }), {
+      label: `${lp}packet#${fixerPasses}`,
+      schema: CYCLE_PACKET_CHECK_SCHEMA,
+      effort: "low",
+    });
+    const measured = !!(measurement && measurement.measured === true);
+    const measuredDirty = measurement && Array.isArray(measurement.dirty) ? measurement.dirty : [];
+    const measuredOperation = measurement && typeof measurement.operation === "string" ? measurement.operation.trim() : "";
+    const measuredDetail = measurement && typeof measurement.detail === "string" ? measurement.detail.trim() : "";
+    packetChecks.push({
+      pass: fixerPasses,
+      measured,
+      dirty: measuredDirty,
+      operation: measuredOperation,
+      // A refusal points the maintainer at this entry, so its one line of prose
+      // never ships empty: the schema admits `detail: ""`, and a blank one
+      // would leave a `measured: false` entry saying nothing about what could
+      // not be read. A measurer that said nothing is kept distinct from one
+      // that returned nothing at all, since only the first took a turn.
+      detail: measuredDetail
+        || (measurement ? "the measuring subagent reported no detail" : "the measuring subagent returned nothing (died or failed schema validation)"),
+    });
+    if (!measured) {
+      return result("error", `the worktree behind fixer pass ${fixerPasses} could not be MEASURED, so its \`clean\` self-report is the only account of it and the cycle does not take one; refusing to adopt the packet — redrive or resume that pass (the \`packetChecks\` entry records the unmeasured reading)`);
+    }
+    if (measuredDirty.length || measuredOperation) {
+      const failedConditions = [
+        measuredDirty.length ? `not clean (${measuredDirty.length} uncommitted path(s); see the \`packetChecks\` entry for the list)` : "",
+        measuredOperation ? `not idle (a Git operation is still in progress, found at ${measuredOperation})` : "",
+      ].filter(Boolean).join(", and ");
+      return result("error", `fixer pass ${fixerPasses} reported \`clean: true\`, but the cycle measured that worktree as ${failedConditions}; refusing to adopt the packet — redrive or resume that pass`);
+    }
+
     for (const d of fix.dispositions || []) findingDispositions.push({ ...d, pass: fixerPasses });
     // The questions a disposition in THIS packet may retire: the ones live
     // before the pass's own are appended below — a question an earlier claim
@@ -2327,6 +2506,10 @@ function taskCycleConfig(task, remote, peerMode) {
       fixer: worktreeContract(task, { mayCreate: true }),
       reviewer: worktreeContract(task),
       peer: worktreeContract(task),
+      // WHERE only. The cycle's packet measurement is the one stage sent to
+      // find states that detach HEAD, so a branch-asserting contract would
+      // stop it before either reading — see `worktreeContract`'s note.
+      measurer: worktreeContract(task, { measuring: true }),
     },
     scope: {
       title: task.slug,
@@ -2528,8 +2711,15 @@ Do NOT open any PR and do NOT remove any worktree — the workflow re-scans the 
 // `prPrompt` below renders `recordOnly` and not `closeOut`, so it would still
 // need teaching, exactly as `wf-address-review.js`'s twin of this note says of
 // its own publish brief. That is the gap this carrier has already dropped a new
-// result field into twice.
+// result field into three times, `packetChecks` last.
 // Both present only when that exit actually ended the cycle.
+// `packetChecks` rides for a reason the others do not have: the cycle's own
+// refusal message points the reader at that entry BY NAME ("see the
+// `packetChecks` entry for the list"), and the batch Summary this carrier feeds
+// is where that refusal is read — dropped, the message promises a list the
+// result does not carry. It is also the only place a reader can see that no
+// packet the cycle adopted went unmeasured. Present once any packet was
+// measured, on every exit including the stopped ones.
 // Deliberately NOT forwarded: the cycle result's `notes` (the last pass's
 // `summary`). This carrier is applied to the raw cycle result AND to task
 // results derived from it, where `notes` already means the reviewer's PR-body
@@ -2548,6 +2738,7 @@ function cycleCarried(result) {
     ...(result.closeOut ? { closeOut: result.closeOut } : {}),
     ...(result.recordOnly ? { recordOnly: result.recordOnly } : {}),
     ...(result.flakeHistory ? { flakeHistory: result.flakeHistory } : {}),
+    ...(result.packetChecks ? { packetChecks: result.packetChecks } : {}),
   };
 }
 

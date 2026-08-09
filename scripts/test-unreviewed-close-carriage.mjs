@@ -6,14 +6,20 @@
 // INTERMEDIATE pass's evidenced-unrelated failure reaches the maintainer once a
 // later pass has concluded clean and the record speaks only for that pass.
 //
+// The per-pass PACKET MEASUREMENT log rides the same carriers and is covered
+// here for a sharper version of the same reason: the cycle refuses a
+// measured-dirty packet with a message that points the reader at that log BY
+// NAME for the list of uncommitted paths, and these carriers are the only thing
+// that puts the log beside the message the maintainer reads.
+//
 // The cycle produces those records; `test-review-cycle-retirement.mjs` covers
-// that half. This covers the other half, which is where the same gap has now
-// opened twice: a consumer's result adapter forwards a NAMED list of fields, so
-// every field the cycle's contract grows is dropped until the adapter is
-// taught it. A dropped `recordOnly` is not a cosmetic loss — the delivery gate
-// admits a FAILED delivery run only on the promise that the failures are
-// documented where the maintainer sees them, and these two consumers are the
-// only things standing between that record and the maintainer.
+// that half. This covers the other half, which is where the same gap keeps
+// opening: a consumer's result adapter forwards a NAMED list of
+// fields, so every field the cycle's contract grows is dropped until the
+// adapter is taught it. A dropped `recordOnly` is not a cosmetic loss — the
+// delivery gate admits a FAILED delivery run only on the promise that the
+// failures are documented where the maintainer sees them, and these two
+// consumers are the only things standing between that record and the maintainer.
 //
 // Forwarding it faithfully is not the whole duty, though: one consumer runs a
 // stage AFTER the cycle that can falsify part of the record — the pre-PR
@@ -63,7 +69,7 @@ function check(name, cond, detail) {
 // does not count. Bump it deliberately when adding or removing one — a check
 // that silently stops running is invisible to a suite that only gates on
 // failures.
-const EXPECTED_CHECKS = 39;
+const EXPECTED_CHECKS = 42;
 
 // Evaluate a workflow's declarations up to its first executable statement and
 // hand back the named ones. Each is returned by an explicit reference, so a
@@ -107,6 +113,16 @@ const CLOSE_OUT = { pass: 3, range: "aaaa..bbbb", edits: ["reworded a comment"],
 // which is exactly why a pass-1 failure a later clean pass superseded reaches
 // the maintainer through this list or not at all.
 const FLAKE_HISTORY = [{ pass: 1, note: "the round-tier run's only failure was the payments suite, which reproduces on the base; already queued as tasks/041-flaky-payments-suite.md, cited rather than re-filed" }];
+// The cycle's per-pass measurement log. It rides these carriers for a reason of
+// its own: the cycle REFUSES a measured-dirty packet with a message that points
+// the reader at this entry by name for the list of uncommitted paths, and these
+// carriers are what puts that entry beside the message the maintainer reads —
+// the batch Summary, and the failed-cycle return of the review-addressing run.
+// Dropped, the reading survives as a count and the list it promises is nowhere.
+const PACKET_CHECKS = [
+  { pass: 1, measured: true, dirty: [], operation: "", detail: "clean and idle" },
+  { pass: 2, measured: true, dirty: [" M src/app.ts", "?? notes.txt"], operation: "", detail: "two uncommitted paths" },
+];
 // A cycle result that concluded on one of those exits, and one that did not.
 const cycleResult = (extra) => ({
   verdict: "pass",
@@ -152,6 +168,14 @@ const cycleResult = (extra) => ({
   const withHistory = cycleCarried(cycleResult({ flakeHistory: FLAKE_HISTORY }));
   check("the batch carrier forwards every pass's flake record, with no conclusion-level record beside it", JSON.stringify(withHistory.flakeHistory) === JSON.stringify(FLAKE_HISTORY) && !("recordOnly" in withHistory), JSON.stringify(withHistory));
   check("and carries no history key for a cycle no pass reported a flake on", !("flakeHistory" in plain), JSON.stringify(Object.keys(plain)));
+
+  // The measurement log, which the cycle's refusal message names outright. The
+  // refusal it belongs to is an `error` verdict, so the shape that carries it
+  // to the maintainer is `implementTask`'s error return — this carrier spread
+  // into it — and the Summary is where it is read.
+  const measured = cycleCarried(cycleResult({ packetChecks: PACKET_CHECKS }));
+  check("the batch carrier forwards the per-pass measurement log the refusal message points the reader at", JSON.stringify(measured.packetChecks) === JSON.stringify(PACKET_CHECKS), JSON.stringify(measured.packetChecks));
+  check("and carries no such key for a cycle that measured nothing", !("packetChecks" in plain), JSON.stringify(Object.keys(plain)));
 
   // The field that must NOT ride: `notes` means the cycle's last-pass summary
   // on the raw result and the reviewer's PR-body caveats on a task result
@@ -269,6 +293,8 @@ const cycleResult = (extra) => ({
   check("and carries neither key when the cycle concluded normally", !("recordOnly" in plain) && !("closeOut" in plain), JSON.stringify(plain));
   const withHistory = carriedOf(cycleResult({ flakeHistory: FLAKE_HISTORY }));
   check("it forwards every pass's flake record too, and only when some pass reported one", JSON.stringify(withHistory.flakeHistory) === JSON.stringify(FLAKE_HISTORY) && !("flakeHistory" in plain), JSON.stringify(withHistory));
+  const measured = carriedOf(cycleResult({ packetChecks: PACKET_CHECKS }));
+  check("and the measurement log the refusal message names, whose failed-cycle return is where that message reaches the maintainer", JSON.stringify(measured.packetChecks) === JSON.stringify(PACKET_CHECKS) && !("packetChecks" in plain), JSON.stringify(measured.packetChecks));
 
   const { publishPrompt } = loadDeclarations("wf-address-review.js", "\nconst raw = flattenArgs(args);", ["publishPrompt"]);
   const pkt = { pr: { number: 42, url: "https://example.invalid/pr/42", branch: "b", workingBranch: "b", base: "main", headOid: "deadbeef", rebased: false }, items: [] };
