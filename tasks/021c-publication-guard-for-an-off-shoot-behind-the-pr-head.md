@@ -32,7 +32,7 @@ Out of scope:
 ## Context and references
 
 - `plugins/dev-skills/workflows/wf-address-review.js` — `publishPrompt`, step 2's push cases and the expected-tip OID they interpolate; `PACKET_SCHEMA`'s `pr.workingBranch` field, whose description states the off-shoot case; and the reconciliation gate whose comment names the same exemption.
-- `plugins/dev-skills/skills/address-review/SKILL.md` — the `PR#` argument row naming the off-shoot, "Step 1 — Resolve and verify the PR" (its "Reconcile the local branch with the PR head before triaging anything" paragraph), and "Step 7 — Publish after the review gate", item 2 "Push".
+- `plugins/dev-skills/skills/address-review/SKILL.md` — the `PR#` argument row naming the off-shoot, "Step 1 — Resolve and verify the PR" (its "Reconcile the local branch with the PR head before triaging anything" paragraph), and "Step 7 — Publish after the review gate", items 1 "Re-check before publication" and 2 "Push". Item 1 belongs here as much as item 2 does: it tells the run to resolve *the current branch's* exact push remote/ref and match them against the PR head, which an off-shoot's own upstream never does — so the branch this skill promoted to a named working location (task 018) stops there after a full run, at the one step whose remit is to decide what may be pushed from it. Raised in 018's review and left to this task rather than answered twice.
 - Task 021b — the reconciliation this sits beside, and the settled decision that it skips entirely where the branch names differ.
 - PR #29 thread `PRRT_kwDOTNFS7M6VaOv1` — the maintainer's no-work-lost heuristic the reconciliation rule encodes; this task applies the same heuristic to the push rather than to the checkout.
 
