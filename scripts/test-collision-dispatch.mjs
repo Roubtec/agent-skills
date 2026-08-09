@@ -60,7 +60,7 @@ function check(name, cond, detail) {
 // it — an edit that drops one, or a guard that swallows a throw, would pass.
 // Counting the oks too lets the run assert it executed the whole suite. Bump
 // this deliberately when adding or removing a check; the number is the assertion.
-const EXPECTED_CHECKS = 178;
+const EXPECTED_CHECKS = 183;
 
 async function scenario(name, fn) {
   try {
@@ -412,6 +412,10 @@ await scenario("re-review failures", async () => {
     check(`${name} → the renamed side is held`, JSON.stringify(slugs(out.held)) === JSON.stringify(["a"]), JSON.stringify(slugs(out.held)));
     check(`${name} → the hold names the re-review`, /fresh re-review/.test(out.held[0].detail), out.held[0].detail);
     check(`${name} → the cleared untouched side still delivers`, JSON.stringify(slugs(out.deliverable)) === JSON.stringify(["b"]));
+    // The too-strict control for the assessment carriage on this arm: a branch
+    // with no standing deviation is a branch this stage asked about nothing, so
+    // it grows no assessments key it did not already have.
+    check(`${name} → and a branch with no standing deviation grows no assessments key`, !("deviationAssessments" in out.held[0]), JSON.stringify(Object.keys(out.held[0])));
   }
 });
 
@@ -522,16 +526,28 @@ await scenario("no standing deviations", async () => {
 
 // 13. The reviewer raises the deviation's staleness as an issue. It is the
 //     ordinary failed-re-review arm — the point is that a reviewer SHOWN the
-//     deviation can now reach it at all.
+//     deviation can now reach it at all, and that the arm carries no assessment
+//     of it onward either way.
 await scenario("re-review raises the deviation as stale", async () => {
   const issue = { claim: `the deviation names src/shared.ts, which the deconfliction renamed to src/shared-b.ts; its text no longer describes this branch` };
   const out = await run({
     held: [DEVIATING(), mkHeld("b")],
     collisions: [clash(["task/a", "task/b"])],
-    packets: { resolution: renamed(["task/a"]), rescan: { collisions: [] }, reviews: { a: { pass: false, issues: [issue], notes: "", flakeRecord: "" } } },
+    // The failing pass volunteers a usable entry of its own, so the assertion
+    // below cannot pass merely because the reviewer returned none.
+    packets: { resolution: renamed(["task/a"]), rescan: { collisions: [] }, reviews: { a: { pass: false, issues: [issue], notes: "", flakeRecord: "", deviationAssessments: [POST_RENAME] } } },
   });
   check("stale deviation → the branch is held, not delivered", JSON.stringify(slugs(out.held)) === JSON.stringify(["a"]) && JSON.stringify(slugs(out.deliverable)) === JSON.stringify(["b"]), JSON.stringify(slugs(out.held)));
   check("stale deviation → the hold names the re-review and carries the finding", /fresh re-review/.test(heldBySlug(out, "a").detail) && JSON.stringify(heldBySlug(out, "a").outstanding) === JSON.stringify([issue]), JSON.stringify(heldBySlug(out, "a")));
+  // Neither assessment may ride this arm. The pre-rename one because the batch
+  // Summary flattens held records' `deviationAssessments` too, so it would put
+  // an obsolete RATIFY in front of the maintainer under the very deviation this
+  // pass just called stale; the failing pass's own because `runReviewCycle`
+  // accepts the reviewer's half on a PASSING round alone. The deviation reaches
+  // the human standing and unjudged, which is what an exit no round approved
+  // has to say.
+  check("stale deviation → the hold carries no assessment: not the pre-rename one, not the failing pass's own", JSON.stringify(heldBySlug(out, "a").deviationAssessments) === "[]", JSON.stringify(heldBySlug(out, "a").deviationAssessments));
+  check("stale deviation → while the deviation itself and the cycle record still ride", JSON.stringify(heldBySlug(out, "a").deviations) === JSON.stringify([DEVIATION]) && heldBySlug(out, "a").artifactDir === "/tmp/art" && heldBySlug(out, "a").rounds === 2, JSON.stringify(heldBySlug(out, "a").deviations));
 });
 
 // 14. THE NEW GATE. The reviewer passes the branch but leaves the standing
@@ -656,7 +672,7 @@ await scenario("still-colliding branch is never asked for assessments", async ()
   // carried assessments anyway would pass every scenario that never scripts a
   // pre-rename entry.
   check("the re-review is handed the branch's standing deviations", /collisionReReviewPrompt\(task, remote, peerMode, standingDeviations\)/.test(body), "dispatch body");
-  check("and the delivering push publishes the re-review's assessments, not the carried ones", /deviationAssessments: coverage\.assessments/.test(body) && /const coverage = collisionDeviationCoverage\(standingDeviations, verdict\);/.test(body), "dispatch body");
+  check("and the delivering push publishes the re-review's assessments, not the carried ones", /deviationAssessments: coverage\.assessments/.test(body) && /const coverage = collisionDeviationCoverage\(standingDeviations, reviewed \? verdict : null\);/.test(body), "dispatch body");
 }
 
 check(`the suite ran all ${EXPECTED_CHECKS} checks`, ok + failures === EXPECTED_CHECKS, `ran ${ok + failures}`);

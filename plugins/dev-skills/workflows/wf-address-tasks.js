@@ -2896,17 +2896,31 @@ async function settleWaveCollisions({ heldTasks, waveCollisions, wave, defaultBa
       // its own brief states (`collisionDeviationCoverage`).
       const standingDeviations = Array.isArray(result.deviations) ? result.deviations : [];
       const verdict = await agent(collisionReReviewPrompt(task, remote, peerMode, standingDeviations), { label: `re-review:${task.slug}`, schema: COLLISION_RE_REVIEW_SCHEMA });
-      const coverage = collisionDeviationCoverage(standingDeviations, verdict);
       const reviewed = !!(verdict && verdict.pass && !verdict.emptyDiffFlag);
-      // The replacement rides both exits a PASSING re-review can take, not the
-      // delivering one alone: the batch Summary flattens EVERY result's
+      // The verdict reaches the coverage only through `reviewed`, which is
+      // `runReviewCycle`'s own rule for the same field: it records the
+      // reviewer's half on a PASSING round alone, "an assessment from a round
+      // that failed judged a packet the fixer has since changed". So a failing
+      // re-review supplies no assessments here either, whatever it returned.
+      const coverage = collisionDeviationCoverage(standingDeviations, reviewed ? verdict : null);
+      // The replacement rides EVERY exit past the re-scan, not the delivering
+      // one alone: the batch Summary flattens EVERY result's
       // `deviationAssessments` — held records included — into the one list the
-      // maintainer reads. So a hold naming a deviation unassessed while still
-      // carrying the pre-rename cycle's assessment of it would put an obsolete
-      // RATIFY/CONFORM in that list under the very deviation the record says
-      // nobody has judged since the rename. Carrying this pass's usable
-      // assessments instead is what the partial-coverage case needs anyway: the
-      // deviations it DID assess get their fresh half, and the rest get none.
+      // maintainer reads. So a record naming a deviation unassessed, or handing
+      // one back under the reviewer's findings, while still carrying the
+      // pre-rename cycle's assessment of it would put an obsolete
+      // RATIFY/CONFORM in that list under the very deviation nobody has judged
+      // since the rename. Past the re-scan is exactly where that is established:
+      // the clash is demonstrably gone, so the tree the cycle's reviewer judged
+      // is demonstrably not this one — the same fact `runReviewCycle` empties
+      // its own assessments on, so that "no exit ships a pre-change
+      // in-spec-route judgment and recommendation beside work no round
+      // approved". The hold arms BEFORE that point keep what they carried, no
+      // post-rename tree having been established for them.
+      // Carrying this pass's usable assessments is what the partial-coverage
+      // case needs anyway: the deviations it DID assess get their fresh half,
+      // and the rest get none — as does every deviation on a failed pass, left
+      // standing and unjudged rather than judged against a tree that is gone.
       // Guarded on there being standing deviations at all, so a branch with none
       // keeps what it carried untouched by a stage that asked about nothing.
       const freshAssessments = standingDeviations.length ? { deviationAssessments: coverage.assessments } : {};
@@ -2919,12 +2933,12 @@ async function settleWaveCollisions({ heldTasks, waveCollisions, wave, defaultBa
         // `collisionReReviewFlakeRecord`).
         deliverable.push({ task, result: { ...result, notes: verdict.notes || result.notes, ...freshAssessments, ...collisionReviewedRecord(result), ...collisionReReviewFlakeRecord(result, verdict) } });
       } else if (reviewed) {
-        // `freshAssessments` is spread AFTER the carried record here, so what
-        // this record reports assessed and what it reports unassessed both speak
-        // for the same pass.
+        // `freshAssessments` is spread AFTER the carried record on both hold
+        // arms, so what a record reports assessed and what it reports
+        // unassessed always speak for the same pass.
         held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "the deconflicted branch passed fresh re-review but left a deviation from a LOCKED decision unassessed, so the PR would lead with the implementer's half of it alone; held before PR delivery — re-review this branch and record the in-spec route and a RATIFY/CONFORM recommendation for each deviation named below, without conforming, rewording, or dropping it", unassessedDeviations: coverage.unassessed, collisions: related, ...cycleCarried(result), ...freshAssessments });
       } else {
-        held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "the deconflicted branch did not pass fresh re-review; held before PR delivery", outstanding: verdict ? verdict.issues : null, collisions: related, ...cycleCarried(result) });
+        held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "the deconflicted branch did not pass fresh re-review; held before PR delivery", outstanding: verdict ? verdict.issues : null, collisions: related, ...cycleCarried(result), ...freshAssessments });
       }
     }
   }
