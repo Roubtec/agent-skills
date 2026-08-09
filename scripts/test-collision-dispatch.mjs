@@ -4,13 +4,21 @@
 // deliveries and holds after the resolver deputy has run.
 //
 // The property it exists for: a branch reaches delivery only when the clash has
-// been RE-DERIVED from the refs after resolution. The resolver reports what it
-// renamed, and a rename can be reported and only partly applied — the file moved
-// but the duplicate export left behind, or one branch renamed and its generated
-// mirror forgotten. Believing that report let both sides open PRs carrying the
-// very clash the guard exists to stop, and the unchanged side delivered with no
-// check at all. So the resolver's packet may select who gets re-reviewed and
-// name what it refused as imperative, and nothing else; the re-scan decides.
+// been RE-DERIVED from the refs after resolution, and only behind a fresh
+// delivery-tier re-review of its own. The resolver reports what it renamed, and
+// a rename can be reported and only partly applied — the file moved but the
+// duplicate export left behind, or one branch renamed and its generated mirror
+// forgotten. Believing that report let both sides open PRs carrying the very
+// clash the guard exists to stop.
+//
+// So the resolver's packet is HOLD-ONLY evidence here, and the suite pins both
+// halves of that. It can hold — by being absent, by accounting for none of the
+// wave's collisions, or by refusing a name as imperative — and it can do nothing
+// else. It cannot release a branch (the re-scan decides that) and it cannot
+// excuse one from the re-review (every held branch of a cleared clash gets one),
+// because "which branches did you touch" is a self-report this stage has no way
+// to check: a resolver that renamed on two branches and named one would
+// otherwise deliver the omitted branch's post-cycle edits unreviewed.
 //
 // The workflow is a runtime script (top-level await/return, injected
 // `agent`/`phase`/`log` globals), so it cannot be imported. This evaluates the
@@ -52,7 +60,7 @@ function check(name, cond, detail) {
 // it — an edit that drops one, or a guard that swallows a throw, would pass.
 // Counting the oks too lets the run assert it executed the whole suite. Bump
 // this deliberately when adding or removing a check; the number is the assertion.
-const EXPECTED_CHECKS = 101;
+const EXPECTED_CHECKS = 110;
 
 async function scenario(name, fn) {
   try {
@@ -163,9 +171,10 @@ await scenario("unreflected rename", async () => {
   check("unreflected rename → no re-review is paid for", !labels(out.calls).some((l) => l.startsWith("re-review:")), JSON.stringify(labels(out.calls)));
 });
 
-// 2. A genuinely resolved two-branch clash: the re-scan comes back empty, so the
-//    renamed side delivers behind a fresh re-review and the untouched side
-//    delivers directly.
+// 2. THE TOO-STRICT CONTROL. A genuinely resolved two-branch clash with a
+//    correctly-reporting resolver still delivers: the re-scan comes back empty
+//    and both sides deliver, each behind a fresh re-review of its own. An
+//    over-tightening that held here would be a failure, not a safe default.
 await scenario("resolved two-branch clash", async () => {
   const out = await run({
     held: [mkHeld("a"), mkHeld("b")],
@@ -174,11 +183,11 @@ await scenario("resolved two-branch clash", async () => {
   });
   check("resolved clash → both sides deliver", JSON.stringify(slugs(out.deliverable)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(out.deliverable)));
   check("resolved clash → nothing held", out.held.length === 0, JSON.stringify(out.held));
-  check("resolved clash → only the CHANGED side is re-reviewed", JSON.stringify(labels(out.calls).filter((l) => l.startsWith("re-review:"))) === JSON.stringify(["re-review:a"]), JSON.stringify(labels(out.calls)));
+  check("resolved clash → EVERY held side is re-reviewed, not just the reported one", JSON.stringify(labels(out.calls).filter((l) => l.startsWith("re-review:")).sort()) === JSON.stringify(["re-review:a", "re-review:b"]), JSON.stringify(labels(out.calls)));
   const a = out.deliverable.find((d) => d.task.slug === "a");
   check("resolved clash → the re-review's notes ride to delivery", a.result.notes === "rename reads clean", JSON.stringify(a.result.notes));
   const b = out.deliverable.find((d) => d.task.slug === "b");
-  check("resolved clash → the untouched side delivers its own cycle result", b.result.notes === "cycle notes");
+  check("resolved clash → the side the resolver did not name still delivers, carrying its cycle record", b.result.rounds === 2 && b.result.artifactDir === "/tmp/art", JSON.stringify(b.result));
   // Ordering: resolve, then re-scan, then any re-review. A re-review before the
   // re-scan would mean a branch was being cleared on the resolver's word.
   const order = labels(out.calls);
@@ -202,6 +211,10 @@ await scenario("three-way clash, one side renamed", async () => {
   check("three-way → the two still-colliding sides are held", JSON.stringify(slugs(out.held)) === JSON.stringify(["b", "c"]), JSON.stringify(slugs(out.held)));
   check("three-way → both holds are collision-hold", out.held.every((h) => h.status === "collision-hold"));
   check("three-way → the held pair's clash names exactly them", out.held.every((h) => JSON.stringify(h.collisions[0].branches) === JSON.stringify(["task/b", "task/c"])));
+  // Cost control on the widened re-review: it covers the branches that DELIVER,
+  // not every branch the wave held. A held branch is not about to open a PR, so
+  // paying a delivery-tier reviewer over it buys nothing.
+  check("three-way → only the delivering side is re-reviewed", JSON.stringify(labels(out.calls).filter((l) => l.startsWith("re-review:"))) === JSON.stringify(["re-review:a"]), JSON.stringify(labels(out.calls)));
 });
 
 // 3b. The same three-way clash with BOTH remaining sides renamed: at most one
@@ -213,11 +226,12 @@ await scenario("three-way clash, enough sides renamed", async () => {
     packets: { resolution: renamed(["task/a", "task/b"]), rescan: { collisions: [] } },
   });
   check("three-way resolved → all three deliver", JSON.stringify(slugs(out.deliverable)) === JSON.stringify(["a", "b", "c"]), JSON.stringify(slugs(out.deliverable)));
-  check("three-way resolved → both renamed sides are re-reviewed", JSON.stringify(labels(out.calls).filter((l) => l.startsWith("re-review:")).sort()) === JSON.stringify(["re-review:a", "re-review:b"]));
+  check("three-way resolved → all three delivering sides are re-reviewed", JSON.stringify(labels(out.calls).filter((l) => l.startsWith("re-review:")).sort()) === JSON.stringify(["re-review:a", "re-review:b", "re-review:c"]), JSON.stringify(labels(out.calls)));
 });
 
-// 4. A wave with no collisions holds nothing and spawns no agent at all — the
-//    re-verification costs only the waves that actually collided.
+// 4. THE OTHER TOO-STRICT CONTROL. A wave with no collisions holds nothing and
+//    spawns no agent at all — the re-verification costs only the waves that
+//    actually collided, and widening who gets re-reviewed must not change that.
 await scenario("no collisions", async () => {
   const out = await run({ held: [], collisions: [], packets: {} });
   check("no collisions → nothing delivered from the dispatch", out.deliverable.length === 0);
@@ -342,15 +356,24 @@ await scenario("single held branch", async () => {
 
 // 7. The resolver returned nothing usable. Nothing is known about the tree, so
 //    no re-scan is spent and every branch is held.
+//
+//    The last case is the one an empty array makes: `[]` is truthy, so it used
+//    to walk straight past this arm into a re-scan that — the clash having
+//    genuinely gone — cleared every branch, which then delivered through an
+//    "untouched by the resolver" arm that nothing had established. A packet
+//    accounting for NONE of the collisions it was handed has reported on none of
+//    them, and would have dropped any `blocked` refusal it made on the way, so
+//    it is the same answer as no packet and is scripted here beside the others
+//    rather than left to differ by an accident of JS truthiness.
 await scenario("resolver returned nothing", async () => {
-  for (const [name, resolution] of [["resolver returned nothing", null], ["resolver omitted resolutions", {}], ["resolver returned a non-array", { resolutions: 7 }]]) {
+  for (const [name, resolution] of [["resolver returned nothing", null], ["resolver omitted resolutions", {}], ["resolver returned a non-array", { resolutions: 7 }], ["resolver accounted for no collision", { resolutions: [] }]]) {
     const out = await run({
       held: [mkHeld("a"), mkHeld("b")],
       collisions: [clash(["task/a", "task/b"])],
       packets: { resolution, rescan: { collisions: [] } },
     });
-    check(`${name} → nothing delivers`, out.deliverable.length === 0);
-    check(`${name} → both held with the resolver detail`, out.held.length === 2 && out.held.every((h) => h.status === "collision-hold" && /resolver returned no result/.test(h.detail)));
+    check(`${name} → nothing delivers`, out.deliverable.length === 0, JSON.stringify(slugs(out.deliverable)));
+    check(`${name} → both held with the resolver detail`, out.held.length === 2 && out.held.every((h) => h.status === "collision-hold" && /resolver returned no usable result/.test(h.detail)), JSON.stringify(out.held.map((h) => h.detail)));
     check(`${name} → no re-scan agent is spawned`, !labels(out.calls).some((l) => l.startsWith("collision-rescan:")), JSON.stringify(labels(out.calls)));
   }
 });
@@ -392,6 +415,30 @@ await scenario("re-review failures", async () => {
   }
 });
 
+// 9b. The resolver UNDER-REPORTS what it touched: it edited BOTH branches but
+//     named only one in `changedBranches`. Nothing here can tell — the resolver
+//     held write access to every held worktree, and the clash's disappearance
+//     proves only that something moved — so the report selects nobody and every
+//     branch of the cleared clash is re-reviewed. The omitted side's failing
+//     review is what makes this scenario able to fail: without the widened
+//     re-review it delivers its unreviewed post-cycle edits, and no packet the
+//     dispatch could inspect would have said so.
+await scenario("resolver under-reports which branches it changed", async () => {
+  const out = await run({
+    held: [mkHeld("a"), mkHeld("b")],
+    collisions: [clash(["task/a", "task/b"])],
+    packets: {
+      resolution: renamed(["task/a"]),
+      rescan: { collisions: [] },
+      reviews: { b: { pass: false, issues: [{ claim: "the rename left a dangling import" }], notes: "", flakeRecord: "" } },
+    },
+  });
+  check("under-reported rename → the unnamed side is re-reviewed too", JSON.stringify(labels(out.calls).filter((l) => l.startsWith("re-review:")).sort()) === JSON.stringify(["re-review:a", "re-review:b"]), JSON.stringify(labels(out.calls)));
+  check("under-reported rename → the unnamed side is held on its failed review", JSON.stringify(slugs(out.held)) === JSON.stringify(["b"]), JSON.stringify(slugs(out.held)));
+  check("under-reported rename → the hold names the re-review", out.held.length === 1 && /fresh re-review/.test(out.held[0].detail), JSON.stringify(out.held.map((h) => h.detail)));
+  check("under-reported rename → only the side that passed delivers", JSON.stringify(slugs(out.deliverable)) === JSON.stringify(["a"]), JSON.stringify(slugs(out.deliverable)));
+});
+
 // 10. A branch in TWO clashes, one resolved and one not. The re-scan answers per
 //     clash rather than per branch, so crediting the rename against the wrong
 //     clash cannot deliver it.
@@ -421,13 +468,19 @@ await scenario("branch in two clashes", async () => {
   check("the re-scan reuses the read-only discovery scan", /collisionScanPrompt\(heldTasks\.map/.test(body));
   check("the re-scan is validated by the discovery schema", /label: `collision-rescan:w\$\{wave\}`, schema: COLLISION_SCHEMA/.test(body));
   // Every delivery in this stage sits after the re-derived state exists. The
-  // count is asserted too: a third push added elsewhere in the function — before
-  // the gate, or outside the loop — fails here rather than sliding in unread.
+  // count is asserted too: a second push added elsewhere in the function —
+  // before the gate, or outside the loop — fails here rather than sliding in
+  // unread. There is exactly ONE now: the arm that delivers without a re-review
+  // was the "untouched by the resolver" arm, and it is gone.
   const gate = body.indexOf("let rescanned = null;");
   const pushes = [...body.matchAll(/deliverable\.push\(/g)].map((m) => m.index);
   check("the re-derived state is established in the dispatch", gate !== -1);
-  check("the dispatch has exactly the two delivery sites", pushes.length === 2, String(pushes.length));
+  check("the dispatch has exactly one delivery site", pushes.length === 1, String(pushes.length));
   check("every delivery site sits after the re-scan gate", gate !== -1 && pushes.length > 0 && pushes.every((i) => i > gate));
+  // The structural property the scenarios can only sample: the dispatch takes no
+  // decision at all off the resolver's account of what it touched. A scenario
+  // covers the shapes it scripts; this covers the field.
+  check("the dispatch reads no `changedBranches` off the resolver's packet", !/changedBranches/.test(body), body.slice(body.indexOf("changedBranches") - 80, body.indexOf("changedBranches") + 80));
 }
 
 check(`the suite ran all ${EXPECTED_CHECKS} checks`, ok + failures === EXPECTED_CHECKS, `ran ${ok + failures}`);
