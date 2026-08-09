@@ -544,17 +544,31 @@ const CYCLE_NO_SELF_PEER = "The cycle runs the sanctioned second opinion itself,
 // Default worktree/branch contract when the consumer supplies none. A consumer
 // with its own worktree lifecycle (wt-enter etc.) passes richer per-role
 // contract text via cycle.contracts instead.
-function cycleDefaultContract(cycle) {
+//
+// The branch assertion is every role's but the MEASURER's, and is dropped for
+// that role rather than excepted around: a rebase and a bisect leave HEAD
+// DETACHED, so `git branch --show-current` prints EMPTY — which "differs" from
+// the branch name — and a detached HEAD is one of the states the measurer is
+// sent to find. Asserting the branch stops it before either reading, so the
+// flagship case the measurement exists for (a tree left mid-rebase, whose
+// porcelain is empty) would come back `measured: false` instead of naming the
+// marker that failed. What a measurer needs is the right WORKTREE, which the
+// path assertion establishes on its own; the branch adds nothing to two
+// read-only readings and forbids the one they exist for.
+function cycleDefaultContract(cycle, role) {
   const where = cycle.worktree
     ? `Your worktree is \`${cycle.worktree}\`. Before anything else, \`cd\` into it and verify \`git rev-parse --show-toplevel\` prints exactly that path; if not, STOP and report — do not run any git or edit command outside it. Other agents may be working in other worktrees concurrently; stay in yours.`
     : `You work in the repository's current checkout — do NOT create a worktree and do NOT switch branches.`;
-  return `${where}
+  return role === "measurer"
+    ? `${where}
+HEAD there may be DETACHED — a rebase or a bisect leaves it so, and \`git branch --show-current\` then prints nothing at all. That is not a mismatch to stop on: it is one of the states you were sent to read. Switch, attach, or restore no branch.`
+    : `${where}
 You must be on branch \`${cycle.branch}\` — confirm with \`git branch --show-current\`; if it differs, STOP and report.`;
 }
 
 function cycleContract(cycle, role) {
   const contracts = cycle.contracts || {};
-  return contracts[role] || cycleDefaultContract(cycle);
+  return contracts[role] || cycleDefaultContract(cycle, role);
 }
 
 function cycleItemsBlock(cycle) {
@@ -930,11 +944,15 @@ Edit nothing.`;
 // packet on, and an `--abort` or a `reset` could take an unfinished operation's
 // work with it. The brief is given no account of the pass, deliberately: the
 // self-report is the thing being checked, and a measurer shown `clean: true`
-// has been handed the answer it is here to derive.
+// has been handed the answer it is here to derive. Its contract is the
+// `measurer` one for a reason of the same kind: every other role's asserts the
+// BRANCH, and the two operations that detach HEAD — a rebase, a bisect — are
+// among the states this step is sent to find, so a reviewer's contract would
+// order it to stop precisely where the reading matters most.
 function cyclePacketCheckPrompt(cycle, state) {
   return `Packet worktree measurement, read-only. Fixer pass ${state.pass} of this review cycle has returned a packet; before the cycle adopts it, MEASURE the worktree it came back from. OBSERVE ONLY — do NOT stage, commit, reset, clean, stash, abort, continue, or edit anything, and do not "tidy" the tree: an unclean or mid-operation worktree is the ANSWER this step exists to return, not a problem for you to solve, and repairing it would destroy the evidence and could take an unfinished operation's work with it.
 
-${cycleContract(cycle, "reviewer")}
+${cycleContract(cycle, "measurer")}
 
 ${CYCLE_DESTROY_BOUNDARY}
 
@@ -1148,8 +1166,12 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     close-out, a SECOND bounded discretion beside `light` and a different
 //     one: `light` skips the final no-op fixer pass, close-out skips the
 //     re-review of a pass whose whole change was non-semantic,
-//   contracts: { fixer, reviewer, peer } — optional per-role preamble text
-//     (a worktree-lifecycle consumer passes its own wt-enter contract here),
+//   contracts: { fixer, reviewer, peer, measurer } — optional per-role
+//     preamble text (a worktree-lifecycle consumer passes its own wt-enter
+//     contract here). A `measurer` contract states WHERE and nothing more: it
+//     must not assert the branch, because the packet measurement is sent to
+//     find the states that detach HEAD. Omitted, every role falls back to
+//     cycleDefaultContract, which drops that assertion for this role itself,
 //   labelPrefix — optional, prefixes agent labels for fan-out consumers,
 //   peerState — optional SHARED peer-availability state for a fan-out owner
 //     embedding many cycles: hand every cycle ONE object of the shape

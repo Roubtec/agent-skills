@@ -513,7 +513,7 @@ function shq(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
 }
 
-function worktreeContract(task, { mayCreate = false } = {}) {
+function worktreeContract(task, { mayCreate = false, measuring = false } = {}) {
   // wt-enter encodes the rerun-safe lifecycle (reuse the existing worktree,
   // attach an existing branch, create off the base) so prompts never re-derive
   // it. Stages that must not create work (reviewer, PR) omit the base: a
@@ -521,6 +521,27 @@ function worktreeContract(task, { mayCreate = false } = {}) {
   const enter = mayCreate
     ? `WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)} ${shq(task.base)})" && cd "$WT"`
     : `WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && cd "$WT"`;
+  // The cycle's packet MEASUREMENT gets its own variant, because every other
+  // stage's contract asserts the branch and this one is sent to find the states
+  // where that assertion cannot hold: a rebase and a bisect detach HEAD, so
+  // `git branch --show-current` prints nothing. wt-enter asserts it too — it
+  // refuses a worktree whose HEAD is off the branch rather than switching it —
+  // so the refusal has to be readable here as evidence rather than as a stop,
+  // and it names the path it checked — which is the only way into that worktree
+  // once the helper has declined to print one.
+  if (measuring) {
+    return `## WORKTREE CONTRACT (do this before anything else)
+
+Resolve this task's worktree path with the image-baked helper — create nothing, change nothing:
+
+    WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})"
+
+Take your readings IN that worktree — \`cd "$WT"\` once the helper has printed a path. Never pass it a base ref: this stage creates nothing.
+
+\`wt-enter\` asserts the branch itself, so it REFUSES a worktree whose HEAD is not on \`${task.branch}\` — including the DETACHED HEAD a rebase or a bisect leaves, where it reports being on branch \`''\` — and then prints no path at all. That refusal is NOT a stop for you: the state it refuses over is one of the states you were sent to read, and its message names the worktree path it checked. Take the path from that message and read that worktree with \`git -C <that path> …\` instead. Any OTHER failure — no such worktree, git will not run there — is a reading you could not take: report it as unknown, quoting the error, rather than guessing.
+
+Read only, and only there. Never read or touch the repo root or a sibling worktree — other agents are working in their own concurrently — and run nothing that writes, switches, attaches, restores, continues, or aborts anything.`;
+  }
   return `## WORKTREE CONTRACT (do this before anything else)
 
 Resolve your worktree with the image-baked helper and \`cd\` into it:
@@ -966,17 +987,31 @@ const CYCLE_NO_SELF_PEER = "The cycle runs the sanctioned second opinion itself,
 // Default worktree/branch contract when the consumer supplies none. A consumer
 // with its own worktree lifecycle (wt-enter etc.) passes richer per-role
 // contract text via cycle.contracts instead.
-function cycleDefaultContract(cycle) {
+//
+// The branch assertion is every role's but the MEASURER's, and is dropped for
+// that role rather than excepted around: a rebase and a bisect leave HEAD
+// DETACHED, so `git branch --show-current` prints EMPTY — which "differs" from
+// the branch name — and a detached HEAD is one of the states the measurer is
+// sent to find. Asserting the branch stops it before either reading, so the
+// flagship case the measurement exists for (a tree left mid-rebase, whose
+// porcelain is empty) would come back `measured: false` instead of naming the
+// marker that failed. What a measurer needs is the right WORKTREE, which the
+// path assertion establishes on its own; the branch adds nothing to two
+// read-only readings and forbids the one they exist for.
+function cycleDefaultContract(cycle, role) {
   const where = cycle.worktree
     ? `Your worktree is \`${cycle.worktree}\`. Before anything else, \`cd\` into it and verify \`git rev-parse --show-toplevel\` prints exactly that path; if not, STOP and report — do not run any git or edit command outside it. Other agents may be working in other worktrees concurrently; stay in yours.`
     : `You work in the repository's current checkout — do NOT create a worktree and do NOT switch branches.`;
-  return `${where}
+  return role === "measurer"
+    ? `${where}
+HEAD there may be DETACHED — a rebase or a bisect leaves it so, and \`git branch --show-current\` then prints nothing at all. That is not a mismatch to stop on: it is one of the states you were sent to read. Switch, attach, or restore no branch.`
+    : `${where}
 You must be on branch \`${cycle.branch}\` — confirm with \`git branch --show-current\`; if it differs, STOP and report.`;
 }
 
 function cycleContract(cycle, role) {
   const contracts = cycle.contracts || {};
-  return contracts[role] || cycleDefaultContract(cycle);
+  return contracts[role] || cycleDefaultContract(cycle, role);
 }
 
 function cycleItemsBlock(cycle) {
@@ -1352,11 +1387,15 @@ Edit nothing.`;
 // packet on, and an `--abort` or a `reset` could take an unfinished operation's
 // work with it. The brief is given no account of the pass, deliberately: the
 // self-report is the thing being checked, and a measurer shown `clean: true`
-// has been handed the answer it is here to derive.
+// has been handed the answer it is here to derive. Its contract is the
+// `measurer` one for a reason of the same kind: every other role's asserts the
+// BRANCH, and the two operations that detach HEAD — a rebase, a bisect — are
+// among the states this step is sent to find, so a reviewer's contract would
+// order it to stop precisely where the reading matters most.
 function cyclePacketCheckPrompt(cycle, state) {
   return `Packet worktree measurement, read-only. Fixer pass ${state.pass} of this review cycle has returned a packet; before the cycle adopts it, MEASURE the worktree it came back from. OBSERVE ONLY — do NOT stage, commit, reset, clean, stash, abort, continue, or edit anything, and do not "tidy" the tree: an unclean or mid-operation worktree is the ANSWER this step exists to return, not a problem for you to solve, and repairing it would destroy the evidence and could take an unfinished operation's work with it.
 
-${cycleContract(cycle, "reviewer")}
+${cycleContract(cycle, "measurer")}
 
 ${CYCLE_DESTROY_BOUNDARY}
 
@@ -1570,8 +1609,12 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     close-out, a SECOND bounded discretion beside `light` and a different
 //     one: `light` skips the final no-op fixer pass, close-out skips the
 //     re-review of a pass whose whole change was non-semantic,
-//   contracts: { fixer, reviewer, peer } — optional per-role preamble text
-//     (a worktree-lifecycle consumer passes its own wt-enter contract here),
+//   contracts: { fixer, reviewer, peer, measurer } — optional per-role
+//     preamble text (a worktree-lifecycle consumer passes its own wt-enter
+//     contract here). A `measurer` contract states WHERE and nothing more: it
+//     must not assert the branch, because the packet measurement is sent to
+//     find the states that detach HEAD. Omitted, every role falls back to
+//     cycleDefaultContract, which drops that assertion for this role itself,
 //   labelPrefix — optional, prefixes agent labels for fan-out consumers,
 //   peerState — optional SHARED peer-availability state for a fan-out owner
 //     embedding many cycles: hand every cycle ONE object of the shape
@@ -2445,6 +2488,10 @@ function taskCycleConfig(task, remote, peerMode) {
       fixer: worktreeContract(task, { mayCreate: true }),
       reviewer: worktreeContract(task),
       peer: worktreeContract(task),
+      // WHERE only. The cycle's packet measurement is the one stage sent to
+      // find states that detach HEAD, so a branch-asserting contract would
+      // stop it before either reading — see `worktreeContract`'s note.
+      measurer: worktreeContract(task, { measuring: true }),
     },
     scope: {
       title: task.slug,

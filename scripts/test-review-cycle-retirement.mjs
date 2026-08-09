@@ -72,7 +72,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 148;
+const CHECKS_PER_LEG = 151;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -1338,6 +1338,17 @@ for (const name of WORKFLOWS) {
     check("and is asked for BOTH readings, the operation state being the one porcelain hides", /--porcelain/.test(measurePrompt) && /CHERRY_PICK_HEAD/.test(measurePrompt) && /prints EMPTY porcelain/.test(measurePrompt), "measurement prompt");
     check("and told to observe only — never to repair the tree it is measuring", /OBSERVE ONLY/.test(measurePrompt) && /do NOT stage, commit, reset, clean, stash, abort/.test(measurePrompt), "measurement prompt");
 
+    // The brief must not FORBID the reading it is sent to take. Every other
+    // role's worktree contract asserts the branch, and the two operations that
+    // detach HEAD — a rebase, a bisect — are among the states this step exists
+    // to find: `git branch --show-current` prints EMPTY there, which "differs"
+    // from the branch name, so a branch-asserting contract orders the measurer
+    // to STOP before either reading and the flagship case comes back
+    // `measured: false` instead of naming the marker that failed.
+    check("the measuring turn's brief carries no branch assertion, which a detached HEAD would fail", !/You must be on branch/.test(measurePrompt) && !/if it differs, STOP/.test(measurePrompt), "measurement prompt");
+    check("and says outright that a DETACHED HEAD is one of the states it was sent to read", /DETACHED/.test(measurePrompt) && /not a mismatch to stop on/.test(measurePrompt), "measurement prompt");
+    check("while the roles that must stay on the branch are still told to", /You must be on branch/.test(opaque.seen.reviewPrompts[0] || "") && /You must be on branch/.test(opaque.seen.fixPrompts[0] || ""), "review/fix prompts");
+
     // The free structural refusal still runs first, so a pass that says its own
     // worktree is unclean costs no measuring turn.
     const selfUnclean = await run(src, { fixes: [{ ...PASS_PACKET, clean: false }], reviews: [] });
@@ -1408,6 +1419,42 @@ const GRANT_CHECKS = 13;
 
   const granted = legOk + legFail - before;
   check(`grant checks ran all ${GRANT_CHECKS}`, granted === GRANT_CHECKS, `ran ${granted}`);
+}
+
+// The batch leg's per-role contracts, which the cycle's own default never
+// reaches: a consumer with a worktree lifecycle supplies its own text for every
+// role, so the section's `measurer` default — exercised on both legs above — is
+// not what a batch's measuring turn actually reads. Checked here, once, outside
+// the embeddable section, because that is where `worktreeContract` lives.
+const BATCH_CONTRACT_CHECKS = 5;
+{
+  console.log("# wf-address-tasks.js — the batch's per-role contracts");
+  const before = legOk + legFail;
+  const src = readFileSync(join(here, "..", "plugins", "dev-skills", "workflows", "wf-address-tasks.js"), "utf8");
+  const cut = src.indexOf("\nconst peerMode = /");
+  if (cut < 0) throw new Error("wf-address-tasks.js: the cut marker this evaluates up to is gone");
+  const prefix = src.slice(0, cut).replace(/^export const meta/m, "const meta");
+  // eslint-disable-next-line no-new-func
+  const { taskCycleConfig } = new Function("args", `"use strict";\n${prefix}\nreturn { taskCycleConfig };`)("");
+  const cfg = taskCycleConfig({ slug: "t025a", branch: "task/025a-measure", base: "main", path: "tasks/025a-measure.md", content: "c" }, true, "off");
+  const measurer = (cfg.contracts || {}).measurer || "";
+
+  check("the batch hands the cycle a measurer contract of its own", measurer.length > 0, JSON.stringify(Object.keys(cfg.contracts || {})));
+  // The same property the section's default carries, and the reason this leg
+  // needs its own check: `wt-enter` asserts the branch INSIDE the helper, and
+  // refuses a worktree whose HEAD is off it rather than switching — which is
+  // exactly what a rebase or a bisect leaves behind. So the contract has to
+  // read that refusal as evidence, or the measurer stops on the flagship case.
+  check("which asserts no branch, so a rebase's or a bisect's detached HEAD does not stop the reading", !/branch --show-current/.test(measurer) && !/STOP/.test(measurer), "measurer contract");
+  check("and reads the helper's own branch refusal as evidence rather than as a stop", /REFUSES/.test(measurer) && /DETACHED HEAD/.test(measurer) && /NOT a stop for you/.test(measurer), "measurer contract");
+  check("while the roles that must stay on the branch are still told to", /branch --show-current/.test(cfg.contracts.fixer) && /branch --show-current/.test(cfg.contracts.reviewer) && /branch --show-current/.test(cfg.contracts.peer), "role contracts");
+  // A measurement creates nothing: `wt-enter` is given no base ref to create a
+  // branch from. And it has a way into the worktree for the case the helper
+  // refuses to print one, which is the case it was sent to read.
+  check("and the measurer creates nothing — no base ref — but can still reach a worktree the helper refused to enter", !measurer.includes("'main'") && /git -C/.test(measurer), "measurer contract");
+
+  const n = legOk + legFail - before;
+  check(`batch contract checks ran all ${BATCH_CONTRACT_CHECKS}`, n === BATCH_CONTRACT_CHECKS, `ran ${n}`);
 }
 
 if (failures) {
