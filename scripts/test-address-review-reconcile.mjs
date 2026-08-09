@@ -248,12 +248,31 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // merely redundant there. Both qualifications are pinned: exclude the resolved
   // PR by number, and identify the other head repository-qualified rather than
   // by bare branch name, which a fork's same-named head also answers.
+  //
+  // The second qualification is pinned COMPONENT BY COMPONENT, because a single
+  // field name does not pin a comparison. `/headRepositoryOwner/` alone did not:
+  // that string also occurs in the probe's `--json` request list, so the whole
+  // comparison could be replaced by a bare `headRefName` equality and the
+  // assertion still held. Each substring below occurs only where that component
+  // is actually USED, so dropping any one of them fails this check: the other
+  // head's repository (owner login joined to repository name, not the owner
+  // alone), the ref that repository qualifies, and the thing it is compared
+  // AGAINST — this branch's own resolved push target, without which "same
+  // repository-qualified ref" names no comparand at all.
   const excludesAddressedPr = /DIFFERENT number/.test(cases);
-  const repoQualifiedOtherHead = /headRepositoryOwner/.test(cases);
+  const namesOtherHeadRepo = /headRepositoryOwner\.login[^`]*headRepository\.name/.test(cases);
+  const namesOtherHeadRef = /plus `headRefName`/.test(cases);
+  const comparesAgainstPushTarget = /resolved push (?:remote\/ref|target)/.test(cases);
+  // And a comparison whose fields the probe never requests reads them as absent:
+  // the short-circuit this same sentence names has to be in the `--json` list,
+  // not merely mentioned, or an agent running the command as written gets
+  // `undefined` and an absent field reads falsy — "not cross-repository" — which
+  // is the fork misfire this qualification exists to prevent.
+  const requestsProbeFields = /--json number,headRefName,headRepository,headRepositoryOwner,isCrossRepository/.test(cases);
   check(
-    "the conflicting-PR stop excludes the PR being addressed and identifies the other head by repository plus ref",
-    excludesAddressedPr && repoQualifiedOtherHead,
-    `different-number filter stated: ${excludesAddressedPr}; repository-qualified head stated: ${repoQualifiedOtherHead}`,
+    "the conflicting-PR stop excludes the PR being addressed and identifies the other head by repository plus ref, against this branch's push target",
+    excludesAddressedPr && namesOtherHeadRepo && namesOtherHeadRef && comparesAgainstPushTarget && requestsProbeFields,
+    `different-number filter stated: ${excludesAddressedPr}; other head's repository stated: ${namesOtherHeadRepo}; its ref stated: ${namesOtherHeadRef}; compared against the resolved push target: ${comparesAgainstPushTarget}; probe requests every field: ${requestsProbeFields}`,
   );
 }
 
