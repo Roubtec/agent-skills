@@ -2907,6 +2907,9 @@ async function settleWaveCollisions({ heldTasks, waveCollisions, wave, defaultBa
         // `collisionReReviewFlakeRecord`).
         deliverable.push({ task, result: { ...result, notes: verdict.notes || result.notes, ...(standingDeviations.length ? { deviationAssessments: coverage.assessments } : {}), ...collisionReviewedRecord(result), ...collisionReReviewFlakeRecord(result, verdict) } });
       } else if (reviewed) {
+        // `unassessedDeviations` is what THIS re-review left uncovered; a
+        // carried `deviationAssessments` beside it naming the same deviation is
+        // the pre-rename cycle's, which only a delivering pass replaces.
         held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "the deconflicted branch passed fresh re-review but left a deviation from a LOCKED decision unassessed, so the PR would lead with the implementer's half of it alone; held before PR delivery — re-review this branch and record the in-spec route and a RATIFY/CONFORM recommendation for each deviation named below, without conforming, rewording, or dropping it", unassessedDeviations: coverage.unassessed, collisions: related, ...cycleCarried(result) });
       } else {
         held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "the deconflicted branch did not pass fresh re-review; held before PR delivery", outstanding: verdict ? verdict.issues : null, collisions: related, ...cycleCarried(result) });
