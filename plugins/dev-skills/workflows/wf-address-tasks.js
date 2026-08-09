@@ -6,8 +6,9 @@
  * plus a best-effort cross-harness codex peer review -> fix, bounded by the
  * cycle's canonical round cap — scan reviewed sibling branches for add/add
  * collisions before delivery and deconflict them (an orchestrator-deputy agent
- * renames one side, regenerates derived files, and the changed branch is
- * re-reviewed) — or hold a name that must stay identical — then open PRs for
+ * renames one side, regenerates derived files, the changed branch is
+ * re-reviewed, and a second scan of the refs decides which sides may deliver) —
+ * or hold a name that must stay identical — then open PRs for
  * the delivered tasks and report. Invoke as
  * `/dev-skills:wf-address-tasks <glob-or-file-list> [peer-opinions=off]`.
  *
@@ -84,7 +85,8 @@ export const meta = {
     { title: "Resolve batch", detail: "read task files, derive dependency waves and branches" },
     { title: "Peer review (codex)", detail: "best-effort cross-harness second opinion beside each task's reviewer rounds; its outcome never blocks" },
     { title: "Collision scan", detail: "diff added files across sibling branches for add/add clashes" },
-    { title: "Collision resolve", detail: "rename one side of each clash, regen, re-review, then deliver" },
+    { title: "Collision resolve", detail: "rename one side of each clash, regen, then re-review the changed side" },
+    { title: "Collision re-scan", detail: "re-derive the clashes from the refs; only a branch the re-scan clears delivers" },
     { title: "Summary" },
   ],
 };
@@ -2680,6 +2682,137 @@ async function deliverTask(task, ready, remote) {
   };
 }
 
+// Post-resolution settlement of one wave's held branches: resolve the clashes,
+// re-verify, and hand back who may deliver and who stays held.
+//
+// Neither side of an add/add clash is inherently "first", so a single
+// orchestrator-deputy agent — seeing every held branch and its worktree, still in
+// place — decides which side to rename and does it: rename the file/symbol,
+// regenerate derived files, commit, push. A name that MUST stay identical
+// (framework-mandated, externally fixed, or pinned by a task file) is reported
+// `blocked` instead of getting an invented divergent name.
+//
+// Delivery is then decided from a SECOND read-only scan of the refs rather than
+// from the resolver's report, because a rename can be reported and only partly
+// applied — the file moved but the duplicate export left behind, or one branch
+// renamed and its regenerated mirror forgotten. Believing the report would let
+// both sides open PRs carrying the very clash this guard exists to stop, against
+// the guard's own bias that holding a real conflict beats shipping a wrong
+// delivery. The re-scan also re-derives 027's 3+ branch rule at no cost: a scan
+// reports a value only where two or more branches still carry it, so a three-way
+// clash with one side renamed still names the other two and holds them both.
+//
+// The resolver's packet keeps the two jobs it is the only source for — which
+// branches were touched and so owe a fresh re-review, and which names it refused
+// as imperative — and loses the third: it is no longer evidence that a clash is
+// gone. The two checks on a renamed branch stay separate and both must pass; the
+// re-review runs the ordinary per-task reviewer brief, which carries no
+// cross-branch context and so cannot stand in for collision proof.
+async function settleWaveCollisions({ heldTasks, waveCollisions, wave, defaultBase, remote, peerMode }) {
+  const deliverable = [];
+  const held = [];
+  if (!heldTasks.length) return { deliverable, held };
+
+  const involves = (c, task) => {
+    const names = collisionBranchNames(c);
+    return names.includes(task.branch) || names.includes(task.slug);
+  };
+  const relatedFor = (task) => waveCollisions.filter((c) => involves(c, task));
+
+  phase(`Collision resolve (wave ${wave})`);
+  const resolution = await agent(
+    resolveCollisionsPrompt(
+      heldTasks.map(({ task }) => ({ slug: task.slug, branch: task.branch, base: task.base || defaultBase })),
+      waveCollisions,
+      remote
+    ),
+    { label: `collision-resolve:w${wave}`, schema: RESOLUTION_SCHEMA }
+  );
+  const resolutions = resolution && Array.isArray(resolution.resolutions) ? resolution.resolutions : null;
+
+  const changedBranches = new Set();
+  const blockedNames = new Set();
+  if (resolutions) {
+    for (const r of resolutions) {
+      if (r.action === "renamed" && Array.isArray(r.changedBranches)) {
+        r.changedBranches.map(normalizeBranchName).filter(Boolean).forEach((n) => changedBranches.add(n));
+      } else if (r.action === "blocked" && r.collision) {
+        blockedNames.add(r.collision);
+      }
+    }
+  }
+  const collisionBlocked = (c) => blockedNames.has(c.name);
+
+  // The re-derived state, scoped to the branches this wave actually held so the
+  // extra agent costs only what the clash costs. Two of them at minimum: a scan
+  // over a single branch has no sibling to compare against and returns an empty
+  // set for want of one, which would read as "clash gone" on no evidence at all.
+  let rescanned = null;
+  if (resolutions && heldTasks.length >= 2) {
+    phase(`Collision re-scan (wave ${wave})`);
+    const rescan = await agent(
+      collisionScanPrompt(heldTasks.map(({ task }) => ({ slug: task.slug, branch: task.branch, base: task.base || defaultBase }))),
+      { label: `collision-rescan:w${wave}`, schema: COLLISION_SCHEMA }
+    );
+    if (rescan && Array.isArray(rescan.collisions)) rescanned = rescan.collisions;
+  }
+
+  for (const { task, result } of heldTasks) {
+    const related = relatedFor(task);
+    const isChanged = changedBranches.has(task.branch) || changedBranches.has(task.slug);
+    const stillColliding = rescanned ? rescanned.filter((c) => involves(c, task)).map((c) => ({ ...c, wave })) : null;
+
+    if (!resolutions) {
+      held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision resolver returned no result; branch held before PR delivery — deconflict manually and re-review", collisions: related, ...cycleCarried(result) });
+    } else if (related.some(collisionBlocked)) {
+      // An imperative shared name still clashes even if this branch was also
+      // touched — keep it held for a human/design decision.
+      held.push({ slug: task.slug, branch: task.branch, status: "collision-blocked", detail: "shared name must stay identical (imperative); resolver could not deconflict — needs a human/design decision", collisions: related, ...cycleCarried(result) });
+    } else if (!stillColliding) {
+      held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "post-resolution collision re-scan established nothing (no usable result, or fewer than two of the colliding branches in hand to compare); branch held before PR delivery — re-scan these branches by hand, deconflict what remains, and re-review", collisions: related, ...cycleCarried(result) });
+    } else if (stillColliding.length) {
+      held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "the clash is still in the refs after the resolver ran; branch held before PR delivery — rename enough sides that at most one branch keeps the name, regenerate whatever derives from it, and re-review", collisions: stillColliding, ...cycleCarried(result) });
+    } else if (isChanged) {
+      // Fresh re-review of the rename — ONE pass of the cycle's reviewer brief,
+      // with no fixer loop and no peer stage. This is deliberately not another
+      // full cycle: the branch already cleared the complete cycle (peer
+      // included) before the collision guard ran, the check is scoped to the
+      // deconfliction rename, and the address-tasks skill specifies exactly this
+      // — "re-review each changed task with fresh eyes" — a single-reviewer pass
+      // that predates the shared cycle. Hold on failure rather than loop.
+      //
+      // At the DELIVERY tier, stated rather than inherited. The resolver renamed
+      // files and regenerated artifacts AFTER the cycle's own delivery-tier
+      // pass, and this is the last check before the PR opens: that post-run
+      // change voids the earlier pass and owes the tier again, which this
+      // reviewer is the only remaining pass able to run. (An unstated tier
+      // renders the delivery tier anyway — that is the fail-safe default — but a
+      // gate this load-bearing says so.) The brief, its stated tier, and the
+      // `flakeRecord` recording delta live in `collisionReReviewPrompt` /
+      // `COLLISION_RE_REVIEW_SCHEMA`.
+      const verdict = await agent(collisionReReviewPrompt(task, remote, peerMode), { label: `re-review:${task.slug}`, schema: COLLISION_RE_REVIEW_SCHEMA });
+      if (verdict && verdict.pass && !verdict.emptyDiffFlag) {
+        // A pass here is a fresh reviewer's read of the whole branch, so it
+        // settles the one claim the cycle's `recordOnly` can no longer make —
+        // see `collisionReviewedRecord`. Only that claim: the record and its note
+        // still ride to the PR body, unchanged otherwise — unless this pass's own
+        // run deferred a failure, whose record then supersedes it (see
+        // `collisionReReviewFlakeRecord`).
+        deliverable.push({ task, result: { ...result, notes: verdict.notes || result.notes, ...collisionReviewedRecord(result), ...collisionReReviewFlakeRecord(result, verdict) } });
+      } else {
+        held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "rename did not pass fresh re-review; held before PR delivery", outstanding: verdict ? verdict.issues : null, collisions: related, ...cycleCarried(result) });
+      }
+    } else {
+      // Untouched by the resolver and no longer named by the re-scan: the clash
+      // is gone from the refs, so this side delivers on evidence rather than on
+      // the resolver's word for it.
+      deliverable.push({ task, result });
+    }
+  }
+
+  return { deliverable, held };
+}
+
 // --- Flag parsing: `peer-opinions=off` must arrive through args (a workflow
 // cannot read prose elsewhere) and suppresses the embedded cycle's peer stage
 // for every task in the batch. Flatten any args shape first — structured
@@ -2952,146 +3085,18 @@ try {
       }
     });
 
-    // Collision resolution. Neither side of an add/add clash is inherently "first",
-    // so a single orchestrator-deputy agent — seeing every held branch and its
-    // worktree, still in place — decides which side to rename and does it: rename
-    // the file/symbol, regenerate derived files, commit, push. A name that MUST
-    // stay identical (framework-mandated, externally fixed, or pinned by a task
-    // file) is reported `blocked` instead of getting an invented divergent name.
-    // Each branch the resolver CHANGED is then re-reviewed fresh (one pass) before
-    // it may deliver; the unchanged side of a resolved clash delivers as-is; a
-    // blocked, unresolved, or re-review-failed branch stays held for a human.
-    if (heldTasks.length) {
-      const waveCollisions = collisions.filter((c) => c.wave === w + 1);
-      const relatedFor = (task) =>
-        waveCollisions.filter((c) => {
-          const names = collisionBranchNames(c);
-          return names.includes(task.branch) || names.includes(task.slug);
-        });
-
-      phase(`Collision resolve (wave ${w + 1})`);
-      const resolution = await agent(
-        resolveCollisionsPrompt(
-          heldTasks.map(({ task }) => ({ slug: task.slug, branch: task.branch, base: task.base || plan.defaultBase })),
-          waveCollisions,
-          remote
-        ),
-        { label: `collision-resolve:w${w + 1}`, schema: RESOLUTION_SCHEMA }
-      );
-      const resolutions = resolution && Array.isArray(resolution.resolutions) ? resolution.resolutions : null;
-
-      // Index the resolver's outcome by branch and by collision name. A collision
-      // is actually resolved only when enough involved branches were changed that
-      // at most one branch still carries the original colliding value. This matters
-      // for 3+ branch clashes: renaming one side leaves the other two still
-      // colliding, so those unchanged branches must stay held.
-      const changedBranches = new Set();
-      const changedBranchesByCollision = new Map();
-      const blockedNames = new Set();
-      if (resolutions) {
-        for (const r of resolutions) {
-          const changed = Array.isArray(r.changedBranches) ? r.changedBranches.map(normalizeBranchName).filter(Boolean) : [];
-          if (r.action === "renamed") {
-            changed.forEach((n) => changedBranches.add(n));
-            if (r.collision) {
-              const existing = changedBranchesByCollision.get(r.collision) || new Set();
-              changed.forEach((n) => existing.add(n));
-              changedBranchesByCollision.set(r.collision, existing);
-            }
-          } else if (r.action === "blocked" && r.collision) {
-            blockedNames.add(r.collision);
-          }
-        }
-      }
-      const collisionBlocked = (c) => blockedNames.has(c.name);
-      // Only branches the resolver reported as changed FOR THIS collision count
-      // toward resolving it. An earlier version also credited any branch in the
-      // global `changedBranches` set, to guard against a resolver that mistypes the
-      // collision echo — but that is unsound when a branch sits in more than one
-      // collision: renaming branch B to fix an A/B path clash would also mark B
-      // "changed" for an unrelated B/C symbol clash, dropping that clash to a single
-      // remaining branch and letting B and C both deliver while still colliding. A
-      // mis-echoed rename now conservatively leaves the branch held (for a manual
-      // pass / re-scan) instead — matching this guard's bias that holding a real
-      // conflict beats shipping a wrong delivery.
-      const changedForCollision = (c) => new Set(changedBranchesByCollision.get(c.name) || []);
-      const remainingForCollision = (c) => {
-        const changed = changedForCollision(c);
-        return collisionBranchNames(c).filter((n) => !changed.has(n));
-      };
-      const collisionResolved = (c) => !collisionBlocked(c) && remainingForCollision(c).length <= 1;
-      const collisionStillIncludes = (c, task) => {
-        if (collisionBlocked(c)) return true;
-        const names = collisionBranchNames(c);
-        const participates = names.includes(task.branch) || names.includes(task.slug);
-        if (!participates) return false;
-        const changed = changedForCollision(c);
-        if (changed.has(task.branch) || changed.has(task.slug)) return false;
-        return remainingForCollision(c).length >= 2;
-      };
-
-      for (const { task, result } of heldTasks) {
-        const related = relatedFor(task);
-        const isChanged = changedBranches.has(task.branch) || changedBranches.has(task.slug);
-
-        if (!resolutions) {
-          const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision resolver returned no result; branch held before PR delivery — deconflict manually and re-review", collisions: related, ...cycleCarried(result) };
-          statusBySlug.set(task.slug, held.status);
-          results.push(held);
-        } else if (related.some(collisionBlocked)) {
-          // An imperative shared name still clashes even if this branch was also
-          // touched — keep it held for a human/design decision.
-          const held = { slug: task.slug, branch: task.branch, status: "collision-blocked", detail: "shared name must stay identical (imperative); resolver could not deconflict — needs a human/design decision", collisions: related, ...cycleCarried(result) };
-          statusBySlug.set(task.slug, held.status);
-          results.push(held);
-        } else if (related.some((c) => collisionStillIncludes(c, task))) {
-          const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision still has two or more unchanged branches after resolver ran; branch held before PR delivery — rename enough sides and re-review", collisions: related, ...cycleCarried(result) };
-          statusBySlug.set(task.slug, held.status);
-          results.push(held);
-        } else if (isChanged) {
-          // Fresh re-review of the rename — ONE pass of the cycle's reviewer
-          // brief, with no fixer loop and no peer stage. This is deliberately
-          // not another full cycle: the branch already cleared the complete
-          // cycle (peer included) before the collision guard ran, the check is
-          // scoped to the deconfliction rename, and the address-tasks skill
-          // specifies exactly this — "re-review each changed task with fresh
-          // eyes" — a single-reviewer pass that predates the shared cycle.
-          // Hold on failure rather than loop.
-          //
-          // At the DELIVERY tier, stated rather than inherited. The resolver
-          // renamed files and regenerated artifacts AFTER the cycle's own
-          // delivery-tier pass, and this is the last check before the PR
-          // opens: that post-run change voids the earlier pass and owes the
-          // tier again, which this reviewer is the only remaining pass able to
-          // run. (An unstated tier renders the delivery tier anyway — that is
-          // the fail-safe default — but a gate this load-bearing says so.)
-          // The brief, its stated tier, and the `flakeRecord` recording delta
-          // live in `collisionReReviewPrompt` / `COLLISION_RE_REVIEW_SCHEMA`.
-          const verdict = await agent(collisionReReviewPrompt(task, remote, peerMode), { label: `re-review:${task.slug}`, schema: COLLISION_RE_REVIEW_SCHEMA });
-          if (verdict && verdict.pass && !verdict.emptyDiffFlag) {
-            // A pass here is a fresh reviewer's read of the whole branch, so it
-            // settles the one claim the cycle's `recordOnly` can no longer
-            // make — see `collisionReviewedRecord`. Only that claim: the record
-            // and its note still ride to the PR body, unchanged otherwise —
-            // unless this pass's own run deferred a failure, whose record then
-            // supersedes it (see `collisionReReviewFlakeRecord`).
-            deliverable.push({ task, result: { ...result, notes: verdict.notes || result.notes, ...collisionReviewedRecord(result), ...collisionReReviewFlakeRecord(result, verdict) } });
-          } else {
-            const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "rename did not pass fresh re-review; held before PR delivery", outstanding: verdict ? verdict.issues : null, collisions: related, ...cycleCarried(result) };
-            statusBySlug.set(task.slug, held.status);
-            results.push(held);
-          }
-        } else if (related.every(collisionResolved)) {
-          // Unchanged side of a clash the resolver fixed on the other branch.
-          deliverable.push({ task, result });
-        } else {
-          // Resolver neither changed nor blocked this branch's clash — do not
-          // re-introduce it by delivering; hold for a manual pass.
-          const held = { slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision left unresolved by the resolver; branch held before PR delivery — deconflict manually and re-review", collisions: related, ...cycleCarried(result) };
-          statusBySlug.set(task.slug, held.status);
-          results.push(held);
-        }
-      }
+    const settled = await settleWaveCollisions({
+      heldTasks,
+      waveCollisions: collisions.filter((c) => c.wave === w + 1),
+      wave: w + 1,
+      defaultBase: plan.defaultBase,
+      remote,
+      peerMode,
+    });
+    deliverable.push(...settled.deliverable);
+    for (const h of settled.held) {
+      statusBySlug.set(h.slug, h.status);
+      results.push(h);
     }
 
     for (let i = 0; i < deliverable.length; i += widthCap) {
