@@ -12,13 +12,13 @@
 // clash the guard exists to stop.
 //
 // So the resolver's packet is HOLD-ONLY evidence here, and the suite pins both
-// halves of that. It can hold — by being absent, by accounting for none of the
-// wave's collisions, or by refusing a name as imperative — and it can do nothing
-// else. It cannot release a branch (the re-scan decides that) and it cannot
-// excuse one from the re-review (every held branch of a cleared clash gets one),
-// because "which branches did you touch" is a self-report this stage has no way
-// to check: a resolver that renamed on two branches and named one would
-// otherwise deliver the omitted branch's post-cycle edits unreviewed.
+// halves of that. It can hold — by being absent, by being empty, or by refusing a
+// name as imperative — and it can do nothing else. It cannot release a branch
+// (the re-scan decides that) and it cannot excuse one from the re-review (every
+// held branch of a cleared clash gets one), because "which branches did you
+// touch" is a self-report this stage has no way to check: a resolver that renamed
+// on two branches and named one would otherwise deliver the omitted branch's
+// post-cycle edits unreviewed.
 //
 // The workflow is a runtime script (top-level await/return, injected
 // `agent`/`phase`/`log` globals), so it cannot be imported. This evaluates the
@@ -360,13 +360,13 @@ await scenario("single held branch", async () => {
 //    The last case is the one an empty array makes: `[]` is truthy, so it used
 //    to walk straight past this arm into a re-scan that — the clash having
 //    genuinely gone — cleared every branch, which then delivered through an
-//    "untouched by the resolver" arm that nothing had established. A packet
-//    accounting for NONE of the collisions it was handed has reported on none of
-//    them, and would have dropped any `blocked` refusal it made on the way, so
-//    it is the same answer as no packet and is scripted here beside the others
-//    rather than left to differ by an accident of JS truthiness.
+//    "untouched by the resolver" arm that nothing had established. A packet with
+//    no entry at all has reported on none of the collisions it was handed, and
+//    would have dropped any `blocked` refusal it made on the way, so it is the
+//    same answer as no packet and is scripted here beside the others rather than
+//    left to differ by an accident of JS truthiness.
 await scenario("resolver returned nothing", async () => {
-  for (const [name, resolution] of [["resolver returned nothing", null], ["resolver omitted resolutions", {}], ["resolver returned a non-array", { resolutions: 7 }], ["resolver accounted for no collision", { resolutions: [] }]]) {
+  for (const [name, resolution] of [["resolver returned nothing", null], ["resolver omitted resolutions", {}], ["resolver returned a non-array", { resolutions: 7 }], ["resolver returned an empty packet", { resolutions: [] }]]) {
     const out = await run({
       held: [mkHeld("a"), mkHeld("b")],
       collisions: [clash(["task/a", "task/b"])],

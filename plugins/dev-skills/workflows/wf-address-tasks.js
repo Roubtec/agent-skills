@@ -2487,7 +2487,7 @@ For each collision:
 3. Otherwise, on EACH branch you chose to change, rename the file and/or exported symbol plus every in-branch reference to it, to a clear name that is distinct from the original AND from any other renamed side — so two renamed branches cannot themselves re-collide on the new name. Regenerate anything derived from it (e.g. contracts). Run the project build / type-check — it MUST pass; if you redirect its output to a file, create a UNIQUE directory for that first, OUTSIDE every worktree (\`mktemp -d "\${TMPDIR:-/tmp}/collision-resolve.XXXXXX"\`), and write there — never a fixed shared scratchpad name (one session's agents share that directory, and two that both wrote \`<scratchpad>/verify.log\` once crossed results between worktrees), and never inside the worktree, which you are about to commit. Commit with a clear message. ${pushLine}
 4. Record the outcome with \`collision\` set to the exact \`name\` from the list above: \`renamed\` (with \`changedBranches\`, \`from\`, \`to\`, what you \`regenerated\`, and why that side) or \`blocked\` (with the reason; empty \`changedBranches\`).
 
-Do NOT open any PR and do NOT remove any worktree — the workflow re-scans the refs, re-reviews every held branch, and handles delivery. Return one resolution entry per collision: a packet that accounts for none of them is read as no result at all and holds every branch.`;
+Do NOT open any PR and do NOT remove any worktree — the workflow re-scans the refs, re-reviews every held branch, and handles delivery. Return one resolution entry per collision: an empty packet is read as no result at all and holds every branch.`;
 }
 
 // Common carrier for every post-cycle terminal result. Whatever terminal
@@ -2744,9 +2744,12 @@ async function settleWaveCollisions({ heldTasks, waveCollisions, wave, defaultBa
   );
   // An EMPTY array answers exactly as no packet at all, deliberately rather than
   // by the accident that `[]` is truthy: the resolver's brief is "one entry per
-  // collision", this stage runs only with collisions in hand, so a packet
-  // accounting for NONE of them has reported on nothing — and would also have
-  // dropped any `blocked` refusal it made on the way.
+  // collision", this stage runs only with collisions in hand, so a packet with no
+  // entry at all has reported on nothing — and would also have dropped any
+  // `blocked` refusal it made on the way. Emptiness is the whole test, and a
+  // non-empty packet's `collision` names are read only for the `blocked` holds
+  // below: a refusal naming a collision this stage cannot match is a clash nobody
+  // deconflicted, so the re-scan still names it and holds it either way.
   const resolutions = resolution && Array.isArray(resolution.resolutions) && resolution.resolutions.length ? resolution.resolutions : null;
 
   const blockedNames = new Set();
@@ -2799,7 +2802,7 @@ async function settleWaveCollisions({ heldTasks, waveCollisions, wave, defaultBa
     const stillColliding = rescanned ? rescanned.filter((c) => involves(c, task)).map((c) => ({ ...c, wave })) : null;
 
     if (!resolutions) {
-      held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision resolver returned no usable result (no packet at all, or one accounting for none of the wave's collisions); branch held before PR delivery — deconflict manually and re-review", collisions: related, ...cycleCarried(result) });
+      held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision resolver returned no usable result (no packet at all, or one with no resolution entries); branch held before PR delivery — deconflict manually and re-review", collisions: related, ...cycleCarried(result) });
     } else if (related.some(collisionBlocked)) {
       // An imperative shared name still clashes even if this branch was also
       // touched — keep it held for a human/design decision.
