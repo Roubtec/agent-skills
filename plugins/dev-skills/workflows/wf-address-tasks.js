@@ -163,10 +163,12 @@ const PLAN_SCHEMA = {
 const PR_SCHEMA = {
   type: "object",
   properties: {
-    opened: { type: "boolean", description: "True ONLY if `gh pr create` succeeded and a PR URL exists." },
-    url: { type: "string", description: "The created PR URL when opened is true." },
+    opened: { type: "boolean", description: "True ONLY if a PR URL exists (from `gh pr create`, or from the recorded-head lookup that recovers a creation which failed before printing one) AND that PR's base was read back and equals the recorded base, after a repair if one was needed." },
+    url: { type: "string", description: "The PR URL — set whenever one exists, including when the base could not be verified or repaired, so the maintainer is handed the PR to retarget." },
     pushed: { type: "boolean", description: "Whether the branch was pushed to the remote." },
-    reason: { type: "string", description: "When opened is false: why (no remote auth, gh error, branch-target failure). Empty when opened." },
+    baseOk: { type: "boolean", description: "True ONLY if the PR named by `url` was read back with `gh pr view <url> --json baseRefName` and its base equals the recorded base — after the repair, when one was made. Never true for a base that was not read back." },
+    baseRepaired: { type: "string", description: "When the PR was created against the wrong base and `gh pr edit <url> --base` fixed it: the base it carried before the repair. Empty when no repair was needed." },
+    reason: { type: "string", description: "When opened is false: why (no remote auth, gh error, no PR from creation or lookup, or a wrong base the repair could not fix — name the base it carries). Empty when opened." },
   },
   required: ["opened", "pushed"],
 };
@@ -2565,9 +2567,11 @@ ${DESTROY_BOUNDARY}
 1. Ensure the branch is pushed: \`git push -u origin ${shq(task.branch)}\` (or \`git push\`).
 2. \`gh pr create --base ${shq(task.base)} --head ${shq(task.branch)} --title "<concise title>" --body "<summary>"\`.
    - Reference the task file (${task.path}); don't restate the whole task unless it adds review value.
-   - Note tradeoffs / intentional divergences / uncertainties.${deviationLead}${flakeRecord}${caveats}
+   - Note tradeoffs / intentional divergences / uncertainties.
+3. Capture the URL step 2 printed and assert THAT PR's base by URL: \`gh pr view <pr-url> --json baseRefName\` must report \`${task.base}\`. Address the PR by its URL, never by whatever branch you are standing on — the check must follow the PR you just created. On a mismatch repair it in the same breath, \`gh pr edit <pr-url> --base ${shq(task.base)}\`, re-read it, and return the base it carried before the repair in \`baseRepaired\`. If the repair fails, return \`opened: false\` WITH the \`url\`, \`baseOk: false\`, and a \`reason\` naming the base it still carries: that PR is delivered with the wrong base, not delivered.
+4. If \`gh pr create\` fails BEFORE printing a URL, the PR may exist server-side anyway. Before retrying creation, look it up by the head branch you pushed, in the repository that OWNS the PR — the base repository the creation targeted, never the head repository, where a fork's PR does not live: \`gh pr list --repo <base-repo> --head ${shq(task.branch)} --state open --json url,headRepositoryOwner\`. \`--head\` cannot carry an \`<owner>:<branch>\` form, so require the returned PR's head repository owner to match the head you pushed before trusting the match; then assert its base per step 3. Retry creation ONLY if that lookup finds nothing.${deviationLead}${flakeRecord}${caveats}
 
-Return \`opened: true\` with the \`url\` ONLY if \`gh pr create\` actually produced a PR URL. If the push succeeded but the PR could not be created (auth, API, or base-branch error), return \`opened: false\`, \`pushed: true\`, and \`reason\`. Do not claim a PR that was not created.`;
+Return \`opened: true\` with the \`url\` ONLY if a PR URL exists — from step 2 or step 4's lookup — AND step 3's read-back confirmed its base is \`${task.base}\`, after any repair; set \`baseOk\` to that same fact. If the push succeeded but no PR could be created or found (auth, API, or base-branch error), return \`opened: false\`, \`pushed: true\`, and \`reason\`; ending with neither a captured URL nor a lookup match is that failure, not a delivery. Do not claim a PR that was not created, and do not claim one whose base you did not read back.`;
 }
 
 function cleanupNote(task) {
@@ -2909,8 +2913,26 @@ async function deliverTask(task, ready, remote) {
   // with the delivery result — they exist for the human and must survive to
   // Summary.
   const carried = cycleCarried(ready);
+  // A PR that exists but whose base was neither verified nor repaired to the
+  // recorded one is its own outcome, not a landed delivery: the diff it shows
+  // and the review it collects belong to another branch's work. Tested before
+  // the success arm and off `baseOk !== true`, so a PR agent that returns
+  // `opened: true` without the read-back its schema requires still reads as
+  // unverified rather than as done — the same conservatism as `remote === true`.
+  if (pr && pr.url && pr.baseOk !== true) {
+    return {
+      slug: task.slug,
+      branch: task.branch,
+      status: "pr-wrong-base",
+      prUrl: pr.url,
+      recordedBase: task.base,
+      pushed: pr.pushed === true,
+      reason: pr.reason || "PR base was neither read back nor repaired to the recorded base",
+      ...carried,
+    };
+  }
   if (pr && pr.opened && pr.url) {
-    return { slug: task.slug, branch: task.branch, status: "done", prUrl: pr.url, ...carried };
+    return { slug: task.slug, branch: task.branch, status: "done", prUrl: pr.url, ...(pr.baseRepaired ? { baseRepaired: pr.baseRepaired } : {}), ...carried };
   }
   // Reviewed and (usually) pushed, but no PR — do NOT count this as a landed PR.
   return {
@@ -3286,12 +3308,16 @@ try {
     // prerequisite. A dependency is "succeeded" if it landed a PR (`done`) OR, on a
     // no-remote run, was implemented and reviewed locally (`local-only`): its base
     // branch and commits persist in the shared `.git`, so dependents can still
-    // build on it. `error`/`review-cap`/`skipped-dep`/`pushed-no-pr`,
+    // build on it. `pr-wrong-base` unlocks too: what that outcome reports is
+    // wrong on the PR, not on the branch — the branch is pushed and a dependent
+    // stacks on THAT, so holding its whole subtree over a base a maintainer
+    // retargets in one command would fail work that is fine.
+    // `error`/`review-cap`/`skipped-dep`/`pushed-no-pr`,
     // `collision-hold`, `collision-blocked`, and `collision-scan-error` do not unlock.
     // Effective deps = the declared `dependsOn` UNION the prerequisite derived from
     // the `base`→`branch` relationship, so the gate holds even if the plan agent
     // omits a `dependsOn` entry it should have listed.
-    const succeeded = (s) => s === "done" || s === "local-only";
+    const succeeded = (s) => s === "done" || s === "local-only" || s === "pr-wrong-base";
     const runnable = [];
     for (const task of wave) {
       const deps = new Set(Array.isArray(task.dependsOn) ? task.dependsOn : []);
@@ -3451,7 +3477,11 @@ phase("Summary");
 // thrown-stage catch above run too).
 const mainCheckout = await finalMainCheckoutReport();
 const landed = results.filter((r) => r.status === "done").length;
-log(`Batch complete: ${landed}/${results.length} tasks landed a PR.`);
+// A PR whose base could not be verified or repaired is called out beside the
+// count rather than folded into it: it needs a retarget before its review is
+// worth reading, and the count of landed PRs would otherwise hide that.
+const wrongBase = results.filter((r) => r.status === "pr-wrong-base").length;
+log(`Batch complete: ${landed}/${results.length} tasks landed a PR.${wrongBase ? ` ${wrongBase} opened against an unverified/wrong base — retarget before reviewing.` : ""}`);
 // Open questions and locked-decision deviations bubble up structurally — they
 // exist for the human; each task's full round history stays behind its
 // artifactDir pointer.

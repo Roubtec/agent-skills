@@ -202,6 +202,8 @@ Each task is its own delivery unit, but stack later task branches on top of earl
 
 ### Determining the PR base
 
+A PR's base must be the ref its branch actually builds on, so the PR shows the honest diff of that branch's own contribution and nothing else; that is what routes each review comment to the PR that owns the code it is about. A branch stacked on an earlier task but targeted at `main` instead presents that earlier task's commits as its own work and collects the comments its PR should have had.
+
 Use the following precedence:
 
 1. **Explicit override** — if the user specifies a base branch (e.g. "make a PR against `main`"), use that for every task in the batch. If the user asks for no PR, skip PR creation entirely.
@@ -228,6 +230,8 @@ For each task file in the input set:
    - Reference the task file in the PR description for context.
    - Include any reviewer-relevant caveats (tradeoffs, intentional divergences, uncertainties surfaced by the implementer or reviewer).
    - Do not restate the entire task unless doing so adds real review value.
+   - **Assert the base on the PR you just created:** capture the URL `gh pr create` printed and read *that* PR back — `gh pr view <pr-url> --json baseRefName` — requiring it to equal the recorded base. Address it by URL rather than letting the current branch pick the PR, so a later change to where creation runs cannot redirect the check at some other PR. On a mismatch, repair it in the same breath (`gh pr edit <pr-url> --base <recorded-base>`) and record in the final summary which PR was repaired and what base it carried, so a genuinely wrong determination stays visible instead of being silently corrected; if the repair fails, report that PR as **delivered with the wrong base** rather than as delivered.
+   - **If a creation attempt fails before printing a URL, the PR may exist server-side anyway.** Before retrying creation, look it up by the recorded head branch in the repository that owns the PR — the base repository the creation targeted, never the head repository, where a fork's PR does not live: `gh pr list --repo <base-repo> --head <branch-name> --state open --json url,headRepositoryOwner`. `--head` cannot carry an `<owner>:<branch>` form, so require the returned PR's head repository owner to match the recorded head before trusting the match, then assert its base as above. Only a lookup that finds nothing licenses the retry, and a delivery ending with neither a captured URL nor a lookup match is reported as that distinct failure, never as an opened PR.
 10. **Continue to the next task** or, if this was the last one, produce the final summary.
    If you hit a blocker that prevents responsible progress, stop and ask the user for clarification.
 

@@ -97,7 +97,7 @@ When in doubt, treat tasks that touch the same files or migrations as dependent.
 
 - **Wave** = the set of tasks whose dependencies are all already complete. All tasks in a wave run **concurrently**.
 - Tasks with **no** unmet dependencies form wave 1; tasks depending on them form wave 2; etc.
-- **Base branch per task:**
+- **Base branch per task.** A PR's base must be the ref its branch actually builds on, so the PR shows the honest diff of that branch's own contribution and nothing else; that is what routes each review comment to the PR that owns the code it is about. A dependent PR opened against `main` instead presents its parent's commits as its own work and collects the comments its parent's PR should have had.
   - Independent task (wave 1, or no dependency in-batch) → branch from and PR against the user's chosen base (default `main`, or an explicit override).
   - Dependent task → branch from and PR against its **dependency's branch** (stacked PRs), so it builds on work that may not be merged yet.
   - If a task depends on *several* tasks, branch from an integration branch that merges them, or from the single dependency it most directly extends — pick the simplest base that contains the code it needs and note the choice.
@@ -282,6 +282,8 @@ Default behavior, matching the existing workflow: each task that passes review g
 
    - Reference the task file for context. Include reviewer-relevant caveats (tradeoffs, intentional divergences, uncertainties).
    - For stacked PRs, note in the body which branch it stacks on, so reviewers understand the base.
+   - **Assert the base on the PR you just created:** capture the URL `gh pr create` printed and read *that* PR back — `gh pr view <pr-url> --json baseRefName` — requiring it to equal the recorded base. Address it by URL rather than letting the current branch pick the PR: creation runs here in the main checkout, not in the task's worktree, so an argument-less `gh pr view`/`gh pr edit` would answer for the main checkout's branch — some other PR, or none. On a mismatch, repair it in the same breath (`gh pr edit <pr-url> --base <base-branch>`) and record in the final summary which PR was repaired and what base it carried, so a genuinely wrong determination stays visible instead of being silently corrected; if the repair fails, report that PR as **delivered with the wrong base** rather than as delivered.
+   - **If a creation attempt fails before printing a URL, the PR may exist server-side anyway.** Before retrying creation, look it up by the recorded head branch in the repository that owns the PR — the base repository the creation targeted, never the head repository, where a fork's PR does not live: `gh pr list --repo <base-repo> --head <branch-name> --state open --json url,headRepositoryOwner`. `--head` cannot carry an `<owner>:<branch>` form, so require the returned PR's head repository owner to match the recorded head before trusting the match, then assert its base as above. Only a lookup that finds nothing licenses the retry, and a delivery ending with neither a captured URL nor a lookup match is reported as that distinct failure, never as an opened PR.
 3. If pushing/PR creation is unavailable (no remote auth — see Bootstrap step 3), fall back to **local reviewed branches**: the work persists in the shared `.git`. Note in the final summary which branches still need to be pushed once a remote is reachable.
 
 After the PR is open, remove the task's worktree per Cleanup to reclaim storage.
