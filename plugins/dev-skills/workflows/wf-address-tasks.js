@@ -2855,6 +2855,17 @@ try {
     // comment above); `nextAvailBytes` owns what a failed or unmeasurable probe
     // does with the previous reading. A 1-task wave skips the probe: its cap can
     // never throttle (widthCap >= 1).
+    //
+    // A THROW from this stage is deliberately not caught locally, unlike the two
+    // agent stages in this file that are (`runCyclePeerStage`,
+    // `finalMainCheckoutReport`) — both non-blocking by design, and this one is
+    // not. A probe that merely failed returns null or an unmeasurable reading,
+    // which `nextAvailBytes` already answers by retaining the cap; a throw is the
+    // run's token budget being gone, which every agent call in the wave would
+    // meet too. Swallowing it would launch the wave anyway and report budget
+    // exhaustion as N crashed tasks over skipped dependents rather than naming it
+    // once. The outer catch is not a crash: it returns the terminal statuses
+    // reached so far plus the closing checkout report.
     if (w > 0 && runnable.length > 1) {
       const probe = await agent(storageProbePrompt(wtBase), { label: `storage-probe:w${w + 1}`, schema: STORAGE_PROBE_SCHEMA, effort: "low" });
       availBytes = nextAvailBytes(availBytes, probe);
