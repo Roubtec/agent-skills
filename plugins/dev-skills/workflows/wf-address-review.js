@@ -570,6 +570,13 @@ if (!cycle) {
 // evidenced-unrelated failure would reach the maintainer nowhere once a later
 // pass concluded clean, and the cited-active-task outcome leaves nothing in the
 // diff either. Present once any pass reported one.
+// `packetChecks` rides for a reason of its own: the cycle's refusal of a
+// measured-dirty packet points the reader at that entry BY NAME ("see the
+// `packetChecks` entry for the list"), and the failed-cycle return below is
+// where that refusal reaches the maintainer — dropped, the message promises a
+// list this result does not carry. It is also the only place a reader can see
+// that no packet the cycle adopted went unmeasured. Present once any packet was
+// measured, on every exit including the stopped ones.
 const carried = {
   ...(cycle.artifactDirAnomalies ? { artifactDirAnomalies: cycle.artifactDirAnomalies } : {}),
   ...(cycle.deviationAssessments ? { deviationAssessments: cycle.deviationAssessments } : {}),
@@ -577,6 +584,7 @@ const carried = {
   ...(cycle.closeOut ? { closeOut: cycle.closeOut } : {}),
   ...(cycle.recordOnly ? { recordOnly: cycle.recordOnly } : {}),
   ...(cycle.flakeHistory ? { flakeHistory: cycle.flakeHistory } : {}),
+  ...(cycle.packetChecks ? { packetChecks: cycle.packetChecks } : {}),
 };
 if (cycle.verdict === "error") {
   return { error: `Review cycle failed: ${cycle.detail}`, pr: packet.pr, rounds: cycle.rounds, dispositions: cycle.workReport, openQuestions: cycle.openQuestions, deviations: cycle.deviations, peerRounds: cycle.peerRounds, artifactDir: cycle.artifactDir, ...carried };

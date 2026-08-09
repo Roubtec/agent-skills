@@ -2646,8 +2646,15 @@ Do NOT open any PR and do NOT remove any worktree — the workflow re-scans the 
 // `prPrompt` below renders `recordOnly` and not `closeOut`, so it would still
 // need teaching, exactly as `wf-address-review.js`'s twin of this note says of
 // its own publish brief. That is the gap this carrier has already dropped a new
-// result field into twice.
+// result field into three times, `packetChecks` last.
 // Both present only when that exit actually ended the cycle.
+// `packetChecks` rides for a reason the others do not have: the cycle's own
+// refusal message points the reader at that entry BY NAME ("see the
+// `packetChecks` entry for the list"), and the batch Summary this carrier feeds
+// is where that refusal is read — dropped, the message promises a list the
+// result does not carry. It is also the only place a reader can see that no
+// packet the cycle adopted went unmeasured. Present once any packet was
+// measured, on every exit including the stopped ones.
 // Deliberately NOT forwarded: the cycle result's `notes` (the last pass's
 // `summary`). This carrier is applied to the raw cycle result AND to task
 // results derived from it, where `notes` already means the reviewer's PR-body
@@ -2666,6 +2673,7 @@ function cycleCarried(result) {
     ...(result.closeOut ? { closeOut: result.closeOut } : {}),
     ...(result.recordOnly ? { recordOnly: result.recordOnly } : {}),
     ...(result.flakeHistory ? { flakeHistory: result.flakeHistory } : {}),
+    ...(result.packetChecks ? { packetChecks: result.packetChecks } : {}),
   };
 }
 
