@@ -58,8 +58,9 @@
  * Workflows have no mid-run user input, so this is structurally the skill's
  * `hands-off` mode: low-stakes ambiguity is decided best-effort by the agents
  * and recorded; high-stakes ambiguity is left open and reported, never guessed.
- * A non-trivial rebase conflict (when `rebase on top of` is supplied) is aborted
- * cleanly and stops the run, as in the skill.
+ * A rebase conflict beyond the delegated step's competence is aborted cleanly,
+ * the tree left clean and idle, and the run stops carrying that conflict out as
+ * an open question — the hands-off shape of the skill's interactive loop-in.
  *
  * Worktree model
  * --------------
@@ -842,9 +843,15 @@ if (!packet.items || packet.items.length === 0) {
 // unconditional on a run that reaches them — the difference from the prose
 // skill, where an agent may judge a point unnecessary: a no-op rebase is
 // cheaper and more deterministic than the judgment that it would be one.
-// "Reaches them" is load-bearing: a run stopped at the reconciliation gate, or
-// exited above as a no-op with nothing to address, has no tree worth rebasing
-// and rewrites nothing. `no-rebase` is the only opt-out.
+// "Reaches them" is load-bearing, and it is where this pipeline's ordering
+// differs from the skill's step 2 (which rebases before it has even gathered the
+// threads): here one agent resolves the PR and gathers them together, so a run
+// with nothing to address is already known to be a no-op by this line, and it
+// rebases nothing. Rewriting the branch on a path that will neither review nor
+// push it would leave the maintainer's branch rewritten, diverged from the PR
+// head, with no verdict and no push behind it. A run stopped at the
+// reconciliation gate above rebases nothing for the same reason.
+// `no-rebase` is the only opt-out.
 //
 // Each point pins its base to a COMMIT and rebases onto that, which is what
 // makes two points safe: the second finds the first's base already an ancestor
