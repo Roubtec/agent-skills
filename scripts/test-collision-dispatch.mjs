@@ -60,7 +60,7 @@ function check(name, cond, detail) {
 // it — an edit that drops one, or a guard that swallows a throw, would pass.
 // Counting the oks too lets the run assert it executed the whole suite. Bump
 // this deliberately when adding or removing a check; the number is the assertion.
-const EXPECTED_CHECKS = 170;
+const EXPECTED_CHECKS = 178;
 
 async function scenario(name, fn) {
   try {
@@ -560,20 +560,30 @@ await scenario("re-review leaves the deviation unassessed", async () => {
     check(`${name} → it is held as a collision-hold`, h && h.status === "collision-hold", JSON.stringify(out.held.map((x) => x.status)));
     check(`${name} → the detail says what is missing and what to do next`, /left a deviation from a LOCKED decision unassessed/.test(h.detail) && /re-review this branch and record/.test(h.detail) && /without conforming, rewording, or dropping it/.test(h.detail), h.detail);
     check(`${name} → the hold names the deviation the human must get an assessment for`, JSON.stringify(h.unassessedDeviations) === JSON.stringify([DEVIATION]), JSON.stringify(h.unassessedDeviations));
+    // The batch Summary flattens every result's assessments — held ones too —
+    // into one list. A record that says "unassessed" while shipping the
+    // pre-rename cycle's RATIFY for that same deviation puts an obsolete verdict
+    // in front of the maintainer under the exact deviation nobody has judged
+    // since the rename.
+    check(`${name} → and carries no assessment for it, the pre-rename one included`, JSON.stringify(h.deviationAssessments) === "[]", JSON.stringify(h.deviationAssessments));
     check(`${name} → and still carries its cycle record`, h.artifactDir === "/tmp/art" && h.rounds === 2 && JSON.stringify(h.deviations) === JSON.stringify([DEVIATION]));
   }
 });
 
 // 14b. Partial coverage: one of two standing deviations assessed. The hold names
-//      only the one still missing its half.
+//      only the one still missing its half — and reports the halves it DOES
+//      carry from the same pass, so the record cannot say assessed and
+//      unassessed of one deviation at once.
 await scenario("re-review assesses one deviation of two", async () => {
+  const staleOther = { deviation: OTHER_DEVIATION, inSpecRoute: "none — CI cannot reach the fixture", recommendation: "RATIFY — the constraint is environmental" };
   const out = await run({
-    held: [mkHeld("a", { deviations: [DEVIATION, OTHER_DEVIATION] }), mkHeld("b")],
+    held: [mkHeld("a", { deviations: [DEVIATION, OTHER_DEVIATION], deviationAssessments: [PRE_RENAME, staleOther] }), mkHeld("b")],
     collisions: [clash(["task/a", "task/b"])],
     packets: { resolution: renamed(["task/a"]), rescan: { collisions: [] }, reviews: { a: reviewOf({ deviationAssessments: [POST_RENAME] }) } },
   });
   check("partial coverage → the branch does not deliver", JSON.stringify(slugs(out.deliverable)) === JSON.stringify(["b"]), JSON.stringify(slugs(out.deliverable)));
   check("partial coverage → the hold names only the unassessed one", JSON.stringify(heldBySlug(out, "a").unassessedDeviations) === JSON.stringify([OTHER_DEVIATION]), JSON.stringify(heldBySlug(out, "a").unassessedDeviations));
+  check("partial coverage → the hold carries THIS pass's half for the assessed one, and neither pre-rename entry", JSON.stringify(heldBySlug(out, "a").deviationAssessments) === JSON.stringify([POST_RENAME]), JSON.stringify(heldBySlug(out, "a").deviationAssessments));
   check("partial coverage → both deviations were shown to the reviewer", briefFor(out, "a").includes(JSON.stringify(DEVIATION)) && briefFor(out, "a").includes(JSON.stringify(OTHER_DEVIATION)), "brief");
 });
 
