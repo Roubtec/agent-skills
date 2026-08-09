@@ -72,7 +72,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 151;
+const CHECKS_PER_LEG = 152;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -1322,6 +1322,13 @@ for (const name of WORKFLOWS) {
 
     const dead = await run(src, { fixes: [PASS_PACKET, idle], reviews: [OK], packets: [CLEAN_READING, null] });
     check("a measuring subagent that returned nothing is unmeasured too, never clean", dead.res.verdict === "error" && (dead.res.packetChecks || []).at(-1).measured === false && /returned nothing/.test((dead.res.packetChecks || []).at(-1).detail || ""), `${dead.res.verdict}/${JSON.stringify(dead.res.packetChecks)}`);
+
+    // The refusal above sends the maintainer to this entry for what went
+    // wrong, and `detail: ""` is schema-valid — so the entry that answers a
+    // refusal never ships blank, and the silent measurer stays distinguishable
+    // from the one that never returned.
+    const blank = await run(src, { fixes: [PASS_PACKET, idle], reviews: [OK], packets: [CLEAN_READING, { ...UNMEASURED_READING, detail: "   " }] });
+    check("and a measurer that returned a BLANK detail still leaves the entry saying which silence it was", blank.res.verdict === "error" && (blank.res.packetChecks || []).at(-1).detail === "the measuring subagent reported no detail", JSON.stringify(blank.res.packetChecks));
 
     // The too-strict direction: a measured-clean cycle behaves exactly as it
     // did, and every pass it adopted has a reading behind it.

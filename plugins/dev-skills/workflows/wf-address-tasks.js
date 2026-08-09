@@ -1919,13 +1919,19 @@ async function runReviewCycle(cycle) {
     const measured = !!(measurement && measurement.measured === true);
     const measuredDirty = measurement && Array.isArray(measurement.dirty) ? measurement.dirty : [];
     const measuredOperation = measurement && typeof measurement.operation === "string" ? measurement.operation.trim() : "";
+    const measuredDetail = measurement && typeof measurement.detail === "string" ? measurement.detail.trim() : "";
     packetChecks.push({
       pass: fixerPasses,
       measured,
       dirty: measuredDirty,
       operation: measuredOperation,
-      detail: (measurement && typeof measurement.detail === "string" && measurement.detail)
-        || (measurement ? "" : "the measuring subagent returned nothing (died or failed schema validation)"),
+      // A refusal points the maintainer at this entry, so its one line of prose
+      // never ships empty: the schema admits `detail: ""`, and a blank one
+      // would leave a `measured: false` entry saying nothing about what could
+      // not be read. A measurer that said nothing is kept distinct from one
+      // that returned nothing at all, since only the first took a turn.
+      detail: measuredDetail
+        || (measurement ? "the measuring subagent reported no detail" : "the measuring subagent returned nothing (died or failed schema validation)"),
     });
     if (!measured) {
       return result("error", `the worktree behind fixer pass ${fixerPasses} could not be MEASURED, so its \`clean\` self-report is the only account of it and the cycle does not take one; refusing to adopt the packet — redrive or resume that pass (the \`packetChecks\` entry records the unmeasured reading)`);
