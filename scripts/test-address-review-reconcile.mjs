@@ -42,6 +42,14 @@
 // the PR head must stop the publisher BEFORE the lease it would otherwise
 // match and rewind the branch with.
 //
+// It covers the DELEGATED REBASE POINTS that run just after the gate (task
+// 016), for the same reason and through the same harness: the base each one
+// pins is what every later delegation's diff range is taken against, so the
+// caller must reject anything but a commit, and a conflict the step cannot judge
+// must stop the run with its question rather than being guessed at. Its own
+// producer half — the brief that makes the agent resolve and pin a commit at all
+// — is read out of the rendered text like the gather brief's.
+//
 // And it covers the sibling gate that runs just ahead of this one (task 018):
 // the WORKING LOCATION, which decides not whether the run may act on the branch
 // but in which tree it acts. Both gates are the same shape — a gather-reported
@@ -88,7 +96,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 53;
+const EXPECTED_CHECKS = 61;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -117,9 +125,9 @@ const cut = src.indexOf("\nconst raw = flattenArgs(args);");
 if (cut < 0) throw new Error(`${SOURCE}: cut marker not found for the declaration prefix`);
 const prefix = src.slice(0, cut).replace(/^export const meta/m, "const meta");
 // eslint-disable-next-line no-new-func
-const { gatherPrompt, publishPrompt } = new Function(
+const { gatherPrompt, publishPrompt, rebasePrompt } = new Function(
   "args",
-  `"use strict";\n${prefix}\nreturn { gatherPrompt, publishPrompt };`,
+  `"use strict";\n${prefix}\nreturn { gatherPrompt, publishPrompt, rebasePrompt };`,
 )("");
 
 // Reaching the nested cycle ends the scenario: everything past the gate is
@@ -127,17 +135,38 @@ const { gatherPrompt, publishPrompt } = new Function(
 // proceeded" cannot be confused with any status the script itself returns.
 const REACHED_CYCLE = Symbol("nested review cycle reached");
 
+// A clean pre-fix rebase: it replayed nothing and pinned the base to a commit.
+// This is the default because it is the common outcome, and because every
+// scenario written before the rebase points existed must keep meaning what it
+// meant — the gates under test are ahead of the rebase or indifferent to it.
+const REBASE_NOOP = {
+  ok: true,
+  halted: false,
+  noop: true,
+  effectiveBase: "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
+  before: "cafebabe",
+  after: "cafebabe",
+  validationPassed: true,
+  detail: "already on the pinned base; nothing replayed",
+};
+
 // Run the shipped script with one scripted gather packet. `no-push` keeps the
-// run local-only: the gate is flag-independent, and a publish path would need
-// stubs for work this suite is not about. The ARGS are a parameter because one
-// gate beside it is not flag-independent: whether a working branch other than
-// the PR head ref was ever selected is read from the request, not the packet.
-async function run(packet, args = "no-push") {
-  const seen = { agentLabels: [], cycleOpts: null };
-  const agent = async (prompt, opts) => {
-    const label = (opts && opts.label) || "";
+// run local-only by default: the gate is flag-independent, and a publish path
+// would need stubs for work this suite is not about. `opts.args` overrides the
+// request, which two gates beside it need: whether a working branch other than
+// the PR head ref was ever selected is read from the request rather than the
+// packet, and the rebase opt-out needs its own token. `opts.rebase` scripts
+// what the delegated rebase agent reports back.
+async function run(packet, opts = {}) {
+  const seen = { agentLabels: [], cycleOpts: null, rebasePrompts: [] };
+  const agent = async (prompt, aopts) => {
+    const label = (aopts && aopts.label) || "";
     seen.agentLabels.push(label);
     if (label === "gather") return packet;
+    if (label.startsWith("rebase-")) {
+      seen.rebasePrompts.push(prompt);
+      return opts.rebase === undefined ? REBASE_NOOP : opts.rebase;
+    }
     throw new Error(`unexpected agent call past the gate: ${label}`);
   };
   const workflow = async (name, opts) => {
@@ -148,7 +177,7 @@ async function run(packet, args = "no-push") {
     throw new Error("unexpected fan-out call");
   };
   try {
-    const result = await script(args, agent, () => {}, workflow, nope, nope, () => {});
+    const result = await script(opts.args === undefined ? "no-push" : opts.args, agent, () => {}, workflow, nope, nope, () => {});
     return { status: (result && (result.status || (result.error ? "error" : "?"))) || "?", result, seen };
   } catch (err) {
     if (err === REACHED_CYCLE) return { status: "reached-cycle", result: null, seen };
@@ -588,7 +617,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
 {
   const off = { workingBranch: "feature/x-offshoot" };
   const SELECTED = "#42 off-shoot no-push";
-  const clean = await run(gathered({ ...off, reconcile: { outcome: "not-applicable" } }), SELECTED);
+  const clean = await run(gathered({ ...off, reconcile: { outcome: "not-applicable" } }), { args: SELECTED });
   check("off-shoot `not-applicable` with no threads is a plain no-op", clean.status === "no-op", JSON.stringify(clean.result));
   // The no-op's reconciliation record is not path-dependent: the off-shoot run
   // reports what reconciliation concluded exactly as the same-branch one above
@@ -601,16 +630,16 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       ((clean.result || {}).reconcile || {}).outcome === "not-applicable",
     JSON.stringify(clean.result),
   );
-  const working = await run(gathered({ ...off, reconcile: { outcome: "not-applicable" }, items: [ITEM] }), SELECTED);
+  const working = await run(gathered({ ...off, reconcile: { outcome: "not-applicable" }, items: [ITEM] }), { args: SELECTED });
   check("off-shoot `not-applicable` with threads proceeds to the nested cycle", working.status === "reached-cycle", working.status);
   check(
     "and the cycle runs on the off-shoot, not on the PR's head ref",
     working.seen.cycleOpts && working.seen.cycleOpts.opts.branch === "feature/x-offshoot",
     JSON.stringify(working.seen.cycleOpts && working.seen.cycleOpts.opts && working.seen.cycleOpts.opts.branch),
   );
-  const absent = await run(gathered({ ...off }), SELECTED);
+  const absent = await run(gathered({ ...off }), { args: SELECTED });
   check("off-shoot with no `reconcile` report at all still proceeds", absent.status === "no-op", absent.status);
-  const contradicting = await run(gathered({ ...off, reconcile: { outcome: "unrecognized", detail: "behind the PR head" } }), SELECTED);
+  const contradicting = await run(gathered({ ...off, reconcile: { outcome: "unrecognized", detail: "behind the PR head" } }), { args: SELECTED });
   check("off-shoot `unrecognized` still proceeds — behind the head is that case's normal state", contradicting.status === "no-op", contradicting.status);
 }
 
@@ -672,7 +701,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   ];
   const refused = [];
   for (const req of selections) {
-    const r = await run(gathered(off), req);
+    const r = await run(gathered(off), { args: req });
     if (r.status !== "reached-cycle") refused.push(`${req} -> ${r.status}`);
   }
   check(
@@ -707,7 +736,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   ];
   const stopped = [];
   for (const req of incidental) {
-    const r = await run(gathered(off), req);
+    const r = await run(gathered(off), { args: req });
     if (r.status !== "reached-cycle") stopped.push(`${req} -> ${r.status}`);
   }
   check(
@@ -791,6 +820,105 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   const named = /PROPER ANCESTOR/.test(brief);
   check("the publish brief stops a proper-ancestor HEAD without pushing", stop > -1 && named, `stop@${stop} names-the-case@${named}`);
   check("and states that stop ahead of the lease it would otherwise match", stop > -1 && lease > -1 && stop < lease, `stop@${stop} lease@${lease}`);
+}
+
+// --- The delegated rebase points --------------------------------------------
+// Rebasing onto the freshest base is the default now, at two points, and both
+// are delegated — this script cannot run git, and an orchestrator holding a
+// half-finished rebase has nowhere to put a conflict. Three separable ways to
+// lose the point of that, each driven through the shipped script rather than
+// read out of it:
+//
+//   1. The PIN. Whatever the rebase reports as the base it landed on becomes
+//      the review base handed to the cycle, and it must be a COMMIT. A
+//      remote-tracking name accepted here moves under a sibling push or the
+//      next fetch, so the reviewer would bound its diff at a tip this branch
+//      was never rebased onto — while the branch it judges still sits where it
+//      did.
+//   2. The HALT. A conflict beyond the step's competence stops the run with the
+//      question BEFORE anything is fixed, rather than being guessed at or
+//      discovered after a cycle's worth of work.
+//   3. The OPT-OUT, and the ORDER against the gate above: `no-rebase`
+//      suppresses both points, and the reconciliation gate still runs ahead of
+//      the first one (the "nothing runs past the gate" check above now covers
+//      that direction on its own, since a rebase agent would show up in the
+//      same label list).
+{
+  const withWork = { reconcile: { outcome: "work" }, items: [ITEM] };
+  const clean = await run(gathered(withWork));
+  check(
+    "a default run delegates the pre-fix rebase, after the gather and before the cycle",
+    clean.status === "reached-cycle" && clean.seen.agentLabels.join(",") === "gather,rebase-pre-fix",
+    JSON.stringify(clean.seen.agentLabels),
+  );
+  check(
+    "and the cycle's review base is the pinned OID the rebase landed on, not the base ref name",
+    clean.seen.cycleOpts && clean.seen.cycleOpts.opts.base === REBASE_NOOP.effectiveBase,
+    JSON.stringify(clean.seen.cycleOpts && clean.seen.cycleOpts.opts && clean.seen.cycleOpts.opts.base),
+  );
+  const unpinned = await run(gathered(withWork), { rebase: { ...REBASE_NOOP, effectiveBase: "origin/main" } });
+  check(
+    "a rebase reporting a movable ref instead of the commit it landed on stops the run, dispatching nothing",
+    unpinned.status === "rebase-unpinned-base" && unpinned.seen.cycleOpts === null,
+    JSON.stringify({ status: unpinned.status, cycle: unpinned.seen.cycleOpts }),
+  );
+  const halted = await run(gathered(withWork), {
+    rebase: {
+      ok: true,
+      halted: true,
+      noop: false,
+      question: "`src/app.ts` conflicts with the sibling PR's rename; which side owns the guard?",
+      detail: "aborted; tree clean and idle",
+      recoveryRef: "refs/pre-rebase/feature/x/20260809-101112",
+    },
+  });
+  check(
+    "a halted rebase stops the run before anything is fixed",
+    halted.status === "rebase-halted" && halted.seen.cycleOpts === null,
+    JSON.stringify({ status: halted.status, cycle: halted.seen.cycleOpts }),
+  );
+  const q = ((halted.result || {}).openQuestions || [])[0] || {};
+  check(
+    "and the conflict leaves as an open question with origin `rebase`, not as a bare error string",
+    q.origin === "rebase" && /which side owns the guard/.test(q.question || ""),
+    JSON.stringify((halted.result || {}).openQuestions),
+  );
+  const off = await run(gathered(withWork), { args: "no-push no-rebase" });
+  check(
+    "`no-rebase` runs neither point and leaves the base ref as the review base",
+    off.status === "reached-cycle" &&
+      off.seen.agentLabels.join(",") === "gather" &&
+      off.seen.cycleOpts.opts.base === "main",
+    JSON.stringify({ labels: off.seen.agentLabels, base: off.seen.cycleOpts && off.seen.cycleOpts.opts.base }),
+  );
+}
+
+// --- The producer half: what the rebase brief orders -------------------------
+// The pin above is enforced on what the agent REPORTS; what makes it report a
+// commit at all is the brief, which no scenario reaches because the rebase agent
+// is stubbed. So it is rendered and read, exactly as the gather brief's
+// reconciliation rule is: resolve the target to an OID and rebase onto that, and
+// on a conflict it cannot judge, abort and leave the tree clean rather than
+// returning mid-rebase.
+{
+  const brief = rebasePrompt("pre-fix", gathered({ reconcile: { outcome: "work" } }), "main");
+  const resolves = /git rev-parse/.test(brief);
+  const rebasesOntoTheOid = /rebase onto THAT OID, never onto the name/.test(brief);
+  const namesTheHazard = /every range this run delegates afterwards is taken against `effectiveBase`/.test(brief);
+  check(
+    "the rebase brief resolves the target to an OID, rebases onto that, and says why a ref name is not an answer",
+    resolves && rebasesOntoTheOid && namesTheHazard,
+    `rev-parse: ${resolves}; rebases onto the OID: ${rebasesOntoTheOid}; names the hazard: ${namesTheHazard}`,
+  );
+  const aborts = brief.indexOf("git rebase --abort");
+  const confirmsIdle = /CONFIRM the tree is clean and idle/.test(brief);
+  const neverMidRebase = /Never leave the tree mid-rebase/.test(brief);
+  const hunkRule = /no cleanly auto-merged content from the other side/.test(brief);
+  check(
+    "and on a conflict beyond its competence it aborts, confirms the tree is clean and idle, and resolves by hunk otherwise",
+    aborts > -1 && confirmsIdle && neverMidRebase && hunkRule,
+    `abort@${aborts} confirms-idle@${confirmsIdle} never-mid-rebase@${neverMidRebase} hunk-rule@${hunkRule}`,
+  );
 }
 
 check(`suite ran all ${EXPECTED_CHECKS} checks`, ran === EXPECTED_CHECKS, `ran ${ran}`);

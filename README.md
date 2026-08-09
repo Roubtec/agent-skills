@@ -26,7 +26,7 @@ scripts/
   test-collision-dispatch.mjs           # behavior coverage for the batch workflow's pre-PR collision dispatch: a held branch delivers only once a re-scan of the refs no longer names its clash
   test-subagent-destroy-boundary.mjs    # renders every workflow subagent prompt and asserts the destroy boundary is in it (and that no copy of it, or of the finish-in-turn rule, has drifted)
   test-unreviewed-close-carriage.mjs    # asserts each consumer carries a cycle that concluded with no fresh reviewer through to the maintainer, and asserts the one consumer that can falsify part of that record corrects it
-  test-address-review-reconcile.mjs     # drives the review-addressing workflow's branch-reconciliation gate (the off-shoot exemption, the outcomes it fails closed on, its position ahead of the empty-items no-op), the working-location gate beside it, and the surviving-worktree report a halted run owes, and reads the rules and attach commands the gather brief states them from
+  test-address-review-reconcile.mjs     # drives the review-addressing workflow's branch-reconciliation gate (the off-shoot exemption, the outcomes it fails closed on, its position ahead of the empty-items no-op), the working-location gate beside it and the surviving-worktree report a halted run owes, and the delegated rebase points after it (the pinned commit a delegation range may be taken against, the halt that stops the run with its question, the `no-rebase` opt-out), and reads the rules and attach commands the gather and rebase briefs state them from
   verify-014-peer-strength-pin.md       # harness-neutral prompt: observe the peer step's pinned review strength (task 014)
 ```
 

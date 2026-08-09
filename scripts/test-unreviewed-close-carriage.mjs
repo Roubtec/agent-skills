@@ -35,7 +35,7 @@
 //      evaluated together — the prompt builders, and `collisionReviewedRecord`;
 //   2. the subject's own source text, matched out and evaluated in isolation —
 //      `wf-address-tasks.js`'s `cycleCarried` function and
-//      `wf-address-review.js`'s inline `carried` object literal;
+//      `wf-address-review.js`'s inline `carriedOf` carrier;
 //   3. the shipped statement held here VERBATIM as a regex and asserted against
 //      the source rather than evaluated — the collision dispatch's call site,
 //      which is executable body no harness can drive.
@@ -278,14 +278,20 @@ const cycleResult = (extra) => ({
 // --- wf-address-review.js: the sibling consumer's inline carrier -----------
 {
   const src = readFileSync(join(workflows, "wf-address-review.js"), "utf8");
-  const m = src.match(/\nconst carried = \{[\s\S]*?\n\};/);
+  // A function of the cycle rather than one object literal, since task 016 gave
+  // that run a SECOND cycle — the post-rebase re-verification, which replaces
+  // the first when a pre-push rebase replays anything — and a carrier read once
+  // would forward the superseded cycle's records into results describing the
+  // re-verified one. Matched whole and evaluated, so the parameter's name is
+  // this suite's business no longer.
+  const m = src.match(/\nconst carriedOf = \([\w$]+\) => \(\{[\s\S]*?\n\}\);/);
   if (!m) {
-    console.error("FAIL: could not locate the `carried` object literal in wf-address-review.js.");
+    console.error("FAIL: could not locate the `carriedOf` carrier in wf-address-review.js.");
     process.exit(1);
   }
-  const literal = m[0].replace(/^\nconst carried = /, "").replace(/;$/, "");
+  const literal = m[0].replace(/^\nconst carriedOf = /, "").replace(/;$/, "");
   // eslint-disable-next-line no-new-func
-  const carriedOf = new Function("cycle", `return (${literal});`);
+  const carriedOf = new Function(`return (${literal});`)();
 
   const carried = carriedOf(cycleResult({ recordOnly: RECORD, closeOut: CLOSE_OUT }));
   check("the review-addressing carrier forwards both records too", JSON.stringify(carried.recordOnly) === JSON.stringify(RECORD) && JSON.stringify(carried.closeOut) === JSON.stringify(CLOSE_OUT), JSON.stringify(carried));

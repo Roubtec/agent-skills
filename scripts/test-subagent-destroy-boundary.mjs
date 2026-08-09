@@ -355,6 +355,16 @@ const FIXTURES = {
       // builder" gap again, closed the same way.
       ["publishPrompt (worktree mode)", (f) => f.publishPrompt(publishPacketWorktree, [], { push: true, pingCodex: false })],
     ],
+    // The delegated rebase brief branches twice: on WHICH of the run's two
+    // points it is (the purpose paragraph and the validation wording), and on
+    // whether the run attached a worktree (the location contract, the arm that
+    // also tells it to keep off the main checkout). Same "new branch inside an
+    // existing builder" gap the comments above name, closed the same way.
+    rebasePrompt: [
+      ["rebasePrompt (pre-fix, inline)", (f) => f.rebasePrompt("pre-fix", publishPacket, "main")],
+      ["rebasePrompt (pre-push, inline)", (f) => f.rebasePrompt("pre-push", publishPacket, "main")],
+      ["rebasePrompt (pre-fix, worktree mode)", (f) => f.rebasePrompt("pre-fix", publishPacketWorktree, "abc1234def5678")],
+    ],
     reclaimPrompt: [["reclaimPrompt", (f) => f.reclaimPrompt("/w/.worktrees/c/pr-42", 42, "publication completed")]],
   },
 };
