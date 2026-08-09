@@ -74,7 +74,7 @@ function check(name, cond, detail) {
 // does not count. Bump it deliberately when adding or removing one — a
 // scenario that silently stops running is invisible to a suite that only gates
 // on failures.
-const EXPECTED_CHECKS = 36;
+const EXPECTED_CHECKS = 37;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -218,6 +218,30 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   );
 }
 
+// --- The producer half: how the working location is chosen -------------------
+// The gate above validates the pair the gather agent REPORTED. What lets that
+// report say `workingBranch != branch` at all is the gather brief's case list,
+// which no scenario reaches because the gather agent is stubbed — so it is read
+// out of the rendered brief: working on a branch that is NOT the PR head ref is
+// reachable ONLY by the request naming it with `off-shoot`. Two review rounds
+// tried to infer that case from the shape of the history instead; "already
+// CARRIES the PR head" was the last such predicate, and it rejected the very
+// case it was written for (an off-shoot cut BEFORE the head and advanced carries
+// no head) while still admitting a stacked child that has not been PR'd. Both
+// halves are pinned here: the token has to be the route, and that predicate must
+// not come back.
+{
+  const brief = gatherPrompt("#42");
+  const cases = brief.split("\n\n").find((p) => p.includes("take the FIRST case that applies")) || "";
+  const tokenRoutes = /`off-shoot` token/.test(cases) && /NOTHING BUT THE TOKEN/.test(cases);
+  const inferredFromShape = /CARRIES the PR head/.test(brief);
+  check(
+    "the off-shoot working location is selected by the `off-shoot` token, never inferred from the branch's shape",
+    tokenRoutes && !inferredFromShape,
+    `token route stated: ${tokenRoutes}; carries-the-head predicate present: ${inferredFromShape}`,
+  );
+}
+
 // --- On the PR's own branch: the two outcomes that let a run continue -------
 {
   const clean = await run(gathered({ reconcile: { outcome: "work" } }));
@@ -303,9 +327,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
 // --- The off-shoot exemption ------------------------------------------------
 // A local off-shoot of a merge-pending PR: `workingBranch` legitimately differs
 // from the PR's head ref, fixes land on the off-shoot, and `branch`/`headOid`
-// stay publication metadata. Reconciliation is skipped WHOLE here, so no
-// reported outcome — including none at all, and including one that contradicts
-// the exemption — may stop the run.
+// stay publication metadata. A run only arrives in that shape by the request
+// NAMING the off-shoot (the `off-shoot` token, pinned above); the gate itself is
+// keyed on the two branch names and is indifferent to how the location was
+// chosen, which is why these scenarios state the packet rather than the route.
+// Reconciliation is skipped WHOLE here, so no reported outcome — including none
+// at all, and including one that contradicts the exemption — may stop the run.
 {
   const off = { workingBranch: "feature/x-offshoot" };
   const clean = await run(gathered({ ...off, reconcile: { outcome: "not-applicable" } }));
