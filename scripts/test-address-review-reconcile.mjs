@@ -30,6 +30,12 @@
 // signal: reaching `workflow("wf-review-cycle", ...)` at all means the gate let
 // this run through.
 //
+// The gate is only the CONSUMER of `packet.reconcile`. The producer is a
+// paragraph of the gather brief, which no scenario reaches because the gather
+// agent is stubbed — so the RULE it states is read out of the rendered brief
+// directly: both probes, the off-shoot skip, and the outcome strings, whose
+// agreement with the strings the gate keys on nothing else pins.
+//
 // It also covers the publication guard that landed beside the gate, which is
 // prompt prose rather than script logic: a HEAD that is a proper ancestor of
 // the PR head must stop the publisher BEFORE the lease it would otherwise
@@ -61,7 +67,7 @@ function check(name, cond, detail) {
 // does not count. Bump it deliberately when adding or removing one — a
 // scenario that silently stops running is invisible to a suite that only gates
 // on failures.
-const EXPECTED_CHECKS = 23;
+const EXPECTED_CHECKS = 27;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -80,6 +86,20 @@ const script = new AsyncFunction(
   "log",
   `"use strict";\n${body}`,
 );
+
+// The prompt builders are plain functions in the DECLARATION PREFIX — the text
+// above the first statement that touches an injected global — so they can be
+// evaluated on their own and rendered without driving a scenario. Both halves
+// of the reconciliation are read that way: the rule the gather brief states,
+// and the publication guard beside it.
+const cut = src.indexOf("\nconst raw = flattenArgs(args);");
+if (cut < 0) throw new Error(`${SOURCE}: cut marker not found for the declaration prefix`);
+const prefix = src.slice(0, cut).replace(/^export const meta/m, "const meta");
+// eslint-disable-next-line no-new-func
+const { gatherPrompt, publishPrompt } = new Function(
+  "args",
+  `"use strict";\n${prefix}\nreturn { gatherPrompt, publishPrompt };`,
+)("");
 
 // Reaching the nested cycle ends the scenario: everything past the gate is
 // another workflow's business. Thrown rather than returned so "the run
@@ -113,7 +133,19 @@ async function run(packet) {
   }
 }
 
-const ITEM = { kind: "review-thread", threadId: "T1", url: "https://example.invalid/pr/42#d1", summary: "a finding" };
+// One gathered item, in `PACKET_SCHEMA`'s `items` shape — `type`/`body` and the
+// required `author`/`authorIsBot`, not a shorthand of this suite's own. Nothing
+// past the gate reads an item here (the nested cycle is stubbed), but the first
+// thing that would routes on `type`, so the fixture states the real shape.
+const ITEM = {
+  type: "review-thread",
+  threadId: "T1",
+  commentId: "C1",
+  author: "a-reviewer",
+  authorIsBot: false,
+  body: "a finding",
+  url: "https://example.invalid/pr/42#d1",
+};
 // A gather packet in the shape the schema requires. `reconcile` is spread in
 // last so a scenario can omit it entirely — the absent-report case.
 function gathered({ workingBranch = "feature/x", items = [], reconcile }) {
@@ -231,6 +263,55 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile }) {
   check("off-shoot `unrecognized` still proceeds — behind the head is that case's normal state", contradicting.status === "no-op", contradicting.status);
 }
 
+// --- The producer half: the rule the gather brief states ---------------------
+// Everything above exercises the CONSUMER of `packet.reconcile`. What makes
+// that field exist is a paragraph of the gather brief that no scenario reaches,
+// since the gather agent is stubbed with a packet already written — delete the
+// paragraph and every check above still passes while no run ever reconciles
+// anything again. So the brief is rendered and read: the two probes it orders,
+// the off-shoot skip, and the outcome vocabulary it fixes.
+{
+  const brief = gatherPrompt("#42");
+  const probes = ["git rev-list --right-only --cherry-pick", "git merge-base --is-ancestor"];
+  const missing = probes.filter((p) => !brief.includes(p));
+  check("the gather brief orders both reconciliation probes", missing.length === 0, `missing: ${missing.join("; ")}`);
+
+  // The off-shoot exemption is stated to the agent as well as enforced by the
+  // gate: where the names differ the step is skipped WHOLE, which is what makes
+  // `not-applicable` the honest report there rather than an unrun probe's.
+  const skipPara = brief.split("\n\n").find((p) => p.includes('outcome: "not-applicable"')) || "";
+  check(
+    "and skips reconciliation whole where the branch names differ, reporting `not-applicable`",
+    /differ/i.test(skipPara) && /skip/i.test(skipPara),
+    skipPara ? skipPara.slice(0, 160) : 'no paragraph reports `outcome: "not-applicable"`',
+  );
+
+  const stated = [...new Set([...brief.matchAll(/outcome:\s*"([^"]*)"/g)].map((m) => m[1]))].sort();
+  check(
+    "and names exactly the four outcomes the schema and the gate know",
+    stated.join(",") === "fast-forwarded,not-applicable,unrecognized,work",
+    stated.join(",") || "the brief states no outcome at all",
+  );
+
+  // The coupling nothing else pins. The brief and the gate agree on a set of
+  // literal strings and neither derives one from the other, so renaming a token
+  // on one side alone leaves both halves internally consistent while every
+  // same-branch run thereafter stops with `skipped-unreconciled`. Each outcome
+  // the BRIEF states is driven through the actual gate here, on the PR's own
+  // branch: the ones that continue a run must be the ones the brief tells the
+  // agent to report before proceeding.
+  const accepted = [];
+  for (const outcome of stated) {
+    const attempt = await run(gathered({ reconcile: { outcome }, items: [ITEM] }));
+    if (attempt.status === "reached-cycle") accepted.push(outcome);
+  }
+  check(
+    "and the outcomes it reports before proceeding are exactly the ones the gate lets through",
+    accepted.join(",") === "fast-forwarded,work",
+    `the gate accepts ${accepted.join(",") || "none of the outcomes the brief states"}`,
+  );
+}
+
 // --- The publication guard beside it ----------------------------------------
 // Independent of the reconciliation and prose rather than script logic, so it
 // is checked in the rendered brief: a HEAD that is a proper ancestor of the PR
@@ -238,15 +319,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile }) {
 // and delete the newer remote commits. The publisher must stop before reaching
 // it, which is a claim about ORDER as much as about presence.
 {
-  const at = src.indexOf("\nconst raw = flattenArgs(args);");
-  if (at < 0) throw new Error(`${SOURCE}: cut marker not found for the declaration prefix`);
-  const prefix = src.slice(0, at).replace(/^export const meta/m, "const meta");
-  // eslint-disable-next-line no-new-func
-  const { publishPrompt } = new Function("args", `"use strict";\n${prefix}\nreturn { publishPrompt };`)("");
   const brief = publishPrompt(gathered({ reconcile: { outcome: "work" } }), [], { push: true }, [], []);
   const stop = brief.indexOf('aborted: "local behind PR head"');
   const lease = brief.indexOf("--force-with-lease=");
-  check("the publish brief stops a proper-ancestor HEAD without pushing", stop > -1 && /PROPER ANCESTOR/.test(brief), "publish prompt");
+  const named = /PROPER ANCESTOR/.test(brief);
+  check("the publish brief stops a proper-ancestor HEAD without pushing", stop > -1 && named, `stop@${stop} names-the-case@${named}`);
   check("and states that stop ahead of the lease it would otherwise match", stop > -1 && lease > -1 && stop < lease, `stop@${stop} lease@${lease}`);
 }
 
