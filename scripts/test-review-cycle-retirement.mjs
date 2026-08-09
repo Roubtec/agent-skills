@@ -1448,18 +1448,19 @@ const BATCH_CONTRACT_CHECKS = 5;
 
   check("the batch hands the cycle a measurer contract of its own", measurer.length > 0, JSON.stringify(Object.keys(cfg.contracts || {})));
   // The same property the section's default carries, and the reason this leg
-  // needs its own check: `wt-enter` asserts the branch INSIDE the helper, and
-  // refuses a worktree whose HEAD is off it rather than switching — which is
-  // exactly what a rebase or a bisect leaves behind. So the contract has to
-  // read that refusal as evidence, or the measurer stops on the flagship case.
-  check("which asserts no branch, so a rebase's or a bisect's detached HEAD does not stop the reading", !/branch --show-current/.test(measurer) && !/STOP/.test(measurer), "measurer contract");
-  check("and reads the helper's own branch refusal as evidence rather than as a stop", /REFUSES/.test(measurer) && /DETACHED HEAD/.test(measurer) && /NOT a stop for you/.test(measurer), "measurer contract");
+  // needs its own check: every other role on this leg is told to assert the
+  // branch, and a rebase's or a bisect's detached HEAD — the flagship state
+  // this step exists to find — fails that assertion.
+  check("which asserts no branch, so a rebase's or a bisect's detached HEAD does not stop the reading", !/branch --show-current/.test(measurer) && !/STOP/.test(measurer) && /DETACHED/.test(measurer), "measurer contract");
+  // The measuring stage must not RECONSTRUCT the state it observes. Every
+  // worktree resolver here is rerun-safe — `wt-enter` attaches the branch in a
+  // fresh checkout when the worktree is gone — so a resolving measurer would
+  // read a checkout built moments ago and call the packet clean. It reads
+  // git's registration instead, which names the path in every state the tree
+  // can be in, and a `git -C <path>` reading is taken from there.
+  check("and FINDS the already-registered worktree rather than resolving one, so no reading comes from a checkout built just now", /git worktree list --porcelain/.test(measurer) && !measurer.includes("$(wt-enter") && /git -C/.test(measurer), "measurer contract");
+  check("with a worktree that is gone reported as unknown rather than rebuilt", /report it as unknown/.test(measurer) && /Never build it, attach it, or prune it/.test(measurer), "measurer contract");
   check("while the roles that must stay on the branch are still told to", /branch --show-current/.test(cfg.contracts.fixer) && /branch --show-current/.test(cfg.contracts.reviewer) && /branch --show-current/.test(cfg.contracts.peer), "role contracts");
-  // A measurement brings no branch into being: `wt-enter` is given no base ref,
-  // and without one it refuses to create the branch rather than checking out an
-  // empty tree. And the contract has a way into the worktree for the case the
-  // helper refuses to print one, which is the case it was sent to read.
-  check("and the measurer is handed no base ref, so the helper cannot create the branch — but it can still reach a worktree the helper refused to enter", !measurer.includes("'main'") && /git -C/.test(measurer), "measurer contract");
 
   const n = legOk + legFail - before;
   check(`batch contract checks ran all ${BATCH_CONTRACT_CHECKS}`, n === BATCH_CONTRACT_CHECKS, `ran ${n}`);

@@ -521,26 +521,31 @@ function worktreeContract(task, { mayCreate = false, measuring = false } = {}) {
   const enter = mayCreate
     ? `WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)} ${shq(task.base)})" && cd "$WT"`
     : `WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && cd "$WT"`;
-  // The cycle's packet MEASUREMENT gets its own variant, because every other
-  // stage's contract asserts the branch and this one is sent to find the states
-  // where that assertion cannot hold: a rebase and a bisect detach HEAD, so
-  // `git branch --show-current` prints nothing. wt-enter asserts it too — it
-  // refuses a worktree whose HEAD is off the branch rather than switching it —
-  // so the refusal has to be readable here as evidence rather than as a stop,
-  // and it names the path it checked — which is the only way into that worktree
-  // once the helper has declined to print one.
+  // The cycle's packet MEASUREMENT gets its own variant, and it is the one
+  // stage that must not RESOLVE a worktree at all. `wt-enter` is rerun-safe by
+  // design: where the worktree is gone it attaches the branch in a FRESH
+  // checkout, and a checkout built moments ago reads clean whatever the tree
+  // the pass returned from held — the one answer this step must never invent.
+  // So the measurer FINDS an already-registered worktree in git's own metadata
+  // instead, and a worktree that is not there is unknown rather than rebuilt.
+  // That also drops the branch assertion every other stage's contract carries,
+  // which the DETACHED HEAD a rebase or a bisect leaves would fail: the
+  // registration names the path whatever state the tree is in, `detached`
+  // included, so nothing has to be read out of a helper's refusal message.
   if (measuring) {
     return `## WORKTREE CONTRACT (do this before anything else)
 
-Resolve this task's worktree path with the image-baked helper, and beyond that one command create nothing and change nothing:
+FIND this task's worktree — never RESOLVE it. \`wt-enter\` and every helper like it is rerun-safe by design: where the worktree is gone it attaches the branch in a fresh checkout, which would read clean whatever the tree you were sent to measure held. Run none of them.
 
-    WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})"
+From the repository checkout you start in, take exactly one read-only reading there and nothing else:
 
-Take your readings IN that worktree — \`cd "$WT"\` once the helper has printed a path. Never pass it a base ref: without one the helper cannot create the branch, and a measuring stage must never bring one into being.
+    git worktree list --porcelain
 
-\`wt-enter\` asserts the branch itself, so it REFUSES a worktree whose HEAD is not on \`${task.branch}\` — including the DETACHED HEAD a rebase or a bisect leaves, where it reports being on branch \`''\` — and then prints no path at all. That refusal is NOT a stop for you: the state it refuses over is one of the states you were sent to read, and its message names the worktree path it checked. Take the path from that message and read that worktree with \`git -C <that path> …\` instead. Any OTHER failure — no such worktree, git will not run there — is a reading you could not take: report it as unknown, quoting the error, rather than guessing.
+Your worktree is the registered one whose directory is named \`${task.slug}\`. Read it with \`git -C <that path> …\`, and read nothing else. That entry names the path whatever state the tree is in — a rebase or a bisect leaves HEAD DETACHED, so the entry reads \`detached\` rather than naming \`${task.branch}\`, and that is one of the states you were sent to read rather than a mismatch to report.
 
-Read only, and only there. Never read or touch the repo root or a sibling worktree — other agents are working in their own concurrently — and run nothing that writes, switches, attaches, restores, continues, or aborts anything.`;
+If no entry names that directory, if more than one does, or if the directory it names is missing or git will not run there, then the tree the pass returned from is not there to observe: report it as unknown, quoting what you found. Never build it, attach it, or prune it.
+
+Read only, and only there. Beyond that one query never touch the repo root, and never read a sibling worktree — other agents are working in their own concurrently — and run nothing that writes, switches, attaches, restores, continues, or aborts anything.`;
   }
   return `## WORKTREE CONTRACT (do this before anything else)
 
