@@ -68,7 +68,7 @@ function check(name, cond, detail) {
 // does not count. Bump it deliberately when adding or removing one — a
 // scenario that silently stops running is invisible to a suite that only gates
 // on failures.
-const EXPECTED_CHECKS = 29;
+const EXPECTED_CHECKS = 30;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -259,6 +259,17 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile }) {
   const off = { workingBranch: "feature/x-offshoot" };
   const clean = await run(gathered({ ...off, reconcile: { outcome: "not-applicable" } }));
   check("off-shoot `not-applicable` with no threads is a plain no-op", clean.status === "no-op", JSON.stringify(clean.result));
+  // The no-op's reconciliation record is not path-dependent: the off-shoot run
+  // reports what reconciliation concluded exactly as the same-branch one above
+  // does. Pinned because the difference is invisible from the gate — both paths
+  // reach the SAME return — so a reader is free to conclude the off-shoot result
+  // carries no such record, and one did.
+  check(
+    "and that no-op names the reconciliation and carries its record too",
+    /not-applicable/.test((clean.result || {}).detail || "") &&
+      ((clean.result || {}).reconcile || {}).outcome === "not-applicable",
+    JSON.stringify(clean.result),
+  );
   const working = await run(gathered({ ...off, reconcile: { outcome: "not-applicable" }, items: [ITEM] }));
   check("off-shoot `not-applicable` with threads proceeds to the nested cycle", working.status === "reached-cycle", working.status);
   check(

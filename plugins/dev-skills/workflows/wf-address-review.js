@@ -106,7 +106,7 @@ const PACKET_SCHEMA = {
     },
     reconcile: {
       type: "object",
-      description: "What the gather brief's branch reconciliation did. Required whenever ok is true, the off-shoot case included — it reports `not-applicable`. ENFORCED only on a run whose workingBranch equals branch: there the caller stops the run on any outcome but the two that let it continue, an absent report among them. Where the names differ the caller does not read this field at all, because the brief skips reconciliation whole.",
+      description: "What the gather brief's branch reconciliation did. Required whenever ok is true, the off-shoot case included — it reports `not-applicable`. ENFORCED only on a run whose workingBranch equals branch: there the caller stops the run on any outcome but the two that let it continue, an absent report among them.",
       properties: {
         outcome: {
           type: "string",
