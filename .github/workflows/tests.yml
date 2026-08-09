@@ -18,3 +18,4 @@ jobs:
       - run: node scripts/test-review-cycle-retirement.mjs
       - run: node scripts/test-subagent-destroy-boundary.mjs
       - run: node scripts/test-unreviewed-close-carriage.mjs
+      - run: node scripts/test-address-review-reconcile.mjs

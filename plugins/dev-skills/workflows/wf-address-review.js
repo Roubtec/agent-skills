@@ -104,6 +104,18 @@ const PACKET_SCHEMA = {
       },
       required: ["number", "url", "branch", "workingBranch", "base", "headOid"],
     },
+    reconcile: {
+      type: "object",
+      description: "What the gather brief's branch reconciliation did. Required whenever ok is true, the off-shoot case included — it reports `not-applicable`. ENFORCED only on a run whose workingBranch equals branch: there the caller stops the run on any outcome but the two that let it continue, an absent report among them.",
+      properties: {
+        outcome: {
+          type: "string",
+          description: "`work` (local already carries everything the PR head has), `fast-forwarded` (local was strictly behind and was fast-forwarded onto it), `not-applicable` (workingBranch differs from branch — the local off-shoot case, where reconciliation is skipped entirely), or `unrecognized` (any other branch state: the run stops and the branch goes back to the maintainer). Only `work` and `fast-forwarded` let a run on the PR's own branch proceed.",
+        },
+        detail: { type: "string", description: "What the two probes saw. MANDATORY for `unrecognized`: both tips and the commits unique to each side, so the maintainer can act on it without re-deriving it." },
+      },
+      required: ["outcome"],
+    },
     items: {
       type: "array",
       description: "Every UNRESOLVED review thread plus any explicitly-included standalone item (issue comment / review summary), verbatim.",
@@ -131,7 +143,7 @@ const PUBLISH_SCHEMA = {
   type: "object",
   properties: {
     published: { type: "boolean", description: "True only if the push AND every required reply/resolve/summary/ping step succeeded. False if any guard (moved head, unmatched remote, rejected lease, failed comment) aborted publication." },
-    aborted: { type: "string", description: "Why publication stopped, when published is false (e.g. `head moved`, `lease rejected`, `push remote unmatched`). Empty when published." },
+    aborted: { type: "string", description: "Why publication stopped, when published is false (e.g. `head moved`, `lease rejected`, `local behind PR head`, `push remote unmatched`). Empty when published." },
     pushed: { type: "boolean", description: "Whether a push was performed at all (may be an `Everything up-to-date` no-op)." },
     pushedNewCommits: { type: "boolean", description: "True ONLY if the push actually advanced the remote branch — new commits or rewritten history. False when no push happened or for a no-op `Everything up-to-date` push. Gates whether the re-review pings may fire." },
     threadOutcomes: {
@@ -234,6 +246,15 @@ Preflight (set \`ok: false\` with a \`blocker\` and stop on any failure):
 
 Resolve the PR: explicit PR# wins (but sanity-check it shares history with the current branch — if genuinely unrelated, blocker and stop); else auto-detect via \`gh pr view\`. When \`ok\` is true you MUST populate the whole \`pr\` object: \`number\`, \`url\`, \`branch\` (the PR's remote headRefName — the push target), \`workingBranch\` (the branch actually checked out now, from \`git branch --show-current\`), \`base\`, \`headOid\` (the PR's headRefOid — the publish phase needs it for a safe \`--force-with-lease\`), and \`rebased\`. Do NOT switch branches: \`workingBranch\` is whatever is checked out. It usually equals \`branch\`, but for a supported local off-shoot of a merge-pending PR it differs — downstream fixes must edit \`workingBranch\`, while \`branch\`/\`headOid\` remain publication metadata for the push.
 
+Reconcile the checked-out branch with the PR head — ONLY when \`workingBranch\` equals \`branch\`. Where the two names DIFFER the supported local off-shoot of a merge-pending PR is in play: \`branch\`/\`headOid\` are publication metadata for a branch you are not on, "behind the PR head" is that case's normal state, and you MUST skip this step whole — no fetch, no branch move — reporting \`reconcile: { outcome: "not-applicable" }\`.
+
+Where the names match: fetch the PR's exact head ref WITHOUT moving the local branch, then take \`R\` from what that fetch actually brought — \`git rev-parse FETCH_HEAD\` — NOT from the recorded \`headRefOid\`. A fetch brings whatever the ref names NOW, and whether the recorded OID is a local object says nothing about that: it is normally reachable from your own checkout, so an existence check passes even when a push has since advanced the head, leaving you to reconcile against the stale tip. Where \`R\` differs from the recorded OID the head moved under you, which is not a failure — record \`R\` as \`pr.headOid\` before continuing, so the lease the publish phase builds names the head you actually reconciled against. Then with \`H\` = \`HEAD\`, run these two probes and take the FIRST outcome that applies:
+1. \`git rev-list --right-only --cherry-pick H...R\` — the remote commits not represented in local. EMPTY → local already carries everything the remote has (identical, ahead by unpushed commits, rebased onto a newer base, restacked after a predecessor merged, or any combination). Report \`reconcile: { outcome: "work" }\` and proceed on \`H\` as it stands.
+2. Else \`git merge-base --is-ancestor H R\` — true means local is strictly behind and holds nothing the remote lacks. Run \`git merge --ff-only <R>\`, report \`reconcile: { outcome: "fast-forwarded" }\`, and proceed. This fast-forward is the ONE branch move this assignment authorizes, and only on this path.
+3. Else this run does not act on the branch. Return \`ok: true\` (this is NOT a failure and NOT a blocker), \`items: []\`, the \`pr\` object populated, and \`reconcile: { outcome: "unrecognized", detail: "<what you saw>" }\` — name both tips and the commits unique to each side. Do NOT pick a side, merge, rebase, reset, or force anything, and gather no threads: the caller stops the run and hands the branch back to the maintainer.
+
+Those two probes are the whole rule; do not grow them into a classifier of branch states, which is exactly what the third outcome exists to make unnecessary. The first is patch-id based on purpose: \`--cherry-pick\` drops commits with a patch-id twin on the other side, so a branch rebased onto a newer base reads as carrying the PR head's content though it shares no SHAs with it, where a raw-ancestry test would call that ordinary state divergent. Do NOT filter merge commits out of that probe: patch-id cannot speak for a merge, so an unrepresented merge on the remote head lands in outcome 3 deliberately — one extra ask when a UI "Update branch" merge advanced the head, in exchange for never silently dropping a conflict resolution such a merge carried.
+
 If \`rebase on top of <branch>\` was given: read \`current_branch="$(git branch --show-current)"\`, require it to be non-empty, save the pre-rebase tip with \`git update-ref refs/pre-rebase/$current_branch/<ts> HEAD\` (the one \`update-ref\` this assignment spells out, and the run's only rebase recovery ref — do not skip it), then \`git rebase <target>\`. Resolve only TRIVIAL conflicts (imports/whitespace/pure additions/already-represented patches → in-file resolve or \`git rebase --skip\`). On the FIRST non-trivial conflict, \`git rebase --abort\`, confirm a clean tree, set \`blocker\` and stop. After a conflicted rebase, run the build to confirm; if you redirect its output to a file, create a UNIQUE directory for that first, OUTSIDE the checkout (\`mktemp -d "\${TMPDIR:-/tmp}/gather-build.XXXXXX"\`), and write there — never a fixed shared scratchpad name, since one session's agents share that directory and a fixed one has crossed results between concurrent runs before. Set \`pr.rebased\` true if the tip was rewritten and \`pr.base\` to the rebase target; otherwise \`pr.base = baseRefName\` and \`pr.rebased = false\`. (When rebased, \`pr.headOid\` is still the *remote* tip you will replace — read it before the rebase.)
 
 Gather feedback into \`items\` (each verbatim):
@@ -325,7 +346,7 @@ Flags for this publication: ${JSON.stringify(flags)}.
 Report a STRUCTURED result: set \`published: true\` ONLY if the push and every required reply/resolve/summary/ping below succeeded. If any guard aborts you, set \`published: false\` and \`aborted: "<reason>"\` and report what (if anything) was pushed — never claim success on an aborted publication.
 
 1. Re-check before publication: clean worktree, no rebase in progress; re-fetch the PR and confirm it is still open and still points at the expected head repo/ref. Resolve the branch's exact push remote/ref and verify it matches the PR head (never assume \`origin\`, especially for forks). Expected head OID to replace: \`${packet.pr.headOid}\`. If the head moved or the target can't be matched, set \`published: false\`, \`aborted\`, and STOP — do not guess.
-2. Push: if the expected tip is an ancestor of HEAD, normal push (\`git push <remote> HEAD:refs/heads/${shq(packet.pr.branch)}\`). If history was rewritten (rebased: ${packet.pr.rebased ? "yes" : "no"}), use an exact lease: \`git push <remote> --force-with-lease=refs/heads/${shq(packet.pr.branch)}:${shq(packet.pr.headOid)} HEAD:refs/heads/${shq(packet.pr.branch)}\`. If the lease is rejected, NEVER escalate to bare \`--force\`; set \`published: false\`, \`aborted: "lease rejected"\`, and stop.
+2. Push. Establish which of THREE cases you are in before running any push, and never skip ahead to the lease. If HEAD is a PROPER ANCESTOR of the expected tip \`${packet.pr.headOid}\`, the remote branch is ahead of you: there is nothing of yours to publish, a normal push cannot fast-forward it, and the lease below is the trap — it MATCHES, so it succeeds and rewinds the branch, deleting the newer remote commits. Set \`published: false\`, \`aborted: "local behind PR head"\`, and STOP without pushing, exactly as for a rejected lease. Otherwise: if the expected tip is an ancestor of HEAD, normal push (\`git push <remote> HEAD:refs/heads/${shq(packet.pr.branch)}\`). If history was rewritten (rebased: ${packet.pr.rebased ? "yes" : "no"}), use an exact lease: \`git push <remote> --force-with-lease=refs/heads/${shq(packet.pr.branch)}:${shq(packet.pr.headOid)} HEAD:refs/heads/${shq(packet.pr.branch)}\`. If the lease is rejected, NEVER escalate to bare \`--force\`; set \`published: false\`, \`aborted: "lease rejected"\`, and stop.
 3. Re-read unresolved threads after the push. Do not mutate newly-arrived feedback that was not triaged this run — leave it open and call it out.
 4. Per-item hygiene for each disposition:
    - \`review-thread\` items: reply via REST \`pulls/.../comments/<commentId>/replies\`, resolve via GraphQL \`resolveReviewThread\` on \`threadId\`:
@@ -443,8 +464,40 @@ if (!packet.pr || packet.pr.number == null || !packet.pr.branch || !packet.pr.wo
 if (flags.push && !packet.pr.headOid) {
   return { error: "Push requested but gather returned no pr.headOid; refusing to proceed without the expected-head OID needed for a safe --force-with-lease.", pr: packet.pr };
 }
+// Branch reconciliation, per the gather brief's "Reconcile the checked-out
+// branch" step. Only a run on the PR's OWN branch reconciles: where
+// `workingBranch` differs, the supported local off-shoot of a merge-pending PR
+// is in play, and there "local is behind the PR head" is the normal state
+// rather than the hazard the rule fires on. Two outcomes let the run continue
+// and EVERYTHING else stops it — including an outcome string this script does
+// not know and an absent report — which is what keeps the rule at two probes
+// instead of a classifier that would have to name every branch state. It runs
+// ahead of the empty-`items` no-op below because outcome 3 returns no items:
+// reported as a no-op, an unreconciled branch would read as "nothing to do".
+const reconcile = packet.reconcile || null;
+const reconcileOutcome = (reconcile && reconcile.outcome) || "";
+if (
+  packet.pr.workingBranch === packet.pr.branch &&
+  reconcileOutcome !== "work" &&
+  reconcileOutcome !== "fast-forwarded"
+) {
+  return {
+    status: "skipped-unreconciled",
+    pr: packet.pr,
+    reconcile,
+    detail: `Local branch \`${packet.pr.workingBranch}\` was not reconciled with PR #${packet.pr.number}'s head (outcome: ${reconcileOutcome || "none reported"}): ${(reconcile && reconcile.detail) || "no detail reported"}`,
+    note: "Nothing was addressed and nothing was pushed. Put the branch into a state the reconciliation recognises — every commit on the PR head represented in it by patch-id, or strictly behind it — and re-run.",
+  };
+}
 if (!packet.items || packet.items.length === 0) {
-  return { status: "no-op", detail: "No unresolved threads and no included standalone item — nothing to address.", pr: packet.pr };
+  // Carry the reconciliation record here too: on the `fast-forwarded` outcome
+  // this run MOVED the local branch, which a bare "nothing to address" hides.
+  return {
+    status: "no-op",
+    detail: `No unresolved threads and no included standalone item — nothing to address (branch reconciliation: ${reconcileOutcome || "none reported"}).`,
+    pr: packet.pr,
+    reconcile,
+  };
 }
 
 phase("Fix and verify");
