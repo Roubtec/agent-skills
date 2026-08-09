@@ -26,7 +26,7 @@ The runtime's `agent(..., { isolation: "worktree" })` creates a separate tempora
 
 `wf-address-tasks.js` therefore uses one explicit worktree per task and reuses it for the implementer, reviewer, and later fix rounds. Independent tasks still run concurrently, while sharing the on-disk task worktree makes commits visible across stages. The workflow depends on the environment-provided `wt-bootstrap`, `wt-enter`, and `wt-remove` helpers and reports a blocker when they are unavailable.
 
-`wf-address-review.js` is a single-PR sequential pipeline, so its agents deliberately share the current checkout rather than creating worktrees.
+`wf-address-review.js` is a single-PR sequential pipeline, so its agents deliberately share the current checkout rather than creating worktrees. It does not own that checkout either — its gather brief forbids switching branches, because the workflow supports a local off-shoot of a merge-pending PR, where the checked-out branch legitimately differs from the PR's head ref. The one exception is the branch reconciliation of task 021b: a run whose checked-out branch IS the PR's head ref fast-forwards it when it is strictly behind, and stops the run when the two have genuinely diverged. That reconciliation is gated on the two names matching, so the off-shoot case never reaches it — there, "behind the PR head" is the normal state rather than the hazard.
 
 The shared-filesystem assumption was verified on 2026-06-10 with Claude Code 2.1.170: a separately spawned agent could find the first agent's worktree, file, and commit, and a two-task workflow run kept each reviewer on its implementer's task worktree.
 
