@@ -2747,14 +2747,34 @@ async function settleWaveCollisions({ heldTasks, waveCollisions, wave, defaultBa
   // extra agent costs only what the clash costs. Two of them at minimum: a scan
   // over a single branch has no sibling to compare against and returns an empty
   // set for want of one, which would read as "clash gone" on no evidence at all.
+  //
+  // Two further shapes read as unusable rather than as proof of absence, because
+  // each would otherwise clear every held branch off a packet that just reported
+  // a surviving clash. A THROW is caught here, unlike the wave-boundary storage
+  // probe whose abort widens nothing: an abort at this point discards the
+  // deliveries this wave's uncontested branches already earned and leaves the
+  // held ones with no result to act on, while this task's degraded path owes
+  // them an actionable hold. And an entry naming NONE of the held branches —
+  // `branches: []`, or a name echoed in a form `normalizeBranchName` cannot
+  // match, such as `refs/heads/task/a` — is a clash this stage cannot attribute
+  // to anyone; crediting the packet anyway would invert the bias applied one arm
+  // above, where a mis-echoed collision name is deliberately not believed.
   let rescanned = null;
   if (resolutions && heldTasks.length >= 2) {
     phase(`Collision re-scan (wave ${wave})`);
-    const rescan = await agent(
-      collisionScanPrompt(heldTasks.map(({ task }) => ({ slug: task.slug, branch: task.branch, base: task.base || defaultBase }))),
-      { label: `collision-rescan:w${wave}`, schema: COLLISION_SCHEMA }
-    );
-    if (rescan && Array.isArray(rescan.collisions)) rescanned = rescan.collisions;
+    let rescan = null;
+    try {
+      rescan = await agent(
+        collisionScanPrompt(heldTasks.map(({ task }) => ({ slug: task.slug, branch: task.branch, base: task.base || defaultBase }))),
+        { label: `collision-rescan:w${wave}`, schema: COLLISION_SCHEMA }
+      );
+    } catch (e) {
+      log(`collision re-scan failed for wave ${wave}: ${e && e.message ? e.message : String(e)}`);
+    }
+    const attributable = (c) => heldTasks.some(({ task }) => involves(c, task));
+    if (rescan && Array.isArray(rescan.collisions) && rescan.collisions.every(attributable)) {
+      rescanned = rescan.collisions;
+    }
   }
 
   for (const { task, result } of heldTasks) {
@@ -2769,7 +2789,7 @@ async function settleWaveCollisions({ heldTasks, waveCollisions, wave, defaultBa
       // touched — keep it held for a human/design decision.
       held.push({ slug: task.slug, branch: task.branch, status: "collision-blocked", detail: "shared name must stay identical (imperative); resolver could not deconflict — needs a human/design decision", collisions: related, ...cycleCarried(result) });
     } else if (!stillColliding) {
-      held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "post-resolution collision re-scan established nothing (no usable result, or fewer than two of the colliding branches in hand to compare); branch held before PR delivery — re-scan these branches by hand, deconflict what remains, and re-review", collisions: related, ...cycleCarried(result) });
+      held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "post-resolution collision re-scan established nothing (it failed, returned no usable result, attributed a clash to none of the held branches, or fewer than two of the colliding branches were in hand to compare); branch held before PR delivery — re-scan these branches by hand, deconflict what remains, and re-review", collisions: related, ...cycleCarried(result) });
     } else if (stillColliding.length) {
       held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "the clash is still in the refs after the resolver ran; branch held before PR delivery — rename enough sides that at most one branch keeps the name, regenerate whatever derives from it, and re-review", collisions: stillColliding, ...cycleCarried(result) });
     } else if (isChanged) {

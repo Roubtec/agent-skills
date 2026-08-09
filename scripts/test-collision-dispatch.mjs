@@ -52,7 +52,7 @@ function check(name, cond, detail) {
 // it — an edit that drops one, or a guard that swallows a throw, would pass.
 // Counting the oks too lets the run assert it executed the whole suite. Bump
 // this deliberately when adding or removing a check; the number is the assertion.
-const EXPECTED_CHECKS = 82;
+const EXPECTED_CHECKS = 97;
 
 async function scenario(name, fn) {
   try {
@@ -87,7 +87,10 @@ function scriptedAgent(packets, calls) {
     const label = (opts && opts.label) || "";
     calls.push({ label, prompt, schema: opts && opts.schema });
     if (label.startsWith("collision-resolve:")) return packets.resolution;
-    if (label.startsWith("collision-rescan:")) return packets.rescan;
+    if (label.startsWith("collision-rescan:")) {
+      if (packets.rescan === THROWS) throw new Error("re-scan agent exploded");
+      return packets.rescan;
+    }
     if (label.startsWith("re-review:")) {
       const slug = label.slice("re-review:".length);
       const reviews = packets.reviews || {};
@@ -98,6 +101,10 @@ function scriptedAgent(packets, calls) {
 }
 
 const PASS_REVIEW = { pass: true, issues: [], notes: "rename reads clean", flakeRecord: "" };
+// Scripted stand-in for an agent stage that throws rather than returning a
+// packet. This repository does not establish when `agent()` throws versus
+// returns null, so the dispatch must answer both the same way.
+const THROWS = Symbol("agent throws");
 
 const mkTask = (slug) => ({ slug, branch: `task/${slug}`, base: "main", path: `tasks/${slug}.md`, content: `# ${slug}\n` });
 const mkHeld = (slug) => ({
@@ -234,6 +241,62 @@ await scenario("degraded re-scan", async () => {
     check(`${name} → detail names the re-scan and the next step`, out.held.every((h) => /re-scan/.test(h.detail) && /by hand/.test(h.detail)), JSON.stringify(out.held.map((h) => h.detail)));
     check(`${name} → no re-review is paid for`, !labels(out.calls).some((l) => l.startsWith("re-review:")));
   }
+});
+
+// 5b. A re-scan entry this stage cannot attribute to any held branch. It is a
+//     clash reported with no owner, so filtering by branch name yields an empty
+//     "still colliding" set for every held branch and would deliver all of them
+//     off a packet that just said the clash survives — the exact inversion the
+//     guard exists to prevent. The packet reads as unusable instead.
+await scenario("unattributable re-scan entry", async () => {
+  const cases = [
+    ["re-scan entry names no branches at all", [clash([])]],
+    ["re-scan entry names branches in an unmatched form", [clash(["refs/heads/task/a", "refs/heads/task/b"])]],
+  ];
+  for (const [name, collisions] of cases) {
+    const out = await run({
+      held: [mkHeld("a"), mkHeld("b")],
+      collisions: [clash(["task/a", "task/b"])],
+      packets: { resolution: renamed(["task/a"]), rescan: { collisions } },
+    });
+    check(`${name} → nothing delivers`, out.deliverable.length === 0, JSON.stringify(slugs(out.deliverable)));
+    check(`${name} → both branches held`, JSON.stringify(slugs(out.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(out.held)));
+    check(`${name} → detail says the re-scan established nothing`, out.held.length === 2 && out.held.every((h) => /established nothing/.test(h.detail) && /by hand/.test(h.detail)), JSON.stringify(out.held.map((h) => h.detail)));
+    check(`${name} → no re-review is paid for`, !labels(out.calls).some((l) => l.startsWith("re-review:")), JSON.stringify(labels(out.calls)));
+  }
+});
+
+// 5c. One unattributable entry voids the WHOLE packet rather than being filtered
+//     out of it: the branch the packet's usable entries clear would otherwise
+//     deliver on a scan that also reported a clash belonging to nobody.
+await scenario("partly unattributable re-scan", async () => {
+  const out = await run({
+    held: [mkHeld("a"), mkHeld("b"), mkHeld("c")],
+    collisions: [clash(["task/a", "task/b"]), clash(["task/b", "task/c"], "Widget")],
+    packets: {
+      resolution: renamed(["task/a"]),
+      rescan: { collisions: [clash(["task/b", "task/c"], "Widget"), clash([], "Ghost")] },
+    },
+  });
+  check("partly unattributable → nothing delivers", out.deliverable.length === 0, JSON.stringify(slugs(out.deliverable)));
+  check("partly unattributable → all three branches held", JSON.stringify(slugs(out.held)) === JSON.stringify(["a", "b", "c"]), JSON.stringify(slugs(out.held)));
+  check("partly unattributable → every hold says the re-scan established nothing", out.held.length === 3 && out.held.every((h) => /established nothing/.test(h.detail)), JSON.stringify(out.held.map((h) => h.detail)));
+});
+
+// 5d. The re-scan stage THROWS. Letting it unwind to the batch-body catch would
+//     discard the deliveries this wave's uncontested branches already earned and
+//     leave the held ones with no result to act on, so the throw is answered with
+//     the same hold as any other unusable re-scan.
+await scenario("re-scan throws", async () => {
+  const out = await run({
+    held: [mkHeld("a"), mkHeld("b")],
+    collisions: [clash(["task/a", "task/b"])],
+    packets: { resolution: renamed(["task/a"]), rescan: THROWS },
+  });
+  check("re-scan throws → the re-scan was actually attempted", labels(out.calls).includes("collision-rescan:w1"), JSON.stringify(labels(out.calls)));
+  check("re-scan throws → nothing delivers", out.deliverable.length === 0, JSON.stringify(slugs(out.deliverable)));
+  check("re-scan throws → both branches held with the re-scan detail", JSON.stringify(slugs(out.held)) === JSON.stringify(["a", "b"]) && out.held.every((h) => h.status === "collision-hold" && /established nothing/.test(h.detail) && /by hand/.test(h.detail)), JSON.stringify(out.held.map((h) => h.detail)));
+  check("re-scan throws → no re-review is paid for", !labels(out.calls).some((l) => l.startsWith("re-review:")), JSON.stringify(labels(out.calls)));
 });
 
 // 6. Fewer than two of a clash's branches in hand. A scan over ONE branch has no
