@@ -272,6 +272,7 @@ const deviationAssessments = [
   { deviation: deviations[0], inSpecRoute: "None — the locked route needs an endpoint this environment cannot expose.", recommendation: "RATIFY — conforming would block the release on an infrastructure change." },
 ];
 const publishPacket = { pr: { number: 42, url: "https://example.invalid/pr/42", branch: "b", workingBranch: "b", base: "main", headOid: "deadbeef", rebased: false }, items: [] };
+const publishPacketWorktree = { ...publishPacket, pr: { ...publishPacket.pr, locationMode: "worktree", worktree: "/w/.worktrees/c/pr-42" } };
 
 // The cycle briefs, each rendered under BOTH configurations, because
 // cycleContract() branches on whether the consumer overrode the role.
@@ -348,7 +349,13 @@ const FIXTURES = {
       ["publishPrompt (deviation + assessment)", (f) => f.publishPrompt(publishPacket, [], { push: true, pingCodex: false }, deviations, deviationAssessments)],
       ["publishPrompt (deviation, cycle recorded no assessment)", (f) => f.publishPrompt(publishPacket, [], { push: true, pingCodex: false }, deviations, [])],
       ["publishPrompt (record-only close)", (f) => f.publishPrompt(publishPacket, [], { push: true, pingCodex: false }, [], [], { pass: 2, range: "a..b", verified: "only the flake task", note: "the payments suite failed on the base too" })],
+      // The publisher's working-location contract branches on whether this run
+      // attached a worktree, and the worktree arm is the one that also tells it
+      // to keep off the main checkout — the "new branch inside an existing
+      // builder" gap again, closed the same way.
+      ["publishPrompt (worktree mode)", (f) => f.publishPrompt(publishPacketWorktree, [], { push: true, pingCodex: false })],
     ],
+    reclaimPrompt: [["reclaimPrompt", (f) => f.reclaimPrompt("/w/.worktrees/c/pr-42", 42, "publication completed")]],
   },
 };
 
