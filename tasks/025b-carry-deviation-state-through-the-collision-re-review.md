@@ -32,7 +32,7 @@ Implement AFTER task 027a, which reworks this same dispatch: it re-derives the c
 
 ## Context and references
 
-- The re-review call and its state object: the `re-review:${task.slug}` agent label in `plugins/dev-skills/workflows/wf-address-tasks.js`, in the `isChanged` arm of the `heldTasks` dispatch. Cited by anchor rather than by line on purpose: this file first carried a line number, and PR #55's own later commits — growing the `review-cycle-core` section above the call — moved it before the PR merged, while the label is a unique string that survives every such move.
+- The re-review call and its state object: the `re-review:${task.slug}` agent label in `plugins/dev-skills/workflows/wf-address-tasks.js`, in the re-review arm of the `heldTasks` dispatch — the final arm, which 027a widened from "the branches the resolver said it changed" to every held branch of a cleared clash. Cited by anchor rather than by line on purpose: this file first carried a line number, and PR #55's own later commits — growing the `review-cycle-core` section above the call — moved it before the PR merged, while the label is a unique string that survives every such move.
 - What the pass carries forward on success: the `deliverable.push({ task, result: { ...result, notes: ... } })` immediately below it.
 - Where the carried values surface: `deliverTask` and `prPrompt` in the same file, which lead the PR body with `deviations` and `deviationAssessments`.
 - The enforcement this path lacks: the deviation-coverage gate in `runReviewCycle` (the `unassessedDeviations` / `roundPassed` block) and the `deviationsBlock` prose in `cycleReviewPrompt`, both inside the `review-cycle-core` section.
