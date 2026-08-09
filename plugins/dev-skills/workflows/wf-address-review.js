@@ -882,7 +882,7 @@ async function rebasePoint(point, target) {
     stop: {
       status,
       pr: packet.pr,
-      rebase: { ...rebaseRecord, halted: { point, target, ...(report || {}) } },
+      rebase: { ...rebaseRecord, stoppedAt: { point, target, ...(report || {}) } },
       detail,
       ...(extra || {}),
       note: `Nothing was pushed. The branch is where the rebase left it${report && report.recoveryRef ? `, and its pre-rebase tip is saved at \`${report.recoveryRef}\`` : ""}.`,
