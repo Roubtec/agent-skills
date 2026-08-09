@@ -532,11 +532,11 @@ function worktreeContract(task, { mayCreate = false, measuring = false } = {}) {
   if (measuring) {
     return `## WORKTREE CONTRACT (do this before anything else)
 
-Resolve this task's worktree path with the image-baked helper — create nothing, change nothing:
+Resolve this task's worktree path with the image-baked helper, and beyond that one command create nothing and change nothing:
 
     WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})"
 
-Take your readings IN that worktree — \`cd "$WT"\` once the helper has printed a path. Never pass it a base ref: this stage creates nothing.
+Take your readings IN that worktree — \`cd "$WT"\` once the helper has printed a path. Never pass it a base ref: without one the helper cannot create the branch, and a measuring stage must never bring one into being.
 
 \`wt-enter\` asserts the branch itself, so it REFUSES a worktree whose HEAD is not on \`${task.branch}\` — including the DETACHED HEAD a rebase or a bisect leaves, where it reports being on branch \`''\` — and then prints no path at all. That refusal is NOT a stop for you: the state it refuses over is one of the states you were sent to read, and its message names the worktree path it checked. Take the path from that message and read that worktree with \`git -C <that path> …\` instead. Any OTHER failure — no such worktree, git will not run there — is a reading you could not take: report it as unknown, quoting the error, rather than guessing.
 

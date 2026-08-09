@@ -1448,10 +1448,11 @@ const BATCH_CONTRACT_CHECKS = 5;
   check("which asserts no branch, so a rebase's or a bisect's detached HEAD does not stop the reading", !/branch --show-current/.test(measurer) && !/STOP/.test(measurer), "measurer contract");
   check("and reads the helper's own branch refusal as evidence rather than as a stop", /REFUSES/.test(measurer) && /DETACHED HEAD/.test(measurer) && /NOT a stop for you/.test(measurer), "measurer contract");
   check("while the roles that must stay on the branch are still told to", /branch --show-current/.test(cfg.contracts.fixer) && /branch --show-current/.test(cfg.contracts.reviewer) && /branch --show-current/.test(cfg.contracts.peer), "role contracts");
-  // A measurement creates nothing: `wt-enter` is given no base ref to create a
-  // branch from. And it has a way into the worktree for the case the helper
-  // refuses to print one, which is the case it was sent to read.
-  check("and the measurer creates nothing — no base ref — but can still reach a worktree the helper refused to enter", !measurer.includes("'main'") && /git -C/.test(measurer), "measurer contract");
+  // A measurement brings no branch into being: `wt-enter` is given no base ref,
+  // and without one it refuses to create the branch rather than checking out an
+  // empty tree. And the contract has a way into the worktree for the case the
+  // helper refuses to print one, which is the case it was sent to read.
+  check("and the measurer is handed no base ref, so the helper cannot create the branch — but it can still reach a worktree the helper refused to enter", !measurer.includes("'main'") && /git -C/.test(measurer), "measurer contract");
 
   const n = legOk + legFail - before;
   check(`batch contract checks ran all ${BATCH_CONTRACT_CHECKS}`, n === BATCH_CONTRACT_CHECKS, `ran ${n}`);
