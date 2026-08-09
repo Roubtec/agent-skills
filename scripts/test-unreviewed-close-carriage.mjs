@@ -245,9 +245,9 @@ const cycleResult = (extra) => ({
   // that its statement still ships verbatim: it reads no surrounding guard, so
   // it does not establish which arm of the dispatch holds it.
   const dispatchSrc = readFileSync(join(workflows, "wf-address-tasks.js"), "utf8");
-  const APPLIED = /deliverable\.push\(\{ task, result: \{ \.\.\.result, notes: verdict\.notes \|\| result\.notes, \.\.\.collisionReviewedRecord\(result\), \.\.\.collisionReReviewFlakeRecord\(result, verdict\) \} \}\);/;
+  const APPLIED = /deliverable\.push\(\{ task, result: \{ \.\.\.result, notes: verdict\.notes \|\| result\.notes, \.\.\.freshAssessments, \.\.\.collisionReviewedRecord\(result\), \.\.\.collisionReReviewFlakeRecord\(result, verdict\) \} \}\);/;
   check("the collision dispatch's delivering push spreads the correction and the re-review's own record into the result it delivers", APPLIED.test(dispatchSrc), "wf-address-tasks.js");
-  const RE_REVIEW_CALL = /await agent\(collisionReReviewPrompt\(task, remote, peerMode\), \{ label: `re-review:\$\{task\.slug\}`, schema: COLLISION_RE_REVIEW_SCHEMA \}\)/;
+  const RE_REVIEW_CALL = /await agent\(collisionReReviewPrompt\(task, remote, peerMode, standingDeviations\), \{ label: `re-review:\$\{task\.slug\}`, schema: COLLISION_RE_REVIEW_SCHEMA \}\)/;
   check("and its re-review runs the extended brief under the extended schema", RE_REVIEW_CALL.test(dispatchSrc), "wf-address-tasks.js");
 }
 

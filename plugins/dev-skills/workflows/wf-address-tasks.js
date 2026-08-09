@@ -2609,10 +2609,60 @@ const COLLISION_RE_REVIEW_SCHEMA = {
   required: [...CYCLE_REVIEW_SCHEMA.required, "flakeRecord"],
 };
 
-function collisionReReviewPrompt(task, remote, peerMode) {
-  return `${cycleReviewPrompt(taskCycleConfig(task, remote, peerMode), { round: 1, packet: null, artifactDir: "", tier: "delivery" })}
+// The deviations standing on the branch's cycle result are handed in, so the
+// one stage that sees the POST-rename tree is the one that judges them. The
+// deconfliction renamed a file or an exported symbol on purpose, and a
+// deviation's text is the implementer's prose naming what it delivered —
+// commonly that same file or symbol — so a brief shown none of them lets the PR
+// lead with a deviation naming something the branch no longer contains, under a
+// verdict formed against the pre-rename tree.
+//
+// The block itself is `cycleReviewPrompt`'s, rendered from inside the mirrored
+// section and unreachable from out here. It tells the reviewer outright that the
+// round does not pass while a standing deviation is unassessed, so showing the
+// deviations at all commits this path to that gate — see
+// `collisionDeviationCoverage`, which applies it. The addition below only
+// restates the CONSEQUENCE this path has and the cycle does not (a hold, not
+// another round) and names the staleness this pass exists to catch; the
+// restatement itself is out of scope here, since only a fixer may restate a
+// deviation and this path deliberately has none.
+function collisionReReviewPrompt(task, remote, peerMode, deviations) {
+  const standing = Array.isArray(deviations) ? deviations : [];
+  return `${cycleReviewPrompt(taskCycleConfig(task, remote, peerMode), { round: 1, packet: null, artifactDir: "", tier: "delivery", deviations: standing })}
 
-One addition to the flake rule above: no pass follows this one, so a failure your own validation run hit and you are passing over as evidenced-unrelated MUST come back in \`flakeRecord\` — what failed, the ACTIVE follow-up task you tied it to, and the evidence; leave it empty otherwise. You commit nothing yourself, so a failure you can tie to no ACTIVE task stays blocking (\`pass: false\`), exactly as that rule says.`;
+One addition to the flake rule above: no pass follows this one, so a failure your own validation run hit and you are passing over as evidenced-unrelated MUST come back in \`flakeRecord\` — what failed, the ACTIVE follow-up task you tied it to, and the evidence; leave it empty otherwise. You commit nothing yourself, so a failure you can tie to no ACTIVE task stays blocking (\`pass: false\`), exactly as that rule says.${standing.length ? `
+
+And one to the deviations block above. Those deviations were written BEFORE the deconfliction rename you are reviewing, so read each against the tree as it now stands: one whose text names a file, path, or symbol the rename moved has gone stale, and a stale deviation is an issue to RAISE (\`pass: false\`, naming the text and what it now says wrongly) — never one to rewrite. You commit nothing here and no fixer follows you; restating a deviation is a fixer's job, not yours. The block's assessment rule holds on this path with a different consequence than it has inside a cycle: leaving a standing deviation unassessed costs no round, because no round follows — the branch is HELD before its PR instead, and a human picks it up. So do not conform, reword, or drop one to clear that gate; assess every one of them, or say why you cannot in \`issues\`.` : ""}`;
+}
+
+// The reviewer's half of report-don't-correct on the one pass that runs with no
+// cycle around it, and the decision this path owes: an incomplete assessment
+// HOLDS the branch.
+//
+// The alternative was a brief that does not claim the gate, and it is not
+// available: the deviations block lives inside the byte-mirrored section, states
+// "this round does not pass while one of them is unassessed" as a flat fact, and
+// cannot be edited from out here — so a path that showed the deviations and
+// declined to enforce would have to contradict its own brief a paragraph later.
+// Enforcing also matches every other degraded arm of this dispatch: an answer
+// this stage cannot use holds the branch rather than delivering it.
+//
+// Same usability test as `runReviewCycle`'s — an in-spec-route judgment and a
+// recommendation that reads as one of the two verdicts, first usable entry per
+// deviation winning — plus one narrowing the cycle applies on its way out rather
+// than at the gate: an entry counts only for a deviation that STILL STANDS. The
+// cycle's result contract filters its raw list that way before publishing it;
+// nothing downstream of this stage filters again, so the filter is here.
+function collisionDeviationCoverage(deviations, verdict) {
+  const standing = new Set(deviations);
+  const entries = verdict && Array.isArray(verdict.deviationAssessments) ? verdict.deviationAssessments : [];
+  const usable = new Map();
+  for (const a of entries) {
+    if (!a || typeof a.deviation !== "string" || !standing.has(a.deviation)) continue;
+    if (!String(a.inSpecRoute || "").trim() || !cycleDeviationVerdict(a.recommendation)) continue;
+    if (!usable.has(a.deviation)) usable.set(a.deviation, a);
+  }
+  return { assessments: [...usable.values()], unassessed: deviations.filter((d) => !usable.has(d)) };
 }
 
 // Publishes the record the re-review returned. `recordOnly` speaks for the
@@ -2838,17 +2888,58 @@ async function settleWaveCollisions({ heldTasks, waveCollisions, wave, defaultBa
       // gate this load-bearing says so.) The brief, its stated tier, and the
       // `flakeRecord` recording delta live in `collisionReReviewPrompt` /
       // `COLLISION_RE_REVIEW_SCHEMA`.
-      const verdict = await agent(collisionReReviewPrompt(task, remote, peerMode), { label: `re-review:${task.slug}`, schema: COLLISION_RE_REVIEW_SCHEMA });
-      if (verdict && verdict.pass && !verdict.emptyDiffFlag) {
+      //
+      // The deviations still standing on the cycle result go with it, and the
+      // assessments come back replacing the carried ones: those were formed
+      // against the pre-rename tree, and `prPrompt` leads the PR body with them.
+      // A deviation the reviewer leaves unassessed holds the branch — the gate
+      // its own brief states (`collisionDeviationCoverage`).
+      const standingDeviations = Array.isArray(result.deviations) ? result.deviations : [];
+      const verdict = await agent(collisionReReviewPrompt(task, remote, peerMode, standingDeviations), { label: `re-review:${task.slug}`, schema: COLLISION_RE_REVIEW_SCHEMA });
+      const reviewed = !!(verdict && verdict.pass && !verdict.emptyDiffFlag);
+      // The verdict reaches the coverage only through `reviewed`, which is
+      // `runReviewCycle`'s own rule for the same field: it records the
+      // reviewer's half on a PASSING round alone, "an assessment from a round
+      // that failed judged a packet the fixer has since changed". So a failing
+      // re-review supplies no assessments here either, whatever it returned.
+      const coverage = collisionDeviationCoverage(standingDeviations, reviewed ? verdict : null);
+      // The replacement rides EVERY exit past the re-scan, not the delivering
+      // one alone: the batch Summary flattens EVERY result's
+      // `deviationAssessments` — held records included — into the one list the
+      // maintainer reads. So a record naming a deviation unassessed, or handing
+      // one back under the reviewer's findings, while still carrying the
+      // pre-rename cycle's assessment of it would put an obsolete
+      // RATIFY/CONFORM in that list under the very deviation nobody has judged
+      // since the rename. Past the re-scan every exit runs on the same
+      // conservative bias the re-review above does: which branch the resolver
+      // renamed is a claim this stage cannot check, so every branch of a
+      // cleared clash is treated as changed and none of them ships a pre-rename
+      // in-spec-route judgment and recommendation. Not `runReviewCycle`'s
+      // ground for emptying its own — there the fixer demonstrably changed the
+      // tree. The hold arms BEFORE that point keep what they carried, no
+      // post-rename tree having been established for them.
+      // Carrying this pass's usable assessments is what the partial-coverage
+      // case needs anyway: the deviations it DID assess get their fresh half,
+      // and the rest get none — as does every deviation on a failed pass, left
+      // standing and unjudged rather than judged against a tree that is gone.
+      // Guarded on there being standing deviations at all, so a branch with none
+      // keeps what it carried untouched by a stage that asked about nothing.
+      const freshAssessments = standingDeviations.length ? { deviationAssessments: coverage.assessments } : {};
+      if (reviewed && !coverage.unassessed.length) {
         // A pass here is a fresh reviewer's read of the whole branch, so it
         // settles the one claim the cycle's `recordOnly` can no longer make —
         // see `collisionReviewedRecord`. Only that claim: the record and its note
         // still ride to the PR body, unchanged otherwise — unless this pass's own
         // run deferred a failure, whose record then supersedes it (see
         // `collisionReReviewFlakeRecord`).
-        deliverable.push({ task, result: { ...result, notes: verdict.notes || result.notes, ...collisionReviewedRecord(result), ...collisionReReviewFlakeRecord(result, verdict) } });
+        deliverable.push({ task, result: { ...result, notes: verdict.notes || result.notes, ...freshAssessments, ...collisionReviewedRecord(result), ...collisionReReviewFlakeRecord(result, verdict) } });
+      } else if (reviewed) {
+        // `freshAssessments` is spread AFTER the carried record on both hold
+        // arms, so what a record reports assessed and what it reports
+        // unassessed always speak for the same pass.
+        held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "the deconflicted branch passed fresh re-review but left a deviation from a LOCKED decision unassessed, so the PR would lead with the implementer's half of it alone; held before PR delivery — re-review this branch and record the in-spec route and a RATIFY/CONFORM recommendation for each deviation named below, without conforming, rewording, or dropping it", unassessedDeviations: coverage.unassessed, collisions: related, ...cycleCarried(result), ...freshAssessments });
       } else {
-        held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "the deconflicted branch did not pass fresh re-review; held before PR delivery", outstanding: verdict ? verdict.issues : null, collisions: related, ...cycleCarried(result) });
+        held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "the deconflicted branch did not pass fresh re-review; held before PR delivery", outstanding: verdict ? verdict.issues : null, collisions: related, ...cycleCarried(result), ...freshAssessments });
       }
     }
   }

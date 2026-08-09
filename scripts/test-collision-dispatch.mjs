@@ -60,7 +60,7 @@ function check(name, cond, detail) {
 // it — an edit that drops one, or a guard that swallows a throw, would pass.
 // Counting the oks too lets the run assert it executed the whole suite. Bump
 // this deliberately when adding or removing a check; the number is the assertion.
-const EXPECTED_CHECKS = 110;
+const EXPECTED_CHECKS = 183;
 
 async function scenario(name, fn) {
   try {
@@ -115,9 +115,9 @@ const PASS_REVIEW = { pass: true, issues: [], notes: "rename reads clean", flake
 const THROWS = Symbol("agent throws");
 
 const mkTask = (slug) => ({ slug, branch: `task/${slug}`, base: "main", path: `tasks/${slug}.md`, content: `# ${slug}\n` });
-const mkHeld = (slug) => ({
+const mkHeld = (slug, extra) => ({
   task: mkTask(slug),
-  result: { slug, branch: `task/${slug}`, status: "ready", notes: "cycle notes", rounds: 2, openQuestions: [], deviations: [], peerRounds: 1, artifactDir: "/tmp/art" },
+  result: { slug, branch: `task/${slug}`, status: "ready", notes: "cycle notes", rounds: 2, openQuestions: [], deviations: [], peerRounds: 1, artifactDir: "/tmp/art", ...extra },
 });
 
 const NAME = "src/shared.ts";
@@ -412,6 +412,10 @@ await scenario("re-review failures", async () => {
     check(`${name} → the renamed side is held`, JSON.stringify(slugs(out.held)) === JSON.stringify(["a"]), JSON.stringify(slugs(out.held)));
     check(`${name} → the hold names the re-review`, /fresh re-review/.test(out.held[0].detail), out.held[0].detail);
     check(`${name} → the cleared untouched side still delivers`, JSON.stringify(slugs(out.deliverable)) === JSON.stringify(["b"]));
+    // The too-strict control for the assessment carriage on this arm: a branch
+    // with no standing deviation is a branch this stage asked about nothing, so
+    // it grows no assessments key it did not already have.
+    check(`${name} → and a branch with no standing deviation grows no assessments key`, !("deviationAssessments" in out.held[0]), JSON.stringify(Object.keys(out.held[0])));
   }
 });
 
@@ -456,7 +460,179 @@ await scenario("branch in two clashes", async () => {
   check("two clashes → the held pair's clash is the surviving one", out.held.every((h) => h.collisions.length === 1 && h.collisions[0].name === "Widget"));
 });
 
-// 11. Source-level properties the scenarios cannot see. The first is what makes
+// --- Deviation state across the re-review ---------------------------------
+//
+// A deconfliction rename changes a file path or an exported symbol on purpose,
+// and a deviation's text is the implementer's prose naming what it delivered —
+// commonly that same file or symbol. The cycle's own reviewer judged that text
+// against the PRE-rename tree; the re-review is the only stage that ever sees
+// the post-rename one. So it is shown the standing deviations, its assessments
+// replace the carried ones, and the gate its brief states — a standing deviation
+// left unassessed does not pass — is applied here as a HOLD, there being no
+// round to spend instead.
+
+const DEVIATION = "Delivered the helper as src/shared.ts instead of the LOCKED src/shared-config.ts: the generator owns that path.";
+const OTHER_DEVIATION = "Skipped the LOCKED integration test: its fixture service is unreachable from CI.";
+const PRE_RENAME = { deviation: DEVIATION, inSpecRoute: "none — the generator owns the locked path", recommendation: "RATIFY — the constraint is real" };
+const POST_RENAME = { deviation: DEVIATION, inSpecRoute: "none before the rename; the locked path is free now", recommendation: "CONFORM — the rename freed the locked path" };
+const DEVIATING = (extra) => mkHeld("a", { deviations: [DEVIATION], deviationAssessments: [PRE_RENAME], ...extra });
+const reviewOf = (extra) => ({ pass: true, issues: [], notes: "rename reads clean", flakeRecord: "", ...extra });
+const briefFor = (out, slug) => (out.calls.find((c) => c.label === `re-review:${slug}`) || {}).prompt || "";
+const DEVIATIONS_HEADING = "Deviations from LOCKED decisions standing on this packet";
+
+// 11. The deviations reach the reviewer, and its answer — not the cycle's —
+//     reaches the PR body.
+await scenario("standing deviation assessed by the re-review", async () => {
+  const out = await run({
+    held: [DEVIATING(), mkHeld("b")],
+    collisions: [clash(["task/a", "task/b"])],
+    packets: { resolution: renamed(["task/a"]), rescan: { collisions: [] }, reviews: { a: reviewOf({ deviationAssessments: [POST_RENAME] }) } },
+  });
+  const brief = briefFor(out, "a");
+  check("deviation shown → the re-review brief carries the standing deviation VERBATIM", brief.includes(JSON.stringify(DEVIATION)), brief.slice(-400));
+  check("deviation shown → the brief asks for the reviewer's half by name", brief.includes(DEVIATIONS_HEADING) && /deviationAssessments/.test(brief));
+  // The gate the brief asserts, and the consequence this path has instead of a
+  // round. Both must be there: the block's claim is rendered from inside the
+  // mirrored section, and a path that shows it while delivering an unassessed
+  // deviation anyway would be prose outrunning enforcement.
+  check("deviation shown → the brief states the unassessed gate", /does not pass while one of them is unassessed/.test(brief), "brief");
+  check("deviation shown → and states THIS path's consequence, a hold rather than another round", /the branch is HELD before its PR instead/.test(brief), "brief");
+  check("deviation shown → and asks for staleness to be RAISED, not rewritten", /gone stale/.test(brief) && /never one to rewrite/.test(brief), "brief");
+  check("deviation assessed → the branch delivers", JSON.stringify(slugs(out.deliverable)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(out.deliverable)));
+  const a = out.deliverable.find((d) => d.task.slug === "a");
+  check("deviation assessed → the delivered result carries the POST-rename assessment", JSON.stringify(a.result.deviationAssessments) === JSON.stringify([POST_RENAME]), JSON.stringify(a.result.deviationAssessments));
+  check("deviation assessed → and no assessment formed before the rename", !JSON.stringify(a.result.deviationAssessments).includes(PRE_RENAME.recommendation), JSON.stringify(a.result.deviationAssessments));
+  check("deviation assessed → the deviation TEXT is left alone (only a fixer may restate one)", JSON.stringify(a.result.deviations) === JSON.stringify([DEVIATION]), JSON.stringify(a.result.deviations));
+});
+
+// 12. THE TOO-STRICT CONTROL for the whole feature: a branch with no standing
+//     deviations renders no block, is asked for nothing, and delivers with
+//     whatever it carried untouched.
+await scenario("no standing deviations", async () => {
+  const carried = [{ deviation: "an entry no standing deviation matches", inSpecRoute: "n/a", recommendation: "RATIFY — stale" }];
+  const out = await run({
+    held: [mkHeld("a", { deviationAssessments: carried }), mkHeld("b")],
+    collisions: [clash(["task/a", "task/b"])],
+    packets: { resolution: renamed(["task/a"]), rescan: { collisions: [] } },
+  });
+  check("no deviations → both sides deliver exactly as before", JSON.stringify(slugs(out.deliverable)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(out.deliverable)));
+  check("no deviations → the brief renders no deviations block at all", !briefFor(out, "a").includes(DEVIATIONS_HEADING) && !briefFor(out, "b").includes(DEVIATIONS_HEADING));
+  check("no deviations → and no gate claim the path would then have to keep", !/does not pass while one of them is unassessed/.test(briefFor(out, "a")) && !/the branch is HELD before its PR instead/.test(briefFor(out, "a")), "brief");
+  const a = out.deliverable.find((d) => d.task.slug === "a");
+  check("no deviations → the dispatch touches the carried assessments not at all", JSON.stringify(a.result.deviationAssessments) === JSON.stringify(carried), JSON.stringify(a.result.deviationAssessments));
+  const b = out.deliverable.find((d) => d.task.slug === "b");
+  check("no deviations → and invents no assessments key on a result that had none", !("deviationAssessments" in b.result), JSON.stringify(Object.keys(b.result)));
+});
+
+// 13. The reviewer raises the deviation's staleness as an issue. It is the
+//     ordinary failed-re-review arm — the point is that a reviewer SHOWN the
+//     deviation can now reach it at all, and that the arm carries no assessment
+//     of it onward either way.
+await scenario("re-review raises the deviation as stale", async () => {
+  const issue = { claim: `the deviation names src/shared.ts, which the deconfliction renamed to src/shared-b.ts; its text no longer describes this branch` };
+  const out = await run({
+    held: [DEVIATING(), mkHeld("b")],
+    collisions: [clash(["task/a", "task/b"])],
+    // The failing pass volunteers a usable entry of its own, so the assertion
+    // below cannot pass merely because the reviewer returned none.
+    packets: { resolution: renamed(["task/a"]), rescan: { collisions: [] }, reviews: { a: { pass: false, issues: [issue], notes: "", flakeRecord: "", deviationAssessments: [POST_RENAME] } } },
+  });
+  check("stale deviation → the branch is held, not delivered", JSON.stringify(slugs(out.held)) === JSON.stringify(["a"]) && JSON.stringify(slugs(out.deliverable)) === JSON.stringify(["b"]), JSON.stringify(slugs(out.held)));
+  check("stale deviation → the hold names the re-review and carries the finding", /fresh re-review/.test(heldBySlug(out, "a").detail) && JSON.stringify(heldBySlug(out, "a").outstanding) === JSON.stringify([issue]), JSON.stringify(heldBySlug(out, "a")));
+  // Neither assessment may ride this arm. The pre-rename one because the batch
+  // Summary flattens held records' `deviationAssessments` too, so it would put
+  // an obsolete RATIFY in front of the maintainer under the very deviation this
+  // pass just called stale; the failing pass's own because `runReviewCycle`
+  // accepts the reviewer's half on a PASSING round alone. The deviation reaches
+  // the human standing and unjudged, which is what an exit no round approved
+  // has to say.
+  check("stale deviation → the hold carries no assessment: not the pre-rename one, not the failing pass's own", JSON.stringify(heldBySlug(out, "a").deviationAssessments) === "[]", JSON.stringify(heldBySlug(out, "a").deviationAssessments));
+  check("stale deviation → while the deviation itself and the cycle record still ride", JSON.stringify(heldBySlug(out, "a").deviations) === JSON.stringify([DEVIATION]) && heldBySlug(out, "a").artifactDir === "/tmp/art" && heldBySlug(out, "a").rounds === 2, JSON.stringify(heldBySlug(out, "a").deviations));
+});
+
+// 14. THE NEW GATE. The reviewer passes the branch but leaves the standing
+//     deviation without a usable half of its own. Every shape the cycle's own
+//     gate rejects is rejected here, and the branch is held rather than
+//     delivering a deviation the maintainer would rule on knowing only what the
+//     implementer said.
+await scenario("re-review leaves the deviation unassessed", async () => {
+  const cases = [
+    ["no assessments field at all", reviewOf()],
+    ["an empty assessments array", reviewOf({ deviationAssessments: [] })],
+    ["an entry for a deviation that is not standing", reviewOf({ deviationAssessments: [{ ...POST_RENAME, deviation: OTHER_DEVIATION }] })],
+    ["an entry with no in-spec-route judgment", reviewOf({ deviationAssessments: [{ ...POST_RENAME, inSpecRoute: "  " }] })],
+    ["a hedged recommendation", reviewOf({ deviationAssessments: [{ ...POST_RENAME, recommendation: "UNSURE — needs investigation" }] })],
+    ["a recommendation refusing to choose", reviewOf({ deviationAssessments: [{ ...POST_RENAME, recommendation: "RATIFY or CONFORM — needs investigation" }] })],
+    ["a malformed entry", reviewOf({ deviationAssessments: [null, { inSpecRoute: "none", recommendation: "RATIFY — fine" }] })],
+  ];
+  for (const [name, review] of cases) {
+    const out = await run({
+      held: [DEVIATING(), mkHeld("b")],
+      collisions: [clash(["task/a", "task/b"])],
+      packets: { resolution: renamed(["task/a"]), rescan: { collisions: [] }, reviews: { a: review } },
+    });
+    check(`${name} → the branch does not deliver`, JSON.stringify(slugs(out.deliverable)) === JSON.stringify(["b"]), JSON.stringify(slugs(out.deliverable)));
+    const h = heldBySlug(out, "a");
+    check(`${name} → it is held as a collision-hold`, h && h.status === "collision-hold", JSON.stringify(out.held.map((x) => x.status)));
+    check(`${name} → the detail says what is missing and what to do next`, /left a deviation from a LOCKED decision unassessed/.test(h.detail) && /re-review this branch and record/.test(h.detail) && /without conforming, rewording, or dropping it/.test(h.detail), h.detail);
+    check(`${name} → the hold names the deviation the human must get an assessment for`, JSON.stringify(h.unassessedDeviations) === JSON.stringify([DEVIATION]), JSON.stringify(h.unassessedDeviations));
+    // The batch Summary flattens every result's assessments — held ones too —
+    // into one list. A record that says "unassessed" while shipping the
+    // pre-rename cycle's RATIFY for that same deviation puts an obsolete verdict
+    // in front of the maintainer under the exact deviation nobody has judged
+    // since the rename.
+    check(`${name} → and carries no assessment for it, the pre-rename one included`, JSON.stringify(h.deviationAssessments) === "[]", JSON.stringify(h.deviationAssessments));
+    check(`${name} → and still carries its cycle record`, h.artifactDir === "/tmp/art" && h.rounds === 2 && JSON.stringify(h.deviations) === JSON.stringify([DEVIATION]));
+  }
+});
+
+// 14b. Partial coverage: one of two standing deviations assessed. The hold names
+//      only the one still missing its half — and reports the halves it DOES
+//      carry from the same pass, so the record cannot say assessed and
+//      unassessed of one deviation at once.
+await scenario("re-review assesses one deviation of two", async () => {
+  const staleOther = { deviation: OTHER_DEVIATION, inSpecRoute: "none — CI cannot reach the fixture", recommendation: "RATIFY — the constraint is environmental" };
+  const out = await run({
+    held: [mkHeld("a", { deviations: [DEVIATION, OTHER_DEVIATION], deviationAssessments: [PRE_RENAME, staleOther] }), mkHeld("b")],
+    collisions: [clash(["task/a", "task/b"])],
+    packets: { resolution: renamed(["task/a"]), rescan: { collisions: [] }, reviews: { a: reviewOf({ deviationAssessments: [POST_RENAME] }) } },
+  });
+  check("partial coverage → the branch does not deliver", JSON.stringify(slugs(out.deliverable)) === JSON.stringify(["b"]), JSON.stringify(slugs(out.deliverable)));
+  check("partial coverage → the hold names only the unassessed one", JSON.stringify(heldBySlug(out, "a").unassessedDeviations) === JSON.stringify([OTHER_DEVIATION]), JSON.stringify(heldBySlug(out, "a").unassessedDeviations));
+  check("partial coverage → the hold carries THIS pass's half for the assessed one, and neither pre-rename entry", JSON.stringify(heldBySlug(out, "a").deviationAssessments) === JSON.stringify([POST_RENAME]), JSON.stringify(heldBySlug(out, "a").deviationAssessments));
+  check("partial coverage → both deviations were shown to the reviewer", briefFor(out, "a").includes(JSON.stringify(DEVIATION)) && briefFor(out, "a").includes(JSON.stringify(OTHER_DEVIATION)), "brief");
+});
+
+// 14c. What a covered branch PUBLISHES, which is exactly what the gate accepted:
+//      at most one entry per standing deviation, and none for anything else. A
+//      hedge riding to the maintainer beside the usable entry would reinstate in
+//      what ships the ambiguity the gate closed in what is checked.
+await scenario("only usable assessments are published", async () => {
+  const hedge = { ...POST_RENAME, recommendation: "UNSURE — on reflection" };
+  const foreign = { ...POST_RENAME, deviation: OTHER_DEVIATION };
+  const out = await run({
+    held: [DEVIATING(), mkHeld("b")],
+    collisions: [clash(["task/a", "task/b"])],
+    packets: { resolution: renamed(["task/a"]), rescan: { collisions: [] }, reviews: { a: reviewOf({ deviationAssessments: [POST_RENAME, hedge, foreign] }) } },
+  });
+  const a = out.deliverable.find((d) => d.task.slug === "a");
+  check("publication → the branch delivers", a !== undefined, JSON.stringify(slugs(out.deliverable)));
+  check("publication → exactly the one usable entry ships, hedge and foreign entry dropped", JSON.stringify(a.result.deviationAssessments) === JSON.stringify([POST_RENAME]), JSON.stringify(a.result.deviationAssessments));
+});
+
+// 14d. A branch held for any earlier reason is never asked, so the gate costs
+//      nothing on the paths that already hold — and cannot deliver one either.
+await scenario("still-colliding branch is never asked for assessments", async () => {
+  const out = await run({
+    held: [DEVIATING(), mkHeld("b")],
+    collisions: [clash(["task/a", "task/b"])],
+    packets: { resolution: renamed(["task/a"]), rescan: { collisions: [clash(["task/a", "task/b"])] } },
+  });
+  check("still colliding → no re-review is paid for", !labels(out.calls).some((l) => l.startsWith("re-review:")), JSON.stringify(labels(out.calls)));
+  check("still colliding → the hold is the refs one, not the assessment one", heldBySlug(out, "a").detail.includes("still in the refs") && !("unassessedDeviations" in heldBySlug(out, "a")), heldBySlug(out, "a").detail);
+});
+
+// 15. Source-level properties the scenarios cannot see. The first is what makes
 //     every scenario above speak for the shipped workflow at all: a dispatch the
 //     batch body no longer calls would pass all of them.
 {
@@ -489,6 +665,14 @@ await scenario("branch in two clashes", async () => {
   // belongs in the doc comment above the function, where it already lives.
   const at = body.indexOf("changedBranches");
   check("the dispatch reads no `changedBranches` off the resolver's packet", at === -1, body.slice(Math.max(0, at - 80), at + 80));
+  // The deviation carriage, pinned at the source because the scenarios above
+  // sample its behavior through a stubbed reviewer: the standing set is what the
+  // brief is built from, and the re-review's coverage is what the delivering
+  // push publishes. A dispatch that computed the coverage and delivered the
+  // carried assessments anyway would pass every scenario that never scripts a
+  // pre-rename entry.
+  check("the re-review is handed the branch's standing deviations", /collisionReReviewPrompt\(task, remote, peerMode, standingDeviations\)/.test(body), "dispatch body");
+  check("and the delivering push publishes the re-review's assessments, not the carried ones", /deviationAssessments: coverage\.assessments/.test(body) && /const coverage = collisionDeviationCoverage\(standingDeviations, reviewed \? verdict : null\);/.test(body), "dispatch body");
 }
 
 check(`the suite ran all ${EXPECTED_CHECKS} checks`, ok + failures === EXPECTED_CHECKS, `ran ${ok + failures}`);

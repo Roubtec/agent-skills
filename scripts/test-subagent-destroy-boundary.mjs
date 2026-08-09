@@ -324,6 +324,7 @@ const FIXTURES = {
     collisionReReviewPrompt: [
       ["collisionReReviewPrompt (remote)", (f) => f.collisionReReviewPrompt(task, true, "on")],
       ["collisionReReviewPrompt (no remote)", (f) => f.collisionReReviewPrompt(task, false, "on")],
+      ["collisionReReviewPrompt (standing deviation)", (f) => f.collisionReReviewPrompt(task, true, "on", deviations)],
     ],
   },
   "wf-address-review.js": {
