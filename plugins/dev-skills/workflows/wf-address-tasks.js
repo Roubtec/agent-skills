@@ -2487,7 +2487,7 @@ For each collision:
 3. Otherwise, on EACH branch you chose to change, rename the file and/or exported symbol plus every in-branch reference to it, to a clear name that is distinct from the original AND from any other renamed side — so two renamed branches cannot themselves re-collide on the new name. Regenerate anything derived from it (e.g. contracts). Run the project build / type-check — it MUST pass; if you redirect its output to a file, create a UNIQUE directory for that first, OUTSIDE every worktree (\`mktemp -d "\${TMPDIR:-/tmp}/collision-resolve.XXXXXX"\`), and write there — never a fixed shared scratchpad name (one session's agents share that directory, and two that both wrote \`<scratchpad>/verify.log\` once crossed results between worktrees), and never inside the worktree, which you are about to commit. Commit with a clear message. ${pushLine}
 4. Record the outcome with \`collision\` set to the exact \`name\` from the list above: \`renamed\` (with \`changedBranches\`, \`from\`, \`to\`, what you \`regenerated\`, and why that side) or \`blocked\` (with the reason; empty \`changedBranches\`).
 
-Do NOT open any PR and do NOT remove any worktree — the workflow re-scans the refs, re-reviews every held branch, and handles delivery. Return one resolution entry per collision: an empty packet is read as no result at all and holds every branch.`;
+Do NOT open any PR and do NOT remove any worktree — the workflow re-scans the refs, re-reviews the branches that re-scan clears, and handles delivery. Return one resolution entry per collision: an empty packet is read as no result at all and holds every branch.`;
 }
 
 // Common carrier for every post-cycle terminal result. Whatever terminal
