@@ -26,6 +26,13 @@
 // and the one every pass reaches at the delivery tier. Each clause names its
 // scenario's subject rather than its ordinal, for the reason stated just above.
 //
+// The packet MEASUREMENT is that same question read one step earlier — what may
+// enter the cycle at all. A pass's `clean` is its own word about its own
+// worktree, so an independent reading decides instead; and because three of
+// those exits have no reviewer round after the pass they conclude on, the
+// reading is taken when the packet RETURNS rather than folded into a later
+// round, which is what the confirmation-pass scenario pins.
+//
 // The workflows are runtime scripts (top-level await/return, injected
 // `agent`/`parallel`/`log` globals), so they cannot be imported. This evaluates
 // the ACTUAL shipped `review-cycle-core` section — no second copy — with those
@@ -65,7 +72,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 129;
+const CHECKS_PER_LEG = 148;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -117,17 +124,28 @@ function loadCycle(src, agent) {
 // direction is deliberate: both gates' failure mode is firing when they should
 // not, and a permissive check makes a broken gate visible as a concluded cycle
 // instead of hiding behind a scripted veto.
-function scriptedAgent(fixes, reviews, seen, closeOuts = [], records = []) {
+function scriptedAgent(fixes, reviews, seen, closeOuts = [], records = [], packets = []) {
   const fixQueue = [...fixes];
   const reviewQueue = [...reviews];
   const closeOutQueue = [...closeOuts];
   const recordQueue = [...records];
+  const packetQueue = [...packets];
   return async function agent(prompt, opts) {
     const label = (opts && opts.label) || "";
     if (label.startsWith("fix#")) {
       seen.fixPrompts.push(prompt);
       const p = fixQueue.shift();
       return p === undefined ? null : p;
+    }
+    // The packet measurement defaults PERMISSIVE for the diff checks' reason,
+    // and one of its own: every scenario in this suite drives a cycle whose
+    // packets are meant to be adopted, so a scripted refusal here would stop
+    // them all. A gate that stopped firing therefore shows up as a scenario
+    // that concluded, never as one hidden behind a scripted veto.
+    if (label.startsWith("packet#")) {
+      seen.packetPrompts.push(prompt);
+      const p = packetQueue.shift();
+      return p === undefined ? { measured: true, dirty: [], operation: "", detail: "scripted: clean and idle" } : p;
     }
     if (label.startsWith("review#")) {
       seen.reviewPrompts.push(prompt);
@@ -335,6 +353,17 @@ const confirmRecordOnlySilent = { ...PASS_PACKET, dispositions: [] };
 const CITED_NOTE = "the delivery run's only failure was the payments suite, which reproduces on the base; already queued as tasks/041-flaky-payments-suite.md, cited rather than re-filed";
 const confirmCitingActiveTask = { ...idle, flakeRecord: CITED_NOTE };
 
+// The readings the packet measurement can come back with. `CLEAN_READING` is
+// the scripted default's explicit twin, needed wherever a scenario places a
+// specific reading on a LATER pass and so must fill the earlier slot itself.
+const CLEAN_READING = { measured: true, dirty: [], operation: "", detail: "clean and idle" };
+const DIRTY_READING = { measured: true, dirty: [" M src/app.ts", "?? notes.txt"], operation: "", detail: "two uncommitted paths" };
+// The reading this whole measurement exists for: a tree left mid-cherry-pick
+// prints EMPTY porcelain, so `dirty` is empty and the operation marker is the
+// only thing that shows it. A porcelain-only check calls this worktree clean.
+const MID_OPERATION_READING = { measured: true, dirty: [], operation: "CHERRY_PICK_HEAD", detail: "a cherry-pick is still in progress; the porcelain is empty" };
+const UNMEASURED_READING = { measured: false, dirty: [], operation: "", detail: "git would not run in that path" };
+
 // A deviation from a LOCKED maintainer decision, and a pass that reports one.
 // Every other packet above carries `deviations: []`, so any of them following
 // this one is a pass that has stopped restating it — the claimed drop.
@@ -373,8 +402,8 @@ const deviateDeclining = (findingId) => ({
   dispositions: [{ findingId, finding: "f", origin: "reviewer", disposition: "declined", detail: "the deviation stands; the assessment is the reviewer's to supply" }],
 });
 
-async function run(src, { fixes, reviews, closeOuts, records, cycle }) {
-  const seen = { fixPrompts: [], reviewPrompts: [], closeOutPrompts: [], recordPrompts: [] };
+async function run(src, { fixes, reviews, closeOuts, records, packets, cycle }) {
+  const seen = { fixPrompts: [], reviewPrompts: [], closeOutPrompts: [], recordPrompts: [], packetPrompts: [] };
   // Deep-clone every scripted packet. The cycle MUTATES the question objects it
   // accumulates — that is how a retirement mark lands — and the packets above
   // are module-level literals shared by every scenario and BOTH workflow legs.
@@ -382,7 +411,7 @@ async function run(src, { fixes, reviews, closeOuts, records, cycle }) {
   // shared `Q1` and each later scenario silently exercises the volunteered-mark
   // STRIP path instead of the clean one it means to test.
   const clone = (v) => JSON.parse(JSON.stringify(v));
-  const { runReviewCycle } = loadCycle(src, scriptedAgent(clone(fixes), clone(reviews), seen, clone(closeOuts || []), clone(records || [])));
+  const { runReviewCycle } = loadCycle(src, scriptedAgent(clone(fixes), clone(reviews), seen, clone(closeOuts || []), clone(records || []), clone(packets || [])));
   const res = await runReviewCycle({ ...CYCLE, ...cycle });
   const questionOf = (id) => (res.openQuestions || []).find((x) => x && x.id === id);
   // The three states a claimed question can be in, as a CONSUMER sees them:
@@ -1259,6 +1288,73 @@ for (const name of WORKFLOWS) {
     check("and the exit still records the round's undisposed remarks beside it", (lit.res.undisposed || []).includes(REVIEWER_CAVEAT), JSON.stringify(lit.res.undisposed));
     const clean = await run(src, { fixes: [PASS_PACKET], reviews: [OK], cycle: { mode: "light" } });
     check("while a light conclusion over a clean delivery run carries no record at all", clean.res.verdict === "pass" && clean.res.recordOnly === undefined, `${clean.res.verdict}/${JSON.stringify(clean.res.recordOnly)}`);
+  });
+
+  // 30. The packet hard-check's MEASURING half. `clean` is the fixer's word
+  //     about its own worktree, and the precise failure the check exists to
+  //     contain survives it: a pass returning `clean: true` from a tree still
+  //     mid-rebase or mid-cherry-pick, which prints EMPTY porcelain, so the
+  //     self-report can be sincere and wrong with nobody but the fixer having
+  //     looked. So every packet the cycle ADOPTS is measured by a turn that did
+  //     not produce it, when the packet returns rather than on a later reviewer
+  //     round — three of the four conclusions have no reviewer round after the
+  //     pass they conclude on, the final confirmation pass first among them.
+  await scenario("30. every adopted packet is measured independently of the pass that produced it", async () => {
+    const dirty = await run(src, { fixes: [PASS_PACKET, fixOn("r1-1"), idle], reviews: [FAIL("r1"), OK], packets: [DIRTY_READING] });
+    check("a packet claiming `clean: true` from a measured-DIRTY worktree is refused", dirty.res.verdict === "error" && /measured that worktree as not clean/.test(dirty.res.detail || ""), `${dirty.res.verdict}/${dirty.res.detail}`);
+    check("and the refusal names the condition that failed and the response", /uncommitted path/.test(dirty.res.detail || "") && /redrive or resume that pass/.test(dirty.res.detail || ""), dirty.res.detail);
+    check("and no reviewer round was ever spent on that worktree", dirty.seen.reviewPrompts.length === 0, `${dirty.seen.reviewPrompts.length} review prompt(s)`);
+
+    // The criterion's hardest case, and the one a reviewer-borne reading cannot
+    // reach at all: the FINAL CONFIRMATION pass, which no reviewer round
+    // follows. Measured when its packet returns, before the terminal exit
+    // branches on it — an `idle` confirming packet is otherwise the cycle's
+    // `pass` verdict.
+    const midOp = await run(src, { fixes: [PASS_PACKET, idle], reviews: [OK], packets: [CLEAN_READING, MID_OPERATION_READING] });
+    check("a mid-operation worktree on the FINAL CONFIRMATION pass does not conclude the cycle", midOp.res.verdict === "error" && /CHERRY_PICK_HEAD/.test(midOp.res.detail || ""), `${midOp.res.verdict}/${midOp.res.detail}`);
+    check("even though its porcelain was empty, which a status-only check calls clean", /not idle/.test(midOp.res.detail || "") && JSON.stringify((midOp.res.packetChecks || []).at(-1).dirty) === "[]", JSON.stringify(midOp.res.packetChecks));
+    check("and the measurement ran on that pass, no reviewer round following it", midOp.seen.packetPrompts.length === 2 && midOp.seen.reviewPrompts.length === 1, `${midOp.seen.packetPrompts.length} measurement(s)/${midOp.seen.reviewPrompts.length} review prompt(s)`);
+
+    // Unknown is not clean, in both shapes it arrives in.
+    const unmeasured = await run(src, { fixes: [PASS_PACKET, idle], reviews: [OK], packets: [CLEAN_READING, UNMEASURED_READING] });
+    check("a reading that could not be TAKEN is not treated as clean", unmeasured.res.verdict === "error" && /could not be MEASURED/.test(unmeasured.res.detail || ""), `${unmeasured.res.verdict}/${unmeasured.res.detail}`);
+    check("and the result carries the unmeasured entry rather than reporting a clean finish", (unmeasured.res.packetChecks || []).at(-1).measured === false && (unmeasured.res.packetChecks || []).at(-1).pass === 2, JSON.stringify(unmeasured.res.packetChecks));
+
+    const dead = await run(src, { fixes: [PASS_PACKET, idle], reviews: [OK], packets: [CLEAN_READING, null] });
+    check("a measuring subagent that returned nothing is unmeasured too, never clean", dead.res.verdict === "error" && (dead.res.packetChecks || []).at(-1).measured === false && /returned nothing/.test((dead.res.packetChecks || []).at(-1).detail || ""), `${dead.res.verdict}/${JSON.stringify(dead.res.packetChecks)}`);
+
+    // The too-strict direction: a measured-clean cycle behaves exactly as it
+    // did, and every pass it adopted has a reading behind it.
+    const clean = await run(src, { fixes: [PASS_PACKET, fixOn("r1-1"), idle], reviews: [FAIL("r1"), OK] });
+    check("a measured-clean cycle concludes exactly as before", clean.res.verdict === "pass" && clean.seen.reviewPrompts.length === 2, `${clean.res.verdict}/${clean.seen.reviewPrompts.length} review prompt(s)`);
+    check("with one reading per adopted pass, the final confirmation pass included", clean.seen.packetPrompts.length === 3 && JSON.stringify((clean.res.packetChecks || []).map((p) => p.pass)) === "[1,2,3]" && (clean.res.packetChecks || []).every((p) => p.measured === true), JSON.stringify(clean.res.packetChecks));
+
+    // Independence is the property, not merely a second turn: a measurer shown
+    // the pass's own account has been handed the answer it exists to derive.
+    const SENTINEL = "the fixer's own account of what this pass did";
+    const opaque = await run(src, { fixes: [{ ...PASS_PACKET, summary: SENTINEL }, idle], reviews: [OK] });
+    const measurePrompt = opaque.seen.packetPrompts[0] || "";
+    check("the measuring turn is given no account of the pass whose worktree it judges", !measurePrompt.includes(SENTINEL), "measurement prompt");
+    check("and is asked for BOTH readings, the operation state being the one porcelain hides", /--porcelain/.test(measurePrompt) && /CHERRY_PICK_HEAD/.test(measurePrompt) && /prints EMPTY porcelain/.test(measurePrompt), "measurement prompt");
+    check("and told to observe only — never to repair the tree it is measuring", /OBSERVE ONLY/.test(measurePrompt) && /do NOT stage, commit, reset, clean, stash, abort/.test(measurePrompt), "measurement prompt");
+
+    // The free structural refusal still runs first, so a pass that says its own
+    // worktree is unclean costs no measuring turn.
+    const selfUnclean = await run(src, { fixes: [{ ...PASS_PACKET, clean: false }], reviews: [] });
+    check("a pass that self-reports unclean is refused for free, before any measuring turn", selfUnclean.res.verdict === "error" && selfUnclean.seen.packetPrompts.length === 0 && selfUnclean.res.packetChecks === undefined, `${selfUnclean.res.verdict}/${selfUnclean.seen.packetPrompts.length} measurement(s)`);
+
+    // The log rides every exit, the stopped ones included — `packetChecks` is
+    // the only place a consumer can see that no adopted packet went unmeasured.
+    const capped = await run(src, { fixes: [PASS_PACKET, PASS_PACKET], reviews: [FAIL("r1"), FAIL("r2")], cycle: { maxRounds: 2 } });
+    check("`packetChecks` rides a stopped exit too, one entry per adopted pass", capped.res.verdict === "review-cap" && (capped.res.packetChecks || []).length === 2, `${capped.res.verdict}/${JSON.stringify(capped.res.packetChecks)}`);
+
+    // And the other two conclusions no reviewer round follows.
+    const closed = await run(src, { fixes: [PASS_PACKET, closeOutFix("r1-1")], reviews: [FAIL("a wording nit")], cycle: { closeOut: "on" } });
+    check("the trivial-round close-out's concluding pass is measured before that exit branches on it", !!closed.res.closeOut && (closed.res.packetChecks || []).length === 2 && (closed.res.packetChecks || []).at(-1).pass === 2, JSON.stringify(closed.res.packetChecks));
+    const recorded = await run(src, { fixes: [PASS_PACKET, confirmRecordOnly], reviews: [OK], cycle: { maxRounds: 3 } });
+    check("and so is the record-only close's", !!recorded.res.recordOnly && (recorded.res.packetChecks || []).length === 2, JSON.stringify(recorded.res.packetChecks));
+    const lit = await run(src, { fixes: [PASS_PACKET], reviews: [OK], cycle: { mode: "light" } });
+    check("and the light conclusion's single pass, whose reviewer round it already had", lit.res.verdict === "pass" && (lit.res.packetChecks || []).length === 1, JSON.stringify(lit.res.packetChecks));
   });
 
   const ran = legOk + legFail;

@@ -249,6 +249,11 @@ const closeOutState = { passBase: "abc1234", edits: ["typo in a comment"], fixes
 // list of what the pass says is in it (see the builder), so this state is the
 // whole input.
 const recordOnlyState = { passBase: "abc1234" };
+// The packet measurement is handed the pass ORDINAL and nothing else, for the
+// record-only check's reason carried one step further: it is told nothing about
+// the pass whose worktree it measures, because the pass's `clean` self-report
+// is the very claim it exists to check independently.
+const packetCheckState = { pass: 2 };
 const fixStateRound1 = { ...fixState, round: 1, findings: null, artifactDir: "" };
 const reviewStateNoArtifact = { ...reviewState, round: 1, artifactDir: "" };
 
@@ -291,6 +296,10 @@ const cycleCases = {
   cycleRecordOnlyPrompt: [
     ["cycleRecordOnlyPrompt (standalone)", (f) => f.cycleRecordOnlyPrompt(cycleStandalone, recordOnlyState)],
     ["cycleRecordOnlyPrompt (batch/overridden)", (f) => f.cycleRecordOnlyPrompt(cycleOverridden, recordOnlyState)],
+  ],
+  cyclePacketCheckPrompt: [
+    ["cyclePacketCheckPrompt (standalone)", (f) => f.cyclePacketCheckPrompt(cycleStandalone, packetCheckState)],
+    ["cyclePacketCheckPrompt (batch/overridden)", (f) => f.cyclePacketCheckPrompt(cycleOverridden, packetCheckState)],
   ],
 };
 
