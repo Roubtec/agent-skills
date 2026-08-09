@@ -52,7 +52,7 @@ function check(name, cond, detail) {
 // it — an edit that drops one, or a guard that swallows a throw, would pass.
 // Counting the oks too lets the run assert it executed the whole suite. Bump
 // this deliberately when adding or removing a check; the number is the assertion.
-const EXPECTED_CHECKS = 97;
+const EXPECTED_CHECKS = 101;
 
 async function scenario(name, fn) {
   try {
@@ -301,6 +301,27 @@ await scenario("re-scan throws", async () => {
   check("re-scan throws → nothing delivers", out.deliverable.length === 0, JSON.stringify(slugs(out.deliverable)));
   check("re-scan throws → both branches held with the re-scan detail", JSON.stringify(slugs(out.held)) === JSON.stringify(["a", "b"]) && out.held.every((h) => h.status === "collision-hold" && /established nothing/.test(h.detail) && /by hand/.test(h.detail)), JSON.stringify(out.held.map((h) => h.detail)));
   check("re-scan throws → no re-review is paid for", !labels(out.calls).some((l) => l.startsWith("re-review:")), JSON.stringify(labels(out.calls)));
+});
+
+// 5e. The narrower shape of 5b's hole, and the one that costs deliveries: a
+//     three-branch clash whose re-scan malforms into a single entry naming only
+//     ONE of the held branches. That entry is attributable to somebody, so a
+//     "names at least one held branch" test reads the packet as usable — and the
+//     two branches it does not name then have an empty still-colliding set and
+//     BOTH deliver, each still carrying the value, which is 027's 3+ branch rule
+//     inverted. `COLLISION_SCHEMA` calls `branches` "the two or more branches
+//     that each independently added it", so a lone name is malformed by the
+//     scan's own contract and is evidence about nobody.
+await scenario("re-scan entry names one held branch", async () => {
+  const out = await run({
+    held: [mkHeld("a"), mkHeld("b"), mkHeld("c")],
+    collisions: [clash(["task/a", "task/b", "task/c"])],
+    packets: { resolution: renamed(["task/a"]), rescan: { collisions: [clash(["task/a"])] } },
+  });
+  check("one-branch re-scan entry → nothing delivers", out.deliverable.length === 0, JSON.stringify(slugs(out.deliverable)));
+  check("one-branch re-scan entry → all three branches held", JSON.stringify(slugs(out.held)) === JSON.stringify(["a", "b", "c"]), JSON.stringify(slugs(out.held)));
+  check("one-branch re-scan entry → every hold says the re-scan established nothing", out.held.length === 3 && out.held.every((h) => /established nothing/.test(h.detail) && /by hand/.test(h.detail)), JSON.stringify(out.held.map((h) => h.detail)));
+  check("one-branch re-scan entry → no re-review is paid for", !labels(out.calls).some((l) => l.startsWith("re-review:")), JSON.stringify(labels(out.calls)));
 });
 
 // 6. Fewer than two of a clash's branches in hand. A scan over ONE branch has no
