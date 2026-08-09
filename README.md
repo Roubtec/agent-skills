@@ -22,6 +22,7 @@ scripts/
   test-dc-helpers.sh                    # hermetic contract coverage for the disposable-clone helpers
   test-checkout-cleanliness-report.mjs  # regression coverage for the batch workflow's checkout report
   test-review-cycle-retirement.mjs      # behavior coverage for the review cycle's claim lifecycles (question retirement, locked-decision deviations)
+  test-storage-probe-target.mjs         # regression coverage for the batch workflow's df-probe targeting and throttle retention
   test-subagent-destroy-boundary.mjs    # renders every workflow subagent prompt and asserts the destroy boundary is in it (and that no copy of it, or of the finish-in-turn rule, has drifted)
   test-unreviewed-close-carriage.mjs    # asserts each consumer carries a cycle that concluded with no fresh reviewer through to the maintainer, and asserts the one consumer that can falsify part of that record corrects it
   verify-014-peer-strength-pin.md       # harness-neutral prompt: observe the peer step's pinned review strength (task 014)
