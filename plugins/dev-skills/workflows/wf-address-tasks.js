@@ -100,12 +100,35 @@ const BOOTSTRAP_SCHEMA = {
   properties: {
     ok: { type: "boolean" },
     blocker: { type: "string", description: "Why the batch cannot proceed (worktree roots unsafe, CONTAINER_NAME unset, wt-bootstrap missing). Empty when ok." },
-    wtBase: { type: "string", description: "Absolute path to this container's worktree base, `<repo>/.worktrees/$CONTAINER_NAME`." },
+    wtBase: { type: "string", description: "Absolute path to this container's worktree base, `<repo>/.worktrees/$CONTAINER_NAME`. Mandatory whenever `ok` is true: the batch aborts rather than probe an unknown filesystem." },
     remote: { type: "boolean", description: "True if push/PR is available (remote reachable); false means local-branch-only fallback." },
     availBytes: { type: "number", description: "Free bytes on the .worktrees mount, verbatim from wt-bootstrap (drives wave-width throttling)." },
   },
   required: ["ok"],
 };
+
+// `wtBase` is the path every later `df` probe is pointed at, and each probe is a
+// fresh agent with its own working directory — so an empty or relative base
+// measures whatever filesystem that agent happened to start in rather than the
+// `.worktrees` mount, and the storage throttle silently guards the wrong thing.
+// `wt-bootstrap` reports an absolute path by contract, so an `ok` bootstrap that
+// does not is a broken contract: refuse the batch instead of guessing a path
+// from the workflow's or an agent's working directory.
+//
+// This is deliberately the ONLY gate on the property, rather than also adding
+// `wtBase` to BOOTSTRAP_SCHEMA's `required`: an `ok: false` bootstrap has no
+// worktree base to report, and a schema-required key would still admit `""` and
+// `.worktrees` — so the second gate would add a case without adding enforcement.
+function validateBootstrapWtBase(boot) {
+  const raw = boot && typeof boot.wtBase === "string" ? boot.wtBase.trim() : "";
+  if (!raw) {
+    return { ok: false, wtBase: "", blocker: "Bootstrap contract violated: reported ok without a `wtBase`. wt-bootstrap must report an absolute worktree base (`<repo>/.worktrees/$CONTAINER_NAME`); the batch will not guess one." };
+  }
+  if (raw[0] !== "/") {
+    return { ok: false, wtBase: "", blocker: `Bootstrap contract violated: reported ok with a relative \`wtBase\` (${raw}). wt-bootstrap must report an absolute worktree base (\`<repo>/.worktrees/$CONTAINER_NAME\`); the batch will not resolve one against an agent's working directory.` };
+  }
+  return { ok: true, wtBase: raw, blocker: "" };
+}
 
 const PLAN_SCHEMA = {
   type: "object",
@@ -234,7 +257,7 @@ function bootstrapPrompt() {
 ${DESTROY_BOUNDARY}
 
 1. From the repo root, run \`wt-bootstrap\` (an image-baked helper on PATH). It performs the whole Session Bootstrap deterministically: verifies the worktree roots are container-local (never the host bind mount), prunes ONLY this container's orphaned worktrees under \`.worktrees/$CONTAINER_NAME/\`, sets up the container-local SSH→HTTPS remote rewrite, probes push access, and prints one JSON object.
-2. Map that JSON onto the structured result verbatim — \`ok\`, \`blocker\`, \`wtBase\`, \`remote\`, \`availBytes\` — with no reinterpretation. \`remote: false\` is NOT a blocker (the batch falls back to local branches and skips PRs).
+2. Map that JSON onto the structured result verbatim — \`ok\`, \`blocker\`, \`wtBase\`, \`remote\`, \`availBytes\` — with no reinterpretation. \`remote: false\` is NOT a blocker (the batch falls back to local branches and skips PRs). On \`ok: true\`, \`wtBase\` must be the absolute path the script printed: never a relative path, never one derived from your own working directory. The batch aborts without it rather than measure an unknown filesystem.
 3. If \`wt-bootstrap\` is not on PATH, the image predates it: return \`ok: false\` with blocker \`"image predates the wt-* helpers; rebuild the powbox image and relaunch"\`. Do not re-derive the checks by hand.
 4. On \`ok: false\` from the script, return its \`blocker\` verbatim (typical remedies it names: set CONTAINER_NAME, run \`enable-worktrees\`, rebuild/relaunch).`;
 }
@@ -252,7 +275,17 @@ function storageProbePrompt(wtBase) {
 
 ${DESTROY_BOUNDARY}
 
-Run \`df -B1 --output=avail ${shq(wtBase)}\` (POSIX fallback: \`df -kP\`, avail column, times 1024) and return the mount's free bytes as \`availBytes\`. If the path is missing or \`df\` fails, return \`availBytes: 0\`.`;
+Run \`df -B1 --output=avail ${shq(wtBase)}\` (POSIX fallback: \`df -kP\`, avail column, times 1024) and return the mount's free bytes as \`availBytes\`. Measure that exact path — do not substitute a relative path or one derived from your working directory. If the path is missing or \`df\` fails, return \`availBytes: 0\`.`;
+}
+
+// The storage throttle's retention rule, in one place so no probe site can relax
+// it: a reading counts only when it is a positive number, and anything else — no
+// result at all, a `df` that could not measure (0), a non-numeric or negative
+// value — keeps the previous reading. Stale-but-conservative beats dropping the
+// cap mid-batch, which is the ENOSPC the throttle exists to prevent.
+function nextAvailBytes(previous, reading) {
+  const bytes = reading && typeof reading.availBytes === "number" ? reading.availBytes : 0;
+  return bytes > 0 ? bytes : previous;
 }
 
 // Non-destructive cleanliness report for the SHARED main checkout. Every task
@@ -2672,6 +2705,15 @@ if (!boot || !boot.ok) {
 // than silently attempt a publish.
 const remote = boot.remote === true;
 
+// Before any task work starts, not at the first probe: an unusable worktree base
+// is a bootstrap failure, and discovering it three waves in would waste the whole
+// batch. `wtBase` is the only path the storage probes may measure.
+const bootWtBase = validateBootstrapWtBase(boot);
+if (!bootWtBase.ok) {
+  return { error: "Worktree bootstrap returned no usable absolute worktree base; batch not started.", blocker: bootWtBase.blocker };
+}
+const wtBase = bootWtBase.wtBase;
+
 // Pre-batch baseline of the SHARED main checkout (see MAIN_CHECKOUT_SCHEMA).
 // Observation only — a dirty start is the user's prerogative and never blocks
 // the batch; a null/unmeasured result just means the Summary report cannot
@@ -2774,7 +2816,7 @@ try {
   // earlier waves' pnpm-store growth, ccache, and build artifacts that worktree
   // reclaim does not return, so each subsequent wave boundary re-probes `df`
   // through a cheap agent and recomputes the cap from the fresh reading.
-  let availBytes = typeof boot.availBytes === "number" ? boot.availBytes : 0;
+  let availBytes = nextAvailBytes(0, boot);
   const widthCapFor = (bytes) => (bytes > 0 ? Math.max(1, Math.floor(bytes / PER_WORKTREE_BYTES)) : Infinity);
 
   for (let w = 0; w < plan.waves.length; w++) {
@@ -2810,12 +2852,12 @@ try {
 
     phase(`Wave ${w + 1} (${runnable.length} task${runnable.length === 1 ? "" : "s"})`);
     // Re-probe free space at each wave boundary after the first (see the wave-width
-    // comment above). A failed or unmeasurable probe keeps the previous reading —
-    // stale-but-conservative beats silently dropping the throttle mid-batch. A
-    // 1-task wave skips the probe: its cap can never throttle (widthCap >= 1).
+    // comment above); `nextAvailBytes` owns what a failed or unmeasurable probe
+    // does with the previous reading. A 1-task wave skips the probe: its cap can
+    // never throttle (widthCap >= 1).
     if (w > 0 && runnable.length > 1) {
-      const probe = await agent(storageProbePrompt(boot.wtBase || ".worktrees"), { label: `storage-probe:w${w + 1}`, schema: STORAGE_PROBE_SCHEMA, effort: "low" });
-      if (probe && typeof probe.availBytes === "number" && probe.availBytes > 0) availBytes = probe.availBytes;
+      const probe = await agent(storageProbePrompt(wtBase), { label: `storage-probe:w${w + 1}`, schema: STORAGE_PROBE_SCHEMA, effort: "low" });
+      availBytes = nextAvailBytes(availBytes, probe);
     }
     const widthCap = widthCapFor(availBytes);
     if (runnable.length > widthCap) {

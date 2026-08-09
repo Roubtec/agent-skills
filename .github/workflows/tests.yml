@@ -13,6 +13,7 @@ jobs:
       - run: bash scripts/test-gh-review-threads.sh
       - run: bash scripts/test-dc-helpers.sh
       - run: node scripts/test-checkout-cleanliness-report.mjs
+      - run: node scripts/test-storage-probe-target.mjs
       - run: node scripts/test-review-cycle-retirement.mjs
       - run: node scripts/test-subagent-destroy-boundary.mjs
       - run: node scripts/test-unreviewed-close-carriage.mjs
