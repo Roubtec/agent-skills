@@ -114,6 +114,7 @@ const mkHeld = (slug) => ({
 
 const NAME = "src/shared.ts";
 const clash = (branches, name = NAME) => ({ kind: "path", name, branches, detail: `both add ${name} — rename one side`, wave: 1 });
+const RESCAN_DETAIL = "re-scan: both branches still add it";
 const renamed = (changedBranches, collision = NAME) => ({ resolutions: [{ collision, action: "renamed", changedBranches, from: collision, to: "src/shared-b.ts", regenerated: "", reason: "fewer references" }] });
 
 async function run({ held, collisions, packets }) {
@@ -143,7 +144,10 @@ await scenario("unreflected rename", async () => {
   const out = await run({
     held: [mkHeld("a"), mkHeld("b")],
     collisions: [clash(["task/a", "task/b"])],
-    packets: { resolution: renamed(["task/a"]), rescan: { collisions: [clash(["task/a", "task/b"])] } },
+    // The re-scan's own clash object, distinguishable from the discovery one it
+    // is otherwise identical to, so the "carries the re-derived clash" check
+    // below can tell them apart at all.
+    packets: { resolution: renamed(["task/a"]), rescan: { collisions: [{ ...clash(["task/a", "task/b"]), detail: RESCAN_DETAIL }] } },
   });
   check("unreflected rename → nothing delivers", out.deliverable.length === 0, JSON.stringify(slugs(out.deliverable)));
   check("unreflected rename → both branches held", JSON.stringify(slugs(out.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(out.held)));
@@ -153,7 +157,7 @@ await scenario("unreflected rename", async () => {
     const h = heldBySlug(out, s);
     check(`unreflected rename → ${s}'s detail says the clash is still in the refs`, /still in the refs/.test(h.detail), h.detail);
     check(`unreflected rename → ${s}'s detail says what to do next`, /rename enough sides/.test(h.detail) && /re-review/.test(h.detail), h.detail);
-    check(`unreflected rename → ${s} carries the RE-DERIVED clash, not only the discovery one`, Array.isArray(h.collisions) && h.collisions.length === 1 && h.collisions[0].name === NAME);
+    check(`unreflected rename → ${s} carries the RE-DERIVED clash, not the discovery one`, Array.isArray(h.collisions) && h.collisions.length === 1 && h.collisions[0].name === NAME && h.collisions[0].detail === RESCAN_DETAIL, JSON.stringify(h.collisions));
     check(`unreflected rename → ${s} still carries its cycle record`, h.artifactDir === "/tmp/art" && h.rounds === 2);
   }
   check("unreflected rename → no re-review is paid for", !labels(out.calls).some((l) => l.startsWith("re-review:")), JSON.stringify(labels(out.calls)));
