@@ -42,11 +42,11 @@ Implement AFTER task 027a, which reworks this same dispatch: it re-derives the c
 ## Target files or areas
 
 - `plugins/dev-skills/workflows/wf-address-tasks.js` (out-of-section collision dispatch only).
-- A test harness for the collision dispatch. None exists: `scripts/test-review-cycle-retirement.mjs` evaluates only the marked `review-cycle-core` section, so the wave/collision code has never been driven as running code. 027a's validation needs the same harness; build it once, under whichever task lands first.
+- `scripts/test-collision-dispatch.mjs` — the harness 027a landed. It drives the shipped `settleWaveCollisions` directly with scripted resolver, re-scan, and re-review packets, so the dispatch already runs as code and this task extends that suite rather than building one. What it does not carry yet is deviation state: add a driver that gives a held branch's cycle result a standing `deviations` entry and asserts what the re-review is shown, what its `deviationAssessments` do to the delivered result, and that the brief this path renders says what this path enforces.
 
 ## Acceptance criteria
 
-- The collision re-review of a changed branch is shown the deviations still standing on that branch's cycle result.
+- The collision re-review is shown the deviations still standing on the cycle result of every branch it runs on.
 - A branch delivered out of the collision dispatch does not carry a `deviationAssessments` entry formed before the rename it just received.
 - A re-review that raises the deviation's staleness as an issue holds the branch rather than delivering it, with a detail that says what to do next.
 - The brief this path renders and the gate this path applies agree: either an unassessed standing deviation holds the branch, or the brief does not claim it does.
