@@ -203,7 +203,7 @@ const RESOLUTION_SCHEMA = {
         properties: {
           collision: { type: "string", description: "The exact `name` of the collision (from the guard's list) this entry resolves." },
           action: { type: "string", description: "renamed | blocked. `renamed` = a side was renamed, regenerated, and committed; `blocked` = the name must stay identical and cannot be changed without a design decision." },
-          changedBranches: { type: "array", items: { type: "string" }, description: "Branches actually modified + committed by this resolution — your account of the work, for the human reading a hold. It does NOT select who is re-reviewed: every held branch is re-reviewed before delivery, because this report cannot be checked. Empty when blocked." },
+          changedBranches: { type: "array", items: { type: "string" }, description: "Branches actually modified + committed by this resolution — your account of the work, for the run record. The dispatch reads nothing from it: it does NOT select who is re-reviewed, because every held branch is re-reviewed before delivery and this report cannot be checked. Empty when blocked." },
           from: { type: "string", description: "The original colliding name/path. Empty when blocked." },
           to: { type: "string", description: "The new name/path on the renamed side(s). Empty when blocked." },
           regenerated: { type: "string", description: "Derived files regenerated after the rename (e.g. 'contracts'), or empty if none." },
