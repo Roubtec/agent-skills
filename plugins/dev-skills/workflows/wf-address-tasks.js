@@ -2910,12 +2910,13 @@ async function settleWaveCollisions({ heldTasks, waveCollisions, wave, defaultBa
       // one back under the reviewer's findings, while still carrying the
       // pre-rename cycle's assessment of it would put an obsolete
       // RATIFY/CONFORM in that list under the very deviation nobody has judged
-      // since the rename. Past the re-scan is exactly where that is established:
-      // the clash is demonstrably gone, so the tree the cycle's reviewer judged
-      // is demonstrably not this one — the same fact `runReviewCycle` empties
-      // its own assessments on, so that "no exit ships a pre-change
-      // in-spec-route judgment and recommendation beside work no round
-      // approved". The hold arms BEFORE that point keep what they carried, no
+      // since the rename. Past the re-scan every exit runs on the same
+      // conservative bias the re-review above does: which branch the resolver
+      // renamed is a claim this stage cannot check, so every branch of a
+      // cleared clash is treated as changed and none of them ships a pre-rename
+      // in-spec-route judgment and recommendation. Not `runReviewCycle`'s
+      // ground for emptying its own — there the fixer demonstrably changed the
+      // tree. The hold arms BEFORE that point keep what they carried, no
       // post-rename tree having been established for them.
       // Carrying this pass's usable assessments is what the partial-coverage
       // case needs anyway: the deviations it DID assess get their fresh half,
