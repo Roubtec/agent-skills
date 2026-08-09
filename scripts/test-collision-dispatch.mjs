@@ -480,7 +480,15 @@ await scenario("branch in two clashes", async () => {
   // The structural property the scenarios can only sample: the dispatch takes no
   // decision at all off the resolver's account of what it touched. A scenario
   // covers the shapes it scripts; this covers the field.
-  check("the dispatch reads no `changedBranches` off the resolver's packet", !/changedBranches/.test(body), body.slice(body.indexOf("changedBranches") - 80, body.indexOf("changedBranches") + 80));
+  //
+  // It matches the bare identifier anywhere in the function, comments included,
+  // and that breadth is the point: a property-access pattern (`.changedBranches`)
+  // reads tighter but lets `const { changedBranches } = r` through, which is an
+  // ordinary refactor of exactly the access this branch removed. Absence of the
+  // name is the invariant, and it costs nothing to keep — the field's rationale
+  // belongs in the doc comment above the function, where it already lives.
+  const at = body.indexOf("changedBranches");
+  check("the dispatch reads no `changedBranches` off the resolver's packet", at === -1, body.slice(Math.max(0, at - 80), at + 80));
 }
 
 check(`the suite ran all ${EXPECTED_CHECKS} checks`, ok + failures === EXPECTED_CHECKS, `ran ${ok + failures}`);
