@@ -67,6 +67,7 @@ In that mode:
 - On the first non-trivial conflict, abort the current rebase and stop; do not leave conflict markers or an in-progress rebase for the parent agent.
 - If conflict resolution completes but validation cannot be repaired confidently, reset that disposable branch to its pre-rebase ref and stop.
 - Before returning, run `git clean -fd` to remove untracked leftovers (`git rebase --abort` and `git reset --hard` restore tracked files but leave `.orig`/build outputs) and confirm `git status --porcelain` is empty, so the parent can `git worktree remove` without `--force`.
+- **What these commands may reach.** Every `git reset --hard` and `git clean -fd` this mode runs — the restore after a stop, the pre-return clean, and the clean-stop that follows a restore — is scoped to the disposable chain branch currently being processed (the caller's guide branch) and to the worktree this invocation was pointed at: never a canonical task branch, never a remote ref, never a sibling worktree. `git clean -fd` is bounded to the tree it runs in; the ref-moving half is not — a worktree isolates the working tree, not the repository, so a `reset --hard` on the wrong branch reaches every sibling worktree through the shared `.git`.
 
 Do not infer this mode merely because the caller is a subagent.
 Without all three guarantees — explicit chain, explicit authorization, and disposable branches — use the normal interactive confirmation and stopping behavior.
