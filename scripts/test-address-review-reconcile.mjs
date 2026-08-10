@@ -350,7 +350,14 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // was lost before: the fork arm is always helper-free and uses the same stable
   // path, so a read stated only for the local-`T` arms leaves the one attach
   // with no helper alternative unable to resume at all.
-  const registrationRule = cases.slice(0, cases.indexOf("take the FIRST of these three arms"));
+  // Scoping means nothing if the anchor can vanish: `indexOf` answers -1 for an
+  // absent marker and `slice(0, -1)` would then hand every assertion below the
+  // WHOLE case block, degrading this into the "appears somewhere" check it
+  // exists to replace. Fail closed on the marker, as the declaration-prefix cut
+  // above does.
+  const armsAt = cases.indexOf("take the FIRST of these three arms");
+  if (armsAt < 0) throw new Error(`${SOURCE}: arm-list marker not found; the registration read cannot be scoped ahead of the arms`);
+  const registrationRule = cases.slice(0, armsAt);
   const readsRegistrations = /git worktree list/.test(registrationRule);
   const coversEveryArm = /any of the three arms below/.test(registrationRule);
   const reusesMatch = /REUSE it/.test(registrationRule);
