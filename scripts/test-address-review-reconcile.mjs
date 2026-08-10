@@ -1110,6 +1110,13 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
 // returning mid-rebase.
 {
   const brief = rebasePrompt("pre-fix", gathered({ reconcile: { outcome: "work" } }), "main");
+  // The same brief rendered for the OTHER working location. The mode decides
+  // where every command in it runs, so both renderings are read below.
+  const briefInWorktree = rebasePrompt(
+    "pre-fix",
+    gathered({ reconcile: { outcome: "work" }, locationMode: "worktree", worktree: "/w/.worktrees/c/pr-42" }),
+    "main",
+  );
   const resolves = /git rev-parse/.test(brief);
   const rebasesOntoTheOid = /rebase onto THAT OID, never onto the name/.test(brief);
   const namesTheHazard = /every range this run delegates afterwards is taken against `effectiveBase`/.test(brief);
@@ -1151,14 +1158,32 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // cannot reach are deliberately absent and are named in the builder's comment:
   // the parent map with its `--onto` form (one PR), and the pinned-base snapshot
   // ref (the pin is rebased onto, so HEAD keeps it reachable).
+  //
+  // Each clause is anchored to its IMPERATIVE, never to a noun it happens to
+  // contain, because a keyword survives the destruction of the instruction
+  // around it. A reviewer gutted three of these in a disposable clone with the
+  // whole suite still green: step 3 reduced to "Recovery refs live under
+  // refs/pre-rebase/ by convention; skip this step if it is inconvenient", the
+  // halt clause to "a `question` is optional and may be empty", and the final
+  // report sentence deleted outright (its field names occur elsewhere in the
+  // brief, in prose that orders nothing). So the recovery ref is paired with the
+  // order not to skip it, the halt with what its question must name, and the
+  // packet's field list is matched INSIDE the report sentence rather than
+  // anywhere in the brief.
+  const reportSentence = (brief.match(/Report `ok`[\s\S]*?`question` when you halted\./) || [""])[0];
   const nuggetClauses = {
-    "the recovery ref before the first replay": /refs\/pre-rebase\//.test(brief),
+    "saving the recovery ref before the first replay, and not skipping it": /git update-ref "refs\/pre-rebase\//.test(brief) && /do not skip it/.test(brief),
     "verifying the target is a commit, and the full OID it prints": /rev-parse --verify/.test(brief) && /never an abbreviation/.test(brief),
+    "the working location it runs in — verified first in a worktree, never switched inline":
+      /`cd` into it and verify `git rev-parse --show-toplevel` prints exactly that path/.test(briefInWorktree) &&
+      /STOP and report `ok: false`/.test(briefInWorktree) &&
+      /Do NOT create a worktree and do NOT switch branches/.test(brief),
     "the no-op reported as one, with no validation run on it": /noop: true/.test(brief) && /run no validation/.test(brief),
     "idempotence — why two points cannot double-apply": /cannot double-apply/.test(brief),
     "the delivery-tier validation after a replay": /the project's build AND its test suite/.test(brief),
-    "the halt reported with a maintainer-facing question": /`question`/.test(brief),
-    "the packet it hands back": ["effectiveBase", "recoveryRef", "validationPassed", "before", "after"].every((f) => brief.includes(f)),
+    "reporting the conflicts it resolved and the commits it skipped": /git rebase --skip/.test(brief) && /Narrate one line each in `detail`/.test(brief),
+    "the halt reported with a question naming the conflict it turns on": /report `halted: true` with a `question` naming the conflicting files, the offending commit/.test(brief),
+    "the packet it hands back": ["effectiveBase", "recoveryRef", "validationPassed", "before", "after"].every((f) => reportSentence.includes(f)),
     "and nothing else changed — no commits, no push, no PR mutation": /Change nothing else/.test(brief),
   };
   const absent = Object.entries(nuggetClauses).filter(([, present]) => !present).map(([name]) => name);
