@@ -125,6 +125,15 @@ function shippedWorkflows() {
 // qualifier window admits a hyphen ("that could change on-disk state") because
 // excluding one narrowed the clause below its own intent while closing nothing:
 // the negation the literal text fences out cannot be spelled with one.
+//
+// The addressing clause is the other pattern written long, for the opposite
+// reason: that clause states three things at once — the positive form, the glob
+// ban, and the unchecked-`cd` ban — so a copy keeping only the first would read
+// as compliant while dropping the two prohibitions the incident it exists for
+// actually turned on. The pattern therefore spans all three, joined by windows
+// too narrow to hold a verb rather than by wildcards, and matches each
+// prohibition through its own imperative, which is not something a permission
+// can be spelled with.
 const REQUIRED = [
   ["permitted set", /Permitted: reading, searching,[^\n]*read-only `git`\/`gh` queries/],
   ["forbidden set", /`rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`/],
@@ -134,6 +143,7 @@ const REQUIRED = [
   ["exemptions are granted, not self-selected", /the only exemptions — and only because this assignment names them/],
   ["worktree is not a blast radius", /A worktree is not a blast radius/],
   ["shared `.git` reaches every sibling worktree", /reach every sibling worktree through the shared `\.git`/],
+  ["a repository is addressed by path", /Address any repository other than [^\n]{0,40}BY PATH: `git -C <absolute path>`[^\n]{0,40}NEVER derive a working directory from a glob[^\n]{0,40}NEVER chain a state-changing git command after a `cd` whose success/],
   ["empirical verification is clone-only", /Empirical verification that [a-z -]+ state belongs ONLY in a disposable clone/],
   ["disposable-clone destination", /command -v dc-enter/],
   ["absolute-path fallback", /absolute path outside the repository — never a relative one/],
