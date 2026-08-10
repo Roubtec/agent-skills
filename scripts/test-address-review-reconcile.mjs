@@ -113,7 +113,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 83;
+const EXPECTED_CHECKS = 86;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -156,6 +156,11 @@ const REACHED_CYCLE = Symbol("nested review cycle reached");
 // This is the default because it is the common outcome, and because every
 // scenario written before the rebase points existed must keep meaning what it
 // meant — the gates under test are ahead of the rebase or indifferent to it.
+// The recovery ref is part of the fixture rather than optional decoration: the
+// brief saves it before anything is replayed and orders the step not to skip it,
+// the caller refuses to adopt a report without one, and the stops name it to the
+// maintainer — a fixture that omitted it would have this suite asserting a
+// promise it never made the report keep.
 const REBASE_NOOP = {
   ok: true,
   halted: false,
@@ -163,6 +168,7 @@ const REBASE_NOOP = {
   effectiveBase: "1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b",
   before: "cafebabe",
   after: "cafebabe",
+  recoveryRef: "refs/pre-rebase/feature/x/20260809-090000",
   validationPassed: true,
   detail: "already on the pinned base; nothing replayed",
 };
@@ -176,6 +182,7 @@ const REBASE_REPLAY = {
   effectiveBase: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c",
   before: "cafebabe",
   after: "d00dfeed",
+  recoveryRef: "refs/pre-rebase/feature/x/20260809-121314",
   validationPassed: true,
   detail: "replayed 2 commits onto the fresh base; build and tests passed",
 };
@@ -238,6 +245,22 @@ const CYCLE_REVERIFIED_RESTATING = {
   ...CYCLE_REVERIFIED,
   deviations: [DEVIATION],
   deviationAssessments: [{ deviation: DEVIATION, inSpecRoute: "the replay brought the flag with it", recommendation: "CONFORM — the in-spec route exists on this base" }],
+};
+// The other shape a two-cycle deviation set comes in: the re-verification states
+// a deviation of its OWN, so the merged result must carry BOTH, each beside the
+// assessment that names it. This fixture is what makes the fold's IDENTITY
+// observable rather than only the fold: where both cycles state the SAME
+// deviation, "folded to one" and "folded to nothing but the last one" are the
+// same observation, so an identity that returned a constant would pass while
+// collapsing every deviation to the last and every assessment to the last —
+// exactly what `review-cycle` forbids, since none may vanish with the loop's
+// last turn and no deviation may reach the maintainer carrying only the
+// implementer's half.
+const SECOND_DEVIATION = "put the retry loop in the request path where the locked decision names the queue; that queue does not exist on this base";
+const CYCLE_REVERIFIED_OWN_DEVIATION = {
+  ...CYCLE_REVERIFIED,
+  deviations: [SECOND_DEVIATION],
+  deviationAssessments: [{ deviation: SECOND_DEVIATION, inSpecRoute: "the queue lands with the follow-up", recommendation: "RATIFY — no in-spec route exists on this base either" }],
 };
 // A first cycle that CONCLUDED over a failed delivery run, on the flake rule's
 // evidenced-unrelated disposition, and over the one post-run commit that exit
@@ -916,16 +939,25 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // can pin a commit the base has moved past even same-repo. Both halves are
   // pinned: the base repository is the PR's own, and the ref is fetched and
   // resolved from what the fetch brought.
+  // And WHICH VALUE names that repository, which is the same hazard one step in:
+  // `gh repo view` with no repository argument answers for the repository the
+  // directory it runs in resolves to, so in the very fork-clone case this
+  // paragraph exists for it names the HEAD fork and the fetch lands on a
+  // same-named branch there. The PR's own URL is the explicit, already-resolved
+  // value that cannot drift with the working directory.
   const basePara = brief.split("\n\n").find((p) => p.includes("pr.baseOid")) || "";
   const readsBaseRepo = /base always lives in the repository the PR itself is in/.test(basePara);
   const notThePushRemote = /NOT this branch's push remote|not through this branch's push remote/.test(basePara);
+  const namesItFromThePrUrl = /this PR's OWN URL names/.test(basePara) && /you report as `pr\.url`/.test(basePara);
+  const refusesTheDirectoryDerivedRepo =
+    /Do not ask a bare `gh repo view/.test(basePara) && /answers for the repository the DIRECTORY it runs in/.test(basePara);
   const fetchesIt = /git fetch <the remote whose URL is that repository/.test(basePara) && /moving any branch/i.test(basePara);
   const resolvesTheFetch = /rev-parse --verify FETCH_HEAD\^\{commit\}/.test(basePara);
   const refusesTheTrackingRef = /remote-tracking ref is only as fresh as/.test(basePara);
   check(
-    "and resolves the base commit in the PR's OWN repository, freshly fetched, rather than through the branch's push remote or a remote-tracking ref",
-    readsBaseRepo && notThePushRemote && fetchesIt && resolvesTheFetch && refusesTheTrackingRef,
-    `base repository stated: ${readsBaseRepo}; push remote refused: ${notThePushRemote}; fetches the ref: ${fetchesIt}; resolves the fetch: ${resolvesTheFetch}; refuses a tracking ref: ${refusesTheTrackingRef}`,
+    "and resolves the base commit in the PR's OWN repository — named from the PR's URL, not from the directory `gh repo view` would answer for — freshly fetched, rather than through the branch's push remote or a remote-tracking ref",
+    readsBaseRepo && notThePushRemote && namesItFromThePrUrl && refusesTheDirectoryDerivedRepo && fetchesIt && resolvesTheFetch && refusesTheTrackingRef,
+    `base repository stated: ${readsBaseRepo}; push remote refused: ${notThePushRemote}; named from the PR url: ${namesItFromThePrUrl}; directory-derived repo refused: ${refusesTheDirectoryDerivedRepo}; fetches the ref: ${fetchesIt}; resolves the fetch: ${resolvesTheFetch}; refuses a tracking ref: ${refusesTheTrackingRef}`,
   );
 
   const stated = [...new Set([...brief.matchAll(/outcome:\s*"([^"]*)"/g)].map((m) => m[1]))].sort();
@@ -1054,6 +1086,34 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     failed.status === "rebase-validation-failed",
     JSON.stringify(failed.status),
   );
+  // The way back from a replay. Every stop past a successful point tells the
+  // maintainer the pre-rebase tip is saved at a named ref, so the report has to
+  // carry one: a successful rebase that names none has skipped the single
+  // `update-ref` the brief spells out, and adopting it would leave the run's
+  // notes silently dropping the sentence that promises a way back.
+  const unsaved = { ...REBASE_REPLAY };
+  delete unsaved.recoveryRef;
+  const noWayBack = await run(gathered(withWork), { rebase: unsaved });
+  check(
+    "a successful rebase that names no `refs/pre-rebase/` recovery ref stops the run, dispatching nothing",
+    noWayBack.status === "rebase-unsaved-recovery-ref" && noWayBack.seen.cycleOpts === null,
+    JSON.stringify({ status: noWayBack.status, cycle: noWayBack.seen.cycleOpts }),
+  );
+  // The rebase brief hands the delegated step the base repository's identity as
+  // this PR's own URL, which makes that field load-bearing rather than
+  // decorative: absent, the brief would interpolate `undefined` and the step
+  // would be back to deriving the repository from its working directory — the
+  // head fork in a fork clone. So it stops the run before any brief is built.
+  const urlless = gathered(withWork);
+  delete urlless.pr.url;
+  const noUrl = await run(urlless);
+  check(
+    "a gather that reports no PR url stops the run, since the rebase brief names the base repository from it",
+    noUrl.status === "error" &&
+      /url/.test((noUrl.result || {}).error || "") &&
+      noUrl.seen.agentLabels.join(",") === "gather",
+    JSON.stringify({ status: noUrl.status, error: (noUrl.result || {}).error, labels: noUrl.seen.agentLabels }),
+  );
   const off = await run(gathered(withWork), { args: "no-push no-rebase" });
   check(
     "`no-rebase` runs neither point and pins the base ref's commit as the review base, never its name",
@@ -1161,11 +1221,15 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       !spent.seen.agentLabels.includes("publish"),
     JSON.stringify({ status: spent.status, cycles: spent.seen.cycleCalls.length, labels: spent.seen.agentLabels }),
   );
+  // And the recovery ref it promises is the EXACT one the replay reported, not a
+  // clause a report without one drops on its way out: the note is the only place
+  // this stop tells the maintainer how to get the pre-rebase tip back.
   check(
     "and says so in terms of the cap and the rounds already spent, with the branch's recovery ref named",
     /12/.test((spent.result || {}).detail || "") &&
       /never raise/.test((spent.result || {}).detail || "") &&
-      /nothing was pushed/i.test((spent.result || {}).note || ""),
+      /nothing was pushed/i.test((spent.result || {}).note || "") &&
+      ((spent.result || {}).note || "").includes(`saved at \`${REBASE_REPLAY.recoveryRef}\``),
     JSON.stringify({ detail: (spent.result || {}).detail, note: (spent.result || {}).note }),
   );
   // The merge folds the two human-facing sets rather than concatenating them: a
@@ -1185,6 +1249,26 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       (rr.deviationAssessments || []).length === 1 &&
       (rr.deviationAssessments || [])[0].recommendation === CYCLE_REVERIFIED_RESTATING.deviationAssessments[0].recommendation,
     JSON.stringify({ deviations: rr.deviations, assessments: rr.deviationAssessments }),
+  );
+  // And the discriminating half of that: where the two cycles state DIFFERENT
+  // deviations, both reach the maintainer and each keeps its own assessment. The
+  // check above cannot see the difference between folding on the deviation's text
+  // and folding on nothing, because its two fixtures state the same deviation;
+  // this one fails outright if the identity stops telling two deviations apart.
+  const distinct = await run(gathered(withWork), {
+    cycles: [CYCLE_PASS, CYCLE_REVERIFIED_OWN_DEVIATION],
+    rebases: { "pre-fix": REBASE_NOOP, "pre-push": REBASE_REPLAY },
+  });
+  const dr = distinct.result || {};
+  check(
+    "two DIFFERENT deviations both survive the fold, oldest first, each still carrying the assessment that names it",
+    JSON.stringify(dr.deviations) === JSON.stringify([DEVIATION, SECOND_DEVIATION]) &&
+      JSON.stringify((dr.deviationAssessments || []).map((a) => [a && a.deviation, a && a.recommendation])) ===
+        JSON.stringify([
+          [DEVIATION, CYCLE_PASS.deviationAssessments[0].recommendation],
+          [SECOND_DEVIATION, CYCLE_REVERIFIED_OWN_DEVIATION.deviationAssessments[0].recommendation],
+        ]),
+    JSON.stringify({ deviations: dr.deviations, assessments: dr.deviationAssessments }),
   );
   // The superseded cycle's three `preRebase*` records. Each speaks for something
   // the re-verification did not undo — a delivery run that FAILED, a close-out's
@@ -1259,7 +1343,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
 // on a conflict it cannot judge, abort and leave the tree clean rather than
 // returning mid-rebase.
 {
-  const brief = rebasePrompt("pre-fix", gathered({ reconcile: { outcome: "work" } }), "main");
+  const briefPacket = gathered({ reconcile: { outcome: "work" } });
+  const brief = rebasePrompt("pre-fix", briefPacket, "main");
   // The same brief rendered for the OTHER working location. The mode decides
   // where every command in it runs, so both renderings are read below.
   const briefInWorktree = rebasePrompt(
@@ -1291,13 +1376,21 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // push remote is the HEAD repository — a different one on every fork PR, where
   // the same ref name is another branch's tip or nothing. Rebasing onto that
   // pins a commit off the wrong branch and the run looks like it worked.
+  // Naming that repository is not enough: this step has to be HANDED it, because
+  // the one command that would name it for itself — `gh repo view` with no
+  // repository argument — answers for the repository its working directory
+  // resolves to, which in a fork clone is that same head fork. So the caller
+  // interpolates the PR's own already-resolved URL, and the brief is read for it.
   const fetchesFromBaseRepo = /repository the PR itself is in/.test(brief) && /NOT this branch's push remote/.test(brief);
+  const carriesThePrUrl = brief.includes(briefPacket.pr.url) && /whose `<owner>\/<repo>` IS that repository/.test(brief);
+  const refusesTheDirectoryDerivedRepo =
+    /Do not re-derive it from a bare `gh repo view/.test(brief) && /answers for the repository the DIRECTORY it runs in/.test(brief);
   const fetchesTheRef = /git fetch <the remote whose URL is that repository/.test(brief);
   const resolvesWhatItFetched = /`FETCH_HEAD` for a ref you just fetched/.test(brief);
   check(
-    "and fetches the target from the repository that ref lives in — the PR's own — rather than through the branch's push remote",
-    fetchesFromBaseRepo && fetchesTheRef && resolvesWhatItFetched,
-    `base repository stated: ${fetchesFromBaseRepo}; fetches the ref: ${fetchesTheRef}; resolves what it fetched: ${resolvesWhatItFetched}`,
+    "and fetches the target from the repository that ref lives in — the PR's own, handed over as its resolved URL rather than re-derived from the working directory — never through the branch's push remote",
+    fetchesFromBaseRepo && carriesThePrUrl && refusesTheDirectoryDerivedRepo && fetchesTheRef && resolvesWhatItFetched,
+    `base repository stated: ${fetchesFromBaseRepo}; carries the PR url: ${carriesThePrUrl}; directory-derived repo refused: ${refusesTheDirectoryDerivedRepo}; fetches the ref: ${fetchesTheRef}; resolves what it fetched: ${resolvesWhatItFetched}`,
   );
 
   // This brief is the workflow layer's rendering of the canonical nugget
