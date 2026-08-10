@@ -111,7 +111,7 @@ const PACKET_SCHEMA = {
     blocker: { type: "string", description: "Why the run stopped: unidentifiable/unrelated PR, dirty tree, rebase in progress, non-trivial rebase conflict, auth failure. Empty when ok." },
     pr: {
       type: "object",
-      description: "Required whenever ok is true — the downstream phases dereference these fields, so populate them all. Required in PART on a BLOCKER too: once a worktree has been attached or reused, an `ok: false` packet still carries `locationMode` and `worktree` (with whatever else was resolved), because a halt is what KEEPS that worktree standing and this object is the only channel that reports its path.",
+      description: "Required whenever ok is true — the downstream phases dereference these fields, so populate them all. Required IN FULL on a post-attach BLOCKER too, not in part: the working location is picked only after the PR is resolved, so an `ok: false` packet raised from the attach onwards already knows every field here — `locationMode` and `worktree` above all, because a halt is what KEEPS that worktree standing and this object is the only channel that reports its path. The one packet that omits `pr` is a blocker raised BEFORE the PR is resolved (auth failure, unidentifiable or unrelated PR): it created no worktree and has nothing to report, which is why `pr` is not required at the top level.",
       properties: {
         number: { type: "integer" },
         url: { type: "string" },
@@ -164,7 +164,7 @@ const PUBLISH_SCHEMA = {
   type: "object",
   properties: {
     published: { type: "boolean", description: "True only if the push AND every required reply/resolve/summary/ping step succeeded. False if any guard (moved head, unmatched remote, rejected lease, failed comment) aborted publication." },
-    aborted: { type: "string", description: "Why publication stopped, when published is false (e.g. `head moved`, `lease rejected`, `local behind PR head`, `push remote unmatched`). Empty when published." },
+    aborted: { type: "string", description: "Why publication stopped, when published is false (e.g. `head moved`, `lease rejected`, `local behind PR head`, `push remote unmatched`). REQUIRED, empty when published: the run's own note sends a maintainer to this field BY NAME on an incomplete publication, so a schema that let a failed one omit it would point them at nothing." },
     pushed: { type: "boolean", description: "Whether a push was performed at all (may be an `Everything up-to-date` no-op)." },
     pushedNewCommits: { type: "boolean", description: "True ONLY if the push actually advanced the remote branch — new commits or rewritten history. False when no push happened or for a no-op `Everything up-to-date` push. Gates whether the re-review pings may fire." },
     threadOutcomes: {
@@ -182,7 +182,7 @@ const PUBLISH_SCHEMA = {
     summaryCommentUrl: { type: "string", description: "URL of the posted Summary of Review Fixes, or empty if not posted." },
     pings: { type: "string", description: "Which ping comments were posted, or empty." },
   },
-  required: ["published", "pushed", "pushedNewCommits"],
+  required: ["published", "aborted", "pushed", "pushedNewCommits"],
 };
 
 const RECLAIM_SCHEMA = {
