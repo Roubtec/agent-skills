@@ -3095,36 +3095,48 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // record ends goes ambiguous for exactly the part it exists to carry. Nor may
   // the body be trimmed on the way in — a reply body's own leading or trailing
   // blank line is content, and "verbatim" is the whole promise.
-  const FENCED_RECORD = [
+  // Two bodies, whose longest backtick run differs by one, because a delimiter
+  // is only safe if it is a function of THIS body: a constant four backticks
+  // survives the three-backtick body and is closed early by the four-backtick
+  // one, which markdown allows and a Summary body quoting a fenced block
+  // produces. So what is asserted is that the delimiter GREW with the body.
+  const fencedRecord = (run_) => [
     "<!-- address-review:disposition-record -->",
     "# address-review packet — PR #42 (feature/x)",
     "",
     "## Summary comment (verbatim, ready to post)",
     "## Summary of Review Fixes",
     "Fixed the guard:",
-    "```js",
+    `${run_}js`,
     "if (!x) return;",
-    "```",
+    run_,
     "and swept the same pattern in two siblings.",
     "",
   ].join("\n");
-  const fenced = await run(
-    gathered({ reconcile: { outcome: "work" }, items: [ITEM], priorRecord: { url: "https://example.invalid/pr/42#issuecomment-9", body: FENCED_RECORD } }),
-    { args: "no-push no-rebase" },
-  );
-  const fencedFixer = (((fenced.seen.cycleOpts || {}).opts || {}).scope || {}).instructions || "";
-  const wrapper = (fencedFixer.match(/\n(`{4,})\n/) || [])[1] || "";
+  const embedded = [];
+  for (const inner of ["```", "````"]) {
+    const body = fencedRecord(inner);
+    const fenced = await run(
+      gathered({ reconcile: { outcome: "work" }, items: [ITEM], priorRecord: { url: "https://example.invalid/pr/42#issuecomment-9", body } }),
+      { args: "no-push no-rebase" },
+    );
+    const fixerBrief = (((fenced.seen.cycleOpts || {}).opts || {}).scope || {}).instructions || "";
+    embedded.push({ body, brief: fixerBrief, wrapper: (fixerBrief.match(/\n(`{4,})\n/) || [])[1] || "" });
+  }
   check(
-    "a record whose own Summary body is fenced is embedded WHOLE, in a delimiter longer than any backtick run inside it",
-    fencedFixer.includes(FENCED_RECORD) &&
-      wrapper.length >= 4 &&
-      !FENCED_RECORD.includes(wrapper) &&
-      fencedFixer.includes(`\n${wrapper}\n${FENCED_RECORD}\n${wrapper}`) &&
-      fencedFixer.includes(`the two lines of ${wrapper.length} backticks below`),
-    JSON.stringify({
+    "a record whose own Summary body is fenced is embedded WHOLE, in a delimiter longer than any backtick run inside it — and one that grows with the body rather than being a longer constant",
+    embedded.every(
+      ({ body, brief, wrapper }) =>
+        brief.includes(body) &&
+        wrapper.length >= 4 &&
+        !body.includes(wrapper) &&
+        brief.includes(`\n${wrapper}\n${body}\n${wrapper}`) &&
+        brief.includes(`the two lines of ${wrapper.length} backticks below`),
+    ) && embedded[1].wrapper.length === embedded[0].wrapper.length + 1,
+    JSON.stringify(embedded.map(({ body, brief, wrapper }) => ({
       wrapper: wrapper || "no fence of four or more backticks",
-      whole: fencedFixer.includes(FENCED_RECORD),
-    }),
+      whole: brief.includes(body),
+    }))),
   );
   // And the contract that gets it here in one piece: a record reported without
   // its body replays to nothing while the run reads as having found one, so the
