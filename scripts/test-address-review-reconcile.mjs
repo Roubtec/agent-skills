@@ -978,15 +978,31 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // Both are pins on the PHRASING, not on the meaning, and the claim goes no
   // further than that: a regex over prose cannot tell "adopt X" from "adopt X
   // only where Y", so what these catch is an edit that drops the phrasing or
-  // re-imports a probe — the shape an ordinary rewrite takes. What they do not
-  // catch, stated so nobody reads a pass as a semantic guarantee: a rule
-  // REVERSED while the pinned phrase survives ("never adopt the fetched OID as
-  // this entry's head" contains it), a demotion of the fetched head stated
-  // without naming any git command, a probe spelled outside the forms
-  // enumerated below — a `rev-parse` that neither asks `--verify` nor peels,
-  // `cat-file` in any other mode — and any of them written without backticks,
-  // since only backticked spans are read. Polarity is the reviewer's to hold;
-  // sharpening a regex at it only buys the next evasion.
+  // re-imports a probe — the shape an ordinary rewrite takes. What they MISS,
+  // stated so nobody reads a pass as a semantic guarantee: a rule REVERSED
+  // while the pinned phrase survives ("never adopt the fetched OID as this
+  // entry's head" contains it), a demotion of the fetched head stated without
+  // naming any git command, a probe spelled outside the forms enumerated below
+  // — a `rev-parse` that neither asks `--verify` nor peels, `cat-file` in any
+  // other mode — and any of them written without backticks, since only
+  // backticked spans are read. Polarity is the reviewer's to hold; sharpening a
+  // regex at it only buys the next evasion.
+  //
+  // One limit runs the other way and is listed apart from those, because it is
+  // an OVER-report rather than a miss. The exemption below recognizes the
+  // fetched-head read only in its CANONICAL spelling — the whole span being
+  // `git rev-parse FETCH_HEAD`, with an optional `--verify`, an optional peel
+  // suffix, and nothing else — so a re-spelled read that ALSO asks `--verify`
+  // or peels is reported as a gate: `git -C <path> rev-parse --verify
+  // FETCH_HEAD^{commit}`, `git rev-parse --verify --quiet FETCH_HEAD`,
+  // `git rev-parse --verify FETCH_HEAD > <file>`. A re-spelling
+  // carrying neither marker never reaches the probe at all, so it passes
+  // regardless — which is why the four shipped paragraphs, all using the bare
+  // read, are unaffected. The remedy when it does fire is to normalize the
+  // spelling in the paragraph, or to widen the recognizer deliberately — never
+  // to relax it back to "the span mentions `FETCH_HEAD`", the evasion the
+  // whole-read anchor exists to close. It fails loudly and prints the offending
+  // span, so unlike the misses above it cannot be mistaken for a pass.
   {
     const mirrors = ["plugins/dev-skills/skills", "codex/dev-skills/skills"];
     // The probe is looked for command-first, not by proximity to a name for the
@@ -1014,6 +1030,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // direction and a reversed rule passes, wrong in the strict direction and an
     // edit that merely mentions a branch-name query fails. Neither miss is
     // visible from the shipped text, which contains none of these spans.
+    // Each PART of the discriminator is fixtured separately, so that dropping any
+    // one of them fails a case rather than being covered by another: the shared
+    // span appears with the read on both sides (drop the exemption's trailing
+    // anchor and "starts with the read" is excused, which is the same evasion
+    // with its halves swapped), and one gate asks only `--verify` while another
+    // only peels (drop either branch of the probe and that gate goes unseen).
     const probeFixtures = [
       ["a non-query `rev-parse`", "Record the tip with `git rev-parse --abbrev-ref HEAD` first.", false],
       ["the fetched-head read", "take the head from `git rev-parse FETCH_HEAD` instead", false],
@@ -1025,17 +1047,24 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         true,
       ],
       [
+        "a gate sharing its span with the read, the read first",
+        "prefer `git rev-parse FETCH_HEAD || git rev-parse --verify <headRefOid>^{commit}`",
+        true,
+      ],
+      [
         "a gate whose comment names the read",
         "run `git rev-parse --verify <headRefOid>^{commit}  # cheaper than reading FETCH_HEAD`",
         true,
       ],
+      ["a gate that only asks `--verify`", "confirm `git rev-parse --verify <headRefOid>` first", true],
+      ["a gate that only peels", "confirm `git rev-parse <headRefOid>^{commit}` first", true],
       ["a gate spelled `cat-file -e`", "confirm `git cat-file -e <headRefOid>^{commit}` first", true],
     ];
     const misjudged = probeFixtures
       .filter(([, para, isGate]) => (gatingProbes(para).length > 0) !== isGate)
       .map(([what]) => what);
     check(
-      "and that read counts a gate on the recorded OID even beside the fetched-head read, while leaving a non-query `rev-parse` alone",
+      "and that read counts a gate on the recorded OID even beside the fetched-head read, in either order and whether it asks `--verify` or only peels, while leaving a non-query `rev-parse` alone",
       misjudged.length === 0,
       `misjudged: ${misjudged.join("; ")}`,
     );
