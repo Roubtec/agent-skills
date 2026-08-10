@@ -50,10 +50,12 @@
 // hang off that location and are pinned beside it: a HALT keeps the worktree,
 // so the blocker exit — which runs before the pair is even validated — has to
 // name the surviving path, and the brief has to oblige a blocker packet to
-// carry it; and the two helper-free attach commands each fail as written if
-// they lose a clause (a pathless `git worktree add --detach`, an add that never
-// reads the live registration a halted run left behind), which no scenario can
-// observe because the gather agent is stubbed.
+// carry it; and the three helper-free attach arms each fail as written if they
+// lose a clause (a pathless `git worktree add --detach`, an add that never reads
+// the live registration a halted run left behind, an arm order that lets a prior
+// fork run's leftover local branch claim the re-run, a landing verification that
+// states no consequence), which no scenario can observe because the gather agent
+// is stubbed.
 //
 // Run: node scripts/test-address-review-reconcile.mjs
 
@@ -81,7 +83,7 @@ function check(name, cond, detail) {
 // does not count. Bump it deliberately when adding or removing one — a
 // scenario that silently stops running is invisible to a suite that only gates
 // on failures.
-const EXPECTED_CHECKS = 44;
+const EXPECTED_CHECKS = 46;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -323,9 +325,9 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     excludesAddressedPr && namesOtherHeadRepo && namesOtherHeadRef && comparesAgainstPushTarget && requestsProbeFields,
     `different-number filter stated: ${excludesAddressedPr}; other head's repository stated: ${namesOtherHeadRepo}; its ref stated: ${namesOtherHeadRef}; compared against the resolved push target: ${comparesAgainstPushTarget}; probe requests every field: ${requestsProbeFields}`,
   );
-  // Two commands in the same case list, each of which fails as written if it
-  // loses one clause — and neither failure is visible to the gate above, which
-  // only ever sees what the gather REPORTED.
+  // Four clauses in the same case list, each of which the worktree case fails as
+  // written without — and none of the failures is visible to the gate above,
+  // which only ever sees what the gather REPORTED.
   //
   // `git worktree add` takes its path as a mandatory argument
   // (`git worktree add … <path> [<commit-ish>]`), so the fork arm's `--detach`
@@ -339,15 +341,43 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // And `git worktree prune` clears STALE registrations only, so the LIVE one a
   // halted run left is exactly what survives it — which is the run this stable
   // slug exists to resume. Without a reuse arm the helper-free fallback's add
-  // fails on a path and a branch both occupied, so the documented resume works
-  // only where the optional helper exists.
-  const readsRegistrations = /git worktree list/.test(cases);
-  const reusesMatch = /REUSE it/.test(cases);
-  const stopsOnMismatch = /registered on anything else/.test(cases);
+  // fails on an occupied path, so the documented resume works only where the
+  // optional helper exists. The read is asserted to precede the ARMS rather than
+  // to appear anywhere in the case, because scoping it to one arm is how this
+  // was lost before: the fork arm is always helper-free and uses the same stable
+  // path, so a read stated only for the local-`T` arms leaves the one attach
+  // with no helper alternative unable to resume at all.
+  const registrationRule = cases.slice(0, cases.indexOf("take the FIRST of these three arms"));
+  const readsRegistrations = /git worktree list/.test(registrationRule);
+  const coversEveryArm = /any of the three arms below/.test(registrationRule);
+  const reusesMatch = /REUSE it/.test(registrationRule);
+  const stopsOnMismatch = /registered on anything ELSE/.test(registrationRule);
   check(
-    "the helper-free attach reads the registrations first, reuses a `pr-<N>` tree already on the head ref, and stops on any other",
-    readsRegistrations && reusesMatch && stopsOnMismatch,
-    `reads registrations: ${readsRegistrations}; reuse arm: ${reusesMatch}; mismatch stop: ${stopsOnMismatch}`,
+    "the registration read precedes every attach arm, reuses a `pr-<N>` tree already on the head ref, and stops on any other",
+    readsRegistrations && coversEveryArm && reusesMatch && stopsOnMismatch,
+    `reads registrations ahead of the arms: ${readsRegistrations}; scoped to every arm: ${coversEveryArm}; reuse arm: ${reusesMatch}; mismatch stop: ${stopsOnMismatch}`,
+  );
+  // Arm ORDER is a contract in its own right, and prose has to settle it: a
+  // prior fork run's `gh pr checkout` leaves a same-named local `T` behind, so
+  // on the re-run both "a local `T` EXISTS" and "the head is a fork" describe
+  // the tree, and the local arm would attach that leftover with no fork remote
+  // wired up. The fork arm therefore has to be named as taking precedence, not
+  // merely listed alongside.
+  const forkFirst = /FORK head takes the first arm, ahead of both local-`T` arms/.test(cases);
+  check(
+    "the fork arm is stated to take precedence over the local-`T` arms",
+    forkFirst,
+    forkFirst ? "" : "the fork arm's precedence over the local-`T` arms is unstated",
+  );
+  // And the landing verification has to say what a FAILURE does. The identity
+  // check runs before any checkout, so it cannot see a collision `gh`'s own
+  // branch selection creates; a verification with no consequence leaves that
+  // case to whatever the agent invents.
+  const forkMismatchStops = /verification FAILS[\s\S]*?ok: false[\s\S]*?attach nothing further and substitute nothing/.test(cases);
+  check(
+    "a failed fork landing verification is a blocker that attaches and substitutes nothing",
+    forkMismatchStops,
+    forkMismatchStops ? "" : "the fork arm verifies the landing but states no consequence for a mismatch",
   );
   // The location pair rides in `pr`, which is otherwise owed only on success —
   // so the packet that could silently omit the path is precisely the halt that
