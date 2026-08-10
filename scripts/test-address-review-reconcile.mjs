@@ -47,14 +47,16 @@
 // but in which tree it acts. Both gates are the same shape — a gather-reported
 // field the caller must not read charitably — and both fail closed, so they are
 // driven through the same harness rather than a second copy of it. Two things
-// hang off that location and are pinned beside it: a HALT keeps the worktree,
-// so the blocker exit — which runs before the pair is even validated — has to
-// name the surviving path, and the brief has to oblige a blocker packet to
-// carry it; and the three helper-free attach arms each fail as written if they
-// lose a clause (a pathless `git worktree add --detach`, an add that never reads
-// the live registration a halted run left behind, an arm order that lets a prior
-// fork run's leftover local branch claim the re-run, a landing verification that
-// states no consequence), which no scenario can observe because the gather agent
+// hang off that location and are pinned beside it: a HALT keeps the worktree
+// (bar the fork arm's rejected landing, below), so the blocker exit — which
+// runs before the pair is even validated — has to name the surviving path, and
+// the brief has to oblige a blocker packet to carry it; and the three
+// helper-free attach arms each fail as written if they lose a clause (a
+// pathless `git worktree add --detach`, an add that never reads the live
+// registration a halted run left behind, an arm order that lets a prior fork
+// run's leftover local branch claim the re-run, a landing verification that
+// states no consequence, or one whose consequence keeps a tree the re-run would
+// then stop on forever), which no scenario can observe because the gather agent
 // is stubbed.
 //
 // Run: node scripts/test-address-review-reconcile.mjs
@@ -83,7 +85,7 @@ function check(name, cond, detail) {
 // does not count. Bump it deliberately when adding or removing one — a
 // scenario that silently stops running is invisible to a suite that only gates
 // on failures.
-const EXPECTED_CHECKS = 46;
+const EXPECTED_CHECKS = 47;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -228,9 +230,10 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
 }
 
 // --- What a HALTED run hands back: the worktree it left standing -------------
-// A worktree is given back only where the run FINISHED; halting is what KEEPS
-// it, so a blocker raised after the attach is the one exit that must name the
-// surviving path. It is also the exit that runs BEFORE the location pair is
+// The reclaim step runs only where the run FINISHED; halting is what KEEPS the
+// tree (the fork arm's rejected landing hands its own back, inside the gather
+// and before this exit ever sees a path), so a blocker raised after the attach
+// is the one exit that must name the surviving path. It is also the exit that runs BEFORE the location pair is
 // validated — the gather stopped, so there may be no usable pair at all — which
 // is what makes this a property of its own rather than a corollary of the gate:
 // the path is read defensively and surfaced in the `note` a maintainer reads
@@ -378,6 +381,19 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "a failed fork landing verification is a blocker that attaches and substitutes nothing",
     forkMismatchStops,
     forkMismatchStops ? "" : "the fork arm verifies the landing but states no consequence for a mismatch",
+  );
+  // And that consequence has to GIVE THE TREE BACK, which is the one thing the
+  // rest of this case cannot recover from: the halt leaves `pr-<N>` detached or
+  // on the rejected ref, and the registration read above then stops every
+  // re-run on "registered on anything ELSE" — never a second slug and never a
+  // removal — so the slug stays blocked even once the maintainer has fixed the
+  // collision. `address-reviews` states the same give-back for the same
+  // failure, and this arm is the one place a divergence would be invisible.
+  const forkMismatchGivesTreeBack = /verification FAILS[\s\S]*?wt-remove pr-<N>[\s\S]*?git worktree remove/.test(cases);
+  check(
+    "and it hands that worktree back, so the rejected ref does not block the stable slug on every re-run",
+    forkMismatchGivesTreeBack,
+    forkMismatchGivesTreeBack ? "" : "the fork arm's failure path states no give-back, leaving `pr-<N>` occupied by the rejected landing",
   );
   // The location pair rides in `pr`, which is otherwise owed only on success —
   // so the packet that could silently omit the path is precisely the halt that
