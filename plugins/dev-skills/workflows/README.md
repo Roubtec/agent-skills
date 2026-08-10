@@ -42,7 +42,7 @@ The shared-filesystem assumption was verified on 2026-06-10 with Claude Code 2.1
 
 ## Validation
 
-Parse-check the shipped workflow sources — `plugins/dev-skills/workflows/wf-review-cycle.js`, `wf-address-review.js`, and `wf-address-tasks.js` — with powbox's `wf-check` where it has landed: it is built against the runtime's own loading, which nothing in this repo can speak for. It is not on PATH in this repo's powbox image (checked 2026-08-05), so until it lands, stand in for it with a hand-rolled wrapper — from the repository root, once per file:
+Parse-check the shipped workflow sources — `plugins/dev-skills/workflows/wf-review-cycle.js`, `wf-address-review.js`, and `wf-address-tasks.js` — with powbox's `wf-check`, which is normally on PATH: it is built against the runtime's own loading, which nothing in this repo can speak for, so it is the check to run whenever `command -v wf-check` finds it. It is baked into the powbox image rather than shipped from here, so skills refreshed into a container running an older image can still find it absent; only then, stand in for it with the hand-rolled wrapper below — from the repository root, once per file:
 
 ```
 D="$(mktemp -d "${TMPDIR:-/tmp}/wf-check.XXXXXX")" \
