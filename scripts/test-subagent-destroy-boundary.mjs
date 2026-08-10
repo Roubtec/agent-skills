@@ -133,7 +133,13 @@ function shippedWorkflows() {
 // actually turned on. The pattern therefore spans all three, joined by windows
 // too narrow to hold a verb rather than by wildcards, and matches each
 // prohibition through its own imperative, which is not something a permission
-// can be spelled with.
+// can be spelled with. The last of them runs on through its NEGATIVE QUALIFIER
+// as well, because there the imperative alone does not carry the clause: what
+// separates the banned form from the guarded one is "you have not checked", and
+// a match stopping at "whose success" is equally satisfied by an inverted
+// qualifier ("whose success you have checked") that bans the guarded form and
+// leaves the unchecked one free, or by one dismissing the check outright
+// ("whose success need not be checked").
 const REQUIRED = [
   ["permitted set", /Permitted: reading, searching,[^\n]*read-only `git`\/`gh` queries/],
   ["forbidden set", /`rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`/],
@@ -143,7 +149,7 @@ const REQUIRED = [
   ["exemptions are granted, not self-selected", /the only exemptions — and only because this assignment names them/],
   ["worktree is not a blast radius", /A worktree is not a blast radius/],
   ["shared `.git` reaches every sibling worktree", /reach every sibling worktree through the shared `\.git`/],
-  ["a repository is addressed by path", /Address any repository other than [^\n]{0,40}BY PATH: `git -C <absolute path>`[^\n]{0,40}NEVER derive a working directory from a glob[^\n]{0,40}NEVER chain a state-changing git command after a `cd` whose success/],
+  ["a repository is addressed by path", /Address any repository other than [^\n]{0,40}BY PATH: `git -C <absolute path>`[^\n]{0,40}NEVER derive a working directory from a glob[^\n]{0,40}NEVER chain a state-changing git command after a `cd` whose success you have not checked/],
   ["empirical verification is clone-only", /Empirical verification that [a-z -]+ state belongs ONLY in a disposable clone/],
   ["disposable-clone destination", /command -v dc-enter/],
   ["absolute-path fallback", /absolute path outside the repository — never a relative one/],
