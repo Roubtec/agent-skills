@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 150;
+const EXPECTED_CHECKS = 153;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1389,9 +1389,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // resolves a push target and stops on a mismatch, and an off-shoot's own
   // upstream never matches the PR head — so read as the branch's own resolution
   // it halts every off-shoot run after all its work, at the one step whose remit
-  // is to decide what may be pushed from it.
-  const item1 = off.split("\n").find((l) => l.startsWith("1. Re-check before publication")) || "";
-  const targetIsThePr = /PUBLICATION TARGET/.test(item1) && /the PR's head repository/.test(item1);
+  // is to decide what may be pushed from it. Read from the item as a WHOLE: the
+  // exception is a bullet of its own, because it is the off-shoot's alone (the
+  // block below pins the other bullet, which the same-branch case keeps).
+  const item1 = off.slice(off.indexOf("1. Re-check before publication"), off.indexOf("2. Push."));
+  const targetIsThePr = /resolve the target from the PR instead/.test(item1) && /its head repository and/.test(item1);
   const notTheOffShootsUpstream =
     /off-shoot's own upstream is NOT the target/.test(item1) && /normal state rather than a stop/.test(item1);
   check(
@@ -1400,7 +1402,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     `target is the PR's: ${targetIsThePr}; off-shoot upstream not a stop: ${notTheOffShootsUpstream}`,
   );
 
-  // The same two decisions in the SKILL that states them to a reader rather than
+  // The same decisions in the SKILL that states them to a reader rather than
   // to a subagent, in both mirrors, which no generator keeps in step. Anchored to
   // the sentence that carries each decision, so a rewrite that keeps the heading
   // and drops the rule fails rather than passing on the file's other mentions.
@@ -1419,7 +1421,15 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       [
         "the off-shoot's publication target",
         "**On a named off-shoot the target is the PR's head ref, never the branch's own upstream.**",
-        [/is never pushed to by this run/, /that mode's normal state/],
+        [/is never pushed to by this run/, /that mode's normal state/, /Mode 4 is the only mode this substitution covers/],
+      ],
+      [
+        "the check that substitution excepts",
+        "1. **Re-check before publication:**",
+        [
+          /Resolve the current branch's exact push remote\/ref, verify they match that PR head/,
+          /still standing on the branch this run has been working on/,
+        ],
       ],
       ["the lease as the remainder", "- **Otherwise** — every remaining state", [/whether or not this run rewrote history/]],
     ];
@@ -1443,11 +1453,69 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       }
     }
     check(
-      "and the skill carries the same two decisions in both mirrors — the off-shoot's gate before its push, and the PR's ref as its target",
+      "and the skill carries the same decisions in both mirrors — the off-shoot's gate before its push, the PR's ref as its target, and the check that substitution excepts",
       missing.length === 0,
       missing.join("; "),
     );
   }
+}
+
+// --- The check the off-shoot exception must not swallow ----------------------
+// The exception above substitutes a PR-DERIVED push target for the branch's own
+// resolution, and only the off-shoot needed that substitution. Item 1's "resolve
+// THIS branch's exact push remote/ref and verify they match the PR head" is a
+// check in its own right on every other path: it is what stops a run whose
+// checkout moved to some unrelated branch after the review, which would
+// otherwise trust the recorded equal names, skip the representation probe as a
+// same-branch run, and lease-push the wrong HEAD onto the PR. So the ordinary
+// path's resolution must survive, keyed on the two names exactly as its
+// exception is, and item 1 must re-verify that the checkout still STANDS on the
+// recorded working branch — the name both gates key on is otherwise a record
+// taken before the fixes landed rather than a present fact.
+{
+  const same = publishPrompt(gathered({ reconcile: { outcome: "work" } }), [], { push: true }, [], []);
+  const item1 = same.slice(same.indexOf("1. Re-check before publication"), same.indexOf("2. Push."));
+  const lines = item1.split("\n");
+  const ownTarget = lines.find((l) => /Where the two names are the SAME/.test(l)) || "";
+  const prDerived = lines.find((l) => /Where they DIFFER/.test(l)) || "";
+  // Presence of the resolution is not the claim — a bullet that resolves the
+  // branch's own target and then treats a mismatch as information keeps every
+  // other string here, so the STOP is read as well.
+  const resolvesOwn = /resolve THAT branch's exact push remote\/ref and verify they match the PR head/.test(ownTarget);
+  const stopsOnMismatch = /STOP rather than pushing to a target you resolved some other way/.test(ownTarget);
+  check(
+    "the publish brief still resolves the same-branch case's own push remote/ref, and stops where they do not match the PR head",
+    resolvesOwn && stopsOnMismatch,
+    `resolves the branch's own target: ${resolvesOwn}; stops on a mismatch: ${stopsOnMismatch}`,
+  );
+
+  // And the substitution stays in the bullet it belongs to: an exception written
+  // as the unconditional rule is exactly how this check was lost.
+  const scoped = /resolve the target from the PR instead/.test(prDerived) && !/resolve the target from the PR instead/.test(ownTarget);
+  check(
+    "and confines the PR-derived target to the differing-names case, so the exception does not swallow the check it excepts",
+    scoped && ownTarget !== "" && prDerived !== "",
+    `PR-derived resolution confined to the differing case: ${scoped}; same-names bullet found: ${ownTarget !== ""}; differing bullet found: ${prDerived !== ""}`,
+  );
+
+  // The checkout re-verification, read from the OFF-SHOOT render because only
+  // there do the two names differ: what item 1 must require HEAD to be on is the
+  // branch the run addressed, not the PR's head ref.
+  const off = publishPrompt(
+    gathered({ workingBranch: "local/side-work", reconcile: { outcome: "not-applicable" } }),
+    [],
+    { push: true },
+    [],
+    [],
+  );
+  const offItem1 = off.slice(off.indexOf("1. Re-check before publication"), off.indexOf("2. Push."));
+  const readsTheCheckout = /`git rev-parse --abbrev-ref HEAD` must print `local\/side-work`/.test(offItem1);
+  const stopsOnAnotherBranch = /where it prints anything else, set `published: false`, `aborted`, and STOP without pushing/.test(offItem1);
+  check(
+    "and re-verifies the checkout still stands on the branch the run addressed — the working branch, not the head ref — stopping when it does not",
+    readsTheCheckout && stopsOnAnotherBranch,
+    `requires HEAD on the working branch: ${readsTheCheckout}; stops otherwise: ${stopsOnAnotherBranch}`,
+  );
 }
 
 // --- The delegated rebase points --------------------------------------------
