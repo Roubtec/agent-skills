@@ -46,7 +46,14 @@
 // the WORKING LOCATION, which decides not whether the run may act on the branch
 // but in which tree it acts. Both gates are the same shape — a gather-reported
 // field the caller must not read charitably — and both fail closed, so they are
-// driven through the same harness rather than a second copy of it.
+// driven through the same harness rather than a second copy of it. Two things
+// hang off that location and are pinned beside it: a HALT keeps the worktree,
+// so the blocker exit — which runs before the pair is even validated — has to
+// name the surviving path, and the brief has to oblige a blocker packet to
+// carry it; and the two helper-free attach commands each fail as written if
+// they lose a clause (a pathless `git worktree add --detach`, an add that never
+// reads the live registration a halted run left behind), which no scenario can
+// observe because the gather agent is stubbed.
 //
 // Run: node scripts/test-address-review-reconcile.mjs
 
@@ -74,7 +81,7 @@ function check(name, cond, detail) {
 // does not count. Bump it deliberately when adding or removing one — a
 // scenario that silently stops running is invisible to a suite that only gates
 // on failures.
-const EXPECTED_CHECKS = 38;
+const EXPECTED_CHECKS = 44;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -218,6 +225,48 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   );
 }
 
+// --- What a HALTED run hands back: the worktree it left standing -------------
+// A worktree is given back only where the run FINISHED; halting is what KEEPS
+// it, so a blocker raised after the attach is the one exit that must name the
+// surviving path. It is also the exit that runs BEFORE the location pair is
+// validated — the gather stopped, so there may be no usable pair at all — which
+// is what makes this a property of its own rather than a corollary of the gate:
+// the path is read defensively and surfaced in the `note` a maintainer reads
+// first, not left to be dug out of the echoed `pr` object.
+{
+  const blockedPr = {
+    number: 42,
+    url: "https://example.invalid/pr/42",
+    branch: "feature/x",
+    workingBranch: "feature/x",
+    base: "main",
+    headOid: "deadbeef",
+    locationMode: "worktree",
+    worktree: "/w/.worktrees/c/pr-42",
+  };
+  const blocked = await run({ ok: false, blocker: "the reused worktree is mid-cherry-pick", pr: blockedPr, items: [] });
+  const br = blocked.result || {};
+  check(
+    "a blocker raised after the attach names the surviving worktree where a maintainer reads it first",
+    blocked.status === "error" && /\/w\/\.worktrees\/c\/pr-42/.test(br.note || "") && /still standing/.test(br.note || ""),
+    JSON.stringify(br),
+  );
+  check(
+    "and nothing reclaims it or runs past the gather",
+    blocked.seen.agentLabels.join(",") === "gather" && blocked.seen.cycleOpts === null,
+    JSON.stringify(blocked.seen),
+  );
+  // The other direction: a run that never attached anything has no path to
+  // report, and reporting one would send the maintainer to a tree that does not
+  // exist.
+  const early = await run({ ok: false, blocker: "gh auth status failed", items: [] });
+  check(
+    "a blocker raised before any attach reports no worktree rather than inventing one",
+    early.status === "error" && !("note" in (early.result || {})),
+    JSON.stringify(early.result),
+  );
+}
+
 // --- The producer half: how the working location is chosen -------------------
 // The gate above validates the pair the gather agent REPORTED. What lets that
 // report say `workingBranch != branch` at all is the gather brief's case list,
@@ -273,6 +322,41 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "the conflicting-PR stop excludes the PR being addressed and identifies the other head by repository plus ref, against this branch's push target",
     excludesAddressedPr && namesOtherHeadRepo && namesOtherHeadRef && comparesAgainstPushTarget && requestsProbeFields,
     `different-number filter stated: ${excludesAddressedPr}; other head's repository stated: ${namesOtherHeadRepo}; its ref stated: ${namesOtherHeadRef}; compared against the resolved push target: ${comparesAgainstPushTarget}; probe requests every field: ${requestsProbeFields}`,
+  );
+  // Two commands in the same case list, each of which fails as written if it
+  // loses one clause — and neither failure is visible to the gate above, which
+  // only ever sees what the gather REPORTED.
+  //
+  // `git worktree add` takes its path as a mandatory argument
+  // (`git worktree add … <path> [<commit-ish>]`), so the fork arm's `--detach`
+  // form needs one too: pathless, the command fails before `gh pr checkout` is
+  // reached and the default worktree mode never runs for a fork PR at all.
+  check(
+    "the fork attach's detached add carries the worktree path",
+    /git worktree add --detach "<worktree base>\/pr-<N>"/.test(cases),
+    cases.includes("--detach") ? "the `--detach` add is present but pathless" : "no `--detach` add found",
+  );
+  // And `git worktree prune` clears STALE registrations only, so the LIVE one a
+  // halted run left is exactly what survives it — which is the run this stable
+  // slug exists to resume. Without a reuse arm the helper-free fallback's add
+  // fails on a path and a branch both occupied, so the documented resume works
+  // only where the optional helper exists.
+  const readsRegistrations = /git worktree list/.test(cases);
+  const reusesMatch = /REUSE it/.test(cases);
+  const stopsOnMismatch = /registered on anything else/.test(cases);
+  check(
+    "the helper-free attach reads the registrations first, reuses a `pr-<N>` tree already on the head ref, and stops on any other",
+    readsRegistrations && reusesMatch && stopsOnMismatch,
+    `reads registrations: ${readsRegistrations}; reuse arm: ${reusesMatch}; mismatch stop: ${stopsOnMismatch}`,
+  );
+  // The location pair rides in `pr`, which is otherwise owed only on success —
+  // so the packet that could silently omit the path is precisely the halt that
+  // KEEPS the worktree standing. The consumer half is pinned above.
+  const report = brief.split("\n\n").find((p) => p.includes("Report the choice as")) || "";
+  check(
+    "and a blocker packet raised after the attach still owes the location pair",
+    /owed on a BLOCKER too/.test(report) && /pr\.worktree/.test(report),
+    report,
   );
 }
 
