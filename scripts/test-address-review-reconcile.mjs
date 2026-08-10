@@ -1439,6 +1439,15 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         [
           /Resolve the current branch's exact push remote\/ref, verify they match that PR head/,
           /still standing on the branch this run has been working on/,
+          // The SPELLING, not only the requirement, and for the same reason the
+          // rendered brief is read for it below: `git rev-parse --abbrev-ref
+          // HEAD` is documented to produce a non-ambiguous name, so it prints
+          // `heads/<name>` wherever a tag shares the branch's name and aborts a
+          // valid publication. The span runs into "in that spelling" rather than
+          // stopping at the command, because both spellings appear on this line
+          // — the wrong one as the counter-example — so a bare mention of the
+          // right one would still pass a line that swapped which is asked for.
+          /`git branch --show-current`, in that spelling/,
         ],
       ],
       [
@@ -1458,7 +1467,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         // has nothing for the publish-time read to confirm.
         "the fields its off-shoot target rule reads",
         "**Read context:** `gh pr view NUMBER --json",
-        [/headRepository,/, /isCrossRepository/],
+        [/headRepository,/, /headRepositoryOwner,/, /isCrossRepository/],
       ],
       [
         "the fields step 1 records them from",
