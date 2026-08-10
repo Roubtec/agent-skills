@@ -197,21 +197,29 @@
 // class, rather than one at a time — is the derived RESULT lists whose empty state
 // IS the verdict their check reports as a pass: `unlisted`, `vanished`,
 // `unaccounted`, `prose`, `drifted`, `missing`, `unreadableDeputyRules`,
-// `ruleDrifted`, `undeclared`, `wrong`, `absent`, `blankSpans`, and `stray`, the
-// one `find` among them rather than a list. Whichever shape, emptying one of those
-// is not an edit available to anyone: each is DERIVED from something this file
-// establishes elsewhere — most of them by filtering a collection this list already
-// covers — and each comes back empty exactly when the condition it detects is
-// absent. `prose` and `unaccounted` are the two whose source is a scan rather than
-// a listed collection: they partition one source's literal `agent(` occurrences
-// between them, and they gate nothing by themselves — what a lost occurrence
-// costs is a builder that goes unrendered, which is `promptBuilders(src).names`'
-// entry below. What this list exists to catch is a check switched off by emptying
-// its INPUT; a result list has no such door.
+// `ruleDrifted`, `undeclared`, `wrong`, `absent`, `emptyTables`, `blankSpans`,
+// and `stray`, the one `find` among them rather than a list. Whichever shape,
+// emptying one of those is not an edit available to anyone: each is DERIVED from
+// something this file establishes elsewhere — most of them by filtering a
+// collection this list already covers — and each comes back empty exactly when
+// the condition it detects is absent. `prose` and `unaccounted` are the two whose
+// source is a scan rather than a listed collection: they partition one source's
+// literal `agent(` occurrences between them, and they sit in this class for
+// different reasons. `unaccounted` fits it exactly: non-empty increments
+// `failures` and prints a FAIL row, so its empty state IS the pass that check
+// reports. `prose` reports no verdict at all — it is printed for the record and
+// gates nothing — so it has no check of its own to switch off. What keeps both
+// out of the inventory is that neither is a hand-written INPUT: emptying either
+// takes deleting `agent(` occurrences from a shipped source, and what a lost
+// occurrence costs is a builder that goes unrendered, which is
+// `promptBuilders(src).names`' entry below. What this list exists to catch is a
+// check switched off by emptying its INPUT; a result list has no such door.
 //
-// `emptyTables` used to be named in that class and does not belong to it: it is
-// filtered out of an inline hand-written registry that no other entry covers, so
-// it gets its own entry below.
+// `emptyTables` is in that class on both counts — it is filtered out of the
+// inline guard registry, and it comes back empty exactly when no declared table
+// is empty — and it is the case the "most of them" above hedges around: the
+// collection it filters was itself covered by no entry. That INPUT is what needed
+// one, and it has one below.
 //
 //   `CUT` — empty: every shipped `wf-*.js` is unlisted, which FAILs the
 //     workflow-set check, and nothing renders. The run then dies in the
@@ -328,8 +336,8 @@
 // files. Where something does, shrinking FAILS on its own: dropping a
 // warning-carrying anchor from `PROSE_CLAUSES` leaves the census counting a
 // clause the table no longer declares, and dropping a `byReference` anchor now
-// fails the same way, against the second census pattern beside it. Where nothing
-// does — `BESPOKE_DESTINATIONS`' entries, the guard registry above — shrinking is
+// fails too, against the guards beside it. Where nothing does —
+// `BESPOKE_DESTINATIONS`' entries, the guard registry above — shrinking is
 // invisible, and what the guards buy is that closing the resulting hole takes a
 // SECOND deliberate edit: removing the `rebaseTempDirectory` entry from
 // `BESPOKE_DESTINATIONS` AND flipping `rebasePrompt` to `NO_BUILD` passes at
@@ -1428,7 +1436,7 @@ for (const mirror of PROSE_MIRRORS) {
       rows.push([path, "prose destination", "FAIL", `${counted} warning-carrying destination clause(s) in the file but ${anchors.length} anchored — a clause arrived or left; update the anchors`]);
     } else if (byRefCounted !== byReference.length) {
       failures++;
-      rows.push([path, "prose destination", "FAIL", `${byRefCounted} by-reference destination clause(s) in the file but ${byReference.length} anchored — a clause arrived, left, or lost its \`byReference\` key; update the anchors`]);
+      rows.push([path, "prose destination", "FAIL", `${byRefCounted} by-reference destination clause(s) in the file but ${byReference.length} anchored — a clause arrived, left, lost its \`byReference\` key, or was reworded past \`PROSE_BY_REFERENCE\`; update the anchors or the pattern`]);
     } else {
       proseAnchors += guarded.length;
       const also = byReference.length ? ` + ${byReference.length} by-reference` : "";
