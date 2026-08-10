@@ -1329,10 +1329,16 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   const probe = off.indexOf("git rev-list --right-only --cherry-pick HEAD...");
   const offStop = off.indexOf('aborted: "off-shoot does not carry the PR head"');
   const offLease = off.indexOf("--force-with-lease=");
+  // The probe's POLARITY is read too, not only its presence: a gate that runs
+  // the probe and treats what it prints as information ("print it for the
+  // record and continue") keeps every other string this block reads. What no
+  // regex here can hold is a rule reversed while the phrasing survives — that
+  // is the reviewer's, exactly as in the fetched-head block above.
+  const requiresEmpty = /require it to print NOTHING/.test(off);
   check(
     "the publish brief makes an off-shoot establish the recorded head is represented in it, before any lease",
-    probe > -1 && offStop > -1 && offLease > -1 && probe < offLease && offStop < offLease,
-    `probe@${probe} stop@${offStop} lease@${offLease}`,
+    probe > -1 && offStop > -1 && offLease > -1 && probe < offLease && offStop < offLease && requiresEmpty,
+    `probe@${probe} stop@${offStop} lease@${offLease} requires-empty@${requiresEmpty}`,
   );
 
   // The stop must name what it SAW rather than reporting a classification, and
