@@ -1448,6 +1448,15 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
           // — the wrong one as the counter-example — so a bare mention of the
           // right one would still pass a line that swapped which is asked for.
           /`git branch --show-current`, in that spelling/,
+          // The CONSEQUENCE, not only the requirement. Everything above pins
+          // what the step must establish; none of it pins what happens when the
+          // establishing fails, and a line that resolves the target, finds it
+          // unmatched and then publishes anyway keeps every other span here.
+          // The span runs to "instead of guessing" rather than stopping at the
+          // verb, because "stop" alone also appears on this line as the
+          // moved-checkout case — so a bare mention would pass a line whose
+          // push-target failure had been softened to a note-and-continue.
+          /stop and report instead of guessing/,
         ],
       ],
       [
