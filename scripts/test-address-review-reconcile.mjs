@@ -1020,9 +1020,10 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // The probe is looked for command-first, not by proximity to a name for the
     // recorded OID: `<headRefOid>`, `"$PR_HEAD"` and a bare `HEAD^{commit}` are
     // the same gate. But `rev-parse` is not one command: these four files run it
-    // in four spellings that query no object's existence at all
-    // (`--abbrev-ref HEAD`, `--show-toplevel`, `--git-path rebase-merge`,
-    // `origin/main`), so counting every `rev-parse` as an existence probe would
+    // in three spellings that query no object's existence at all
+    // (`--show-toplevel`, `--git-path rebase-merge`, `origin/main`), and the
+    // fixtures below add a fourth they no longer ship (`--abbrev-ref HEAD`),
+    // so counting every `rev-parse` as an existence probe would
     // fail an ordinary edit that mentions one of those inside the rule
     // paragraph. `rev-parse` therefore counts only in its object-query
     // spellings — `--verify`, or a peel suffix (`^{commit}`, `^{}`), which is
