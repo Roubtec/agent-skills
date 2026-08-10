@@ -1619,13 +1619,24 @@ if (cycle.verdict === "error") {
 // complete).
 // A map with no entries records nothing: the skill's rule that a run with
 // nothing triaged says so in its report rather than posting an empty record.
-// An exit that passes no reason records nothing either, and the cycle-error
-// exits do not call this at all — there no verdict describes the tree that
-// exists, so the run cannot say what the map it holds was verified against, and
-// a record replayed as if it were verified is worse than one the maintainer
-// reads out of the result. A run stopped by the pre-push rebase is NOT that
-// case: its verdict describes the tree the aborted replay left standing, and the
-// record says the rebase is why nothing was published.
+// An exit that passes no reason records nothing either, and the two CYCLE-ERROR
+// exits do not call this at all. Not because no tree is described — the pre-push
+// stop's tree is, and its pre-rebase tip is saved at `refs/pre-rebase/…` — but
+// because no verdict was ever RENDERED over the map they hold. A cap-hit cycle
+// reported one: its dispositions are a finished round's triage with findings
+// still outstanding, and `reviewer did NOT pass (N rounds)` is a line its record
+// prints truthfully. An errored cycle reported none at all, so its map is
+// whatever a round that did not finish left behind, of unknown completeness and
+// unknown tree. The post-merge exit is the same map: `mergedCycle` spreads
+// `after`, so the merged `workReport` is the FAILED re-verification's own, never
+// the pre-rebase cycle's. And a record is REPLAYED rather than re-triaged
+// (`priorRecordSection`), so recording one there would hand the next run's round
+// 1 a baseline no reviewer ever stood behind — while the map itself still rides
+// out in the result, beside the error that produced it, where a maintainer reads
+// both. Two neighbours are NOT that case and both record: a run stopped by the
+// pre-push rebase, whose verdict describes the tree the aborted replay left
+// standing, and a re-verification that returned NOTHING, which still holds the
+// map that passed on the pre-replay base. Each says so in its reason.
 // It always runs before the worktree is given back, because every exit that
 // reclaims one is below the call that records for it — so the tips it cites are
 // read where the work happened.
@@ -1781,8 +1792,21 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
       },
     });
     if (!reverified) {
+      // `cycle` is still `preRebaseCycle` here — the reassignment is below — so
+      // this exit holds exactly the map the exhausted-budget exit above holds:
+      // one that PASSED review on the base the branch sat on before the replay.
+      // The cycle-error exits' exemption does not reach it, and nothing
+      // downstream will ever post its drafted replies, so it records for the
+      // same reason, with the same care not to claim the verdict describes the
+      // rebased tree.
+      const record = await leaveDispositionRecord(
+        `the pre-push rebase replayed commits and the re-verification cycle returned nothing, so no verdict describes the rebased tree and publication was refused. The dispositions below passed review on the base the branch sat on before that replay.`,
+        cycle.workReport,
+        { rounds: cycle.rounds, reviewerPassed: cycle.verdict === "pass", deviations: cycle.deviations },
+      );
       return {
         error: "The post-rebase re-verification cycle returned nothing, so no verdict describes the rebased tree; nothing was pushed.",
+        ...record,
         pr: packet.pr,
         rebase: rebaseRecord,
         rounds: cycle.rounds,
@@ -1792,6 +1816,7 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
         peerRounds: cycle.peerRounds,
         artifactDir: cycle.artifactDir,
         ...carriedOf(cycle),
+        note: withRecordNote(`Nothing was pushed. The branch is on the rebased base, and its pre-rebase tip is saved at \`${second.rebase.recoveryRef}\`.`),
       };
     }
     second.rebase.reverified = {

@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 165;
+const EXPECTED_CHECKS = 167;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -2667,6 +2667,18 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   };
   // The same abort with NO map at all — nothing to replay, so nothing to record.
   const CYCLE_NO_MAP = { ...CYCLE_PASS, workReport: [] };
+  // A cycle that reported an ERROR instead of a verdict, holding a nonempty map
+  // no reviewer ever passed.
+  const CYCLE_ERROR = { ...CYCLE_PASS, verdict: "error", detail: "the review cycle harness returned no verdict" };
+  // The re-verification erroring, with a map of its OWN — distinguishable from
+  // the pre-rebase cycle's, so "the merged report is the failed
+  // re-verification's" is observable rather than asserted.
+  const CYCLE_REVERIFIED_ERROR = {
+    ...CYCLE_REVERIFIED,
+    verdict: "error",
+    detail: "the reviewer harness died mid-round",
+    workReport: [{ ...CYCLE_PASS.workReport[0], detail: "re-triaged after the replay, and the round never finished" }],
+  };
   // The pre-push rebase halting on a conflict it cannot judge: the map has
   // passed review, and the abort left the tree that verdict describes.
   const REBASE_HALTED = {
@@ -2708,14 +2720,24 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     ["a push run whose dispositions leave a gathered item uncovered", { args: "push no-rebase", cycles: [CYCLE_UNCOVERED] }, "publish-aborted-incomplete-dispositions", true],
     ["a pre-push rebase that halted on a conflict", { args: "push", cycles: [CYCLE_PASS], rebases: { "pre-fix": REBASE_NOOP, "pre-push": REBASE_HALTED } }, "rebase-halted", true],
     ["a replay with no reviewer rounds left to re-verify it", { args: "push", cycles: [{ ...CYCLE_PASS, rounds: 12 }], ...REPLAY_POINTS }, "reverify-budget-exhausted", true],
+    ["a re-verification that returned nothing", { args: "push", cycles: [CYCLE_PASS, null], ...REPLAY_POINTS }, "error", true],
     ["a publication that pushed and then failed part-way", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_PART_WAY }, "fixed-publish-failed", true],
     ["a publication that aborted with nothing on origin", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_NOTHING }, "fixed-publish-failed", true],
     ["a run that published", { args: "push no-rebase", cycles: [CYCLE_PASS] }, "fixed-published", false],
     ["an abort with no dispositions at all", { args: "push no-rebase", cycles: [CYCLE_NO_MAP] }, "publish-aborted-incomplete-dispositions", false],
+    // The two exits the exemption covers, and the only two: a cycle that
+    // reported no verdict at all, before the rebase and after it. Neither map
+    // was ever passed by a reviewer, and a record is REPLAYED rather than
+    // re-triaged, so neither is written — while both still ride out in the
+    // result. `records: false` here is the declined half of the same decision
+    // that makes the row above it record.
+    ["a first cycle that errored", { args: "push no-rebase", cycles: [CYCLE_ERROR] }, "error", false],
+    ["a re-verification that errored", { args: "push", cycles: [CYCLE_PASS, CYCLE_REVERIFIED_ERROR], ...REPLAY_POINTS }, "error", false],
   ];
   const wrong = [];
   let recordBrief = "";
   const briefs = {};
+  const results = {};
   for (const [what, opts, status, records] of cases) {
     const r = await run(gathered(withWork), opts);
     const dispatched = r.seen.agentLabels.includes("record");
@@ -2724,6 +2746,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     if (dispatched !== records) wrong.push(`${what} ${dispatched ? "recorded" : "recorded nothing"}, expected the opposite`);
     if (reported !== records) wrong.push(`${what} ${reported ? "reports" : "does not report"} a dispositionRecord, expected the opposite`);
     briefs[what] = r.seen.recordPrompts[0] || "";
+    results[what] = r.result || {};
     if (records && !recordBrief) recordBrief = r.seen.recordPrompts[0] || "";
   }
   check(
@@ -2750,6 +2773,46 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       partWayStatus: (partWay.match(/status: [^(]*/) || [])[0],
       partWayLocalOnly: /LOCAL ONLY/.test(partWay),
       nothingLandedStatus: (nothingLanded.match(/status: [^(]*/) || [])[0],
+    }),
+  );
+
+  // A re-verification that returned NOTHING holds the map that passed review on
+  // the base before the replay — `cycle` is not reassigned until the merge below
+  // it — so it is the exhausted-budget exit's case, not the cycle-error exits'.
+  // The reason must say which base that verdict was rendered on, or the record
+  // overstates itself.
+  const reverifyGone = briefs["a re-verification that returned nothing"];
+  check(
+    "a re-verification that returned nothing records the map that passed before the replay, saying which base that verdict was rendered on",
+    /the re-verification cycle returned nothing, so no verdict describes the rebased tree/.test(reverifyGone) &&
+      /The dispositions below passed review on the base the branch sat on before that replay/.test(reverifyGone) &&
+      /reviewer Pass \(3 round\(s\)\)/.test(reverifyGone) &&
+      reverifyGone.includes(CYCLE_PASS.workReport[0].detail) &&
+      /refs\/pre-rebase\/feature\/x\/20260809-121314/.test(results["a re-verification that returned nothing"].note || ""),
+    JSON.stringify({
+      reason: (reverifyGone.match(/This run published NOTHING: [^\n]*/) || ["no reason line"])[0].slice(0, 160),
+      note: results["a re-verification that returned nothing"].note,
+    }),
+  );
+
+  // The declined half, stated as the fact it rests on: a cycle that reported an
+  // ERROR was passed by no verdict, and the merged report of a failed
+  // re-verification is that cycle's OWN map rather than the pre-rebase one that
+  // passed — `mergedCycle` spreads `after`. Were it the pre-rebase map, the
+  // exemption would be withholding a record from a map that passed review.
+  const erroredReverify = results["a re-verification that errored"];
+  check(
+    "and a cycle that errored records nothing while its map still rides out in the result — the merged map being the failed re-verification's own, not the map that passed",
+    Array.isArray(erroredReverify.dispositions) &&
+      erroredReverify.dispositions.length === 1 &&
+      erroredReverify.dispositions[0].detail === CYCLE_REVERIFIED_ERROR.workReport[0].detail &&
+      !erroredReverify.dispositionRecord &&
+      Array.isArray(results["a first cycle that errored"].dispositions) &&
+      results["a first cycle that errored"].dispositions.length === 1 &&
+      !results["a first cycle that errored"].dispositionRecord,
+    JSON.stringify({
+      mergedDetail: (erroredReverify.dispositions || [{}])[0].detail,
+      firstCycleMap: (results["a first cycle that errored"].dispositions || []).length,
     }),
   );
 
