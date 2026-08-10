@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 144;
+const EXPECTED_CHECKS = 150;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1305,6 +1305,143 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   const named = /PROPER ANCESTOR/.test(brief);
   check("the publish brief stops a proper-ancestor HEAD without pushing", stop > -1 && named, `stop@${stop} names-the-case@${named}`);
   check("and states that stop ahead of the lease it would otherwise match", stop > -1 && lease > -1 && stop < lease, `stop@${stop} lease@${lease}`);
+}
+
+// --- The off-shoot's publication gate ---------------------------------------
+// The hole the reconciliation deliberately leaves (task 021c). On the off-shoot
+// path reconciliation is skipped WHOLE, so nothing has compared the two tips by
+// the time the publisher runs — and an off-shoot cut BEFORE the recorded head,
+// advanced with its own commits, is neither an ancestor nor a descendant of it.
+// The lease is no protection there: the recorded OID is exactly what the remote
+// still points at, so it MATCHES, the push succeeds, and the PR branch is
+// rewound over every commit between the cut point and the head. Prose again, so
+// it is read out of the rendered brief — and the claim is about ORDER (before
+// the lease), about what the stop REPORTS (both tips, not a guess), and about
+// the gate being keyed on the two branch NAMES exactly as 021b's is.
+{
+  const off = publishPrompt(
+    gathered({ workingBranch: "local/side-work", reconcile: { outcome: "not-applicable" } }),
+    [],
+    { push: true },
+    [],
+    [],
+  );
+  const probe = off.indexOf("git rev-list --right-only --cherry-pick HEAD...");
+  const offStop = off.indexOf('aborted: "off-shoot does not carry the PR head"');
+  const offLease = off.indexOf("--force-with-lease=");
+  check(
+    "the publish brief makes an off-shoot establish the recorded head is represented in it, before any lease",
+    probe > -1 && offStop > -1 && offLease > -1 && probe < offLease && offStop < offLease,
+    `probe@${probe} stop@${offStop} lease@${offLease}`,
+  );
+
+  // The stop must name what it SAW rather than reporting a classification, and
+  // it must not offer to make the push legal instead: fast-forwarding, merging
+  // or rebasing the off-shoot is the maintainer's call, exactly as the
+  // reconciliation's third outcome is.
+  const gate = off.split("\n").find((l) => l.includes('aborted: "off-shoot does not carry the PR head"')) || "";
+  const namesBothTips = /BOTH tips/.test(gate) && gate.includes("deadbeef") && /\bHEAD\b/.test(gate);
+  const namesTheCommits = /every commit the probe printed/.test(gate);
+  const refusesToReconcile = /Do NOT fast-forward, merge, rebase/.test(gate);
+  check(
+    "and that stop names both tips and the commits it saw, and reconciles nothing to make the push legal",
+    namesBothTips && namesTheCommits && refusesToReconcile,
+    `names both tips: ${namesBothTips}; names the commits: ${namesTheCommits}; refuses to reconcile: ${refusesToReconcile}`,
+  );
+
+  // Keyed on the two names, and RENDERED with both, so the publisher settles
+  // applicability from its own brief rather than probing the shape of the
+  // history — the one thing task 018 forbids. The PR's own branch is left to the
+  // reconciliation deliberately: re-asking there would stop an ordinary run
+  // whose default rebase flattened a merge commit the recorded head carries.
+  const keyedOnNames = gate.includes("local/side-work") && gate.includes("feature/x");
+  const leavesTheOwnBranch = /run no probe there/.test(gate) && /reconciliation established representation/.test(gate);
+  check(
+    "and keys that gate on the two branch names it renders, leaving a run on the PR's own branch to the reconciliation",
+    keyedOnNames && leavesTheOwnBranch,
+    `renders both names: ${keyedOnNames}; leaves the own branch to the reconciliation: ${leavesTheOwnBranch}`,
+  );
+
+  // The residual case, which is the same gap seen from the other side: the lease
+  // case used to trigger on "history was rewritten", so a tip that is neither a
+  // proper ancestor nor a descendant of the expected tip and rewrote nothing
+  // matched no enumerated instruction at all — the run was left to choose at
+  // exactly the point where the wrong choice is the rewinding one. The remainder
+  // must therefore be "everything else". `rebased:` stays rendered as context;
+  // what it may not be again is the trigger.
+  const seg = off.slice(off.indexOf("normal push (", offStop), offLease);
+  const remainder = /OTHERWISE/.test(seg) && /every remaining state, whether or not this run rewrote history/.test(seg);
+  const notGatedOnRewrite = !/If history was rewritten/.test(seg);
+  const rebasedStillReported = /rebased: no/.test(seg);
+  check(
+    "and hands the remaining state an instruction — the lease is what everything else gets, not what a rewritten history gets",
+    remainder && notGatedOnRewrite && rebasedStillReported,
+    `remainder stated: ${remainder}; not gated on a rewrite: ${notGatedOnRewrite}; rebased still reported: ${rebasedStillReported}`,
+  );
+
+  // Item 1 is the other half of the same exposure and reaches the run FIRST: it
+  // resolves a push target and stops on a mismatch, and an off-shoot's own
+  // upstream never matches the PR head — so read as the branch's own resolution
+  // it halts every off-shoot run after all its work, at the one step whose remit
+  // is to decide what may be pushed from it.
+  const item1 = off.split("\n").find((l) => l.startsWith("1. Re-check before publication")) || "";
+  const targetIsThePr = /PUBLICATION TARGET/.test(item1) && /the PR's head repository/.test(item1);
+  const notTheOffShootsUpstream =
+    /off-shoot's own upstream is NOT the target/.test(item1) && /normal state rather than a stop/.test(item1);
+  check(
+    "and item 1 resolves the publication target from the PR, so an off-shoot's own upstream is not a stop before the gate is reached",
+    targetIsThePr && notTheOffShootsUpstream,
+    `target is the PR's: ${targetIsThePr}; off-shoot upstream not a stop: ${notTheOffShootsUpstream}`,
+  );
+
+  // The same two decisions in the SKILL that states them to a reader rather than
+  // to a subagent, in both mirrors, which no generator keeps in step. Anchored to
+  // the sentence that carries each decision, so a rewrite that keeps the heading
+  // and drops the rule fails rather than passing on the file's other mentions.
+  {
+    const wanted = [
+      [
+        "the off-shoot representation gate",
+        "**First, an off-shoot must carry the recorded head.**",
+        [
+          /`git rev-list --right-only --cherry-pick HEAD\.\.\.<expected-head-oid>`/,
+          /patch-id rather than raw ancestry/,
+          /naming both tips/,
+          /do not fast-forward, merge or rebase the off-shoot/,
+        ],
+      ],
+      [
+        "the off-shoot's publication target",
+        "**On a named off-shoot the target is the PR's head ref, never the branch's own upstream.**",
+        [/is never pushed to by this run/, /that mode's normal state/],
+      ],
+      ["the lease as the remainder", "- **Otherwise** — every remaining state", [/whether or not this run rewrote history/]],
+    ];
+    const missing = [];
+    for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
+      const path = `${mirror}/address-review/SKILL.md`;
+      let text;
+      try {
+        text = readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8");
+      } catch (err) {
+        missing.push(`${path} cannot be read: ${err.message}`);
+        continue;
+      }
+      for (const [what, anchor, phrases] of wanted) {
+        const line = text.split("\n").find((l) => l.includes(anchor));
+        if (!line) {
+          missing.push(`${path} states nothing for ${what}`);
+          continue;
+        }
+        for (const phrase of phrases) if (!phrase.test(line)) missing.push(`${path}'s ${what} does not state ${phrase}`);
+      }
+    }
+    check(
+      "and the skill carries the same two decisions in both mirrors — the off-shoot's gate before its push, and the PR's ref as its target",
+      missing.length === 0,
+      missing.join("; "),
+    );
+  }
 }
 
 // --- The delegated rebase points --------------------------------------------
