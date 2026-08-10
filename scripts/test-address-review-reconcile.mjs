@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 141;
+const EXPECTED_CHECKS = 143;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -955,21 +955,44 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // The same rule, in the two SKILLs that state it to a reader rather than to a
   // subagent — and in both mirrors, which no generator keeps in step. Each file
   // is anchored to the PARAGRAPH that carries the rule, not to the file, so the
-  // read stays where the decision is made: `FETCH_HEAD` is discussed in two to
-  // four places per file, so a rule paragraph rewritten back to an existence
-  // test could keep a file-level search satisfied from a paragraph that decides
-  // nothing. The deletion half is asserted over the whole file instead, because
-  // re-importing the probe anywhere in either skill is the regression.
+  // read stays where the decision is made. Today every `FETCH_HEAD` mention in
+  // all four files already sits inside that paragraph (2 occurrences in
+  // `address-review`, 4 in `address-reviews`, one line each), so the anchoring
+  // is defensive rather than load-bearing: it keeps a rule paragraph reverted to
+  // an existence test from being excused by a mention some future edit adds
+  // elsewhere in the file, which a file-level search would accept.
+  //
+  // Reading the paragraph for the fetched-head command is not enough by itself.
+  // A gutted instruction — "do not use `git rev-parse FETCH_HEAD`; retain the
+  // recorded OID" — contains the command, and an existence gate re-spelled as
+  // `git rev-parse --verify <headRefOid>^{commit}` with the fetched head demoted
+  // to a fallback contains it too. So each paragraph is read for the rule's
+  // DIRECTION as each skill states it (`address-review` reconciles against the
+  // fetched head rather than the recorded `headRefOid`; `address-reviews` adopts
+  // it as the entry's head), and for the absence of an existence gate on the
+  // recorded OID however the probe is spelled. `cat-file -e` is banned
+  // file-wide as well, because re-importing that probe anywhere in either skill
+  // is the regression.
   {
     const mirrors = ["plugins/dev-skills/skills", "codex/dev-skills/skills"];
+    // `git rev-parse --verify FETCH_HEAD` is a benign spelling of the rule
+    // itself, so a probe counts as the replaced gate only where it names the
+    // RECORDED side.
+    const existenceGate = /(?:cat-file\s+-[et]\b|rev-parse\s+--verify)[^`\n]{0,40}(?:headRefOid|recorded)/;
     const rulePara = [
-      ["address-review", "**Reconcile the working location's branch with the PR head before triaging anything.**"],
-      ["address-reviews", "The canonical path."],
+      [
+        "address-review",
+        "**Reconcile the working location's branch with the PR head before triaging anything.**",
+        /rather than (?:from )?the recorded `headRefOid`/,
+      ],
+      ["address-reviews", "The canonical path.", /adopt(?:ing)? the fetched OID as (?:this|the) entry's head/],
     ];
     const unread = [];
+    const undirected = [];
+    const gated = [];
     const probed = [];
     for (const mirror of mirrors) {
-      for (const [skill, anchor] of rulePara) {
+      for (const [skill, anchor, direction] of rulePara) {
         const path = `${mirror}/${skill}/SKILL.md`;
         let text;
         try {
@@ -979,8 +1002,13 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
           continue;
         }
         const para = text.split("\n\n").find((p) => p.includes(anchor));
-        if (!para) unread.push(`${path} has no paragraph carrying ${JSON.stringify(anchor)}`);
-        else if (!para.includes("git rev-parse FETCH_HEAD")) unread.push(`${path}'s rule paragraph does not read the fetched head`);
+        if (!para) {
+          unread.push(`${path} has no paragraph carrying ${JSON.stringify(anchor)}`);
+        } else {
+          if (!/git rev-parse (?:--verify )?FETCH_HEAD/.test(para)) unread.push(`${path}'s rule paragraph does not read the fetched head`);
+          if (!direction.test(para)) undirected.push(`${path} does not state ${direction}`);
+          if (existenceGate.test(para)) gated.push(`${path} matches ${existenceGate}`);
+        }
         if (/cat-file -e/.test(text)) probed.push(path);
       }
     }
@@ -988,6 +1016,16 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       "and both skills state that same rule, in both mirrors — the head comes from `git rev-parse FETCH_HEAD`",
       unread.length === 0,
       unread.join("; "),
+    );
+    check(
+      "and each states it directionally — the fetched head displaces the recorded `headRefOid`, not the reverse",
+      undirected.length === 0,
+      undirected.join("; "),
+    );
+    check(
+      "and no rule paragraph gates on the recorded OID being present, however the probe is spelled",
+      gated.length === 0,
+      gated.join("; "),
     );
     check(
       "and no skill has re-imported the existence probe on the recorded OID",
