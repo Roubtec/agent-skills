@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 143;
+const EXPECTED_CHECKS = 144;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -969,8 +969,9 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // to a fallback contains it too. So each paragraph is read for two more
   // things: the PHRASE its own skill states the rule in (`address-review`'s
   // "rather than the recorded `headRefOid`"; `address-reviews`' "adopt the
-  // fetched OID as this entry's head"), and the absence of either enumerated
-  // existence probe on anything but `FETCH_HEAD`. `cat-file -e` is banned
+  // fetched OID as this entry's head"), and the absence of any object-existence
+  // gate other than reading the fetched head itself — which commands count, and
+  // in which spellings, is enumerated below. `cat-file -e` is banned
   // file-wide as well, because re-importing that probe anywhere in either skill
   // is the regression.
   //
@@ -981,22 +982,63 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // catch, stated so nobody reads a pass as a semantic guarantee: a rule
   // REVERSED while the pinned phrase survives ("never adopt the fetched OID as
   // this entry's head" contains it), a demotion of the fetched head stated
-  // without naming any git command, and a probe spelled outside the two
-  // enumerated below — including one that names `FETCH_HEAD` in the same
-  // command, which the benign-use exclusion lets through. Polarity is the
-  // reviewer's to hold; sharpening a regex at it only buys the next evasion.
+  // without naming any git command, a probe spelled outside the forms
+  // enumerated below — a `rev-parse` that neither asks `--verify` nor peels,
+  // `cat-file` in any other mode — and any of them written without backticks,
+  // since only backticked spans are read. Polarity is the reviewer's to hold;
+  // sharpening a regex at it only buys the next evasion.
   {
     const mirrors = ["plugins/dev-skills/skills", "codex/dev-skills/skills"];
     // The probe is looked for command-first, not by proximity to a name for the
     // recorded OID: `<headRefOid>`, `"$PR_HEAD"` and a bare `HEAD^{commit}` are
-    // the same gate, and `--verify` is redundant for an existence test so bare
-    // `rev-parse` is the likelier spelling. Exactly one use of these commands is
-    // benign — reading the fetch itself — and it is excluded by name, so a
-    // backticked command counts as the replaced gate whenever it runs one of
-    // them without naming `FETCH_HEAD`.
-    const existenceProbe = /cat-file\s+-[et]\b|rev-parse\b/;
+    // the same gate. But `rev-parse` is not one command: these four files run it
+    // in four spellings that query no object's existence at all
+    // (`--abbrev-ref HEAD`, `--show-toplevel`, `--git-path rebase-merge`,
+    // `origin/main`), so counting every `rev-parse` as an existence probe would
+    // fail an ordinary edit that mentions one of those inside the rule
+    // paragraph. `rev-parse` therefore counts only in its object-query
+    // spellings — `--verify`, or a peel suffix (`^{commit}`, `^{}`), which is
+    // how an existence gate on a commit is written; `cat-file -e`/`-t` asks
+    // nothing else and counts however it is spelled. Reading the fetch itself is
+    // benign, and that one span is exempted by being the fetched-head read
+    // WHOLE, not by mentioning `FETCH_HEAD` somewhere: a span that gates on the
+    // recorded OID and names `FETCH_HEAD` beside it — `… ^{commit} || git
+    // rev-parse FETCH_HEAD`, or the same gate with a trailing comment
+    // mentioning it — is the gate, not the read.
+    const existenceProbe = /cat-file\s+-[et]\b|rev-parse\b[^`]*(?:--verify\b|\^\{[a-z]*\})/;
+    const fetchedHeadRead = /^`git rev-parse (?:--verify )?FETCH_HEAD(?:\^\{[a-z]*\})?`$/;
     const gatingProbes = (para) =>
-      (para.match(/`[^`\n]+`/g) || []).filter((span) => existenceProbe.test(span) && !/FETCH_HEAD/.test(span));
+      (para.match(/`[^`\n]+`/g) || []).filter((span) => existenceProbe.test(span) && !fetchedHeadRead.test(span));
+    // The discriminator is fixtured on synthetic spans, because it is the whole
+    // reason this read stays off ordinary prose: get it wrong in the loose
+    // direction and a reversed rule passes, wrong in the strict direction and an
+    // edit that merely mentions a branch-name query fails. Neither miss is
+    // visible from the shipped text, which contains none of these spans.
+    const probeFixtures = [
+      ["a non-query `rev-parse`", "Record the tip with `git rev-parse --abbrev-ref HEAD` first.", false],
+      ["the fetched-head read", "take the head from `git rev-parse FETCH_HEAD` instead", false],
+      ["the same read spelled with a peel", "resolve `git rev-parse --verify FETCH_HEAD^{commit}`", false],
+      ["a gate on the recorded OID", "confirm `git rev-parse --verify <headRefOid>^{commit}` first", true],
+      [
+        "a gate sharing its span with the read",
+        "prefer `git rev-parse --verify <headRefOid>^{commit} || git rev-parse FETCH_HEAD`",
+        true,
+      ],
+      [
+        "a gate whose comment names the read",
+        "run `git rev-parse --verify <headRefOid>^{commit}  # cheaper than reading FETCH_HEAD`",
+        true,
+      ],
+      ["a gate spelled `cat-file -e`", "confirm `git cat-file -e <headRefOid>^{commit}` first", true],
+    ];
+    const misjudged = probeFixtures
+      .filter(([, para, isGate]) => (gatingProbes(para).length > 0) !== isGate)
+      .map(([what]) => what);
+    check(
+      "and that read counts a gate on the recorded OID even beside the fetched-head read, while leaving a non-query `rev-parse` alone",
+      misjudged.length === 0,
+      `misjudged: ${misjudged.join("; ")}`,
+    );
     const rulePara = [
       [
         "address-review",
@@ -1042,7 +1084,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       unphrased.join("; "),
     );
     check(
-      "and no rule paragraph runs either enumerated existence probe on anything but `FETCH_HEAD`",
+      "and no rule paragraph gates on an object's existence — `cat-file -e`/`-t`, or a `rev-parse` that asks `--verify` or peels — except in reading the fetched head itself",
       gated.length === 0,
       gated.join("; "),
     );
