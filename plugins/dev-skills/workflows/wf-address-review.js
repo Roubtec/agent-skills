@@ -6,7 +6,9 @@
  * disposition through the shared review cycle (fresh-eyes reviewer plus a
  * best-effort cross-harness codex peer, bounded by the cycle's round cap),
  * then publish by default (lease-safe push, reply + resolve threads, Summary
- * comment, pings) — a `no-push` run stays local-only and mutates nothing.
+ * comment, pings) — a `no-push` run stays local-only, and the one PR write it
+ * makes is the disposition record every non-publishing exit leaves behind (see
+ * `recordPrompt`), which is `no-push`'s single documented exception.
  * The re-review pings fire ONLY when the push actually advanced the branch with
  * new commits/rewritten history; a no-op push (nothing new to review) skips them
  * so an automated review -> address -> review loop can terminate.
@@ -127,6 +129,7 @@ export const meta = {
     { title: "Rebase", detail: "delegated rebase onto the freshest base — before fixing, and again before publication" },
     { title: "Fix and verify", detail: "fix/push-back per thread through the nested wf-review-cycle" },
     { title: "Peer review (codex)", detail: "best-effort cross-harness second opinion beside each reviewer round; its outcome never blocks" },
+    { title: "Record", detail: "on every exit that publishes nothing: leave the run's disposition map on the PR as one record comment" },
     { title: "Publish", detail: "lease-safe push, thread replies, summary comment, pings" },
     { title: "Summary" },
   ],
@@ -252,6 +255,21 @@ const PUBLISH_SCHEMA = {
   required: ["published", "pushed", "pushedNewCommits"],
 };
 
+// What the disposition record's one write hands back. `posted` false is a report
+// rather than a failure of the run — the run's status still names what happened
+// to the PR — but it means this run's map exists only in the result, so the
+// reason rides in `detail` where a maintainer reads it.
+const RECORD_SCHEMA = {
+  type: "object",
+  properties: {
+    posted: { type: "boolean", description: "True only if the record comment is on the PR — either newly posted or a prior record of the authenticated user's updated in place." },
+    superseded: { type: "boolean", description: "True when this run UPDATED a prior record of its own rather than posting a new comment. Either way exactly one record write happened." },
+    url: { type: "string", description: "Permalink to the record comment, or empty when nothing was written." },
+    detail: { type: "string", description: "One line: whether it was posted or superseded, any further prior records left untouched, or what failed." },
+  },
+  required: ["posted", "detail"],
+};
+
 const RECLAIM_SCHEMA = {
   type: "object",
   properties: {
@@ -313,7 +331,7 @@ function botKindOf(login, authorIsBot) {
 // shared main checkout: its setup clone had failed invisibly inside a pipeline
 // under `set -e` (a pipeline's status is its last command), so it was still at
 // the repository root while believing it stood in a clone. This script's own
-// two agents (gather, publish) carry it from here; the fix and review briefs
+// deputies (gather, record, publish, worktree reclaim) carry it from here; the fix and review briefs
 // below ride the NESTED wf-review-cycle, whose review-cycle-core section states
 // the same boundary in the prompts it composes, so they do not restate it.
 const DESTROY_BOUNDARY = `## DESTROY BOUNDARY
@@ -381,7 +399,7 @@ Rebase NOTHING here, whatever the request asked for. Report \`pr.base = baseRefN
 
 Gather feedback into \`items\` (each verbatim):
 - UNRESOLVED review threads — PRIMARY: use the baked \`gh-review-threads\` helper. \`gh-review-threads <PR#>\` prints the unresolved threads as a JSON array (each thread \`id isResolved isOutdated path line\` and \`comments[]\` with \`databaseId author{ login __typename } body diffHunk url\`); it already pages with fresh SINGLE-SHOT queries (never \`gh api graphql --paginate\`), does the nested comment fetch-up, and applies the scope check below, failing closed with exit 3 and no stdout on a contaminated response. FALLBACK, only when \`command -v gh-review-threads\` fails (a container built from an older image — the same graceful-degradation used for the gh-version-gated Copilot ping): run the GraphQL \`reviewThreads\` query by hand as SINGLE-SHOT queries, never \`gh api graphql --paginate\` (run concurrently with other gh GraphQL calls it has returned ANOTHER PR's threads); include \`totalCount\` + \`pageInfo{ hasNextPage endCursor }\` and page past 100 threads by passing the returned cursor to a fresh call. Either way SCOPE-CHECK the result (the helper does this for you): every comment \`url\` must match the exact repo-qualified PR path for this PR (\`https://github.com/<owner>/<repo>/pull/<number>\` followed by \`#\`, \`/\`, \`?\`, or end); do not use a plain substring check such as \`/pull/<number>\`. On any mismatch, discard the entire response, retry once with a fresh single-shot query, and if it repeats fail closed; never emit an item whose \`url\` points at a different PR. Keep only \`isResolved == false\`. Emit each as \`type: "review-thread"\` with \`threadId\` (the thread node \`id\`), \`commentId\` (the top comment's \`databaseId\`), \`path\`, \`line\`, \`author\` (the top comment's \`author.login\`), \`authorIsBot\` (true when that comment's \`author.__typename\` is \`Bot\` — from the helper's output or the GraphQL \`author{ login __typename }\`; do not guess from the login), \`body\`, \`url\`. \`threadId\` and \`commentId\` are mandatory for these — they are how publication resolves and replies.
-- Top-level context — ALWAYS fetch every review summary (\`gh pr view --json reviews\`) and every issue comment (\`gh api --paginate repos/{owner}/{repo}/issues/<PR>/comments\`), even when the request names no standalone item: this sweep is how maintainer replies and decision comments are discovered. A maintainer reply on an unresolved thread is authoritative — fold it into that thread's context. So is a top-level maintainer comment recording per-item verdicts (often titled "Maintainer Decisions" or similar) — fold each decision into the relevant thread's context as its binding disposition (including "defer to a follow-up task" and "keep as-is").
+- Top-level context — ALWAYS fetch every review summary (\`gh pr view --json reviews\`) and every issue comment (\`gh api --paginate repos/{owner}/{repo}/issues/<PR>/comments\`), even when the request names no standalone item: this sweep is how maintainer replies and decision comments are discovered. A maintainer reply on an unresolved thread is authoritative — fold it into that thread's context. So is a top-level maintainer comment recording per-item verdicts (often titled "Maintainer Decisions" or similar) — fold each decision into the relevant thread's context as its binding disposition (including "defer to a follow-up task" and "keep as-is"). One kind of issue comment is NEITHER of those: a DISPOSITION RECORD left by an earlier run of this workflow, recognized by the marker \`<!-- address-review:disposition-record -->\` rather than by its prose. It is this workflow's own output, so it is never an item and carries no maintainer authority — do not fold its drafted replies into a thread as a decision. Read it as what an earlier run proposed, re-judge every disposition it names against the branch as it now stands (its SHAs are provenance, not a promise: the recorded tip is local-only and a rebase since then may have rewritten every one of them), and leave the comment alone — the record phase below is what supersedes it.
 - A standalone issue comment or review summary becomes its own item ONLY if the request explicitly identifies it as outstanding. Emit it as \`type: "standalone"\` with \`author\`, \`authorIsBot\`, \`body\`, and \`url\` (its permalink is the stable reference; it has no threadId and is never resolved as a thread).
 
 If there are no unresolved threads and no included standalone item, return \`ok: true\` with an empty \`items\` array — the caller will exit as a successful no-op.
@@ -661,6 +679,72 @@ ${JSON.stringify(dispositions, null, 2)}
 Record each item's outcome with its stable reference (file:line, author, threadId or url) in \`threadOutcomes\`.`;
 }
 
+// The DURABLE DISPOSITION RECORD — the `address-review` skill's section of that
+// name, rendered once for this workflow. Every exit that holds this run's
+// disposition map and publishes nothing writes it, so the map outlives the
+// session: this run's result is chat output, and closing the session used to
+// lose which thread was pushed back, what the drafted rationale said, and what
+// the Summary comment would have said — precisely the judgment calls the next
+// run would otherwise re-derive from scratch, most likely differently.
+// It is the ONE PR write a `no-push` run makes, carved out as that flag's single
+// documented exception rather than gated behind a flag of its own: a gate would
+// make durability opt-in and so lose the record in exactly the runs that end
+// unexpectedly, and it would add a fifth token to a push/ping resolution this
+// family has already learned not to grow.
+// Nothing here REPLAYS a record. Replay belongs to the next run's gather step,
+// which is told to read a prior record as a proposal and re-judge it against the
+// branch rather than trust its SHAs; this brief only writes one, and marks it so
+// that step can find it. And it runs BEFORE the worktree is given back, so the
+// tips it cites are read where the work actually happened.
+function recordPrompt(packet, dispositions, facts) {
+  const where = packet.pr && packet.pr.worktree
+    ? `Your working location is the worktree \`${packet.pr.worktree}\`. Before anything else, \`cd\` into it and verify \`git rev-parse --show-toplevel\` prints exactly that path; if not, STOP and report. Every git read below runs there. Do NOT touch the main checkout: it is on another branch and is none of this run's business.`
+    : `You work in the repository's current checkout, which is on the branch this run addressed — do NOT create a worktree and do NOT switch branches.`;
+  return `Leave this run's disposition record on PR #${packet.pr.number} (branch \`${packet.pr.workingBranch}\`). This run published NOTHING: ${facts.why} Read \`AGENTS.md\` / \`CLAUDE.md\` first.
+
+${where}
+
+${DEPUTY_FINISH_IN_TURN}
+
+${DESTROY_BOUNDARY}
+
+You make exactly ONE PR write — this record comment — and nothing else: no push, no reply, no resolve, no Summary comment, no ping, no label, no review request. If you cannot make that one write, report \`posted: false\` with what failed; never compensate by writing something else.
+
+1. Find a prior record. \`gh api --paginate repos/{owner}/{repo}/issues/${packet.pr.number}/comments --jq '.[] | select(.body | contains("<!-- address-review:disposition-record -->")) | {id, login: .user.login, updated_at}'\` — the MARKER identifies a record, never its prose. Keep the ones authored by the authenticated user (\`gh api user --jq .login\`).
+2. Compose the body below, then write it ONCE, reading it from stdin so composing it puts no file in the working location: a prior record of your own → \`gh api --method PATCH repos/{owner}/{repo}/issues/comments/<id> -F body=@-\`, which supersedes it IN PLACE so the PR keeps one record instead of a stack of near-duplicates; none → \`gh pr comment ${packet.pr.number} --body-file -\`. Where several of your own are present (one predating the marker, say), update the most recent and report the rest in \`detail\`: delete, sweep or expire NOTHING, and never touch another actor's comment.
+3. Write "codex"/"claude"/"copilot" PLAIN in the body, with no bare \`@\`-mentions anywhere, exactly as the Summary comment does — a mention here would summon a review round for work this run did not publish.
+
+The body, marker first (the marker line is what step 1 of the next run matches, so it is mandatory and must be byte-exact):
+
+\`\`\`
+<!-- address-review:disposition-record -->
+# address-review packet — PR #${packet.pr.number} (${packet.pr.workingBranch})
+status: not published (<the reason above, one line>)
+final HEAD <the tip you read> | recorded headRefOid ${packet.pr.headOid} | base ${packet.pr.base}
+validation <what ran> | reviewer ${facts.reviewerPassed ? "Pass" : "did NOT pass"} (${facts.rounds} round(s)) | peer <participation>
+the tips above are LOCAL ONLY — this run pushed nothing, so they are not on origin
+
+## Threads
+[<disposition>] <path>:<line>  <author>  thread=<threadId or url>
+                url:   <permalink>
+                reply: "<the exact reply body a publishing turn would post, verbatim>"
+
+## Summary comment (verbatim, ready to post)
+<the full markdown body>
+\`\`\`
+
+- \`final HEAD\` is what \`git rev-parse HEAD\` prints in the working location. Read it there rather than repeating a SHA from this brief.
+- One \`## Threads\` block entry per disposition below, in that shape: its disposition kind, its stable reference (path:line, author, and the \`threadId\` for a review thread or the \`url\` for a standalone item), the permalink, and the reply body VERBATIM. The drafted reply bodies and the ready-to-post Summary body are the only parts of this record that cannot be re-derived from the PR later, so they are the parts that must be exact.
+- The \`## Summary comment\` block holds the "Summary of Review Fixes" body a publishing run would have posted — what was fixed, a prominent "Pushed back — please re-examine" section, a "Deferred to follow-up tasks" section naming each committed task file, and any ambiguous/skipped item — ready to post unchanged. Where the cycle recorded locked-decision deviations, that body LEADS with them under a "Deviation from a locked decision" section, since a later turn posts what you wrote here as it stands. Standing deviations for this run: ${JSON.stringify(facts.deviations || [])}.
+- The SHAs are PROVENANCE, not a promise. Assert nothing about them holding later: the branch may be rebased before any push, which rewrites every one while changing nothing about whether the work is there. Do not write "the branch tip is <sha>" as a condition a replay must check, and do not omit the LOCAL ONLY line — a reader who takes those SHAs for origin's goes looking for commits that are not there.
+
+Report \`posted\`, \`superseded\` (true when you updated a prior record of your own), \`url\` (the record comment's permalink), and one line of \`detail\`.
+
+## Dispositions to record
+
+${JSON.stringify(dispositions, null, 2)}`;
+}
+
 // The one deputy whose whole job is giving the worktree back. It runs only on
 // paths where the run FINISHED — published, a local-only pass, or a no-op —
 // because a halted run's tree is the evidence a maintainer resumes from, and
@@ -737,7 +821,9 @@ const flagText = raw.toLowerCase().replace(/(\brebase[\s-]*on[\s-]*top[\s-]*of\s
 //   ping-contributing         -> same as the default (redundant, kept for reference)
 //   push                      -> push, ping NOBODY (publish quietly)
 //   ping-codex|claude|copilot -> push + ping exactly those (overrides contributing)
-//   no-push                   -> local-only; mutate no PR at all (the pre-change default)
+//   no-push                   -> local-only; the ONE PR write is the disposition
+//                                record every non-publishing exit leaves (the
+//                                pre-change default, which mutated nothing)
 // `no-push` WINS: it is the only way to suppress the now-default push, so honor it
 // even when combined with a (contradictory) ping flag.
 //
@@ -1746,8 +1832,63 @@ const badDispDefect = dispDefects.length ? dispDefects[0].defect : "";
 const badDispRef = dispDefects.length ? dispDefects[0].ref : "";
 const moreDefects = dispDefects.length > 1 ? ` ${dispDefects.length - 1} further entr${dispDefects.length === 2 ? "y is" : "ies are"} unpublishable too — see malformedDispositions.` : "";
 
+// THE DISPOSITION RECORD, before any of the exits that publish nothing take it.
+// Which exits those are is not a list to maintain: the reason below is computed
+// from the very conditions the exits branch on, in their order, so it is
+// non-empty exactly when one of them is about to be taken and an exit cannot be
+// added past here without deciding what it records. It runs before the no-push
+// branch's worktree reclaim so the record's tips are read where the work
+// happened.
+// The two error exits above it deliberately record nothing: there the cycle
+// returned no verdict describing the tree that exists, so the run cannot say
+// what the map it holds was verified against, and a record replayed as if it
+// were verified is worse than one the maintainer reads out of the result.
+// A map with no entries records nothing either — the skill's rule that a run
+// with nothing triaged says so in its report rather than posting an empty
+// record. The zero-item exits upstream never reach here, so what this covers is
+// a cycle that returned an empty report.
+const noPublishReason = !flags.push
+  ? passed
+    ? "`no-push` was given, so this was a local-only run: nothing was pushed and no thread was touched."
+    : "`no-push` was given AND the review cycle stopped at its round cap, so nothing was pushed."
+  : !passed
+    ? "the review cycle stopped at its round cap without a passing verdict, so publication was refused."
+    : uncoveredItems.length
+      ? `${uncoveredItems.length} gathered item(s) carry no disposition, so publication was aborted before any push.`
+      : duplicatedItems.length
+        ? `${duplicatedItems.length} gathered item(s) carry more than one disposition, so publication was aborted before any push.`
+        : badDispDefect
+          ? `a disposition is not publishable (${badDispRef}: ${badDispDefect}), so publication was aborted before any push.`
+          : "";
+let dispositionRecord = null;
+if (noPublishReason && workReport.length) {
+  phase("Record");
+  const written = await agent(
+    recordPrompt(packet, workReport, {
+      why: noPublishReason,
+      rounds,
+      reviewerPassed: !!passed,
+      deviations: cycle.deviations,
+    }),
+    { label: "record", schema: RECORD_SCHEMA }
+  );
+  dispositionRecord = written || { posted: false, detail: "the record phase returned nothing, so this run's disposition map survives only in this result." };
+}
+// Spread into every exit below that publishes nothing, so the result says where
+// the map went — or that it went nowhere.
+const recordResult = dispositionRecord ? { dispositionRecord } : {};
+// The same fact in the one line a maintainer reads first. A record that failed
+// to post is the more important half: it means the map is in this result and
+// nowhere else, which is exactly the loss the record exists to prevent.
+const recordNote = dispositionRecord
+  ? dispositionRecord.posted
+    ? `This run's disposition map is on the PR as its disposition record${dispositionRecord.url ? ` (${dispositionRecord.url})` : ""} — the one PR write a run that publishes nothing makes.`
+    : `This run's disposition map could NOT be recorded on the PR (${dispositionRecord.detail}), so it survives only in this result.`
+  : "";
+
 if (!flags.push) {
-  // Local-only run: make NO PR mutations. The disposition map is the deliverable
+  // Local-only run: no push, no reply, no resolve, no Summary comment, no ping —
+  // the record above is the one documented PR write. The disposition map is the deliverable
   // so a later "push" turn can replay replies/resolves precisely — which is why
   // an uncovered item, a doubly-covered one, or a malformed covering entry
   // downgrades the verdict to `fixed-local-incomplete`: a replay from this map
@@ -1761,6 +1902,7 @@ if (!flags.push) {
   phase("Report (no-push)");
   return {
     status: passed ? (uncoveredItems.length || duplicatedItems.length || badDispDefect ? "fixed-local-incomplete" : "fixed-local") : "review-cap",
+    ...recordResult,
     ...(reclaimed ? { worktreeReclaim: reclaimed } : {}),
     pr: packet.pr,
     rebase: rebaseRecord,
@@ -1784,7 +1926,7 @@ if (!flags.push) {
     ...(badDispDefect
       ? { malformedDisposition: badDispRef, malformedDispositions: dispDefects, dispositionNote: `Disposition "${badDispRef}" is not publishable: ${badDispDefect}. A later publish replay would misroute or skip it.${moreDefects}` }
       : {}),
-    note: `Local-only run: no push, no replies/resolves, no comment. Re-run without \`no-push\` to publish with the default contributing-bot pings, or with \`push\` to publish quietly.${survivingWorktreeNote(reclaimed)}`,
+    note: `Local-only run: no push, no replies/resolves, no Summary comment, no ping.${recordNote ? ` ${recordNote}` : ""} Re-run without \`no-push\` to publish with the default contributing-bot pings, or with \`push\` to publish quietly.${survivingWorktreeNote(reclaimed)}`,
   };
 }
 
@@ -1793,6 +1935,7 @@ if (!passed) {
   phase("Report (cap hit, not published)");
   return {
     status: "review-cap-not-published",
+    ...recordResult,
     pr: packet.pr,
     rebase: rebaseRecord,
     rounds,
@@ -1803,7 +1946,7 @@ if (!passed) {
     artifactDir: cycle.artifactDir,
     ...carried,
     outstanding: cycle.outstanding || null,
-    note: "Hit the review cycle's round cap without a passing review; nothing was pushed.",
+    note: `Hit the review cycle's round cap without a passing review; nothing was pushed.${recordNote ? ` ${recordNote}` : ""}`,
   };
 }
 
@@ -1815,6 +1958,7 @@ if (!passed) {
 if (uncoveredItems.length) {
   return {
     status: "publish-aborted-incomplete-dispositions",
+    ...recordResult,
     pr: packet.pr,
     rebase: rebaseRecord,
     rounds,
@@ -1837,6 +1981,7 @@ if (uncoveredItems.length) {
 if (duplicatedItems.length) {
   return {
     status: "publish-aborted-conflicting-dispositions",
+    ...recordResult,
     pr: packet.pr,
     rebase: rebaseRecord,
     rounds,
@@ -1859,6 +2004,7 @@ if (duplicatedItems.length) {
 if (badDispDefect) {
   return {
     status: "publish-aborted-incomplete-dispositions",
+    ...recordResult,
     pr: packet.pr,
     rebase: rebaseRecord,
     rounds,

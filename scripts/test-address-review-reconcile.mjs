@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 153;
+const EXPECTED_CHECKS = 156;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -305,7 +305,7 @@ const CYCLE_PASS_RECORD_ONLY = {
 // stubbed as a clean success and its rendered brief kept, since what the caller
 // HANDS it is script logic even though the brief itself is prose.
 async function run(packet, opts = {}) {
-  const seen = { agentLabels: [], cycleOpts: null, cycleCalls: [], rebasePrompts: [], publishPrompts: [] };
+  const seen = { agentLabels: [], cycleOpts: null, cycleCalls: [], rebasePrompts: [], publishPrompts: [], recordPrompts: [] };
   const agent = async (prompt, aopts) => {
     const label = (aopts && aopts.label) || "";
     seen.agentLabels.push(label);
@@ -321,6 +321,15 @@ async function run(packet, opts = {}) {
       return opts.publish === undefined
         ? { published: true, pushed: true, pushedNewCommits: true, threadOutcomes: [] }
         : opts.publish;
+    }
+    // The disposition record: the one PR write an exit that publishes nothing
+    // makes. Stubbed as a clean post and its brief kept, for the publisher's
+    // reason — WHICH exits reach it, and what they are handed, is script logic.
+    if (label === "record") {
+      seen.recordPrompts.push(prompt);
+      return opts.record === undefined
+        ? { posted: true, superseded: false, url: "https://example.invalid/pr/42#issuecomment-1", detail: "posted" }
+        : opts.record;
     }
     throw new Error(`unexpected agent call past the gate: ${label}`);
   };
@@ -1483,6 +1492,36 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         "2. **Auto-detect** — `gh pr view --json",
         [/headRepository,/, /headRepositoryOwner,/, /isCrossRepository/],
       ],
+      // The durable disposition record, whose whole value is that a LATER run
+      // finds and replays it — so what is pinned is the marker it is found by,
+      // the supersession that keeps one per PR, and the two rules a replay goes
+      // wrong without. Each is anchored to the sentence that carries it, so a
+      // rewrite keeping the heading and dropping the rule fails.
+      [
+        "`no-push`'s one carved-out write",
+        "| `no-push` | **Local-only run**",
+        [/It makes \*\*exactly one\*\* PR write, the single documented exception/, /no push, no replies\/resolves, no summary comment, no ping/],
+      ],
+      [
+        "the record's marker and its supersession",
+        "**One record per PR per run, superseding your own rather than stacking.**",
+        [/<!-- address-review:disposition-record -->/, /never by matching prose/, /update that comment in place/, /this run writes exactly one record/],
+      ],
+      [
+        "the SHAs as provenance rather than a replay gate",
+        "**The SHAs are provenance, never a replay gate.**",
+        [/never assert that equality/, /re-derive every SHA from the branch at replay time/],
+      ],
+      [
+        "patch-id as the first probe",
+        "- **Patch-id is the first probe, not the gate.**",
+        [/git rev-list --right-only --cherry-pick B\.\.\.F/, /printing nothing means every recorded commit is represented/],
+      ],
+      [
+        "and a non-empty patch-id probe rejecting nothing",
+        "- **A non-empty result rejects nothing.**",
+        [/patch-id cascade/, /Fall through to the tree/],
+      ],
     ];
     // Item 2's bullets are an ordered exclusion chain — "work these in order …
     // each excludes the ones above it and the last is 'everything else'" — so
@@ -1524,7 +1563,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         if (placed[i][1] < placed[i - 1][1]) missing.push(`${path} states ${placed[i][0]} before ${placed[i - 1][0]}`);
     }
     check(
-      "and the skill carries the same decisions in both mirrors, in the order that makes the stops reachable — the proper-ancestor stop and the off-shoot's gate ahead of both pushes, the PR's ref as the off-shoot's target with the fields both recipes resolve it from, and the check that substitution excepts",
+      "and the skill carries the same decisions in both mirrors, in the order that makes the stops reachable — the proper-ancestor stop and the off-shoot's gate ahead of both pushes, the PR's ref as the off-shoot's target with the fields both recipes resolve it from, the check that substitution excepts, and the disposition record's carve-out, marker, supersession, and SHA/patch-id rules",
       missing.length === 0,
       missing.join("; "),
     );
@@ -2022,7 +2061,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   check(
     "a passing cycle is followed by the pre-push point, and a no-op there needs no second cycle",
     noopSecond.status === "fixed-local" &&
-      noopSecond.seen.agentLabels.join(",") === "gather,rebase-pre-fix,rebase-pre-push" &&
+      noopSecond.seen.agentLabels.join(",") === "gather,rebase-pre-fix,rebase-pre-push,record" &&
       noopSecond.seen.cycleCalls.length === 1,
     JSON.stringify({ status: noopSecond.status, labels: noopSecond.seen.agentLabels, cycles: noopSecond.seen.cycleCalls.length }),
   );
@@ -2563,6 +2602,90 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       `description is ${description.length} characters`,
     );
   }
+}
+
+// --- The disposition record, on every exit that publishes nothing ------------
+// Step 8's report is chat output, so an unpublished run's map — which thread was
+// pushed back, what the drafted rationale said — died with the session. It now
+// goes to the PR as one comment, and WHICH exits leave it is script logic: the
+// reason is computed from the same conditions the exits branch on, so the
+// failure mode worth testing is an exit that publishes nothing and records
+// nothing. The published exit is tested from the other side: it must record
+// NOTHING, because its replies, resolves and Summary comment are the durable
+// record there and a record beside them would say "not published" of published
+// work.
+{
+  const withWork = { reconcile: { outcome: "work" }, items: [ITEM] };
+  // The cap: a cycle that returned its report without a passing verdict.
+  const CYCLE_CAP = { ...CYCLE_PASS, verdict: "fail", outstanding: { reviewer: [{ finding: "still wrong" }] } };
+  // A passing cycle whose one entry names a thread that was never gathered, so
+  // the gathered ITEM is uncovered: publication aborts before any push while the
+  // run still holds a map worth recording.
+  const CYCLE_UNCOVERED = {
+    ...CYCLE_PASS,
+    workReport: [{ ...CYCLE_PASS.workReport[0], threadId: "T2", url: "https://example.invalid/pr/42#d2" }],
+  };
+  // The same abort with NO map at all — nothing to replay, so nothing to record.
+  const CYCLE_NO_MAP = { ...CYCLE_PASS, workReport: [] };
+  const cases = [
+    ["a `no-push` run that passed", "no-push", CYCLE_PASS, "fixed-local", true],
+    ["a `no-push` run stopped at the round cap", "no-push", CYCLE_CAP, "review-cap", true],
+    ["a push run stopped at the round cap", "push", CYCLE_CAP, "review-cap-not-published", true],
+    ["a push run whose dispositions leave a gathered item uncovered", "push", CYCLE_UNCOVERED, "publish-aborted-incomplete-dispositions", true],
+    ["a run that published", "push", CYCLE_PASS, "fixed-published", false],
+    ["an abort with no dispositions at all", "push", CYCLE_NO_MAP, "publish-aborted-incomplete-dispositions", false],
+  ];
+  const wrong = [];
+  let recordBrief = "";
+  for (const [what, args, cycle, status, records] of cases) {
+    const r = await run(gathered(withWork), { args: `${args} no-rebase`, cycles: [cycle] });
+    const dispatched = r.seen.agentLabels.includes("record");
+    const reported = !!(r.result || {}).dispositionRecord;
+    if (r.status !== status) wrong.push(`${what} exited ${r.status}, expected ${status}`);
+    if (dispatched !== records) wrong.push(`${what} ${dispatched ? "recorded" : "recorded nothing"}, expected the opposite`);
+    if (reported !== records) wrong.push(`${what} ${reported ? "reports" : "does not report"} a dispositionRecord, expected the opposite`);
+    if (records && !recordBrief) recordBrief = r.seen.recordPrompts[0] || "";
+  }
+  check(
+    "every exit that publishes nothing while holding a disposition map leaves the record, and a published run leaves none",
+    wrong.length === 0,
+    wrong.join("; "),
+  );
+
+  // The brief itself. What a later run needs from this comment is the marker
+  // that finds it, the supersession that keeps one per PR, the reply bodies
+  // verbatim, and the two things a replay must NOT take from it: the SHAs as a
+  // condition, and the tips as commits on origin.
+  const recordClauses = {
+    "the marker a later run matches, not its prose": /<!-- address-review:disposition-record -->/.test(recordBrief) && /the MARKER identifies a record, never its prose/.test(recordBrief),
+    "superseding its own prior record in place rather than appending a second": /--method PATCH repos\/\{owner\}\/\{repo\}\/issues\/comments\/<id>/.test(recordBrief) && /instead of a stack of near-duplicates/.test(recordBrief),
+    "exactly one PR write, and no reply, resolve, push or ping beside it": /You make exactly ONE PR write/.test(recordBrief) && /no push, no reply, no resolve, no Summary comment, no ping/.test(recordBrief),
+    "the drafted replies and the ready-to-post Summary body, verbatim": /reply: "<the exact reply body a publishing turn would post, verbatim>"/.test(recordBrief) && /ready to post unchanged/.test(recordBrief),
+    "the SHAs as provenance rather than a condition a replay checks": /The SHAs are PROVENANCE, not a promise/.test(recordBrief) && /Do not write "the branch tip is <sha>" as a condition a replay must check/.test(recordBrief),
+    "the cited tips stated as local-only, not on origin": /the tips above are LOCAL ONLY — this run pushed nothing, so they are not on origin/.test(recordBrief),
+    "no bare @-mention, which would summon a review of unpublished work": /with no bare `@`-mentions anywhere/.test(recordBrief),
+    "the dispositions it is recording": recordBrief.includes(CYCLE_PASS.workReport[0].detail),
+  };
+  const absent = Object.entries(recordClauses).filter(([, present]) => !present).map(([name]) => name);
+  check(
+    "and the record brief carries what a later run replays from, and refuses what it must not replay",
+    absent.length === 0,
+    `missing: ${absent.join("; ")}`,
+  );
+
+  // The next run's side of the same comment: the gather step meets it as an
+  // issue comment, and reading it as feedback would re-triage this workflow's
+  // own output as if a maintainer had written it.
+  const brief = gatherPrompt("#42");
+  const priorPara = brief.split("\n").find((l) => l.includes("DISPOSITION RECORD")) || "";
+  check(
+    "and the gather brief meets a prior record as a proposal to re-judge — never an item, never maintainer authority, and never trusted for its SHAs",
+    /<!-- address-review:disposition-record -->/.test(priorPara) &&
+      /never an item and carries no maintainer authority/.test(priorPara) &&
+      /re-judge every disposition it names against the branch as it now stands/.test(priorPara) &&
+      /the recorded tip is local-only/.test(priorPara),
+    priorPara ? priorPara.slice(0, 200) : "the gather brief says nothing about a prior disposition record",
+  );
 }
 
 check(`suite ran all ${EXPECTED_CHECKS} checks`, ran === EXPECTED_CHECKS, `ran ${ran}`);
