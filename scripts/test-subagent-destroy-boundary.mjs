@@ -54,14 +54,20 @@
 //   is missed in silence.
 //
 //   What this suite does instead is what it already does for call sites and
-//   fixtures — ACCOUNTING, not searching. The verdict is TOTAL over the
-//   DISCOVERED render set and FAIL-CLOSED: every fixture case carries a third
-//   element saying whether that render orders a build (`NO_BUILD`, or a
-//   destination spec), and a case carrying none FAILS as unclassified. A list
-//   missing an entry passes; a total map missing an entry cannot, and the set
-//   it must be total over is discovered from the sources rather than written
-//   down. A new builder therefore fails twice: once for having no fixture, and
-//   again for having no verdict once given one. The verdict is per RENDER
+//   fixtures — ACCOUNTING, not searching. The verdict is FAIL-CLOSED and TOTAL,
+//   and it is worth being exact about what it is total OVER, because the two
+//   halves of the render set are not established the same way. BUILDER NAMES are
+//   discovered from the sources; the RENDER CASES for each builder are
+//   ENUMERATED by hand in `FIXTURES`. The verdict is total over those enumerated
+//   cases: every one carries a third element saying whether that render orders a
+//   build (`NO_BUILD`, or a destination spec), and a case carrying none FAILS as
+//   unclassified. A list missing an entry passes; a total map missing an entry
+//   cannot. So a new BUILDER fails twice — once for having no fixture, because
+//   its name is discovered rather than written down, and again for having no
+//   verdict once given one — while a new BRANCH of a builder that already has
+//   fixtures yields no new render case, and so no new verdict to be missing.
+//   That is the rendering gap this header ends on, and the destination check
+//   inherits it whole rather than closing it. The verdict is per RENDER
 //   rather than per builder because both the answer and the wording can differ
 //   between branches of one builder — `cycleReviewPrompt` names a different
 //   destination when it is handed no artifact directory, and `rebasePrompt`
@@ -76,9 +82,12 @@
 // its destination but without the verdict flip fails, as does a destination
 // clause left behind after its build order was removed. The dangerous
 // direction — a build order added with NO destination — is what the verdict
-// alone answers for. The rendering gaps stated below still apply unchanged: a
-// new branch inside an existing builder is unrendered until its fixtures widen,
-// verdict or no verdict.
+// alone answers for, and only over the render cases enumerated below. The
+// rendering gaps stated at the end of this header apply to it unchanged, the
+// first of them sharply: a new BRANCH inside a builder these fixtures already
+// render is unrendered, unclassified and green until its fixtures widen, so a
+// branch that grows a build order and names no destination is caught by nothing
+// here. Widen the fixtures when a builder gains a branch.
 //
 // PRESENCE of a destination is exact containment, as for the boundary, in
 // whichever of two shapes the site has. Where the clause IS a constant, the
@@ -90,10 +99,17 @@
 // phrase regex: it is the prose itself, byte for byte, and it spans the
 // POSITIVE destination rather than only the "never a fixed shared scratchpad
 // name" prohibition — so a clause gutted to its keywords with the instruction
-// destroyed fails it. CONTENT is checked once per destination constant besides,
-// for the boundary's reason: exact containment of a constant says nothing about
-// what the constant says. A file declaring no destination constant is fine,
-// unlike the boundary, because its clauses are inline by design.
+// destroyed fails it. A verdict that claims a build order and pins NOTHING fails
+// too, in both shapes that vacuum takes: an empty span, which every string
+// contains, and an EMPTY LIST of them, which `some`/`filter` answer vacuously —
+// that one reported "carries 0 pinned span(s)" as a pass until it was
+// demonstrated. Containment of nothing establishes nothing, so it is unclassified
+// rather than satisfied. CONTENT is checked once per destination constant
+// besides, for the boundary's reason — exact containment of a constant says
+// nothing about what the constant says — but as a continuous pin rather than a
+// set of phrase regexes, because three regexes over one sentence were satisfied
+// by its negation; see DESTINATION_PINS. A file declaring no destination constant
+// is fine, unlike the boundary, because its clauses are inline by design.
 //
 // And a FOURTH job, over files this suite renders nothing from: 017's
 // destination clauses also ship in the `SKILL.md` briefs of BOTH skill mirrors,
@@ -295,21 +311,42 @@ const REQUIRED = [
   ["absolute-path fallback", /Where the helper is absent, use an absolute path outside the repository — never a relative one/],
 ];
 
-// What a destination CONSTANT must say, on REQUIRED's terms and for its reason:
-// a brief carrying the constant verbatim proves the text was interpolated, not
-// that the text still instructs anything, so the gutting this closes is the one
-// that keeps the vocabulary and destroys the instruction. Keyed by constant name
-// rather than by file, since the two copies of this one are a single declaration
-// mirrored into the `review-cycle-core` section, whose byte-identity check
-// already covers them drifting apart — the same division of labour the
-// `DESTROY_BOUNDARY` identity check below draws. A destination constant this
-// map does not name FAILS, exactly as an unlisted workflow or an unfixtured
-// builder does: the alternative is a new constant whose content nothing checks.
-const DESTINATION_CLAUSES = {
+// What a destination CONSTANT must say, for REQUIRED's reason — a brief carrying
+// the constant verbatim proves the text was interpolated, not that the text still
+// instructs anything, so the gutting this closes is the one that keeps the
+// vocabulary and destroys the instruction — but NOT on REQUIRED's terms, and the
+// difference was demonstrated rather than reasoned. REQUIRED matches each clause
+// by the phrase that carries it because it spans twelve clauses over five
+// constants, where a byte comparison would turn every wording tweak into a
+// failure. That tolerance does not survive one sentence: three phrase regexes
+// over this constant ("output you redirect to a file", "goes under that same
+// round directory", "never a fixed shared scratchpad name") were ALL satisfied by
+// a text that reverses the rule — "No build or validation output you redirect to
+// a file goes under that same round directory … write it wherever you find
+// convenient, never a fixed shared scratchpad name" — because each phrase matched
+// in isolation and nothing bound them into one instruction.
+//
+// So a destination constant is pinned the way a bespoke per-site clause below is:
+// as CONTINUOUS verbatim spans of the positive instruction, contained in the
+// constant's evaluated value. No reversal, negation or re-ordering of the
+// sentence can satisfy that, since the pin is the sentence. The cost is
+// deliberate and is the same cost the pins carry: rewording the constant means
+// editing the pin here. The explanatory tail after the pin ("parallel cycles
+// share one scratch directory") is left free, so the reason may be rewritten
+// without the rule moving.
+//
+// Keyed by constant name rather than by file, since the two copies of this one
+// are a single declaration mirrored into the `review-cycle-core` section, whose
+// byte-identity check already covers them drifting apart — the same division of
+// labour the `DESTROY_BOUNDARY` identity check below draws. A destination
+// constant this map does not name FAILS, exactly as an unlisted workflow or an
+// unfixtured builder does: the alternative is a new constant whose content
+// nothing checks. So does one whose entry is empty, or holds an empty span:
+// containment of no span at all, like containment of an empty one, establishes
+// nothing.
+const DESTINATION_PINS = {
   CYCLE_REDIRECTED_OUTPUT: [
-    ["governs output redirected to a file", /build or validation output you redirect to a file/],
-    ["names the round directory as the destination", /goes under that same round directory/],
-    ["forbids a fixed shared scratchpad name", /never a fixed shared scratchpad name/],
+    "Any build or validation output you redirect to a file goes under that same round directory, under any name you like — never a fixed shared scratchpad name",
   ],
 };
 
@@ -605,7 +642,7 @@ let failures = 0;
 let rendered = 0;
 let clauseChecks = 0;
 let destinationChecks = 0;
-let destinationClauseChecks = 0;
+let destinationContentChecks = 0;
 let proseAnchors = 0;
 const rows = [];
 
@@ -623,7 +660,7 @@ function report() {
   // count: on the vanished path one key names a file that is gone, and counting
   // it would contradict the row directly above that says exactly that.
   const accountedFor = Object.keys(CUT).filter((f) => shipped.includes(f)).length;
-  console.log(`\n${rendered} rendered prompt paths across ${accountedFor} accounted-for workflows, ${clauseChecks} boundary constants clause-checked, ${destinationChecks} of those renders ordering a build and destination-checked (${destinationClauseChecks} destination constants clause-checked), ${proseAnchors} prose destination clauses deletion-guarded, ${failures} failing.`);
+  console.log(`\n${rendered} rendered prompt paths across ${accountedFor} accounted-for workflows, ${clauseChecks} boundary constants clause-checked, ${destinationChecks} of those renders ordering a build and destination-checked (${destinationContentChecks} destination constants content-pinned), ${proseAnchors} prose destination clauses deletion-guarded, ${failures} failing.`);
   if (failures) process.exit(1);
 }
 
@@ -671,21 +708,25 @@ for (const file of Object.keys(CUT)) {
   }
   // The same content question for each destination constant this file declares,
   // and for the same reason. Unlike the boundary, declaring none is no failure;
-  // declaring one this suite has no clause list for is.
+  // declaring one this suite has no pin for is — and so is a pin list that
+  // asserts nothing, for the reason the empty-span check further down states.
   for (const [dName, text] of destinations) {
-    destinationClauseChecks++;
-    const clauses = DESTINATION_CLAUSES[dName];
-    if (!clauses) {
+    destinationContentChecks++;
+    const pins = DESTINATION_PINS[dName];
+    if (!pins || !pins.length || pins.some((pin) => !pin)) {
       failures++;
-      rows.push([file, `${dName} (clauses)`, "FAIL", "destination constant with no clause list — add one to DESTINATION_CLAUSES"]);
+      const why = !pins
+        ? "destination constant with no pin — add its positive instruction to DESTINATION_PINS"
+        : "destination constant whose pin list is empty or holds an empty span — containment of nothing establishes nothing";
+      rows.push([file, `${dName} (content)`, "FAIL", why]);
       continue;
     }
-    const missing = clauses.filter(([, re]) => !re.test(text)).map(([what]) => what);
-    if (missing.length) {
+    const absent = pins.filter((pin) => !text.includes(pin));
+    if (absent.length) {
       failures++;
-      rows.push([file, `${dName} (clauses)`, "FAIL", `missing: ${missing.join("; ")}`]);
+      rows.push([file, `${dName} (content)`, "FAIL", `does not carry ${absent.length} of ${pins.length} pinned instruction(s) verbatim; first missing: ${JSON.stringify(absent[0].slice(0, 70))}…`]);
     } else {
-      rows.push([file, `${dName} (clauses)`, "ok", `all ${clauses.length} clauses, ${Buffer.byteLength(text)} bytes`]);
+      rows.push([file, `${dName} (content)`, "ok", `all ${pins.length} pinned instruction(s), ${Buffer.byteLength(text)} bytes`]);
     }
   }
   // Every destination clause this file's own cases know about — the constants it
@@ -698,7 +739,11 @@ for (const file of Object.keys(CUT)) {
       .flatMap(([label, , dest]) => (dest && dest.pins ? [[label, dest.pins[0]]] : [])),
     // An empty span is contained in every string, so a destination constant
     // emptied out would report every NO_BUILD render as carrying it. That is a
-    // failure of the constant, reported once as such below, not of thirty briefs.
+    // failure of the constant, reported once as such below, not of thirty-three
+    // briefs — the measured count, taken by emptying `CYCLE_REDIRECTED_OUTPUT`
+    // and dropping this guard: the NO_BUILD renders of the two files that declare
+    // it, 11 in `wf-review-cycle.js` and 22 in `wf-address-tasks.js`, out of 40
+    // NO_BUILD renders overall.
   ].filter(([, span]) => span);
   for (const name of names) {
     if (!fixtures[name]) {
@@ -738,6 +783,15 @@ for (const file of Object.keys(CUT)) {
         if (dest.constant && spans[0] === undefined) {
           failures++;
           rows.push([file, `${label} (destination)`, "FAIL", `verdict names ${dest.constant}, which this file does not declare`]);
+        } else if (!spans.length) {
+          // Containment of NOTHING proves nothing, the same way containment of an
+          // empty span does, and the vacuous form is the quieter one: `[].some`
+          // is false and `[].filter` is empty, so a verdict claiming a build
+          // order while pinning no span at all used to report "carries 0 pinned
+          // span(s)" as a pass — a verdict asserting a build and asserting
+          // nothing whatever about its destination.
+          failures++;
+          rows.push([file, `${label} (destination)`, "FAIL", "orders a build but its verdict pins no destination span at all — that asserts nothing, so the case is unclassified rather than satisfied"]);
         } else if (spans.some((span) => !span)) {
           // Containment of an empty span proves nothing: every string contains
           // one. So an emptied constant or pin fails here rather than passing.
@@ -845,9 +899,16 @@ if (!canonicalRule) {
 // One anchor per shipped clause, verbatim, each spanning the POSITIVE
 // destination and not only the "never a fixed shared scratchpad name"
 // prohibition, so a clause gutted to its keywords with the instruction destroyed
-// fails it. Each anchor must appear EXACTLY once in its file: twice would mean
-// two clauses one anchor cannot tell apart, and the second copy is how a
-// deletion of the first would go unnoticed.
+// fails it. "Spanning the destination" means the destination ITSELF, not a
+// pronoun pointing at it: where a shipped clause names its destination in a
+// preceding sentence and refers back to it ("goes there"), the anchor must begin
+// at that sentence. Two of the anchors below did not, and emptying the sentence
+// their "there" pointed at — destroying the instruction and leaving the pronoun
+// aimed at nothing — kept both anchors present, both mirrors green and the census
+// count unchanged. Each anchor must appear EXACTLY once in its file: twice would
+// mean two clauses one anchor cannot tell apart, and the second copy is how a
+// deletion of the first would go unnoticed. An entry with NO anchors fails, for
+// the reason an empty pin list does above: it claims a guard and asserts nothing.
 //
 // Both mirrors are held to the same anchors, which is the strongest form of the
 // lockstep rule this repository keeps by hand: these clauses are byte-identical
@@ -872,9 +933,16 @@ const PROSE_CLAUSES = {
     "any build or check output that must land in a file goes inside this task's worktree (a gitignored path, removed before any commit), never a shared scratchpad filename",
     "create a unique directory for it first with `mktemp -d`, outside every worktree, and write there — never a fixed shared scratchpad name",
   ],
+  // Both of these clauses state their destination in a PRECEDING sentence and
+  // refer back to it as "there", so an anchor starting at "Any build or … output"
+  // would span a pronoun rather than a destination: emptying the sentence that
+  // defines it — leaving "goes there" pointing at nothing — kept both anchors
+  // present and the census count unchanged. The anchors therefore begin at the
+  // allocation sentence and run through the "goes there" continuation, which is
+  // the whole instruction rather than the half that survives its own gutting.
   "address-tasks-serialized": [
-    "Any build or lint output that must land in a file goes there, never a fixed shared scratchpad name",
-    "Any build or check output that must land in a file goes there, never a fixed shared scratchpad name",
+    "**An absolute path for validation output**, which you allocate — namespaced by this task's number or created with `mktemp -d`, and outside the working tree the implementer commits from. Any build or lint output that must land in a file goes there, never a fixed shared scratchpad name",
+    "**An absolute path for validation output**, which you allocate — namespaced by this task's number or created with `mktemp -d`. Any build or check output that must land in a file goes there, never a fixed shared scratchpad name",
   ],
   // The briefless spawn instruction: the rule sits in the skill text the
   // orchestrator itself follows, because there is no template to carry it.
@@ -927,7 +995,15 @@ for (const mirror of PROSE_MIRRORS) {
     }
     const wrong = anchors.map((anchor) => [anchor, text.split(anchor).length - 1]).filter(([, n]) => n !== 1);
     const counted = census.get(skill) || 0;
-    if (wrong.length) {
+    if (!anchors.length) {
+      // A skill listed here with no anchors claims to be guarded and asserts
+      // nothing — the same vacuum an empty pin list is on the rendered side. The
+      // census would catch a clause arriving in the file, but an entry whose
+      // anchors were all removed alongside its clauses leaves a guarded-looking
+      // key that no longer guards anything. Drop the key instead.
+      failures++;
+      rows.push([path, "prose destination", "FAIL", "listed with no anchors — an entry asserting nothing; remove the key or give it its clause(s)"]);
+    } else if (wrong.length) {
       failures++;
       const [anchor, n] = wrong[0];
       rows.push([path, "prose destination", "FAIL", `${wrong.length} of ${anchors.length} anchor(s) not present exactly once; first found ${n}x: ${JSON.stringify(anchor.slice(0, 70))}…`]);
