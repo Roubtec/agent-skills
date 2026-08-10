@@ -80,7 +80,10 @@
 // direction of it is cross-checked mechanically: a `NO_BUILD` render must carry
 // no destination clause this suite knows, so a build order added together with
 // its destination but without the verdict flip fails, as does a destination
-// clause left behind after its build order was removed. The dangerous
+// clause left behind after its build order was removed. "Clause this suite
+// knows" is deliberately read off the DECLARED clauses rather than off the ones
+// some case still claims — see BESPOKE_DESTINATIONS — because the latter is
+// emptied by the wrong verdict this cross-check is aimed at. The dangerous
 // direction — a build order added with NO destination — is what the verdict
 // alone answers for, and only over the render cases enumerated below. The
 // rendering gaps stated at the end of this header apply to it unchanged, the
@@ -117,8 +120,11 @@
 // therefore a DELETION GUARD — a verbatim anchor of every shipped clause must
 // stay present, in both mirrors — plus a CENSUS: every `SKILL.md` in either
 // mirror is scanned for the shared-scratchpad warning and its count must equal
-// the anchors declared for it, so a clause that arrives, or leaves, fails until
-// the table below is brought up to date.
+// the WARNING-CARRYING anchors declared for it, so a clause that arrives, or
+// leaves, fails until the table below is brought up to date. Warning-carrying is
+// the qualifier that makes the equality statable: one shipped clause delegates
+// its warning by reference and so carries none to count, and it is anchored
+// without joining that count. The table below states all three categories.
 //
 // The ASYMMETRY that leaves is the point, and must not be read as parity with
 // the rendered checks. Call-site accounting discovers a new BUILDER because a
@@ -180,7 +186,20 @@
 // `filter`, `find` and `for…of` vacuously, and every check built on one is a
 // check that can be switched off by emptying its input rather than by breaking
 // it. `[]` is also TRUTHY, so a `!collection` guard does not catch it. Read this
-// list before adding a check, and extend it when you do:
+// list before adding a check, and extend it when you do.
+//
+// What it enumerates is every collection whose EMPTINESS COULD SWITCH A CHECK
+// OFF, however that collection is derived: `deputyRules` and `census` are both
+// computed rather than declared, and both are listed. What it leaves out — as a
+// class, rather than one at a time — is the derived RESULT lists whose empty state
+// IS the verdict their check reports as a pass: `unlisted`, `vanished`,
+// `unaccounted`, `prose`, `drifted`, `missing`, `unreadableDeputyRules`,
+// `ruleDrifted`, `undeclared`, `wrong`, `absent`, `blankSpans`, `emptyTables`, and
+// `stray`, the one `find` among them rather than a list. Whichever shape, emptying
+// one of those is not an edit available to anyone: each is filtered out of a
+// collection this list already covers, and it comes back empty exactly when the
+// condition it detects is absent. What this list exists to catch is a check
+// switched off by emptying its INPUT; a result list has no such door.
 //
 //   `CUT` — empty: every shipped `wf-*.js` is unlisted, which FAILs the
 //     workflow-set check, and nothing renders. The run then dies in the
@@ -204,7 +223,6 @@
 //     fixture it has FAILs as stale. A file with neither call sites nor fixtures
 //     passes with zero renders, which is the truth about a workflow that spawns
 //     no subagent; the `agent(` accounting is what makes "no call sites" mean it.
-//   `accounting.prose` / `.unaccounted` — empty is the normal passing state.
 //   `FIXTURES[file]` — missing or empty: every builder discovered in that file
 //     FAILs as having no fixture.
 //   `fixtures[name]` — an empty CASE LIST: FAILs. Before that guard it was the
@@ -217,19 +235,49 @@
 //     unclassified rather than satisfied. Both shapes are checked in the render
 //     loop and the reasoning is beside them.
 //   `knownDestinations` — empty: the NO_BUILD cross-check finds no stray clause
-//     and passes vacuously. It cannot be empty without a louder failure first,
-//     because every way to empty it — an emptied constant, an emptied pin —
-//     FAILs its own content or empty-span check; the `.filter` that drops empty
-//     spans from it is there so one emptied constant is reported once as its own
-//     failure rather than as every NO_BUILD render carrying it.
+//     and passes vacuously. It USED to be emptiable in one edit, and the claim
+//     here that it could not be was wrong twice over: built from the specs a
+//     file's cases still claimed, classifying `wf-address-review.js`'s only
+//     build-ordering renders (`rebasePrompt`'s three) as `NO_BUILD` emptied it —
+//     that file declares no destination constant either — and the three renders
+//     passed while still carrying their clause verbatim, at exit 0. It is now
+//     built from `BESPOKE_DESTINATIONS` plus the file's own constants, so no
+//     verdict reaches it; the remaining ways to empty it are emptying that table
+//     or emptying every constant, and both FAIL their own check. The `.filter`
+//     that drops empty spans is there so one emptied span is reported once as its
+//     own failure rather than as every NO_BUILD render carrying it.
+//   `BESPOKE_DESTINATIONS` — empty, or an entry holding an empty span: the
+//     cross-check searches for that clause in nothing, silently. Guarded by the
+//     declared-tables check below, both shapes.
 //   `PROSE_MIRRORS` — empty: reported "0 prose destination clauses
 //     deletion-guarded" as a pass. Guarded by the declared-tables check below.
 //   `PROSE_CLAUSES` — empty: every skill carrying a warning phrase is
 //     undeclared, so the census FAILs in both mirrors.
-//   an `anchors` list inside `PROSE_CLAUSES` — empty: FAILs as an entry that
-//     claims a guard and asserts nothing.
+//   the `anchors` and `byReference` lists inside one `PROSE_CLAUSES` entry —
+//     empty TOGETHER, or holding an empty string: FAILs as an entry that claims a
+//     guard and asserts nothing. A `byReference` key PRESENT and EMPTY FAILs on its
+//     own too, and that one was measured on this check rather than reasoned about:
+//     the anchors and the census equality both still held, so the by-reference
+//     clause lost its only guard and the run passed. An ABSENT `byReference` is
+//     the ordinary shape and no failure, and `anchors` empty ALONE is legitimate
+//     (no entry is shaped that way today): it says the file's only guarded clause
+//     carries no warning, and the census equality then holds at zero.
 //   `census` — empty (no skill carries the warning): every declared entry FAILs
-//     with "0 destination clause(s) in the file but N anchored".
+//     with "0 warning-carrying destination clause(s) in the file but N anchored".
+//   `deputyRules` — empty: the drift comparison over the deputy copies of the
+//     finish-in-turn rule answers vacuously, and it reported "0 deputy copy(ies)
+//     match the cycle's rule" as a pass until this was demonstrated by deleting
+//     every declaration AND every `${DEPUTY_FINISH_IN_TURN}` interpolation from
+//     the workflows. `unreadableDeputyRules` catches only the half where the
+//     interpolation outlives the declaration, so that edit passed. Empty now
+//     FAILs: no shipped workflow briefs zero subagents out of section, so the
+//     rule binding no deputy anywhere means the rule went, not the deputies.
+//     What still passes is the PER-FILE version of the same loss — one workflow
+//     dropping its declaration and its interpolations together while keeping the
+//     deputies — since a file declaring no copy is legitimate and this check
+//     cannot tell the two apart; see the comment on the check.
+//     `deputyRuleReads` is empty only when the shipped set is, which is listed
+//     above.
 //   `rows` — never empty when `report()` runs: the workflow-set row is pushed
 //     before anything can fail, and `Math.max(...[])` in the column widths would
 //     be `-Infinity` if it were.
@@ -523,11 +571,33 @@ const COLLISION_TEMP_DIRECTORY = destinationPins(
 
 // The delegated rebase validates the checkout it stands in, and puts the run's
 // point in the directory name so its two points cannot collide with each other.
-// Hence a verdict per point rather than per builder.
+// Hence a verdict per point rather than per builder. The point lands in the
+// MIDDLE of the clause, so everything before it — the part every point's render
+// carries — is declared on its own: that stem is what the NO_BUILD cross-check
+// below searches for, since it has to recognize this clause without knowing
+// which point produced it.
+const REBASE_DESTINATION_STEM =
+  'If you redirect any build output to a file, create a UNIQUE directory for it first, OUTSIDE the checkout (`mktemp -d "${TMPDIR:-/tmp}/rebase-';
 const rebaseTempDirectory = (point) =>
-  destinationPins(
-    `If you redirect any build output to a file, create a UNIQUE directory for it first, OUTSIDE the checkout (\`mktemp -d "\${TMPDIR:-/tmp}/rebase-${point}.XXXXXX"\`) — never a fixed shared scratchpad name`,
-  );
+  destinationPins(`${REBASE_DESTINATION_STEM}${point}.XXXXXX"\`) — never a fixed shared scratchpad name`);
+
+// Every bespoke destination clause THIS SUITE declares, named by the spec that
+// carries it. This is the NO_BUILD cross-check's search set, and it is built from
+// the DECLARATIONS rather than from the verdicts that use them, because built
+// from the verdicts it was emptied by the very edit it exists to catch: a case
+// flipped to `NO_BUILD` took its spec out of the set in the same edit, and in
+// `wf-address-review.js` — whose only build-ordering renders are `rebasePrompt`'s
+// three, and which declares no destination constant either — that emptied the
+// set outright, so all three renders passed as NO_BUILD while still carrying
+// their destination clause verbatim. Measured: exit 0, nothing failing.
+// One span per spec is enough, since a clause is RECOGNIZED here rather than
+// validated — the render loop above is what checks a claimed destination in
+// full — so the parametric one contributes its point-independent stem.
+const BESPOKE_DESTINATIONS = [
+  ["REREVIEW_TEMP_DIRECTORY", REREVIEW_TEMP_DIRECTORY.pins[0]],
+  ["COLLISION_TEMP_DIRECTORY", COLLISION_TEMP_DIRECTORY.pins[0]],
+  ["rebaseTempDirectory", REBASE_DESTINATION_STEM],
+];
 
 // --- Fixtures -------------------------------------------------------------
 // One entry per rendered path: label, render, and output-destination verdict. A
@@ -790,21 +860,24 @@ for (const file of Object.keys(CUT)) {
       rows.push([file, `${dName} (content)`, "ok", `all ${pins.length} pinned instruction(s), ${Buffer.byteLength(text)} bytes`]);
     }
   }
-  // Every destination clause this file's own cases know about — the constants it
-  // declares, plus the first pin of each bespoke spec used for one of its
-  // renders. This is what a NO_BUILD render is asserted to carry NONE of.
+  // Every destination clause a NO_BUILD render of this file is asserted to carry
+  // NONE of: the destination CONSTANTS this file declares — one it does not
+  // declare cannot be interpolated here — plus every bespoke clause the suite
+  // declares, whatever file it was written for, since a bespoke clause is prose
+  // and prose can be pasted anywhere. Deliberately not "the specs this file's
+  // cases still claim": that set is emptied by the wrong verdict it exists to
+  // catch, which is what BESPOKE_DESTINATIONS' comment records.
   const knownDestinations = [
     ...destinations,
-    ...Object.values(fixtures)
-      .flat()
-      .flatMap(([label, , dest]) => (dest && dest.pins ? [[label, dest.pins[0]]] : [])),
+    ...BESPOKE_DESTINATIONS,
     // An empty span is contained in every string, so a destination constant
     // emptied out would report every NO_BUILD render as carrying it. That is a
     // failure of the constant, reported once as such below, not of thirty-three
     // briefs — the measured count, taken by emptying `CYCLE_REDIRECTED_OUTPUT`
     // and dropping this guard: the NO_BUILD renders of the two files that declare
     // it, 11 in `wf-review-cycle.js` and 22 in `wf-address-tasks.js`, out of 40
-    // NO_BUILD renders overall.
+    // NO_BUILD renders overall. An emptied BESPOKE_DESTINATIONS span is dropped
+    // here for the same reason and reported once by the declared-tables check.
   ].filter(([, span]) => span);
   for (const name of names) {
     // An EMPTY case list is checked with the missing one, because `[]` is truthy
@@ -929,15 +1002,20 @@ if (missing.length || drifted.length) {
 // code does not reach into the section. Two spellings of one rule are two
 // rules the moment one is edited, so the canonical text is read from
 // `wf-review-cycle.js` — the section's source — and every deputy copy must
-// match it exactly. A file declaring no deputy copy simply has no deputies;
-// that is not a failure. A file declaring one that no longer matches is — and
-// so is a file whose prompts interpolate `${DEPUTY_FINISH_IN_TURN}` while the
+// match it exactly. A file declaring no deputy copy is not a failure, but the
+// reason is narrower than "it has no deputies": `wf-review-cycle.js` declares
+// none while briefing one subagent out here (the scope agent), so what a missing
+// declaration actually means is that the file binds no deputy of its own to this
+// rule, which this check cannot tell apart from having none to bind. A file
+// declaring a copy that no longer matches IS a failure — and so is a file whose
+// prompts interpolate `${DEPUTY_FINISH_IN_TURN}` while the
 // declaration pattern below finds nothing to compare, since "has no deputies"
 // and "declares its copy in a shape this check cannot read" are the same
 // silence otherwise, and the second one would exempt exactly the file the
 // check exists for. The `DESTROY_BOUNDARY` check above fails closed on a
 // missing declaration because every workflow must carry one; this one cannot,
-// so the interpolation is what says a declaration was owed.
+// so the interpolation is what says a declaration was owed. What it CAN fail
+// closed on is the total: no copy anywhere, checked below.
 const rule = (file, name) =>
   (readFileSync(join(workflows, file), "utf8").match(new RegExp(`^const ${name} = ("(?:\\\\.|[^"\\\\])*");$`, "m")) || [])[1];
 const canonicalRule = rule("wf-review-cycle.js", "CYCLE_FINISH_IN_TURN");
@@ -952,6 +1030,18 @@ if (!canonicalRule) {
 } else if (unreadableDeputyRules.length) {
   failures++;
   rows.push(["(all)", "FINISH_IN_TURN identity", "FAIL", `interpolates \`\${DEPUTY_FINISH_IN_TURN}\` but declares no readable top-level \`const DEPUTY_FINISH_IN_TURN = "…";\`: ${unreadableDeputyRules.join(", ")}`]);
+} else if (!deputyRules.length) {
+  // ZERO COPIES, checked before the drift comparison over them, which an empty
+  // list answers vacuously: it reported "0 deputy copy(ies) match the cycle's
+  // rule" as a pass until this was demonstrated, by deleting every declaration
+  // AND every `${DEPUTY_FINISH_IN_TURN}` interpolation from the shipped
+  // workflows — the half `unreadableDeputyRules` above cannot see, since it
+  // reaches only the case where the interpolation outlives the declaration.
+  // Zero is not a legitimate state of this tree: every shipped workflow briefs
+  // at least one subagent out here, so the rule reaching no deputy anywhere
+  // means the rule was deleted rather than that the deputies were.
+  failures++;
+  rows.push(["(all)", "FINISH_IN_TURN identity", "FAIL", "no workflow declares a top-level `const DEPUTY_FINISH_IN_TURN`, so the cycle's rule binds no deputy anywhere and every comparison over the copies is vacuous"]);
 } else {
   const ruleDrifted = deputyRules.filter(([, text]) => text !== canonicalRule).map(([file]) => file);
   if (ruleDrifted.length) {
@@ -977,23 +1067,53 @@ if (!canonicalRule) {
 // at that sentence. Two of the anchors below did not, and emptying the sentence
 // their "there" pointed at — destroying the instruction and leaving the pronoun
 // aimed at nothing — kept both anchors present, both mirrors green and the census
-// count unchanged. Each anchor must appear EXACTLY once in its file: twice would
-// mean two clauses one anchor cannot tell apart, and the second copy is how a
-// deletion of the first would go unnoticed. An entry with NO anchors fails, for
+// count unchanged. A clause that names NO destination of its own — category 2
+// below, which delegates the destination by reference — is the one exception to
+// that qualifier and not a loophole in it: its anchor spans the obligation and
+// the reference, which is the whole of what the clause says, so gutting either
+// half still fails it. Each anchor must appear EXACTLY once in its file: twice
+// would mean two clauses one anchor cannot tell apart, and the second copy is how
+// a deletion of the first would go unnoticed. An entry with NO anchors fails, for
 // the reason an empty pin list does above: it claims a guard and asserts nothing.
 //
 // Both mirrors are held to the same anchors, which is the strongest form of the
 // lockstep rule this repository keeps by hand: these clauses are byte-identical
 // across the two sides today, so a mirror reworded on one side alone fails here.
 //
-// One shape is deliberately NOT anchored, and saying so is what reconciles the
-// census count with a grep for the concept: a brief template that RESTATES an
-// already-anchored allocation by pointing back at it —
-// `address-tasks-serialized`'s "Any build or lint output that must land in a file
-// goes to `<validation-output path allocated above>`, never anywhere else",
-// twice per mirror — names no destination of its own and carries no warning
-// phrase, by design. The rule it points at is anchored in the same file, in both
-// mirrors, so deleting the restatement cannot delete the rule.
+// A grep for the CONCEPT finds more clauses than the census counts, so this
+// table sorts them into THREE categories and states the census equality over the
+// first alone. Naming all three is what reconciles the two numbers; naming one of
+// them did not, and the clause that fell through the gap is category 2:
+//
+//   1. WARNING-CARRYING clauses (`anchors`) — a clause that spells the shared-name
+//      warning `PROSE_WARNING` counts. `counted` must equal exactly this many, so
+//      one arriving or leaving fails until the table is brought up to date.
+//   2. BY-REFERENCE requirements (`byReference`) — a clause that IMPOSES a
+//      destination requirement while delegating both the destination and the
+//      warning to a rule anchored elsewhere in the same file. `review-cycle`'s
+//      delegated rebase step is the one member: its brief carries "the pinned base
+//      below, and a destination for any build output under this cycle's
+//      artifact-directory rules", which names the `## Artifacts and hygiene` rule
+//      anchored below rather than restating it. It carries no warning spelling at
+//      all, so NO widening of `PROSE_WARNING` can reach it and the census cannot
+//      count it — but deleting it deletes the obligation on the caller to hand the
+//      rebase subagent a destination, which nothing else in either mirror states.
+//      So it is deletion-guarded like any other clause and left out of the
+//      equality instead of left out of the guard. Measured before this category
+//      existed: deleting the clause from BOTH mirrors left the suite at exit 0,
+//      24 anchors, nothing failing. The category cannot be used to smuggle a
+//      countable clause out of the census: a `byReference` anchor that DOES spell
+//      the warning raises `counted` while `anchors.length` stays put, so the
+//      equality fails.
+//   3. DELIBERATELY UNANCHORED restatements — a brief template that RESTATES an
+//      already-anchored allocation by pointing back at it:
+//      `address-tasks-serialized`'s "Any build or lint output that must land in a
+//      file goes to `<validation-output path allocated above>`, never anywhere
+//      else", twice per mirror. It names no destination of its own and carries no
+//      warning phrase, by design. What separates it from category 2 is that it
+//      imposes nothing: the rule it points at is anchored in the same file, in
+//      both mirrors, so deleting the restatement cannot delete the rule. That is
+//      why this shape is not guarded at all where category 2 is.
 const PROSE_MIRRORS = ["plugins/dev-skills/skills", "codex/dev-skills/skills"];
 // The warning every one of these clauses carries, and the census key. It is not
 // the anchor: a clause could keep this phrase and lose its destination, which is
@@ -1019,20 +1139,26 @@ const PROSE_MIRRORS = ["plugins/dev-skills/skills", "codex/dev-skills/skills"];
 // shipped tree.
 const PROSE_WARNING = /shared scratchpad (?:name|filename)|fixed shared filename/g;
 const PROSE_CLAUSES = {
-  "address-review": [
-    "hand it the path any build or check output must land in — namespaced by this PR number, or created with `mktemp -d`, and outside the checkout it commits from — never a fixed shared scratchpad name",
-  ],
-  "address-reviews": [
-    "Any output that must land in a file goes inside this worktree (a gitignored path, removed before any commit), never a shared scratchpad filename",
-  ],
-  "address-tasks": [
+  "address-review": {
+    anchors: [
+      "hand it the path any build or check output must land in — namespaced by this PR number, or created with `mktemp -d`, and outside the checkout it commits from — never a fixed shared scratchpad name",
+    ],
+  },
+  "address-reviews": {
+    anchors: [
+      "Any output that must land in a file goes inside this worktree (a gitignored path, removed before any commit), never a shared scratchpad filename",
+    ],
+  },
+  "address-tasks": {
     // The implementer template, the reviewer's own rule, and the quoted brief
     // for the integration-check subagent, which validates from a worktree it
     // must leave clean and so is sent outside every worktree instead.
-    "Any build or check output that must land in a file goes inside this worktree (a gitignored path, removed before any commit), never a shared scratchpad filename",
-    "any build or check output that must land in a file goes inside this task's worktree (a gitignored path, removed before any commit), never a shared scratchpad filename",
-    "create a unique directory for it first with `mktemp -d`, outside every worktree, and write there — never a fixed shared scratchpad name",
-  ],
+    anchors: [
+      "Any build or check output that must land in a file goes inside this worktree (a gitignored path, removed before any commit), never a shared scratchpad filename",
+      "any build or check output that must land in a file goes inside this task's worktree (a gitignored path, removed before any commit), never a shared scratchpad filename",
+      "create a unique directory for it first with `mktemp -d`, outside every worktree, and write there — never a fixed shared scratchpad name",
+    ],
+  },
   // Both of these clauses state their destination in a PRECEDING sentence and
   // refer back to it as "there", so an anchor starting at "Any build or … output"
   // would span a pronoun rather than a destination: emptying the sentence that
@@ -1040,19 +1166,25 @@ const PROSE_CLAUSES = {
   // present and the census count unchanged. The anchors therefore begin at the
   // allocation sentence and run through the "goes there" continuation, which is
   // the whole instruction rather than the half that survives its own gutting.
-  "address-tasks-serialized": [
-    "**An absolute path for validation output**, which you allocate — namespaced by this task's number or created with `mktemp -d`, and outside the working tree the implementer commits from. Any build or lint output that must land in a file goes there, never a fixed shared scratchpad name",
-    "**An absolute path for validation output**, which you allocate — namespaced by this task's number or created with `mktemp -d`. Any build or check output that must land in a file goes there, never a fixed shared scratchpad name",
-  ],
+  "address-tasks-serialized": {
+    anchors: [
+      "**An absolute path for validation output**, which you allocate — namespaced by this task's number or created with `mktemp -d`, and outside the working tree the implementer commits from. Any build or lint output that must land in a file goes there, never a fixed shared scratchpad name",
+      "**An absolute path for validation output**, which you allocate — namespaced by this task's number or created with `mktemp -d`. Any build or check output that must land in a file goes there, never a fixed shared scratchpad name",
+    ],
+  },
   // The briefless spawn instruction: the rule sits in the skill text the
   // orchestrator itself follows, because there is no template to carry it.
-  "reap-tasks": [
-    "Output that must land in a file goes to a path namespaced by the task number, or one created with `mktemp -d` — never a fixed shared scratchpad name",
-  ],
-  "resolve-open-questions": [
-    "Hand it the path any of that output must land in — namespaced by the item, or created with `mktemp -d` — never a fixed shared scratchpad name",
-    "Hand it the path any of that validation output must land in — namespaced by the item, or created with `mktemp -d`, and outside the worktree it commits from, which must be left clean — never a fixed shared scratchpad name",
-  ],
+  "reap-tasks": {
+    anchors: [
+      "Output that must land in a file goes to a path namespaced by the task number, or one created with `mktemp -d` — never a fixed shared scratchpad name",
+    ],
+  },
+  "resolve-open-questions": {
+    anchors: [
+      "Hand it the path any of that output must land in — namespaced by the item, or created with `mktemp -d` — never a fixed shared scratchpad name",
+      "Hand it the path any of that validation output must land in — namespaced by the item, or created with `mktemp -d`, and outside the worktree it commits from, which must be left clean — never a fixed shared scratchpad name",
+    ],
+  },
   // Two clauses: the Reviewer role's, which every consumer of the cycle reaches
   // through this one file, and the ALL-ROLES rule under `## Artifacts and
   // hygiene` that the Fixer contract points at rather than restating — the rule
@@ -1067,12 +1199,24 @@ const PROSE_CLAUSES = {
   // part of allocating the directory (a slug's `/` splits the path), so the cost
   // is that rewording it means editing this anchor. That is the pins' cost
   // everywhere in this suite, taken knowingly.
-  "review-cycle": [
-    "tell it where any output of that build goes, a path under the cycle's artifact directory below or inside the reviewed worktree, never a fixed shared scratchpad name and never left to the reviewer to pick",
-    "Every cycle uses its own unique artifact directory outside the worktree — suffix the cycle slug, reduced first to a single path segment, or create it with `mktemp -d` — never a fixed shared filename: parallel cycles share one scratchpad, and fixed names have crossed review streams between concurrent runs before.\n" +
-      "A slug is routinely a branch name, and the `/` in one splits the suffix into a parent directory: `mktemp` refuses that outright, and a `mkdir -p` path takes it silently, nesting the round history where nobody will look for it.\n" +
-      "The full round history (reviewer reports, peer output, fixer packets) lives there, as does any build or validation output a role redirects to a file",
-  ],
+  "review-cycle": {
+    anchors: [
+      "tell it where any output of that build goes, a path under the cycle's artifact directory below or inside the reviewed worktree, never a fixed shared scratchpad name and never left to the reviewer to pick",
+      "Every cycle uses its own unique artifact directory outside the worktree — suffix the cycle slug, reduced first to a single path segment, or create it with `mktemp -d` — never a fixed shared filename: parallel cycles share one scratchpad, and fixed names have crossed review streams between concurrent runs before.\n" +
+        "A slug is routinely a branch name, and the `/` in one splits the suffix into a parent directory: `mktemp` refuses that outright, and a `mkdir -p` path takes it silently, nesting the round history where nobody will look for it.\n" +
+        "The full round history (reviewer reports, peer output, fixer packets) lives there, as does any build or validation output a role redirects to a file",
+    ],
+    // Category 2, the by-reference requirement: `## The delegated rebase step`
+    // obliges the brief to carry a destination and delegates WHICH destination to
+    // the artifact-directory rule anchored just above. The anchor starts at
+    // "carries that absolute path" so it spans the obligation rather than the
+    // trailing reference alone, which a sentence could keep while dropping what it
+    // is a list of. It arrived with task 016 rather than 017 and shipped
+    // unguarded, which is what made this category necessary.
+    byReference: [
+      "so the brief carries that absolute path, the branch, the pinned base below, and a destination for any build output under this cycle's artifact-directory rules",
+    ],
+  },
 };
 
 // Every table this suite declares by hand drives a check that an EMPTY table
@@ -1086,12 +1230,25 @@ const PROSE_CLAUSES = {
 const emptyTables = [
   ["REQUIRED", REQUIRED],
   ["PROSE_MIRRORS", PROSE_MIRRORS],
+  ["BESPOKE_DESTINATIONS", BESPOKE_DESTINATIONS],
 ].filter(([, table]) => !table.length);
-if (emptyTables.length) {
+// An emptied span in that last table is the same vacuum one step down: the
+// cross-check drops it (an empty span is contained in every string, so keeping it
+// would report every NO_BUILD render as carrying it) and would then search for
+// one clause fewer in silence. Reported here, once, for the same reason an
+// emptied destination constant is.
+const blankSpans = BESPOKE_DESTINATIONS.filter(([, span]) => !span).map(([name]) => name);
+if (emptyTables.length || blankSpans.length) {
   failures++;
-  rows.push(["(all)", "declared tables", "FAIL", `${emptyTables.map(([n]) => n).join(", ")} empty — an empty table asserts nothing for every check built on it`]);
+  const why = [
+    emptyTables.length ? `${emptyTables.map(([n]) => n).join(", ")} empty — an empty table asserts nothing for every check built on it` : "",
+    blankSpans.length ? `BESPOKE_DESTINATIONS holds an empty span for ${blankSpans.join(", ")} — the cross-check silently searches for one clause fewer` : "",
+  ]
+    .filter(Boolean)
+    .join("; ");
+  rows.push(["(all)", "declared tables", "FAIL", why]);
 } else {
-  rows.push(["(all)", "declared tables", "ok", `REQUIRED ${REQUIRED.length} clauses, PROSE_MIRRORS ${PROSE_MIRRORS.length} mirrors`]);
+  rows.push(["(all)", "declared tables", "ok", `REQUIRED ${REQUIRED.length} clauses, PROSE_MIRRORS ${PROSE_MIRRORS.length} mirrors, BESPOKE_DESTINATIONS ${BESPOKE_DESTINATIONS.length} clauses`]);
 }
 
 for (const mirror of PROSE_MIRRORS) {
@@ -1117,7 +1274,7 @@ for (const mirror of PROSE_MIRRORS) {
   } else {
     rows.push([mirror, "prose census", "ok", `${census.size} skills carry destination clauses, all guarded`]);
   }
-  for (const [skill, anchors] of Object.entries(PROSE_CLAUSES)) {
+  for (const [skill, entry] of Object.entries(PROSE_CLAUSES)) {
     const path = `${mirror}/${skill}/SKILL.md`;
     let text;
     try {
@@ -1127,26 +1284,51 @@ for (const mirror of PROSE_MIRRORS) {
       rows.push([path, "prose destination", "FAIL", `cannot read: ${err.message}`]);
       continue;
     }
-    const wrong = anchors.map((anchor) => [anchor, text.split(anchor).length - 1]).filter(([, n]) => n !== 1);
+    // Category 1 is what the census equality is stated over; category 2 is
+    // deletion-guarded on the same terms and excluded from that count, because it
+    // carries no warning for the census to have counted. Both are anchored, so
+    // both are checked present exactly once and both count toward the tally.
+    const anchors = entry.anchors;
+    const byReference = entry.byReference || [];
+    const guarded = [...anchors, ...byReference];
+    const wrong = guarded.map((anchor) => [anchor, text.split(anchor).length - 1]).filter(([, n]) => n !== 1);
     const counted = census.get(skill) || 0;
-    if (!anchors.length) {
-      // A skill listed here with no anchors claims to be guarded and asserts
-      // nothing — the same vacuum an empty pin list is on the rendered side. The
-      // census would catch a clause arriving in the file, but an entry whose
-      // anchors were all removed alongside its clauses leaves a guarded-looking
-      // key that no longer guards anything. Drop the key instead.
+    // A skill listed here with no anchors of either kind claims to be guarded and
+    // asserts nothing — the same vacuum an empty pin list is on the rendered side
+    // — and an empty anchor is that vacuum one step down, since every file
+    // contains one. The census would catch a clause arriving in the file, but an
+    // entry whose anchors were all removed alongside its clauses leaves a
+    // guarded-looking key that no longer guards anything. Drop the key instead.
+    //
+    // A `byReference` key PRESENT and EMPTY is its own vacuum and the quieter one,
+    // measured on this check the day it was written: `anchors` and the census
+    // equality both still held, so the by-reference clause silently lost its only
+    // guard and the run passed. Writing the key is the claim; an ABSENT key says
+    // the file has no such clause, which is the ordinary shape and no failure. An
+    // empty `anchors` beside a non-empty `byReference` is legitimate too — it says
+    // the file's only guarded clause carries no warning, and the equality then
+    // holds at zero.
+    const vacuous = !guarded.length
+      ? "listed with no anchors of either kind — an entry asserting nothing; remove the key or give it its clause(s)"
+      : guarded.some((anchor) => !anchor)
+        ? "holds an empty anchor — every file contains one, so it guards nothing"
+        : entry.byReference && !entry.byReference.length
+          ? "declares a `byReference` category and puts no anchor in it — an empty list guards nothing; drop the key or anchor the clause"
+          : "";
+    if (vacuous) {
       failures++;
-      rows.push([path, "prose destination", "FAIL", "listed with no anchors — an entry asserting nothing; remove the key or give it its clause(s)"]);
+      rows.push([path, "prose destination", "FAIL", vacuous]);
     } else if (wrong.length) {
       failures++;
       const [anchor, n] = wrong[0];
-      rows.push([path, "prose destination", "FAIL", `${wrong.length} of ${anchors.length} anchor(s) not present exactly once; first found ${n}x: ${JSON.stringify(anchor.slice(0, 70))}…`]);
+      rows.push([path, "prose destination", "FAIL", `${wrong.length} of ${guarded.length} anchor(s) not present exactly once; first found ${n}x: ${JSON.stringify(anchor.slice(0, 70))}…`]);
     } else if (counted !== anchors.length) {
       failures++;
-      rows.push([path, "prose destination", "FAIL", `${counted} destination clause(s) in the file but ${anchors.length} anchored — a clause arrived or left; update the anchors`]);
+      rows.push([path, "prose destination", "FAIL", `${counted} warning-carrying destination clause(s) in the file but ${anchors.length} anchored — a clause arrived or left; update the anchors`]);
     } else {
-      proseAnchors += anchors.length;
-      rows.push([path, "prose destination", "ok", `${anchors.length} clause(s) anchored, ${counted} in the file`]);
+      proseAnchors += guarded.length;
+      const also = byReference.length ? ` + ${byReference.length} by-reference` : "";
+      rows.push([path, "prose destination", "ok", `${anchors.length} clause(s) anchored${also}, ${counted} counted in the file`]);
     }
   }
 }
