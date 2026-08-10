@@ -246,11 +246,13 @@ const PUBLISH_SCHEMA = {
     pushedNewCommits: { type: "boolean", description: "True ONLY if the push actually advanced the remote branch — new commits or rewritten history. False when no push happened or for a no-op `Everything up-to-date` push. Gates whether the re-review pings may fire, and it is the push half of what a disposition record may call landed." },
     threadOutcomes: {
       type: "array",
-      description: "Per item: its stable reference, what was done in prose, and the two facts a later turn acts on. Report it even when publication ABORTS part-way, one entry per item you acted on: an aborted publication leaves a disposition record, and the difference between a reply that landed and one that is still owed is derived from exactly these entries — a thread whose reply landed but whose resolve did not needs resolving, not replying to twice.",
+      description: "Your ACCOUNT of what you posted, keyed one entry per item: its machine identity, its stable reference, what was done in prose, and the two facts a later turn acts on. REQUIRED on every report, ABORTED ONES INCLUDED — one entry per item you were given, whether or not you reached it. What landed and what is still owed are derived as complements of this account, so an item you leave out is not read as untouched: the caller cannot tell a thread you never reached from one whose reply landed unreported, and it says the outcome is UNKNOWN rather than guessing either way. An abort before the push touched anything reports `[]`, which is the complete account of having acted on nothing.",
       items: {
         type: "object",
         properties: {
-          ref: { type: "string" },
+          threadId: { type: "string", description: "The thread's GraphQL node id, MANDATORY on a `review-thread` item's entry: it is the key this entry is matched to its disposition by, echoed VERBATIM from that disposition." },
+          url: { type: "string", description: "The item's url, MANDATORY on a `standalone` item's entry (where it is that item's whole identity, echoed VERBATIM); the thread's permalink on a `review-thread` entry, which is keyed by `threadId` instead." },
+          ref: { type: "string", description: "file:line + author, for a human reading the record. NOT an identity: two threads a re-review left on the same line by the same author share it, so it can key nothing — `threadId`/`url` above is what does." },
           outcome: { type: "string" },
           replied: { type: "boolean", description: "True ONLY if the reply is on the PR — the API call returned success. Never what you intended or attempted." },
           resolved: { type: "boolean", description: "True ONLY if the thread is now resolved on the PR. Never what you intended or attempted." },
@@ -258,18 +260,22 @@ const PUBLISH_SCHEMA = {
         required: ["ref", "outcome", "replied", "resolved"],
       },
     },
-    summaryCommentUrl: { type: "string", description: "URL of the posted Summary of Review Fixes, or empty if not posted." },
+    summaryCommentUrl: { type: "string", description: "URL of the posted Summary of Review Fixes, or empty if not posted. REQUIRED on every report, aborted ones included: absent, whether a Summary reached the PR is unstated, and an empty string read out of a missing field is a claim this run cannot make." },
     pings: { type: "string", description: "Which ping comments were posted, or empty." },
   },
-  // `aborted` stays out of `required`, beside `summaryCommentUrl` and `pings` —
-  // this schema's other may-be-empty fields. Requiring it was tried and
-  // reversed: a packet that misses validation reaches the caller as nothing at
-  // all, so one omitted reason would take `threadOutcomes`, `pushed`,
-  // `pushedNewCommits` and the summary URL down with it and force `published`
-  // false on a push that had completed. The result note carries whatever is
-  // here inline instead, which degrades to "no reason reported" and costs the
-  // rest of the report nothing.
-  required: ["published", "pushed", "pushedNewCommits"],
+  // `aborted` stays out of `required`, beside `pings` — this schema's other
+  // may-be-empty field. Requiring it was tried and reversed: a packet that
+  // misses validation reaches the caller as nothing at all, so one omitted
+  // reason would take `threadOutcomes`, `pushed`, `pushedNewCommits` and the
+  // summary URL down with it and force `published` false on a push that had
+  // completed. The result note carries whatever is here inline instead, which
+  // degrades to "no reason reported" and costs the rest of the report nothing.
+  // `threadOutcomes` and `summaryCommentUrl` ARE required, for the opposite
+  // reason: what a disposition record may say about origin is derived from
+  // them, and a field read as `[]`/`""` because it was absent turns silence
+  // into the positive claim "nothing reached origin". Required, silence is a
+  // visible schema violation instead.
+  required: ["published", "pushed", "pushedNewCommits", "threadOutcomes", "summaryCommentUrl"],
 };
 
 // What the disposition record's one write hands back. `posted` false is a report
@@ -752,7 +758,9 @@ Report a STRUCTURED result: set \`published: true\` ONLY if the push and every r
 
 ${JSON.stringify(dispositions, null, 2)}
 
-Record each item's outcome with its stable reference (file:line, author, threadId or url) in \`threadOutcomes\`, and set that entry's \`replied\` and \`resolved\` to what actually SUCCEEDED on the PR rather than to what you attempted. Report them even where publication stops part-way, for every item you acted on: such a run leaves a disposition record, and these entries are the only thing that lets it say which reply is already posted and which is still owed — without them a later turn either re-posts a reply that landed or never posts one that did not.`;
+Record each item's outcome in \`threadOutcomes\`, and set that entry's \`replied\` and \`resolved\` to what actually SUCCEEDED on the PR rather than to what you attempted. Each entry carries the item's MACHINE IDENTITY — a \`review-thread\` item's \`threadId\`, a \`standalone\` item's \`url\`, echoed verbatim from its disposition — beside the human \`ref\` (file:line + author), which identifies nothing on its own: two threads a re-review left on the same line by the same author share a \`ref\`, and an account keyed on it cannot say which of them was replied to.
+
+Report them even where publication stops part-way, and report EXACTLY ONE entry per item you were given — every item, whether or not you reached it, and never a second entry for one you already reported. Such a run leaves a disposition record, and what it may say about origin is derived from this account as complements: an item your account names once is settled either way, while an item it leaves out, names twice, or names by an identity this run never handed you leaves the record no choice but to say the outcome is UNKNOWN and send the next turn to the PR — because a reply you posted and did not report would be posted twice by a turn that assumed it was owed, and one you never posted would never be posted at all. Where you abort before the push touched anything, report \`[]\` and an empty \`summaryCommentUrl\`: that is the complete account of having acted on nothing, and both fields are required either way.`;
 }
 
 // The DURABLE DISPOSITION RECORD — the `address-review` skill's section of that
@@ -787,12 +795,24 @@ function recordPrompt(packet, dispositions, facts) {
   // run: nothing reached origin at all — and `pushNoop` is the one shape between
   // them, a push that succeeded while moving nothing, where the tips are on
   // origin though this run put nothing there.
+  // `unknown` is the THIRD state, and it is not a fourth flavour of "nothing
+  // reached origin": it says the publisher gave no usable account of what it
+  // posted, so this run does not KNOW. It outranks the other three, because
+  // every one of them asserts something about origin that an unaccounted run
+  // cannot assert — and the publisher pushes before it replies, so "died after
+  // something landed" is the ORDINARY shape of a part-way stop rather than an
+  // exotic one. `perThread` is the standing of each entry, keyed to the
+  // dispositions by the caller (never by `ref`, which two threads can share).
   const landed = typeof facts.landed === "string" ? facts.landed.trim() : "";
   const outstanding = typeof facts.outstanding === "string" ? facts.outstanding.trim() : "";
   const outcomes = Array.isArray(facts.outcomes) ? facts.outcomes : [];
-  return `Leave this run's disposition record on PR #${packet.pr.number} (branch \`${packet.pr.workingBranch}\`). ${landed
-    ? `This run's publication stopped PART-WAY: ${facts.why} So this record says what landed rather than "not published", and its tips are NOT local-only — the two lines below marked for that case are the ones that differ.`
-    : `This run published NOTHING: ${facts.why}`} Read \`AGENTS.md\` / \`CLAUDE.md\` first.
+  const unknown = typeof facts.unknown === "string" ? facts.unknown.trim() : "";
+  const perThread = Array.isArray(facts.perThread) ? facts.perThread.filter((l) => typeof l === "string" && l.trim()) : [];
+  return `Leave this run's disposition record on PR #${packet.pr.number} (branch \`${packet.pr.workingBranch}\`). ${unknown
+    ? `This run's publication stopped and WHAT IT PUBLISHED IS UNKNOWN: ${facts.why} So this record neither claims that nothing reached origin nor claims that anything did — the lines below marked for that case say what is unknown, and every thread entry carries the same reservation.`
+    : landed
+      ? `This run's publication stopped PART-WAY: ${facts.why} So this record says what landed rather than "not published", and its tips are NOT local-only — the two lines below marked for that case are the ones that differ.`
+      : `This run published NOTHING: ${facts.why}`} Read \`AGENTS.md\` / \`CLAUDE.md\` first.
 
 ${where}
 
@@ -811,14 +831,18 @@ The body, marker first (the marker line is what step 1 of the next run matches, 
 \`\`\`
 <!-- address-review:disposition-record -->
 # address-review packet — PR #${packet.pr.number} (${packet.pr.workingBranch})
-status: ${landed ? "published in part" : "not published"} (<the reason above, one line${landed ? ", saying what landed and what did not" : ""}>)
+status: ${unknown ? "UNKNOWN whether anything was published" : landed ? "published in part" : "not published"} (<the reason above, one line${unknown ? ", saying which facts are missing" : landed ? ", saying what landed and what did not" : ""}>)
 starting HEAD ${facts.startingHead || "(not recorded — neither the gather nor a rebase point reported one)"} | final HEAD <the tip you read> | recorded headRefOid ${packet.pr.headOid}
-base ${packet.pr.base} | validation <what ran> | reviewer ${facts.reviewerPassed ? "Pass" : "did NOT pass"} (${facts.rounds} round(s)) | peer <participation>
-${landed
-    ? `reached origin: ${landed} — still outstanding: ${outstanding}`
-    : facts.pushNoop
-      ? "this run changed NOTHING on origin: its push was an `Everything up-to-date` no-op, so the tips above are already on origin while no reply, resolve or Summary comment reached it"
-      : "the tips above are LOCAL ONLY — this run pushed nothing, so they are not on origin"}
+base ${packet.pr.base} | validation <what ran> | reviewer ${facts.reviewerStatus || (facts.reviewerPassed ? "Pass" : "did NOT pass")} (${facts.rounds} round(s)) | peer <participation>
+${unknown
+    ? `whether anything reached origin is UNKNOWN: ${unknown} — ${facts.pushAdvanced
+      ? "what IS known is that the push advanced the remote branch, so the tips above ARE on origin while every reply, resolve and Summary comment below is unaccounted for"
+      : "not even a push is known to have advanced the remote branch, so whether the tips above are on origin is unknown too"}; the publisher pushes BEFORE it replies, so a stop with something already on origin is the ordinary shape of this failure: check the PR itself before acting on any tip or any entry below`
+    : landed
+      ? `reached origin: ${landed} — still outstanding: ${outstanding}`
+      : facts.pushNoop
+        ? "this run changed NOTHING on origin: its push was an `Everything up-to-date` no-op, so the tips above are already on origin while no reply, resolve or Summary comment reached it"
+        : "the tips above are LOCAL ONLY — this run pushed nothing, so they are not on origin"}
 
 ## Threads
 [<disposition>] <path>:<line>  <author>  thread=<threadId or url>
@@ -832,10 +856,14 @@ ${landed
 - \`final HEAD\` is what \`git rev-parse HEAD\` prints in the working location. Read it there rather than repeating a SHA from this brief.
 - One \`## Threads\` block entry per disposition below, in that shape, and EVERY entry carries the same field set whatever its kind: the disposition kind, its stable reference (path:line, author, and the \`threadId\` for a review thread or the \`url\` for a standalone item), the permalink, and the reply body VERBATIM — a \`deferred-to-task\` entry adding the committed task file and its queued or deferred placement beside them rather than in place of them, since which thread a follow-up closes is not re-derivable from the PR. The drafted reply bodies and the ready-to-post Summary body are the only parts of this record that cannot be re-derived from the PR later, so they are the parts that must be exact.
 - The \`## Summary comment\` block holds the "Summary of Review Fixes" body a publishing run would have posted — what was fixed, a prominent "Pushed back — please re-examine" section, a "Deferred to follow-up tasks" section naming each committed task file, and any ambiguous/skipped item — ready to post unchanged. Where the cycle recorded locked-decision deviations, that body LEADS with them under a "Deviation from a locked decision" section, since a later turn posts what you wrote here as it stands. Standing deviations for this run: ${JSON.stringify(facts.deviations || [])}.
-- The SHAs are PROVENANCE, not a promise. Assert nothing about them holding later: the branch may be rebased before any push, which rewrites every one while changing nothing about whether the work is there. Do not write "the branch tip is <sha>" as a condition a replay must check, and do not omit the header's last line${landed
-    ? " — a reader who takes a part-way publication for a complete one stops looking for the replies that never landed"
-    : " — a reader who takes those SHAs for origin's goes looking for commits that are not there"}.${landed
-    ? `\n- Every thread keeps its entry and its verbatim reply, this run's part-way publication included — and each entry says WHERE IT STANDS, taken from the publisher's own per-thread account and from nothing else: ${JSON.stringify(outcomes)}. An entry that account reports \`replied\` carries \`reply: ALREADY POSTED — do not post it again\` above the body it posted, adding \`resolve still owed\` where \`resolved\` is false; an entry that account does not name at all carries \`the publisher reported no outcome for this thread — check it on the PR before replying\`, because a reply the publisher posted and failed to report would be posted twice by a later turn that assumed it was owed. Never drop an entry because its reply landed: the difference between the two is the whole reason this rendering exists.`
+- The SHAs are PROVENANCE, not a promise. Assert nothing about them holding later: the branch may be rebased before any push, which rewrites every one while changing nothing about whether the work is there. Do not write "the branch tip is <sha>" as a condition a replay must check, and do not omit the header's last line${unknown
+    ? " — a reader who takes this record for \"nothing was published\" either re-posts a reply that already landed or never posts one that did not"
+    : landed
+      ? " — a reader who takes a part-way publication for a complete one stops looking for the replies that never landed"
+      : " — a reader who takes those SHAs for origin's goes looking for commits that are not there"}.${perThread.length
+    ? `\n- Every thread keeps its entry and its verbatim reply, this run's stopped publication included — and each entry says WHERE IT STANDS. That standing is NOT yours to derive: the lines below are already matched to the dispositions by the identity publication routes on (\`thread=<threadId or url>\`, never \`ref\` — file:line plus author is shared by two threads a re-review left on one line, so it identifies neither). Copy each line's standing onto the entry it names, above that entry's verbatim reply body, and change nothing else:\n${perThread.map((l) => `  ${l}`).join("\n")}\n  Never drop an entry because its reply landed, and never drop one because its standing is unknown: the difference between the two is the whole reason this rendering exists.${unknown
+      ? ` What the publisher DID report is below, for a maintainer's eye and not as a fact to act on — it is exactly what could not be used: ${JSON.stringify(outcomes)}.`
+      : ""}`
     : ""}
 
 Report \`posted\`, \`superseded\` (true when you updated a prior record of your own), \`url\` (the record comment's permalink), and one line of \`detail\`.
@@ -1633,9 +1661,6 @@ function reverifiedRecord(record) {
 // against — are ruled out by the budget on its own.
 const CYCLE_MAX_ROUNDS = 12;
 const REVERIFY_MAX_ROUNDS = 4;
-if (cycle.verdict === "error") {
-  return { error: `Review cycle failed: ${cycle.detail}`, pr: packet.pr, rebase: rebaseRecord, rounds: cycle.rounds, dispositions: cycle.workReport, openQuestions: cycle.openQuestions, deviations: cycle.deviations, peerRounds: cycle.peerRounds, artifactDir: cycle.artifactDir, ...carriedOf(cycle) };
-}
 
 // --- The DISPOSITION RECORD, finalized in ONE place --------------------------
 // `recordPrompt` is this workflow's rendering of the `address-review` skill's
@@ -1650,24 +1675,31 @@ if (cycle.verdict === "error") {
 // complete).
 // A map with no entries records nothing: the skill's rule that a run with
 // nothing triaged says so in its report rather than posting an empty record.
-// An exit that passes no reason records nothing either, and the two CYCLE-ERROR
-// exits do not call this at all. Not because no tree is described — the pre-push
-// stop's tree is, and its pre-rebase tip is saved at `refs/pre-rebase/…` — but
-// because no verdict was ever RENDERED over the map they hold. A cap-hit cycle
-// reported one: its dispositions are a finished round's triage with findings
-// still outstanding, and `reviewer did NOT pass (N rounds)` is a line its record
-// prints truthfully. An errored cycle reported none at all, so its map is
-// whatever a round that did not finish left behind, of unknown completeness and
-// unknown tree. The post-merge exit is the same map: `mergedCycle` spreads
-// `after`, so the merged `workReport` is the FAILED re-verification's own, never
-// the pre-rebase cycle's. And a record is REPLAYED rather than re-triaged
-// (`priorRecordSection`), so recording one there would hand the next run's round
-// 1 a baseline no reviewer ever stood behind — while the map itself still rides
-// out in the result, beside the error that produced it, where a maintainer reads
-// both. Two neighbours are NOT that case and both record: a run stopped by the
-// pre-push rebase, whose verdict describes the tree the aborted replay left
-// standing, and a re-verification that returned NOTHING, which still holds the
-// map that passed on the pre-replay base. Each says so in its reason.
+// An exit that passes no reason records nothing either.
+// The ONE substantive exemption is a map NO REVIEWER EVER JUDGED, and it is
+// keyed on that fact rather than on which exit is asking — the distinction it
+// used to be keyed on, "a cycle that errored", is not the same question and is
+// FALSE for some errors. `wf-review-cycle` sets `confirming` only after a round
+// PASSED, and the confirmation pass that follows can stop the cycle outright
+// (returning nothing, blocking, coming back on an unclean worktree), which
+// leaves `verdict: "error"` standing over exactly the map that just passed
+// review. So the cycle reports `workReportReviewed` — whether a reviewer round
+// passed over the map being carried out, which is false again once a later pass
+// replaced it — and every exit reads that. A cap-hit cycle records for the same
+// reason it always did: its dispositions are a finished round's triage with
+// findings still outstanding, and `reviewer did NOT pass (N rounds)` is a line
+// its record prints truthfully.
+// What the exemption still covers is a map of genuinely unknown completeness
+// over an unknown tree: a round that never finished, no verdict of any kind
+// rendered over its entries. A record is REPLAYED rather than re-triaged
+// (`priorRecordSection`), so recording that would hand the next run's round 1 a
+// baseline no reviewer ever stood behind — while the map itself rides out in the
+// result, beside the error that produced it, where a maintainer reads both.
+// The post-merge error exit holds TWO maps and neither is exempt by that test:
+// `mergedCycle` spreads `after`, so its `workReport` is the failed
+// re-verification's own, but `preRebaseCycle`'s PASSED review on the base before
+// the replay. Both ride out in the result, and the one RECORDED is the most
+// recent one a reviewer passed over.
 // It always runs before the worktree is given back, because every exit that
 // reclaims one is below the call that records for it — so the tips it cites are
 // read where the work happened.
@@ -1705,6 +1737,34 @@ function recordNoteText() {
 // `rebasePoint`, the published exit's by the ping accounting), so the record
 // still reaches the line a maintainer reads first.
 const withRecordNote = (note) => `${note || ""}${recordNoteText() ? ` ${recordNoteText()}` : ""}`.trim();
+
+// The FIRST cycle-error exit, and the first one to read the reviewed fact rather
+// than the verdict. It sits below the helper only because it calls it (the
+// helper's `dispositionRecord` is a `let` in this scope, so calling it from
+// above would hit the temporal dead zone); nothing between them has an effect.
+if (cycle.verdict === "error") {
+  const record = cycle.workReportReviewed
+    ? await leaveDispositionRecord(
+        `the review cycle errored AFTER a reviewer round had passed over the dispositions below — its final confirmation pass stopped the cycle — so publication was refused: ${cycle.detail || "no detail reported"}`,
+        cycle.workReport,
+        { rounds: cycle.rounds, reviewerStatus: "passed a round, after which the cycle errored", deviations: cycle.deviations },
+      )
+    : {};
+  return {
+    error: `Review cycle failed: ${cycle.detail}`,
+    ...record,
+    pr: packet.pr,
+    rebase: rebaseRecord,
+    rounds: cycle.rounds,
+    dispositions: cycle.workReport,
+    openQuestions: cycle.openQuestions,
+    deviations: cycle.deviations,
+    peerRounds: cycle.peerRounds,
+    artifactDir: cycle.artifactDir,
+    ...carriedOf(cycle),
+    ...(recordNoteText() ? { note: recordNoteText() } : {}),
+  };
+}
 
 // The SECOND rebase point: the fixes are committed and the next thing that
 // happens is publication, so this is where the branch meets the base as it
@@ -1859,7 +1919,44 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
     };
     cycle = mergedCycle(preRebaseCycle, reverified);
     if (cycle.verdict === "error") {
-      return { error: `Post-rebase re-verification cycle failed: ${cycle.detail}`, pr: packet.pr, rebase: rebaseRecord, rounds: cycle.rounds, dispositions: cycle.workReport, openQuestions: cycle.openQuestions, deviations: cycle.deviations, peerRounds: cycle.peerRounds, artifactDir: cycle.artifactDir, ...carriedOf(cycle) };
+      // TWO maps stand here, and this exit used to record neither. The merged
+      // one is the failed re-verification's own (`mergedCycle` spreads `after`),
+      // and it may still have been judged — a confirmation pass that stopped
+      // that cycle leaves an error verdict over a map a round passed — while
+      // `preRebaseCycle`'s PASSED review on the base before the replay
+      // regardless, and used to be dropped on the floor here: recorded nowhere
+      // and carried under no result key, which is precisely the loss this record
+      // exists against. So both ride out, and the one RECORDED is the most
+      // recent one a reviewer actually passed over.
+      const reverifiedReviewed = !!cycle.workReportReviewed;
+      const record = await leaveDispositionRecord(
+        reverifiedReviewed
+          ? `the post-rebase re-verification errored AFTER a reviewer round had passed over the dispositions below, so publication was refused: ${cycle.detail || "no detail reported"} They are the re-verification's own map, judged over the rebased tree.`
+          : `the post-rebase re-verification errored before any reviewer round judged its map, so publication was refused: ${cycle.detail || "no detail reported"} The dispositions below are the ones that PASSED review on the base the branch sat on before that replay; the re-verification's own unjudged map is in this run's result under \`dispositions\` and is deliberately not recorded, since a record is replayed rather than re-triaged.`,
+        reverifiedReviewed ? cycle.workReport : preRebaseCycle.workReport,
+        reverifiedReviewed
+          ? { rounds: cycle.rounds, reviewerStatus: "passed a round over the rebased tree, after which the cycle errored", deviations: cycle.deviations }
+          : { rounds: preRebaseCycle.rounds, reviewerStatus: "Pass, on the base the branch sat on before the replay", deviations: preRebaseCycle.deviations },
+      );
+      return {
+        error: `Post-rebase re-verification cycle failed: ${cycle.detail}`,
+        ...record,
+        pr: packet.pr,
+        rebase: rebaseRecord,
+        rounds: cycle.rounds,
+        dispositions: cycle.workReport,
+        // The map that passed on the pre-replay base, under its own key on every
+        // one of these exits — including the one that recorded it, so a
+        // maintainer reading the result never has to work out which of the two
+        // the record holds.
+        preRebaseDispositions: preRebaseCycle.workReport || [],
+        openQuestions: cycle.openQuestions,
+        deviations: cycle.deviations,
+        peerRounds: cycle.peerRounds,
+        artifactDir: cycle.artifactDir,
+        ...carriedOf(cycle),
+        note: withRecordNote(`Nothing was pushed. The branch is on the rebased base, and its pre-rebase tip is saved at \`${second.rebase.recoveryRef}\`.`),
+      };
     }
   }
 }
@@ -2275,10 +2372,84 @@ const published = !!(publishReport && publishReport.published);
 // goes looking for replies and a Summary comment that were never posted. Only
 // three things can have landed, and the publisher reports each one: a push that
 // ADVANCED the remote, replies/resolves it confirmed, and a posted Summary.
+// And what the publisher's account cannot say, this run must not say either.
+// Absence of a report is not evidence of absence of mutations: the publisher
+// pushes at step 2 and replies at step 4, so "died after something landed" is the
+// ORDINARY shape of a part-way stop, and a report that names no outcome is a
+// report about a state this run has no information about. So every claim below is
+// derived from an account that KEYS ONE ENTRY PER DISPOSITION, and where the
+// account cannot carry that weight the record says the outcome is unknown.
 const outcomes = Array.isArray(publishReport && publishReport.threadOutcomes) ? publishReport.threadOutcomes : [];
-const repliedCount = outcomes.filter((o) => o && o.replied).length;
-const resolvedCount = outcomes.filter((o) => o && o.resolved).length;
-const summaryUrl = publishReport && typeof publishReport.summaryCommentUrl === "string" ? publishReport.summaryCommentUrl.trim() : "";
+// The identity publication itself routes on, and the only thing that can key this
+// account: a `review-thread` by its `threadId`, a `standalone` by its `url`.
+// `ref` is file:line + author, which two threads a re-review left on one line
+// SHARE — keyed on it, one thread's landed reply and another's owed one are the
+// same entry. Every disposition reaching publication has one: `dispositionDefect`
+// above rejects a review-thread entry with no `threadId` and a standalone with no
+// `url` before any push.
+const dispKeyOf = (d) => String((d && (d.type === "review-thread" ? d.threadId : d.url)) || "").trim();
+const outcomeKeyOf = (o) => String((o && (o.threadId || o.url)) || "").trim();
+const dispKeys = workReport.map(dispKeyOf);
+const dispKeySet = new Set(dispKeys);
+const accountByKey = new Map();
+const duplicateKeys = [];
+const strayKeys = [];
+for (const o of outcomes) {
+  const k = outcomeKeyOf(o);
+  if (!k || !dispKeySet.has(k)) {
+    strayKeys.push(k || "(an entry carrying neither a threadId nor a url)");
+    continue;
+  }
+  if (accountByKey.has(k)) {
+    duplicateKeys.push(k);
+    continue;
+  }
+  accountByKey.set(k, o);
+}
+const unaccountedKeys = dispKeys.filter((k) => !accountByKey.has(k));
+const summaryReported = !!publishReport && typeof publishReport.summaryCommentUrl === "string";
+const summaryUrl = summaryReported ? publishReport.summaryCommentUrl.trim() : "";
+// Nothing the publisher reported claims a mutation at all: no push, no reply, no
+// resolve, no Summary. Then an account short of an entry per item is COMPLETE
+// rather than missing — the push is step 2 and the replies and Summary are steps
+// 4 and 5, so there is nothing an unnamed item's entry could say — and this is
+// the one shape in which `[]` is the whole truth.
+const claimsAMutation =
+  !!(publishReport && (publishReport.pushed || publishReport.pushedNewCommits)) ||
+  !!summaryUrl ||
+  outcomes.some((o) => o && (o.replied || o.resolved));
+// Why the account cannot be used, in the words the record prints. EMPTY means it
+// keys one entry per disposition, so `landed` and `outstanding` below are two
+// halves of one keyed set rather than two lists built independently.
+const accountDefect = !publishReport
+  ? "the publisher returned nothing at all, so no field of its report exists — neither the push flags, nor its per-thread account, nor whether a Summary comment was posted"
+  : !Array.isArray(publishReport.threadOutcomes)
+    ? "its report carries no `threadOutcomes` array, so it accounts for nothing it did to any thread"
+    : !summaryReported
+      ? "its report carries no `summaryCommentUrl`, so whether a Summary comment reached the PR is unstated"
+      : duplicateKeys.length
+        ? `its account names ${duplicateKeys.length === 1 ? "an item" : `${duplicateKeys.length} items`} more than once (${duplicateKeys.join(", ")}), so which entry is that item's outcome is undecidable`
+        : strayKeys.length
+          ? `its account names ${strayKeys.join(", ")}, which is no disposition this run holds, so it is an account of some other work`
+          : unaccountedKeys.length && claimsAMutation
+            ? `its account leaves ${unaccountedKeys.length} of ${workReport.length} item(s) unnamed (${unaccountedKeys.join(", ")}) while reporting that it already mutated the PR, so whether those replies landed is unstated`
+            : "";
+// Only three things can have landed, and the publisher reports each one: a push
+// that ADVANCED the remote, replies/resolves it confirmed, and a posted Summary.
+// `pushed` is NOT one of them — it says a push command succeeded, which an
+// `Everything up-to-date` no-op also does, so a run whose no-op push was followed
+// by a failure on its first reply changed nothing remotely and must not read as
+// "published in part": a reader who believes it goes looking for replies and a
+// Summary comment that were never posted.
+const repliedKeys = dispKeys.filter((k) => (accountByKey.get(k) || {}).replied);
+const resolvedKeys = dispKeys.filter((k) => (accountByKey.get(k) || {}).resolved);
+const repliedCount = repliedKeys.length;
+const resolvedCount = resolvedKeys.length;
+// One place decides what an unusable account supersedes, and it is not here:
+// every consumer below reads `accountDefect` FIRST — the record's rendering, its
+// reason, the per-entry standing, and the result's note — so guarding these two
+// as well would be a second copy of that precedence, unobservable while it
+// agreed and silent when it stopped agreeing.
 const landed = published
   ? ""
   : [
@@ -2289,29 +2460,63 @@ const landed = published
     ].filter(Boolean).join(", ");
 // A push that ran and moved nothing is neither case: the tips ARE on origin
 // (the remote already pointed at them), so the local-only line is false too.
-// One fact, one extra line in the record, rather than a rendering of its own.
-const pushNoop = !published && !landed && !!(publishReport && publishReport.pushed);
-// What is left, counted off the same reported facts. An entry the publisher did
-// not report as replied reads as outstanding, which is the safe direction and
-// the honest one: this is what the publisher SAID it did, and the record's own
-// per-thread breakdown below carries the same reservation to the thread it
-// concerns rather than averaging it away.
-const owedReplies = Math.max(0, workReport.length - repliedCount);
-const outstanding = [
-  owedReplies ? `${owedReplies} of ${workReport.length} thread(s) still owed their reply` : "",
-  resolvedCount < workReport.length ? `${workReport.length - resolvedCount} not resolved (which for a push-back on a human thread is the policy rather than a debt)` : "",
-  summaryUrl ? "" : "the Summary comment",
-].filter(Boolean).join(", ") || "no reply, resolve or Summary comment — publication stopped past all of them, so its reason above is what is left to act on";
+// One fact, one extra line in the record, rather than a rendering of its own. It
+// needs a usable account for the same reason "nothing reached origin" does: the
+// line says no reply, resolve or Summary followed, which is a claim.
+const pushNoop = !published && !accountDefect && !landed && !!(publishReport && publishReport.pushed);
+// What is left, as the COMPLEMENT of what landed over the same keyed set rather
+// than a second count of its own: every disposition is named exactly once above,
+// so an item is owed its reply precisely when the account does not report one.
+const owedReplies = dispKeys.length - repliedCount;
+const outstanding = published
+  ? ""
+  : [
+      owedReplies ? `${owedReplies} of ${workReport.length} thread(s) still owed their reply` : "",
+      resolvedCount < workReport.length ? `${workReport.length - resolvedCount} not resolved (which for a push-back on a human thread is the policy rather than a debt)` : "",
+      summaryUrl ? "" : "the Summary comment",
+    ].filter(Boolean).join(", ") || "no reply, resolve or Summary comment — publication stopped past all of them, so its reason above is what is left to act on";
+// Where each entry stands, one line per disposition, matched to it by key. The
+// caller derives this rather than handing the record's author the raw account and
+// the rule: joining the two is exactly where a shared `ref` would put one
+// thread's landed reply on another thread's entry. Emitted on the two paths where
+// an entry's standing is not simply "owed" — a part-way publication, and an
+// unusable account, where every entry's standing is unknown.
+const standingLine = (d) => {
+  const key = dispKeyOf(d);
+  const label = `thread=${key || "(no threadId or url)"}  ${String((d && d.ref) || "").trim() || "(no ref)"}`;
+  if (accountDefect) return `${label} — UNKNOWN whether its reply is posted or its thread resolved: check it on the PR before replying, and before resolving.`;
+  const o = accountByKey.get(key);
+  return `${label} — ${o && o.replied ? "reply ALREADY POSTED — do not post it again" : "no reply reached the PR — the reply below is still owed"}; ${o && o.resolved ? "thread ALREADY RESOLVED — do not resolve it again" : "resolve still owed"}.`;
+};
+const perThread = published || !(landed || accountDefect) ? [] : workReport.map(standingLine);
 const publishRecord = published
   ? {}
   : await leaveDispositionRecord(
-      `publication did not complete: ${(publishReport && publishReport.aborted) || "the publisher returned nothing"}${landed
-        ? ` — what reached origin: ${landed}; what is left to replay: ${outstanding}.`
-        : pushNoop
-          ? ", and nothing reached origin: its push was an `Everything up-to-date` no-op that moved nothing, and no reply, resolve or Summary comment followed."
-          : ", and nothing reached origin."}`,
+      `publication did not complete: ${(publishReport && publishReport.aborted) || "the publisher returned nothing"}${accountDefect
+        ? ` — and WHAT REACHED ORIGIN IS UNKNOWN: ${accountDefect}. Treat nothing below as posted and nothing as unposted until the PR itself says which.`
+        : landed
+          ? ` — what reached origin: ${landed}; what is left to replay: ${outstanding}.`
+          : pushNoop
+            ? ", and nothing reached origin: its push was an `Everything up-to-date` no-op that moved nothing, and its own account reports no reply, resolve or Summary comment after it."
+            : ", and nothing reached origin: its own account reports no push, no reply, no resolve and no Summary comment."}`,
       workReport,
-      { rounds, reviewerPassed: true, deviations: cycle.deviations, landed, outstanding, pushNoop, outcomes },
+      {
+        rounds,
+        reviewerPassed: true,
+        deviations: cycle.deviations,
+        landed,
+        outstanding,
+        pushNoop,
+        outcomes,
+        unknown: accountDefect,
+        perThread,
+        // The one half of "what reached origin" an unusable account does not put
+        // in doubt: the push flags are reported positively, so a run whose push
+        // ADVANCED the remote knows its tips are there even where it knows
+        // nothing about its replies. Saying "whether anything reached origin is
+        // unknown" over that would understate what the run does know.
+        pushAdvanced: !!(publishReport && publishReport.pushedNewCommits),
+      },
     );
 // Published is the finish this whole pipeline exists for, so the worktree goes
 // back here. A publication that aborted keeps it: whatever the publisher
@@ -2358,9 +2563,11 @@ return {
   ...(reclaimed ? { worktreeReclaim: reclaimed } : {}),
   note: published
     ? (`${notes.join(" ")}${survivingWorktreeNote(reclaimed)}`.trim() || undefined)
-    : withRecordNote(`Fixes passed review but publication did not fully complete — see publishReport.aborted; ${landed
-        ? `what reached origin: ${landed}; what is outstanding: ${outstanding}`
-        : pushNoop
-          ? "nothing reached origin — its push was an `Everything up-to-date` no-op that moved nothing"
-          : "nothing reached origin"}.`),
+    : withRecordNote(`Fixes passed review but publication did not fully complete — see publishReport.aborted; ${accountDefect
+        ? `what reached origin is UNKNOWN: ${accountDefect}`
+        : landed
+          ? `what reached origin: ${landed}; what is outstanding: ${outstanding}`
+          : pushNoop
+            ? "nothing reached origin — its push was an `Everything up-to-date` no-op that moved nothing"
+            : "nothing reached origin"}.`),
 };

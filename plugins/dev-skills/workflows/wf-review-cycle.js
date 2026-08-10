@@ -1190,7 +1190,11 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //   each deviation still standing — at most ONE entry per deviation, only an
 //   entry the passing round could use, and only while no later pass adopted
 //   work that round never saw), deviationHistory (only once some
-//   pass reported one), workReport, proactive, finalSha, notes, reviewerNotes,
+//   pass reported one), workReport, workReportReviewed (whether a reviewer
+//     round actually passed over THAT map — true on an error or cap exit taken
+//     past a passing round, since the confirmation pass can stop the cycle over
+//     the very map that just passed, and false where no round ever judged the
+//     map being carried out), proactive, finalSha, notes, reviewerNotes,
 //   peerRounds, discardedPeerFindings, undisposed, outstanding, artifactDir,
 //   closeOut (present only when a trivial-round close-out ENDED the cycle:
 //     the pass, the range, and the non-semantic edits that shipped unreviewed),
@@ -1291,6 +1295,17 @@ async function runReviewCycle(cycle) {
   let fixerPasses = 0;
   let findings = null; // findings block for the next fixer pass; null on round 1
   let confirming = false; // next fixer pass is the final confirmation pass
+  // The map a reviewer round actually PASSED over, snapshotted as text. It
+  // answers a question the verdict cannot: `confirming` is set only after a
+  // round passed, and the confirmation pass that follows can stop the cycle
+  // outright — returning nothing, blocking, coming back on an unclean worktree
+  // — leaving `verdict: "error"` over exactly the map that just passed. A
+  // consumer deciding what a stopped cycle's map is worth (wf-address-review
+  // withholds a disposition record from an UNREVIEWED map) must not read that
+  // as "no reviewer ever judged this". Text rather than a latched boolean
+  // because a later pass may REPLACE `workReport`, and only comparing the two
+  // answers "is the map LEAVING this cycle the one that was judged".
+  let reviewedReportJson = "";
   // Peer availability state: `preflighted` (the install/login preflight runs
   // once, never per round) and sticky `unavailable` (an unavailable peer is
   // not re-probed). A fan-out owner embedding many cycles passes ONE shared
@@ -1317,6 +1332,7 @@ async function runReviewCycle(cycle) {
     // exit, which ships it standing and unjudged rather than pretending a
     // pre-change judgment still holds.
     const standingAssessments = deviationAssessments.filter((a) => a && deviations.includes(a.deviation));
+    const carriedReport = (packet && packet.workReport) || [];
     return {
       verdict,
       detail: detail || "",
@@ -1328,7 +1344,13 @@ async function runReviewCycle(cycle) {
       ...(deviationHistory.some((h) => h.deviations.length) ? { deviationHistory } : {}),
       ...(flakeHistory.length ? { flakeHistory } : {}),
       ...(packetChecks.length ? { packetChecks } : {}),
-      workReport: (packet && packet.workReport) || [],
+      workReport: carriedReport,
+      // Whether a reviewer round passed over THAT map, not over some earlier
+      // one: false before any round finished and false again once a pass
+      // replaced it, true on an error/cap exit taken past a passing round. The
+      // empty initial snapshot matches nothing `JSON.stringify` can produce, so
+      // no round having passed reads as false without a second condition.
+      workReportReviewed: JSON.stringify(carriedReport) === reviewedReportJson,
       proactive: (packet && packet.proactive) || "",
       finalSha: (packet && packet.finalSha) || "",
       notes: (packet && packet.summary) || "",
@@ -1965,6 +1987,11 @@ async function runReviewCycle(cycle) {
       }
       continue;
     }
+
+    // The round PASSED, so the map this packet carries is one a fresh reviewer
+    // judged. Snapshotted here — the one point in the loop where that is true —
+    // and read by `result()` on every exit, the stopped ones included.
+    reviewedReportJson = JSON.stringify((packet && packet.workReport) || []);
 
     // The round passed with every pending retirement in view, so the fresh
     // reviewer accepted each claim the same way it accepted this round's

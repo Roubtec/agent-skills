@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 172;
+const EXPECTED_CHECKS = 177;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -2670,6 +2670,26 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
 // and a record beside them would say "not published" of published work.
 {
   const withWork = { reconcile: { outcome: "work" }, items: [ITEM] };
+  // A second gathered thread on the SAME line by the SAME author — what a
+  // re-review round ordinarily leaves behind — so the two dispositions below
+  // share a `ref` and are told apart only by `threadId`.
+  const ITEM_2 = { ...ITEM, threadId: "T2", commentId: "C2", body: "a second finding on the same line", url: "https://example.invalid/pr/42#d2" };
+  const withTwo = { reconcile: { outcome: "work" }, items: [ITEM, ITEM_2] };
+  const CYCLE_PASS_TWO = {
+    ...CYCLE_PASS,
+    workReport: [
+      CYCLE_PASS.workReport[0],
+      {
+        ...CYCLE_PASS.workReport[0],
+        threadId: "T2",
+        commentId: "C2",
+        url: "https://example.invalid/pr/42#d2",
+        kind: "push-back",
+        detail: "the guard is deliberate; the same line was re-raised without new grounds",
+        newFinding: false,
+      },
+    ],
+  };
   // The cap: a cycle that returned its report without a passing verdict.
   const CYCLE_CAP = { ...CYCLE_PASS, verdict: "fail", outstanding: { reviewer: [{ finding: "still wrong" }] } };
   // A passing cycle whose one entry names a thread that was never gathered, so
@@ -2682,16 +2702,37 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // The same abort with NO map at all — nothing to replay, so nothing to record.
   const CYCLE_NO_MAP = { ...CYCLE_PASS, workReport: [] };
   // A cycle that reported an ERROR instead of a verdict, holding a nonempty map
-  // no reviewer ever passed.
-  const CYCLE_ERROR = { ...CYCLE_PASS, verdict: "error", detail: "the review cycle harness returned no verdict" };
+  // no reviewer ever passed. `workReportReviewed: false` is the cycle's own
+  // answer to that, and it is stated rather than omitted: the field is what the
+  // exemption keys on, so a fixture leaving it out would exercise a shape the
+  // cycle never returns.
+  const CYCLE_ERROR = { ...CYCLE_PASS, verdict: "error", workReportReviewed: false, detail: "the review cycle harness returned no verdict" };
+  // The SAME error verdict over a map a reviewer round DID pass: `wf-review-cycle`
+  // sets `confirming` only after a round passed, so a confirmation pass that
+  // stops the cycle leaves exactly this shape — an `error` beside the map that
+  // just passed review. The old exemption, keyed on the exit rather than on the
+  // fact, dropped it.
+  const CYCLE_ERROR_REVIEWED = {
+    ...CYCLE_ERROR,
+    workReportReviewed: true,
+    detail: "the final confirmation pass returned nothing on pass 4",
+  };
   // The re-verification erroring, with a map of its OWN — distinguishable from
   // the pre-rebase cycle's, so "the merged report is the failed
   // re-verification's" is observable rather than asserted.
   const CYCLE_REVERIFIED_ERROR = {
     ...CYCLE_REVERIFIED,
     verdict: "error",
+    workReportReviewed: false,
     detail: "the reviewer harness died mid-round",
     workReport: [{ ...CYCLE_PASS.workReport[0], detail: "re-triaged after the replay, and the round never finished" }],
+  };
+  // And the same re-verification stopped by its own confirmation pass, so ITS
+  // map carries a passing round's verdict over the rebased tree.
+  const CYCLE_REVERIFIED_ERROR_REVIEWED = {
+    ...CYCLE_REVERIFIED_ERROR,
+    workReportReviewed: true,
+    detail: "the post-rebase confirmation pass came back on an unclean worktree",
   };
   // The pre-push rebase halting on a conflict it cannot judge: the map has
   // passed review, and the abort left the tree that verdict describes.
@@ -2715,7 +2756,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     pushedNewCommits: true,
     aborted: "the push landed but replying to thread T1 failed with a 502",
     summaryCommentUrl: "",
-    threadOutcomes: [{ ref: "src/app.ts:12 a-reviewer", outcome: "reply rejected with a 502", replied: false, resolved: false }],
+    threadOutcomes: [{ ref: "src/app.ts:12 a-reviewer", threadId: "T1", outcome: "reply rejected with a 502", replied: false, resolved: false }],
   };
   // The same exit with a reply and the Summary ALREADY on the PR: what landed
   // and what is outstanding are then different subsets of the same map, which is
@@ -2726,7 +2767,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     pushedNewCommits: true,
     aborted: "the reply landed but resolving thread T1 was rejected, and the pings never ran",
     summaryCommentUrl: "https://example.invalid/pr/42#issuecomment-7",
-    threadOutcomes: [{ ref: "src/app.ts:12 a-reviewer", outcome: "replied; resolve rejected", replied: true, resolved: false }],
+    threadOutcomes: [{ ref: "src/app.ts:12 a-reviewer", threadId: "T1", outcome: "replied; resolve rejected", replied: true, resolved: false }],
   };
   // A push that SUCCEEDED while moving nothing — `Everything up-to-date`, the
   // remote already pointing at this tip — and then failed on its first reply.
@@ -2738,16 +2779,67 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     pushedNewCommits: false,
     aborted: "the push was a no-op and replying to thread T1 failed with a 502",
     summaryCommentUrl: "",
-    threadOutcomes: [{ ref: "src/app.ts:12 a-reviewer", outcome: "reply rejected with a 502", replied: false, resolved: false }],
+    threadOutcomes: [{ ref: "src/app.ts:12 a-reviewer", threadId: "T1", outcome: "reply rejected with a 502", replied: false, resolved: false }],
   };
   // And the same exit reached with nothing on origin at all, which records
-  // exactly like a stop before publication.
+  // exactly like a stop before publication. Its account is EMPTY and complete:
+  // the push is step 2 and the replies are step 4, so a publisher that never
+  // pushed acted on no thread, and there is nothing an entry could say. This is
+  // the one shape in which `[]` is the whole truth rather than a silence.
   const PUBLISH_NOTHING = {
     published: false,
     pushed: false,
     pushedNewCommits: false,
     aborted: "the PR head moved under the run, so nothing was pushed",
+    summaryCommentUrl: "",
     threadOutcomes: [],
+  };
+  // A publication whose reply AND resolve landed on one thread while the other
+  // was never reached. The resolve half is what makes this fixture necessary:
+  // with a single unresolved thread everywhere, the landed-resolve clause is
+  // never rendered and the outstanding side can count every thread instead of
+  // the complement without any check noticing. The two dispositions share one
+  // `ref` — same path:line, same author, which is ordinary once a re-review
+  // lands a second finding on a line — so an account keyed on `ref` cannot say
+  // which of them was replied to, and only `threadId` can.
+  const PUBLISH_PART_WAY_RESOLVED = {
+    published: false,
+    pushed: true,
+    pushedNewCommits: true,
+    aborted: "thread T1 was replied to and resolved, then posting the Summary comment failed with a 502",
+    summaryCommentUrl: "",
+    threadOutcomes: [
+      { ref: "src/app.ts:12 a-reviewer", threadId: "T1", outcome: "replied and resolved", replied: true, resolved: true },
+      { ref: "src/app.ts:12 a-reviewer", threadId: "T2", outcome: "never reached before the abort", replied: false, resolved: false },
+    ],
+  };
+  // The publisher returning NOTHING. It pushes at step 2 and reports at step 4,
+  // so "died after pushing" is the ordinary shape of this — and the run holds no
+  // fact whatever about what reached origin.
+  const PUBLISH_SILENT = null;
+  // A report that pushed and then accounted for NO thread. Read as `[]`, this
+  // asserts that no reply landed; what it actually says is nothing at all.
+  const PUBLISH_UNACCOUNTED = {
+    published: false,
+    pushed: true,
+    pushedNewCommits: true,
+    aborted: "the push landed and then the run lost the thread ids it was replying through",
+    summaryCommentUrl: "",
+    threadOutcomes: [],
+  };
+  // And an account that names ONE thread twice while leaving the other unnamed —
+  // the shape a `ref`-keyed account degenerates into. The two entries disagree,
+  // so which is that thread's outcome is undecidable and neither may be counted.
+  const PUBLISH_DUPLICATE_ACCOUNT = {
+    published: false,
+    pushed: true,
+    pushedNewCommits: true,
+    aborted: "the Summary comment was rejected",
+    summaryCommentUrl: "",
+    threadOutcomes: [
+      { ref: "src/app.ts:12 a-reviewer", threadId: "T1", outcome: "replied", replied: true, resolved: false },
+      { ref: "src/app.ts:12 a-reviewer", threadId: "T1", outcome: "not reached", replied: false, resolved: false },
+    ],
   };
   const REPLAY_POINTS = { rebases: { "pre-fix": REBASE_NOOP, "pre-push": REBASE_REPLAY } };
   const cases = [
@@ -2762,23 +2854,35 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     ["a publication whose reply and Summary landed before it failed", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_PART_WAY_REPLIED }, "fixed-publish-failed", true],
     ["a publication whose push was a no-op before it failed", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_NOOP_PUSH }, "fixed-publish-failed", true],
     ["a publication that aborted with nothing on origin", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_NOTHING }, "fixed-publish-failed", true],
+    ["a publication whose reply and resolve landed on one of two threads", { args: "push no-rebase", cycles: [CYCLE_PASS_TWO], publish: PUBLISH_PART_WAY_RESOLVED }, "fixed-publish-failed", true, withTwo],
+    // The three shapes in which the publisher's account cannot carry a claim
+    // about origin. Every one of them used to render as "nothing reached
+    // origin", which is a statement about a state the run has no fact about.
+    ["a publisher that returned nothing at all", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_SILENT }, "fixed-publish-failed", true],
+    ["a publication that pushed and then accounted for no thread", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_UNACCOUNTED }, "fixed-publish-failed", true],
+    ["a publication whose account names one thread twice and the other not at all", { args: "push no-rebase", cycles: [CYCLE_PASS_TWO], publish: PUBLISH_DUPLICATE_ACCOUNT }, "fixed-publish-failed", true, withTwo],
     ["a run that published", { args: "push no-rebase", cycles: [CYCLE_PASS] }, "fixed-published", false],
     ["an abort with no dispositions at all", { args: "push no-rebase", cycles: [CYCLE_NO_MAP] }, "publish-aborted-incomplete-dispositions", false],
-    // The two exits the exemption covers, and the only two: a cycle that
-    // reported no verdict at all, before the rebase and after it. Neither map
-    // was ever passed by a reviewer, and a record is REPLAYED rather than
-    // re-triaged, so neither is written — while both still ride out in the
-    // result. `records: false` here is the declined half of the same decision
-    // that makes the row above it record.
-    ["a first cycle that errored", { args: "push no-rebase", cycles: [CYCLE_ERROR] }, "error", false],
-    ["a re-verification that errored", { args: "push", cycles: [CYCLE_PASS, CYCLE_REVERIFIED_ERROR], ...REPLAY_POINTS }, "error", false],
+    // What the exemption covers, stated as the FACT it now rests on rather than
+    // as the two exits it used to name: a map no reviewer round ever judged, of
+    // unknown completeness over an unknown tree. A record is REPLAYED rather
+    // than re-triaged, so writing one would hand the next run's round 1 a
+    // baseline nobody stood behind — while the map rides out in the result.
+    ["a first cycle that errored with no round behind its map", { args: "push no-rebase", cycles: [CYCLE_ERROR] }, "error", false],
+    ["a re-verification that errored with no round behind its map", { args: "push", cycles: [CYCLE_PASS, CYCLE_REVERIFIED_ERROR], ...REPLAY_POINTS }, "error", true],
+    // And the same two exits over a map a reviewer round DID pass, which the
+    // exit's name cannot distinguish: `confirming` is set only after a round
+    // passed, so a confirmation pass that stops the cycle leaves an `error`
+    // verdict standing over the map that just passed review.
+    ["a first cycle that errored after a round had passed over its map", { args: "push no-rebase", cycles: [CYCLE_ERROR_REVIEWED] }, "error", true],
+    ["a re-verification that errored after a round had passed over its map", { args: "push", cycles: [CYCLE_PASS, CYCLE_REVERIFIED_ERROR_REVIEWED], ...REPLAY_POINTS }, "error", true],
   ];
   const wrong = [];
   let recordBrief = "";
   const briefs = {};
   const results = {};
-  for (const [what, opts, status, records] of cases) {
-    const r = await run(gathered(withWork), opts);
+  for (const [what, opts, status, records, packetOpts] of cases) {
+    const r = await run(gathered(packetOpts || withWork), opts);
     const dispatched = r.seen.agentLabels.includes("record");
     const reported = !!(r.result || {}).dispositionRecord;
     if (r.status !== status) wrong.push(`${what} exited ${r.status}, expected ${status}`);
@@ -2846,16 +2950,117 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   const replied = briefs["a publication whose reply and Summary landed before it failed"];
   const landedLine = (replied.match(/^reached origin: .*/m) || [""])[0];
   check(
-    "and the breakdown names a landed reply and Summary as landed, never also as outstanding, with the publisher's per-thread account carried for the rest",
+    "and the breakdown names a landed reply and Summary as landed, never also as outstanding, with each entry's own standing carried beside it",
     /1 thread reply/.test(landedLine) &&
       landedLine.includes("the Summary comment at https://example.invalid/pr/42#issuecomment-7") &&
       !/still outstanding: [^\n]*Summary comment/.test(landedLine) &&
       /still outstanding: 1 not resolved/.test(landedLine) &&
-      replied.includes('"replied":true') &&
-      /ALREADY POSTED — do not post it again/.test(replied) &&
-      /resolve still owed/.test(replied) &&
-      /the publisher reported no outcome for this thread — check it on the PR before replying/.test(replied),
-    landedLine || "no origin line at all",
+      /thread=T1 {2}src\/app\.ts:12 a-reviewer — reply ALREADY POSTED — do not post it again; resolve still owed\./.test(replied),
+    JSON.stringify({ landedLine: landedLine || "no origin line at all", standing: (replied.match(/^ {2}thread=.*/m) || ["no standing line"])[0] }),
+  );
+
+  // The RESOLVE half of that breakdown, over two threads rather than one. With a
+  // single unresolved thread in every fixture, the landed-resolve clause is never
+  // rendered at all and the outstanding side can count every thread instead of
+  // the complement, so two truthfulness mutations pass green: a landed resolve
+  // ALSO reported as outstanding, and a landed resolve dropped from the record
+  // altogether. Both are this task's failure, in the direction each round has
+  // found new. The two dispositions share a `ref` on purpose — same path:line,
+  // same author, which is what a re-review leaves — so the standing lines can
+  // only be told apart by `threadId`, and an account joined by `ref` would put
+  // T1's landed reply on T2's entry.
+  const resolved = briefs["a publication whose reply and resolve landed on one of two threads"];
+  const resolvedLanded = (resolved.match(/^reached origin: .*/m) || [""])[0];
+  check(
+    "and a resolve that landed is named as landed, never also as outstanding, with its own entry keyed by threadId rather than by the ref it shares",
+    /1 thread reply, 1 thread resolve/.test(resolvedLanded) &&
+      /still outstanding: 1 of 2 thread\(s\) still owed their reply, 1 not resolved/.test(resolvedLanded) &&
+      !/still outstanding: [^\n]*2 not resolved/.test(resolvedLanded) &&
+      /thread=T1 {2}src\/app\.ts:12 a-reviewer — reply ALREADY POSTED — do not post it again; thread ALREADY RESOLVED — do not resolve it again\./.test(resolved) &&
+      /thread=T2 {2}src\/app\.ts:12 a-reviewer — no reply reached the PR — the reply below is still owed; resolve still owed\./.test(resolved) &&
+      !/thread=T1[^\n]*resolve still owed/.test(resolved),
+    JSON.stringify({ landedLine: resolvedLanded || "no origin line at all", standing: (resolved.match(/^ {2}thread=.*\n {2}thread=.*/m) || ["no standing lines"])[0] }),
+  );
+
+  // The THIRD state, in all three shapes it arrives in. Absence of a report is
+  // not evidence of absence of mutations: the publisher pushes at step 2 and
+  // replies at step 4, so a stop with a reply already on the PR is the ORDINARY
+  // shape of this failure. A record asserting "nothing reached origin" over it
+  // either sends a later turn to re-post a reply that landed or leaves one that
+  // never landed unposted forever.
+  // Each row also names the half of "what reached origin" its report DOES settle:
+  // the push flags are reported positively, so a run whose push advanced the
+  // remote knows its tips are there even knowing nothing about its replies, and
+  // calling that unknown too would understate what the run holds.
+  const unknownCases = {
+    "a publisher that returned nothing at all": [
+      "the publisher returned nothing at all, so no field of its report exists",
+      "not even a push is known to have advanced the remote branch",
+    ],
+    "a publication that pushed and then accounted for no thread": [
+      "its account leaves 1 of 1 item(s) unnamed (T1) while reporting that it already mutated the PR",
+      "what IS known is that the push advanced the remote branch, so the tips above ARE on origin",
+    ],
+    "a publication whose account names one thread twice and the other not at all": [
+      "its account names an item more than once (T1), so which entry is that item's outcome is undecidable",
+      "what IS known is that the push advanced the remote branch, so the tips above ARE on origin",
+    ],
+  };
+  const notThird = Object.entries(unknownCases).filter(([what, [why, known]]) => {
+    const b = briefs[what];
+    return !(
+      // The brief's own lead, which is what tells its author which of the three
+      // renderings it is writing at all.
+      /This run's publication stopped and WHAT IT PUBLISHED IS UNKNOWN/.test(b) &&
+      /neither claims that nothing reached origin nor claims that anything did/.test(b) &&
+      /status: UNKNOWN whether anything was published/.test(b) &&
+      b.includes(why) &&
+      b.includes(known) &&
+      /whether anything reached origin is UNKNOWN/.test(b) &&
+      /the publisher pushes BEFORE it replies, so a stop with something already on origin is the ordinary shape of this failure/.test(b) &&
+      // The same reservation in the one line a maintainer reads first.
+      /what reached origin is UNKNOWN/.test((results[what] || {}).note || "") &&
+      !/LOCAL ONLY/.test(b) &&
+      !/published in part/.test(b) &&
+      !/^reached origin:/m.test(b) &&
+      !/no reply, resolve or Summary comment reached it/.test(b) &&
+      // And the reservation reaches every ENTRY, which is exactly what the old
+      // rendering dropped: the per-thread block was gated on something having
+      // landed, so it was absent precisely when the account was missing.
+      /^ {2}thread=T1 {2}src\/app\.ts:12 a-reviewer — UNKNOWN whether its reply is posted or its thread resolved: check it on the PR before replying, and before resolving\.$/m.test(b) &&
+      !/ALREADY POSTED/.test(b)
+    );
+  });
+  check(
+    "and no usable account is a THIRD state — what is unknown is said as unknown, and every entry carries the reservation rather than none",
+    notThird.length === 0,
+    notThird.map(([what]) => `${what}: ${((briefs[what] || "").match(/status: [^(]*/) || ["no status line"])[0]}`).join("; "),
+  );
+
+  // Both halves of the same rule in the other direction, so the third state
+  // cannot swallow the two that ARE knowable: a publisher whose push never
+  // succeeded and whose account is empty reported four facts, not none — nothing
+  // pushed, nothing replied, nothing resolved, no Summary — and the steps run in
+  // that order, so `[]` is the complete account of having acted on no thread.
+  const nothingBrief = briefs["a publication that aborted with nothing on origin"];
+  check(
+    "while an empty account from a publisher that never pushed stays the knowable case, not the unknown one",
+    !/UNKNOWN/.test(nothingBrief) &&
+      /the tips above are LOCAL ONLY/.test(nothingBrief) &&
+      /nothing reached origin: its own account reports no push, no reply, no resolve and no Summary comment/.test(nothingBrief),
+    (nothingBrief.match(/status: [^(]*/) || ["no status line"])[0],
+  );
+
+  // And the schema half, which is what makes silence visible at all: read out of
+  // an ABSENT field, `threadOutcomes` is `[]` and `summaryCommentUrl` is `""` —
+  // two positive claims about what did not happen, from a report that said
+  // nothing. Required, the same silence is a schema violation.
+  check(
+    "and the two fields those claims are derived from are required, so a silent publisher is a visible violation",
+    ["published", "pushed", "pushedNewCommits", "threadOutcomes", "summaryCommentUrl"].every((f) => (PUBLISH_SCHEMA.required || []).includes(f)) &&
+      /REQUIRED on every report, ABORTED ONES INCLUDED/.test(PUBLISH_SCHEMA.properties.threadOutcomes.description) &&
+      /REQUIRED on every report, aborted ones included/.test(PUBLISH_SCHEMA.properties.summaryCommentUrl.description),
+    JSON.stringify(PUBLISH_SCHEMA.required),
   );
 
   // A re-verification that returned NOTHING holds the map that passed review on
@@ -2877,43 +3082,88 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     }),
   );
 
-  // The declined half, stated as the fact it rests on: a cycle that reported an
-  // ERROR was passed by no verdict, and the merged report of a failed
-  // re-verification is that cycle's OWN map rather than the pre-rebase one that
-  // passed — `mergedCycle` spreads `after`. Were it the pre-rebase map, the
-  // exemption would be withholding a record from a map that passed review.
-  const erroredReverify = results["a re-verification that errored"];
+  // The declined half, stated as the fact it now rests on rather than as the exit
+  // it used to be keyed on: a map NO REVIEWER ROUND JUDGED. The merged report of
+  // a failed re-verification is that cycle's OWN map rather than the pre-rebase
+  // one — `mergedCycle` spreads `after` — so on that exit the unjudged map is
+  // withheld while the map that PASSED on the pre-replay base is recorded, and
+  // both ride out in the result under keys of their own. Dropping the passing map
+  // was the loss this task exists to prevent, committed by the record itself.
+  const erroredReverify = results["a re-verification that errored with no round behind its map"];
+  const erroredReverifyBrief = briefs["a re-verification that errored with no round behind its map"];
   check(
-    "and a cycle that errored records nothing while its map still rides out in the result — the merged map being the failed re-verification's own, not the map that passed",
+    "a cycle that errored over an unjudged map records nothing of it, while the map that PASSED before the replay is recorded rather than dropped",
     Array.isArray(erroredReverify.dispositions) &&
       erroredReverify.dispositions.length === 1 &&
       erroredReverify.dispositions[0].detail === CYCLE_REVERIFIED_ERROR.workReport[0].detail &&
-      !erroredReverify.dispositionRecord &&
-      Array.isArray(results["a first cycle that errored"].dispositions) &&
-      results["a first cycle that errored"].dispositions.length === 1 &&
-      !results["a first cycle that errored"].dispositionRecord,
+      // Both maps ride out, each under its own key, so which one the record holds
+      // never has to be inferred.
+      erroredReverify.preRebaseDispositions[0].detail === CYCLE_PASS.workReport[0].detail &&
+      // And the record is the one that passed, not the one that errored.
+      erroredReverifyBrief.includes(CYCLE_PASS.workReport[0].detail) &&
+      !erroredReverifyBrief.includes(CYCLE_REVERIFIED_ERROR.workReport[0].detail) &&
+      /errored before any reviewer round judged its map/.test(erroredReverifyBrief) &&
+      /The dispositions below are the ones that PASSED review on the base the branch sat on before that replay/.test(erroredReverifyBrief) &&
+      /reviewer Pass, on the base the branch sat on before the replay \(3 round\(s\)\)/.test(erroredReverifyBrief) &&
+      // The first cycle's error, over a map nothing judged, records nothing at
+      // all — there is no second map behind it to record.
+      results["a first cycle that errored with no round behind its map"].dispositions.length === 1 &&
+      !results["a first cycle that errored with no round behind its map"].dispositionRecord,
     JSON.stringify({
       mergedDetail: (erroredReverify.dispositions || [{}])[0].detail,
-      firstCycleMap: (results["a first cycle that errored"].dispositions || []).length,
+      preRebase: (erroredReverify.preRebaseDispositions || [{}])[0].detail,
+      reason: (erroredReverifyBrief.match(/This run published NOTHING: [^\n]*/) || ["no reason line"])[0].slice(0, 120),
+    }),
+  );
+
+  // And the case that refutes keying the exemption on the exit's NAME at all.
+  // `wf-review-cycle` sets `confirming` only after a round PASSED, and its
+  // confirmation pass can stop the cycle — returning nothing, blocking, coming
+  // back on an unclean worktree — so an `error` verdict standing over the very
+  // map that just passed review is an ordinary outcome rather than a contrived
+  // one. Withholding a record there loses a reviewed map with drafted replies
+  // nobody will ever post, which is exactly the loss task 021a is about.
+  const errorAfterPass = briefs["a first cycle that errored after a round had passed over its map"];
+  const reverifyErrorAfterPass = briefs["a re-verification that errored after a round had passed over its map"];
+  check(
+    "and an error verdict standing over a map a round DID pass is recorded on both exits, saying which round rendered it",
+    /errored AFTER a reviewer round had passed over the dispositions below/.test(errorAfterPass) &&
+      /the final confirmation pass returned nothing on pass 4/.test(errorAfterPass) &&
+      /reviewer passed a round, after which the cycle errored \(3 round\(s\)\)/.test(errorAfterPass) &&
+      errorAfterPass.includes(CYCLE_PASS.workReport[0].detail) &&
+      // The post-rebase twin records ITS map — the newer of the two, judged over
+      // the rebased tree — rather than the pre-rebase one.
+      /the post-rebase re-verification errored AFTER a reviewer round had passed over the dispositions below/.test(reverifyErrorAfterPass) &&
+      /judged over the rebased tree/.test(reverifyErrorAfterPass) &&
+      reverifyErrorAfterPass.includes(CYCLE_REVERIFIED_ERROR.workReport[0].detail) &&
+      results["a re-verification that errored after a round had passed over its map"].preRebaseDispositions[0].detail === CYCLE_PASS.workReport[0].detail,
+    JSON.stringify({
+      firstReason: (errorAfterPass.match(/This run published NOTHING: [^\n]*/) || ["no reason line"])[0].slice(0, 120),
+      reverifyReason: (reverifyErrorAfterPass.match(/This run published NOTHING: [^\n]*/) || ["no reason line"])[0].slice(0, 120),
     }),
   );
 
   // The producer of that breakdown. Nothing else in the run can answer "did this
   // reply reach the PR": `pushed` says only that a push command succeeded, and an
   // `outcome` string is prose. So the publisher reports the two facts per thread,
-  // and reports them on the path that needs them most — the one where it aborted.
+  // keyed by the identity publication routes on rather than by a `ref` two
+  // threads share, and reports them on the path that needs them most — the one
+  // where it aborted.
   const outcomeItem = PUBLISH_SCHEMA.properties.threadOutcomes.items;
   const publishBriefRun = await run(gathered(withWork), { args: "push no-rebase", cycles: [CYCLE_PASS] });
   const pubBrief = publishBriefRun.seen.publishPrompts[0] || "";
   check(
-    "and the publisher is what produces it — per thread, only what SUCCEEDED, and reported even where publication aborted",
+    "and the publisher is what produces it — per thread, only what SUCCEEDED, keyed by threadId/url, and reported even where publication aborted",
     ["ref", "outcome", "replied", "resolved"].every((f) => (outcomeItem.required || []).includes(f)) &&
       /True ONLY if the reply is on the PR/.test(outcomeItem.properties.replied.description) &&
       /Never what you intended or attempted/.test(outcomeItem.properties.resolved.description) &&
-      /Report it even when publication ABORTS part-way/.test(PUBLISH_SCHEMA.properties.threadOutcomes.description) &&
+      /MANDATORY on a `review-thread` item's entry/.test(outcomeItem.properties.threadId.description) &&
+      /two threads a re-review left on the same line by the same author share it, so it can key nothing/.test(outcomeItem.properties.ref.description) &&
+      /REQUIRED on every report, ABORTED ONES INCLUDED/.test(PUBLISH_SCHEMA.properties.threadOutcomes.description) &&
       /NOT evidence that anything this run did reached origin/.test(PUBLISH_SCHEMA.properties.pushed.description) &&
       /set that entry's `replied` and `resolved` to what actually SUCCEEDED on the PR rather than to what you attempted/.test(pubBrief) &&
-      /Report them even where publication stops part-way/.test(pubBrief),
+      /Report them even where publication stops part-way, and report EXACTLY ONE entry per item you were given/.test(pubBrief) &&
+      /an account keyed on it cannot say which of them was replied to/.test(pubBrief),
     JSON.stringify({ required: outcomeItem.required, brief: /threadOutcomes/.test(pubBrief) }),
   );
 

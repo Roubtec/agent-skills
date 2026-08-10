@@ -72,7 +72,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 152;
+const CHECKS_PER_LEG = 155;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -1373,6 +1373,53 @@ for (const name of WORKFLOWS) {
     check("and so is the record-only close's", !!recorded.res.recordOnly && (recorded.res.packetChecks || []).length === 2, JSON.stringify(recorded.res.packetChecks));
     const lit = await run(src, { fixes: [PASS_PACKET], reviews: [OK], cycle: { mode: "light" } });
     check("and the light conclusion's single pass, whose reviewer round it already had", lit.res.verdict === "pass" && (lit.res.packetChecks || []).length === 1, JSON.stringify(lit.res.packetChecks));
+  });
+
+  // 31. WHOSE VERDICT the map leaving the cycle carries. `workReport` is the
+  //     one field a consumer REPLAYS (wf-address-review posts thread replies
+  //     and resolves from it, and withholds its durable disposition record from
+  //     a map no reviewer ever judged), so "was this map reviewed" is a
+  //     contract rather than an internal detail — and it is not the verdict.
+  //     `confirming` is set only after a round PASSED, and the confirmation
+  //     pass that follows can stop the cycle outright, which leaves an `error`
+  //     verdict standing over exactly the map that just passed. A consumer
+  //     reading the verdict alone calls that map unreviewed and drops it.
+  await scenario("31. whether a reviewer judged the map the cycle carries out", async () => {
+    const REPORTED = [{ threadId: "T1", kind: "actionable-fixed", detail: "guarded the null case" }];
+    const REPLACED = [{ threadId: "T1", kind: "push-back", detail: "re-triaged after the round had passed" }];
+    const withMap = { ...PASS_PACKET, workReport: REPORTED };
+    const withReplacedMap = { ...PASS_PACKET, workReport: REPLACED };
+
+    // Nothing ever finished: pass 1 returned nothing, so no map and no round.
+    const never = await run(src, { fixes: [], reviews: [] });
+    check(
+      "a cycle stopped before any round says no reviewer judged the map it carries",
+      never.res.verdict === "error" && never.res.workReportReviewed === false,
+      `${never.res.verdict}/${never.res.workReportReviewed}`,
+    );
+
+    // The flagship: round 1 passed over this map, then the CONFIRMATION pass
+    // returned nothing. The cycle errors holding the map a reviewer passed.
+    const confirmDied = await run(src, { fixes: [withMap], reviews: [OK] });
+    check(
+      "a confirmation pass that stops the cycle still carries the map a round PASSED, and says so",
+      confirmDied.res.verdict === "error" &&
+        JSON.stringify(confirmDied.res.workReport) === JSON.stringify(REPORTED) &&
+        confirmDied.res.workReportReviewed === true,
+      `${confirmDied.res.verdict}/${confirmDied.res.workReportReviewed}/${JSON.stringify(confirmDied.res.workReport)}`,
+    );
+
+    // And the precision the flag would lose if it latched: the confirmation
+    // pass REPLACED the map, then round 2's reviewer returned nothing. What
+    // leaves the cycle is a map no round ever saw, whatever passed before it.
+    const replacedThenDied = await run(src, { fixes: [withMap, withReplacedMap], reviews: [OK, null], cycle: { maxRounds: 3 } });
+    check(
+      "and a map a later pass REPLACED is not reviewed, whatever passed before it",
+      replacedThenDied.res.verdict === "error" &&
+        JSON.stringify(replacedThenDied.res.workReport) === JSON.stringify(REPLACED) &&
+        replacedThenDied.res.workReportReviewed === false,
+      `${replacedThenDied.res.verdict}/${replacedThenDied.res.workReportReviewed}/${JSON.stringify(replacedThenDied.res.workReport)}`,
+    );
   });
 
   const ran = legOk + legFail;
