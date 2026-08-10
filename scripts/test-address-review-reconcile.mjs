@@ -45,10 +45,21 @@
 // It covers the DELEGATED REBASE POINTS that run just after the gate (task
 // 016), for the same reason and through the same harness: the base each one
 // pins is what every later delegation's diff range is taken against, so the
-// caller must reject anything but a commit, and a conflict the step cannot judge
-// must stop the run with its question rather than being guessed at. Its own
-// producer half — the brief that makes the agent resolve and pin a commit at all
-// — is read out of the rendered text like the gather brief's.
+// caller must reject anything but a full commit, and a conflict the step cannot
+// judge must stop the run with its question rather than being guessed at. Its
+// own producer half — the brief that makes the agent resolve and pin a commit at
+// all — is read out of the rendered text like the gather brief's, and read
+// against the canonical nugget's clauses, which this rendering exists to carry
+// to an agent that has read no skill and so must not drift from.
+//
+// The PRE-PUSH point is driven too, which needs the nested cycle to RETURN
+// rather than end the scenario: it runs only after a cycle passes, and where it
+// replays anything the cycle runs a second time over the rebased tree. That
+// second cycle is the run's whole honesty guarantee — its fixer carries the
+// dispositions that already passed rather than re-triaging them, its reviewer
+// compares against them, and the cycle it replaces still owns open questions and
+// deviations that are the maintainer's — so the harness scripts cycle results in
+// order instead of stopping at the first call.
 //
 // And it covers the sibling gate that runs just ahead of this one (task 018):
 // the WORKING LOCATION, which decides not whether the run may act on the branch
@@ -96,7 +107,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 61;
+const EXPECTED_CHECKS = 74;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -149,29 +160,92 @@ const REBASE_NOOP = {
   validationPassed: true,
   detail: "already on the pinned base; nothing replayed",
 };
+// A rebase that REPLAYED something: a different pinned base, a moved tip, and a
+// passing post-rebase validation. What the pre-push point does with this is the
+// re-verification the scenarios below drive.
+const REBASE_REPLAY = {
+  ok: true,
+  halted: false,
+  noop: false,
+  effectiveBase: "0f1e2d3c4b5a69788796a5b4c3d2e1f00f1e2d3c",
+  before: "cafebabe",
+  after: "d00dfeed",
+  validationPassed: true,
+  detail: "replayed 2 commits onto the fresh base; build and tests passed",
+};
+// The full OID a scenario's gather reports for the PR's base ref. Under
+// `no-rebase` this is the run's review base — nothing rebased to pin one.
+const GATHERED_BASE_OID = "9988776655443322110099887766554433221100";
+
+// A passing first cycle, in the result shape `wf-review-cycle` returns: enough
+// of it that the consumer's coverage checks pass (one workReport entry per
+// gathered item) and its for-the-human sets are non-empty, since whether those
+// survive the re-verification is exactly what is under test.
+const CYCLE_PASS = {
+  verdict: "pass",
+  rounds: 3,
+  workReport: [
+    {
+      type: "review-thread",
+      threadId: "T1",
+      commentId: "C1",
+      url: "https://example.invalid/pr/42#d1",
+      ref: "src/app.ts:12 a-reviewer",
+      kind: "actionable-fixed",
+      detail: "guarded the null case in abc1234",
+      author: "a-reviewer",
+      authorIsBot: false,
+      newFinding: true,
+    },
+  ],
+  openQuestions: [{ id: "pr-42-q1", origin: "reviewer", blocking: false, question: "parked before the rebase" }],
+  deviations: [{ decision: "one-checkout-at-a-time", why: "stated before the rebase" }],
+  proactive: "swept the same pattern in two siblings",
+  finalSha: "d00dfeed",
+  artifactDir: "/artifacts/pr-42",
+};
+// The re-verification's own result: fewer rounds, its own question, and no
+// deviation of its own — so a merged result must still carry the first cycle's.
+const CYCLE_REVERIFIED = {
+  ...CYCLE_PASS,
+  rounds: 1,
+  openQuestions: [{ id: "pr-42-post-q1", origin: "reviewer", blocking: false, question: "parked after the rebase" }],
+  deviations: [],
+  artifactDir: "/artifacts/pr-42-post-rebase",
+};
 
 // Run the shipped script with one scripted gather packet. `no-push` keeps the
 // run local-only by default: the gate is flag-independent, and a publish path
 // would need stubs for work this suite is not about. `opts.args` overrides the
 // request, which two gates beside it need: whether a working branch other than
 // the PR head ref was ever selected is read from the request rather than the
-// packet, and the rebase opt-out needs its own token. `opts.rebase` scripts
-// what the delegated rebase agent reports back.
+// packet, and the rebase opt-out needs its own token. `opts.rebase` scripts what
+// every delegated rebase agent reports back and `opts.rebases` scripts one point
+// at a time (keyed `pre-fix`/`pre-push`), and `opts.cycles` scripts what the
+// nested cycle RETURNS, call by call — without it the first call ends the
+// scenario, which is all the gates ahead of the cycle need.
 async function run(packet, opts = {}) {
-  const seen = { agentLabels: [], cycleOpts: null, rebasePrompts: [] };
+  const seen = { agentLabels: [], cycleOpts: null, cycleCalls: [], rebasePrompts: [] };
   const agent = async (prompt, aopts) => {
     const label = (aopts && aopts.label) || "";
     seen.agentLabels.push(label);
     if (label === "gather") return packet;
     if (label.startsWith("rebase-")) {
       seen.rebasePrompts.push(prompt);
+      const point = label.slice("rebase-".length);
+      if (opts.rebases && Object.prototype.hasOwnProperty.call(opts.rebases, point)) return opts.rebases[point];
       return opts.rebase === undefined ? REBASE_NOOP : opts.rebase;
     }
     throw new Error(`unexpected agent call past the gate: ${label}`);
   };
-  const workflow = async (name, opts) => {
-    seen.cycleOpts = { name, opts };
-    throw REACHED_CYCLE;
+  const workflow = async (name, wopts) => {
+    seen.cycleCalls.push({ name, opts: wopts });
+    // The FIRST call, so every scenario written before the cycle returned
+    // anything still reads the cycle it was written about.
+    if (!seen.cycleOpts) seen.cycleOpts = { name, opts: wopts };
+    const scripted = Array.isArray(opts.cycles) ? opts.cycles[seen.cycleCalls.length - 1] : undefined;
+    if (scripted === undefined) throw REACHED_CYCLE;
+    return scripted;
   };
   const nope = () => {
     throw new Error("unexpected fan-out call");
@@ -203,7 +277,7 @@ const ITEM = {
 // location pair is written the same way: `locationMode` defaults to the inline
 // mode every reconciliation scenario runs in, and passing `null` omits the
 // field, which the working-location gate below rejects.
-function gathered({ workingBranch = "feature/x", items = [], reconcile, locationMode = "inline", worktree }) {
+function gathered({ workingBranch = "feature/x", items = [], reconcile, locationMode = "inline", worktree, baseOid = GATHERED_BASE_OID }) {
   const packet = {
     ok: true,
     pr: {
@@ -217,6 +291,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     },
     items,
   };
+  if (baseOid !== null) packet.pr.baseOid = baseOid;
   if (locationMode !== null) packet.pr.locationMode = locationMode;
   if (worktree !== undefined) packet.pr.worktree = worktree;
   if (reconcile !== undefined) packet.reconcile = reconcile;
@@ -883,13 +958,124 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     q.origin === "rebase" && /which side owns the guard/.test(q.question || ""),
     JSON.stringify((halted.result || {}).openQuestions),
   );
+  const abbreviated = await run(gathered(withWork), { rebase: { ...REBASE_NOOP, effectiveBase: "1a2b3c4" } });
+  check(
+    "an ABBREVIATED base is rejected like a ref name — a prefix is not an immutable boundary",
+    abbreviated.status === "rebase-unpinned-base" && abbreviated.seen.cycleOpts === null,
+    JSON.stringify({ status: abbreviated.status, cycle: abbreviated.seen.cycleOpts }),
+  );
+  // The acceptance condition is that build+tests RAN after every non-noop
+  // rebase, so the caller requires the passing report positively: a replay that
+  // says nothing about validation is as unusable as one that reports a failure,
+  // and reading only for an explicit `false` lets the silent one through.
+  const unvalidated = { ...REBASE_REPLAY };
+  delete unvalidated.validationPassed;
+  const silent = await run(gathered(withWork), { rebase: unvalidated });
+  check(
+    "a replay that reports NO validation outcome stops the run, exactly as a failing one does",
+    silent.status === "rebase-validation-failed" && silent.seen.cycleOpts === null,
+    JSON.stringify({ status: silent.status, cycle: silent.seen.cycleOpts }),
+  );
+  const failed = await run(gathered(withWork), { rebase: { ...REBASE_REPLAY, validationPassed: false } });
+  check(
+    "and a replay whose build/tests failed stops it too",
+    failed.status === "rebase-validation-failed",
+    JSON.stringify(failed.status),
+  );
   const off = await run(gathered(withWork), { args: "no-push no-rebase" });
   check(
-    "`no-rebase` runs neither point and leaves the base ref as the review base",
+    "`no-rebase` runs neither point and pins the base ref's commit as the review base, never its name",
     off.status === "reached-cycle" &&
       off.seen.agentLabels.join(",") === "gather" &&
-      off.seen.cycleOpts.opts.base === "main",
+      off.seen.cycleOpts.opts.base === GATHERED_BASE_OID,
     JSON.stringify({ labels: off.seen.agentLabels, base: off.seen.cycleOpts && off.seen.cycleOpts.opts.base }),
+  );
+  // The opt-out is the one path with no rebase report to check, so the pin is
+  // checked on the gather's resolution instead. Unusable there means the run
+  // stops: delegating the ref name is the defect the rebasing path refuses.
+  for (const [label, packetOpts] of [
+    ["absent", { ...withWork, baseOid: null }],
+    ["a ref name", { ...withWork, baseOid: "origin/main" }],
+    ["abbreviated", { ...withWork, baseOid: "9988776" }],
+  ]) {
+    const unpinned = await run(gathered(packetOpts), { args: "no-push no-rebase" });
+    check(
+      `\`no-rebase\` with the base commit ${label} stops the run, dispatching nothing`,
+      unpinned.status === "unpinned-base" && unpinned.seen.cycleOpts === null,
+      JSON.stringify({ status: unpinned.status, cycle: unpinned.seen.cycleOpts }),
+    );
+  }
+}
+
+// --- The pre-push point and its re-verification ------------------------------
+// The second point runs once the cycle has PASSED, because what it exists for is
+// the tree that is about to be pushed. Where it replays anything, the passing
+// verdict describes a tree nobody will push, so the cycle runs again over the
+// rebased one — and that second run is where the mechanism can go wrong in ways
+// no earlier scenario reaches: it must be told the dispositions it is ordered to
+// carry forward, its reviewer must be given them as a baseline, it must be
+// bounded, and replacing the first cycle must not take the first cycle's open
+// questions and deviations with it.
+{
+  const withWork = { reconcile: { outcome: "work" }, items: [ITEM] };
+  const noopSecond = await run(gathered(withWork), { cycles: [CYCLE_PASS] });
+  check(
+    "a passing cycle is followed by the pre-push point, and a no-op there needs no second cycle",
+    noopSecond.status === "fixed-local" &&
+      noopSecond.seen.agentLabels.join(",") === "gather,rebase-pre-fix,rebase-pre-push" &&
+      noopSecond.seen.cycleCalls.length === 1,
+    JSON.stringify({ status: noopSecond.status, labels: noopSecond.seen.agentLabels, cycles: noopSecond.seen.cycleCalls.length }),
+  );
+  const replayed = await run(gathered(withWork), {
+    cycles: [CYCLE_PASS, CYCLE_REVERIFIED],
+    rebases: { "pre-fix": REBASE_NOOP, "pre-push": REBASE_REPLAY },
+  });
+  check(
+    "a replaying pre-push point re-runs the cycle over the rebased tree, on the base THAT rebase landed on",
+    replayed.status === "fixed-local" &&
+      replayed.seen.cycleCalls.length === 2 &&
+      replayed.seen.cycleCalls[1].opts.base === REBASE_REPLAY.effectiveBase,
+    JSON.stringify({ status: replayed.status, cycles: replayed.seen.cycleCalls.length, base: replayed.seen.cycleCalls[1] && replayed.seen.cycleCalls[1].opts.base }),
+  );
+  const second = replayed.seen.cycleCalls[1] ? replayed.seen.cycleCalls[1].opts.scope : null;
+  const passedDisposition = CYCLE_PASS.workReport[0];
+  check(
+    "and hands it the dispositions that passed — to the fixer told to carry them forward, and to the reviewer as its baseline",
+    !!second &&
+      second.instructions.includes(passedDisposition.detail) &&
+      second.reviewInstructions.includes(passedDisposition.detail) &&
+      /carry/i.test(second.instructions) &&
+      /baseline/i.test(second.reviewInstructions),
+    JSON.stringify({
+      fixerCarriesThem: !!second && second.instructions.includes(passedDisposition.detail),
+      reviewerCarriesThem: !!second && second.reviewInstructions.includes(passedDisposition.detail),
+    }),
+  );
+  const cap = replayed.seen.cycleCalls[1] ? replayed.seen.cycleCalls[1].opts.maxRounds : undefined;
+  check(
+    "and bounds it with a lowered round cap, so two cycles cannot double the run's worst case",
+    typeof cap === "number" && cap > 0 && cap < 12,
+    `maxRounds: ${JSON.stringify(cap)}`,
+  );
+  // The replacement is what makes the verdict honest; it must not also make the
+  // first cycle's for-the-human records disappear. A parked question or a
+  // standing locked-decision deviation raised before the rebase is the
+  // maintainer's either way, and the deviation is what a publish run leads its
+  // summary comment with.
+  const r = replayed.result || {};
+  const questionIds = (r.openQuestions || []).map((q) => q && q.id).join(",");
+  check(
+    "and the result carries BOTH cycles' open questions and the superseded cycle's deviations",
+    questionIds === "pr-42-q1,pr-42-post-q1" &&
+      JSON.stringify(r.deviations) === JSON.stringify(CYCLE_PASS.deviations),
+    JSON.stringify({ questionIds, deviations: r.deviations }),
+  );
+  check(
+    "and reports the rounds of both, rather than only the re-verification's",
+    r.rounds === CYCLE_PASS.rounds + CYCLE_REVERIFIED.rounds &&
+      (r.roundsByCycle || {}).beforeRebase === CYCLE_PASS.rounds &&
+      (r.roundsByCycle || {}).reverification === CYCLE_REVERIFIED.rounds,
+    JSON.stringify({ rounds: r.rounds, roundsByCycle: r.roundsByCycle }),
   );
 }
 
@@ -918,6 +1104,31 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "and on a conflict beyond its competence it aborts, confirms the tree is clean and idle, and resolves by hunk otherwise",
     aborts > -1 && confirmsIdle && neverMidRebase && hunkRule,
     `abort@${aborts} confirms-idle@${confirmsIdle} never-mid-rebase@${neverMidRebase} hunk-rule@${hunkRule}`,
+  );
+
+  // This brief is the workflow layer's rendering of the canonical nugget
+  // (`review-cycle` → "The delegated rebase step"), carried inline because it is
+  // handed to a subagent that has read no skill. Rendering it is the established
+  // pattern; the risk the pattern carries is CONTENT drift, so each operative
+  // clause of the nugget that this pipeline can reach is pinned here. The two it
+  // cannot reach are deliberately absent and are named in the builder's comment:
+  // the parent map with its `--onto` form (one PR), and the pinned-base snapshot
+  // ref (the pin is rebased onto, so HEAD keeps it reachable).
+  const nuggetClauses = {
+    "the recovery ref before the first replay": /refs\/pre-rebase\//.test(brief),
+    "verifying the target is a commit, and the full OID it prints": /rev-parse --verify/.test(brief) && /never an abbreviation/.test(brief),
+    "the no-op reported as one, with no validation run on it": /noop: true/.test(brief) && /run no validation/.test(brief),
+    "idempotence — why two points cannot double-apply": /cannot double-apply/.test(brief),
+    "the delivery-tier validation after a replay": /the project's build AND its test suite/.test(brief),
+    "the halt reported with a maintainer-facing question": /`question`/.test(brief),
+    "the packet it hands back": ["effectiveBase", "recoveryRef", "validationPassed", "before", "after"].every((f) => brief.includes(f)),
+    "and nothing else changed — no commits, no push, no PR mutation": /Change nothing else/.test(brief),
+  };
+  const absent = Object.entries(nuggetClauses).filter(([, present]) => !present).map(([name]) => name);
+  check(
+    "and carries every clause of the canonical nugget this pipeline can reach, since the agent reading it has read no skill",
+    absent.length === 0,
+    `missing: ${absent.join("; ")}`,
   );
 }
 

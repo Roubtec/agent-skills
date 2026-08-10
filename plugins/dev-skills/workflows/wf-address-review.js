@@ -32,7 +32,10 @@
  *
  * The pinned OID — the base each rebase actually landed on — replaces the ref
  * NAME as this run's review base, because every range delegated afterwards is
- * taken against it and a remote-tracking name moves under a sibling push.
+ * taken against it and a remote-tracking name moves under a sibling push. That
+ * holds on the opt-out path too: a `no-rebase` run has no rebase report to pin
+ * from, so it pins the commit the gather resolved the base ref to. The review
+ * base is a commit on every path this script dispatches from.
  * Where the pre-push point replays anything, the passing verdict no longer
  * describes the tree being pushed, so the cycle is re-run over the rebased tree
  * as a re-verification (not a re-triage) and its verdict is the one publication
@@ -140,10 +143,11 @@ const PACKET_SCHEMA = {
         locationMode: { type: "string", description: "REQUIRED: exactly `inline` (the work happens in the current checkout) or `worktree` (a worktree was attached for it). There is no default — the caller stops the run on an absent or unrecognized value, because reading one as `inline` would point every later phase at the main checkout, which in worktree mode is not on the PR branch at all." },
         worktree: { type: "string", description: "ABSOLUTE path of the attached worktree in `worktree` mode — required there, since it is where every later phase works. Empty in `inline` mode. It rides in `pr` so that every result echoing the PR object reports a worktree a halted run left standing." },
         base: { type: "string", description: "The PR's `baseRefName`. It is a REF NAME at this stage and nothing more: the rebase phase resolves it (or the requested target) to a commit and the caller replaces this field with that pinned OID, which is what every later delegation names as its review base." },
+        baseOid: { type: "string", description: "The full OID that base ref resolves to right now — a commit, never a name. REQUIRED. A `no-rebase` run has no rebase report to pin from, so this is the OID it pins as its review base; a rebasing run supersedes it with the OID that rebase landed on. The caller rejects anything that is not a full hex OID on the `no-rebase` path and stops the run." },
         headOid: { type: "string", description: "Expected remote head OID, for the publication lease. Populate from the PR's headRefOid." },
         rebased: { type: "boolean", description: "Whether the branch tip has been rewritten (publish must then use --force-with-lease). Report `false` here — this step performs no rebase; the caller sets it from the rebase phase's own report." },
       },
-      required: ["number", "url", "branch", "workingBranch", "locationMode", "base", "headOid"],
+      required: ["number", "url", "branch", "workingBranch", "locationMode", "base", "baseOid", "headOid"],
     },
     rebaseTarget: {
       type: "string",
@@ -197,12 +201,12 @@ const REBASE_SCHEMA = {
     ok: { type: "boolean", description: "False when the rebase could not be carried out at all — dirty or mid-operation tree, a target that does not resolve, a git failure. The run stops; nothing is fixed or pushed on the strength of it." },
     halted: { type: "boolean", description: "True when a conflict beyond this step's competence was met: the rebase was ABORTED, the tree left clean and idle, and `question` carries what the maintainer has to decide. Not a failure of the run's mechanics — a decision it cannot make." },
     question: { type: "string", description: "REQUIRED when halted: the conflicting files, the offending commit, and what the judgment turns on. It is reported as this run's open question, so write it for the maintainer rather than as a log line." },
-    effectiveBase: { type: "string", description: "The full OID actually rebased onto — a commit, never a ref name. REQUIRED whenever ok is true; the caller rejects anything that is not a hex OID and stops the run, because every delegation range afterwards is taken against this value." },
+    effectiveBase: { type: "string", description: "The full OID actually rebased onto, as `git rev-parse --verify <target>^{commit}` printed it — a commit, never a ref name and never an abbreviation. REQUIRED whenever ok is true; the caller rejects anything that is not a full hex OID (40 characters, or 64 in a SHA-256 repository) and stops the run, because every delegation range afterwards is taken against this value." },
     noop: { type: "boolean", description: "True when the rebase replayed nothing and the tip is unchanged (the pinned base was already an ancestor of HEAD) — the common and cheap outcome, and what makes two rebase points safe." },
     before: { type: "string", description: "Tip SHA before the rebase." },
     after: { type: "string", description: "Tip SHA after it (equal to `before` on a no-op)." },
     recoveryRef: { type: "string", description: "The `refs/pre-rebase/<branch>/<ts>` ref saved before the first replay, so a report can name it." },
-    validationPassed: { type: "boolean", description: "Whether the post-rebase build/tests passed. Report `true` for a no-op rebase, which runs none. False stops the run before any review verdict or push rests on the replay." },
+    validationPassed: { type: "boolean", description: "Whether the post-rebase build/tests passed. Report `true` for a no-op rebase, which runs none. A rebase that replayed anything must report `true` here to go on: the caller requires that value positively, so `false` and an absent field stop the run alike, before any review verdict or push rests on the replay." },
     detail: { type: "string", description: "One line: the target, what was replayed, skipped or resolved, and what validation ran." },
   },
   required: ["ok", "halted", "noop", "detail"],
@@ -268,6 +272,18 @@ const RECLAIM_SCHEMA = {
 // deliberately bare and is not an omission.
 function shq(s) {
   return `'${String(s).replace(/'/g, `'\\''`)}'`;
+}
+
+// Is this string an immutable commit boundary? Only a FULL object id qualifies:
+// 40 lowercase hex characters, or 64 in a SHA-256 repository. An abbreviation
+// is a prefix, so a repository that grows can make one resolve to a second
+// object or stop resolving at all, and a 7-character hex string is also a legal
+// branch name — which is the very thing a pinned base may not be. Every
+// delegation range this run hands out is taken against a value that passed
+// this, whether the rebase phase pinned it or `no-rebase` pinned the base ref
+// the gather resolved.
+function isFullOid(s) {
+  return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(s);
 }
 
 // Map a bot comment author login to the known reviewer bot it represents, or
@@ -352,7 +368,7 @@ Where the names match: fetch the PR's exact head ref WITHOUT moving the local br
 
 Those two probes are the whole rule; do not grow them into a classifier of branch states, which is exactly what the third outcome exists to make unnecessary. The first is patch-id based on purpose: \`--cherry-pick\` drops commits with a patch-id twin on the other side, so a branch rebased onto a newer base reads as carrying the PR head's content though it shares no SHAs with it, where a raw-ancestry test would call that ordinary state divergent. Do NOT filter merge commits out of that probe: patch-id cannot speak for a merge, so an unrepresented merge on the remote head lands in outcome 3 deliberately — one extra ask when a UI "Update branch" merge advanced the head, in exchange for never silently dropping a conflict resolution such a merge carried.
 
-Rebase NOTHING here, whatever the request asked for. Report \`pr.base = baseRefName\` and \`pr.rebased = false\`, and put an explicit \`rebase on top of <branch>\` token's target — a branch name or an exact commit, verbatim — into \`rebaseTarget\` (empty when none was named). A delegated rebase step runs immediately after you and again before publication; it resolves that target to a commit, pins it, and reports back what it landed on, and the caller replaces \`pr.base\`/\`pr.rebased\` from that report. Two agents both rebasing would replay the same commits twice, which is precisely why this one does not.
+Rebase NOTHING here, whatever the request asked for. Report \`pr.base = baseRefName\` and \`pr.rebased = false\`. Also resolve that base ref to a commit ONCE and report the full OID as \`pr.baseOid\`: read it through the remote this branch actually pushes to rather than assuming \`origin\` (\`git rev-parse --verify <remote>/<baseRefName>^{commit}\`), report the full unabbreviated OID git prints, and move nothing and fetch nothing for it. A \`no-rebase\` run pins its review base to that OID, because every range this run delegates is taken against a commit rather than a name — a name moves under the next fetch or a sibling push. Then put an explicit \`rebase on top of <branch>\` token's target — a branch name or an exact commit, verbatim — into \`rebaseTarget\` (empty when none was named). A delegated rebase step runs immediately after you and again before publication; it resolves that target to a commit, pins it, and reports back what it landed on, and the caller replaces \`pr.base\`/\`pr.rebased\` from that report. Two agents both rebasing would replay the same commits twice, which is precisely why this one does not.
 
 Gather feedback into \`items\` (each verbatim):
 - UNRESOLVED review threads — PRIMARY: use the baked \`gh-review-threads\` helper. \`gh-review-threads <PR#>\` prints the unresolved threads as a JSON array (each thread \`id isResolved isOutdated path line\` and \`comments[]\` with \`databaseId author{ login __typename } body diffHunk url\`); it already pages with fresh SINGLE-SHOT queries (never \`gh api graphql --paginate\`), does the nested comment fetch-up, and applies the scope check below, failing closed with exit 3 and no stdout on a contaminated response. FALLBACK, only when \`command -v gh-review-threads\` fails (a container built from an older image — the same graceful-degradation used for the gh-version-gated Copilot ping): run the GraphQL \`reviewThreads\` query by hand as SINGLE-SHOT queries, never \`gh api graphql --paginate\` (run concurrently with other gh GraphQL calls it has returned ANOTHER PR's threads); include \`totalCount\` + \`pageInfo{ hasNextPage endCursor }\` and page past 100 threads by passing the returned cursor to a fresh call. Either way SCOPE-CHECK the result (the helper does this for you): every comment \`url\` must match the exact repo-qualified PR path for this PR (\`https://github.com/<owner>/<repo>/pull/<number>\` followed by \`#\`, \`/\`, \`?\`, or end); do not use a plain substring check such as \`/pull/<number>\`. On any mismatch, discard the entire response, retry once with a fresh single-shot query, and if it repeats fail closed; never emit an item whose \`url\` points at a different PR. Keep only \`isResolved == false\`. Emit each as \`type: "review-thread"\` with \`threadId\` (the thread node \`id\`), \`commentId\` (the top comment's \`databaseId\`), \`path\`, \`line\`, \`author\` (the top comment's \`author.login\`), \`authorIsBot\` (true when that comment's \`author.__typename\` is \`Bot\` — from the helper's output or the GraphQL \`author{ login __typename }\`; do not guess from the login), \`body\`, \`url\`. \`threadId\` and \`commentId\` are mandatory for these — they are how publication resolves and replies.
@@ -370,6 +386,20 @@ Edit NO project files here; this is gather-only. The working-location setup and 
 // the canonical statement lives in the skill, this is the text an agent that
 // cannot read the skill acts on, and there is exactly one of it here. Both call
 // sites share this builder, so the run's two points cannot drift apart.
+//
+// Rendering it here rather than pointing at the skill is this repo's
+// established pattern, not a second specification: a brief handed to a subagent
+// that has read nothing else must be self-contained (task 023a states the
+// rule — inline the instruction and its one settling read), and
+// `test-subagent-destroy-boundary.mjs` enforces exactly that rendering for the
+// destroy boundary. What the pattern forbids is the other direction — moving
+// this mechanism up into the skill (task 044) — and content drift from the
+// nugget, which `test-address-review-reconcile.mjs` pins clause by clause.
+// Two nugget clauses have no counterpart below because this pipeline cannot
+// reach them: the parent map and the `--onto` parent-first form (one PR, so a
+// stacked target arrives as an explicit token already pinned to a commit), and
+// the `refs/pinned-base/` snapshot (the pinned OID is rebased onto, so `HEAD`
+// keeps it reachable).
 //
 // Why an agent at all: the script cannot run git, and the skill forbids an
 // orchestrator from holding a half-finished rebase — a conflict wants a whole
@@ -398,7 +428,7 @@ This is the ${prePush ? "SECOND" : "FIRST"} of this run's two rebase points: ${p
 Rebasing twice in one run is deliberate and cannot double-apply: each point pins its base to a commit and rebases onto that, so a base that has not moved since is already an ancestor of \`HEAD\` and git replays nothing.
 
 1. **Preflight.** \`git status --porcelain\` must print nothing AND no Git operation may be in progress — \`git rev-parse --git-path rebase-merge\` and \`rebase-apply\` for an existing path, plus \`MERGE_HEAD\`, \`CHERRY_PICK_HEAD\`, \`REVERT_HEAD\`, \`BISECT_LOG\` (a tree left mid-cherry-pick prints empty porcelain). Either failing is \`ok: false\` with what you found in \`detail\`. Stash nothing, clean nothing, force nothing.
-2. **Pin the base.** The target is \`${target}\`. Where it is a ref name, fetch it fresh first (\`git fetch <remote> <the ref>\`, resolving the remote for this branch rather than assuming \`origin\`) so you pin what it points at NOW; where it is already an exact commit, fetch nothing. Then resolve it once with \`git rev-parse\` and report that full OID as \`effectiveBase\` — and rebase onto THAT OID, never onto the name. The name is not an answer: \`origin/<base>\` moves whenever anything else pushes or fetches, and every range this run delegates afterwards is taken against \`effectiveBase\`, so a name would bound a reviewer's diff at a tip this branch was never rebased onto. The caller rejects a non-commit \`effectiveBase\` and stops the run.
+2. **Pin the base.** The target is \`${target}\`. Where it is a ref name, fetch it fresh first (\`git fetch <remote> <the ref>\`, resolving the remote for this branch rather than assuming \`origin\`) so you pin what it points at NOW; where it is already an exact commit, fetch nothing. Then resolve it once with \`git rev-parse --verify <the target>^{commit}\` — which both proves it names an existing COMMIT and prints the full object id — and report exactly that full OID as \`effectiveBase\` and rebase onto THAT OID, never onto the name, and never an abbreviation of it: a short id is a prefix, and a growing repository can make one match a second object, so the caller rejects anything but the full length. The name is not an answer: \`origin/<base>\` moves whenever anything else pushes or fetches, and every range this run delegates afterwards is taken against \`effectiveBase\`, so a name would bound a reviewer's diff at a tip this branch was never rebased onto. The caller rejects a non-commit \`effectiveBase\` and stops the run.
 3. **Save the recovery ref.** \`current_branch="$(git branch --show-current)"\` (require it non-empty), \`ts="$(date -u +%Y%m%d-%H%M%S)"\`, then \`git update-ref "refs/pre-rebase/$current_branch/$ts" HEAD\`. That is the one \`update-ref\` this assignment spells out and the run's only rebase recovery ref — do not skip it, and report it as \`recoveryRef\`.
 4. **Rebase:** \`git rebase <the effectiveBase OID>\`. Git's patch-id detection drops commits the base already carries. If nothing was replayed and the tip is unchanged, that is the expected no-op: report \`noop: true\` with \`before\` equal to \`after\`, run no validation, and you are done.
 5. **Conflicts — by hunk, in place.** Preserve cleanly auto-merged changes elsewhere in each file. Whole-file \`git checkout --ours\`/\`--theirs\` is safe ONLY after inspecting the merged result and confirming the file carries no cleanly auto-merged content from the other side; otherwise it silently deletes a sibling's already-shipped behavior with no conflict marker left behind.
@@ -446,22 +476,38 @@ Which of those fields are structurally enforced: every field publication acts on
 // and publication would then reply "already handled" for work this run did. The
 // per-item report contract is `fixInstructions` verbatim below, so the coverage
 // and publishability checks read this cycle's report exactly as the first's.
-function rebaseReverifyInstructions(packet, rebase) {
+//
+// `priorReport` is the FIRST cycle's `workReport`, embedded verbatim in both
+// briefs. Without it neither role can do what it is told: the cycle's scope
+// contract carries `{ title, instructions, reviewInstructions, items }` and the
+// items are the gathered threads, which hold no disposition fields — so a fixer
+// ordered to carry dispositions forward would have to reconstruct them from the
+// tree (the re-triage this round is not) and a reviewer told to catch a quiet
+// relabel would have no baseline to compare against.
+function rebaseReverifyInstructions(packet, rebase, priorReport) {
   return `## This branch was rebased AFTER these dispositions passed review
 
 Every work item below was already triaged, acted on, and reviewed to a pass — on the base the branch sat on before. The branch has since been rebased onto \`${rebase.effectiveBase}\` (${rebase.detail || "no detail reported"}), so this round exists to confirm each disposition still holds on the replayed tree and to fix what the replay broke. It is NOT a fresh triage.
 
-- Carry every disposition forward UNCHANGED unless the replay actually invalidated it: same \`kind\`, same identifiers, same \`author\`/\`authorIsBot\`, same \`newFinding\`. Update \`detail\` only where a commit sha moved or the answer genuinely changed.
+- Carry every disposition forward UNCHANGED unless the replay actually invalidated it: same \`kind\`, same identifiers, same \`author\`/\`authorIsBot\`, same \`newFinding\`. Take those values from the report below rather than re-deriving them from the tree, and update \`detail\` only where a commit sha moved or the answer genuinely changed. Where an item below carries no entry in that report, triage it under the per-item contract that follows.
 - Do NOT relabel a fix you can still see in the tree as \`already-addressed\`: publication would reply "already handled" for work this run performed.
 - Fix only fallout — a conflict resolution that dropped part of a fix, a build or test the replay broke. The one honest relabel is a fix git's patch-id dropping removed because the new base now carries an equivalent: that IS \`already-addressed\`, and \`detail\` says where the base carries it.
+
+### The dispositions that passed on the previous base — carry these forward
+
+${JSON.stringify(priorReport || [], null, 2)}
 
 ${fixInstructions(packet)}`;
 }
 
-function rebaseReverifyCriteria(rebase) {
+function rebaseReverifyCriteria(rebase, priorReport) {
   return `${reviewCriteria()}
 
-This tree was REBASED onto \`${rebase.effectiveBase}\` after those dispositions passed a round on the previous base, so your verdict is the one that describes what gets pushed. Two things beyond the criteria above: confirm the replay preserved every fix (a hunk-level resolution can silently drop half of one, and a whole-file resolution can delete a sibling's already-shipped behavior with no conflict marker left behind), and confirm no disposition was quietly relabeled by the round after the rebase — a fix still visible in the tree, reported as \`already-addressed\`, publishes the wrong reply.`;
+This tree was REBASED onto \`${rebase.effectiveBase}\` after those dispositions passed a round on the previous base, so your verdict is the one that describes what gets pushed. Two things beyond the criteria above: confirm the replay preserved every fix (a hunk-level resolution can silently drop half of one, and a whole-file resolution can delete a sibling's already-shipped behavior with no conflict marker left behind), and confirm no disposition was quietly relabeled by the round after the rebase — a fix still visible in the tree, reported as \`already-addressed\`, publishes the wrong reply. The set that passed before the rebase is below verbatim; it is the baseline you compare this round's report against, entry by entry, and a changed \`kind\`, identifier, \`author\`/\`authorIsBot\` or \`newFinding\` that the replay does not account for is a blocking issue.
+
+### The dispositions that passed on the previous base — the baseline
+
+${JSON.stringify(priorReport || [], null, 2)}`;
 }
 
 function reviewCriteria() {
@@ -866,7 +912,7 @@ const rebaseRecord = {
   target: rebaseTargetRef,
   explicitTarget: rebaseTargetRef !== packet.pr.base,
   points: [],
-  ...(flags.noRebase ? { suppressed: "`no-rebase` was given: neither point ran, and the branch is addressed and published on the base it already sits on." } : {}),
+  ...(flags.noRebase ? { suppressed: "`no-rebase` was given: neither point ran, and the branch is addressed and published on the base it already sits on. The review base is that base ref resolved to a commit, since nothing rebased to pin one." } : {}),
 };
 // Runs one point and returns either `{ rebase }` — the report, with `pr.base`
 // already replaced by the pinned OID — or `{ stop }`, a result the run returns
@@ -919,16 +965,21 @@ async function rebasePoint(point, target) {
     return stop("rebase-failed", `The ${point} rebase could not be carried out: ${report.detail || "no detail reported"}`);
   }
   const pinned = typeof report.effectiveBase === "string" ? report.effectiveBase.trim() : "";
-  if (!/^[0-9a-f]{7,40}$/.test(pinned)) {
+  if (!isFullOid(pinned)) {
     return stop(
       "rebase-unpinned-base",
-      `The ${point} rebase reported ${JSON.stringify(report.effectiveBase === undefined ? null : report.effectiveBase)} as the base it landed on, which is not a commit. A ref name cannot be a delegation boundary — it moves — so nothing downstream is dispatched on it.`,
+      `The ${point} rebase reported ${JSON.stringify(report.effectiveBase === undefined ? null : report.effectiveBase)} as the base it landed on, which is not a full commit OID. A ref name cannot be a delegation boundary — it moves — and an abbreviation is a prefix that can go ambiguous or stop resolving, so nothing downstream is dispatched on either.`,
     );
   }
-  if (report.validationPassed === false) {
+  // Positively, not merely "did not report a failure": the acceptance condition
+  // is that build+tests ran after every non-noop rebase, so a replay that
+  // reports nothing about validation is as unusable as one that reports a
+  // failure — and the two stop the run identically rather than one slipping
+  // through as `undefined !== false`.
+  if (report.noop !== true && report.validationPassed !== true) {
     return stop(
       "rebase-validation-failed",
-      `The ${point} rebase replayed commits and the post-rebase build/tests failed: ${report.detail || "no detail reported"}`,
+      `The ${point} rebase replayed commits without reporting a PASSING post-rebase build and test run (validationPassed: ${JSON.stringify(report.validationPassed === undefined ? null : report.validationPassed)}): ${report.detail || "no detail reported"}`,
     );
   }
   const record = { point, target, ...report, effectiveBase: pinned };
@@ -942,7 +993,28 @@ async function rebasePoint(point, target) {
   return { rebase: record };
 }
 
-if (!flags.noRebase) {
+if (flags.noRebase) {
+  // Suppressing the rebase does not suppress the PIN. Every range delegated
+  // below is taken against `pr.base`, so leaving the ref NAME there would hand
+  // the cycle a boundary the next fetch or a sibling push moves — the same
+  // defect the `effectiveBase` check refuses on the rebasing path, arriving by
+  // the one path that has no rebase report to check. The gather resolved the
+  // base ref to a commit for exactly this, which is `address-review` step 6's
+  // fallback for a turn in which no rebase ran; an unusable value stops the run
+  // rather than being delegated as a name.
+  const pinnedBase = typeof packet.pr.baseOid === "string" ? packet.pr.baseOid.trim() : "";
+  if (!isFullOid(pinnedBase)) {
+    return {
+      status: "unpinned-base",
+      pr: packet.pr,
+      rebase: rebaseRecord,
+      detail: `\`no-rebase\` was given and the gather reported ${JSON.stringify(packet.pr.baseOid === undefined ? null : packet.pr.baseOid)} as the base ref's commit, which is not a full commit OID. With no rebase to pin one, that value IS this run's review base, and a movable name or an abbreviation cannot bound a delegated diff.`,
+      note: "Nothing was addressed and nothing was pushed. Re-run so the gather resolves the PR's base ref to a full commit OID, or drop `no-rebase` and let the rebase phase pin it.",
+    };
+  }
+  rebaseRecord.pinnedBase = pinnedBase;
+  packet.pr.base = pinnedBase;
+} else {
   const first = await rebasePoint("pre-fix", rebaseTargetRef);
   if (first.stop) return first.stop;
 }
@@ -966,9 +1038,10 @@ if (typeof workflow !== "function") {
   };
 }
 // `let`, because a pre-push rebase that replays anything makes THIS verdict
-// describe a tree nobody will push; the re-verification cycle below replaces it
-// so every check and every result past this point reads the cycle that judged
-// the tree actually being published.
+// describe a tree nobody will push; the re-verification cycle below supersedes
+// it so every check and every result past this point reads the cycle that judged
+// the tree actually being published — carrying this cycle's open questions,
+// deviations and round count along, which are the run's rather than a loop's.
 let cycle = await workflow("wf-review-cycle", {
   worktree: locationMode === "worktree" ? worktreePath : "",
   branch: packet.pr.workingBranch,
@@ -1042,7 +1115,53 @@ const carriedOf = (c) => ({
   ...(c.recordOnly ? { recordOnly: c.recordOnly } : {}),
   ...(c.flakeHistory ? { flakeHistory: c.flakeHistory } : {}),
   ...(c.packetChecks ? { packetChecks: c.packetChecks } : {}),
+  // The four keys `mergedCycle` below adds, so a re-verified run reports both
+  // cycles rather than only the one that judged the pushed tree.
+  ...(c.roundsByCycle ? { roundsByCycle: c.roundsByCycle } : {}),
+  ...(c.preRebaseArtifactDir ? { preRebaseArtifactDir: c.preRebaseArtifactDir } : {}),
+  ...(c.preRebaseCloseOut ? { preRebaseCloseOut: c.preRebaseCloseOut } : {}),
+  ...(c.preRebaseRecordOnly ? { preRebaseRecordOnly: c.preRebaseRecordOnly } : {}),
 });
+// The re-verification cycle REPLACES the verdict — it is the one that judged the
+// tree being pushed — but it must not replace the run's for-the-human record.
+// A parked open question or a still-standing locked-decision deviation raised
+// before the rebase is the maintainer's either way, and `review-cycle` forbids a
+// deviation vanishing with a loop's last turn (`publishPrompt`'s deviation lead
+// reads exactly this set). So the verdict-bearing fields come from the second
+// cycle and the human-facing sets are both cycles' concatenated, oldest first.
+// `rounds` becomes the run's total for the same reason: neither cycle's own
+// count describes what the run spent, and `roundsByCycle` keeps the split.
+function mergedCycle(before, after) {
+  const both = (key) => {
+    const list = [...(Array.isArray(before[key]) ? before[key] : []), ...(Array.isArray(after[key]) ? after[key] : [])];
+    return list.length ? { [key]: list } : {};
+  };
+  const proactive = [before.proactive, after.proactive].filter((s) => typeof s === "string" && s.trim()).join(" ");
+  return {
+    ...after,
+    rounds: (Number(before.rounds) || 0) + (Number(after.rounds) || 0),
+    roundsByCycle: { beforeRebase: before.rounds, reverification: after.rounds },
+    ...both("openQuestions"),
+    ...both("deviations"),
+    ...both("deviationAssessments"),
+    ...both("deviationHistory"),
+    ...both("findingDispositions"),
+    ...both("peerRounds"),
+    ...both("discardedPeerFindings"),
+    ...both("flakeHistory"),
+    ...both("packetChecks"),
+    ...both("artifactDirAnomalies"),
+    ...(proactive ? { proactive } : {}),
+    ...(before.artifactDir && before.artifactDir !== after.artifactDir ? { preRebaseArtifactDir: before.artifactDir } : {}),
+    ...(before.closeOut ? { preRebaseCloseOut: before.closeOut } : {}),
+    ...(before.recordOnly ? { preRebaseRecordOnly: before.recordOnly } : {}),
+  };
+}
+// A re-verification fixes replay fallout rather than doing fresh work, so it
+// runs under a LOWERED cap: the cycle permits an invoker to lower one and never
+// to raise it, and two full 12-round cycles would put this run's worst case at
+// 24 reviewer rounds — the arcane token bloat the cap exists against.
+const REVERIFY_MAX_ROUNDS = 4;
 if (cycle.verdict === "error") {
   return { error: `Review cycle failed: ${cycle.detail}`, pr: packet.pr, rebase: rebaseRecord, rounds: cycle.rounds, dispositions: cycle.workReport, openQuestions: cycle.openQuestions, deviations: cycle.deviations, peerRounds: cycle.peerRounds, artifactDir: cycle.artifactDir, ...carriedOf(cycle) };
 }
@@ -1076,6 +1195,12 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
   }
   if (!second.rebase.noop) {
     phase("Fix and verify");
+    // The cycle that passed on the previous base. Its `workReport` is what the
+    // re-verification is told to carry forward and what its reviewer compares
+    // against, and its human-facing records are merged into the replacement
+    // below rather than dropped with it.
+    const preRebaseCycle = cycle;
+    const priorReport = preRebaseCycle.workReport || [];
     const reverified = await workflow("wf-review-cycle", {
       worktree: locationMode === "worktree" ? worktreePath : "",
       branch: packet.pr.workingBranch,
@@ -1083,10 +1208,11 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
       artifactType: "code",
       peer: flags.peerOff ? "off" : "on",
       mode: "full",
+      maxRounds: REVERIFY_MAX_ROUNDS,
       scope: {
         title: `pr-${packet.pr.number}-post-rebase`,
-        instructions: rebaseReverifyInstructions(packet, second.rebase),
-        reviewInstructions: rebaseReverifyCriteria(second.rebase),
+        instructions: rebaseReverifyInstructions(packet, second.rebase, priorReport),
+        reviewInstructions: rebaseReverifyCriteria(second.rebase, priorReport),
         items: packet.items,
       },
     });
@@ -1104,8 +1230,13 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
         ...carriedOf(cycle),
       };
     }
-    second.rebase.reverified = { rounds: reverified.rounds, verdict: reverified.verdict };
-    cycle = reverified;
+    second.rebase.reverified = {
+      rounds: reverified.rounds,
+      verdict: reverified.verdict,
+      roundsBeforeRebase: preRebaseCycle.rounds,
+      maxRounds: REVERIFY_MAX_ROUNDS,
+    };
+    cycle = mergedCycle(preRebaseCycle, reverified);
     if (cycle.verdict === "error") {
       return { error: `Post-rebase re-verification cycle failed: ${cycle.detail}`, pr: packet.pr, rebase: rebaseRecord, rounds: cycle.rounds, dispositions: cycle.workReport, openQuestions: cycle.openQuestions, deviations: cycle.deviations, peerRounds: cycle.peerRounds, artifactDir: cycle.artifactDir, ...carriedOf(cycle) };
     }
