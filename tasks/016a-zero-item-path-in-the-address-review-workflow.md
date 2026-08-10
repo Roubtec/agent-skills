@@ -21,6 +21,7 @@ Out of scope: the prose skills' own zero-item wording, which is settled; and any
 
 ## Context and references
 
+- **Sequencing**: implement AFTER 016, which is a prerequisite rather than merely a neighbour. Both tasks edit the same empty-`items` return in `wf-address-review.js` and its immediate neighbourhood — 016 places the run's first rebase point at the line this task's exit decision moves, and 016's amended Scope bullet is the text this task is to update — so acting on this one first lands on a file 016 then rewrites.
 - Task 016 — the amended "Two rebase points" Scope bullet records the split reviewers and points here.
 - `address-review` step 3 (the paragraph beginning "If there are no unresolved threads and no explicitly included standalone items") — the authority for the two outcomes, in both mirrors.
 - `address-reviews` → "Phase A — initial fix" — the batch's version of the same distinction, already implemented as the terminal zero-feedback shortcut with its exact three-way tip comparison; the workflow's version should read the same way rather than inventing a second rule.
