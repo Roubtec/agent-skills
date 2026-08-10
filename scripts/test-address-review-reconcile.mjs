@@ -1021,11 +1021,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // recorded OID: `<headRefOid>`, `"$PR_HEAD"` and a bare `HEAD^{commit}` are
     // the same gate. But `rev-parse` is not one command: these four files run it
     // in three spellings that query no object's existence at all
-    // (`--show-toplevel`, `--git-path rebase-merge`, `origin/main`), and the
-    // fixtures below add a fourth they no longer ship (`--abbrev-ref HEAD`),
-    // so counting every `rev-parse` as an existence probe would
-    // fail an ordinary edit that mentions one of those inside the rule
-    // paragraph. `rev-parse` therefore counts only in its object-query
+    // (`--show-toplevel`, `--git-path rebase-merge`, `origin/main`), plus
+    // `--abbrev-ref HEAD`, which two of them still carry as the counter-example
+    // the publication re-check names — so counting every `rev-parse` as an
+    // existence probe would fail an ordinary edit that mentions one of those
+    // inside the rule paragraph. `rev-parse` therefore counts only in its object-query
     // spellings — `--verify`, or a peel suffix (`^{commit}`, `^{}`), which is
     // how an existence gate on a commit is written; `cat-file -e`/`-t` asks
     // nothing else and counts however it is spelled. Reading the fetch itself is
@@ -1441,17 +1441,42 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
           /still standing on the branch this run has been working on/,
         ],
       ],
+      [
+        "the normal push the stops precede",
+        "- Then, if the expected remote tip is an ancestor of `HEAD`",
+        [/`git push <remote> HEAD:refs\/heads\/<headRefName>`/],
+      ],
       ["the lease as the remainder", "- **Otherwise** — every remaining state", [/whether or not this run rewrote history/]],
       [
         // The target rule above is only followable if the shipped commands
         // actually supply what it reads. `headRepositoryOwner` alone does not
         // name a fork whose repository NAME differs from the base's, so a run
         // that follows the recipes verbatim reaches publication with the work
-        // done and no target it can verify.
+        // done and no target it can verify. Both recipes are pinned because the
+        // publish step's own read is not where the fields first arrive: step 1
+        // is what a run follows to RECORD them, and a run that recorded nothing
+        // has nothing for the publish-time read to confirm.
         "the fields its off-shoot target rule reads",
         "**Read context:** `gh pr view NUMBER --json",
         [/headRepository,/, /isCrossRepository/],
       ],
+      [
+        "the fields step 1 records them from",
+        "2. **Auto-detect** — `gh pr view --json",
+        [/headRepository,/, /headRepositoryOwner,/, /isCrossRepository/],
+      ],
+    ];
+    // Item 2's bullets are an ordered exclusion chain — "work these in order …
+    // each excludes the ones above it and the last is 'everything else'" — so
+    // presence is not enough: the lease MATCHES in exactly the states the two
+    // stops describe, so a stop stated below it is a stop no run reaches, and
+    // every bullet can be present and correctly phrased with the guard gone.
+    const anchorOf = (what) => wanted.find(([w]) => w === what)[1];
+    const orderedChain = [
+      "the proper-ancestor stop",
+      "the off-shoot representation gate",
+      "the normal push the stops precede",
+      "the lease as the remainder",
     ];
     const missing = [];
     for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
@@ -1463,17 +1488,25 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         missing.push(`${path} cannot be read: ${err.message}`);
         continue;
       }
+      const lines = text.split("\n");
       for (const [what, anchor, phrases] of wanted) {
-        const line = text.split("\n").find((l) => l.includes(anchor));
+        const line = lines.find((l) => l.includes(anchor));
         if (!line) {
           missing.push(`${path} states nothing for ${what}`);
           continue;
         }
         for (const phrase of phrases) if (!phrase.test(line)) missing.push(`${path}'s ${what} does not state ${phrase}`);
       }
+      // An absent bullet is already reported above, so read the chain over the
+      // ones that are there: out of order is a separate failure from missing.
+      const placed = orderedChain
+        .map((what) => [what, lines.findIndex((l) => l.includes(anchorOf(what)))])
+        .filter(([, at]) => at !== -1);
+      for (let i = 1; i < placed.length; i += 1)
+        if (placed[i][1] < placed[i - 1][1]) missing.push(`${path} states ${placed[i][0]} before ${placed[i - 1][0]}`);
     }
     check(
-      "and the skill carries the same decisions in both mirrors — the proper-ancestor stop, the off-shoot's gate before its push, the PR's ref as its target with the fields that resolve it, and the check that substitution excepts",
+      "and the skill carries the same decisions in both mirrors, in the order that makes the stops reachable — the proper-ancestor stop and the off-shoot's gate ahead of both pushes, the PR's ref as the off-shoot's target with the fields both recipes resolve it from, and the check that substitution excepts",
       missing.length === 0,
       missing.join("; "),
     );
