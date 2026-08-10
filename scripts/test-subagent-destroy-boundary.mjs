@@ -19,8 +19,8 @@
 //
 //   CONTENT, checked per boundary constant, against the clause list below.
 //   Task 017's criterion is about what the constants SAY, and they say it once
-//   each; asserting eleven clauses against all thirty renders re-derived the
-//   same five answers thirty times over. The constants are evaluated out of the
+//   each; asserting twelve clauses against all sixty renders re-derived the
+//   same five answers sixty times over. The constants are evaluated out of the
 //   same declaration prefix the builders come from, so this is the value the
 //   briefs actually interpolate rather than the source text of the literal.
 //
