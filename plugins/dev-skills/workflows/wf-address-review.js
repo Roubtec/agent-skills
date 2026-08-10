@@ -3149,8 +3149,14 @@ return {
   // what its push command did; this is the run's own result, and the fact the
   // publisher was never able to report is stated as unheld here rather than
   // rounded to a boolean. Nothing the run DOES turns on the substitution: every
-  // consumer reads `publishReport` (the local) and reads the abort ahead of either
-  // push flag, the disposition record's rendering included.
+  // consumer reads `publishReport` (the local), which this spread copies rather
+  // than rewrites. Not all of them read the abort, and the ones that do not are
+  // meant to: `claimsAMutation` counts a push command that RAN as a claimed
+  // mutation — which is what puts an account short of an entry per item in doubt —
+  // so do not "repair" it to match this echo. What the abort gates is every CLAIM
+  // about origin: `landed` withholds the advance under it, `pushState` reads it
+  // ahead of both flags, and the disposition record's rendering and the note below
+  // reach it before `pushNoop`.
   publishReport: publishReport
     ? { ...publishReport, ...(pushUnconfirmed ? { pushedNewCommits: null } : {}) }
     : { published: false, aborted: "publisher returned nothing" },
