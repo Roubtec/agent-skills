@@ -35,6 +35,7 @@ Out of scope:
 - `plugins/dev-skills/skills/address-reviews/SKILL.md`
 - `codex/dev-skills/skills/address-review/SKILL.md` (mirror)
 - `codex/dev-skills/skills/address-reviews/SKILL.md` (mirror)
+- `scripts/test-address-review-reconcile.mjs` — the regression pin for the four skill paragraphs, beside the workflow-side check it already carries
 
 ## Implementation notes
 
@@ -52,7 +53,7 @@ Out of scope:
 ## Validation
 
 - Walk both cases against the delivered text: a head advanced by a push (recorded OID still reachable locally) and a head force-pushed away (recorded OID absent). Both must reach the same "the head moved" handling.
-- No suite covers the skill prose; `scripts/test-address-review-reconcile.mjs` covers the workflow only, and its brief-reading check does not read SKILL.md.
+- `scripts/test-address-review-reconcile.mjs` pins this rule on the workflow side only, and its brief-reading check does not read SKILL.md. Skill prose is pinnable all the same — `scripts/test-review-cycle-retirement.mjs` and `scripts/test-subagent-destroy-boundary.mjs` both read `SKILL.md` files — so extend that suite to read the rule out of the paragraph that states it in both skills and both mirrors: the fetched-head read present in each of the four, and `git cat-file -e` absent from all of them. The deleted probe is the shape a later edit re-imports as a safety check, and nothing else would notice.
 
 ## Review plan
 

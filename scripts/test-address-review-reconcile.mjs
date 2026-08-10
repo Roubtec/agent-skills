@@ -37,6 +37,13 @@
 // the outcome strings, whose agreement with the strings the gate keys on
 // nothing else pins.
 //
+// That brief is one of three renderings of where the compared head comes from;
+// the other two are the two review-addressing SKILLs, in both mirrors (task
+// 021d). They are prose no scenario can execute, and the probe they replaced
+// (`git cat-file -e` on the OID `gh pr view` reported) is exactly the shape a
+// later edit re-imports as a "safety check", so their paragraphs are read here
+// beside the brief's.
+//
 // It also covers the publication guard that landed beside the gate, which is
 // prompt prose rather than script logic: a HEAD that is a proper ancestor of
 // the PR head must stop the publisher BEFORE the lease it would otherwise
@@ -113,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 139;
+const EXPECTED_CHECKS = 141;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -944,6 +951,50 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     readsFetchedHead && !testsObjectExistence,
     `reads FETCH_HEAD: ${readsFetchedHead}; tests object existence: ${testsObjectExistence}`,
   );
+
+  // The same rule, in the two SKILLs that state it to a reader rather than to a
+  // subagent — and in both mirrors, which no generator keeps in step. Each file
+  // is anchored to the PARAGRAPH that carries the rule, not to the file, so the
+  // read stays where the decision is made: `FETCH_HEAD` is discussed in two to
+  // four places per file, so a rule paragraph rewritten back to an existence
+  // test could keep a file-level search satisfied from a paragraph that decides
+  // nothing. The deletion half is asserted over the whole file instead, because
+  // re-importing the probe anywhere in either skill is the regression.
+  {
+    const mirrors = ["plugins/dev-skills/skills", "codex/dev-skills/skills"];
+    const rulePara = [
+      ["address-review", "**Reconcile the working location's branch with the PR head before triaging anything.**"],
+      ["address-reviews", "The canonical path."],
+    ];
+    const unread = [];
+    const probed = [];
+    for (const mirror of mirrors) {
+      for (const [skill, anchor] of rulePara) {
+        const path = `${mirror}/${skill}/SKILL.md`;
+        let text;
+        try {
+          text = readFileSync(join(here, "..", mirror, skill, "SKILL.md"), "utf8");
+        } catch (err) {
+          unread.push(`${path} cannot be read: ${err.message}`);
+          continue;
+        }
+        const para = text.split("\n\n").find((p) => p.includes(anchor));
+        if (!para) unread.push(`${path} has no paragraph carrying ${JSON.stringify(anchor)}`);
+        else if (!para.includes("git rev-parse FETCH_HEAD")) unread.push(`${path}'s rule paragraph does not read the fetched head`);
+        if (/cat-file -e/.test(text)) probed.push(path);
+      }
+    }
+    check(
+      "and both skills state that same rule, in both mirrors — the head comes from `git rev-parse FETCH_HEAD`",
+      unread.length === 0,
+      unread.join("; "),
+    );
+    check(
+      "and no skill has re-imported the existence probe on the recorded OID",
+      probed.length === 0,
+      `tests \`cat-file -e\`: ${probed.join(", ")}`,
+    );
+  }
 
   // The off-shoot exemption is stated to the agent as well as enforced by the
   // gate: where the names differ the step is skipped WHOLE, which is what makes
