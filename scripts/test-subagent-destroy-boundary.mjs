@@ -182,10 +182,14 @@
 // it. `[]` is also TRUTHY, so a `!collection` guard does not catch it. Read this
 // list before adding a check, and extend it when you do:
 //
-//   `CUT` — empty: every shipped `wf-*.js` is unlisted, so the workflow-set
-//     check FAILs; the whole run is over before any render.
+//   `CUT` — empty: every shipped `wf-*.js` is unlisted, which FAILs the
+//     workflow-set check, and nothing renders. The run then dies in the
+//     `DESTROY_BOUNDARY` identity check reading `copies[0]` of an empty list, so
+//     it exits non-zero on a stack trace with no table rather than on that row —
+//     measured, and left alone: loud is the requirement, and no ordinary edit
+//     empties this map.
 //   the shipped set, `shippedWorkflows()` — empty: every CUT key has vanished,
-//     which FAILs and stops the run right there.
+//     which FAILs and stops the run right there, on the row that names the keys.
 //   `REQUIRED` — empty: reported "all 0 clauses" as a pass until the
 //     declared-tables check below was added. Guarded there now.
 //   `DESTINATION_PINS` — empty, or an entry that is empty or holds an empty
