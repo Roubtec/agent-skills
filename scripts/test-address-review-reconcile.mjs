@@ -113,7 +113,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 86;
+const EXPECTED_CHECKS = 89;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1086,6 +1086,27 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     failed.status === "rebase-validation-failed",
     JSON.stringify(failed.status),
   );
+  // `noop: true` is the value that switches those very checks OFF — the
+  // validation above here, and at the pre-push point the whole re-verification
+  // of the rebased tree — so it is adopted on the unchanged tip the brief orders
+  // reported beside it rather than on the flag. A claim naming no tips, or two
+  // different ones, has replayed something or cannot say, and taking it at its
+  // word publishes a replayed tree that was neither validated nor reviewed.
+  const tipless = { ...REBASE_NOOP };
+  delete tipless.before;
+  delete tipless.after;
+  const unevidenced = await run(gathered(withWork), { rebase: tipless });
+  check(
+    "a `noop: true` naming neither tip stops the run, dispatching nothing",
+    unevidenced.status === "rebase-unevidenced-noop" && unevidenced.seen.cycleOpts === null,
+    JSON.stringify({ status: unevidenced.status, cycle: unevidenced.seen.cycleOpts }),
+  );
+  const moved = await run(gathered(withWork), { rebase: { ...REBASE_NOOP, after: "d00dfeed" } });
+  check(
+    "and so does one whose two tips disagree — a moved tip is a replay however the report labelled it",
+    moved.status === "rebase-unevidenced-noop" && moved.seen.cycleOpts === null,
+    JSON.stringify({ status: moved.status, cycle: moved.seen.cycleOpts }),
+  );
   // The way back from a replay. Every stop past a successful point tells the
   // maintainer the pre-rebase tip is saved at a named ref, so the report has to
   // carry one: a successful rebase that names none has skipped the single
@@ -1157,6 +1178,31 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       noopSecond.seen.agentLabels.join(",") === "gather,rebase-pre-fix,rebase-pre-push" &&
       noopSecond.seen.cycleCalls.length === 1,
     JSON.stringify({ status: noopSecond.status, labels: noopSecond.seen.agentLabels, cycles: noopSecond.seen.cycleCalls.length }),
+  );
+  // A halt at the SECOND point stops a run that already has a passed cycle
+  // behind it, so it is the one exit where two sources of open questions meet.
+  // They are reported oldest first — the order the two-cycle merge below keeps
+  // every human-facing set in — rather than leading with the halt because it
+  // arrived last.
+  const haltedSecond = await run(gathered(withWork), {
+    cycles: [CYCLE_PASS],
+    rebases: {
+      "pre-fix": REBASE_NOOP,
+      "pre-push": {
+        ok: true,
+        halted: true,
+        noop: false,
+        question: "`src/app.ts` conflicts with the base's rename; which side owns the guard?",
+        detail: "aborted; tree clean and idle",
+        recoveryRef: "refs/pre-rebase/feature/x/20260809-131415",
+      },
+    },
+  });
+  const haltIds = ((haltedSecond.result || {}).openQuestions || []).map((q) => q && q.id).join(",");
+  check(
+    "a halt at the pre-push point stops the run, reporting the passed cycle's questions ahead of the halt's",
+    haltedSecond.status === "rebase-halted" && haltIds === "pr-42-q1,pr-42-rebase-pre-push",
+    JSON.stringify({ status: haltedSecond.status, ids: haltIds }),
   );
   const replayed = await run(gathered(withWork), {
     cycles: [CYCLE_PASS, CYCLE_REVERIFIED],
@@ -1421,7 +1467,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /`cd` into it and verify `git rev-parse --show-toplevel` prints exactly that path/.test(briefInWorktree) &&
       /STOP and report `ok: false`/.test(briefInWorktree) &&
       /Do NOT create a worktree and do NOT switch branches/.test(brief),
-    "the no-op reported as one, with no validation run on it": /noop: true/.test(brief) && /run no validation/.test(brief),
+    "the no-op reported as one, with no validation run on it and the two tips that evidence it":
+      /noop: true/.test(brief) && /run no validation/.test(brief) && /adopts it only where both are reported and equal/.test(brief),
     "idempotence — why two points cannot double-apply": /cannot double-apply/.test(brief),
     "the delivery-tier validation after a replay": /the project's build AND its test suite/.test(brief),
     "reporting the conflicts it resolved and the commits it skipped": /git rebase --skip/.test(brief) && /Narrate one line each in `detail`/.test(brief),

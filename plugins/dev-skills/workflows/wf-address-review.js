@@ -196,7 +196,8 @@ const PACKET_SCHEMA = {
 // the review cycle as a diff boundary that a sibling push or the next fetch
 // moves out from under it, so the reviewer would bound its diff at a tip this
 // branch was never rebased onto. There is no conditional-required in JSON
-// schema, so the field is validated in the script instead of listed here.
+// schema, so that field and every other one required only under a condition are
+// validated in the script instead of listed here.
 const REBASE_SCHEMA = {
   type: "object",
   properties: {
@@ -204,9 +205,9 @@ const REBASE_SCHEMA = {
     halted: { type: "boolean", description: "True when a conflict beyond this step's competence was met: the rebase was ABORTED, the tree left clean and idle, and `question` carries what the maintainer has to decide. Not a failure of the run's mechanics — a decision it cannot make." },
     question: { type: "string", description: "REQUIRED when halted: the conflicting files, the offending commit, and what the judgment turns on. It is reported as this run's open question, so write it for the maintainer rather than as a log line." },
     effectiveBase: { type: "string", description: "The full OID actually rebased onto, as `git rev-parse --verify <target>^{commit}` printed it — a commit, never a ref name and never an abbreviation. REQUIRED whenever ok is true; the caller rejects anything that is not a full hex OID (40 characters, or 64 in a SHA-256 repository) and stops the run, because every delegation range afterwards is taken against this value." },
-    noop: { type: "boolean", description: "True when the rebase replayed nothing and the tip is unchanged (the pinned base was already an ancestor of HEAD) — the common and cheap outcome, and what makes two rebase points safe." },
-    before: { type: "string", description: "Tip SHA before the rebase." },
-    after: { type: "string", description: "Tip SHA after it (equal to `before` on a no-op)." },
+    noop: { type: "boolean", description: "True when the rebase replayed nothing and the tip is unchanged (the pinned base was already an ancestor of HEAD) — the common and cheap outcome, and what makes two rebase points safe. It is the one value that switches checks off (no validation here, no re-verification of the rebased tree at the pre-push point), so the caller adopts it only where `before` and `after` are both reported and equal, and stops the run otherwise." },
+    before: { type: "string", description: "Tip SHA before the rebase. REQUIRED whenever noop is true — it and `after` are the evidence the caller accepts the no-op on." },
+    after: { type: "string", description: "Tip SHA after it. REQUIRED whenever noop is true, and equal to `before` there; a no-op naming a moved tip, or naming none, is treated as an unevidenced claim and stops the run." },
     recoveryRef: { type: "string", description: "The `refs/pre-rebase/<branch>/<ts>` ref saved before the first replay, so a report can name it. REQUIRED whenever ok is true — step 3 saves it unconditionally and is told not to skip it, and every stop this point can reach promises the maintainer the pre-rebase tip is saved at this ref by name; the caller rejects a report that cannot name one and stops the run rather than adopting a replay with no way back." },
     validationPassed: { type: "boolean", description: "Whether the post-rebase build/tests passed. Report `true` for a no-op rebase, which runs none. A rebase that replayed anything must report `true` here to go on: the caller requires that value positively, so `false` and an absent field stop the run alike, before any review verdict or push rests on the replay." },
     detail: { type: "string", description: "One line: the target, what was replayed, skipped or resolved, and what validation ran." },
@@ -432,7 +433,7 @@ Rebasing twice in one run is deliberate and cannot double-apply: each point pins
 1. **Preflight.** \`git status --porcelain\` must print nothing AND no Git operation may be in progress — \`git rev-parse --git-path rebase-merge\` and \`rebase-apply\` for an existing path, plus \`MERGE_HEAD\`, \`CHERRY_PICK_HEAD\`, \`REVERT_HEAD\`, \`BISECT_LOG\` (a tree left mid-cherry-pick prints empty porcelain). Either failing is \`ok: false\` with what you found in \`detail\`. Stash nothing, clean nothing, force nothing.
 2. **Pin the base.** The target is \`${target}\`. Where it is a ref name, fetch it fresh first so you pin what it points at NOW — from the repository that ref lives in, which for this PR's base is the repository the PR itself is in (a PR's base always is) and NOT this branch's push remote, which on a cross-repository PR is the head fork where the same name is some other branch or none. WHICH repository that is is already resolved and is handed to you here, in this PR's own URL: \`${packet.pr.url}\`, whose \`<owner>/<repo>\` IS that repository. Do not re-derive it from a bare \`gh repo view --json nameWithOwner\`, which with no repository argument answers for the repository the DIRECTORY it runs in resolves to — in a fork clone the head fork, so it would send this fetch at the very repository the sentence above rules out, and pin a commit off a same-named branch there. Then: \`git fetch <the remote whose URL is that repository, or that repository's URL where no remote points at it> refs/heads/<the ref>\`, moving no branch. Where it is already an exact commit, fetch nothing. Then resolve what you pinned once with \`git rev-parse --verify <it>^{commit}\` — \`FETCH_HEAD\` for a ref you just fetched, the commit itself where the target was already one — which both proves it names an existing COMMIT and prints the full object id — and report exactly that full OID as \`effectiveBase\` and rebase onto THAT OID, never onto the name, and never an abbreviation of it: a short id is a prefix, and a growing repository can make one match a second object, so the caller rejects anything but the full length. The name is not an answer: \`origin/<base>\` moves whenever anything else pushes or fetches, and every range this run delegates afterwards is taken against \`effectiveBase\`, so a name would bound a reviewer's diff at a tip this branch was never rebased onto. The caller rejects a non-commit \`effectiveBase\` and stops the run.
 3. **Save the recovery ref.** \`current_branch="$(git branch --show-current)"\` (require it non-empty), \`ts="$(date -u +%Y%m%d-%H%M%S)"\`, then \`git update-ref "refs/pre-rebase/$current_branch/$ts" HEAD\`. That is the one \`update-ref\` this assignment spells out and the run's only rebase recovery ref — do not skip it, and report it as \`recoveryRef\`.
-4. **Rebase:** \`git rebase <the effectiveBase OID>\`. Git's patch-id detection drops commits the base already carries. If nothing was replayed and the tip is unchanged, that is the expected no-op: report \`noop: true\` with \`before\` equal to \`after\`, run no validation, and you are done.
+4. **Rebase:** \`git rebase <the effectiveBase OID>\`. Git's patch-id detection drops commits the base already carries. If nothing was replayed and the tip is unchanged, that is the expected no-op: report \`noop: true\` with \`before\` equal to \`after\`, run no validation, and you are done. Those two tips are the evidence, not decoration: \`noop: true\` is what tells the caller to run no validation on this point and to spend no reviewer round re-verifying the tree afterwards, so the caller adopts it only where both are reported and equal, and stops the run on a no-op claim that names a moved tip or names none.
 5. **Conflicts — by hunk, in place.** Preserve cleanly auto-merged changes elsewhere in each file. Whole-file \`git checkout --ours\`/\`--theirs\` is safe ONLY after inspecting the merged result and confirming the file carries no cleanly auto-merged content from the other side; otherwise it silently deletes a sibling's already-shipped behavior with no conflict marker left behind.
    - TRIVIAL (import/whitespace/formatting collisions, pure additions, or a patch the new base already represents) → resolve in-file and \`git add\` + \`git rebase --continue\`, or \`git rebase --skip\` for an already-represented commit. Narrate one line each in \`detail\`.
    - BEYOND THAT (a genuine semantic dilemma) → \`git rebase --abort\`, then CONFIRM the tree is clean and idle by step 1's two checks, and report \`halted: true\` with a \`question\` naming the conflicting files, the offending commit, and what the judgment turns on. Never leave the tree mid-rebase, and never guess a resolution: this run is unattended, and addressing review on a wrong base and then force-pushing is worse than not running. If the abort leaves unexpected files, preserve and report them rather than deleting anything.
@@ -1005,6 +1006,26 @@ async function rebasePoint(point, target) {
       `The ${point} rebase reported ${JSON.stringify(report.effectiveBase === undefined ? null : report.effectiveBase)} as the base it landed on, which is not a full commit OID. A ref name cannot be a delegation boundary — it moves — and an abbreviation is a prefix that can go ambiguous or stop resolving, so nothing downstream is dispatched on either.`,
     );
   }
+  // `noop: true` is the one value that switches checks OFF — the post-rebase
+  // validation just below, and at the pre-push point the whole re-verification
+  // of the rebased tree — so it is adopted on its evidence rather than on the
+  // flag. Step 4 of the brief orders the no-op reported "with `before` equal to
+  // `after`", which is exactly that evidence; a report naming a moved tip, or
+  // naming none, has replayed something or cannot say, and either way the two
+  // checks it would switch off are the ones standing between that replay and a
+  // push nobody validated or reviewed. The tips are compared only with each
+  // other, so unlike `effectiveBase` they are not held to the full-OID rule:
+  // nothing downstream is dispatched on them.
+  if (report.noop === true) {
+    const before = typeof report.before === "string" ? report.before.trim() : "";
+    const after = typeof report.after === "string" ? report.after.trim() : "";
+    if (!before || before !== after) {
+      return stop(
+        "rebase-unevidenced-noop",
+        `The ${point} rebase reported \`noop: true\` while naming ${JSON.stringify(report.before === undefined ? null : report.before)} and ${JSON.stringify(report.after === undefined ? null : report.after)} as the tips before and after it. A no-op is the one report that runs no post-rebase validation and spends no round re-verifying the rebased tree, so it is adopted only on the unchanged tip the brief orders reported beside it.`,
+      );
+    }
+  }
   // Positively, not merely "did not report a failure": the acceptance condition
   // is that build+tests ran after every non-noop rebase, so a replay that
   // reports nothing about validation is as unusable as one that reports a
@@ -1281,7 +1302,10 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
       ...second.stop,
       rounds: cycle.rounds,
       dispositions: cycle.workReport,
-      openQuestions: [...(second.stop.openQuestions || []), ...(cycle.openQuestions || [])],
+      // Oldest first, the order `mergedCycle` keeps every human-facing set in:
+      // the cycle's questions were raised before the rebase point that stopped
+      // the run, so they lead and the halt's question follows.
+      openQuestions: [...(cycle.openQuestions || []), ...(second.stop.openQuestions || [])],
       deviations: cycle.deviations,
       peerRounds: cycle.peerRounds,
       artifactDir: cycle.artifactDir,
