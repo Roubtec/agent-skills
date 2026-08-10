@@ -49,6 +49,12 @@
 // the PR head must stop the publisher BEFORE the lease it would otherwise
 // match and rewind the branch with.
 //
+// And the two GitHub-reliability recipes the same brief renders inline because
+// its publisher has read no skill (task 023a): the push read-back at the ref and
+// the reviewer request confirmed from the timeline. Both are second copies of a
+// wording the skill authors, so the brief's clause and the skill's sentence are
+// read together, in both mirrors — the drift the rendering buys back.
+//
 // It covers the DELEGATED REBASE POINTS that run just after the gate (task
 // 016), for the same reason and through the same harness: the base each one
 // pins is what every later delegation's diff range is taken against, so the
@@ -120,7 +126,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 200;
+const EXPECTED_CHECKS = 204;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1701,6 +1707,148 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       missing.join("; "),
     );
   }
+}
+
+// --- The GitHub-reliability recipes the publish brief renders inline ---------
+// Task 023 put one authoritative recipe for each of five `gh`/API behaviors at
+// the step that performs the operation, and scoped that to the skills. This
+// workflow performs two of those operations from prose of its own — the push at
+// step 2, the `--add-reviewer` request at step 6 — and its publisher has read no
+// skill, so 023a renders both recipes into the brief rather than pointing at the
+// section that authors them.
+//
+// That makes each one a SECOND copy of a settled wording, which is what is
+// pinned here: the brief's clause, by the phrases that carry the instruction, and
+// the SAME rules in both mirrors of the skill that owns them — so a recipe
+// reworded on one side and not the other fails rather than drifting quietly. The
+// two mirrors are hand-edited in lockstep with no generator, which is why both
+// are read.
+//
+// What is NOT here is a third recipe. Item 5 (re-verify at publish boundaries)
+// is already performed by the brief's own steps 1 and 3, so it is checked as
+// PRESENCE OF THOSE STEPS rather than of a restatement: a copy of item 5 beside
+// them is the text commit 390156a deliberately declined to write.
+{
+  const brief = publishPrompt(
+    gathered({ reconcile: { outcome: "work" } }),
+    [],
+    { push: true, pingCopilot: true },
+    [],
+    [],
+  );
+  // The push's read-back, which the brief used to end without: `git push`
+  // returning is not the ref having moved, and the API read that looks like
+  // proof is the one this recipe rules out. Read from step 2's own segment, so a
+  // clause that survives somewhere else in the brief does not answer for the
+  // step that pushes; and required to sit AFTER the push instructions, since a
+  // read-back stated before them confirms nothing.
+  const step2 = brief.slice(brief.indexOf("2. Push."), brief.indexOf("3. Re-read unresolved threads"));
+  const readBack = {
+    "reads the ref itself": /confirm what actually LANDED against the ref itself/.test(step2),
+    "refuses the PR API as the evidence": /rather than from `gh pr view --json headRefOid`/.test(step2),
+    "names the per-URL ls-remote": /git ls-remote "<url>" refs\/heads\//.test(step2) && /git remote get-url --push --all <remote>/.test(step2),
+    "requires every push URL": /require every one of them to come back with the HEAD you pushed/.test(step2),
+    "treats silence as a stop": /exits 0 even when it prints nothing/.test(step2) && /is a stop rather than a pass/.test(step2),
+    "stops rather than claiming publication": step2.includes('aborted: "push not confirmed at the ref"'),
+    "states it after the push": step2.indexOf("confirm what actually LANDED") > step2.indexOf("--force-with-lease="),
+  };
+  const readBackMissing = Object.entries(readBack).filter(([, ok]) => !ok).map(([what]) => what);
+  check(
+    "the publish brief verifies its push at the ref rather than through the PR API, after the push and before the replies",
+    readBackMissing.length === 0,
+    readBackMissing.join("; ") || `step 2 carries all ${Object.keys(readBack).length} clauses`,
+  );
+
+  // The reviewer request, whose confirmation the brief gave no instruction for at
+  // all: the read that looks authoritative is empty on a request that succeeded,
+  // so an agent left to its own devices re-issues a request that landed. Read
+  // from the pings step, and only under the flag that orders the request.
+  const step6 = brief.slice(brief.indexOf("6. Pings"));
+  const confirmation = {
+    "confirms from the timeline": /`review_requested` event in `gh api --paginate/.test(step6),
+    "refuses the GraphQL read": /never from `gh pr view --json reviewRequests`/.test(step6) && /reads back empty on a request that succeeded/.test(step6),
+    "says REST can confirm but not refute": /can confirm a request but never refute one/.test(step6),
+    "matches by snapshot rather than by clock":
+      /Snapshot the `id`s of the events naming that reviewer BEFORE issuing the request/.test(step6) &&
+      /require one that is NOT in that snapshot/.test(step6) &&
+      /matching by event id rather than against your own clock/.test(step6),
+    "paginates both reads": /paginate BOTH reads/.test(step6),
+    "an unconfirmed request neither fails nor re-issues":
+      /do not fail publication, and do NOT issue the request again/.test(step6) && /requested, unconfirmed/.test(step6),
+  };
+  const confirmationMissing = Object.entries(confirmation).filter(([, ok]) => !ok).map(([what]) => what);
+  check(
+    "and confirms the Copilot reviewer request from the timeline, without re-issuing one it cannot confirm",
+    confirmationMissing.length === 0,
+    confirmationMissing.join("; ") || `step 6 carries all ${Object.keys(confirmation).length} clauses`,
+  );
+
+  // Item 5, satisfied by the steps rather than by a copy of it. Both halves are
+  // pinned positively, because "no restatement here" is only the right answer
+  // while the steps themselves still do it.
+  const step1 = brief.slice(brief.indexOf("1. Re-check before publication"), brief.indexOf("2. Push."));
+  const reVerified =
+    /re-fetch the PR and confirm it is still open/.test(step1) &&
+    /Re-read unresolved threads after the push/.test(brief);
+  check(
+    "and re-verifies the PR at the publish boundary through its own steps, needing no fourth copy of that rule",
+    reVerified,
+    `step 1 re-fetches: ${/re-fetch the PR and confirm it is still open/.test(step1)}; step 3 re-reads: ${/Re-read unresolved threads after the push/.test(brief)}`,
+  );
+
+  // And the sections that AUTHOR both recipes, in both mirrors: the brief is a
+  // rendering of them, so a rule that lives only in the brief is a rule the next
+  // reader of the skill contradicts, and one reworded only in the skill leaves
+  // the workflow's copy stating superseded wording. Anchored to the sentence that
+  // carries each rule, so a rewrite keeping the paragraph and dropping the rule
+  // fails rather than passing on the file's other mentions of `ls-remote` or
+  // `--add-reviewer`.
+  const wanted = [
+    [
+      "the push read-back",
+      "confirm what actually landed against the ref itself",
+      [
+        /rather than `gh pr view --json headRefOid`/,
+        /for each URL `git remote get-url --push --all <remote>` lists/,
+        /exits 0 even when it prints nothing/,
+      ],
+    ],
+    [
+      "the reviewer-request confirmation",
+      "**Confirm the request from the timeline, never from `gh pr view --json reviewRequests`:**",
+      [
+        /the durable evidence is a `review_requested` event/,
+        /snapshot the `id`s of the events naming the intended reviewer/,
+        /Compare by event id, never against your own clock/,
+        /Paginate \*\*both\*\* reads/,
+        /do not fail the run, and do not issue this one again/,
+      ],
+    ],
+  ];
+  const missing = [];
+  for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
+    const path = `${mirror}/address-review/SKILL.md`;
+    let text;
+    try {
+      text = readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8");
+    } catch (err) {
+      missing.push(`${path} cannot be read: ${err.message}`);
+      continue;
+    }
+    for (const [what, anchor, phrases] of wanted) {
+      const line = text.split("\n").find((l) => l.includes(anchor));
+      if (!line) {
+        missing.push(`${path} states nothing for ${what}`);
+        continue;
+      }
+      for (const phrase of phrases) if (!phrase.test(line)) missing.push(`${path}'s ${what} does not state ${phrase}`);
+    }
+  }
+  check(
+    "and both mirrors of the skill still author those two recipes — the ref read-back and the timeline confirmation — that the brief renders",
+    missing.length === 0,
+    missing.join("; "),
+  );
 }
 
 // --- The check the off-shoot exception must not swallow ----------------------
