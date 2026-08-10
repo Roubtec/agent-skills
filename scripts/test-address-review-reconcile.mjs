@@ -1862,21 +1862,22 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // expansion the boundary text states on purpose.
   const KNOWN_LITERAL_SPANS = ["${DC:?dc-enter returned no path}"];
   const unrendered = [];
+  const rendered = {};
   for (const [what, { flags, args, packet }] of Object.entries(arms)) {
-    const rendered = publishPrompt(gathered({ reconcile: { outcome: "work" }, ...packet }), [], flags, ...args);
-    const hits = rendered.match(/\$\{[^}]*\}/g) || [];
+    rendered[what] = publishPrompt(gathered({ reconcile: { outcome: "work" }, ...packet }), [], flags, ...args);
+    const hits = rendered[what].match(/\$\{[^}]*\}/g) || [];
     const hit = hits.find((h) => !KNOWN_LITERAL_SPANS.includes(h));
     if (hit) unrendered.push(`${what}: ${hit}`);
   }
   // Driven arms are only coverage while they still SELECT what they were added
-  // for, and the two packet-driven rows are selected by fields a rename would
-  // silently take away — leaving two rows that render the same arms as the rows
-  // above them and a check that reads as broader than it is.
-  const rebasedRow = publishPrompt(gathered({ reconcile: { outcome: "work" }, rebased: true }), [], { push: true }, [], []);
-  const worktreeRow = publishPrompt(gathered({ reconcile: { outcome: "work" }, locationMode: "worktree", worktree: "/w/.worktrees/c/pr-42" }), [], { push: true }, [], []);
+  // for, and the two packet-driven rows are selected by packet fields a rename or a
+  // dropped override would silently take away — leaving two rows rendering the same
+  // arms as the rows above them and a check reading as broader than it is. Read out
+  // of the rows the sweep actually drove, not from renders repeated here, which
+  // would answer for their own inputs rather than for the sweep's.
   const selected = {
-    "the `rebased: yes` arm": /\(rebased: yes\)/.test(rebasedRow),
-    "the worktree arm": /Your working location is the worktree `\/w\/\.worktrees\/c\/pr-42`/.test(worktreeRow),
+    "the `rebased: yes` arm": /\(rebased: yes\)/.test(rendered["a branch this run rebased"] || ""),
+    "the worktree arm": /Your working location is the worktree `\/w\/\.worktrees\/c\/pr-42`/.test(rendered["a worktree working location"] || ""),
   };
   const unselected = Object.entries(selected).filter(([, ok]) => !ok).map(([what]) => what);
   check(
@@ -3873,8 +3874,22 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       echoWrong.push(`${what}: the result's echoed report does not carry the abort that says why (\`${report.aborted}\`)`);
     }
   }
+  // And the exits this substitution is NOT for, where the flag is a fact the
+  // publisher established and the result must hand it on: a stop AFTER a push that
+  // advanced the remote, and one after a push that moved nothing. Withholding the
+  // flag from every report would read as this run never knowing whether its push
+  // advanced anything, which is a different false claim in the other direction.
+  for (const [caseName, expected] of [
+    ["a publication that pushed and then failed part-way", true],
+    ["a publication whose push was a no-op before it failed", false],
+  ]) {
+    const report = (results[caseName] || {}).publishReport || {};
+    if (report.pushedNewCommits !== expected) {
+      echoWrong.push(`${caseName}: the result no longer echoes the flag its publisher DID establish (\`${JSON.stringify(report.pushedNewCommits)}\`, expected \`${expected}\`)`);
+    }
+  }
   check(
-    "and the run's own result states no value for the advance its read-back could not establish, whichever way the publisher reported it, while echoing the push it did establish",
+    "and the run's own result states no value for the advance its read-back could not establish, whichever way the publisher reported it — while passing on the push it did establish there, and the advance itself on the exits that established it",
     echoWrong.length === 0,
     echoWrong.join("; ") || "both results echo the report with the unestablished advance held at no value",
   );
