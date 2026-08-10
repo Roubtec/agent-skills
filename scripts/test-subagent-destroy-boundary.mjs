@@ -108,9 +108,9 @@ function shippedWorkflows() {
 // pass. Each entry is one semantic clause the boundary states, matched by the
 // phrase that carries it rather than by a byte comparison of the whole
 // constant. This must fail when a clause is LOST. What that buys is narrow, and
-// measured rather than hoped for: the phrases now pin about two thirds of each
-// constant in contiguous literal runs, so it is the unpinned third — the
-// mechanics, the reasons, the tails — that may be reworded freely, and the
+// measured rather than hoped for: the phrases now pin just over two thirds of
+// each constant in contiguous literal runs, so it is the unpinned remainder —
+// the mechanics, the reasons, the tails — that may be reworded freely, and the
 // pinned spans that may not. Inside a pinned span even an obviously benign edit
 // fails: dropping an Oxford comma does, lowercasing `NOT in a clone` does, and
 // so does ADDING a command to the forbidden list, i.e. hardening the boundary
@@ -123,19 +123,24 @@ function shippedWorkflows() {
 // NARROWED boundary satisfies just as well, WITH TWO DELIBERATE EXCEPTIONS
 // named below. That rule is written down because every phrase which broke it
 // was measured green against a boundary saying something else: a wildcard
-// spanning the directive's verb passed "never
-// belongs ONLY in a disposable clone"; a wildcard spanning that directive's
-// qualifier instead passed both "that cannot change state" and "that must
-// change state", the second narrowing the rule until ordinary state-changing
-// verification escapes it; a bare `and force-pushing` passed the same command
-// list under an "Also permitted:" label; a phrase starting on the blast-radius
-// clause's verb passed "so nothing you do can reach every sibling worktree" and
-// a halved enumeration; and a carve-out matched from "whether as an exact
-// command" passed a boundary with the scope it bounds — "beyond what this
-// assignment itself spells out" — deleted outright. So these phrases run long,
-// and none of them holds a wildcard any more: every matched span is contiguous
-// literal text, and the one place two shipped spellings differ inside a span is
-// enumerated ("and", which only the section's copy has) rather than skipped over.
+// spanning the directive's verb passed "never belongs ONLY in a disposable
+// clone"; a wildcard spanning that directive's qualifier instead passed both
+// "that cannot change state" and "that must change state", the second narrowing
+// the rule until ordinary state-changing verification escapes it; a bare `and
+// force-pushing` passed the same command list under an "Also permitted:" label;
+// a phrase starting on the blast-radius clause's verb passed "so nothing you do
+// can reach every sibling worktree" and a halved enumeration; a carve-out
+// matched from "whether as an exact command" passed a boundary with the scope it
+// bounds — "beyond what this assignment itself spells out" — deleted outright;
+// and the fallback phrase, holding no wildcard at all but starting one word past
+// its directive's verb, passed both "NEVER use an absolute path outside the
+// repository" and "you may ignore the rule that you use an absolute path outside
+// the repository" — a boundary that has kept "clone-only" while naming no
+// destination to fall back to, which is the live checkout again. So these
+// phrases run long, and none of them holds a wildcard any more: every matched
+// span is contiguous literal text, and the one place two shipped spellings
+// differ inside a span is enumerated ("and", which only the section's copy has)
+// rather than skipped over.
 //
 // THE TWO EXCEPTIONS, stated here rather than left to be rediscovered as a bug.
 // A rule with unrecorded exceptions is worse than a bounded one: a reader who
@@ -154,9 +159,14 @@ function shippedWorkflows() {
 //   put `dc-enter`'s calling convention under this suite, where every future
 //   change to the helper breaks a destroy-boundary test. What must survive is
 //   pinned in full by the clauses either side — verification belongs ONLY in a
-//   disposable clone, and the fallback is an absolute path outside the
-//   repository — and both hold whatever the helper's usage text says. This
-//   entry asserts only that a destination is named at all.
+//   disposable clone, and, where the helper is absent, the fallback is an
+//   absolute path outside the repository — and both hold whatever the helper's
+//   usage text says. "In full" is the load-bearing word and the neighbouring
+//   phrases are what have to deliver it, which is why the fallback's phrase
+//   spans its condition and verb rather than starting at the destination: the
+//   shorter span is green against a fallback that FORBIDS or WAIVES the
+//   absolute path, and this exception's whole safety rests on it. This entry
+//   asserts only that a destination is named at all.
 //
 //   "permitted set" stops after `queries` and leaves the permitted half's SCOPE
 //   tail unpinned, so WIDENING that tail is green: "— plus edits, commits, and
@@ -168,19 +178,19 @@ function shippedWorkflows() {
 //   branch it names" versus "and the specific mutations this assignment spells
 //   out"), so no single literal span covers both and a pattern would need an
 //   alternation — an added case, against this repository's bias toward deleting
-//   them, and paid for out of a tolerance already spent down to a third. So the
-//   entry keeps the job it was added for, which is narrower than the rule
-//   above: it fails when the Permitted line is LOST, not when it is widened.
-//   The forbidden half is the half that binds, and it is pinned through its
-//   enumeration, its carve-out, and its no-exemptions clause.
+//   them, and paid for out of a tolerance already spent down to under a third.
+//   So the entry keeps the job it was added for, which is narrower than the
+//   rule above: it fails when the Permitted line is LOST, not when it is
+//   widened. The forbidden half is the half that binds, and it is pinned
+//   through its enumeration, its carve-out, and its no-exemptions clause.
 //
 // The addressing clause is the longest of them for a further reason: it states
 // three things at once — the positive form, the glob ban, and the unchecked-`cd`
 // ban — so a copy keeping only the first would read as compliant while dropping
 // the two prohibitions the incident it exists for actually turned on.
 const REQUIRED = [
-  // Exception 1 of 2 (see above): pinned only through `queries`. Fails on a
-  // LOST Permitted line, not on a widened one.
+  // A deliberate exception (see above): pinned only through `queries`. Fails on
+  // a LOST Permitted line, not on a widened one.
   ["permitted set", /Permitted: reading, searching, (?:and )?read-only `git`\/`gh` queries/],
   ["forbidden set", /Forbidden: `rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`, and force-pushing/],
   ["exact-command / named-skill carve-out", /each of them beyond what this assignment itself spells out, whether as an exact command or as a skill it names to invoke/],
@@ -190,10 +200,11 @@ const REQUIRED = [
   ["shared `.git` reaches every sibling worktree", /so `branch -f`, `reset`, `update-ref`, and `gc` reach every sibling worktree through the shared `\.git`/],
   ["a repository is addressed by path", /Address any repository other than your own checkout BY PATH: `git -C <absolute path>`\. NEVER derive a working directory from a glob, and NEVER chain a state-changing git command after a `cd` whose success you have not checked/],
   ["empirical verification is clone-only", /Empirical verification that could change state belongs ONLY in a disposable clone/],
-  // Exception 2 of 2 (see above): a bare existence check, deliberately. Asserts
-  // that a destination is named, not what the surrounding sentence says of it.
+  // A deliberate exception (see above): a bare existence check, deliberately.
+  // Asserts that a destination is named, not what the surrounding sentence says
+  // of it.
   ["disposable-clone destination", /command -v dc-enter/],
-  ["absolute-path fallback", /absolute path outside the repository — never a relative one/],
+  ["absolute-path fallback", /Where the helper is absent, use an absolute path outside the repository — never a relative one/],
 ];
 
 // Every `agent(<fn>(...))` in the file — the complete set of prompt paths — plus
