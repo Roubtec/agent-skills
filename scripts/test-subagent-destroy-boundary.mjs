@@ -9,7 +9,7 @@
 //
 // Why rendering rather than reading: the boundary lives in shared constants and
 // in a section one workflow embeds byte-for-byte from another, so the source
-// reads as covered long before every prompt actually carries it. Three review
+// reads as covered long before every prompt actually carries it. Four review
 // rounds of task 017 each eyeballed the sources and each missed a path. A
 // rendered string cannot be argued with.
 //
@@ -173,6 +173,62 @@
 // exists in these sources, and letting accounting match the space would fail
 // the shipped tree on the English `agent (...)` in `wf-address-review.js`'s
 // ping step, which lives in a template literal rather than on a comment line.
+//
+// EVERY COLLECTION THIS SUITE ITERATES OR REDUCES OVER, and what an empty one
+// does. This enumeration is here because the same hole was found three times by
+// three readers in the same mechanism: an empty collection satisfies `some`,
+// `filter`, `find` and `for…of` vacuously, and every check built on one is a
+// check that can be switched off by emptying its input rather than by breaking
+// it. `[]` is also TRUTHY, so a `!collection` guard does not catch it. Read this
+// list before adding a check, and extend it when you do:
+//
+//   `CUT` — empty: every shipped `wf-*.js` is unlisted, so the workflow-set
+//     check FAILs; the whole run is over before any render.
+//   the shipped set, `shippedWorkflows()` — empty: every CUT key has vanished,
+//     which FAILs and stops the run right there.
+//   `REQUIRED` — empty: reported "all 0 clauses" as a pass until the
+//     declared-tables check below was added. Guarded there now.
+//   `DESTINATION_PINS` — empty, or an entry that is empty or holds an empty
+//     span: every destination constant a file declares FAILs for having no
+//     usable pin. A file declaring no destination constant checks nothing here,
+//     which is legitimate — see `destinationNames`.
+//   `boundaryNames(src)` — empty: `load()` throws. Every workflow must declare a
+//     boundary, since nothing it renders could otherwise carry one.
+//   `destinationNames(src)` — empty is LEGITIMATE, the one exception in this
+//     list: `wf-address-review.js`'s destination clauses are all inline prose.
+//   `promptBuilders(src).names` — empty: that file renders nothing, and every
+//     fixture it has FAILs as stale. A file with neither call sites nor fixtures
+//     passes with zero renders, which is the truth about a workflow that spawns
+//     no subagent; the `agent(` accounting is what makes "no call sites" mean it.
+//   `accounting.prose` / `.unaccounted` — empty is the normal passing state.
+//   `FIXTURES[file]` — missing or empty: every builder discovered in that file
+//     FAILs as having no fixture.
+//   `fixtures[name]` — an empty CASE LIST: FAILs. Before that guard it was the
+//     quietest hole in the suite, because `[]` is truthy and so passed the
+//     missing-fixture check, then rendered nothing, so the builder lost its
+//     boundary PRESENCE check and its destination verdict at once and was not
+//     stale either: `cycleFixPrompt: []` took the run to 54 renders and 14
+//     destination checks with zero FAIL rows.
+//   `dest.pins` — empty list, or a list holding an empty span: FAILs as
+//     unclassified rather than satisfied. Both shapes are checked in the render
+//     loop and the reasoning is beside them.
+//   `knownDestinations` — empty: the NO_BUILD cross-check finds no stray clause
+//     and passes vacuously. It cannot be empty without a louder failure first,
+//     because every way to empty it — an emptied constant, an emptied pin —
+//     FAILs its own content or empty-span check; the `.filter` that drops empty
+//     spans from it is there so one emptied constant is reported once as its own
+//     failure rather than as every NO_BUILD render carrying it.
+//   `PROSE_MIRRORS` — empty: reported "0 prose destination clauses
+//     deletion-guarded" as a pass. Guarded by the declared-tables check below.
+//   `PROSE_CLAUSES` — empty: every skill carrying a warning phrase is
+//     undeclared, so the census FAILs in both mirrors.
+//   an `anchors` list inside `PROSE_CLAUSES` — empty: FAILs as an entry that
+//     claims a guard and asserts nothing.
+//   `census` — empty (no skill carries the warning): every declared entry FAILs
+//     with "0 destination clause(s) in the file but N anchored".
+//   `rows` — never empty when `report()` runs: the workflow-set row is pushed
+//     before anything can fail, and `Math.max(...[])` in the column widths would
+//     be `-Infinity` if it were.
 
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -471,8 +527,9 @@ const rebaseTempDirectory = (point) =>
 
 // --- Fixtures -------------------------------------------------------------
 // One entry per rendered path: label, render, and output-destination verdict. A
-// discovered builder with no fixture is a failure, not a skip; so is a fixture
-// case with no verdict.
+// discovered builder with no fixture is a failure, not a skip; so is a builder
+// whose case list is EMPTY, which renders nothing and so asserts nothing; and so
+// is a fixture case with no verdict.
 
 const task = {
   slug: "042-widget",
@@ -746,9 +803,20 @@ for (const file of Object.keys(CUT)) {
     // NO_BUILD renders overall.
   ].filter(([, span]) => span);
   for (const name of names) {
-    if (!fixtures[name]) {
+    // An EMPTY case list is checked with the missing one, because `[]` is truthy
+    // and `for…of` over it iterates zero times: the builder would keep its
+    // fixture key, go unrendered, and lose its boundary PRESENCE check and its
+    // destination verdict together, in silence and without going stale.
+    if (!fixtures[name] || !fixtures[name].length) {
       failures++;
-      rows.push([file, `${name} (NO FIXTURE)`, "FAIL", "reaches agent() but this suite renders no case for it"]);
+      rows.push([
+        file,
+        `${name} (NO FIXTURE)`,
+        "FAIL",
+        fixtures[name]
+          ? "reaches agent() but its fixture case list is empty — an empty list renders nothing and so asserts nothing, neither the boundary nor a destination"
+          : "reaches agent() but this suite renders no case for it",
+      ]);
       continue;
     }
     for (const [label, render, dest] of fixtures[name]) {
@@ -913,11 +981,39 @@ if (!canonicalRule) {
 // Both mirrors are held to the same anchors, which is the strongest form of the
 // lockstep rule this repository keeps by hand: these clauses are byte-identical
 // across the two sides today, so a mirror reworded on one side alone fails here.
+//
+// One shape is deliberately NOT anchored, and saying so is what reconciles the
+// census count with a grep for the concept: a brief template that RESTATES an
+// already-anchored allocation by pointing back at it —
+// `address-tasks-serialized`'s "Any build or lint output that must land in a file
+// goes to `<validation-output path allocated above>`, never anywhere else",
+// twice per mirror — names no destination of its own and carries no warning
+// phrase, by design. The rule it points at is anchored in the same file, in both
+// mirrors, so deleting the restatement cannot delete the rule.
 const PROSE_MIRRORS = ["plugins/dev-skills/skills", "codex/dev-skills/skills"];
 // The warning every one of these clauses carries, and the census key. It is not
 // the anchor: a clause could keep this phrase and lose its destination, which is
 // exactly what the anchors are long enough to catch.
-const PROSE_WARNING = /shared scratchpad (?:name|filename)/g;
+//
+// It is an alternation of the SPELLINGS THAT SHIP rather than one phrase, which
+// is the census's sharpest edge and was found by a clause slipping past it: the
+// `review-cycle` Artifacts rule — the all-roles destination rule every consumer
+// of the cycle inherits — writes "never a fixed shared filename: parallel cycles
+// share one scratchpad", so a pattern keyed on "shared scratchpad name" counted
+// it zero times and it shipped neither censused nor anchored. Deleting it left
+// the suite green. A clause that spells the warning some third way is the same
+// hole again, which is the "guarded against deletion, not discovered" asymmetry
+// the header states, reaching one level further than it might read: it also
+// bounds what the census DISCOVERS in a file it already guards. Widen this
+// alternation when a clause arrives spelling it differently.
+//
+// The alternation stays narrow on purpose. `address-tasks`' peer step says
+// "never a shared filename, never inside a task worktree" of the peer's
+// prompt/output/stderr paths — a destination rule for a different artifact kind,
+// which task 045 leaves out of scope — so matching a bare "shared filename"
+// would count a clause this table deliberately does not anchor and fail the
+// shipped tree.
+const PROSE_WARNING = /shared scratchpad (?:name|filename)|fixed shared filename/g;
 const PROSE_CLAUSES = {
   "address-review": [
     "hand it the path any build or check output must land in — namespaced by this PR number, or created with `mktemp -d`, and outside the checkout it commits from — never a fixed shared scratchpad name",
@@ -953,12 +1049,46 @@ const PROSE_CLAUSES = {
     "Hand it the path any of that output must land in — namespaced by the item, or created with `mktemp -d` — never a fixed shared scratchpad name",
     "Hand it the path any of that validation output must land in — namespaced by the item, or created with `mktemp -d`, and outside the worktree it commits from, which must be left clean — never a fixed shared scratchpad name",
   ],
-  // The inherited contract: every consumer of the cycle's Reviewer role reaches
-  // its destination rule through this one clause.
+  // Two clauses: the Reviewer role's, which every consumer of the cycle reaches
+  // through this one file, and the ALL-ROLES rule under `## Artifacts and
+  // hygiene` that the Fixer contract points at rather than restating — the rule
+  // the whole cycle's redirected output obeys, and the one this table missed
+  // until the census pattern above was widened to its spelling.
+  //
+  // The second anchor spans three sentences because the clause does: the
+  // destination is allocated in the first and the redirected output "goes there"
+  // in the third, so an anchor starting at the third would span a pronoun rather
+  // than a destination — the failure two anchors above this one already
+  // demonstrated. Continuity then carries the middle sentence along, which is
+  // part of allocating the directory (a slug's `/` splits the path), so the cost
+  // is that rewording it means editing this anchor. That is the pins' cost
+  // everywhere in this suite, taken knowingly.
   "review-cycle": [
     "tell it where any output of that build goes, a path under the cycle's artifact directory below or inside the reviewed worktree, never a fixed shared scratchpad name and never left to the reviewer to pick",
+    "Every cycle uses its own unique artifact directory outside the worktree — suffix the cycle slug, reduced first to a single path segment, or create it with `mktemp -d` — never a fixed shared filename: parallel cycles share one scratchpad, and fixed names have crossed review streams between concurrent runs before.\n" +
+      "A slug is routinely a branch name, and the `/` in one splits the suffix into a parent directory: `mktemp` refuses that outright, and a `mkdir -p` path takes it silently, nesting the round history where nobody will look for it.\n" +
+      "The full round history (reviewer reports, peer output, fixer packets) lives there, as does any build or validation output a role redirects to a file",
   ],
 };
+
+// Every table this suite declares by hand drives a check that an EMPTY table
+// switches OFF rather than breaks, and the header enumerates all of them. These
+// two are the ones nothing else would notice: an emptied `REQUIRED` reported
+// "all 0 clauses" per boundary constant as a pass, and an emptied
+// `PROSE_MIRRORS` reported "0 prose destination clauses deletion-guarded" as
+// one. The rest fail on their own — an empty `CUT` leaves every shipped workflow
+// unlisted, an empty `PROSE_CLAUSES` leaves every censused clause undeclared —
+// so they are not restated here.
+const emptyTables = [
+  ["REQUIRED", REQUIRED],
+  ["PROSE_MIRRORS", PROSE_MIRRORS],
+].filter(([, table]) => !table.length);
+if (emptyTables.length) {
+  failures++;
+  rows.push(["(all)", "declared tables", "FAIL", `${emptyTables.map(([n]) => n).join(", ")} empty — an empty table asserts nothing for every check built on it`]);
+} else {
+  rows.push(["(all)", "declared tables", "ok", `REQUIRED ${REQUIRED.length} clauses, PROSE_MIRRORS ${PROSE_MIRRORS.length} mirrors`]);
+}
 
 for (const mirror of PROSE_MIRRORS) {
   const dir = join(root, mirror);
