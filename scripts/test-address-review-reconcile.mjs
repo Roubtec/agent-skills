@@ -1030,12 +1030,18 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // direction and a reversed rule passes, wrong in the strict direction and an
     // edit that merely mentions a branch-name query fails. Neither miss is
     // visible from the shipped text, which contains none of these spans.
-    // Each PART of the discriminator is fixtured separately, so that dropping any
-    // one of them fails a case rather than being covered by another: the shared
-    // span appears with the read on both sides (drop the exemption's trailing
-    // anchor and "starts with the read" is excused, which is the same evasion
-    // with its halves swapped), and one gate asks only `--verify` while another
-    // only peels (drop either branch of the probe and that gate goes unseen).
+    // Each PART of the discriminator is fixtured separately, so that no part
+    // rides on another: the shared span appears with the read on both sides
+    // (drop the exemption's trailing anchor and "starts with the read" is
+    // excused, which is the same evasion with its halves swapped), and one gate
+    // asks only `--verify` while another only peels (drop either branch of the
+    // probe and that gate goes unseen). What a fixture pins is the PART, not
+    // every character that spells it: the exemption's trailing backtick and its
+    // `$` are redundant with each other, since an extracted span always ends in
+    // a backtick and never contains one, so deleting `$` alone changes no
+    // verdict and the suite stays green. Deleting the backtick misjudges the
+    // peel-spelled read; deleting the trailing anchor entirely misjudges the
+    // shared span with the read first.
     const probeFixtures = [
       ["a non-query `rev-parse`", "Record the tip with `git rev-parse --abbrev-ref HEAD` first.", false],
       ["the fetched-head read", "take the head from `git rev-parse FETCH_HEAD` instead", false],
