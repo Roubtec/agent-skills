@@ -774,7 +774,7 @@ Report a STRUCTURED result: set \`published: true\` ONLY if the push and every r
    - Then, if the expected tip is an ancestor of HEAD, normal push (\`git push <remote> HEAD:refs/heads/${shq(packet.pr.branch)}\`).
    - OTHERWISE — every remaining state, whether or not this run rewrote history (rebased: ${packet.pr.rebased ? "yes" : "no"}) — use an exact lease: \`git push <remote> --force-with-lease=refs/heads/${shq(packet.pr.branch)}:${shq(packet.pr.headOid)} HEAD:refs/heads/${shq(packet.pr.branch)}\`. The remainder is deliberately not "history was rewritten": a tip carrying the expected head by patch-id without having it as an ancestor is the ordinary result of a rebase, and it reaches this same instruction whether that rebase happened in this run or before it. If the lease is rejected, NEVER escalate to bare \`--force\`; set \`published: false\`, \`aborted: "lease rejected"\`, and stop.
 
-   Then, whichever push ran, confirm what actually LANDED against the ref itself rather than from \`gh pr view --json headRefOid\`, which can still report the pre-push head for a while after the push returns: run one \`git ls-remote "<url>" refs/heads/${shq(packet.pr.branch)}\` for each URL \`git remote get-url --push --all <remote>\` lists, and require every one of them to come back with the HEAD you pushed. Read those push URLs back one at a time rather than the remote NAME: \`git push\` writes to EVERY configured push URL, plain \`--push\` names only the first, and where a remote carries a distinct \`pushurl\` the name reads a repository the push never wrote to. \`git ls-remote\` is observational and exits 0 even when it prints nothing, so an absent ref, a disagreeing OID, or a URL you could not reach is a stop rather than a pass: set \`published: false\`, \`aborted: "${PUSH_UNCONFIRMED_ABORT}"\`, \`pushedNewCommits: false\`, and report what each URL returned.
+   Then, whichever push ran, confirm what actually LANDED against the ref itself rather than from \`gh pr view --json headRefOid\`, which can still report the pre-push head for a while after the push returns: run one \`git ls-remote "<url>" refs/heads/${shq(packet.pr.branch)}\` for each URL \`git remote get-url --push --all <remote>\` lists, and require every one of them to come back with the HEAD you pushed. Read those push URLs back one at a time rather than the remote NAME: \`git push\` writes to EVERY configured push URL, plain \`--push\` names only the first, and where a remote carries a distinct \`pushurl\` the name reads a repository the push never wrote to. \`git ls-remote\` is observational and exits 0 even when it prints nothing, so an absent ref, a disagreeing OID, or a URL you could not reach is a stop rather than a pass: set \`published: false\`, \`aborted: "${PUSH_UNCONFIRMED_ABORT}"\`, and report what each URL returned. Report \`pushed\`/\`pushedNewCommits\` as what your push COMMAND itself reported and nothing more: whether the ref MOVED is exactly the fact this read-back failed to establish, so do not set either flag to stand for it in either direction — that abort is what says it is unestablished, and it is read ahead of both.
 3. Re-read unresolved threads after the push. Do not mutate newly-arrived feedback that was not triaged this run — leave it open and call it out.
 4. Per-item hygiene for each disposition:
    - \`review-thread\` items: reply via REST \`pulls/.../comments/<commentId>/replies\`, resolve via GraphQL \`resolveReviewThread\` on \`threadId\`:
@@ -3139,7 +3139,21 @@ return {
   peerRounds: cycle.peerRounds,
   artifactDir: cycle.artifactDir,
   ...carried,
-  publishReport: publishReport || { published: false, aborted: "publisher returned nothing" },
+  // The publisher's own report, echoed for a reader of the RESULT — with the one
+  // flag this run cannot stand behind carrying no value where the read-back's stop
+  // says nothing established it. `false` there is a positive claim that the remote
+  // did not move, which is no better founded than `true`, and it is the claim the
+  // rest of this exit spends three renderings withdrawing. `null` states neither,
+  // beside the `aborted` that says why and the note below that says it in prose.
+  // The schema governs what the PUBLISHER reports and still asks it for a boolean —
+  // what its push command did; this is the run's own result, and the fact the
+  // publisher was never able to report is stated as unheld here rather than
+  // rounded to a boolean. Nothing the run DOES turns on the substitution: every
+  // consumer reads `publishReport` (the local) and reads the abort ahead of either
+  // push flag, the disposition record's rendering included.
+  publishReport: publishReport
+    ? { ...publishReport, ...(pushUnconfirmed ? { pushedNewCommits: null } : {}) }
+    : { published: false, aborted: "publisher returned nothing" },
   ...(reclaimed ? { worktreeReclaim: reclaimed } : {}),
   note: published
     ? (`${notes.join(" ")}${survivingWorktreeNote(reclaimed)}`.trim() || undefined)

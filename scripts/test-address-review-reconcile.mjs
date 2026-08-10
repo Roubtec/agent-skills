@@ -1766,10 +1766,15 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "requires every push URL": /require every one of them to come back with the HEAD you pushed/.test(step2),
     "treats silence as a stop": /exits 0 even when it prints nothing/.test(step2) && /is a stop rather than a pass/.test(step2),
     "stops rather than claiming publication": step2.includes('aborted: "push not confirmed at the ref"'),
-    // The abort is the ONE fact the record reads to withhold its origin claim, so
-    // the stop denies the advance rather than leaving the publisher to report a
-    // flag its own read-back could not establish.
-    "denies the advance it could not establish": /`pushedNewCommits: false`/.test(step2),
+    // The abort is the ONE fact the record and the run's result read to withhold
+    // their origin claims, so the stop leaves the advance TO it: ordering
+    // `pushedNewCommits: false` here would have the publisher assert the very fact
+    // its read-back failed to establish — in the direction that claims less about
+    // origin, but a claim either way.
+    "leaves the advance to the abort rather than to a flag":
+      /whether the ref MOVED is exactly the fact this read-back failed to establish/.test(step2) &&
+      /do not set either flag to stand for it in either direction/.test(step2),
+    "orders no boolean for the advance it could not establish": !/`pushedNewCommits: (?:true|false)`/.test(step2),
     "states it after the push": step2.indexOf("confirm what actually LANDED") > step2.indexOf("--force-with-lease="),
   };
   const readBackMissing = Object.entries(readBack).filter(([, ok]) => !ok).map(([what]) => what);
@@ -3338,8 +3343,9 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   };
   // The push whose own READ-BACK could not confirm the ref (task 023a's recipe at
   // step 2 stops there), which is the first abort reachable AFTER `git push`
-  // returned 0 — so the push is exactly the thing in doubt. The brief tells the
-  // publisher to deny the advance it could not establish; this is that report.
+  // returned 0 — so the push is exactly the thing in doubt. The brief leaves the
+  // advance to that abort rather than ordering a flag value, so a publisher may
+  // come back either way; this is the report whose flags claim no advance.
   const PUBLISH_PUSH_UNCONFIRMED = {
     published: false,
     pushed: true,
@@ -3813,15 +3819,16 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // `noop` both put these tips ON origin, "pushed nothing" puts them nowhere, and
   // what the stop establishes is that nobody knows which. So it is read out of the
   // ABORT rather than out of the push flags, whose truth is precisely what the stop
-  // withdraws — driven from both reports a publisher can hand back, the honest
-  // denial of the advance and a claim of it, because a record reading either flag
+  // withdraws — driven from both reports a publisher can hand back, one whose flags
+  // claim no advance and one that claims it, because a record reading either flag
   // renders a false claim on one value or the other.
   const unconfirmedRuns = {
-    "denying the advance": briefs["a publication whose push could not be confirmed at the ref"],
-    "claiming the advance": briefs["a publication that claimed the advance its read-back could not confirm"],
+    "denying the advance": "a publication whose push could not be confirmed at the ref",
+    "claiming the advance": "a publication that claimed the advance its read-back could not confirm",
   };
   const claimedOrigin = [];
-  for (const [what, b] of Object.entries(unconfirmedRuns)) {
+  for (const [what, caseName] of Object.entries(unconfirmedRuns)) {
+    const b = briefs[caseName];
     const wrongLines = [
       /LOCAL ONLY/.test(b) ? "calls the tips local-only" : "",
       /already on origin/.test(b) ? "calls the tips already on origin" : "",
@@ -3837,13 +3844,39 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /takes this record for "nothing reached origin" treats these tips as unpushed when the ref may already carry them/.test(b) ? "" : "does not warn the reader off reading it as nothing-reached-origin",
     ].filter(Boolean);
     if (wrongLines.length) claimedOrigin.push(`${what}: ${wrongLines.join(", ")}`);
-    const note = (results[Object.keys(briefs).find((k) => briefs[k] === b)] || {}).note || "";
+    const note = (results[caseName] || {}).note || "";
     if (!/whether its push reached origin is UNKNOWN/.test(note)) claimedOrigin.push(`${what}: the run's own note does not carry it either`);
   }
   check(
     "a push the read-back could not confirm claims neither presence nor absence on origin, whichever way the publisher reported its own flags",
     claimedOrigin.length === 0,
     claimedOrigin.join("; ") || "both reports render the same unknown-push record",
+  );
+
+  // And the same fact in the RESULT, which is a second reader with a second copy
+  // of the publisher's report: the report is echoed there field for field, so a
+  // `pushedNewCommits` boolean beside an UNKNOWN disposition is this exit stating
+  // the very thing its record spends three lines withdrawing — `false` reading as
+  // "the remote did not move", which the failed read-back establishes no better
+  // than `true`. So the echoed flag holds NO value there, driven from both reports
+  // for the same reason the record is: whichever boolean arrived is the one that
+  // must not be passed on. The other fields are echoed verbatim, `pushed` included
+  // — that a push command succeeded is a fact this stop leaves standing.
+  const echoWrong = [];
+  for (const [what, caseName] of Object.entries(unconfirmedRuns)) {
+    const report = (results[caseName] || {}).publishReport || {};
+    if (report.pushedNewCommits !== null) {
+      echoWrong.push(`${what}: the result echoes \`pushedNewCommits: ${JSON.stringify(report.pushedNewCommits)}\``);
+    }
+    if (report.pushed !== true) echoWrong.push(`${what}: the result drops the push it DID establish (\`pushed: ${JSON.stringify(report.pushed)}\`)`);
+    if (!/^push not confirmed at the ref/.test(String(report.aborted || ""))) {
+      echoWrong.push(`${what}: the result's echoed report does not carry the abort that says why (\`${report.aborted}\`)`);
+    }
+  }
+  check(
+    "and the run's own result states no value for the advance its read-back could not establish, whichever way the publisher reported it, while echoing the push it did establish",
+    echoWrong.length === 0,
+    echoWrong.join("; ") || "both results echo the report with the unestablished advance held at no value",
   );
 
   // And the same stop where the account is ALSO unusable, which selects the third
