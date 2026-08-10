@@ -124,7 +124,10 @@
 // leaves, fails until the table below is brought up to date. Warning-carrying is
 // the qualifier that makes the equality statable: one shipped clause delegates
 // its warning by reference and so carries none to count, and it is anchored
-// without joining that count. The table below states all three categories.
+// without joining that count. It is censused instead by the delegation it makes,
+// against the anchors declared for THAT category, so both categories are held to
+// a count read off the mirrors rather than one of them resting on the table
+// alone. The table below states all three categories.
 //
 // The ASYMMETRY that leaves is the point, and must not be read as parity with
 // the rendered checks. Call-site accounting discovers a new BUILDER because a
@@ -194,12 +197,21 @@
 // class, rather than one at a time — is the derived RESULT lists whose empty state
 // IS the verdict their check reports as a pass: `unlisted`, `vanished`,
 // `unaccounted`, `prose`, `drifted`, `missing`, `unreadableDeputyRules`,
-// `ruleDrifted`, `undeclared`, `wrong`, `absent`, `blankSpans`, `emptyTables`, and
-// `stray`, the one `find` among them rather than a list. Whichever shape, emptying
-// one of those is not an edit available to anyone: each is filtered out of a
-// collection this list already covers, and it comes back empty exactly when the
-// condition it detects is absent. What this list exists to catch is a check
-// switched off by emptying its INPUT; a result list has no such door.
+// `ruleDrifted`, `undeclared`, `wrong`, `absent`, `blankSpans`, and `stray`, the
+// one `find` among them rather than a list. Whichever shape, emptying one of those
+// is not an edit available to anyone: each is DERIVED from something this file
+// establishes elsewhere — most of them by filtering a collection this list already
+// covers — and each comes back empty exactly when the condition it detects is
+// absent. `prose` and `unaccounted` are the two whose source is a scan rather than
+// a listed collection: they partition one source's literal `agent(` occurrences
+// between them, and they gate nothing by themselves — what a lost occurrence
+// costs is a builder that goes unrendered, which is `promptBuilders(src).names`'
+// entry below. What this list exists to catch is a check switched off by emptying
+// its INPUT; a result list has no such door.
+//
+// `emptyTables` used to be named in that class and does not belong to it: it is
+// filtered out of an inline hand-written registry that no other entry covers, so
+// it gets its own entry below.
 //
 //   `CUT` — empty: every shipped `wf-*.js` is unlisted, which FAILs the
 //     workflow-set check, and nothing renders. The run then dies in the
@@ -251,27 +263,50 @@
 //     declared-tables check below, both shapes.
 //   `PROSE_MIRRORS` — empty: reported "0 prose destination clauses
 //     deletion-guarded" as a pass. Guarded by the declared-tables check below.
-//   `PROSE_CLAUSES` — empty: every skill carrying a warning phrase is
-//     undeclared, so the census FAILs in both mirrors.
+//   the GUARD REGISTRY those three are read out of — the inline
+//     `[["REQUIRED", REQUIRED], …]` literal `emptyTables` filters — which is the
+//     INPUT to the declared-tables check rather than one of its results, and the
+//     one hand-written collection here that no other entry covers. Empty: all
+//     three tables lose their emptiness guard at once, so emptying `REQUIRED`
+//     after that passes again. SHRUNK: only the table whose pair went loses it —
+//     measured, by dropping `["REQUIRED", REQUIRED]` and then emptying
+//     `REQUIRED`, which passes at exit 0 on the row `declared tables ok
+//     REQUIRED 0 clauses…`, i.e. the promise made under `REQUIRED` above
+//     ("Guarded there now") rests on an input that is itself unguarded. That is
+//     the shrinkage class stated after this list, and this registry is its
+//     floor: nothing censuses it against anything.
+//   `PROSE_CLAUSES` — empty: every skill carrying a warning phrase or a
+//     by-reference clause is undeclared, so the census FAILs in both mirrors.
 //   the `anchors` and `byReference` lists inside one `PROSE_CLAUSES` entry —
 //     empty TOGETHER, or holding an empty string: FAILs as an entry that claims a
 //     guard and asserts nothing. A `byReference` key PRESENT and EMPTY FAILs on its
 //     own too, and that one was measured on this check rather than reasoned about:
-//     the anchors and the census equality both still held, so the by-reference
+//     the anchors and the warning census both still held, so the by-reference
 //     clause lost its only guard and the run passed. An ABSENT `byReference` is
-//     the ordinary shape and no failure, and `anchors` empty ALONE is legitimate
-//     (no entry is shaped that way today): it says the file's only guarded clause
-//     carries no warning, and the census equality then holds at zero.
-//   `census` — empty (no skill carries the warning): every declared entry FAILs
-//     with "0 warning-carrying destination clause(s) in the file but N anchored".
+//     the ordinary shape for a file with no such clause, and no failure in
+//     itself — but it is no longer a free way to un-guard one either: the
+//     by-reference census counts the delegating clause the mirrors ship and holds
+//     `byReference.length` to it, so deleting the key while the clause ships FAILs.
+//     That edit used to be the one guard in this table removable in silence.
+//     `anchors` empty ALONE — or the key omitted, which is the same claim — is
+//     legitimate (no entry is shaped that way today): it says the file's only
+//     guarded clause carries no warning, and the warning equality then holds at
+//     zero.
+//   `census` — empty (no skill carries a warning or a by-reference clause): every
+//     declared entry FAILs with "0 warning-carrying destination clause(s) in the
+//     file but N anchored", or with its by-reference counterpart.
 //   `deputyRules` — empty: the drift comparison over the deputy copies of the
 //     finish-in-turn rule answers vacuously, and it reported "0 deputy copy(ies)
 //     match the cycle's rule" as a pass until this was demonstrated by deleting
 //     every declaration AND every `${DEPUTY_FINISH_IN_TURN}` interpolation from
 //     the workflows. `unreadableDeputyRules` catches only the half where the
 //     interpolation outlives the declaration, so that edit passed. Empty now
-//     FAILs: no shipped workflow briefs zero subagents out of section, so the
-//     rule binding no deputy anywhere means the rule went, not the deputies.
+//     FAILs, on a narrower premise than the one first written here: briefing a
+//     subagent out of section does not oblige a declaration — `wf-review-cycle.js`
+//     briefs its scope agent out here and declares none — so what makes zero
+//     illegitimate is the tree as it stands, where two of the three workflows
+//     declare this rule AND interpolate it. No declaration anywhere therefore
+//     means the declarations went, not the deputies.
 //     What still passes is the PER-FILE version of the same loss — one workflow
 //     dropping its declaration and its interpolations together while keeping the
 //     deputies — since a file declaring no copy is legitimate and this check
@@ -281,6 +316,26 @@
 //   `rows` — never empty when `report()` runs: the workflow-set row is pushed
 //     before anything can fail, and `Math.max(...[])` in the column widths would
 //     be `-Infinity` if it were.
+//
+// SHRINKAGE, the class this inventory does not reach, stated once here rather
+// than under each entry. Every line above reasons about a collection going
+// EMPTY, and the guards this suite has answer that shape wherever the emptied
+// collection is one a check names: an emptied table fails the declared-tables
+// check, an emptied case list fails as unclassified — with the guard registry
+// above as the floor, since emptying IT switches those very guards off.
+// Removing ONE ENTRY from a hand-written collection is the other shape, and the
+// answer splits by whether anything counts that collection against the shipped
+// files. Where something does, shrinking FAILS on its own: dropping a
+// warning-carrying anchor from `PROSE_CLAUSES` leaves the census counting a
+// clause the table no longer declares, and dropping a `byReference` anchor now
+// fails the same way, against the second census pattern beside it. Where nothing
+// does — `BESPOKE_DESTINATIONS`' entries, the guard registry above — shrinking is
+// invisible, and what the guards buy is that closing the resulting hole takes a
+// SECOND deliberate edit: removing the `rebaseTempDirectory` entry from
+// `BESPOKE_DESTINATIONS` AND flipping `rebasePrompt` to `NO_BUILD` passes at
+// exit 0, where before those guards one edit did. Two edits rather than one is a
+// real strengthening and not a proof of coverage; a purely hand-declared entry is
+// only ever as safe as the review of the diff that removes it.
 
 import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
@@ -1037,9 +1092,13 @@ if (!canonicalRule) {
   // AND every `${DEPUTY_FINISH_IN_TURN}` interpolation from the shipped
   // workflows — the half `unreadableDeputyRules` above cannot see, since it
   // reaches only the case where the interpolation outlives the declaration.
-  // Zero is not a legitimate state of this tree: every shipped workflow briefs
-  // at least one subagent out here, so the rule reaching no deputy anywhere
-  // means the rule was deleted rather than that the deputies were.
+  // Zero is not a legitimate state of this tree, and the reason is narrower than
+  // "every shipped workflow briefs a subagent out here" — the comment above
+  // establishes that briefing one obliges no declaration, since
+  // `wf-review-cycle.js` briefs its scope agent out of section and declares
+  // nothing. What rules zero out is the tree as it stands: two of the three
+  // workflows declare this rule and interpolate it today, so no declaration
+  // anywhere means the declarations went, not the deputies.
   failures++;
   rows.push(["(all)", "FINISH_IN_TURN identity", "FAIL", "no workflow declares a top-level `const DEPUTY_FINISH_IN_TURN`, so the cycle's rule binds no deputy anywhere and every comparison over the copies is vacuous"]);
 } else {
@@ -1105,6 +1164,16 @@ if (!canonicalRule) {
 //      countable clause out of the census: a `byReference` anchor that DOES spell
 //      the warning raises `counted` while `anchors.length` stays put, so the
 //      equality fails.
+//      Because the census cannot count these clauses by their warning, they get a
+//      census of their own — `PROSE_BY_REFERENCE`, keyed on the REFERENCE the way
+//      the first is keyed on the WARNING — held to `byReference.length` by the
+//      same equality. That closes the one door category 1 never had: DELETING the
+//      `byReference` key while the clause still ships was exit 0, 24 prose
+//      anchors, nothing failing, since no census reached the clause and the
+//      anchors it declared went with the key. Both directions are now
+//      symmetrical with category 1, and the residue is the same one: deleting the
+//      clause from both mirrors AND its key here is two edits, which is the
+//      shrinkage class the header states.
 //   3. DELIBERATELY UNANCHORED restatements — a brief template that RESTATES an
 //      already-anchored allocation by pointing back at it:
 //      `address-tasks-serialized`'s "Any build or lint output that must land in a
@@ -1138,6 +1207,25 @@ const PROSE_MIRRORS = ["plugins/dev-skills/skills", "codex/dev-skills/skills"];
 // would count a clause this table deliberately does not anchor and fail the
 // shipped tree.
 const PROSE_WARNING = /shared scratchpad (?:name|filename)|fixed shared filename/g;
+// The second census key, for category 2, and it exists for the reason the
+// category does: those clauses spell no warning, so `PROSE_WARNING` can never
+// count one and the equality above holds at zero however many of them ship or
+// leave. That left the `byReference` key itself unguarded — removing it took the
+// clause's only guard away in one edit, at exit 0, since the anchors went with
+// the key and no count noticed. So a by-reference clause is censused by what
+// makes it one: the REFERENCE it delegates to, where category 1 is censused by
+// the warning it spells. `byReference.length` is held to this count by the same
+// equality, in the same place, so the category is now guarded in both directions.
+//
+// This buys the enforcement without a hand-written expected count per file: the
+// number comes off the shipped mirrors, like the first census's. Its limits are
+// the first census's too, and stated for the same reason — it is one alternative
+// because one delegation ships, a clause delegating some other way is counted
+// zero times and is the "guarded, not discovered" asymmetry again, so widen this
+// pattern when one arrives. Narrowing it is not a quiet way out: a pattern that
+// stops matching leaves `byReference` declaring a clause the census no longer
+// finds, which fails the equality.
+const PROSE_BY_REFERENCE = /under this cycle's artifact-directory rules/g;
 const PROSE_CLAUSES = {
   "address-review": {
     anchors: [
@@ -1264,8 +1352,13 @@ for (const mirror of PROSE_MIRRORS) {
     } catch {
       continue;
     }
-    const n = (text.match(PROSE_WARNING) || []).length;
-    if (n) census.set(skill, n);
+    // Two counts per file, one per censused category: the warning-carrying
+    // clauses and the by-reference ones. A file is in the census when it carries
+    // either, so a by-reference clause arriving in a file this table does not
+    // name fails as undeclared exactly as a warning-carrying one does.
+    const counted = (text.match(PROSE_WARNING) || []).length;
+    const byRefCounted = (text.match(PROSE_BY_REFERENCE) || []).length;
+    if (counted || byRefCounted) census.set(skill, { counted, byRefCounted });
   }
   const undeclared = [...census.keys()].filter((skill) => !PROSE_CLAUSES[skill]);
   if (undeclared.length) {
@@ -1288,11 +1381,16 @@ for (const mirror of PROSE_MIRRORS) {
     // deletion-guarded on the same terms and excluded from that count, because it
     // carries no warning for the census to have counted. Both are anchored, so
     // both are checked present exactly once and both count toward the tally.
-    const anchors = entry.anchors;
+    // `entry.anchors || []` because an OMITTED `anchors` key is the same claim as
+    // an empty one — the file's only guarded clause carries no warning — and the
+    // header offers that shape as legitimate. Reading it bare crashed on
+    // `TypeError: anchors is not iterable` before any table was printed, which is
+    // not what "legitimate" reads as anywhere else in this suite.
+    const anchors = entry.anchors || [];
     const byReference = entry.byReference || [];
     const guarded = [...anchors, ...byReference];
     const wrong = guarded.map((anchor) => [anchor, text.split(anchor).length - 1]).filter(([, n]) => n !== 1);
-    const counted = census.get(skill) || 0;
+    const { counted = 0, byRefCounted = 0 } = census.get(skill) || {};
     // A skill listed here with no anchors of either kind claims to be guarded and
     // asserts nothing — the same vacuum an empty pin list is on the rendered side
     // — and an empty anchor is that vacuum one step down, since every file
@@ -1301,13 +1399,16 @@ for (const mirror of PROSE_MIRRORS) {
     // guarded-looking key that no longer guards anything. Drop the key instead.
     //
     // A `byReference` key PRESENT and EMPTY is its own vacuum and the quieter one,
-    // measured on this check the day it was written: `anchors` and the census
-    // equality both still held, so the by-reference clause silently lost its only
+    // measured on this check the day it was written: `anchors` and the warning
+    // census both still held, so the by-reference clause silently lost its only
     // guard and the run passed. Writing the key is the claim; an ABSENT key says
-    // the file has no such clause, which is the ordinary shape and no failure. An
-    // empty `anchors` beside a non-empty `byReference` is legitimate too — it says
-    // the file's only guarded clause carries no warning, and the equality then
-    // holds at zero.
+    // the file has no such clause — the ordinary shape, and no failure IN ITSELF,
+    // though the by-reference census below now decides whether the file agrees:
+    // absent while such a clause ships fails the equality, which is what closed
+    // the last edit in this table that removed a guard for free. An `anchors` key
+    // empty or omitted beside a non-empty `byReference` is legitimate too — it
+    // says the file's only guarded clause carries no warning, and the warning
+    // equality then holds at zero.
     const vacuous = !guarded.length
       ? "listed with no anchors of either kind — an entry asserting nothing; remove the key or give it its clause(s)"
       : guarded.some((anchor) => !anchor)
@@ -1325,10 +1426,13 @@ for (const mirror of PROSE_MIRRORS) {
     } else if (counted !== anchors.length) {
       failures++;
       rows.push([path, "prose destination", "FAIL", `${counted} warning-carrying destination clause(s) in the file but ${anchors.length} anchored — a clause arrived or left; update the anchors`]);
+    } else if (byRefCounted !== byReference.length) {
+      failures++;
+      rows.push([path, "prose destination", "FAIL", `${byRefCounted} by-reference destination clause(s) in the file but ${byReference.length} anchored — a clause arrived, left, or lost its \`byReference\` key; update the anchors`]);
     } else {
       proseAnchors += guarded.length;
       const also = byReference.length ? ` + ${byReference.length} by-reference` : "";
-      rows.push([path, "prose destination", "ok", `${anchors.length} clause(s) anchored${also}, ${counted} counted in the file`]);
+      rows.push([path, "prose destination", "ok", `${anchors.length} clause(s) anchored${also}, ${counted} counted in the file${byRefCounted ? ` + ${byRefCounted} by reference` : ""}`]);
     }
   }
 }
