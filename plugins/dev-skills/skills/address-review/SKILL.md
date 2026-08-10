@@ -275,7 +275,7 @@ In worktree mode, reclaim the worktree first, per "Working location" — after p
 
 Always produce a report (this is the only output of a no-push run, and it doubles as the body of the Summary comment on push runs):
 
-- The PR, the branch, before/after tip SHAs, and what each of step 2's two rebase points did — replayed, no-op, skipped as unnecessary (with why), or suppressed by `no-rebase` — plus the pinned effective base the run ended on and how any conflicts went.
+- The PR, the branch, before/after tip SHAs, and what each of step 2's two rebase points did — replayed, no-op, skipped as unnecessary (with why), or suppressed by `no-rebase` — plus the pinned effective base the run ended on and how any conflicts went. In `delegated-fix`, where those points are the orchestrator's, report the pinned effective base you were handed and carried rather than a rebase of your own.
 - **The working location and how it was selected** — inline on the target branch, forced `inline`, the off-shoot the `off-shoot` argument named, or a worktree (created or reused) — plus whether that worktree was reclaimed, or its absolute path where a halt left it standing. Say nothing about where the main checkout points now: a worktree run neither moved it nor watched it.
 - Each addressed comment with a **stable reference** — file:line, comment author, the thread's GraphQL node id, and the comment permalink — and its disposition (fixed / already-addressed / pushed-back / follow-up-task / skipped). On a **no-push** run this mapping is essential: a later "push now" turn uses it to replay the exact replies/resolves without re-deriving everything.
 - Push-backs, prominently, with rationale.
