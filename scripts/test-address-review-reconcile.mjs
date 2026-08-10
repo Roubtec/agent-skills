@@ -2934,6 +2934,16 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     summaryCommentUrl: "",
     threadOutcomes: [{ ref: "src/app.ts:12 a-reviewer", threadId: "T1", outcome: "replied and resolved", replied: true, resolved: true }],
   };
+  // And the same claim over a `summaryCommentUrl` that is PRESENT and BLANK —
+  // whitespace, which is what a publisher that posted no Summary and still has a
+  // required field to fill reports. That string is what decides `published`, so it
+  // is compared TRIMMED: untrimmed, `"   "` is a truthy URL, the claim is accepted,
+  // and the run exits `fixed-published`, gives the worktree back and writes NO
+  // record — the defect the row above closes, restored by one removed `.trim()`.
+  const PUBLISH_CLAIMED_COMPLETE_BLANK_SUMMARY = {
+    ...PUBLISH_CLAIMED_COMPLETE_NO_SUMMARY,
+    summaryCommentUrl: "   ",
+  };
   // A first cycle whose round PASSED over one map and whose later pass replaced it
   // before the cycle stopped. `workReportReviewed` is false — what leaves is the
   // replacement — while the judged map rides out under `reviewedWorkReport`, and
@@ -2993,6 +3003,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // and writes nothing is reachable by a claim nobody can check.
     ["a publisher claiming a COMPLETE publication over an account of nothing", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_CLAIMED_COMPLETE_SHORT }, "fixed-publish-failed", true],
     ["a publisher claiming a COMPLETE publication with no Summary comment posted", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_CLAIMED_COMPLETE_NO_SUMMARY }, "fixed-publish-failed", true],
+    ["a publisher claiming a COMPLETE publication over a blank Summary comment url", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_CLAIMED_COMPLETE_BLANK_SUMMARY }, "fixed-publish-failed", true],
     ["a run that published", { args: "push no-rebase", cycles: [CYCLE_PASS] }, "fixed-published", false],
     ["an abort with no dispositions at all", { args: "push no-rebase", cycles: [CYCLE_NO_MAP] }, "publish-aborted-incomplete-dispositions", false],
     // What the exemption covers, stated as the FACT it now rests on rather than
@@ -3237,7 +3248,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       // maintainer's eye — with the rule that says why an entry claiming a landed
       // reply still leaves its thread reserved.
       /What the publisher DID report is below/.test(b) &&
-      b.includes(`distrusted WHOLE, so no part of it is acted on here, an entry that looks complete included: ${JSON.stringify(accountOf(what))}.`) &&
+      // Scoped to the ACCOUNT, which is the half that is distrusted: the same
+      // record's origin line acts on the push flags two lines above, so a closing
+      // clause saying no part of the report is acted on contradicts it. Both
+      // mirrors state the rule with that scope ("its per-thread half included");
+      // the rendering used to drop it.
+      b.includes(`distrusted WHOLE, so no part of its per-thread account is acted on here, an entry that looks complete included: ${JSON.stringify(accountOf(what))}.`) &&
       // And the reservation reaches every ENTRY, which is exactly what the old
       // rendering dropped: the per-thread block was gated on something having
       // landed, so it was absent precisely when the account was missing.
@@ -3297,18 +3313,27 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // this run CAN read, short only of the Summary comment step 7 ends with. Nothing
   // is unknown, so the record renders the part-way publication it is — with the
   // Summary as the one thing outstanding, which is exactly what a later turn owes.
-  const claimedNoSummary = briefs["a publisher claiming a COMPLETE publication with no Summary comment posted"];
+  // Both shapes of that missing Summary: the field EMPTY, and the field present
+  // and BLANK. The URL is the string that decides `published`, so it decides it
+  // trimmed — otherwise the whitespace row is a truthy URL, the completion claim
+  // is accepted, and the run exits `fixed-published` with the worktree given back
+  // and no record at all. One removed `.trim()` restores exactly that, and the
+  // empty-field row cannot see it.
+  const claimedNoSummaryBriefs = {
+    "an empty summaryCommentUrl": briefs["a publisher claiming a COMPLETE publication with no Summary comment posted"],
+    "a whitespace-only summaryCommentUrl": briefs["a publisher claiming a COMPLETE publication over a blank Summary comment url"],
+  };
+  const summaryNotOutstanding = Object.entries(claimedNoSummaryBriefs).filter(([, b]) => !(
+    /status: published in part \(/.test(b) &&
+    /^reached origin: the push, which advanced the remote branch, 1 thread reply, 1 thread resolve — still outstanding: the Summary comment$/m.test(b) &&
+    /it names no `summaryCommentUrl`, so the Summary comment step 7 ends with is not on the PR/.test(b) &&
+    !/UNKNOWN whether/.test(b) &&
+    /thread=T1 {2}src\/app\.ts:12 a-reviewer — reply ALREADY POSTED — do not post it again; thread ALREADY RESOLVED — do not resolve it again\./.test(b)
+  ));
   check(
-    "and one whose account IS readable but names no posted Summary comment records a part-way publication with the Summary outstanding, nothing unknown",
-    /status: published in part \(/.test(claimedNoSummary) &&
-      /^reached origin: the push, which advanced the remote branch, 1 thread reply, 1 thread resolve — still outstanding: the Summary comment$/m.test(claimedNoSummary) &&
-      /it names no `summaryCommentUrl`, so the Summary comment step 7 ends with is not on the PR/.test(claimedNoSummary) &&
-      !/UNKNOWN whether/.test(claimedNoSummary) &&
-      /thread=T1 {2}src\/app\.ts:12 a-reviewer — reply ALREADY POSTED — do not post it again; thread ALREADY RESOLVED — do not resolve it again\./.test(claimedNoSummary),
-    JSON.stringify({
-      status: (claimedNoSummary.match(/status: [^(]*/) || ["no status line"])[0],
-      landed: (claimedNoSummary.match(/^reached origin: .*/m) || ["no origin line at all"])[0],
-    }),
+    "and one whose account IS readable but names no posted Summary comment records a part-way publication with the Summary outstanding, nothing unknown — a url reported as whitespace being no url",
+    summaryNotOutstanding.length === 0,
+    summaryNotOutstanding.map(([what, b]) => `${what}: ${(b.match(/status: [^(]*/) || ["no status line"])[0]} / ${(b.match(/^reached origin: .*/m) || ["no origin line at all"])[0]}`).join("; "),
   );
 
   // Both halves of the same rule in the other direction, so the third state
@@ -3436,13 +3461,25 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // carrying out (which rides out under `dispositions`).
     replacedFirst.includes("judged by round 1, then replaced by a later pass") &&
       !replacedFirst.includes(CYCLE_PASS.workReport[0].detail) &&
-      /errored after a later pass had REPLACED the map a reviewer round passed over/.test(replacedFirst) &&
-      /reviewer passed a round, after which a later pass replaced the map it judged and the cycle errored/.test(replacedFirst) &&
+      /errored after a later pass had SUPERSEDED the map a reviewer round passed over — replacing its entries, or committing a new tip under the same ones —/.test(replacedFirst) &&
+      /reviewer passed a round, after which a later pass superseded the map it judged and the cycle errored/.test(replacedFirst) &&
+      // The tip the record cites is the working location's, and on this branch it
+      // is not the tree the recorded verdict was rendered over. Said, because
+      // "replaced" alone reads as a claim the same-map/new-tip shape falsifies:
+      // the cycle reports `workReportReviewed: false` for a later pass that
+      // committed a new `finalSha` over the IDENTICAL entries, and nothing was
+      // replaced there — what changed is the tree under the map.
+      /The `final HEAD` below is the tip standing in the working location, which is therefore NOT necessarily the tree that verdict was rendered over\./.test(replacedFirst) &&
       // The post-rebase exit: its own judged map, not the pre-rebase map that used
       // to stand in for it, and not the replacement either.
       replacedReverify.includes("judged over the rebased tree, then replaced by a later pass") &&
       !replacedReverify.includes(CYCLE_REVERIFIED_ERROR.workReport[0].detail) &&
       !replacedReverify.includes(CYCLE_PASS.workReport[0].detail) &&
+      // Both halves of that same wording on the post-rebase twin, which renders
+      // its own copy of it.
+      /errored after a later pass had SUPERSEDED the map its reviewer round passed over — replacing its entries, or committing a new tip under the same ones —/.test(replacedReverify) &&
+      /reviewer passed a round over the rebased tree, after which a later pass superseded the map it judged and the cycle errored/.test(replacedReverify) &&
+      /The `final HEAD` below is the tip standing in the working location, which is therefore NOT necessarily the tree that verdict was rendered over\./.test(replacedReverify) &&
       // The empty judged map: the record is written, over the map that passed on
       // the pre-replay base, rather than not written at all.
       emptyReviewed.includes(CYCLE_PASS.workReport[0].detail) &&
@@ -3453,8 +3490,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       // REPORTS. The cycle is stubbed here, so every row above would keep passing
       // over a field `wf-review-cycle` had stopped emitting — the selection then
       // silently falling back to the pre-rebase map in production while the suite
-      // stayed green. Read from the producer's source, since nothing else joins
-      // the two halves of this contract.
+      // stayed green. So it is read from the producer's SOURCE here. This is the
+      // cheap textual half rather than the only guard on that contract:
+      // `test-review-cycle-retirement` joins the two halves BEHAVIOURALLY on both
+      // of its workflow legs, driving the cycle and asserting what it reports in
+      // that field — the same-map/new-tip shape included.
       readFileSync(join(here, "..", "plugins", "dev-skills", "workflows", "wf-review-cycle.js"), "utf8")
         .includes("{ reviewedWorkReport: reviewedPass.workReport, reviewedFinalSha: reviewedPass.finalSha }"),
     JSON.stringify({
@@ -3610,27 +3650,48 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // least-claiming of the three rather than throw, since a prompt builder that
   // throws loses the record outright, which is the loss this mechanism exists
   // against. Rendered directly, with a push fact the lookup does not know.
-  let strangePush = "";
-  try {
-    strangePush = recordPrompt(
-      { pr: { number: 42, workingBranch: "feature/x", base: "main", headOid: "deadbeef" } },
-      [{ ref: "src/app.ts:12 a-reviewer", threadId: "T1" }],
-      {
-        why: "the publisher stopped.",
-        unknown: "its account cannot be read",
-        pushState: "sideways",
-        rounds: 1,
-        perThread: ["thread=T1  src/app.ts:12 a-reviewer — UNKNOWN whether its reply is posted or its thread resolved: check it on the PR before replying, and before resolving."],
-      },
+  // The names are the other half of that: a state of `constructor`, `toString`,
+  // `valueOf`, `hasOwnProperty`, `isPrototypeOf` or `__proto__` is INHERITED from
+  // `Object.prototype` by any plain object literal, so the lookup returns a truthy
+  // value that is not one of the three, the `||` never fires, and the brief renders
+  // `status: undefined`, its lead and claims sentences as the literal word
+  // `undefined`, and an origin line whose whole claim is that same word — matching
+  // none of the three renderings, and so worse than throwing. Probing only a name
+  // like `sideways` left that whole class uncovered.
+  const renderStrangePush = (pushState) => {
+    try {
+      return recordPrompt(
+        { pr: { number: 42, workingBranch: "feature/x", base: "main", headOid: "deadbeef" } },
+        [{ ref: "src/app.ts:12 a-reviewer", threadId: "T1" }],
+        {
+          why: "the publisher stopped.",
+          unknown: "its account cannot be read",
+          pushState,
+          rounds: 1,
+          perThread: ["thread=T1  src/app.ts:12 a-reviewer — UNKNOWN whether its reply is posted or its thread resolved: check it on the PR before replying, and before resolving."],
+        },
+      );
+    } catch (err) {
+      return `the record brief threw: ${(err && err.message) || err}`;
+    }
+  };
+  const STRANGE_PUSH_STATES = ["sideways", "", "constructor", "toString", "valueOf", "hasOwnProperty", "isPrototypeOf", "__proto__"];
+  const notLeastClaiming = STRANGE_PUSH_STATES.filter((state) => {
+    const b = renderStrangePush(state);
+    return !(
+      /status: UNKNOWN whether anything was published \(/.test(b) &&
+      /whether anything reached origin is UNKNOWN — not even a push is known to have advanced the remote branch/.test(b)
     );
-  } catch (err) {
-    strangePush = `the record brief threw: ${(err && err.message) || err}`;
-  }
+  });
   check(
-    "and a push fact the record does not recognize renders the least-claiming of the three states rather than costing the record",
-    /status: UNKNOWN whether anything was published \(/.test(strangePush) &&
-      /whether anything reached origin is UNKNOWN — not even a push is known to have advanced the remote branch/.test(strangePush),
-    (strangePush.match(/status: [^(]*/) || [strangePush.slice(0, 120)])[0],
+    "and a push fact the record does not recognize renders the least-claiming of the three states rather than costing the record — a name Object.prototype supplies included",
+    notLeastClaiming.length === 0,
+    notLeastClaiming
+      .map((state) => {
+        const b = renderStrangePush(state);
+        return `${JSON.stringify(state)}: ${(b.match(/status: [^(]*/) || [b.slice(0, 100)])[0]}`;
+      })
+      .join("; "),
   );
 
   // The producer half, which no scenario reaches because the gather agent is

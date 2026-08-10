@@ -822,7 +822,16 @@ function recordPrompt(packet, dispositions, facts) {
   // succeeded while moving nothing leaves the remote pointing at these tips
   // (`PUBLISH_SCHEMA.pushed` says exactly that of itself), so telling the next
   // turn their presence on origin is unknown understates what the run knows.
-  const UNKNOWN_BY_PUSH = {
+  // The table is PROTOTYPE-LESS, and the fallback below is why that is not a
+  // flourish: on a plain object literal a `pushState` of `constructor`,
+  // `toString`, `valueOf`, `hasOwnProperty`, `isPrototypeOf` or `__proto__`
+  // resolves to a truthy INHERITED value, so the `||` never fires and the record
+  // renders `status: undefined`, its lead and claims sentences as the literal word
+  // `undefined`, and an origin line whose whole claim is that same word — so it
+  // matches none of the three renderings and says NOTHING where the fallback
+  // exists to say the least. A null prototype deletes that class rather than
+  // guarding each name in it.
+  const UNKNOWN_BY_PUSH = Object.assign(Object.create(null), {
     advanced: {
       lead: "This run's publication PUSHED and then stopped, and WHAT ELSE IT PUBLISHED IS UNKNOWN",
       claims: "So this record says the push was published, and neither claims that any reply, resolve or Summary comment reached the PR nor claims that none did",
@@ -841,7 +850,7 @@ function recordPrompt(packet, dispositions, facts) {
       status: "UNKNOWN whether anything was published",
       origin: "whether anything reached origin is UNKNOWN — not even a push is known to have advanced the remote branch, so whether the tips above are on origin is unknown too",
     },
-  };
+  });
   const pushCase = UNKNOWN_BY_PUSH[facts.pushState] || UNKNOWN_BY_PUSH.unknown;
   return `Leave this run's disposition record on PR #${packet.pr.number} (branch \`${packet.pr.workingBranch}\`). ${unknown
     ? `${pushCase.lead}: ${facts.why} ${pushCase.claims} — the lines below marked for that case say what is unknown, and every thread entry carries the same reservation.`
@@ -895,7 +904,7 @@ ${unknown
       ? " — a reader who takes a part-way publication for a complete one stops looking for the replies that never landed"
       : " — a reader who takes those SHAs for origin's goes looking for commits that are not there"}.${perThread.length
     ? `\n- Every thread keeps its entry and its verbatim reply, this run's stopped publication included — and each entry says WHERE IT STANDS. That standing is NOT yours to derive: the lines below are already matched to the dispositions by the identity publication routes on (\`thread=<threadId or url>\`, never \`ref\` — file:line plus author is shared by two threads a re-review left on one line, so it identifies neither). Copy each line's standing onto the entry it names, above that entry's verbatim reply body, and change nothing else:\n${perThread.map((l) => `  ${l}`).join("\n")}\n  Never drop an entry because its reply landed, and never drop one because its standing is unknown: the difference between the two is the whole reason this rendering exists.${unknown
-      ? ` What the publisher DID report is below, for a maintainer's eye and not as a fact to act on — a report that broke the contract these facts are read under is distrusted WHOLE, so no part of it is acted on here, an entry that looks complete included: ${JSON.stringify(outcomes)}.`
+      ? ` What the publisher DID report is below, for a maintainer's eye and not as a fact to act on — a report that broke the contract these facts are read under is distrusted WHOLE, so no part of its per-thread account is acted on here, an entry that looks complete included: ${JSON.stringify(outcomes)}.`
       : ""}`
     : ""}
 
@@ -1766,9 +1775,19 @@ async function leaveDispositionRecord(why, map, facts) {
 // is the loss this whole mechanism exists against. And the map a reviewer judged
 // is not always the map leaving the cycle: a later pass can REPLACE it and then
 // stop the cycle, so the cycle reports the judged map separately
-// (`reviewedWorkReport`) and it is recorded while its unjudged replacement rides
-// out under `dispositions` — without which that judged map, drafted replies and
-// all, reached no PR comment and no result key at all.
+// (`reviewedWorkReport`) and it is recorded while the unjudged map it carries out
+// rides out under `dispositions` — without which that judged map, drafted replies
+// and all, reached no PR comment and no result key at all.
+// `replaced` names ONE branch over TWO shapes, which is why the record's wording
+// names both rather than a third `which`: `wf-review-cycle` reports
+// `workReportReviewed: false` both for a later pass that returned DIFFERENT
+// entries and for one that committed a new `finalSha` while returning the
+// identical entries (`test-review-cycle-retirement` drives that same-map/new-tip
+// shape on both of its workflow legs). Nothing was replaced in the second, yet the
+// consequence is the one that matters here and is the same in both: the verdict
+// this map carries was not rendered over the tree leaving the cycle, so the tip
+// the record cites is not the tree the reviewer judged. Telling them apart would
+// buy a third rendering to say what one honest sentence already says.
 function reviewedMapOf(cycle) {
   const carried = Array.isArray(cycle.workReport) ? cycle.workReport : [];
   if (cycle.workReportReviewed && carried.length) return { which: "carried", map: carried };
@@ -1800,12 +1819,12 @@ if (cycle.verdict === "error") {
     judged.which === "carried"
       ? `the review cycle errored AFTER a reviewer round had passed over the dispositions below — its final confirmation pass stopped the cycle — so publication was refused: ${cycle.detail || "no detail reported"}`
       : judged.which === "replaced"
-        ? `the review cycle errored after a later pass had REPLACED the map a reviewer round passed over, so publication was refused: ${cycle.detail || "no detail reported"} The dispositions below are that judged map — the most recent one a reviewer actually passed over; the unjudged replacement the cycle carried out is in this run's result under \`dispositions\` and is deliberately not recorded, since a record is replayed rather than re-triaged.`
+        ? `the review cycle errored after a later pass had SUPERSEDED the map a reviewer round passed over — replacing its entries, or committing a new tip under the same ones — so publication was refused: ${cycle.detail || "no detail reported"} The dispositions below are that judged map — the most recent one a reviewer actually passed over; the unjudged map the cycle carried out is in this run's result under \`dispositions\` and is deliberately not recorded, since a record is replayed rather than re-triaged. The \`final HEAD\` below is the tip standing in the working location, which is therefore NOT necessarily the tree that verdict was rendered over.`
         : "",
     judged.map,
     judged.which === "carried"
       ? { rounds: cycle.rounds, reviewerStatus: "passed a round, after which the cycle errored", deviations: cycle.deviations }
-      : { rounds: cycle.rounds, reviewerStatus: "passed a round, after which a later pass replaced the map it judged and the cycle errored", deviations: cycle.deviations },
+      : { rounds: cycle.rounds, reviewerStatus: "passed a round, after which a later pass superseded the map it judged and the cycle errored", deviations: cycle.deviations },
   );
   return {
     error: `Review cycle failed: ${cycle.detail}`,
@@ -1994,13 +2013,13 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
         judged.which === "carried"
           ? `the post-rebase re-verification errored AFTER a reviewer round had passed over the dispositions below, so publication was refused: ${cycle.detail || "no detail reported"} They are the re-verification's own map, judged over the rebased tree.`
           : judged.which === "replaced"
-            ? `the post-rebase re-verification errored after a later pass had REPLACED the map its reviewer round passed over, so publication was refused: ${cycle.detail || "no detail reported"} The dispositions below are that judged map, rendered over the rebased tree; the unjudged replacement is in this run's result under \`dispositions\` and is deliberately not recorded, since a record is replayed rather than re-triaged.`
+            ? `the post-rebase re-verification errored after a later pass had SUPERSEDED the map its reviewer round passed over — replacing its entries, or committing a new tip under the same ones — so publication was refused: ${cycle.detail || "no detail reported"} The dispositions below are that judged map, rendered over the rebased tree; the unjudged map the cycle carried out is in this run's result under \`dispositions\` and is deliberately not recorded, since a record is replayed rather than re-triaged. The \`final HEAD\` below is the tip standing in the working location, which is therefore NOT necessarily the tree that verdict was rendered over.`
             : `the post-rebase re-verification errored with no judged map of its own to record — no reviewer round passed over a map with entries over the rebased tree — so publication was refused: ${cycle.detail || "no detail reported"} The dispositions below are the ones that PASSED review on the base the branch sat on before that replay; the re-verification's own map is in this run's result under \`dispositions\` and is deliberately not recorded, since a record is replayed rather than re-triaged.`,
         judged.which === "none" ? preRebaseCycle.workReport : judged.map,
         judged.which === "carried"
           ? { rounds: cycle.rounds, reviewerStatus: "passed a round over the rebased tree, after which the cycle errored", deviations: cycle.deviations }
           : judged.which === "replaced"
-            ? { rounds: cycle.rounds, reviewerStatus: "passed a round over the rebased tree, after which a later pass replaced the map it judged and the cycle errored", deviations: cycle.deviations }
+            ? { rounds: cycle.rounds, reviewerStatus: "passed a round over the rebased tree, after which a later pass superseded the map it judged and the cycle errored", deviations: cycle.deviations }
             : { rounds: preRebaseCycle.rounds, reviewerStatus: "Pass, on the base the branch sat on before the replay", deviations: preRebaseCycle.deviations },
       );
       return {
