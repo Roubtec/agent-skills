@@ -106,19 +106,24 @@ function shippedWorkflows() {
 // states the PERMITTED-versus-FORBIDDEN boundary, so the permitted half is
 // asserted too: a constant that lost its Permitted line would otherwise still
 // pass. Each entry is one semantic clause the boundary states, matched by the
-// phrase that carries it — deliberately not a byte comparison of the whole
-// constant, which would turn every future wording tweak into a failure. This
-// must fail when a clause is LOST. The tolerance that buys is bounded by each
-// phrase rather than general: wording the phrase leaves open may change freely,
-// and a rewording that moves the phrase itself reads here as a loss. Say that
-// rather than "a rewording is not a failure", which is broader than any of
-// these patterns delivers.
+// phrase that carries it rather than by a byte comparison of the whole
+// constant. This must fail when a clause is LOST. What that buys is narrow, and
+// measured rather than hoped for: the phrases now pin about two thirds of each
+// constant in contiguous literal runs, so it is the unpinned third — the
+// mechanics, the reasons, the tails — that may be reworded freely, and the
+// pinned spans that may not. Inside a pinned span even an obviously benign edit
+// fails: dropping an Oxford comma does, lowercasing `NOT in a clone` does, and
+// so does ADDING a command to the forbidden list, i.e. hardening the boundary
+// breaks this suite. That is the deal these patterns make, and it is why
+// tightening them further has a real cost. Say this rather than "a rewording is
+// not a failure", which is broader than any of them delivers.
 //
 // Each phrase spans the words that make its clause OPERATIVE — its polarity,
 // its qualifier, its enumeration — and never merely a tail that an INVERTED or
-// NARROWED boundary satisfies just as well. That rule is written down because
-// every phrase which broke it was measured green against a boundary saying
-// something else: a wildcard spanning the directive's verb passed "never
+// NARROWED boundary satisfies just as well, WITH TWO DELIBERATE EXCEPTIONS
+// named below. That rule is written down because every phrase which broke it
+// was measured green against a boundary saying something else: a wildcard
+// spanning the directive's verb passed "never
 // belongs ONLY in a disposable clone"; a wildcard spanning that directive's
 // qualifier instead passed both "that cannot change state" and "that must
 // change state", the second narrowing the rule until ordinary state-changing
@@ -132,11 +137,50 @@ function shippedWorkflows() {
 // literal text, and the one place two shipped spellings differ inside a span is
 // enumerated ("and", which only the section's copy has) rather than skipped over.
 //
+// THE TWO EXCEPTIONS, stated here rather than left to be rediscovered as a bug.
+// A rule with unrecorded exceptions is worse than a bounded one: a reader who
+// takes the rule at face value trusts these two entries for something they do
+// not do, and each round that rediscovers one spends itself re-measuring what
+// was already known. Both are measured green against boundaries saying
+// something else, and both are kept anyway, for the reason given:
+//
+//   "disposable-clone destination" is a bare existence check on `command -v
+//   dc-enter` — no polarity, no qualifier. Inverting the sentence around it
+//   ("Do NOT run `command -v dc-enter`; where it is found, avoid ...") is
+//   green, and so is replacing the whole `dc-enter` calling convention — the
+//   `DC="$(dc-enter <slug>)"` form, `dc-remove`, the reused-slug refusal — with
+//   "Run `command -v dc-enter` if you like." Kept bare because those mechanics
+//   are a helper's usage text rather than clause material: pinning them would
+//   put `dc-enter`'s calling convention under this suite, where every future
+//   change to the helper breaks a destroy-boundary test. What must survive is
+//   pinned in full by the clauses either side — verification belongs ONLY in a
+//   disposable clone, and the fallback is an absolute path outside the
+//   repository — and both hold whatever the helper's usage text says. This
+//   entry asserts only that a destination is named at all.
+//
+//   "permitted set" stops after `queries` and leaves the permitted half's SCOPE
+//   tail unpinned, so WIDENING that tail is green: "— plus edits, commits, and
+//   pushes anywhere in the repository." in the section copy, "and any mutation
+//   you judge necessary." in the out-of-section one. This one is a residual
+//   rather than a design choice, and pinning it is what was rejected: the two
+//   shipped copies spell the tail differently ("plus, where the contract above
+//   authorizes it, edits, commits, and pushes confined to the worktree and
+//   branch it names" versus "and the specific mutations this assignment spells
+//   out"), so no single literal span covers both and a pattern would need an
+//   alternation — an added case, against this repository's bias toward deleting
+//   them, and paid for out of a tolerance already spent down to a third. So the
+//   entry keeps the job it was added for, which is narrower than the rule
+//   above: it fails when the Permitted line is LOST, not when it is widened.
+//   The forbidden half is the half that binds, and it is pinned through its
+//   enumeration, its carve-out, and its no-exemptions clause.
+//
 // The addressing clause is the longest of them for a further reason: it states
 // three things at once — the positive form, the glob ban, and the unchecked-`cd`
 // ban — so a copy keeping only the first would read as compliant while dropping
 // the two prohibitions the incident it exists for actually turned on.
 const REQUIRED = [
+  // Exception 1 of 2 (see above): pinned only through `queries`. Fails on a
+  // LOST Permitted line, not on a widened one.
   ["permitted set", /Permitted: reading, searching, (?:and )?read-only `git`\/`gh` queries/],
   ["forbidden set", /Forbidden: `rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`, and force-pushing/],
   ["exact-command / named-skill carve-out", /each of them beyond what this assignment itself spells out, whether as an exact command or as a skill it names to invoke/],
@@ -146,6 +190,8 @@ const REQUIRED = [
   ["shared `.git` reaches every sibling worktree", /so `branch -f`, `reset`, `update-ref`, and `gc` reach every sibling worktree through the shared `\.git`/],
   ["a repository is addressed by path", /Address any repository other than your own checkout BY PATH: `git -C <absolute path>`\. NEVER derive a working directory from a glob, and NEVER chain a state-changing git command after a `cd` whose success you have not checked/],
   ["empirical verification is clone-only", /Empirical verification that could change state belongs ONLY in a disposable clone/],
+  // Exception 2 of 2 (see above): a bare existence check, deliberately. Asserts
+  // that a destination is named, not what the surrounding sentence says of it.
   ["disposable-clone destination", /command -v dc-enter/],
   ["absolute-path fallback", /absolute path outside the repository — never a relative one/],
 ];
