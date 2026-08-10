@@ -1510,11 +1510,17 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   );
   const offItem1 = off.slice(off.indexOf("1. Re-check before publication"), off.indexOf("2. Push."));
   const readsTheCheckout = /`git rev-parse --abbrev-ref HEAD` must print `local\/side-work`/.test(offItem1);
-  const stopsOnAnotherBranch = /where it prints anything else, set `published: false`, `aborted`, and STOP without pushing/.test(offItem1);
+  // The stop carries its own reason string, like every other stop in this step:
+  // one the schema's `aborted` examples list, so the publisher reports it rather
+  // than inventing a phrase of its own for a state nothing else names.
+  const stopsOnAnotherBranch =
+    /where it prints anything else, set `published: false`, `aborted: "working location moved off the branch"`, and STOP without pushing/.test(
+      offItem1,
+    );
   check(
-    "and re-verifies the checkout still stands on the branch the run addressed — the working branch, not the head ref — stopping when it does not",
+    "and re-verifies the checkout still stands on the branch the run addressed — the working branch, not the head ref — stopping with a named reason when it does not",
     readsTheCheckout && stopsOnAnotherBranch,
-    `requires HEAD on the working branch: ${readsTheCheckout}; stops otherwise: ${stopsOnAnotherBranch}`,
+    `requires HEAD on the working branch: ${readsTheCheckout}; stops with the named reason: ${stopsOnAnotherBranch}`,
   );
 }
 
