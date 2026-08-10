@@ -1409,8 +1409,17 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   {
     const wanted = [
       [
+        // The stop the workflow brief has always carried and the skill did not:
+        // a HEAD that is a proper ancestor of the expected tip has nothing to
+        // publish, and the lease MATCHES there, so the fallback rewinds the
+        // branch over the newer remote commits.
+        "the proper-ancestor stop",
+        "**First, a `HEAD` that is a proper ancestor of the expected tip is a stop, not a push.**",
+        [/nothing of yours to publish/, /the lease \*matches\*/, /Stop and report, exactly as for a rejected lease/],
+      ],
+      [
         "the off-shoot representation gate",
-        "**First, an off-shoot must carry the recorded head.**",
+        "**Then, an off-shoot must carry the recorded head.**",
         [
           /`git rev-list --right-only --cherry-pick HEAD\.\.\.<expected-head-oid>`/,
           /patch-id rather than raw ancestry/,
@@ -1432,6 +1441,16 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         ],
       ],
       ["the lease as the remainder", "- **Otherwise** — every remaining state", [/whether or not this run rewrote history/]],
+      [
+        // The target rule above is only followable if the shipped commands
+        // actually supply what it reads. `headRepositoryOwner` alone does not
+        // name a fork whose repository NAME differs from the base's, so a run
+        // that follows the recipes verbatim reaches publication with the work
+        // done and no target it can verify.
+        "the fields its off-shoot target rule reads",
+        "**Read context:** `gh pr view NUMBER --json",
+        [/headRepository,/, /isCrossRepository/],
+      ],
     ];
     const missing = [];
     for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
@@ -1453,7 +1472,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       }
     }
     check(
-      "and the skill carries the same decisions in both mirrors — the off-shoot's gate before its push, the PR's ref as its target, and the check that substitution excepts",
+      "and the skill carries the same decisions in both mirrors — the proper-ancestor stop, the off-shoot's gate before its push, the PR's ref as its target with the fields that resolve it, and the check that substitution excepts",
       missing.length === 0,
       missing.join("; "),
     );
@@ -1509,7 +1528,13 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     [],
   );
   const offItem1 = off.slice(off.indexOf("1. Re-check before publication"), off.indexOf("2. Push."));
-  const readsTheCheckout = /`git rev-parse --abbrev-ref HEAD` must print `local\/side-work`/.test(offItem1);
+  // Read for the spelling too, not just the requirement: `git rev-parse
+  // --abbrev-ref HEAD` is documented to produce a NON-AMBIGUOUS name, so it
+  // prints `heads/<name>` wherever a tag shares the branch's name — a check
+  // asked that way aborts a valid publication, and the wrong spelling is the
+  // obvious one to write back in.
+  const readsTheCheckout =
+    /`git branch --show-current` must print `local\/side-work`/.test(offItem1) && !/--abbrev-ref HEAD` must print/.test(offItem1);
   // The stop carries its own reason string, like every other stop in this step:
   // one the schema's `aborted` examples list, so the publisher reports it rather
   // than inventing a phrase of its own for a state nothing else names.
