@@ -298,9 +298,11 @@ const REQUIRED = [
 // What a destination CONSTANT must say, on REQUIRED's terms and for its reason:
 // a brief carrying the constant verbatim proves the text was interpolated, not
 // that the text still instructs anything, so the gutting this closes is the one
-// that keeps the vocabulary and destroys the instruction. Keyed by constant
-// name rather than by file, since the two copies of this one are a single
-// declaration mirrored into the embedded section. A destination constant this
+// that keeps the vocabulary and destroys the instruction. Keyed by constant name
+// rather than by file, since the two copies of this one are a single declaration
+// mirrored into the `review-cycle-core` section, whose byte-identity check
+// already covers them drifting apart — the same division of labour the
+// `DESTROY_BOUNDARY` identity check below draws. A destination constant this
 // map does not name FAILS, exactly as an unlisted workflow or an unfixtured
 // builder does: the alternative is a new constant whose content nothing checks.
 const DESTINATION_CLAUSES = {
