@@ -694,7 +694,10 @@ for (const file of Object.keys(CUT)) {
     ...Object.values(fixtures)
       .flat()
       .flatMap(([label, , dest]) => (dest && dest.pins ? [[label, dest.pins[0]]] : [])),
-  ];
+    // An empty span is contained in every string, so a destination constant
+    // emptied out would report every NO_BUILD render as carrying it. That is a
+    // failure of the constant, reported once as such below, not of thirty briefs.
+  ].filter(([, span]) => span);
   for (const name of names) {
     if (!fixtures[name]) {
       failures++;
@@ -733,6 +736,11 @@ for (const file of Object.keys(CUT)) {
         if (dest.constant && spans[0] === undefined) {
           failures++;
           rows.push([file, `${label} (destination)`, "FAIL", `verdict names ${dest.constant}, which this file does not declare`]);
+        } else if (spans.some((span) => !span)) {
+          // Containment of an empty span proves nothing: every string contains
+          // one. So an emptied constant or pin fails here rather than passing.
+          failures++;
+          rows.push([file, `${label} (destination)`, "FAIL", `orders a build and its destination ${dest.constant ? `constant ${dest.constant}` : "pin"} is empty — containment of an empty span establishes nothing`]);
         } else {
           const absent = spans.filter((span) => !text.includes(span));
           if (absent.length) {
