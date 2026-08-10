@@ -1,6 +1,11 @@
 #!/usr/bin/env node
 // Renders EVERY prompt a dynamic workflow hands to a spawned subagent and
-// asserts the destroy boundary is in the rendered text.
+// asserts two rules are in the rendered text: the destroy boundary, and — where
+// the brief orders a build or validation — a destination for output redirected
+// to a file. It also deletion-guards the same destination rule where it lives in
+// prose the workflows do not render, the `SKILL.md` briefs of both skill
+// mirrors. The file name names the first of those jobs, which is the one it
+// shipped with; task 045 widened the remit to the other two.
 //
 // Why rendering rather than reading: the boundary lives in shared constants and
 // in a section one workflow embeds byte-for-byte from another, so the source
@@ -8,8 +13,8 @@
 // rounds of task 017 each eyeballed the sources and each missed a path. A
 // rendered string cannot be argued with.
 //
-// Two separable jobs, because in a workflow the boundary is a CONSTANT and
-// every use of it is a bare `${CONSTANT}` interpolation:
+// Two separable jobs for the BOUNDARY, because in a workflow it is a CONSTANT
+// and every use of it is a bare `${CONSTANT}` interpolation:
 //
 //   PRESENCE, checked per rendered prompt, by exact string containment. Each
 //   brief must carry one of the boundary constants DECLARED IN ITS OWN FILE,
@@ -23,6 +28,89 @@
 //   same five answers sixty times over. The constants are evaluated out of the
 //   same declaration prefix the builders come from, so this is the value the
 //   briefs actually interpolate rather than the source text of the literal.
+//
+// A THIRD job, task 045's, over the same renders: THE OUTPUT DESTINATION. Task
+// 017 put a sentence naming where redirected build output goes into every brief
+// that orders a build or validation, and nothing asserted it — which is the
+// class every one of that task's four missed rounds fell into. It cannot be
+// checked the way the boundary is, and the fork is worth stating here rather
+// than leaving to be inferred from the code:
+//
+//   The destination is NOT one constant. `CYCLE_REDIRECTED_OUTPUT` covers the
+//   `review-cycle-core` briefs; the artifact-directory-less re-review, the
+//   collision resolution and the delegated rebase each carry their own wording,
+//   deliberately, because the safe destination differs by whether the role
+//   commits from the tree it would write into. Collapsing them into one
+//   constant would flatten that distinction, so this check does not ask for one.
+//
+//   So something must decide WHICH renders have to carry a destination at all,
+//   and the two obvious answers are both broken. Deriving "orders a build" from
+//   the rendered prose is what the PRESENCE rule above refuses to do for the
+//   boundary, and for the same reason: a vocabulary of build-ordering phrases
+//   silently drops every brief phrased outside it, and would have to parse
+//   negation besides — `cyclePeerPrompt` says "run no builds or tests".
+//   Listing the build-ordering builders instead reintroduces exactly the
+//   failure mode task 045 exists to close: a new builder absent from the list
+//   is missed in silence.
+//
+//   What this suite does instead is what it already does for call sites and
+//   fixtures — ACCOUNTING, not searching. The verdict is TOTAL over the
+//   DISCOVERED render set and FAIL-CLOSED: every fixture case carries a third
+//   element saying whether that render orders a build (`NO_BUILD`, or a
+//   destination spec), and a case carrying none FAILS as unclassified. A list
+//   missing an entry passes; a total map missing an entry cannot, and the set
+//   it must be total over is discovered from the sources rather than written
+//   down. A new builder therefore fails twice: once for having no fixture, and
+//   again for having no verdict once given one. The verdict is per RENDER
+//   rather than per builder because both the answer and the wording can differ
+//   between branches of one builder — `cycleReviewPrompt` names a different
+//   destination when it is handed no artifact directory, and `rebasePrompt`
+//   names a different temp directory per rebase point.
+//
+// What the verdict does NOT catch, plainly: being WRONG. A brief that grows a
+// build order while its case still says `NO_BUILD` passes, because the verdict
+// is a claim in the source and not a derivation from the prose. That claim is
+// at least visible and reviewable where a silent omission was not, and one
+// direction of it is cross-checked mechanically: a `NO_BUILD` render must carry
+// no destination clause this suite knows, so a build order added together with
+// its destination but without the verdict flip fails, as does a destination
+// clause left behind after its build order was removed. The dangerous
+// direction — a build order added with NO destination — is what the verdict
+// alone answers for. The rendering gaps stated below still apply unchanged: a
+// new branch inside an existing builder is unrendered until its fixtures widen,
+// verdict or no verdict.
+//
+// PRESENCE of a destination is exact containment, as for the boundary, in
+// whichever of two shapes the site has. Where the clause IS a constant, the
+// case names it and the check contains that constant's EVALUATED value out of
+// the declaration prefix — the `DESTROY_BOUNDARY` mould, and the third shape
+// task 045 offered, honored exactly where the shape already exists. Where the
+// clause is bespoke per site, the case pins it as verbatim spans, split around
+// whatever the render interpolates (a slug, a rebase point). A pin is not a
+// phrase regex: it is the prose itself, byte for byte, and it spans the
+// POSITIVE destination rather than only the "never a fixed shared scratchpad
+// name" prohibition — so a clause gutted to its keywords with the instruction
+// destroyed fails it. CONTENT is checked once per destination constant besides,
+// for the boundary's reason: exact containment of a constant says nothing about
+// what the constant says. A file declaring no destination constant is fine,
+// unlike the boundary, because its clauses are inline by design.
+//
+// And a FOURTH job, over files this suite renders nothing from: 017's
+// destination clauses also ship in the `SKILL.md` briefs of BOTH skill mirrors,
+// where the file text IS the brief and there is no builder. That half is
+// therefore a DELETION GUARD — a verbatim anchor of every shipped clause must
+// stay present, in both mirrors — plus a CENSUS: every `SKILL.md` in either
+// mirror is scanned for the shared-scratchpad warning and its count must equal
+// the anchors declared for it, so a clause that arrives, or leaves, fails until
+// the table below is brought up to date.
+//
+// The ASYMMETRY that leaves is the point, and must not be read as parity with
+// the rendered checks. Call-site accounting discovers a new BUILDER because a
+// call is syntax, whatever its prompt says. Nothing here discovers a new prose
+// brief: a `SKILL.md` section that orders a build and names no destination —
+// 017's actual failure mode — carries no warning phrase for the census to count
+// and no anchor to go missing, and passes green. Prose briefs are guarded
+// against deletion; they are not discovered.
 //
 // A workflow is a runtime script, not a module: it opens with `export const
 // meta` and ends in top-level `await agent(...)`. So this suite evaluates the
@@ -207,6 +295,22 @@ const REQUIRED = [
   ["absolute-path fallback", /Where the helper is absent, use an absolute path outside the repository — never a relative one/],
 ];
 
+// What a destination CONSTANT must say, on REQUIRED's terms and for its reason:
+// a brief carrying the constant verbatim proves the text was interpolated, not
+// that the text still instructs anything, so the gutting this closes is the one
+// that keeps the vocabulary and destroys the instruction. Keyed by constant
+// name rather than by file, since the two copies of this one are a single
+// declaration mirrored into the embedded section. A destination constant this
+// map does not name FAILS, exactly as an unlisted workflow or an unfixtured
+// builder does: the alternative is a new constant whose content nothing checks.
+const DESTINATION_CLAUSES = {
+  CYCLE_REDIRECTED_OUTPUT: [
+    ["governs output redirected to a file", /build or validation output you redirect to a file/],
+    ["names the round directory as the destination", /goes under that same round directory/],
+    ["forbids a fixed shared scratchpad name", /never a fixed shared scratchpad name/],
+  ],
+};
+
 // Every `agent(<fn>(...))` in the file — the complete set of prompt paths — plus
 // an accounting of every OTHER literal `agent(` occurrence, so an unrecognized
 // call shape reads as a failure rather than as an absence of call sites. Comment
@@ -240,6 +344,16 @@ function boundaryNames(src) {
   return [...src.matchAll(/^const (\w*DESTROY_BOUNDARY) = `/gm)].map((m) => m[1]);
 }
 
+// The same discovery for the output-destination constants — today one per file
+// in the two workflows that carry the `review-cycle-core` section, and none in
+// `wf-address-review.js`, whose destination clauses are all inline. Declaring
+// none is therefore NOT a failure here, which is the one place this check parts
+// from `boundaryNames` above: every workflow must carry a boundary, while a
+// workflow's destinations may legitimately all be per-site prose.
+function destinationNames(src) {
+  return [...src.matchAll(/^const (\w*REDIRECTED_OUTPUT) = ["`]/gm)].map((m) => m[1]);
+}
+
 function load(file) {
   const src = readFileSync(join(workflows, file), "utf8");
   const marker = CUT[file];
@@ -255,6 +369,7 @@ function load(file) {
   }
   const { names, ...accounting } = promptBuilders(src);
   const bNames = boundaryNames(src);
+  const dNames = destinationNames(src);
   if (!bNames.length) throw new Error(`${file}: declares no top-level *DESTROY_BOUNDARY constant`);
   // `args` is the workflow's own injected parameter; a few late declarations in
   // the prefix read it. An empty string keeps them inert. Each requested name is
@@ -263,17 +378,62 @@ function load(file) {
   // silent skip. The constants come back EVALUATED, which is exactly what the
   // briefs interpolate; the source-text identity check further down is a
   // separate question and reads the literal instead.
-  const wanted = [...names, ...bNames];
+  const wanted = [...names, ...bNames, ...dNames];
   const body = `"use strict";\n${prefix}\nreturn { ${wanted.map((n) => `${n}: ${n}`).join(", ")} };`;
   const out = new Function("args", body)("");
   const fns = Object.fromEntries(names.map((n) => [n, out[n]]));
   const boundaries = bNames.map((n) => [n, out[n]]);
-  return { src, names, fns, boundaries, accounting };
+  const destinations = new Map(dNames.map((n) => [n, out[n]]));
+  return { src, names, fns, boundaries, destinations, accounting };
 }
 
+// --- Output-destination verdicts ------------------------------------------
+// One of these is the THIRD element of every fixture case below, and a case
+// carrying none fails as unclassified. `NO_BUILD` says the render orders no
+// build or validation; the others say it does, and say where its redirected
+// output goes — either the destination CONSTANT the brief interpolates, checked
+// by exact containment of that constant's evaluated value, or verbatim PINS of a
+// bespoke per-site clause, checked the same way and split around whatever the
+// render interpolates through the middle of it. The header states why the
+// verdict is declared rather than derived from the prose, and what that leaves
+// uncaught.
+
+const NO_BUILD = { orders: false };
+const destinationConstant = (constant) => ({ orders: true, constant });
+const destinationPins = (...pins) => ({ orders: true, pins });
+
+// A cycle round writes under the round directory the same brief already told it
+// to report back.
+const ROUND_DIRECTORY = destinationConstant("CYCLE_REDIRECTED_OUTPUT");
+
+// A reviewer handed NO artifact directory — the collision re-review, which runs
+// outside any cycle — makes its own instead. Two pins: the render interpolates
+// the task slug into the `mktemp` example between them.
+const REREVIEW_TEMP_DIRECTORY = destinationPins(
+  "If any build or validation output must land in a file, create a UNIQUE directory for it first — outside the worktree, e.g. `mktemp -d ",
+  "(never a fixed shared name: concurrent reviewers share one scratch directory) — and write inside it.",
+);
+
+// The collision resolver commits from the worktree it validates, so this one
+// sends output outside EVERY worktree rather than inside its own — the per-role
+// difference that keeps these clauses from collapsing into one constant.
+const COLLISION_TEMP_DIRECTORY = destinationPins(
+  'if you redirect its output to a file, create a UNIQUE directory for that first, OUTSIDE every worktree (`mktemp -d "${TMPDIR:-/tmp}/collision-resolve.XXXXXX"`), and write there — never a fixed shared scratchpad name',
+  "and never inside the worktree, which you are about to commit.",
+);
+
+// The delegated rebase validates the checkout it stands in, and puts the run's
+// point in the directory name so its two points cannot collide with each other.
+// Hence a verdict per point rather than per builder.
+const rebaseTempDirectory = (point) =>
+  destinationPins(
+    `If you redirect any build output to a file, create a UNIQUE directory for it first, OUTSIDE the checkout (\`mktemp -d "\${TMPDIR:-/tmp}/rebase-${point}.XXXXXX"\`) — never a fixed shared scratchpad name`,
+  );
+
 // --- Fixtures -------------------------------------------------------------
-// One entry per rendered path. A discovered builder with no fixture is a
-// failure, not a skip.
+// One entry per rendered path: label, render, and output-destination verdict. A
+// discovered builder with no fixture is a failure, not a skip; so is a fixture
+// case with no verdict.
 
 const task = {
   slug: "042-widget",
@@ -346,82 +506,82 @@ const publishPacketWorktree = { ...publishPacket, pr: { ...publishPacket.pr, loc
 // cycleContract() branches on whether the consumer overrode the role.
 const cycleCases = {
   cycleFixPrompt: [
-    ["cycleFixPrompt (standalone)", (f) => f.cycleFixPrompt(cycleStandalone, fixState)],
-    ["cycleFixPrompt (batch/overridden)", (f) => f.cycleFixPrompt(cycleOverridden, fixState)],
-    ["cycleFixPrompt (round 1, no artifact directory yet)", (f) => f.cycleFixPrompt(cycleOverridden, fixStateRound1)],
+    ["cycleFixPrompt (standalone)", (f) => f.cycleFixPrompt(cycleStandalone, fixState), ROUND_DIRECTORY],
+    ["cycleFixPrompt (batch/overridden)", (f) => f.cycleFixPrompt(cycleOverridden, fixState), ROUND_DIRECTORY],
+    ["cycleFixPrompt (round 1, no artifact directory yet)", (f) => f.cycleFixPrompt(cycleOverridden, fixStateRound1), ROUND_DIRECTORY],
   ],
   cycleReviewPrompt: [
-    ["cycleReviewPrompt (standalone)", (f) => f.cycleReviewPrompt(cycleStandalone, reviewState)],
-    ["cycleReviewPrompt (batch/overridden)", (f) => f.cycleReviewPrompt(cycleOverridden, reviewState)],
-    ["cycleReviewPrompt (no artifact directory — collision re-review)", (f) => f.cycleReviewPrompt(cycleOverridden, reviewStateNoArtifact)],
+    ["cycleReviewPrompt (standalone)", (f) => f.cycleReviewPrompt(cycleStandalone, reviewState), ROUND_DIRECTORY],
+    ["cycleReviewPrompt (batch/overridden)", (f) => f.cycleReviewPrompt(cycleOverridden, reviewState), ROUND_DIRECTORY],
+    ["cycleReviewPrompt (no artifact directory — collision re-review)", (f) => f.cycleReviewPrompt(cycleOverridden, reviewStateNoArtifact), REREVIEW_TEMP_DIRECTORY],
   ],
   cyclePeerPrompt: [
-    ["cyclePeerPrompt (standalone)", (f) => f.cyclePeerPrompt(cycleStandalone, peerState)],
-    ["cyclePeerPrompt (batch/overridden)", (f) => f.cyclePeerPrompt(cycleOverridden, peerState)],
+    ["cyclePeerPrompt (standalone)", (f) => f.cyclePeerPrompt(cycleStandalone, peerState), NO_BUILD],
+    ["cyclePeerPrompt (batch/overridden)", (f) => f.cyclePeerPrompt(cycleOverridden, peerState), NO_BUILD],
   ],
   cycleGroundingPrompt: [
-    ["cycleGroundingPrompt (standalone)", (f) => f.cycleGroundingPrompt(cycleStandalone, [{ id: "p1", text: "y", severity: "minor" }])],
-    ["cycleGroundingPrompt (batch/overridden)", (f) => f.cycleGroundingPrompt(cycleOverridden, [{ id: "p1", text: "y", severity: "minor" }])],
+    ["cycleGroundingPrompt (standalone)", (f) => f.cycleGroundingPrompt(cycleStandalone, [{ id: "p1", text: "y", severity: "minor" }]), NO_BUILD],
+    ["cycleGroundingPrompt (batch/overridden)", (f) => f.cycleGroundingPrompt(cycleOverridden, [{ id: "p1", text: "y", severity: "minor" }]), NO_BUILD],
   ],
   cycleCloseOutPrompt: [
-    ["cycleCloseOutPrompt (standalone)", (f) => f.cycleCloseOutPrompt(cycleStandalone, closeOutState)],
-    ["cycleCloseOutPrompt (batch/overridden)", (f) => f.cycleCloseOutPrompt(cycleOverridden, closeOutState)],
+    ["cycleCloseOutPrompt (standalone)", (f) => f.cycleCloseOutPrompt(cycleStandalone, closeOutState), NO_BUILD],
+    ["cycleCloseOutPrompt (batch/overridden)", (f) => f.cycleCloseOutPrompt(cycleOverridden, closeOutState), NO_BUILD],
   ],
   cycleRecordOnlyPrompt: [
-    ["cycleRecordOnlyPrompt (standalone)", (f) => f.cycleRecordOnlyPrompt(cycleStandalone, recordOnlyState)],
-    ["cycleRecordOnlyPrompt (batch/overridden)", (f) => f.cycleRecordOnlyPrompt(cycleOverridden, recordOnlyState)],
+    ["cycleRecordOnlyPrompt (standalone)", (f) => f.cycleRecordOnlyPrompt(cycleStandalone, recordOnlyState), NO_BUILD],
+    ["cycleRecordOnlyPrompt (batch/overridden)", (f) => f.cycleRecordOnlyPrompt(cycleOverridden, recordOnlyState), NO_BUILD],
   ],
   cyclePacketCheckPrompt: [
-    ["cyclePacketCheckPrompt (standalone)", (f) => f.cyclePacketCheckPrompt(cycleStandalone, packetCheckState)],
-    ["cyclePacketCheckPrompt (batch/overridden)", (f) => f.cyclePacketCheckPrompt(cycleOverridden, packetCheckState)],
+    ["cyclePacketCheckPrompt (standalone)", (f) => f.cyclePacketCheckPrompt(cycleStandalone, packetCheckState), NO_BUILD],
+    ["cyclePacketCheckPrompt (batch/overridden)", (f) => f.cyclePacketCheckPrompt(cycleOverridden, packetCheckState), NO_BUILD],
   ],
 };
 
 const FIXTURES = {
   "wf-review-cycle.js": {
     ...cycleCases,
-    scopePrompt: [["scopePrompt", (f) => f.scopePrompt("review the current change")]],
+    scopePrompt: [["scopePrompt", (f) => f.scopePrompt("review the current change"), NO_BUILD]],
   },
   "wf-address-tasks.js": {
     ...cycleCases,
-    bootstrapPrompt: [["bootstrapPrompt", (f) => f.bootstrapPrompt()]],
-    storageProbePrompt: [["storageProbePrompt", (f) => f.storageProbePrompt(".worktrees")]],
+    bootstrapPrompt: [["bootstrapPrompt", (f) => f.bootstrapPrompt(), NO_BUILD]],
+    storageProbePrompt: [["storageProbePrompt", (f) => f.storageProbePrompt(".worktrees"), NO_BUILD]],
     mainCheckoutStatusPrompt: [
-      ["mainCheckoutStatusPrompt (baseline)", (f) => f.mainCheckoutStatusPrompt("pre-batch baseline")],
-      ["mainCheckoutStatusPrompt (post-batch)", (f) => f.mainCheckoutStatusPrompt("post-batch")],
+      ["mainCheckoutStatusPrompt (baseline)", (f) => f.mainCheckoutStatusPrompt("pre-batch baseline"), NO_BUILD],
+      ["mainCheckoutStatusPrompt (post-batch)", (f) => f.mainCheckoutStatusPrompt("post-batch"), NO_BUILD],
     ],
-    resolvePrompt: [["resolvePrompt", (f) => f.resolvePrompt("tasks/*.md")]],
+    resolvePrompt: [["resolvePrompt", (f) => f.resolvePrompt("tasks/*.md"), NO_BUILD]],
     prPrompt: [
-      ["prPrompt (remote)", (f) => f.prPrompt(task, { notes: "caveat", deviations: [] }, true)],
-      ["prPrompt (remote, record-only close)", (f) => f.prPrompt(task, { notes: "caveat", deviations: [], recordOnly: { pass: 2, range: "a..b", verified: "only the flake task", note: "the payments suite failed on the base too" } }, true)],
-      ["prPrompt (no remote)", (f) => f.prPrompt(task, { notes: "", deviations: [] }, false)],
-      ["prPrompt (remote, deviation + assessment)", (f) => f.prPrompt(task, { notes: "caveat", deviations, deviationAssessments }, true)],
-      ["prPrompt (remote, deviation, cycle recorded no assessment)", (f) => f.prPrompt(task, { notes: "", deviations, deviationAssessments: [] }, true)],
+      ["prPrompt (remote)", (f) => f.prPrompt(task, { notes: "caveat", deviations: [] }, true), NO_BUILD],
+      ["prPrompt (remote, record-only close)", (f) => f.prPrompt(task, { notes: "caveat", deviations: [], recordOnly: { pass: 2, range: "a..b", verified: "only the flake task", note: "the payments suite failed on the base too" } }, true), NO_BUILD],
+      ["prPrompt (no remote)", (f) => f.prPrompt(task, { notes: "", deviations: [] }, false), NO_BUILD],
+      ["prPrompt (remote, deviation + assessment)", (f) => f.prPrompt(task, { notes: "caveat", deviations, deviationAssessments }, true), NO_BUILD],
+      ["prPrompt (remote, deviation, cycle recorded no assessment)", (f) => f.prPrompt(task, { notes: "", deviations, deviationAssessments: [] }, true), NO_BUILD],
     ],
-    cleanupNote: [["cleanupNote", (f) => f.cleanupNote(task)]],
-    collisionScanPrompt: [["collisionScanPrompt", (f) => f.collisionScanPrompt([{ slug: task.slug, branch: task.branch, base: task.base }])]],
+    cleanupNote: [["cleanupNote", (f) => f.cleanupNote(task), NO_BUILD]],
+    collisionScanPrompt: [["collisionScanPrompt", (f) => f.collisionScanPrompt([{ slug: task.slug, branch: task.branch, base: task.base }]), NO_BUILD]],
     resolveCollisionsPrompt: [
-      ["resolveCollisionsPrompt (remote)", (f) => f.resolveCollisionsPrompt([task], [{ kind: "path", name: "src/a.ts", branches: [task.branch, "task/043-x"] }], true)],
-      ["resolveCollisionsPrompt (no remote)", (f) => f.resolveCollisionsPrompt([task], [{ kind: "path", name: "src/a.ts", branches: [task.branch, "task/043-x"] }], false)],
+      ["resolveCollisionsPrompt (remote)", (f) => f.resolveCollisionsPrompt([task], [{ kind: "path", name: "src/a.ts", branches: [task.branch, "task/043-x"] }], true), COLLISION_TEMP_DIRECTORY],
+      ["resolveCollisionsPrompt (no remote)", (f) => f.resolveCollisionsPrompt([task], [{ kind: "path", name: "src/a.ts", branches: [task.branch, "task/043-x"] }], false), COLLISION_TEMP_DIRECTORY],
     ],
     collisionReReviewPrompt: [
-      ["collisionReReviewPrompt (remote)", (f) => f.collisionReReviewPrompt(task, true, "on")],
-      ["collisionReReviewPrompt (no remote)", (f) => f.collisionReReviewPrompt(task, false, "on")],
-      ["collisionReReviewPrompt (standing deviation)", (f) => f.collisionReReviewPrompt(task, true, "on", deviations)],
+      ["collisionReReviewPrompt (remote)", (f) => f.collisionReReviewPrompt(task, true, "on"), REREVIEW_TEMP_DIRECTORY],
+      ["collisionReReviewPrompt (no remote)", (f) => f.collisionReReviewPrompt(task, false, "on"), REREVIEW_TEMP_DIRECTORY],
+      ["collisionReReviewPrompt (standing deviation)", (f) => f.collisionReReviewPrompt(task, true, "on", deviations), REREVIEW_TEMP_DIRECTORY],
     ],
   },
   "wf-address-review.js": {
-    gatherPrompt: [["gatherPrompt", (f) => f.gatherPrompt("#42 push")]],
+    gatherPrompt: [["gatherPrompt", (f) => f.gatherPrompt("#42 push"), NO_BUILD]],
     publishPrompt: [
-      ["publishPrompt", (f) => f.publishPrompt(publishPacket, [], { push: true, pingCodex: false })],
-      ["publishPrompt (deviation + assessment)", (f) => f.publishPrompt(publishPacket, [], { push: true, pingCodex: false }, deviations, deviationAssessments)],
-      ["publishPrompt (deviation, cycle recorded no assessment)", (f) => f.publishPrompt(publishPacket, [], { push: true, pingCodex: false }, deviations, [])],
-      ["publishPrompt (record-only close)", (f) => f.publishPrompt(publishPacket, [], { push: true, pingCodex: false }, [], [], { pass: 2, range: "a..b", verified: "only the flake task", note: "the payments suite failed on the base too" })],
+      ["publishPrompt", (f) => f.publishPrompt(publishPacket, [], { push: true, pingCodex: false }), NO_BUILD],
+      ["publishPrompt (deviation + assessment)", (f) => f.publishPrompt(publishPacket, [], { push: true, pingCodex: false }, deviations, deviationAssessments), NO_BUILD],
+      ["publishPrompt (deviation, cycle recorded no assessment)", (f) => f.publishPrompt(publishPacket, [], { push: true, pingCodex: false }, deviations, []), NO_BUILD],
+      ["publishPrompt (record-only close)", (f) => f.publishPrompt(publishPacket, [], { push: true, pingCodex: false }, [], [], { pass: 2, range: "a..b", verified: "only the flake task", note: "the payments suite failed on the base too" }), NO_BUILD],
       // The publisher's working-location contract branches on whether this run
       // attached a worktree, and the worktree arm is the one that also tells it
       // to keep off the main checkout — the "new branch inside an existing
       // builder" gap again, closed the same way.
-      ["publishPrompt (worktree mode)", (f) => f.publishPrompt(publishPacketWorktree, [], { push: true, pingCodex: false })],
+      ["publishPrompt (worktree mode)", (f) => f.publishPrompt(publishPacketWorktree, [], { push: true, pingCodex: false }), NO_BUILD],
     ],
     // The delegated rebase brief branches twice: on WHICH of the run's two
     // points it is (the purpose paragraph and the validation wording), and on
@@ -429,11 +589,11 @@ const FIXTURES = {
     // also tells it to keep off the main checkout). Same "new branch inside an
     // existing builder" gap the comments above name, closed the same way.
     rebasePrompt: [
-      ["rebasePrompt (pre-fix, inline)", (f) => f.rebasePrompt("pre-fix", publishPacket, "main")],
-      ["rebasePrompt (pre-push, inline)", (f) => f.rebasePrompt("pre-push", publishPacket, "main")],
-      ["rebasePrompt (pre-fix, worktree mode)", (f) => f.rebasePrompt("pre-fix", publishPacketWorktree, "abc1234def5678")],
+      ["rebasePrompt (pre-fix, inline)", (f) => f.rebasePrompt("pre-fix", publishPacket, "main"), rebaseTempDirectory("pre-fix")],
+      ["rebasePrompt (pre-push, inline)", (f) => f.rebasePrompt("pre-push", publishPacket, "main"), rebaseTempDirectory("pre-push")],
+      ["rebasePrompt (pre-fix, worktree mode)", (f) => f.rebasePrompt("pre-fix", publishPacketWorktree, "abc1234def5678"), rebaseTempDirectory("pre-fix")],
     ],
-    reclaimPrompt: [["reclaimPrompt", (f) => f.reclaimPrompt("/w/.worktrees/c/pr-42", 42, "publication completed")]],
+    reclaimPrompt: [["reclaimPrompt", (f) => f.reclaimPrompt("/w/.worktrees/c/pr-42", 42, "publication completed"), NO_BUILD]],
   },
 };
 
@@ -442,6 +602,9 @@ const FIXTURES = {
 let failures = 0;
 let rendered = 0;
 let clauseChecks = 0;
+let destinationChecks = 0;
+let destinationClauseChecks = 0;
+let proseAnchors = 0;
 const rows = [];
 
 // Printing is a function so the workflow-set check below can report and stop.
@@ -458,7 +621,7 @@ function report() {
   // count: on the vanished path one key names a file that is gone, and counting
   // it would contradict the row directly above that says exactly that.
   const accountedFor = Object.keys(CUT).filter((f) => shipped.includes(f)).length;
-  console.log(`\n${rendered} rendered prompt paths across ${accountedFor} accounted-for workflows, ${clauseChecks} boundary constants clause-checked, ${failures} failing.`);
+  console.log(`\n${rendered} rendered prompt paths across ${accountedFor} accounted-for workflows, ${clauseChecks} boundary constants clause-checked, ${destinationChecks} of those renders ordering a build and destination-checked (${destinationClauseChecks} destination constants clause-checked), ${proseAnchors} prose destination clauses deletion-guarded, ${failures} failing.`);
   if (failures) process.exit(1);
 }
 
@@ -483,7 +646,7 @@ if (unlisted.length || vanished.length) {
 }
 
 for (const file of Object.keys(CUT)) {
-  const { names, fns, boundaries, accounting } = load(file);
+  const { names, fns, boundaries, destinations, accounting } = load(file);
   const fixtures = FIXTURES[file] || {};
   const { sites, prose, unaccounted } = accounting;
   if (unaccounted.length) {
@@ -504,13 +667,41 @@ for (const file of Object.keys(CUT)) {
       rows.push([file, `${bName} (clauses)`, "ok", `all ${REQUIRED.length} clauses, ${Buffer.byteLength(text)} bytes`]);
     }
   }
+  // The same content question for each destination constant this file declares,
+  // and for the same reason. Unlike the boundary, declaring none is no failure;
+  // declaring one this suite has no clause list for is.
+  for (const [dName, text] of destinations) {
+    destinationClauseChecks++;
+    const clauses = DESTINATION_CLAUSES[dName];
+    if (!clauses) {
+      failures++;
+      rows.push([file, `${dName} (clauses)`, "FAIL", "destination constant with no clause list — add one to DESTINATION_CLAUSES"]);
+      continue;
+    }
+    const missing = clauses.filter(([, re]) => !re.test(text)).map(([what]) => what);
+    if (missing.length) {
+      failures++;
+      rows.push([file, `${dName} (clauses)`, "FAIL", `missing: ${missing.join("; ")}`]);
+    } else {
+      rows.push([file, `${dName} (clauses)`, "ok", `all ${clauses.length} clauses, ${Buffer.byteLength(text)} bytes`]);
+    }
+  }
+  // Every destination clause this file's own cases know about — the constants it
+  // declares, plus the first pin of each bespoke spec used for one of its
+  // renders. This is what a NO_BUILD render is asserted to carry NONE of.
+  const knownDestinations = [
+    ...destinations,
+    ...Object.values(fixtures)
+      .flat()
+      .flatMap(([label, , dest]) => (dest && dest.pins ? [[label, dest.pins[0]]] : [])),
+  ];
   for (const name of names) {
     if (!fixtures[name]) {
       failures++;
       rows.push([file, `${name} (NO FIXTURE)`, "FAIL", "reaches agent() but this suite renders no case for it"]);
       continue;
     }
-    for (const [label, render] of fixtures[name]) {
+    for (const [label, render, dest] of fixtures[name]) {
       rendered++;
       let text;
       try {
@@ -529,6 +720,40 @@ for (const file of Object.keys(CUT)) {
         rows.push([file, label, "FAIL", `no boundary: carries none of ${boundaries.map(([n]) => n).join(", ")} verbatim`]);
       } else {
         rows.push([file, label, "ok", `${text.length} chars, carries ${carried[0]}`]);
+      }
+      // DESTINATION: the verdict this case declares, applied to the same render.
+      // Absent, the case is unclassified and fails — that fail-closed default is
+      // the whole answer to "how does this suite decide what orders a build".
+      if (!dest) {
+        failures++;
+        rows.push([file, `${label} (destination)`, "FAIL", "no output-destination verdict on this fixture case — add NO_BUILD or a destination spec"]);
+      } else if (dest.orders) {
+        destinationChecks++;
+        const spans = dest.constant ? [destinations.get(dest.constant)] : dest.pins;
+        if (dest.constant && spans[0] === undefined) {
+          failures++;
+          rows.push([file, `${label} (destination)`, "FAIL", `verdict names ${dest.constant}, which this file does not declare`]);
+        } else {
+          const absent = spans.filter((span) => !text.includes(span));
+          if (absent.length) {
+            failures++;
+            rows.push([file, `${label} (destination)`, "FAIL", `orders a build but does not carry ${absent.length} of ${spans.length} destination span(s) verbatim; first missing: ${JSON.stringify(absent[0].slice(0, 70))}…`]);
+          } else {
+            rows.push([file, `${label} (destination)`, "ok", dest.constant ? `carries ${dest.constant}` : `carries ${spans.length} pinned span(s)`]);
+          }
+        }
+      } else {
+        // The one mechanical cross-check on a negative verdict: a brief that
+        // orders no build must not carry a destination clause either. It catches
+        // the drift in both directions — a build order added with its clause but
+        // without flipping the verdict, and a clause left behind after its build
+        // order went away — and catches nothing about the dangerous direction,
+        // which the verdict alone answers for.
+        const stray = knownDestinations.find(([, span]) => text.includes(span));
+        if (stray) {
+          failures++;
+          rows.push([file, `${label} (destination)`, "FAIL", `declared NO_BUILD but carries the destination clause of ${stray[0]}`]);
+        }
       }
     }
   }
@@ -598,6 +823,111 @@ if (!canonicalRule) {
     rows.push(["(all)", "FINISH_IN_TURN identity", "FAIL", `DEPUTY_FINISH_IN_TURN differs from the cycle's rule in ${ruleDrifted.join(", ")}`]);
   } else {
     rows.push(["(all)", "FINISH_IN_TURN identity", "ok", `${deputyRules.length} deputy copy(ies) match the cycle's rule`]);
+  }
+}
+
+// --- The prose briefs, which nothing renders ------------------------------
+// 017's destination clauses also ship in the skills, mirrored on both sides,
+// where the file text IS the brief — there is nothing to evaluate and nothing to
+// render. So this half is a deletion guard plus a census, and the header states
+// exactly what that reaches and what it does not.
+//
+// One anchor per shipped clause, verbatim, each spanning the POSITIVE
+// destination and not only the "never a fixed shared scratchpad name"
+// prohibition, so a clause gutted to its keywords with the instruction destroyed
+// fails it. Each anchor must appear EXACTLY once in its file: twice would mean
+// two clauses one anchor cannot tell apart, and the second copy is how a
+// deletion of the first would go unnoticed.
+//
+// Both mirrors are held to the same anchors, which is the strongest form of the
+// lockstep rule this repository keeps by hand: these clauses are byte-identical
+// across the two sides today, so a mirror reworded on one side alone fails here.
+const PROSE_MIRRORS = ["plugins/dev-skills/skills", "codex/dev-skills/skills"];
+// The warning every one of these clauses carries, and the census key. It is not
+// the anchor: a clause could keep this phrase and lose its destination, which is
+// exactly what the anchors are long enough to catch.
+const PROSE_WARNING = /shared scratchpad (?:name|filename)/g;
+const PROSE_CLAUSES = {
+  "address-review": [
+    "hand it the path any build or check output must land in — namespaced by this PR number, or created with `mktemp -d`, and outside the checkout it commits from — never a fixed shared scratchpad name",
+  ],
+  "address-reviews": [
+    "Any output that must land in a file goes inside this worktree (a gitignored path, removed before any commit), never a shared scratchpad filename",
+  ],
+  "address-tasks": [
+    // The implementer template, the reviewer's own rule, and the quoted brief
+    // for the integration-check subagent, which validates from a worktree it
+    // must leave clean and so is sent outside every worktree instead.
+    "Any build or check output that must land in a file goes inside this worktree (a gitignored path, removed before any commit), never a shared scratchpad filename",
+    "any build or check output that must land in a file goes inside this task's worktree (a gitignored path, removed before any commit), never a shared scratchpad filename",
+    "create a unique directory for it first with `mktemp -d`, outside every worktree, and write there — never a fixed shared scratchpad name",
+  ],
+  "address-tasks-serialized": [
+    "Any build or lint output that must land in a file goes there, never a fixed shared scratchpad name",
+    "Any build or check output that must land in a file goes there, never a fixed shared scratchpad name",
+  ],
+  // The briefless spawn instruction: the rule sits in the skill text the
+  // orchestrator itself follows, because there is no template to carry it.
+  "reap-tasks": [
+    "Output that must land in a file goes to a path namespaced by the task number, or one created with `mktemp -d` — never a fixed shared scratchpad name",
+  ],
+  "resolve-open-questions": [
+    "Hand it the path any of that output must land in — namespaced by the item, or created with `mktemp -d` — never a fixed shared scratchpad name",
+    "Hand it the path any of that validation output must land in — namespaced by the item, or created with `mktemp -d`, and outside the worktree it commits from, which must be left clean — never a fixed shared scratchpad name",
+  ],
+  // The inherited contract: every consumer of the cycle's Reviewer role reaches
+  // its destination rule through this one clause.
+  "review-cycle": [
+    "tell it where any output of that build goes, a path under the cycle's artifact directory below or inside the reviewed worktree, never a fixed shared scratchpad name and never left to the reviewer to pick",
+  ],
+};
+
+for (const mirror of PROSE_MIRRORS) {
+  const dir = join(root, mirror);
+  // The census reads EVERY skill in the mirror rather than the declared ones, so
+  // a clause arriving in a file this table does not name fails here instead of
+  // shipping unguarded. It cannot see a brief that never had a clause at all.
+  const census = new Map();
+  for (const skill of readdirSync(dir).sort()) {
+    let text;
+    try {
+      text = readFileSync(join(dir, skill, "SKILL.md"), "utf8");
+    } catch {
+      continue;
+    }
+    const n = (text.match(PROSE_WARNING) || []).length;
+    if (n) census.set(skill, n);
+  }
+  const undeclared = [...census.keys()].filter((skill) => !PROSE_CLAUSES[skill]);
+  if (undeclared.length) {
+    failures++;
+    rows.push([mirror, "prose census", "FAIL", `carries a destination clause but is not guarded: ${undeclared.join(", ")} — add its anchor(s)`]);
+  } else {
+    rows.push([mirror, "prose census", "ok", `${census.size} skills carry destination clauses, all guarded`]);
+  }
+  for (const [skill, anchors] of Object.entries(PROSE_CLAUSES)) {
+    const path = `${mirror}/${skill}/SKILL.md`;
+    let text;
+    try {
+      text = readFileSync(join(dir, skill, "SKILL.md"), "utf8");
+    } catch (err) {
+      failures++;
+      rows.push([path, "prose destination", "FAIL", `cannot read: ${err.message}`]);
+      continue;
+    }
+    const wrong = anchors.map((anchor) => [anchor, text.split(anchor).length - 1]).filter(([, n]) => n !== 1);
+    const counted = census.get(skill) || 0;
+    if (wrong.length) {
+      failures++;
+      const [anchor, n] = wrong[0];
+      rows.push([path, "prose destination", "FAIL", `${wrong.length} of ${anchors.length} anchor(s) not present exactly once; first found ${n}x: ${JSON.stringify(anchor.slice(0, 70))}…`]);
+    } else if (counted !== anchors.length) {
+      failures++;
+      rows.push([path, "prose destination", "FAIL", `${counted} destination clause(s) in the file but ${anchors.length} anchored — a clause arrived or left; update the anchors`]);
+    } else {
+      proseAnchors += anchors.length;
+      rows.push([path, "prose destination", "ok", `${anchors.length} clause(s) anchored, ${counted} in the file`]);
+    }
   }
 }
 
