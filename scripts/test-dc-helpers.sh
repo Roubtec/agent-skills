@@ -96,9 +96,11 @@ set -euo pipefail
 #   (k) clone-root hygiene: repeated separators collapse, a relative root and a
 #       newline-bearing one are refused by both helpers — including a newline at
 #       the very end and one only the RESOLVED root has — and a newline anywhere
-#       in the SOURCE's path, end included, still works. These are the checks
-#       that must be made on the value the caller supplied rather than on the
-#       canonicalized one, since canonicalizing changes it.
+#       in the SOURCE's path, end included, still works — as does a SINGLE
+#       QUOTE there, which is the character the clone's ownership-trust
+#       plumbing has to escape for the shell git runs `--upload-pack` through.
+#       These are the checks that must be made on the value the caller supplied
+#       rather than on the canonicalized one, since canonicalizing changes it.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -2143,7 +2145,7 @@ assert_eq "j: hardlinked clone's gc leaves the source's objects alone" "$(object
 in_repo "$SRC6" git fsck --no-progress --no-dangling --connectivity-only
 assert_eq "j: the source still passes fsck after the hardlinked clone's gc" "$RC" 0
 
-echo "== (k) clone-root hygiene: separators, absoluteness, and newlines =="
+echo "== (k) clone-root hygiene: separators, absoluteness, newlines, and quoting =="
 SRC7="$WORK/k/src"
 mkdir -p "$WORK/k/root"
 make_source "$SRC7"
@@ -2261,6 +2263,24 @@ assert_true "k: ... and not from the decoy repository at the newline-free path" 
 in_repo "$TRAIL_SRC" env "DC_ROOT=$WORK/k/root" "$DC_REMOVE" trailsrc
 assert_eq "k: ... and dc-remove derives the identical source and removes it" "$RC" 0
 assert_true "k: ... leaving nothing" "$([ ! -e "$CLONE_TRAIL" ] && echo true || echo false)"
+# A SINGLE QUOTE in the source's path. dc-enter grants git an ownership
+# exception for the repository it was asked to clone, and has to repeat it for
+# the `git-upload-pack` child `git clone` spawns — which it can only do through
+# `--upload-pack`, a value git appends the source path to and runs through
+# `sh -c`. An unescaped quote there closes the quoting early and hands that
+# shell a different command, so the path that carries one is the case worth
+# pinning; the newline cases above cover the rest of the same plumbing.
+Q_SRC="$WORK/k/it's-src"
+make_source "$Q_SRC"
+in_repo "$Q_SRC" env "DC_ROOT=$WORK/k/root" "$DC_ENTER" quotesource
+assert_eq "k: a source path containing a single quote is fine" "$RC" 0
+require_clone CLONE_Q "k: quotesource"
+assert_eq "k: ... and mirrors that source exactly" "$(refs_of "$CLONE_Q")" "$(refs_of "$Q_SRC")"
+assert_eq "k: ... at that source's HEAD" \
+	"$(git -C "$CLONE_Q" rev-parse HEAD)" "$(git -C "$Q_SRC" rev-parse HEAD)"
+in_repo "$Q_SRC" env "DC_ROOT=$WORK/k/root" "$DC_REMOVE" quotesource
+assert_eq "k: ... and dc-remove removes it" "$RC" 0
+assert_true "k: ... leaving nothing" "$([ ! -e "$CLONE_Q" ] && echo true || echo false)"
 
 if [ "$fails" -eq 0 ]; then
 	printf 'test-dc-helpers: %d checks passed\n' "$checks"
