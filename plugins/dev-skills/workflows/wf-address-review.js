@@ -736,8 +736,8 @@ Record each item's outcome with its stable reference (file:line, author, threadI
 
 // The DURABLE DISPOSITION RECORD — the `address-review` skill's section of that
 // name, rendered once for this workflow. Every exit that holds this run's
-// disposition map and publishes nothing writes it, so the map outlives the
-// session: this run's result is chat output, and closing the session used to
+// disposition map and does not publish it in full writes it, so the map outlives
+// the session: this run's result is chat output, and closing the session used to
 // lose which thread was pushed back, what the drafted rationale said, and what
 // the Summary comment would have said — precisely the judgment calls the next
 // run would otherwise re-derive from scratch, most likely differently.
@@ -746,10 +746,11 @@ Record each item's outcome with its stable reference (file:line, author, threadI
 // make durability opt-in and so lose the record in exactly the runs that end
 // unexpectedly, and it would add a fifth token to a push/ping resolution this
 // family has already learned not to grow.
-// Nothing here REPLAYS a record. Replay belongs to the next run's gather step,
-// which is told to read a prior record as a proposal and re-judge it against the
-// branch rather than trust its SHAs; this brief only writes one, and marks it so
-// that step can find it. And it runs BEFORE the worktree is given back, so the
+// Nothing here REPLAYS a record. Replay belongs to the NEXT run: its gather
+// step reports a prior record into the packet as a proposal rather than an item,
+// and its round-1 fixer is handed that text and the rule for judging it against
+// the branch rather than trusting its SHAs (`priorRecordSection`). This brief
+// only writes one, and marks it so that step can find it. And it runs BEFORE the worktree is given back, so the
 // tips it cites are read where the work actually happened.
 function recordPrompt(packet, dispositions, facts) {
   const where = packet.pr && packet.pr.worktree
@@ -1618,8 +1619,8 @@ if (cycle.verdict === "error") {
 // complete).
 // A map with no entries records nothing: the skill's rule that a run with
 // nothing triaged says so in its report rather than posting an empty record.
-// An exit that passes no reason records nothing either, which is how the two
-// cycle-error exits stay silent — there no verdict describes the tree that
+// An exit that passes no reason records nothing either, and the cycle-error
+// exits do not call this at all — there no verdict describes the tree that
 // exists, so the run cannot say what the map it holds was verified against, and
 // a record replayed as if it were verified is worse than one the maintainer
 // reads out of the result. A run stopped by the pre-push rebase is NOT that
