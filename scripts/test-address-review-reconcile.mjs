@@ -52,8 +52,11 @@
 // And the two GitHub-reliability recipes the same brief renders inline because
 // its publisher has read no skill (task 023a): the push read-back at the ref and
 // the reviewer request confirmed from the timeline. Both are second copies of a
-// wording the skill authors, so the brief's clause and the skill's sentence are
-// read together, in both mirrors — the drift the rendering buys back.
+// wording the skill authors, so the brief's clause and the skill's sentence in
+// both mirrors are read together — the drift the rendering buys back. Both reads
+// are PHRASE pins and hold only as far as the phrases they select: a rewrite that
+// keeps every one of them while reversing what they say passes, as it does for
+// README's `FETCH_HEAD` pins, so the polarity is the reviewer's to hold.
 //
 // It covers the DELEGATED REBASE POINTS that run just after the gate (task
 // 016), for the same reason and through the same harness: the base each one
@@ -126,7 +129,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 204;
+const EXPECTED_CHECKS = 207;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1724,6 +1727,15 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
 // two mirrors are hand-edited in lockstep with no generator, which is why both
 // are read.
 //
+// The reads below are PHRASE pins and claim exactly as much as the phrases they
+// select. Measured, not assumed: reversing a recipe's polarity while preserving
+// every pinned phrase — "…is ordinarily fine and only ever is a stop where you
+// already had reason to doubt the push" — passes every check here. A regex over
+// prose cannot separate an instruction from its negation, which is the same hole
+// README states of its own `FETCH_HEAD` pins; what these catch is a side
+// reworded, moved out of its step, or dropped, and the polarity stays the
+// reviewer's to hold.
+//
 // What is NOT here is a third recipe. Item 5 (re-verify at publish boundaries)
 // is already performed by the brief's own steps 1 and 3, so it is checked as
 // PRESENCE OF THOSE STEPS rather than of a restatement: a copy of item 5 beside
@@ -1775,17 +1787,58 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "paginates both reads": /paginate BOTH reads/.test(step6),
     "an unconfirmed request neither fails nor re-issues":
       /do not fail publication, and do NOT issue the request again/.test(step6) && /requested, unconfirmed/.test(step6),
-    // The pings step's per-flag arms are plain STRINGS inside the template
-    // literal, so an interpolation written into one reaches the agent as its own
-    // source text. This clause was added because it did: the confirmation shipped
-    // telling the publisher to read `.../pulls/${packet.pr.number}/…`.
-    "leaves no builder interpolation unrendered": !/\$\{(?:packet|flags|dev|assessments)\b/.test(brief),
   };
   const confirmationMissing = Object.entries(confirmation).filter(([, ok]) => !ok).map(([what]) => what);
   check(
     "and confirms the Copilot reviewer request from the timeline, without re-issuing one it cannot confirm",
     confirmationMissing.length === 0,
     confirmationMissing.join("; ") || `step 6 carries all ${Object.keys(confirmation).length} clauses`,
+  );
+
+  // Every conditional ARM of this builder, rendered. The arms are plain strings
+  // inside the template literal, so a `${…}` written into one reaches the agent as
+  // its own source text — which is how the confirmation above shipped, telling the
+  // publisher to read `.../pulls/${packet.pr.number}/…`. One render answers only
+  // for the arms that render, and each arm is a place the next one can hide, so
+  // the flags are driven in combinations that between them select all of them: the
+  // three per-bot pings, the none-requested arm, both flake-record arms, and the
+  // deviation section with and without its assessments.
+  const arms = {
+    "the copilot arm": { flags: { push: true, pingCopilot: true }, args: [[], []] },
+    "the codex and claude arms": { flags: { push: true, pingCodex: true, pingClaude: true }, args: [[], []] },
+    "no ping requested": { flags: { push: true }, args: [[], []] },
+    "a deviation with its assessment": {
+      flags: { push: true, pingClaude: true },
+      args: [[{ decision: "d1", what: "renamed the flag" }], [{ decision: "d1", inSpecRoute: "keep the name", recommendation: "conform" }]],
+    },
+    "a deviation with no assessment, and both flake records": {
+      flags: { push: true },
+      args: [
+        [{ decision: "d1", what: "renamed the flag" }],
+        [],
+        { note: "a flaky storage probe", range: "abc1234..def5678", verified: "range re-run clean" },
+        { note: "the same probe before the rebase" },
+      ],
+    },
+  };
+  // `DESTROY_BOUNDARY` (task 018) carries one legitimate `${…}`-shaped span of
+  // its own — the guarded-`cd` bash form `${DC:?dc-enter returned no path}` — and
+  // every arm renders it via the shared boundary text, so it is excluded by name
+  // rather than narrowing the scan: the scan's job is catching a builder
+  // interpolation this template failed to resolve, not a bash parameter
+  // expansion the boundary text states on purpose.
+  const KNOWN_LITERAL_SPANS = ["${DC:?dc-enter returned no path}"];
+  const unrendered = [];
+  for (const [what, { flags, args }] of Object.entries(arms)) {
+    const rendered = publishPrompt(gathered({ reconcile: { outcome: "work" } }), [], flags, ...args);
+    const hits = rendered.match(/\$\{[^}]*\}/g) || [];
+    const hit = hits.find((h) => !KNOWN_LITERAL_SPANS.includes(h));
+    if (hit) unrendered.push(`${what}: ${hit}`);
+  }
+  check(
+    "and every conditional arm of the publish brief renders, leaving no builder interpolation in the text the agent reads",
+    unrendered.length === 0,
+    unrendered.join("; ") || `all ${Object.keys(arms).length} flag combinations render clean`,
   );
 
   // Item 5, satisfied by the steps rather than by a copy of it. Both halves are
@@ -3243,6 +3296,41 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     summaryCommentUrl: "",
     threadOutcomes: [{ ref: "src/app.ts:12 a-reviewer", threadId: "T1", outcome: "an equivalent reply of mine was already on the thread, so I posted none", replied: true, resolved: false }],
   };
+  // The push whose own READ-BACK could not confirm the ref (task 023a's recipe at
+  // step 2 stops there), which is the first abort reachable AFTER `git push`
+  // returned 0 — so the push is exactly the thing in doubt. The brief tells the
+  // publisher to deny the advance it could not establish; this is that report.
+  const PUBLISH_PUSH_UNCONFIRMED = {
+    published: false,
+    pushed: true,
+    pushedNewCommits: false,
+    aborted: "push not confirmed at the ref: origin's second push url returned no ref for refs/heads/feature/x",
+    summaryCommentUrl: "",
+    threadOutcomes: [{ ref: "src/app.ts:12 a-reviewer", threadId: "T1", outcome: "never reached — the run stopped at the push read-back", replied: false, resolved: false }],
+  };
+  // The same stop from a publisher that CLAIMED the advance anyway. Both reports
+  // are driven because the flags are what the stop declares unestablished, so a
+  // record that reads them renders a false claim on one value or the other: this
+  // one puts the tips on origin, the one above puts them nowhere.
+  const PUBLISH_PUSH_UNCONFIRMED_ADVANCE_CLAIMED = {
+    published: false,
+    pushed: true,
+    pushedNewCommits: true,
+    aborted: "push not confirmed at the ref: ls-remote against the mirror push url timed out",
+    summaryCommentUrl: "",
+    threadOutcomes: [{ ref: "src/app.ts:12 a-reviewer", threadId: "T1", outcome: "never reached — the run stopped at the push read-back", replied: false, resolved: false }],
+  };
+  // And the same stop over an account this run cannot read, which is the third
+  // state's own path: the push half must not be rendered as `advanced` there
+  // either, on the strength of a flag the stop says nothing supports.
+  const PUBLISH_PUSH_UNCONFIRMED_UNACCOUNTED = {
+    published: false,
+    pushed: true,
+    pushedNewCommits: true,
+    aborted: "push not confirmed at the ref, and the run then lost the thread ids it was replying through",
+    summaryCommentUrl: "",
+    threadOutcomes: [],
+  };
   // And the same exit reached with nothing on origin at all, which records
   // exactly like a stop before publication. Its account is EMPTY and complete:
   // the push is step 2 and the replies are step 4, so a publisher that never
@@ -3501,6 +3589,9 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     ["a publication whose reply and Summary landed before it failed", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_PART_WAY_REPLIED }, "fixed-publish-failed", true],
     ["a publication whose push was a no-op before it failed", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_NOOP_PUSH }, "fixed-publish-failed", true],
     ["a publication whose no-op push found the reply already on the PR", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_NOOP_PUSH_PRIOR_REPLY }, "fixed-publish-failed", true],
+    ["a publication whose push could not be confirmed at the ref", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_PUSH_UNCONFIRMED }, "fixed-publish-failed", true],
+    ["a publication that claimed the advance its read-back could not confirm", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_PUSH_UNCONFIRMED_ADVANCE_CLAIMED }, "fixed-publish-failed", true],
+    ["a publication whose unconfirmed push left its account short", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_PUSH_UNCONFIRMED_UNACCOUNTED }, "fixed-publish-failed", true],
     ["a publication that aborted with nothing on origin", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_NOTHING }, "fixed-publish-failed", true],
     ["a publication whose reply and resolve landed on one of two threads", { args: "push no-rebase", cycles: [CYCLE_PASS_TWO], publish: PUBLISH_PART_WAY_RESOLVED }, "fixed-publish-failed", true, withTwo],
     ["a publication holding items publication owes neither a reply nor a resolve", { args: "push no-rebase", cycles: [CYCLE_PASS_POLICY_KINDS], publish: PUBLISH_PART_WAY_POLICY_KINDS }, "fixed-publish-failed", true, withPolicyKinds],
@@ -3673,6 +3764,63 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       status: (noopPrior.match(/status: [^(]*/) || ["no status line"])[0],
       originLine: (noopPrior.match(/^(this run changed|the tips above|reached origin).*/m) || ["no origin line at all"])[0].slice(0, 110),
       standing: (noopPrior.match(/^ {2}thread=.*/m) || ["no standing line"])[0],
+    }),
+  );
+
+  // The push that RAN and could not be CONFIRMED at the ref — the abort task 023a
+  // put after the push, and the first one reachable once `git push` has already
+  // returned 0. It is the one state the other three cannot hold: `advanced` and
+  // `noop` both put these tips ON origin, "pushed nothing" puts them nowhere, and
+  // what the stop establishes is that nobody knows which. So it is read out of the
+  // ABORT rather than out of the push flags, whose truth is precisely what the stop
+  // withdraws — driven from both reports a publisher can hand back, the honest
+  // denial of the advance and a claim of it, because a record reading either flag
+  // renders a false claim on one value or the other.
+  const unconfirmedRuns = {
+    "denying the advance": briefs["a publication whose push could not be confirmed at the ref"],
+    "claiming the advance": briefs["a publication that claimed the advance its read-back could not confirm"],
+  };
+  const claimedOrigin = [];
+  for (const [what, b] of Object.entries(unconfirmedRuns)) {
+    const wrongLines = [
+      /LOCAL ONLY/.test(b) ? "calls the tips local-only" : "",
+      /already on origin/.test(b) ? "calls the tips already on origin" : "",
+      /published in part/.test(b) ? "calls it a part-way publication" : "",
+      /^reached origin:/m.test(b) ? "names something as having reached origin" : "",
+      /status: not published/.test(b) ? "renders the canonical not-published status" : "",
+      /published NOTHING/.test(b) ? "leads with having published nothing" : "",
+      /goes looking for commits that are not there/.test(b) ? "warns of commits that are not there" : "",
+      /^status: UNKNOWN whether its push reached origin, and nothing else was published \(/m.test(b) ? "" : "does not say the push's own outcome is unknown in its status line",
+      /^whether this run's push reached origin is UNKNOWN — `git push` returned and the read-back at the ref did not confirm the ref moved, so read the ref itself before treating the tips above as either published or local, while no reply, resolve or Summary comment reached the PR$/m.test(b)
+        ? ""
+        : "does not say in place of the local-only line that the push's landing is unknown",
+      /takes this record for "nothing reached origin" treats these tips as unpushed when the ref may already carry them/.test(b) ? "" : "does not warn the reader off reading it as nothing-reached-origin",
+    ].filter(Boolean);
+    if (wrongLines.length) claimedOrigin.push(`${what}: ${wrongLines.join(", ")}`);
+    const note = (results[Object.keys(briefs).find((k) => briefs[k] === b)] || {}).note || "";
+    if (!/whether its push reached origin is UNKNOWN/.test(note)) claimedOrigin.push(`${what}: the run's own note does not carry it either`);
+  }
+  check(
+    "a push the read-back could not confirm claims neither presence nor absence on origin, whichever way the publisher reported its own flags",
+    claimedOrigin.length === 0,
+    claimedOrigin.join("; ") || "both reports render the same unknown-push record",
+  );
+
+  // And the same stop where the account is ALSO unusable, which selects the third
+  // state's rendering instead. Its push half must collapse to the least-claiming
+  // of the three there rather than reading `pushedNewCommits` — the flag this
+  // publisher set while its own abort says nothing supports it.
+  const unconfirmedUnaccounted = briefs["a publication whose unconfirmed push left its account short"];
+  check(
+    "and where its account is unusable too, the push half collapses to the state that claims the least rather than to the advance the flag asserts",
+    /^status: UNKNOWN whether anything was published \(/m.test(unconfirmedUnaccounted) &&
+      /whether anything reached origin is UNKNOWN — not even a push is known to have advanced the remote branch, so whether the tips above are on origin is unknown too/.test(unconfirmedUnaccounted) &&
+      !/the push WAS published/.test(unconfirmedUnaccounted) &&
+      !/the tips above are already on origin/.test(unconfirmedUnaccounted) &&
+      !/LOCAL ONLY/.test(unconfirmedUnaccounted),
+    JSON.stringify({
+      status: (unconfirmedUnaccounted.match(/status: [^(]*/) || [])[0],
+      originLine: (unconfirmedUnaccounted.match(/^(whether|this run|the push|the tips above|reached origin).*/m) || ["no origin line at all"])[0].slice(0, 90),
     }),
   );
 
