@@ -2965,6 +2965,11 @@ const resolvedCount = resolvedKeys.length;
 // recognize the stop is the only direction that reads as a claim: an abort that
 // appends which URL disagreed still withdraws it, and some other abort quoting
 // the phrase only ever claims less.
+// It outranks `pushNoop` and the push's three states by being READ FIRST in
+// every chain below rather than by being subtracted from each of them, which is
+// the precedence this file settles in one place per fact for the reason its
+// neighbours give: a second copy of it is unobservable while it agrees and
+// silent when it stops.
 const pushUnconfirmed =
   !published &&
   !!publishReport &&
@@ -2990,7 +2995,7 @@ const landed = published
 // FIRST, so this flag is only ever read where there is none. Guarding it here as
 // well would be the second copy of that precedence this file has already refused
 // twice — unobservable while it agreed, silent when it stopped agreeing.
-const pushNoop = !published && !landed && !pushUnconfirmed && !!(publishReport && publishReport.pushed);
+const pushNoop = !published && !landed && !!(publishReport && publishReport.pushed);
 // What is left, as the COMPLEMENT of what landed over the same keyed set rather
 // than a second count of its own: every disposition is named exactly once in the
 // account, so an item is owed its reply precisely when the account does not

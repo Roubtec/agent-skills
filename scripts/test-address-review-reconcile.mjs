@@ -1762,6 +1762,10 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "requires every push URL": /require every one of them to come back with the HEAD you pushed/.test(step2),
     "treats silence as a stop": /exits 0 even when it prints nothing/.test(step2) && /is a stop rather than a pass/.test(step2),
     "stops rather than claiming publication": step2.includes('aborted: "push not confirmed at the ref"'),
+    // The abort is the ONE fact the record reads to withhold its origin claim, so
+    // the stop denies the advance rather than leaving the publisher to report a
+    // flag its own read-back could not establish.
+    "denies the advance it could not establish": /`pushedNewCommits: false`/.test(step2),
     "states it after the push": step2.indexOf("confirm what actually LANDED") > step2.indexOf("--force-with-lease="),
   };
   const readBackMissing = Object.entries(readBack).filter(([, ok]) => !ok).map(([what]) => what);
