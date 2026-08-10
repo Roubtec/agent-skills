@@ -48,7 +48,7 @@ Before the first task's branch is created, read the main checkout's working-tree
 
 ## Diagnosis discipline
 
-A subagent's environment or infrastructure diagnosis is a **hypothesis, not a finding**. Verify it against that subagent's own transcript — bounded greps for the specific commands it claims it ran — before propagating any mitigation into sibling prompts. A scratch-filename collision was once misdiagnosed as a working-directory bug, and the wrong mitigation rode into roughly ten later subagent prompts before anyone checked.
+A subagent's environment or infrastructure diagnosis is a **hypothesis, not a finding**. Verify it against **observable state** — the reflog, the refs, the working tree, file contents, the output of a command you run yourself — before propagating any mitigation into sibling prompts: that observes the effect rather than the claim. A bounded grep of that subagent's own transcript is a fallback, and only where the harness exposes a greppable one — some hand back the transcript path with an instruction not to read or tail it, because it is full JSONL that will overflow your context. A scratch-filename collision was once misdiagnosed as a working-directory bug, and the wrong mitigation rode into roughly ten later subagent prompts before anyone checked.
 
 ## Subagent destroy boundary
 
