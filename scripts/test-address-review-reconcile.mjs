@@ -945,7 +945,16 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // so testing that it exists locally passes just as well after the head moved
   // — and every probe then runs against a stale tip.
   const readsFetchedHead = brief.includes("git rev-parse FETCH_HEAD");
-  const testsObjectExistence = /cat-file -e/.test(brief);
+  // `cat-file` in its existence modes asks nothing but whether the object is
+  // there, so it counts however it is spelled: `-t` reports the type but fails
+  // identically on a missing object, and the spacing between the two words is
+  // free. One source for every read of it in this file — this brief's, the four
+  // SKILL paragraphs' and the file-wide ban below — because a second spelling of
+  // the same ban is one that silently narrows: a probe re-imported as
+  // `git cat-file  -e` or `git cat-file -t` would satisfy a literal
+  // `cat-file -e` read while the paragraph read caught it, or the reverse.
+  const catFileProbe = /cat-file\s+-[et]\b/;
+  const testsObjectExistence = catFileProbe.test(brief);
   check(
     "and takes their `R` from the fetched ref, not from an existence test on the recorded OID",
     readsFetchedHead && !testsObjectExistence,
@@ -971,9 +980,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // "rather than the recorded `headRefOid`"; `address-reviews`' "adopt the
   // fetched OID as this entry's head"), and the absence of any object-existence
   // gate other than reading the fetched head itself — which commands count, and
-  // in which spellings, is enumerated below. `cat-file -e` is banned
-  // file-wide as well, because re-importing that probe anywhere in either skill
-  // is the regression.
+  // in which spellings, is enumerated below. `cat-file` in its existence modes
+  // is banned file-wide as well, because re-importing that probe anywhere in
+  // either skill is the regression — and it is banned there in exactly the
+  // spellings the paragraph read counts, off the one `catFileProbe` above, so
+  // the file-wide ban cannot narrow to a single spelling while the paragraph
+  // read stays wide.
   //
   // Both are pins on the PHRASING, not on the meaning, and the claim goes no
   // further than that: a regex over prose cannot tell "adopt X" from "adopt X
@@ -1021,7 +1033,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // recorded OID and names `FETCH_HEAD` beside it — `… ^{commit} || git
     // rev-parse FETCH_HEAD`, or the same gate with a trailing comment
     // mentioning it — is the gate, not the read.
-    const existenceProbe = /cat-file\s+-[et]\b|rev-parse\b[^`]*(?:--verify\b|\^\{[a-z]*\})/;
+    const existenceProbe = new RegExp(`${catFileProbe.source}|rev-parse\\b[^\`]*(?:--verify\\b|\\^\\{[a-z]*\\})`);
     const fetchedHeadRead = /^`git rev-parse (?:--verify )?FETCH_HEAD(?:\^\{[a-z]*\})?`$/;
     const gatingProbes = (para) =>
       (para.match(/`[^`\n]+`/g) || []).filter((span) => existenceProbe.test(span) && !fetchedHeadRead.test(span));
@@ -1042,6 +1054,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // verdict and the suite stays green. Deleting the backtick misjudges the
     // peel-spelled read; deleting the trailing anchor entirely misjudges the
     // shared span with the read first.
+    // The `cat-file` branch is fixtured in its spellings for the same reason,
+    // and those fixtures do double duty: `catFileProbe` is the file-wide ban
+    // as well, so narrowing it to one literal spelling — the shape that lets a
+    // re-imported probe back in unseen — misjudges a case here rather than
+    // quietly weakening a read no fixture exercises.
     const probeFixtures = [
       ["a non-query `rev-parse`", "Record the tip with `git rev-parse --abbrev-ref HEAD` first.", false],
       ["the fetched-head read", "take the head from `git rev-parse FETCH_HEAD` instead", false],
@@ -1065,6 +1082,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       ["a gate that only asks `--verify`", "confirm `git rev-parse --verify <headRefOid>` first", true],
       ["a gate that only peels", "confirm `git rev-parse <headRefOid>^{commit}` first", true],
       ["a gate spelled `cat-file -e`", "confirm `git cat-file -e <headRefOid>^{commit}` first", true],
+      ["the same gate spelled `cat-file -t`", "confirm `git cat-file -t <headRefOid>^{commit}` first", true],
+      ["the same gate with the words spaced apart", "confirm `git cat-file  -e <headRefOid>^{commit}` first", true],
     ];
     const misjudged = probeFixtures
       .filter(([, para, isGate]) => (gatingProbes(para).length > 0) !== isGate)
@@ -1105,7 +1124,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
           const probes = gatingProbes(para);
           if (probes.length) gated.push(`${path} runs ${probes.join(", ")}`);
         }
-        if (/cat-file -e/.test(text)) probed.push(path);
+        if (catFileProbe.test(text)) probed.push(path);
       }
     }
     check(
@@ -1126,7 +1145,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     check(
       "and no skill has re-imported the existence probe on the recorded OID",
       probed.length === 0,
-      `tests \`cat-file -e\`: ${probed.join(", ")}`,
+      `tests \`cat-file -e\`/\`-t\`: ${probed.join(", ")}`,
     );
   }
 
