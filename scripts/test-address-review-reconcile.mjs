@@ -430,7 +430,7 @@ const ITEM = {
 // location pair is written the same way: `locationMode` defaults to the inline
 // mode every reconciliation scenario runs in, and passing `null` omits the
 // field, which the working-location gate below rejects.
-function gathered({ workingBranch = "feature/x", items = [], reconcile, locationMode = "inline", worktree, baseOid = GATHERED_BASE_OID, priorRecord, startingHead }) {
+function gathered({ workingBranch = "feature/x", items = [], reconcile, locationMode = "inline", worktree, baseOid = GATHERED_BASE_OID, priorRecord, startingHead, rebased = false }) {
   const packet = {
     ok: true,
     // Every `ok: true` gather WITH ITEMS owes this echo — empty where the
@@ -448,7 +448,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       workingBranch,
       base: "main",
       headOid: "deadbeef",
-      rebased: false,
+      // What the gather step reports and the caller then REPLACES from the rebase
+      // phase's report, so `true` is the ordinary state of any run whose rebase
+      // replayed anything. Overridable because it selects a brief arm no flag
+      // reaches (the lease bullet's `rebased:` pair).
+      rebased,
     },
     items,
   };
@@ -1799,14 +1803,32 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     confirmationMissing.join("; ") || `step 6 carries all ${Object.keys(confirmation).length} clauses`,
   );
 
-  // Every conditional ARM of this builder, rendered. The arms are plain strings
+  // Conditional ARMS of this builder, rendered. The arms at risk are plain strings
   // inside the template literal, so a `${…}` written into one reaches the agent as
   // its own source text — which is how the confirmation above shipped, telling the
   // publisher to read `.../pulls/${packet.pr.number}/…`. One render answers only
   // for the arms that render, and each arm is a place the next one can hide, so
-  // the flags are driven in combinations that between them select all of them: the
-  // three per-bot pings, the none-requested arm, both flake-record arms, and the
-  // deviation section with and without its assessments.
+  // BOTH inputs that select an arm are driven: the flags, and — since no flag
+  // reaches them — the packet's own `rebased` and worktree pair.
+  //
+  // What this sweep drives is the list below and nothing else: the three per-bot
+  // pings, the none-requested arm, both flake-record arms, the deviation section
+  // with and without its assessments, the lease bullet's `rebased: yes` (its `no`
+  // twin renders in every other row), and the worktree working location. That is a
+  // driven ENUMERATION rather than a claim over the builder: an arm added to
+  // `publishPrompt` is covered once it is added here, and until then this check
+  // says nothing about it.
+  //
+  // The `rebased` pair is the arm this sweep was missing, and it is this check's
+  // own bug class: two plain quoted strings, of which only `no` rendered while
+  // `true` is the ordinary state of any run whose pre-fix rebase replayed anything
+  // (the caller replaces `pr.rebased` from that rebase's report). Measured: a
+  // `${packet.pr.base}` planted in its `yes` arm reached the brief as source text
+  // with every suite green.
+  //
+  // The worktree pair is driven because it is FREE, not because it is at risk:
+  // both of its arms are template literals, so an interpolation written into
+  // either renders normally and this class cannot reach it.
   const arms = {
     "the copilot arm": { flags: { push: true, pingCopilot: true }, args: [[], []] },
     "the codex and claude arms": { flags: { push: true, pingCodex: true, pingClaude: true }, args: [[], []] },
@@ -1824,6 +1846,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         { note: "the same probe before the rebase" },
       ],
     },
+    "a branch this run rebased": { flags: { push: true }, args: [[], []], packet: { rebased: true } },
+    "a worktree working location": { flags: { push: true }, args: [[], []], packet: { locationMode: "worktree", worktree: "/w/.worktrees/c/pr-42" } },
   };
   // `DESTROY_BOUNDARY` (task 018) carries one legitimate `${…}`-shaped span of
   // its own — the guarded-`cd` bash form `${DC:?dc-enter returned no path}` — and
@@ -1833,16 +1857,28 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // expansion the boundary text states on purpose.
   const KNOWN_LITERAL_SPANS = ["${DC:?dc-enter returned no path}"];
   const unrendered = [];
-  for (const [what, { flags, args }] of Object.entries(arms)) {
-    const rendered = publishPrompt(gathered({ reconcile: { outcome: "work" } }), [], flags, ...args);
+  for (const [what, { flags, args, packet }] of Object.entries(arms)) {
+    const rendered = publishPrompt(gathered({ reconcile: { outcome: "work" }, ...packet }), [], flags, ...args);
     const hits = rendered.match(/\$\{[^}]*\}/g) || [];
     const hit = hits.find((h) => !KNOWN_LITERAL_SPANS.includes(h));
     if (hit) unrendered.push(`${what}: ${hit}`);
   }
+  // Driven arms are only coverage while they still SELECT what they were added
+  // for, and the two packet-driven rows are selected by fields a rename would
+  // silently take away — leaving two rows that render the same arms as the rows
+  // above them and a check that reads as broader than it is.
+  const rebasedRow = publishPrompt(gathered({ reconcile: { outcome: "work" }, rebased: true }), [], { push: true }, [], []);
+  const worktreeRow = publishPrompt(gathered({ reconcile: { outcome: "work" }, locationMode: "worktree", worktree: "/w/.worktrees/c/pr-42" }), [], { push: true }, [], []);
+  const selected = {
+    "the `rebased: yes` arm": /\(rebased: yes\)/.test(rebasedRow),
+    "the worktree arm": /Your working location is the worktree `\/w\/\.worktrees\/c\/pr-42`/.test(worktreeRow),
+  };
+  const unselected = Object.entries(selected).filter(([, ok]) => !ok).map(([what]) => what);
   check(
-    "and every conditional arm of the publish brief renders, leaving no builder interpolation in the text the agent reads",
-    unrendered.length === 0,
-    unrendered.join("; ") || `all ${Object.keys(arms).length} flag combinations render clean`,
+    "and the publish brief renders every arm this sweep drives — the ping combinations, both deviation and flake shapes, and the packet-driven `rebased: yes` and worktree arms — leaving no builder interpolation in the text the agent reads",
+    unrendered.length === 0 && unselected.length === 0,
+    [unrendered.join("; "), unselected.length ? `no row selects ${unselected.join(", ")}` : ""].filter(Boolean).join("; ") ||
+      `all ${Object.keys(arms).length} rows render clean, and the two packet-driven rows select the arms they were added for`,
   );
 
   // Item 5, satisfied by the steps rather than by a copy of it. Both halves are
