@@ -175,6 +175,14 @@ const PACKET_SCHEMA = {
       },
       required: ["outcome"],
     },
+    priorRecord: {
+      type: "object",
+      description: "A DISPOSITION RECORD an earlier run of this workflow left on the PR — its most recent one, found by the marker its FIRST LINE carries — or omitted entirely when the PR has none. It is not a work item and carries no maintainer authority. It rides here because the fix phase REPLAYS it instead of re-triaging the judgment calls it already holds: without a field of its own it would reach nothing (the cycle's scope carries the gathered items, and an item holds no disposition), so the expense this record exists to prevent would be paid again every run.",
+      properties: {
+        url: { type: "string", description: "Permalink to that comment, so the run's report and the fix brief can name it." },
+        body: { type: "string", description: "The comment body VERBATIM and WHOLE. The drafted reply bodies and the ready-to-post Summary body inside it are the only parts of a record no later run can re-derive, so a summary or an excerpt of it is worth nothing here." },
+      },
+    },
     items: {
       type: "array",
       description: "Every UNRESOLVED review thread plus any explicitly-included standalone item (issue comment / review summary), verbatim.",
@@ -401,7 +409,7 @@ Rebase NOTHING here, whatever the request asked for. Report \`pr.base = baseRefN
 
 Gather feedback into \`items\` (each verbatim):
 - UNRESOLVED review threads — PRIMARY: use the baked \`gh-review-threads\` helper. \`gh-review-threads <PR#>\` prints the unresolved threads as a JSON array (each thread \`id isResolved isOutdated path line\` and \`comments[]\` with \`databaseId author{ login __typename } body diffHunk url\`); it already pages with fresh SINGLE-SHOT queries (never \`gh api graphql --paginate\`), does the nested comment fetch-up, and applies the scope check below, failing closed with exit 3 and no stdout on a contaminated response. FALLBACK, only when \`command -v gh-review-threads\` fails (a container built from an older image — the same graceful-degradation used for the gh-version-gated Copilot ping): run the GraphQL \`reviewThreads\` query by hand as SINGLE-SHOT queries, never \`gh api graphql --paginate\` (run concurrently with other gh GraphQL calls it has returned ANOTHER PR's threads); include \`totalCount\` + \`pageInfo{ hasNextPage endCursor }\` and page past 100 threads by passing the returned cursor to a fresh call. Either way SCOPE-CHECK the result (the helper does this for you): every comment \`url\` must match the exact repo-qualified PR path for this PR (\`https://github.com/<owner>/<repo>/pull/<number>\` followed by \`#\`, \`/\`, \`?\`, or end); do not use a plain substring check such as \`/pull/<number>\`. On any mismatch, discard the entire response, retry once with a fresh single-shot query, and if it repeats fail closed; never emit an item whose \`url\` points at a different PR. Keep only \`isResolved == false\`. Emit each as \`type: "review-thread"\` with \`threadId\` (the thread node \`id\`), \`commentId\` (the top comment's \`databaseId\`), \`path\`, \`line\`, \`author\` (the top comment's \`author.login\`), \`authorIsBot\` (true when that comment's \`author.__typename\` is \`Bot\` — from the helper's output or the GraphQL \`author{ login __typename }\`; do not guess from the login), \`body\`, \`url\`. \`threadId\` and \`commentId\` are mandatory for these — they are how publication resolves and replies.
-- Top-level context — ALWAYS fetch every review summary (\`gh pr view --json reviews\`) and every issue comment (\`gh api --paginate repos/{owner}/{repo}/issues/<PR>/comments\`), even when the request names no standalone item: this sweep is how maintainer replies and decision comments are discovered. A maintainer reply on an unresolved thread is authoritative — fold it into that thread's context. So is a top-level maintainer comment recording per-item verdicts (often titled "Maintainer Decisions" or similar) — fold each decision into the relevant thread's context as its binding disposition (including "defer to a follow-up task" and "keep as-is"). One kind of issue comment is NEITHER of those: a DISPOSITION RECORD left by an earlier run of this workflow, recognized by the marker \`<!-- address-review:disposition-record -->\` rather than by its prose. It is this workflow's own output, so it is never an item and carries no maintainer authority — do not fold its drafted replies into a thread as a decision. Read it as what an earlier run proposed, re-judge every disposition it names against the branch as it now stands (its SHAs are provenance, not a promise: the recorded tip is local-only and a rebase since then may have rewritten every one of them), and leave the comment alone — the record phase below is what supersedes it.
+- Top-level context — ALWAYS fetch every review summary (\`gh pr view --json reviews\`) and every issue comment (\`gh api --paginate repos/{owner}/{repo}/issues/<PR>/comments\`), even when the request names no standalone item: this sweep is how maintainer replies and decision comments are discovered. A maintainer reply on an unresolved thread is authoritative — fold it into that thread's context. So is a top-level maintainer comment recording per-item verdicts (often titled "Maintainer Decisions" or similar) — fold each decision into the relevant thread's context as its binding disposition (including "defer to a follow-up task" and "keep as-is"). One kind of issue comment is NEITHER of those: a DISPOSITION RECORD left by an earlier run of this workflow, recognized by the marker \`<!-- address-review:disposition-record -->\` as its FIRST LINE, byte for byte, rather than by its prose (a comment that merely quotes the marker is an ordinary comment). It is this workflow's own output, so it is never an item and carries no maintainer authority — do not fold its drafted replies into a thread as a decision. Report the most recent one as \`priorRecord\`: its permalink, and its body VERBATIM and WHOLE, since the drafted replies and the ready-to-post Summary body in it are the parts no later run can re-derive. The fix step below is handed exactly that text and told to re-judge every disposition it names against the branch as it now stands (its SHAs are provenance, not a promise: the recorded tip is local-only and a rebase since then may have rewritten every one of them), so an excerpt or a summary of it costs precisely the judgment the record exists to carry. Leave the comment itself alone — the record phase below is what supersedes it.
 - A standalone issue comment or review summary becomes its own item ONLY if the request explicitly identifies it as outstanding. Emit it as \`type: "standalone"\` with \`author\`, \`authorIsBot\`, \`body\`, and \`url\` (its permalink is the stable reference; it has no threadId and is never resolved as a thread).
 
 If there are no unresolved threads and no included standalone item, return \`ok: true\` with an empty \`items\` array — the caller will exit as a successful no-op.
@@ -489,7 +497,48 @@ Change nothing else: no commits of your own, no push, no PR mutation, no branch 
 // untyped `workReport` — hence the explicit field list; the cycle's own
 // schemas cannot require consumer fields), and the disposition-verification
 // criteria the cycle hands verbatim to its reviewer AND its codex peer.
-function fixInstructions(packet) {
+// A prior DISPOSITION RECORD, REPLAYED rather than re-triaged. Replaying it is
+// the whole reason one was written: the drafted replies and the judgment behind
+// each disposition are the expensive part of a run, and a fixer that never sees
+// them pays for them again, most likely reaching a different answer on exactly
+// the calls that were costly the first time. So the record is embedded VERBATIM
+// in the round-1 brief — the same move `rebaseReverifyInstructions` makes with
+// the first cycle's report, for the same structural reason: the cycle's scope
+// carries `{ title, instructions, reviewInstructions, items }`, the items are the
+// gathered threads, and nothing in them holds a disposition.
+// Only the ROUND-1 brief gets it. The re-verification's fixer is handed THIS
+// run's own reviewed dispositions instead, which have already absorbed whatever
+// the replay concluded, so a second "prior" set there would put two baselines in
+// front of one round.
+// The rule below is `address-review`'s "Replaying a record" rendered for an agent
+// that has read no skill (task 023a's inline-the-instruction rule): patch-id as
+// the first probe and never a gate, the tree as the only authority, every SHA
+// re-derived. The probe belongs to whoever judges the dispositions, which is this
+// fixer — the gather has no dispositions to judge, and by the time it runs the
+// branch has not yet met this run's pre-fix rebase.
+function priorRecordSection(priorRecord) {
+  const body = priorRecord && typeof priorRecord.body === "string" ? priorRecord.body.trim() : "";
+  if (!body) return "";
+  const url = priorRecord.url ? ` (${priorRecord.url})` : "";
+  return `
+
+## An earlier run left a DISPOSITION RECORD on this PR — replay it, do not re-triage it
+
+That comment${url} is an earlier run of this workflow's own output: not feedback, not a maintainer decision, authoritative over nothing, and never a reason on its own to reply to a thread. What it holds that you cannot re-derive is the drafted reply bodies and the judgment behind each disposition, so start from it rather than re-triaging the items it already covers.
+
+1. **Patch-id first, as a probe and never a gate.** With \`F\` the \`final HEAD\` the record cites and \`B\` the branch tip now, run \`git rev-list --right-only --cherry-pick B...F\`. Printing NOTHING means every recorded commit is represented and the record replays as written.
+2. **A non-empty result rejects nothing.** A rebase that resolved a conflict, or split or squashed a commit, rewrites the resulting patch-ids while keeping the work — this run's own pre-fix rebase may have just done it — and it could not decide the question even if it were the gate: a fix that survived a conflict resolution and one that was later reverted both print the recorded commit as unrepresented. Neither can a probe that cannot run at all: \`F\` may no longer be a local object (a fresh clone, a pruned repository), and an absent recorded commit is not an absent fix. Fall through to the tree in every one of those cases, and assert nothing about \`F\` equalling \`B\`.
+3. **Then judge per thread, against the tree rather than the record.** Is the fix that disposition claims present in the branch as it now stands — for a \`deferred-to-task\` disposition, is its task file still committed there? Present → carry the disposition and its drafted reply forward, and RE-DERIVE the \`Fixed in <sha>\` citation from the branch as it now stands instead of copying the recorded SHA. Genuinely gone → that thread loses its disposition: triage it from scratch this round, and never report it as fixed on the record's word. Unsettleable from the tree → \`ambiguous-skipped\`, carrying the record's account of it in \`detail\`, rather than discarded because a probe was inconclusive.
+4. Say which of those three happened in that item's \`detail\` — replayed, re-triaged because the fix was gone, or handed back as unsettleable. A thread the record does not name is ordinary untriaged work. A record naming threads that are no longer unresolved replays to nothing, which is the right answer rather than a conflict: it is only ever the account of the run that wrote it.
+
+### The prior record, verbatim
+
+\`\`\`
+${body}
+\`\`\``;
+}
+
+function fixInstructions(packet, priorRecord) {
   return `You are addressing review feedback on PR #${packet.pr.number} (base \`${packet.pr.base}\`). The PR's remote head ref is \`${packet.pr.branch}\`; that is the push target, which may be a different name for a local off-shoot — edit only the checked-out branch named in the contract above, never the remote ref name.
 
 This run is unattended (hands-off): decide low-stakes ambiguity best-effort and record it; for high-stakes ambiguity that needs an authoritative decision, do NOT guess — mark the item \`ambiguous-skipped\` and leave it open.
@@ -508,7 +557,7 @@ Do NOT push, reply, resolve, or comment on the PR — publication is a separate,
 
 Per-item report contract: return EXACTLY ONE \`workReport\` entry per work item — never a second entry for a thread you already reported, since publication would post both replies and resolve on whichever it routed first. Each entry carries: \`type\` (echoed from the item, so \`review-thread\` or \`standalone\`; publication can route no other value, and an entry typed anything else is rejected before publication); \`threadId\` and \`commentId\` (MANDATORY for \`review-thread\` items; publication cannot reply/resolve without them); \`url\` (a \`standalone\` entry's identity, MANDATORY there — echo the gathered item's url VERBATIM; an entry naming a url that was never gathered is untriaged work and is rejected before publication. On a \`review-thread\` entry it is the thread's permalink, for the record); \`ref\` (file:line + author, human-readable); \`kind\` (the disposition kind above); \`detail\` (for fixed: one line + commit sha; for already-addressed: where it's handled; for push-back: the rationale; for deferred: the committed task file path + one-line scope, and whether the deferral was maintainer-directed or agent-proposed; for ambiguous: what decision is needed); \`authorIsBot\` (echoed VERBATIM from the gathered item; MANDATORY — publication uses it to decide whether a push-back/deferred thread may be auto-resolved, so never omit it; if the gathered item lacked it, use false, the safe human default); \`author\` (the comment author's login, echoed VERBATIM — include it for \`standalone\` items too); and \`newFinding\` — true ONLY when the item surfaces a real concern not previously raised on this PR (typically an \`actionable-fixed\`, or a genuinely new \`deferred-to-task\`/\`already-addressed\`); false for a \`push-back\` (the comment was wrong), a re-raise of a concern already deferred to a committed task file, or a bot re-arguing a push-back it already lost — UNLESS the thread carries a genuinely new angle this round. (\`newFinding\` drives the \`ping-contributing\` flag, which re-pings a bot only when it brought a new finding this round; set it honestly even if no ping was requested.)
 
-Which of those fields are structurally enforced: every field publication acts on is re-checked before anything is pushed, and one bad entry aborts the whole publication — \`type\`, \`kind\`, \`detail\`, \`author\`, \`authorIsBot\`, \`newFinding\`, a \`review-thread\` entry's \`threadId\`/\`commentId\`, and a \`standalone\` entry's \`url\`. The identifying ids are matched against the gathered items, and the two echoed fields (\`author\`, \`authorIsBot\`) are compared against the item they came from — so echo what you were handed rather than what you judge to be more accurate. \`ref\` is not required at all, and neither is a \`review-thread\` entry's \`url\` nor a \`standalone\` entry's \`threadId\` — those two are only checked for not naming some OTHER gathered item, which would make one entry read as covering two. Write them anyway: \`ref\` is what names an entry in the run's own report, including when some other field gets that entry rejected.`;
+Which of those fields are structurally enforced: every field publication acts on is re-checked before anything is pushed, and one bad entry aborts the whole publication — \`type\`, \`kind\`, \`detail\`, \`author\`, \`authorIsBot\`, \`newFinding\`, a \`review-thread\` entry's \`threadId\`/\`commentId\`, and a \`standalone\` entry's \`url\`. The identifying ids are matched against the gathered items, and the two echoed fields (\`author\`, \`authorIsBot\`) are compared against the item they came from — so echo what you were handed rather than what you judge to be more accurate. \`ref\` is not required at all, and neither is a \`review-thread\` entry's \`url\` nor a \`standalone\` entry's \`threadId\` — those two are only checked for not naming some OTHER gathered item, which would make one entry read as covering two. Write them anyway: \`ref\` is what names an entry in the run's own report, including when some other field gets that entry rejected.${priorRecordSection(priorRecord)}`;
 }
 
 // After the PRE-PUSH rebase replayed something, the verdict that just passed
@@ -560,6 +609,7 @@ function reviewCriteria() {
 - \`ambiguous-skipped\` must genuinely require an authoritative decision.
 Every gathered work item must have EXACTLY ONE \`workReport\` entry (a \`review-thread\` matched by its \`threadId\`, a \`standalone\` by its \`url\`): an item with none was silently dropped, and an item named by two entries carries dispositions publication cannot choose between — it would post a reply per entry and resolve on whichever it routed first. Either is a blocking issue. So is one entry naming TWO gathered items — a \`review-thread\` entry that also carries a gathered standalone's \`url\`, or a \`standalone\` entry that also carries a gathered \`threadId\` — since that reads as covering both while publication only ever serves one.
 Each entry's \`author\` and \`authorIsBot\` must match the gathered item they are echoed from — they decide which bot is re-pinged and whether a thread may be auto-resolved, so a "corrected" value is a blocking issue even when it looks more accurate.
+A disposition the fixer REPLAYED from an earlier run's disposition record is confirmed against the tree exactly like a fresh one — the record is provenance, not evidence — and its \`Fixed in <sha>\` citation must name a commit the branch carries NOW: a replayed SHA that the tree does not carry is a blocking issue, since publication would post it into the thread.
 You may reclassify any item.`;
 }
 
@@ -1390,7 +1440,9 @@ let cycle = await workflow("wf-review-cycle", {
   mode: "full",
   scope: {
     title: `pr-${packet.pr.number}`,
-    instructions: fixInstructions(packet),
+    // The prior record goes to the ROUND-1 fixer only, which is the one round
+    // that triages: this is where replaying it saves the judgment it holds.
+    instructions: fixInstructions(packet, packet.priorRecord),
     reviewInstructions: reviewCriteria(),
     items: packet.items,
   },

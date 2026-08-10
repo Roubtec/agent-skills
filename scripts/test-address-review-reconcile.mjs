@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 157;
+const EXPECTED_CHECKS = 161;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -372,7 +372,7 @@ const ITEM = {
 // location pair is written the same way: `locationMode` defaults to the inline
 // mode every reconciliation scenario runs in, and passing `null` omits the
 // field, which the working-location gate below rejects.
-function gathered({ workingBranch = "feature/x", items = [], reconcile, locationMode = "inline", worktree, baseOid = GATHERED_BASE_OID }) {
+function gathered({ workingBranch = "feature/x", items = [], reconcile, locationMode = "inline", worktree, baseOid = GATHERED_BASE_OID, priorRecord }) {
   const packet = {
     ok: true,
     // Every `ok: true` gather WITH ITEMS owes this echo — empty where the
@@ -398,6 +398,10 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   if (locationMode !== null) packet.pr.locationMode = locationMode;
   if (worktree !== undefined) packet.pr.worktree = worktree;
   if (reconcile !== undefined) packet.reconcile = reconcile;
+  // A prior disposition record, spread in only when a scenario supplies one: a
+  // PR without one omits the field entirely, which is what the schema says and
+  // what the no-replay-section case needs.
+  if (priorRecord !== undefined) packet.priorRecord = priorRecord;
   return packet;
 }
 
@@ -2757,8 +2761,74 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     /<!-- address-review:disposition-record -->/.test(priorPara) &&
       /never an item and carries no maintainer authority/.test(priorPara) &&
       /re-judge every disposition it names against the branch as it now stands/.test(priorPara) &&
-      /the recorded tip is local-only/.test(priorPara),
+      /the recorded tip is local-only/.test(priorPara) &&
+      priorPara.includes("Report the most recent one as `priorRecord`") &&
+      /body VERBATIM and WHOLE/.test(priorPara),
     priorPara ? priorPara.slice(0, 200) : "the gather brief says nothing about a prior disposition record",
+  );
+}
+
+// --- Replaying a prior record: the packet must actually carry it --------------
+// The gather brief is told to re-judge a prior record, and the record exists so
+// that judgment is not paid for twice. But the cycle's scope contract carries
+// `{ title, instructions, reviewInstructions, items }` and the items are the
+// gathered threads, which hold no disposition — so unless the record travels in
+// the packet AND is embedded in the round-1 brief, the drafted replies and the
+// dispositions are lost and re-triaged, which is the exact expense this whole
+// mechanism exists to prevent. That, and the `B...F` probe the skill requires of
+// a replay, are what this block drives.
+{
+  const RECORD_BODY = [
+    "<!-- address-review:disposition-record -->",
+    "# address-review packet — PR #42 (feature/x)",
+    "status: not published (`no-push` was given)",
+    "## Threads",
+    "[push-back]  src/app.ts:12  a-reviewer  thread=T1",
+    '             reply: "the null case cannot arise here: the caller resolves it two frames up"',
+  ].join("\n");
+  const withRecord = {
+    reconcile: { outcome: "work" },
+    items: [ITEM],
+    priorRecord: { url: "https://example.invalid/pr/42#issuecomment-9", body: RECORD_BODY },
+  };
+  const replayed = await run(gathered(withRecord), { args: "no-push no-rebase" });
+  const scope = replayed.seen.cycleOpts ? replayed.seen.cycleOpts.opts.scope : null;
+  const fixer = (scope && scope.instructions) || "";
+  check(
+    "a prior record reaches the round-1 fixer VERBATIM, with the permalink that names it",
+    fixer.includes(RECORD_BODY) && fixer.includes("https://example.invalid/pr/42#issuecomment-9"),
+    fixer ? `the brief ${fixer.includes(RECORD_BODY) ? "omits the permalink" : "does not carry the record body"}` : "no cycle was reached",
+  );
+  check(
+    "and carries the replay rule the skill requires — patch-id first, rejecting nothing, the tree per thread, every SHA re-derived",
+    /git rev-list --right-only --cherry-pick B\.\.\.F/.test(fixer) &&
+      /rejects nothing/.test(fixer) &&
+      /Fall through to the tree/.test(fixer) &&
+      fixer.includes("RE-DERIVE the `Fixed in <sha>` citation") &&
+      /never report it as fixed on the record's word/.test(fixer) &&
+      fixer.includes("assert nothing about `F` equalling `B`"),
+    fixer.slice(fixer.indexOf("DISPOSITION RECORD"), fixer.indexOf("DISPOSITION RECORD") + 200),
+  );
+  // And the reviewer is what makes the replay bite: a fixer that copied a stale
+  // `Fixed in <sha>` out of the record would otherwise publish it into the
+  // thread, since the SHA is prose inside `detail` that no schema can check.
+  check(
+    "and the reviewer confirms a replayed disposition against the tree, with its citation re-derived",
+    /REPLAYED from an earlier run's disposition record is confirmed against the tree exactly like a fresh one/.test((scope && scope.reviewInstructions) || "") &&
+      /must name a commit the branch carries NOW/.test((scope && scope.reviewInstructions) || ""),
+    ((scope && scope.reviewInstructions) || "").slice(0, 120),
+  );
+  // A PR with no prior record carries no replay section at all: there is nothing
+  // to replay, and a section describing a record that does not exist would have
+  // the fixer probing a `final HEAD` it was never given.
+  const fresh = await run(gathered({ reconcile: { outcome: "work" }, items: [ITEM] }), { args: "no-push no-rebase" });
+  const freshFixer = ((fresh.seen.cycleOpts || {}).opts || {}).scope
+    ? fresh.seen.cycleOpts.opts.scope.instructions
+    : "";
+  check(
+    "and a PR with no prior record hands the fixer no replay section",
+    !!freshFixer && !/DISPOSITION RECORD/.test(freshFixer) && !/cherry-pick B\.\.\.F/.test(freshFixer),
+    freshFixer ? "the fixer brief carries a replay section with no record to replay" : "no cycle was reached",
   );
 }
 
