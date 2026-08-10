@@ -107,7 +107,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 74;
+const EXPECTED_CHECKS = 76;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -856,6 +856,28 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     skipPara ? skipPara.slice(0, 160) : 'no paragraph reports `outcome: "not-applicable"`',
   );
 
+  // The base commit this brief resolves is the review base of every `no-rebase`
+  // run, and WHICH REPOSITORY it is read in decides whether it is the PR's base
+  // at all. The branch's push remote is the HEAD repository: on a
+  // cross-repository PR `<push-remote>/<baseRefName>` is a same-named branch in
+  // the fork or nothing, so a run there pins a commit off another branch — or
+  // fails — while looking exactly like a run that worked. And a remote-tracking
+  // ref is only as fresh as its last fetch, so reading one instead of fetching
+  // can pin a commit the base has moved past even same-repo. Both halves are
+  // pinned: the base repository is the PR's own, and the ref is fetched and
+  // resolved from what the fetch brought.
+  const basePara = brief.split("\n\n").find((p) => p.includes("pr.baseOid")) || "";
+  const readsBaseRepo = /base always lives in the repository the PR itself is in/.test(basePara);
+  const notThePushRemote = /NOT this branch's push remote|not through this branch's push remote/.test(basePara);
+  const fetchesIt = /git fetch <the remote whose URL is that repository/.test(basePara) && /moving any branch/i.test(basePara);
+  const resolvesTheFetch = /rev-parse --verify FETCH_HEAD\^\{commit\}/.test(basePara);
+  const refusesTheTrackingRef = /remote-tracking ref is only as fresh as/.test(basePara);
+  check(
+    "and resolves the base commit in the PR's OWN repository, freshly fetched, rather than through the branch's push remote or a remote-tracking ref",
+    readsBaseRepo && notThePushRemote && fetchesIt && resolvesTheFetch && refusesTheTrackingRef,
+    `base repository stated: ${readsBaseRepo}; push remote refused: ${notThePushRemote}; fetches the ref: ${fetchesIt}; resolves the fetch: ${resolvesTheFetch}; refuses a tracking ref: ${refusesTheTrackingRef}`,
+  );
+
   const stated = [...new Set([...brief.matchAll(/outcome:\s*"([^"]*)"/g)].map((m) => m[1]))].sort();
   check(
     "and names exactly the four outcomes the schema and the gate know",
@@ -1104,6 +1126,21 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "and on a conflict beyond its competence it aborts, confirms the tree is clean and idle, and resolves by hunk otherwise",
     aborts > -1 && confirmsIdle && neverMidRebase && hunkRule,
     `abort@${aborts} confirms-idle@${confirmsIdle} never-mid-rebase@${neverMidRebase} hunk-rule@${hunkRule}`,
+  );
+
+  // WHICH REPOSITORY the target ref is fetched from, for the same reason the
+  // gather brief's base resolution is pinned above: the default target is the
+  // PR's base ref, which lives in the PR's own repository, while the branch's
+  // push remote is the HEAD repository — a different one on every fork PR, where
+  // the same ref name is another branch's tip or nothing. Rebasing onto that
+  // pins a commit off the wrong branch and the run looks like it worked.
+  const fetchesFromBaseRepo = /repository the PR itself is in/.test(brief) && /NOT this branch's push remote/.test(brief);
+  const fetchesTheRef = /git fetch <the remote whose URL is that repository/.test(brief);
+  const resolvesWhatItFetched = /`FETCH_HEAD` for a ref you just fetched/.test(brief);
+  check(
+    "and fetches the target from the repository that ref lives in — the PR's own — rather than through the branch's push remote",
+    fetchesFromBaseRepo && fetchesTheRef && resolvesWhatItFetched,
+    `base repository stated: ${fetchesFromBaseRepo}; fetches the ref: ${fetchesTheRef}; resolves what it fetched: ${resolvesWhatItFetched}`,
   );
 
   // This brief is the workflow layer's rendering of the canonical nugget
