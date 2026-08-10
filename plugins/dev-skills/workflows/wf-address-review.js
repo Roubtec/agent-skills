@@ -720,7 +720,7 @@ The body, marker first (the marker line is what step 1 of the next run matches, 
 <!-- address-review:disposition-record -->
 # address-review packet — PR #${packet.pr.number} (${packet.pr.workingBranch})
 status: not published (<the reason above, one line>)
-final HEAD <the tip you read> | recorded headRefOid ${packet.pr.headOid} | base ${packet.pr.base}
+starting HEAD ${facts.startingHead || "(not recorded — no rebase ran this run)"} | final HEAD <the tip you read> | recorded headRefOid ${packet.pr.headOid} | base ${packet.pr.base}
 validation <what ran> | reviewer ${facts.reviewerPassed ? "Pass" : "did NOT pass"} (${facts.rounds} round(s)) | peer <participation>
 the tips above are LOCAL ONLY — this run pushed nothing, so they are not on origin
 
@@ -1869,6 +1869,10 @@ if (noPublishReason && workReport.length) {
       rounds,
       reviewerPassed: !!passed,
       deviations: cycle.deviations,
+      // The tip this run started from, which only a rebase point reports (its
+      // `before`). A `no-rebase` run has none, and the brief writes that it has
+      // none rather than inventing one.
+      startingHead: (rebaseRecord.points[0] || {}).before || "",
     }),
     { label: "record", schema: RECORD_SCHEMA }
   );
