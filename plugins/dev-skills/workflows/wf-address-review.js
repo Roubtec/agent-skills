@@ -1007,7 +1007,9 @@ if (flags.noRebase) {
   // the one path that has no rebase report to check. The gather resolved the
   // base ref to a commit for exactly this, which is `address-review` step 6's
   // fallback for a turn in which no rebase ran; an unusable value stops the run
-  // rather than being delegated as a name.
+  // rather than being delegated as a name. That stop is a halt like the rebase
+  // stops below, so it keeps the worktree and reports it through `pr.worktree`
+  // rather than reclaiming it.
   const pinnedBase = typeof packet.pr.baseOid === "string" ? packet.pr.baseOid.trim() : "";
   if (!isFullOid(pinnedBase)) {
     return {
