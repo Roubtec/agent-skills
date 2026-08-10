@@ -19,7 +19,7 @@
 //
 //   CONTENT, checked per boundary constant, against the clause list below.
 //   Task 017's criterion is about what the constants SAY, and they say it once
-//   each; asserting twelve clauses against all sixty renders re-derived the
+//   each; asserting eleven clauses against all sixty renders re-derived the
 //   same five answers sixty times over. The constants are evaluated out of the
 //   same declaration prefix the builders come from, so this is the value the
 //   briefs actually interpolate rather than the source text of the literal.
@@ -114,43 +114,38 @@ function shippedWorkflows() {
 // rather than "a rewording is not a failure", which is broader than any of
 // these patterns delivers.
 //
-// The directive clause is the one place a wildcard used to span a verb: it read
-// `/Empirical verification[^\n]*belongs ONLY in a disposable clone/`, which a
-// NEGATED boundary satisfies — "never belongs ONLY in a disposable clone", "does
-// not belong ONLY in a disposable clone" — so the suite could pass a boundary
-// saying the opposite of what it must. The gap is now bounded to the qualifier
-// that was narrowed last round ("that could change state", "that could mutate
-// state"), with `that ... state belongs ONLY` literal around it, so the
-// directive's own verb can no longer be reworded out from under the match. The
-// qualifier window admits a hyphen ("that could change on-disk state") because
-// excluding one narrowed the clause below its own intent while closing nothing:
-// the negation the literal text fences out cannot be spelled with one.
+// Each phrase spans the words that make its clause OPERATIVE — its polarity,
+// its qualifier, its enumeration — and never merely a tail that an INVERTED or
+// NARROWED boundary satisfies just as well. That rule is written down because
+// every phrase which broke it was measured green against a boundary saying
+// something else: a wildcard spanning the directive's verb passed "never
+// belongs ONLY in a disposable clone"; a wildcard spanning that directive's
+// qualifier instead passed both "that cannot change state" and "that must
+// change state", the second narrowing the rule until ordinary state-changing
+// verification escapes it; a bare `and force-pushing` passed the same command
+// list under an "Also permitted:" label; a phrase starting on the blast-radius
+// clause's verb passed "so nothing you do can reach every sibling worktree" and
+// a halved enumeration; and a carve-out matched from "whether as an exact
+// command" passed a boundary with the scope it bounds — "beyond what this
+// assignment itself spells out" — deleted outright. So these phrases run long,
+// and none of them holds a wildcard any more: every matched span is contiguous
+// literal text, and the one place two shipped spellings differ inside a span is
+// enumerated ("and", which only the section's copy has) rather than skipped over.
 //
-// The addressing clause is the other pattern written long, for the opposite
-// reason: that clause states three things at once — the positive form, the glob
-// ban, and the unchecked-`cd` ban — so a copy keeping only the first would read
-// as compliant while dropping the two prohibitions the incident it exists for
-// actually turned on. The pattern therefore spans all three, joined by windows
-// too narrow to hold a verb rather than by wildcards, and matches each
-// prohibition through its own imperative, which is not something a permission
-// can be spelled with. The last of them runs on through its NEGATIVE QUALIFIER
-// as well, because there the imperative alone does not carry the clause: what
-// separates the banned form from the guarded one is "you have not checked", and
-// a match stopping at "whose success" is equally satisfied by an inverted
-// qualifier ("whose success you have checked") that bans the guarded form and
-// leaves the unchecked one free, or by one dismissing the check outright
-// ("whose success need not be checked").
+// The addressing clause is the longest of them for a further reason: it states
+// three things at once — the positive form, the glob ban, and the unchecked-`cd`
+// ban — so a copy keeping only the first would read as compliant while dropping
+// the two prohibitions the incident it exists for actually turned on.
 const REQUIRED = [
-  ["permitted set", /Permitted: reading, searching,[^\n]*read-only `git`\/`gh` queries/],
-  ["forbidden set", /`rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`/],
-  ["force-pushing forbidden", /and force-pushing/],
-  ["exact-command / named-skill carve-out", /whether as an exact command or as a skill it names to invoke/],
+  ["permitted set", /Permitted: reading, searching, (?:and )?read-only `git`\/`gh` queries/],
+  ["forbidden set", /Forbidden: `rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`, and force-pushing/],
+  ["exact-command / named-skill carve-out", /each of them beyond what this assignment itself spells out, whether as an exact command or as a skill it names to invoke/],
   ['"not in a clone" qualifier', /NOT in a clone, NOT in a temp directory, NOT "safely"/],
-  ["exemptions are granted, not self-selected", /the only exemptions — and only because this assignment names them/],
+  ["exemptions are granted, not self-selected", /You may not self-authorize one by putting yourself somewhere you believe is safe; what this assignment spells out, and the disposable clone below, are the only exemptions — and only because this assignment names them/],
   ["worktree is not a blast radius", /A worktree is not a blast radius/],
-  ["shared `.git` reaches every sibling worktree", /reach every sibling worktree through the shared `\.git`/],
-  ["a repository is addressed by path", /Address any repository other than [^\n]{0,40}BY PATH: `git -C <absolute path>`[^\n]{0,40}NEVER derive a working directory from a glob[^\n]{0,40}NEVER chain a state-changing git command after a `cd` whose success you have not checked/],
-  ["empirical verification is clone-only", /Empirical verification that [a-z -]+ state belongs ONLY in a disposable clone/],
+  ["shared `.git` reaches every sibling worktree", /so `branch -f`, `reset`, `update-ref`, and `gc` reach every sibling worktree through the shared `\.git`/],
+  ["a repository is addressed by path", /Address any repository other than your own checkout BY PATH: `git -C <absolute path>`\. NEVER derive a working directory from a glob, and NEVER chain a state-changing git command after a `cd` whose success you have not checked/],
+  ["empirical verification is clone-only", /Empirical verification that could change state belongs ONLY in a disposable clone/],
   ["disposable-clone destination", /command -v dc-enter/],
   ["absolute-path fallback", /absolute path outside the repository — never a relative one/],
 ];
