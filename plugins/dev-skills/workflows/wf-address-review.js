@@ -10,7 +10,8 @@
  * makes is the disposition record every exit that does not publish IN FULL
  * leaves behind (see `recordPrompt` and `leaveDispositionRecord`), which is
  * `no-push`'s single documented exception. A publication that stopped part-way
- * leaves the same record, saying what landed rather than that nothing did.
+ * leaves the same record, saying what the publisher confirmed reaching origin —
+ * a mutation, never that a push command ran — and what it still owes.
  * The re-review pings fire ONLY when the push actually advanced the branch with
  * new commits/rewritten history; a no-op push (nothing new to review) skips them
  * so an automated review -> address -> review loop can terminate.
@@ -241,18 +242,20 @@ const PUBLISH_SCHEMA = {
   properties: {
     published: { type: "boolean", description: "True only if the push AND every required reply/resolve/summary/ping step succeeded. False if any guard (moved head, unmatched remote, rejected lease, failed comment) aborted publication." },
     aborted: { type: "string", description: "Why publication stopped, when published is false (e.g. `head moved`, `working location moved off the branch`, `lease rejected`, `local behind PR head`, `off-shoot does not carry the PR head`, `push remote unmatched`). Empty when published. Write it: the run's own note carries this reason inline, so an omitted one reads as `no reason reported` there." },
-    pushed: { type: "boolean", description: "Whether a push was performed at all (may be an `Everything up-to-date` no-op)." },
-    pushedNewCommits: { type: "boolean", description: "True ONLY if the push actually advanced the remote branch — new commits or rewritten history. False when no push happened or for a no-op `Everything up-to-date` push. Gates whether the re-review pings may fire." },
+    pushed: { type: "boolean", description: "Whether a push command SUCCEEDED — an `Everything up-to-date` no-op counts, since it leaves the remote pointing at this tip. False when none was attempted, or when one was rejected or failed. This is NOT evidence that anything this run did reached origin: a no-op push changed nothing there, so `pushedNewCommits` is what says the remote moved." },
+    pushedNewCommits: { type: "boolean", description: "True ONLY if the push actually advanced the remote branch — new commits or rewritten history. False when no push happened or for a no-op `Everything up-to-date` push. Gates whether the re-review pings may fire, and it is the push half of what a disposition record may call landed." },
     threadOutcomes: {
       type: "array",
-      description: "Per item: its stable reference and what was done (replied/resolved/left-open).",
+      description: "Per item: its stable reference, what was done in prose, and the two facts a later turn acts on. Report it even when publication ABORTS part-way, one entry per item you acted on: an aborted publication leaves a disposition record, and the difference between a reply that landed and one that is still owed is derived from exactly these entries — a thread whose reply landed but whose resolve did not needs resolving, not replying to twice.",
       items: {
         type: "object",
         properties: {
           ref: { type: "string" },
           outcome: { type: "string" },
+          replied: { type: "boolean", description: "True ONLY if the reply is on the PR — the API call returned success. Never what you intended or attempted." },
+          resolved: { type: "boolean", description: "True ONLY if the thread is now resolved on the PR. Never what you intended or attempted." },
         },
-        required: ["ref", "outcome"],
+        required: ["ref", "outcome", "replied", "resolved"],
       },
     },
     summaryCommentUrl: { type: "string", description: "URL of the posted Summary of Review Fixes, or empty if not posted." },
@@ -749,7 +752,7 @@ Report a STRUCTURED result: set \`published: true\` ONLY if the push and every r
 
 ${JSON.stringify(dispositions, null, 2)}
 
-Record each item's outcome with its stable reference (file:line, author, threadId or url) in \`threadOutcomes\`.`;
+Record each item's outcome with its stable reference (file:line, author, threadId or url) in \`threadOutcomes\`, and set that entry's \`replied\` and \`resolved\` to what actually SUCCEEDED on the PR rather than to what you attempted. Report them even where publication stops part-way, for every item you acted on: such a run leaves a disposition record, and these entries are the only thing that lets it say which reply is already posted and which is still owed — without them a later turn either re-posts a reply that landed or never posts one that did not.`;
 }
 
 // The DURABLE DISPOSITION RECORD — the `address-review` skill's section of that
@@ -776,13 +779,19 @@ function recordPrompt(packet, dispositions, facts) {
     : `You work in the repository's current checkout, which is on the branch this run addressed — do NOT create a worktree and do NOT switch branches.`;
   // A publication that stopped PART-WAY holds the same map with replies left to
   // replay, so it leaves the same record — but two of its lines would be lies:
-  // `status: not published` and "this run pushed nothing" are both false once a
-  // push landed and only the replies, resolves or Summary failed. `landed` is
-  // what reached origin, and it selects the rendering the skill's format defines
-  // for that case. Empty is the ordinary run: nothing reached origin at all.
+  // `status: not published` and "this run pushed nothing" are both false once
+  // something reached origin and only the rest failed. `landed` is what the
+  // publisher confirmed reaching origin, `outstanding` what it owes, and
+  // `outcomes` its per-thread account of which is which; `landed` selects the
+  // rendering the skill's format defines for that case. Empty is the ordinary
+  // run: nothing reached origin at all — and `pushNoop` is the one shape between
+  // them, a push that succeeded while moving nothing, where the tips are on
+  // origin though this run put nothing there.
   const landed = typeof facts.landed === "string" ? facts.landed.trim() : "";
+  const outstanding = typeof facts.outstanding === "string" ? facts.outstanding.trim() : "";
+  const outcomes = Array.isArray(facts.outcomes) ? facts.outcomes : [];
   return `Leave this run's disposition record on PR #${packet.pr.number} (branch \`${packet.pr.workingBranch}\`). ${landed
-    ? `This run's publication stopped PART-WAY: ${facts.why} What reached origin: ${landed}. So this record says what landed rather than "not published", and its tips are NOT local-only — the two lines below marked for that case are the ones that differ.`
+    ? `This run's publication stopped PART-WAY: ${facts.why} So this record says what landed rather than "not published", and its tips are NOT local-only — the two lines below marked for that case are the ones that differ.`
     : `This run published NOTHING: ${facts.why}`} Read \`AGENTS.md\` / \`CLAUDE.md\` first.
 
 ${where}
@@ -805,7 +814,11 @@ The body, marker first (the marker line is what step 1 of the next run matches, 
 status: ${landed ? "published in part" : "not published"} (<the reason above, one line${landed ? ", saying what landed and what did not" : ""}>)
 starting HEAD ${facts.startingHead || "(not recorded — neither the gather nor a rebase point reported one)"} | final HEAD <the tip you read> | recorded headRefOid ${packet.pr.headOid}
 base ${packet.pr.base} | validation <what ran> | reviewer ${facts.reviewerPassed ? "Pass" : "did NOT pass"} (${facts.rounds} round(s)) | peer <participation>
-${landed ? `pushed to origin: ${landed} — the replies, resolves and Summary body below are what remains to replay` : "the tips above are LOCAL ONLY — this run pushed nothing, so they are not on origin"}
+${landed
+    ? `reached origin: ${landed} — still outstanding: ${outstanding}`
+    : facts.pushNoop
+      ? "this run changed NOTHING on origin: its push was an `Everything up-to-date` no-op, so the tips above are already on origin while no reply, resolve or Summary comment reached it"
+      : "the tips above are LOCAL ONLY — this run pushed nothing, so they are not on origin"}
 
 ## Threads
 [<disposition>] <path>:<line>  <author>  thread=<threadId or url>
@@ -822,7 +835,7 @@ ${landed ? `pushed to origin: ${landed} — the replies, resolves and Summary bo
 - The SHAs are PROVENANCE, not a promise. Assert nothing about them holding later: the branch may be rebased before any push, which rewrites every one while changing nothing about whether the work is there. Do not write "the branch tip is <sha>" as a condition a replay must check, and do not omit the header's last line${landed
     ? " — a reader who takes a part-way publication for a complete one stops looking for the replies that never landed"
     : " — a reader who takes those SHAs for origin's goes looking for commits that are not there"}.${landed
-    ? `\n- Every thread keeps its entry and its verbatim reply, this run's part-way publication included: one the publisher DID reply to and resolve says so on its own entry rather than being dropped, so a later turn can see what is left without re-deriving it from the thread state.`
+    ? `\n- Every thread keeps its entry and its verbatim reply, this run's part-way publication included — and each entry says WHERE IT STANDS, taken from the publisher's own per-thread account and from nothing else: ${JSON.stringify(outcomes)}. An entry that account reports \`replied\` carries \`reply: ALREADY POSTED — do not post it again\` above the body it posted, adding \`resolve still owed\` where \`resolved\` is false; an entry that account does not name at all carries \`the publisher reported no outcome for this thread — check it on the PR before replying\`, because a reply the publisher posted and failed to report would be posted twice by a later turn that assumed it was owed. Never drop an entry because its reply landed: the difference between the two is the whole reason this rendering exists.`
     : ""}
 
 Report \`posted\`, \`superseded\` (true when you updated a prior record of your own), \`url\` (the record comment's permalink), and one line of \`detail\`.
@@ -2254,22 +2267,51 @@ const published = !!(publishReport && publishReport.published);
 // left to replay, so it records through the same helper as every exit above —
 // the last of the exits that publish nothing in full, and the one the computed
 // reason above cannot reach because the publisher had not run yet.
-// What it records differs in two lines, and `landed` is what selects them: once
-// the push reached origin, "not published" and "the tips are LOCAL ONLY" are
-// both false, and a reader who believes either stops looking for the replies
-// that never landed. `pushed` false means nothing reached origin at all, so that
-// run records exactly like a pre-publication stop.
-const landed = !published && publishReport && publishReport.pushed
-  ? `the push${publishReport.pushedNewCommits === false ? " (a no-op — the remote already pointed at this tip)" : ""}${publishReport.summaryCommentUrl ? `, and the Summary comment at ${publishReport.summaryCommentUrl}` : ""}`
-  : "";
+// What it records differs in two lines, and what selects them is what actually
+// REACHED ORIGIN — a successful mutation, never `pushed`. `pushed` says a push
+// command succeeded, which an `Everything up-to-date` no-op also does, so a run
+// whose no-op push was followed by a failure on its first reply changed nothing
+// remotely and must not read as "published in part": a reader who believes it
+// goes looking for replies and a Summary comment that were never posted. Only
+// three things can have landed, and the publisher reports each one: a push that
+// ADVANCED the remote, replies/resolves it confirmed, and a posted Summary.
+const outcomes = Array.isArray(publishReport && publishReport.threadOutcomes) ? publishReport.threadOutcomes : [];
+const repliedCount = outcomes.filter((o) => o && o.replied).length;
+const resolvedCount = outcomes.filter((o) => o && o.resolved).length;
+const summaryUrl = publishReport && typeof publishReport.summaryCommentUrl === "string" ? publishReport.summaryCommentUrl.trim() : "";
+const landed = published
+  ? ""
+  : [
+      publishReport && publishReport.pushedNewCommits ? "the push, which advanced the remote branch" : "",
+      repliedCount ? `${repliedCount} thread ${repliedCount === 1 ? "reply" : "replies"}` : "",
+      resolvedCount ? `${resolvedCount} thread resolve${resolvedCount === 1 ? "" : "s"}` : "",
+      summaryUrl ? `the Summary comment at ${summaryUrl}` : "",
+    ].filter(Boolean).join(", ");
+// A push that ran and moved nothing is neither case: the tips ARE on origin
+// (the remote already pointed at them), so the local-only line is false too.
+// One fact, one extra line in the record, rather than a rendering of its own.
+const pushNoop = !published && !landed && !!(publishReport && publishReport.pushed);
+// What is left, counted off the same reported facts. An entry the publisher did
+// not report as replied reads as outstanding, which is the safe direction and
+// the honest one: this is what the publisher SAID it did, and the record's own
+// per-thread breakdown below carries the same reservation to the thread it
+// concerns rather than averaging it away.
+const owedReplies = Math.max(0, workReport.length - repliedCount);
+const outstanding = [
+  owedReplies ? `${owedReplies} of ${workReport.length} thread(s) still owed their reply` : "",
+  resolvedCount < workReport.length ? `${workReport.length - resolvedCount} not resolved (which for a push-back on a human thread is the policy rather than a debt)` : "",
+  summaryUrl ? "" : "the Summary comment",
+].filter(Boolean).join(", ") || "no reply, resolve or Summary comment — publication stopped past all of them, so its reason above is what is left to act on";
 const publishRecord = published
   ? {}
   : await leaveDispositionRecord(
       `publication did not complete: ${(publishReport && publishReport.aborted) || "the publisher returned nothing"}${landed
-        ? " — the push had already landed, so what is left to replay is the replies, resolves and Summary comment."
-        : ", and nothing reached origin."}`,
+        ? ` — what reached origin: ${landed}; what is left to replay: ${outstanding}.`
+        : pushNoop
+          ? ", and nothing reached origin: its push was an `Everything up-to-date` no-op that moved nothing, and no reply, resolve or Summary comment followed."
+          : ", and nothing reached origin."}`,
       workReport,
-      { rounds, reviewerPassed: true, deviations: cycle.deviations, landed },
+      { rounds, reviewerPassed: true, deviations: cycle.deviations, landed, outstanding, pushNoop, outcomes },
     );
 // Published is the finish this whole pipeline exists for, so the worktree goes
 // back here. A publication that aborted keeps it: whatever the publisher
@@ -2316,5 +2358,9 @@ return {
   ...(reclaimed ? { worktreeReclaim: reclaimed } : {}),
   note: published
     ? (`${notes.join(" ")}${survivingWorktreeNote(reclaimed)}`.trim() || undefined)
-    : withRecordNote(`Fixes passed review but publication did not fully complete — see publishReport.aborted; ${landed ? "the push DID land, so what is outstanding is the replies, resolves and Summary comment" : "nothing reached origin"}.`),
+    : withRecordNote(`Fixes passed review but publication did not fully complete — see publishReport.aborted; ${landed
+        ? `what reached origin: ${landed}; what is outstanding: ${outstanding}`
+        : pushNoop
+          ? "nothing reached origin — its push was an `Everything up-to-date` no-op that moved nothing"
+          : "nothing reached origin"}.`),
 };

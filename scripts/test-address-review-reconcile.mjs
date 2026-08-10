@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 169;
+const EXPECTED_CHECKS = 172;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -149,12 +149,13 @@ const cut = src.indexOf("\nconst raw = flattenArgs(args);");
 if (cut < 0) throw new Error(`${SOURCE}: cut marker not found for the declaration prefix`);
 const prefix = src.slice(0, cut).replace(/^export const meta/m, "const meta");
 // eslint-disable-next-line no-new-func
-// The PACKET SCHEMA lives in that same prefix, and carries contract text no
-// scenario can reach: what the gather must hand over with a prior record. It is
-// read as the object it is rather than by grepping the source.
-const { gatherPrompt, publishPrompt, rebasePrompt, PACKET_SCHEMA } = new Function(
+// The SCHEMAS live in that same prefix, and two of them carry contract text a
+// scenario cannot reach: what the gather must hand over with a prior record, and
+// what the publisher must report about what actually reached the PR. Both are
+// read as the objects they are rather than by grepping the source.
+const { gatherPrompt, publishPrompt, rebasePrompt, PACKET_SCHEMA, PUBLISH_SCHEMA } = new Function(
   "args",
-  `"use strict";\n${prefix}\nreturn { gatherPrompt, publishPrompt, rebasePrompt, PACKET_SCHEMA };`,
+  `"use strict";\n${prefix}\nreturn { gatherPrompt, publishPrompt, rebasePrompt, PACKET_SCHEMA, PUBLISH_SCHEMA };`,
 )("");
 
 // Reaching the nested cycle ends the scenario: everything past the gate is
@@ -1553,15 +1554,25 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         [/patch-id cascade/, /Fall through to the tree/],
       ],
       // The rendering for the one case the canonical format cannot state as
-      // written: once a push has landed, `status: not published` and the
-      // local-only line are both false, and a reader who believes either stops
-      // looking for the replies that never landed. Pinned in the skill because
-      // the skill is where the format is defined once; `recordPrompt` renders it
-      // and the exit matrix drives it.
+      // written: once something this run did reached origin, `status: not
+      // published` and the local-only line are both false, and a reader who
+      // believes either stops looking for the replies that never landed. Pinned
+      // in the skill because the skill is where the format is defined once;
+      // `recordPrompt` renders it and the exit matrix drives it. What "landed"
+      // MEANS is pinned beside the rendering, because that is where it went
+      // wrong: a push command running is not a mutation reaching origin, and an
+      // `Everything up-to-date` push followed by a failed reply changed nothing.
       [
         "the part-way publication's rendering of that format",
         "**A publication that stopped part-way**",
-        [/status: published in part/, /what remains to replay/, /keeps its entry and its verbatim reply/],
+        [
+          /status: published in part/,
+          /reached origin: <what landed> — still outstanding: <what is left>/,
+          /mutation that succeeded\*\*, never that a push command ran/,
+          /`Everything up-to-date` moved nothing/,
+          /keeps its entry and its verbatim reply/,
+          /reported no outcome for says that rather than guessing/,
+        ],
       ],
     ];
     // Item 2's bullets are an ordered exclusion chain — "work these in order …
@@ -2704,7 +2715,30 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     pushedNewCommits: true,
     aborted: "the push landed but replying to thread T1 failed with a 502",
     summaryCommentUrl: "",
-    threadOutcomes: [],
+    threadOutcomes: [{ ref: "src/app.ts:12 a-reviewer", outcome: "reply rejected with a 502", replied: false, resolved: false }],
+  };
+  // The same exit with a reply and the Summary ALREADY on the PR: what landed
+  // and what is outstanding are then different subsets of the same map, which is
+  // the distinction a later turn re-posts a reply for want of.
+  const PUBLISH_PART_WAY_REPLIED = {
+    published: false,
+    pushed: true,
+    pushedNewCommits: true,
+    aborted: "the reply landed but resolving thread T1 was rejected, and the pings never ran",
+    summaryCommentUrl: "https://example.invalid/pr/42#issuecomment-7",
+    threadOutcomes: [{ ref: "src/app.ts:12 a-reviewer", outcome: "replied; resolve rejected", replied: true, resolved: false }],
+  };
+  // A push that SUCCEEDED while moving nothing — `Everything up-to-date`, the
+  // remote already pointing at this tip — and then failed on its first reply.
+  // `pushed` is true and nothing whatever reached origin, which is why the
+  // rendering cannot be selected on it.
+  const PUBLISH_NOOP_PUSH = {
+    published: false,
+    pushed: true,
+    pushedNewCommits: false,
+    aborted: "the push was a no-op and replying to thread T1 failed with a 502",
+    summaryCommentUrl: "",
+    threadOutcomes: [{ ref: "src/app.ts:12 a-reviewer", outcome: "reply rejected with a 502", replied: false, resolved: false }],
   };
   // And the same exit reached with nothing on origin at all, which records
   // exactly like a stop before publication.
@@ -2725,6 +2759,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     ["a replay with no reviewer rounds left to re-verify it", { args: "push", cycles: [{ ...CYCLE_PASS, rounds: 12 }], ...REPLAY_POINTS }, "reverify-budget-exhausted", true],
     ["a re-verification that returned nothing", { args: "push", cycles: [CYCLE_PASS, null], ...REPLAY_POINTS }, "error", true],
     ["a publication that pushed and then failed part-way", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_PART_WAY }, "fixed-publish-failed", true],
+    ["a publication whose reply and Summary landed before it failed", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_PART_WAY_REPLIED }, "fixed-publish-failed", true],
+    ["a publication whose push was a no-op before it failed", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_NOOP_PUSH }, "fixed-publish-failed", true],
     ["a publication that aborted with nothing on origin", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_NOTHING }, "fixed-publish-failed", true],
     ["a run that published", { args: "push no-rebase", cycles: [CYCLE_PASS] }, "fixed-published", false],
     ["an abort with no dispositions at all", { args: "push no-rebase", cycles: [CYCLE_NO_MAP] }, "publish-aborted-incomplete-dispositions", false],
@@ -2758,7 +2794,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     wrong.join("; "),
   );
 
-  // The two lines a landed push makes false. A part-way publication's record
+  // The two lines a landed mutation makes false. A part-way publication's record
   // must say what reached origin and what is left; the same exit reached with
   // nothing pushed must still say the tips are local-only, which is what pins
   // the rendering to the FACT rather than to the exit.
@@ -2767,16 +2803,59 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   check(
     "a part-way publication's record says what landed and what remains, while the same exit with nothing on origin still says LOCAL ONLY",
     /status: published in part/.test(partWay) &&
-      /pushed to origin: .* — the replies, resolves and Summary body below are what remains to replay/.test(partWay) &&
+      /^reached origin: the push, which advanced the remote branch — still outstanding: 1 of 1 thread\(s\) still owed their reply/m.test(partWay) &&
       !/LOCAL ONLY/.test(partWay) &&
       /status: not published/.test(nothingLanded) &&
       /the tips above are LOCAL ONLY — this run pushed nothing, so they are not on origin/.test(nothingLanded) &&
       !/published in part/.test(nothingLanded),
     JSON.stringify({
       partWayStatus: (partWay.match(/status: [^(]*/) || [])[0],
+      partWayLanded: (partWay.match(/^reached origin: .*/m) || [])[0],
       partWayLocalOnly: /LOCAL ONLY/.test(partWay),
       nothingLandedStatus: (nothingLanded.match(/status: [^(]*/) || [])[0],
     }),
+  );
+
+  // The push that RAN and moved nothing. `pushed` is true here and nothing
+  // whatever reached origin, so a rendering selected on `pushed` calls this
+  // "published in part" and sends a reader looking for replies and a Summary
+  // comment that were never posted. It is not the local-only case either: the
+  // remote already pointed at this tip, so the record says what is true of both
+  // halves — the tips are there, nothing this run did is.
+  const noopPush = briefs["a publication whose push was a no-op before it failed"];
+  check(
+    "a push that succeeded while moving nothing is not a part-way publication, and its record says so without calling the tips local-only",
+    /status: not published/.test(noopPush) &&
+      !/published in part/.test(noopPush) &&
+      !/^reached origin:/m.test(noopPush) &&
+      /this run changed NOTHING on origin: its push was an `Everything up-to-date` no-op, so the tips above are already on origin while no reply, resolve or Summary comment reached it/.test(noopPush) &&
+      !/LOCAL ONLY/.test(noopPush),
+    JSON.stringify({
+      status: (noopPush.match(/status: [^(]*/) || [])[0],
+      originLine: (noopPush.match(/^(this run changed|the tips above|reached origin).*/m) || ["no origin line at all"])[0].slice(0, 80),
+    }),
+  );
+
+  // The breakdown itself, which is what a later turn acts on. A reply and a
+  // Summary comment already on the PR are LANDED, so neither may be named as
+  // outstanding — a Summary listed as both is a record contradicting itself —
+  // and the per-thread entries carry the publisher's own account so the turn
+  // that replays this resolves a replied thread instead of replying twice. What
+  // the publisher did NOT report is stated as unknown rather than assumed
+  // either way: that is the limit of what this record can know.
+  const replied = briefs["a publication whose reply and Summary landed before it failed"];
+  const landedLine = (replied.match(/^reached origin: .*/m) || [""])[0];
+  check(
+    "and the breakdown names a landed reply and Summary as landed, never also as outstanding, with the publisher's per-thread account carried for the rest",
+    /1 thread reply/.test(landedLine) &&
+      landedLine.includes("the Summary comment at https://example.invalid/pr/42#issuecomment-7") &&
+      !/still outstanding: [^\n]*Summary comment/.test(landedLine) &&
+      /still outstanding: 1 not resolved/.test(landedLine) &&
+      replied.includes('"replied":true') &&
+      /ALREADY POSTED — do not post it again/.test(replied) &&
+      /resolve still owed/.test(replied) &&
+      /the publisher reported no outcome for this thread — check it on the PR before replying/.test(replied),
+    landedLine || "no origin line at all",
   );
 
   // A re-verification that returned NOTHING holds the map that passed review on
@@ -2817,6 +2896,25 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       mergedDetail: (erroredReverify.dispositions || [{}])[0].detail,
       firstCycleMap: (results["a first cycle that errored"].dispositions || []).length,
     }),
+  );
+
+  // The producer of that breakdown. Nothing else in the run can answer "did this
+  // reply reach the PR": `pushed` says only that a push command succeeded, and an
+  // `outcome` string is prose. So the publisher reports the two facts per thread,
+  // and reports them on the path that needs them most — the one where it aborted.
+  const outcomeItem = PUBLISH_SCHEMA.properties.threadOutcomes.items;
+  const publishBriefRun = await run(gathered(withWork), { args: "push no-rebase", cycles: [CYCLE_PASS] });
+  const pubBrief = publishBriefRun.seen.publishPrompts[0] || "";
+  check(
+    "and the publisher is what produces it — per thread, only what SUCCEEDED, and reported even where publication aborted",
+    ["ref", "outcome", "replied", "resolved"].every((f) => (outcomeItem.required || []).includes(f)) &&
+      /True ONLY if the reply is on the PR/.test(outcomeItem.properties.replied.description) &&
+      /Never what you intended or attempted/.test(outcomeItem.properties.resolved.description) &&
+      /Report it even when publication ABORTS part-way/.test(PUBLISH_SCHEMA.properties.threadOutcomes.description) &&
+      /NOT evidence that anything this run did reached origin/.test(PUBLISH_SCHEMA.properties.pushed.description) &&
+      /set that entry's `replied` and `resolved` to what actually SUCCEEDED on the PR rather than to what you attempted/.test(pubBrief) &&
+      /Report them even where publication stops part-way/.test(pubBrief),
+    JSON.stringify({ required: outcomeItem.required, brief: /threadOutcomes/.test(pubBrief) }),
   );
 
   // The brief itself. What a later run needs from this comment is the marker
