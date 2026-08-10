@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 161;
+const EXPECTED_CHECKS = 164;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -372,7 +372,7 @@ const ITEM = {
 // location pair is written the same way: `locationMode` defaults to the inline
 // mode every reconciliation scenario runs in, and passing `null` omits the
 // field, which the working-location gate below rejects.
-function gathered({ workingBranch = "feature/x", items = [], reconcile, locationMode = "inline", worktree, baseOid = GATHERED_BASE_OID, priorRecord }) {
+function gathered({ workingBranch = "feature/x", items = [], reconcile, locationMode = "inline", worktree, baseOid = GATHERED_BASE_OID, priorRecord, startingHead }) {
   const packet = {
     ok: true,
     // Every `ok: true` gather WITH ITEMS owes this echo — empty where the
@@ -402,6 +402,9 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // PR without one omits the field entirely, which is what the schema says and
   // what the no-replay-section case needs.
   if (priorRecord !== undefined) packet.priorRecord = priorRecord;
+  // The tip the run starts from, likewise spread in only when a scenario supplies
+  // one, so the fallback path stays reachable.
+  if (startingHead !== undefined) packet.pr.startingHead = startingHead;
   return packet;
 }
 
@@ -1509,7 +1512,22 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       [
         "the record's marker and its supersession",
         "**One record per PR per run, superseding your own rather than stacking.**",
-        [/<!-- address-review:disposition-record -->/, /never by matching prose/, /update that comment in place/, /this run writes exactly one record/],
+        [
+          /<!-- address-review:disposition-record -->/,
+          /never by matching prose/,
+          /update that comment in place/,
+          /this run writes exactly one record/,
+          // What the lookup matches decides which comment the update overwrites,
+          // so the first-line test and the author filter are part of the rule
+          // rather than of the recipe.
+          /whose \*\*first line is exactly\*\* that marker/,
+          /keep the authenticated-author filter/,
+        ],
+      ],
+      [
+        "the recipe that finds it",
+        "**The disposition record** — find a prior one by its marker",
+        [/first line, byte for byte\*\*, never `contains`/, /would otherwise be selected and `PATCH`ed away/],
       ],
       [
         "the SHAs as provenance rather than a replay gate",
@@ -2735,7 +2753,16 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // verbatim, and the two things a replay must NOT take from it: the SHAs as a
   // condition, and the tips as commits on origin.
   const recordClauses = {
-    "the marker a later run matches, not its prose": /<!-- address-review:disposition-record -->/.test(recordBrief) && /the MARKER identifies a record, never its prose/.test(recordBrief),
+    // The lookup selects the comment a `PATCH` then overwrites, so what it
+    // matches on is a hazard and not a detail: the marker is DEFINED as the
+    // body's first line, and a `contains` test also selects an ordinary comment
+    // that merely quotes it. The author filter stays either way.
+    "the marker a later run matches, as the body's first line and not by a substring":
+      /<!-- address-review:disposition-record -->/.test(recordBrief) &&
+      /the MARKER identifies a record, never its prose/.test(recordBrief) &&
+      recordBrief.includes('select((.body | split("\\n")[0] | rtrimstr("\\r")) == "<!-- address-review:disposition-record -->")') &&
+      !/select\(\.body \| contains\(/.test(recordBrief) &&
+      /Keep the ones authored by the authenticated user/.test(recordBrief),
     "superseding its own prior record in place rather than appending a second": /--method PATCH repos\/\{owner\}\/\{repo\}\/issues\/comments\/<id>/.test(recordBrief) && /instead of a stack of near-duplicates/.test(recordBrief),
     "exactly one PR write, and no reply, resolve, push or ping beside it": /You make exactly ONE PR write/.test(recordBrief) && /no push, no reply, no resolve, no Summary comment, no ping/.test(recordBrief),
     "the drafted replies and the ready-to-post Summary body, verbatim": /reply: "<the exact reply body a publishing turn would post, verbatim>"/.test(recordBrief) && /ready to post unchanged/.test(recordBrief),
@@ -2749,6 +2776,42 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "and the record brief carries what a later run replays from, and refuses what it must not replay",
     absent.length === 0,
     `missing: ${absent.join("; ")}`,
+  );
+
+  // `starting HEAD` is part of the record's single canonical content, so it
+  // cannot be sourced from a rebase report: these rows all run `no-rebase`, so
+  // there is no rebase point at all, and the tip the GATHER read is the only one
+  // that exists. The brief must carry it rather than the not-recorded fallback.
+  const STARTING_TIP = "5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a";
+  const withTip = await run(gathered({ ...withWork, startingHead: STARTING_TIP }), { args: "no-push no-rebase", cycles: [CYCLE_PASS] });
+  const tipBrief = withTip.seen.recordPrompts[0] || "";
+  check(
+    "and a `no-rebase` run's record still cites the starting tip, from the gather rather than a rebase report",
+    tipBrief.includes(`starting HEAD ${STARTING_TIP} | final HEAD`) && !/not recorded/.test(tipBrief),
+    (tipBrief.match(/starting HEAD [^|]*/) || ["no starting HEAD line"])[0],
+  );
+  // And where neither the gather nor a rebase reported one, the brief says so
+  // instead of inventing a tip — the fallback that keeps a missing provenance
+  // field from costing the record.
+  const noTip = await run(gathered(withWork), { args: "no-push no-rebase", cycles: [CYCLE_PASS] });
+  const noTipBrief = noTip.seen.recordPrompts[0] || "";
+  check(
+    "and says it was not recorded where nothing reported one, rather than inventing a tip",
+    /starting HEAD \(not recorded — neither the gather nor a rebase point reported one\)/.test(noTipBrief),
+    (noTipBrief.match(/starting HEAD [^|]*/) || ["no starting HEAD line"])[0],
+  );
+  // The producer half, which no scenario reaches because the gather agent is
+  // stubbed: nothing puts a starting tip in the packet unless the brief reads
+  // one, and it is read in the working location before any fix or rebase — the
+  // only point at which the tip the run started from still exists.
+  const tipPara = gatherPrompt("#42").split("\n").find((l) => l.includes("pr.startingHead")) || "";
+  check(
+    "and the gather brief is what produces it — read in the working location, before any fix or rebase, on every run",
+    tipPara.includes("Read the tip this run STARTS from and report it as `pr.startingHead`") &&
+      tipPara.includes("`git rev-parse HEAD` in the working location") &&
+      /before anything is fixed or rebased/.test(tipPara) &&
+      /EVERY run has one/.test(tipPara),
+    tipPara ? tipPara.slice(0, 160) : "the gather brief says nothing about a starting tip",
   );
 
   // The next run's side of the same comment: the gather step meets it as an
