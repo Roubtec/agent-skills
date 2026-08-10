@@ -72,7 +72,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 155;
+const CHECKS_PER_LEG = 158;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -1419,6 +1419,55 @@ for (const name of WORKFLOWS) {
         JSON.stringify(replacedThenDied.res.workReport) === JSON.stringify(REPLACED) &&
         replacedThenDied.res.workReportReviewed === false,
       `${replacedThenDied.res.verdict}/${replacedThenDied.res.workReportReviewed}/${JSON.stringify(replacedThenDied.res.workReport)}`,
+    );
+
+    // A round that RAN AND FAILED, which is the only shape that separates "a
+    // round happened" from "a round PASSED": pass 1 reports the map, round 1
+    // fails, pass 2 returns nothing. Snapshot on every round rather than only a
+    // passing one and this reads as reviewed — and wf-address-review then heads a
+    // durable record "AFTER a reviewer round had passed" over the map the
+    // exemption exists to withhold, the one map only a failed round ever saw.
+    const failedThenDied = await run(src, { fixes: [withMap], reviews: [FAIL("r1")], cycle: { maxRounds: 3 } });
+    check(
+      "a round that RAN AND FAILED judged nothing, so the map it read is not reviewed",
+      failedThenDied.res.verdict === "error" &&
+        JSON.stringify(failedThenDied.res.workReport) === JSON.stringify(REPORTED) &&
+        failedThenDied.res.workReportReviewed === false &&
+        failedThenDied.res.reviewedWorkReport === undefined,
+      `${failedThenDied.res.verdict}/${failedThenDied.res.workReportReviewed}/${JSON.stringify(failedThenDied.res.reviewedWorkReport)}`,
+    );
+
+    // The same map over a DIFFERENT tree. A later pass can commit a new
+    // `finalSha` while returning the identical `workReport` text and then lose
+    // its reviewer: compared as text alone those dispositions read as reviewed
+    // while they now accompany a tree no reviewer ever read, which is the same
+    // false positive a replacement produces and the same consumer acts on it.
+    const sameMapNewTip = { ...withMap, finalSha: "b2b2b2b2" };
+    const movedThenDied = await run(src, { fixes: [withMap, sameMapNewTip], reviews: [OK, null], cycle: { maxRounds: 3 } });
+    check(
+      "and a map carried out over a tip no round judged is unreviewed too, its text unchanged though it is",
+      movedThenDied.res.verdict === "error" &&
+        JSON.stringify(movedThenDied.res.workReport) === JSON.stringify(REPORTED) &&
+        movedThenDied.res.finalSha === "b2b2b2b2" &&
+        movedThenDied.res.workReportReviewed === false &&
+        movedThenDied.res.reviewedFinalSha === "sha",
+      `${movedThenDied.res.verdict}/${movedThenDied.res.workReportReviewed}/${movedThenDied.res.finalSha} vs ${movedThenDied.res.reviewedFinalSha}`,
+    );
+
+    // And the judged map ITSELF, beside the tip it was judged on, reported
+    // separately from the map being carried out. That is what makes a judged map
+    // a later pass replaced recordable at all: the boolean says only that the map
+    // leaving is not the judged one, so a consumer whose job is to record the
+    // judged one (wf-address-review's disposition record) had nothing to record
+    // and the map with the drafted replies died with the session that judged it.
+    check(
+      "the judged map and its tip ride out beside the map being carried, so a replaced one is not lost",
+      JSON.stringify(replacedThenDied.res.reviewedWorkReport) === JSON.stringify(REPORTED) &&
+        replacedThenDied.res.reviewedFinalSha === "sha" &&
+        JSON.stringify(confirmDied.res.reviewedWorkReport) === JSON.stringify(REPORTED) &&
+        never.res.reviewedWorkReport === undefined &&
+        never.res.reviewedFinalSha === undefined,
+      `${JSON.stringify(replacedThenDied.res.reviewedWorkReport)}/${replacedThenDied.res.reviewedFinalSha}/${JSON.stringify(never.res.reviewedWorkReport)}`,
     );
   });
 
