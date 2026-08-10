@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 167;
+const EXPECTED_CHECKS = 169;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -149,9 +149,12 @@ const cut = src.indexOf("\nconst raw = flattenArgs(args);");
 if (cut < 0) throw new Error(`${SOURCE}: cut marker not found for the declaration prefix`);
 const prefix = src.slice(0, cut).replace(/^export const meta/m, "const meta");
 // eslint-disable-next-line no-new-func
-const { gatherPrompt, publishPrompt, rebasePrompt } = new Function(
+// The PACKET SCHEMA lives in that same prefix, and carries contract text no
+// scenario can reach: what the gather must hand over with a prior record. It is
+// read as the object it is rather than by grepping the source.
+const { gatherPrompt, publishPrompt, rebasePrompt, PACKET_SCHEMA } = new Function(
   "args",
-  `"use strict";\n${prefix}\nreturn { gatherPrompt, publishPrompt, rebasePrompt };`,
+  `"use strict";\n${prefix}\nreturn { gatherPrompt, publishPrompt, rebasePrompt, PACKET_SCHEMA };`,
 )("");
 
 // Reaching the nested cycle ends the scenario: everything past the gate is
@@ -2987,6 +2990,57 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /must name a commit the branch carries NOW/.test((scope && scope.reviewInstructions) || ""),
     ((scope && scope.reviewInstructions) || "").slice(0, 120),
   );
+  // VERBATIM has to survive the EMBEDDING, and a record's own text is what
+  // threatens it: the `## Summary comment` block it ends with holds a full
+  // markdown body, which may itself be fenced. Wrapped in a fixed ``` the
+  // record's own fence closes the wrapper, and the mark that says where the
+  // record ends goes ambiguous for exactly the part it exists to carry. Nor may
+  // the body be trimmed on the way in — a reply body's own leading or trailing
+  // blank line is content, and "verbatim" is the whole promise.
+  const FENCED_RECORD = [
+    "<!-- address-review:disposition-record -->",
+    "# address-review packet — PR #42 (feature/x)",
+    "",
+    "## Summary comment (verbatim, ready to post)",
+    "## Summary of Review Fixes",
+    "Fixed the guard:",
+    "```js",
+    "if (!x) return;",
+    "```",
+    "and swept the same pattern in two siblings.",
+    "",
+  ].join("\n");
+  const fenced = await run(
+    gathered({ reconcile: { outcome: "work" }, items: [ITEM], priorRecord: { url: "https://example.invalid/pr/42#issuecomment-9", body: FENCED_RECORD } }),
+    { args: "no-push no-rebase" },
+  );
+  const fencedFixer = (((fenced.seen.cycleOpts || {}).opts || {}).scope || {}).instructions || "";
+  const wrapper = (fencedFixer.match(/\n(`{4,})\n/) || [])[1] || "";
+  check(
+    "a record whose own Summary body is fenced is embedded WHOLE, in a delimiter longer than any backtick run inside it",
+    fencedFixer.includes(FENCED_RECORD) &&
+      wrapper.length >= 4 &&
+      !FENCED_RECORD.includes(wrapper) &&
+      fencedFixer.includes(`\n${wrapper}\n${FENCED_RECORD}\n${wrapper}`) &&
+      fencedFixer.includes(`the two lines of ${wrapper.length} backticks below`),
+    JSON.stringify({
+      wrapper: wrapper || "no fence of four or more backticks",
+      whole: fencedFixer.includes(FENCED_RECORD),
+    }),
+  );
+  // And the contract that gets it here in one piece: a record reported without
+  // its body replays to nothing while the run reads as having found one, so the
+  // packet requires the body and the permalink together rather than accepting
+  // half a record.
+  const priorRecordSchema = PACKET_SCHEMA.properties.priorRecord;
+  check(
+    "and the packet requires a prior record's body and permalink together, so half a record is rejected rather than silently skipping replay",
+    ["url", "body"].every((f) => (priorRecordSchema.required || []).includes(f)) &&
+      /VERBATIM and WHOLE — not trimmed, not re-wrapped, not excerpted/.test(priorRecordSchema.properties.body.description) &&
+      /replays to NOTHING while the run reads as having found one/.test(priorRecordSchema.properties.body.description),
+    JSON.stringify(priorRecordSchema.required || "nothing required"),
+  );
+
   // A PR with no prior record carries no replay section at all: there is nothing
   // to replay, and a section describing a record that does not exist would have
   // the fixer probing a `final HEAD` it was never given.

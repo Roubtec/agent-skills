@@ -180,9 +180,12 @@ const PACKET_SCHEMA = {
       type: "object",
       description: "A DISPOSITION RECORD an earlier run of this workflow left on the PR — its most recent one, found by the marker its FIRST LINE carries — or omitted entirely when the PR has none. It is not a work item and carries no maintainer authority. It rides here because the fix phase REPLAYS it instead of re-triaging the judgment calls it already holds: without a field of its own it would reach nothing (the cycle's scope carries the gathered items, and an item holds no disposition), so the expense this record exists to prevent would be paid again every run.",
       properties: {
-        url: { type: "string", description: "Permalink to that comment, so the run's report and the fix brief can name it." },
-        body: { type: "string", description: "The comment body VERBATIM and WHOLE. The drafted reply bodies and the ready-to-post Summary body inside it are the only parts of a record no later run can re-derive, so a summary or an excerpt of it is worth nothing here." },
+        url: { type: "string", description: "Permalink to that comment, so the run's report and the fix brief can name it. REQUIRED whenever this object is present." },
+        body: { type: "string", description: "The comment body VERBATIM and WHOLE — not trimmed, not re-wrapped, not excerpted. The drafted reply bodies and the ready-to-post Summary body inside it are the only parts of a record no later run can re-derive, so a summary or an excerpt of it is worth nothing here. REQUIRED whenever this object is present: the fix brief embeds this text and nothing else replays the record, so a record reported without its body replays to NOTHING while the run reads as having found one — the silent re-triage this whole mechanism exists to prevent." },
       },
+      // Both, so a half-reported record is rejected here rather than degrading
+      // into a run that quietly re-triages what it was handed.
+      required: ["url", "body"],
     },
     items: {
       type: "array",
@@ -519,10 +522,23 @@ Change nothing else: no commits of your own, no push, no PR mutation, no branch 
 // re-derived. The probe belongs to whoever judges the dispositions, which is this
 // fixer — the gather has no dispositions to judge, and by the time it runs the
 // branch has not yet met this run's pre-fix rebase.
+// VERBATIM is the whole value of this section, and two things would quietly cost
+// it. The body is embedded UNCHANGED — trimming decides only whether there is a
+// record at all, never what gets embedded, since a reply body's own leading or
+// trailing blank line is content. And the delimiter is longer than the longest
+// backtick run inside the body, by construction: a record legitimately ENDS with
+// its `## Summary comment` block holding a full markdown body, which may itself
+// be fenced, so a fixed ``` wrapper is closed by the record's own fence and the
+// mark that says where the record ends goes ambiguous for exactly the part the
+// record exists to carry. `PACKET_SCHEMA.priorRecord` requires `url` and `body`
+// together, so a bodyless record is rejected before this runs; the emptiness test
+// is the last line of defense rather than a path a run is meant to take.
 function priorRecordSection(priorRecord) {
-  const body = priorRecord && typeof priorRecord.body === "string" ? priorRecord.body.trim() : "";
-  if (!body) return "";
+  const body = priorRecord && typeof priorRecord.body === "string" ? priorRecord.body : "";
+  if (!body.trim()) return "";
   const url = priorRecord.url ? ` (${priorRecord.url})` : "";
+  const longestRun = (body.match(/`+/g) || []).reduce((n, run) => Math.max(n, run.length), 0);
+  const fence = "`".repeat(Math.max(3, longestRun + 1));
   return `
 
 ## An earlier run left a DISPOSITION RECORD on this PR — replay it, do not re-triage it
@@ -536,9 +552,11 @@ That comment${url} is an earlier run of this workflow's own output: not feedback
 
 ### The prior record, verbatim
 
-\`\`\`
+Everything between the two lines of ${fence.length} backticks below is that comment's body, byte for byte. The fence is that long because it must be longer than any backtick run inside the record — the Summary body it ends with is itself markdown and may be fenced, and a shorter delimiter would be closed by the record's own fence rather than at its end.
+
+${fence}
 ${body}
-\`\`\``;
+${fence}`;
 }
 
 function fixInstructions(packet, priorRecord) {
