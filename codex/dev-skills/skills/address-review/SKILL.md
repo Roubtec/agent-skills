@@ -294,9 +294,9 @@ Publication runs in the working location: the re-check, the resolved push remote
 
 ### Step 8 — Final report
 
-In worktree mode, reclaim the worktree first, per "Working location" — after publication and equally after a `no-push` finish, but never in `delegated-fix`/`publish-reviewed`, where the worktree is the orchestrator's to reclaim (and it deliberately keeps a held descendant's). A run that is halting rather than finishing keeps its worktree and reports the path instead.
+Post the disposition record first, where this run leaves one ("The durable disposition record" says which runs do): the tips it cites — its `final HEAD` above all — are read in the working location, and a worktree already given back is no location to read anything in. Then, in worktree mode, reclaim the worktree, per "Working location" — after publication and equally after a `no-push` finish, but never in `delegated-fix`/`publish-reviewed`, where the worktree is the orchestrator's to reclaim (and it deliberately keeps a held descendant's). A run that is halting rather than finishing keeps its worktree and reports the path instead.
 
-Always produce a report (this is the only output of a no-push run, and it doubles as the body of the Summary comment on push runs):
+Always produce a report (on a `no-push` run it is the only chat output the run leaves, beside the one PR write that run makes — its disposition record — and it doubles as the body of the Summary comment on push runs):
 
 - The PR, the branch, before/after tip SHAs, and what each of step 2's two rebase points did — replayed, no-op, skipped as unnecessary (with why), or suppressed by `no-rebase` — plus the pinned effective base the run ended on and how any conflicts went. In `delegated-fix`, where those points are the orchestrator's, report the pinned effective base you were handed and carried rather than a rebase of your own.
 - **The working location and how it was selected** — inline on the target branch, forced `inline`, the off-shoot the `off-shoot` argument named, or a worktree (created or reused) — plus whether that worktree was reclaimed, or its absolute path where a halt left it standing. Say nothing about where the main checkout points now: a worktree run neither moved it nor watched it.
@@ -333,14 +333,20 @@ the tips above are LOCAL ONLY — this run pushed nothing, so they are not on or
             url:   .../pull/141#discussion_r369...
             reply: "Fixed in <tip>: gate merged parents on ..."
 [push-back] SKILL.md:148  codex  thread=PRRT_kwDO...v1
+            url:   .../pull/141#discussion_r369...
             reply: "<full drafted rationale, verbatim>"
-[task]      -> tasks/0NNa-foo.md (queued)
+[task]      SKILL.md:302  codex  thread=PRRT_kwDO...v2
+            url:   .../pull/141#discussion_r369...
+            reply: "Follow-up task committed: tasks/0NNa-foo.md — queued for an upcoming batch"
+            -> tasks/0NNa-foo.md (queued)
 
 ## Summary comment (verbatim, ready to post)
 <full markdown body>
 ```
 
 **A publication that stopped part-way** renders that same record with two lines changed, because `status: not published` and the local-only line are both false once the push landed and only the replies, resolves or Summary failed: the status line becomes `status: published in part (<what landed, and what did not>)`, and in place of the local-only line goes one naming what reached origin and what is left — `pushed to origin: <what landed> — the replies, resolves and Summary body below are what remains to replay`. Nothing else changes, and in particular every thread keeps its entry and its verbatim reply: one the aborted run did reply to and resolve says so on its own entry rather than being dropped, so a later turn reads what is outstanding without re-deriving it from the thread state.
+
+**Every entry carries the same field set whatever its disposition** — the stable reference (path:line, the comment author, and the thread's node id, or a standalone item's url in its place), the permalink, and the reply body verbatim — with a follow-up-task entry adding the committed file and its queued or deferred placement. An entry short of that cannot be replayed at all: which thread a follow-up closes is not re-derivable from the PR, so an entry naming only the task file leaves the next run to guess which thread it closes.
 
 That local-only line is not decoration: a reader who assumes those SHAs are on origin goes looking for commits that are not there, and on a worktree run the tree they were made in is gone by the time they look (the branch and its commits stay in the shared `.git`, which is what makes the record replayable at all).
 Everything else in the record can be re-derived from the PR. The drafted reply bodies and the ready-to-post Summary body cannot, so they go in **verbatim** — they are the expensive part and the reason the record exists. Step 8's report is the source of both, so this is one rendering of that report rather than a second account of the run.

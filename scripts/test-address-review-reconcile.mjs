@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 164;
+const EXPECTED_CHECKS = 165;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1525,6 +1525,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         ],
       ],
       [
+        "every entry's field set, whatever its disposition",
+        "**Every entry carries the same field set whatever its disposition**",
+        [/the permalink, and the reply body verbatim/, /adding the committed file and its queued or deferred placement/],
+      ],
+      [
         "the recipe that finds it",
         "**The disposition record** — find a prior one by its marker",
         [/first line, byte for byte\*\*, never `contains`/, /would otherwise be selected and `PATCH`ed away/],
@@ -2766,6 +2771,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "superseding its own prior record in place rather than appending a second": /--method PATCH repos\/\{owner\}\/\{repo\}\/issues\/comments\/<id>/.test(recordBrief) && /instead of a stack of near-duplicates/.test(recordBrief),
     "exactly one PR write, and no reply, resolve, push or ping beside it": /You make exactly ONE PR write/.test(recordBrief) && /no push, no reply, no resolve, no Summary comment, no ping/.test(recordBrief),
     "the drafted replies and the ready-to-post Summary body, verbatim": /reply: "<the exact reply body a publishing turn would post, verbatim>"/.test(recordBrief) && /ready to post unchanged/.test(recordBrief),
+    // Which thread a follow-up closes is not re-derivable from the PR, so an
+    // entry carrying only its task file cannot be replayed at all.
+    "every entry carrying the same field set whatever its kind":
+      /EVERY entry carries the same field set whatever its kind/.test(recordBrief) &&
+      /beside them rather than in place of them/.test(recordBrief),
     "the SHAs as provenance rather than a condition a replay checks": /The SHAs are PROVENANCE, not a promise/.test(recordBrief) && /Do not write "the branch tip is <sha>" as a condition a replay must check/.test(recordBrief),
     "the cited tips stated as local-only, not on origin": /the tips above are LOCAL ONLY — this run pushed nothing, so they are not on origin/.test(recordBrief),
     "no bare @-mention, which would summon a review of unpublished work": /with no bare `@`-mentions anywhere/.test(recordBrief),
@@ -2800,6 +2810,39 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     /starting HEAD \(not recorded — neither the gather nor a rebase point reported one\)/.test(noTipBrief),
     (noTipBrief.match(/starting HEAD [^|]*/) || ["no starting HEAD line"])[0],
   );
+  // The record's header, THREE copies of one shape: the skill's Content block in
+  // both mirrors, and the brief that renders it. They drifted at birth — the
+  // change that created both grouped `base` on a different line in each — which
+  // is the two-copies failure this skill family's implementation notes warn
+  // about, and nothing but a reader's eye had ever compared them. So the FIELD
+  // GROUPING is pinned here: which fields share a line, in which order, in all
+  // three. Values are not compared (the skill's are examples, the brief's are
+  // placeholders); a field is matched by the name it opens with.
+  const HEADER_LINES = [
+    ["starting HEAD", "final HEAD", "recorded headRefOid"],
+    ["base", "validation", "reviewer", "peer"],
+  ];
+  const headerGrouping = (text) =>
+    HEADER_LINES.map((fields) => {
+      const line = text.split("\n").find((l) => l.startsWith(`${fields[0]} `));
+      if (!line) return `(no line opening with "${fields[0]}")`;
+      return line
+        .split(" | ")
+        .map((field) => fields.find((name) => field.startsWith(name)) || `(unexpected field: ${field.slice(0, 24)})`)
+        .join(" | ");
+    }).join(" / ");
+  const wantedGrouping = HEADER_LINES.map((fields) => fields.join(" | ")).join(" / ");
+  const groupings = { "the record brief": headerGrouping(tipBrief) };
+  for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
+    groupings[mirror] = headerGrouping(readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8"));
+  }
+  const drifted = Object.entries(groupings).filter(([, g]) => g !== wantedGrouping);
+  check(
+    "and the record header groups its fields identically in the brief and in both mirrors of the skill that defines the shape",
+    drifted.length === 0,
+    drifted.map(([who, g]) => `${who}: ${g}`).join("; ") || wantedGrouping,
+  );
+
   // The producer half, which no scenario reaches because the gather agent is
   // stubbed: nothing puts a starting tip in the packet unless the brief reads
   // one, and it is read in the working location before any fix or rebase — the
