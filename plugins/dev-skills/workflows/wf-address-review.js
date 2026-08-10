@@ -164,7 +164,7 @@ const PUBLISH_SCHEMA = {
   type: "object",
   properties: {
     published: { type: "boolean", description: "True only if the push AND every required reply/resolve/summary/ping step succeeded. False if any guard (moved head, unmatched remote, rejected lease, failed comment) aborted publication." },
-    aborted: { type: "string", description: "Why publication stopped, when published is false (e.g. `head moved`, `lease rejected`, `local behind PR head`, `push remote unmatched`). REQUIRED, empty when published: the run's own note sends a maintainer to this field BY NAME on an incomplete publication, so a schema that let a failed one omit it would point them at nothing." },
+    aborted: { type: "string", description: "Why publication stopped, when published is false (e.g. `head moved`, `lease rejected`, `local behind PR head`, `push remote unmatched`). Empty when published. Write it: the run's own note carries this reason inline, so an omitted one reads as `no reason reported` there." },
     pushed: { type: "boolean", description: "Whether a push was performed at all (may be an `Everything up-to-date` no-op)." },
     pushedNewCommits: { type: "boolean", description: "True ONLY if the push actually advanced the remote branch — new commits or rewritten history. False when no push happened or for a no-op `Everything up-to-date` push. Gates whether the re-review pings may fire." },
     threadOutcomes: {
@@ -182,7 +182,15 @@ const PUBLISH_SCHEMA = {
     summaryCommentUrl: { type: "string", description: "URL of the posted Summary of Review Fixes, or empty if not posted." },
     pings: { type: "string", description: "Which ping comments were posted, or empty." },
   },
-  required: ["published", "aborted", "pushed", "pushedNewCommits"],
+  // `aborted` stays out of `required`, beside `summaryCommentUrl` and `pings` —
+  // this schema's other may-be-empty fields. Requiring it was tried and
+  // reversed: a packet that misses validation reaches the caller as nothing at
+  // all, so one omitted reason would take `threadOutcomes`, `pushed`,
+  // `pushedNewCommits` and the summary URL down with it and force `published`
+  // false on a push that had completed. The result note carries whatever is
+  // here inline instead, which degrades to "no reason reported" and costs the
+  // rest of the report nothing.
+  required: ["published", "pushed", "pushedNewCommits"],
 };
 
 const RECLAIM_SCHEMA = {
@@ -1090,6 +1098,10 @@ const publishReport = await agent(publishPrompt(packet, workReport, publishFlags
 });
 
 const published = !!(publishReport && publishReport.published);
+// One record for both the result field and the note below, so the reason the
+// note quotes is the one the report shows — including where the publisher
+// returned nothing at all and there is no report to quote from.
+const publishRecord = publishReport || { published: false, aborted: "publisher returned nothing" };
 // Published is the finish this whole pipeline exists for, so the worktree goes
 // back here. A publication that aborted keeps it: whatever the publisher
 // stopped on is still standing in that tree, and `pr.worktree` names it in the
@@ -1129,9 +1141,9 @@ return {
   peerRounds: cycle.peerRounds,
   artifactDir: cycle.artifactDir,
   ...carried,
-  publishReport: publishReport || { published: false, aborted: "publisher returned nothing" },
+  publishReport: publishRecord,
   ...(reclaimed ? { worktreeReclaim: reclaimed } : {}),
   note: published
     ? (`${notes.join(" ")}${survivingWorktreeNote(reclaimed)}`.trim() || undefined)
-    : "Fixes passed review but publication did not fully complete — see publishReport.aborted; nothing may have been pushed.",
+    : `Fixes passed review but publication did not fully complete: ${publishRecord.aborted || "no reason reported"}. Nothing may have been pushed.`,
 };
