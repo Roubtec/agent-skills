@@ -1301,10 +1301,13 @@ fi
 # path to that value and runs the whole string through `sh -c`, so the same
 # trust is spelled out for the child's own git. Each path is POSIX-quoted for
 # that shell (single quotes, with an embedded one closed and re-opened), which
-# survives a source path holding a space, a quote, or a newline. git records the
-# value as `remote.<origin>.uploadpack` in the clone; the remote section is
-# removed wholesale further down, so nothing of it survives in what is handed
-# back.
+# survives a source path holding a space, a quote, or a newline. git hands the
+# value to that child for this one invocation and writes none of it down —
+# measured on 2.47.3, a fresh clone's `--local` config holds `core.*`,
+# `remote.<origin>.url`, `remote.<origin>.fetch` and the `branch.*` upstream
+# pair and nothing else, with `config --local --get remote.<origin>.uploadpack`
+# exiting 1 — so nothing of it reaches what is handed back, independently of the
+# remote-section removal further down.
 UPLOAD_PACK="git"
 for trust_path_value in "${SRC_TRUST_PATHS[@]}"; do
 	UPLOAD_PACK+=" -c 'safe.directory=${trust_path_value//\'/\'\\\'\'}'"
