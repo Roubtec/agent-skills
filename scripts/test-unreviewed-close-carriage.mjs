@@ -69,7 +69,7 @@ function check(name, cond, detail) {
 // does not count. Bump it deliberately when adding or removing one — a check
 // that silently stops running is invisible to a suite that only gates on
 // failures.
-const EXPECTED_CHECKS = 42;
+const EXPECTED_CHECKS = 43;
 
 // Evaluate a workflow's declarations up to its first executable statement and
 // hand back the named ones. Each is returned by an explicit reference, so a
@@ -315,6 +315,23 @@ const cycleResult = (extra) => ({
   // present, would stay green through exactly that loss.
   const CROSS_REF = /plus the delivery-run failure section defined below/;
   check("and step 5 cross-references it, so the writer meets it while composing the comment", CROSS_REF.test(withRecord) && !CROSS_REF.test(withoutRecord), "publish prompt");
+  // A run whose pre-push rebase replayed something has TWO cycles behind it, and
+  // the second one's verdict supersedes the first's without superseding its
+  // failed delivery run — so the brief takes that cycle's record as its own
+  // argument. Both go under the ONE heading, since a second heading reads as a
+  // second section the writer may stop after, and the superseded one is labelled
+  // as what it is. Its unreviewed-commit claim was already corrected by the
+  // caller (`reverifiedRecord`), which is why the record handed in here names no
+  // range: nothing in this brief re-asserts that no fresh reviewer saw a commit
+  // the re-verification's reviewer read.
+  const PRE_REBASE_NOTE = "the pre-rebase cycle's delivery run failed on the payments suite, which reproduces on the base";
+  const bothRecords = publishPrompt(pkt, [], { push: true }, [], [], RECORD, { ...CITED_RECORD, note: PRE_REBASE_NOTE });
+  const headings = (bothRecords.match(/## Delivery-run failure — recorded, not reviewed/g) || []).length;
+  check(
+    "both cycles' delivery-failure records reach the summary comment under ONE heading, the superseded one labelled as the cycle the re-verification replaced",
+    headings === 1 && bothRecords.includes(NOTE) && bothRecords.includes(PRE_REBASE_NOTE) && /cycle before the pre-push rebase/.test(bothRecords),
+    `headings: ${headings}; own note: ${bothRecords.includes(NOTE)}; superseded note: ${bothRecords.includes(PRE_REBASE_NOTE)}`,
+  );
   const cited = publishPrompt(pkt, [], { push: true }, [], [], CITED_RECORD);
   check("the no-commit record reaches the summary comment too, naming no commit and no empty range check", /Delivery-run failure — recorded, not reviewed/.test(cited) && cited.includes(CITED_NOTE) && !/final commit/.test(cited) && /no post-run commit this record points you at, so cite none/.test(cited) && !/of its own/.test(cited) && !/rangeCheck/.test(cited), "publish prompt");
 }

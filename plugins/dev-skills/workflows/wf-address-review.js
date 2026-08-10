@@ -39,7 +39,9 @@
  * Where the pre-push point replays anything, the passing verdict no longer
  * describes the tree being pushed, so the cycle is re-run over the rebased tree
  * as a re-verification (not a re-triage) and its verdict is the one publication
- * rests on.
+ * rests on — inside what is left of the cycle's 12-round total, since that cap is
+ * a total an invoker may lower and never raise, and this run's `rounds` is its
+ * own total across both cycles.
  *
  * Why a workflow rather than a skill
  * ----------------------------------
@@ -532,7 +534,14 @@ You may reclassify any item.`;
 // produced by the round that passed the deviation. Publishing the deviation
 // without them hands over the implementer's half alone, which is the shape the
 // cycle spends a whole extra round avoiding.
-function publishPrompt(packet, dispositions, flags, deviations, deviationAssessments, recordOnly) {
+// `preRebaseRecordOnly` is the SUPERSEDED cycle's record, and it is a separate
+// parameter because this comment is the run's only PR-facing surface and a
+// re-verified run has two cycles behind it. The re-verification replaces the
+// verdict, never the fact that the first cycle's delivery run FAILED, so
+// reading `cycle.recordOnly` alone would publish one record and drop the other
+// — the gate that permits the evidenced-unrelated disposition being precisely a
+// promise that the maintainer sees it.
+function publishPrompt(packet, dispositions, flags, deviations, deviationAssessments, recordOnly, preRebaseRecordOnly) {
   const dev = Array.isArray(deviations) ? deviations : [];
   const assessments = Array.isArray(deviationAssessments) ? deviationAssessments : [];
   const deviationLead = dev.length
@@ -547,8 +556,21 @@ function publishPrompt(packet, dispositions, flags, deviations, deviationAssessm
   // tolerated post-run flake commit no fresh reviewer saw. The gate that
   // permits that requires the failure to be documented where the maintainer
   // sees it, and this comment is this run's only PR-facing surface.
-  const flakeRecord = recordOnly
-    ? `\n\n## Delivery-run failure — recorded, not reviewed\n\nThe review cycle concluded over a FAILED delivery run, on its evidenced-unrelated flake disposition${recordOnly.range ? `, and over a final commit (\`${recordOnly.range}\`) no fresh reviewer saw — the diagnosis-only follow-up task that failure earned` : ", and over no post-run commit this record points you at, so cite none"}. Carry a section under this exact heading in the summary comment with these verbatim, so the maintainer sees the gap and decides how to absorb it; do not re-diagnose, soften, or omit it.\n\n${JSON.stringify({ note: recordOnly.note || "", ...(recordOnly.range ? { rangeCheck: recordOnly.verified || "" } : {}) }, null, 2)}`
+  // A run whose pre-push rebase replayed anything has TWO cycles behind it, and
+  // the second one's verdict supersedes the first's without superseding its
+  // failure — so both records are rendered here, the earlier one labelled as
+  // the cycle it replaced. Its unreviewed-commit claim is corrected upstream
+  // (see `reverifiedRecord`), so the body it renders is already the no-commit
+  // shape; nothing here re-describes a commit a fresh reviewer has since read.
+  const flakeBody = (record) =>
+    `The review cycle concluded over a FAILED delivery run, on its evidenced-unrelated flake disposition${record.range ? `, and over a final commit (\`${record.range}\`) no fresh reviewer saw — the diagnosis-only follow-up task that failure earned` : ", and over no post-run commit this record points you at, so cite none"}. Carry a section under this exact heading in the summary comment with these verbatim, so the maintainer sees the gap and decides how to absorb it; do not re-diagnose, soften, or omit it.\n\n${JSON.stringify({ note: record.note || "", ...(record.range ? { rangeCheck: record.verified || "" } : {}) }, null, 2)}`;
+  const flakeRecord = recordOnly || preRebaseRecordOnly
+    ? `\n\n## Delivery-run failure — recorded, not reviewed\n\n${[
+        ...(recordOnly ? [flakeBody(recordOnly)] : []),
+        ...(preRebaseRecordOnly
+          ? [`**The cycle before the pre-push rebase**, whose verdict the re-verification over the rebased tree replaced — the delivery run it concluded over still failed, so it belongs in this same section rather than only in the run's result. ${flakeBody(preRebaseRecordOnly)}`]
+          : []),
+      ].join("\n\n")}`
     : "";
   // Where publication happens is the gather step's choice, not this brief's:
   // in worktree mode the branch is checked out THERE, and the main checkout is
@@ -581,7 +603,7 @@ Report a STRUCTURED result: set \`published: true\` ONLY if the push and every r
      - ambiguous-skipped → leave open.
    - \`standalone\` items (no thread to resolve): address them only in the Summary comment below; do NOT call \`resolveReviewThread\`. Record their outcome by \`url\`.
    Avoid duplicate replies (check for an equivalent prior reply by the authed user); resolve only after the reply succeeds.
-5. Summary comment: post a top-level "Summary of Review Fixes" (\`gh pr comment\`) — ${dev.length ? "opening with the locked-decision deviation section defined below, then " : ""}what was fixed (with proactive same-pattern fixes), a prominent "Pushed back — please re-examine" section, a "Deferred to follow-up tasks" section listing each deferral with its committed task file (agent-proposed deferrals flagged for confirmation), and any ambiguous/skipped or newly-arrived items${recordOnly ? ", plus the delivery-run failure section defined below" : ""}. Write "codex"/"claude"/"copilot" plain (no bare @-mentions) so only the dedicated pings below trigger a re-review. Put its URL in \`summaryCommentUrl\`.
+5. Summary comment: post a top-level "Summary of Review Fixes" (\`gh pr comment\`) — ${dev.length ? "opening with the locked-decision deviation section defined below, then " : ""}what was fixed (with proactive same-pattern fixes), a prominent "Pushed back — please re-examine" section, a "Deferred to follow-up tasks" section listing each deferral with its committed task file (agent-proposed deferrals flagged for confirmation), and any ambiguous/skipped or newly-arrived items${recordOnly || preRebaseRecordOnly ? ", plus the delivery-run failure section defined below" : ""}. Write "codex"/"claude"/"copilot" plain (no bare @-mentions) so only the dedicated pings below trigger a re-review. Put its URL in \`summaryCommentUrl\`.
 6. Pings (only after push + summary succeeded, AND only when the push ACTUALLY advanced the remote branch with new commits or rewritten history — never on an \`Everything up-to-date\` no-op push): ${flags.pingCodex ? "post a dedicated comment \`@codex review\`. " : ""}${flags.pingClaude ? "post a dedicated comment \`@claude review\`. " : ""}${flags.pingCopilot ? "request a fresh Copilot review with \`gh pr edit <PR#> --add-reviewer @copilot\` (the canonical CLI request; needs gh >= 2.88.0). Do NOT post an \`@copilot review\` comment — a bare \`@copilot\` mention drives Copilot's coding agent (it can start editing the branch), not its reviewer. The add-reviewer request re-triggers Copilot's review even on a PR it already reviewed (tested working — not a silent no-op), and never misfires into the coding agent. GUARD: before issuing it, confirm the installed \`gh\` supports the \`@copilot\` reviewer value (gh >= 2.88.0 — e.g. check \`gh --version\`); on an older powbox base image where \`gh pr edit --add-reviewer @copilot\` errors, SKIP the Copilot request WITHOUT failing publication — the push and summary already succeeded, so this is non-fatal: keep \`published: true\`, record it in \`pings\` as 'copilot: skipped (gh too old)', and note that the base image needs refreshing (\`agent-update\`) or a one-off manual re-request from the PR's web reviewer menu." : ""}${!flags.pingCodex && !flags.pingClaude && !flags.pingCopilot ? "none requested. " : "If more than one ping was requested, perform each as its own dedicated action (never one comment mentioning several bots). "}If nothing new was pushed this run (the remote ref already pointed at your HEAD — e.g. every disposition was already-addressed/push-back, or the branch was up to date), SKIP all pings even if requested above: re-requesting a review with nothing new to look at would spin the review->address->review loop forever. Set \`pushedNewCommits\` to whether the push advanced the branch, and record which pings (if any) you posted in \`pings\`.${deviationLead}${flakeRecord}
 
 ## Dispositions to publish
@@ -1139,10 +1161,33 @@ const carriedOf = (c) => ({
 // cycle and the human-facing sets are both cycles' concatenated, oldest first.
 // `rounds` becomes the run's total for the same reason: neither cycle's own
 // count describes what the run spent, and `roundsByCycle` keeps the split.
+// Two of the merged sets are read by a HUMAN rather than keyed off by a
+// machine, and concatenating those two hands the publisher the same deviation
+// twice: `review-cycle` has every pass restate each standing deviation VERBATIM
+// and matches them by exact text, so one still standing after the rebase
+// arrives from both cycles character-identical. Published as-is it would lead
+// the summary comment twice, and "carry each assessment beside the deviation
+// they name" would name two assessments per deviation — the ambiguity the
+// publish brief's one-assessment-per-deviation wording cannot survive. So both
+// are folded on the identity the cycle itself uses, the deviation's exact text:
+// a deviation appears once, and an assessment resolves to the LATER cycle's,
+// whose round judged the tree actually being pushed, while one the
+// re-verification never assessed keeps the earlier round's half rather than
+// losing it. Nothing else is deduped — the other sets are per-pass history,
+// where two identical entries are two real events.
+const deviationText = (entry) => (typeof entry === "string" ? entry : JSON.stringify(entry));
 function mergedCycle(before, after) {
   const both = (key) => {
     const list = [...(Array.isArray(before[key]) ? before[key] : []), ...(Array.isArray(after[key]) ? after[key] : [])];
     return list.length ? { [key]: list } : {};
+  };
+  // Keyed insert, so the LAST writer of a key wins while the position stays the
+  // one it was first seen at — the deviations keep their oldest-first order and
+  // each assessment stays where the deviation it names is.
+  const foldedBy = (key, identity) => {
+    const byIdentity = new Map();
+    for (const entry of both(key)[key] || []) byIdentity.set(identity(entry), entry);
+    return byIdentity.size ? { [key]: [...byIdentity.values()] } : {};
   };
   const proactive = [before.proactive, after.proactive].filter((s) => typeof s === "string" && s.trim()).join(" ");
   return {
@@ -1150,8 +1195,8 @@ function mergedCycle(before, after) {
     rounds: (Number(before.rounds) || 0) + (Number(after.rounds) || 0),
     roundsByCycle: { beforeRebase: before.rounds, reverification: after.rounds },
     ...both("openQuestions"),
-    ...both("deviations"),
-    ...both("deviationAssessments"),
+    ...foldedBy("deviations", deviationText),
+    ...foldedBy("deviationAssessments", (a) => deviationText(a && a.deviation !== undefined ? a.deviation : a)),
     ...both("deviationHistory"),
     ...both("findingDispositions"),
     ...both("peerRounds"),
@@ -1162,13 +1207,35 @@ function mergedCycle(before, after) {
     ...(proactive ? { proactive } : {}),
     ...(before.artifactDir && before.artifactDir !== after.artifactDir ? { preRebaseArtifactDir: before.artifactDir } : {}),
     ...(before.closeOut ? { preRebaseCloseOut: before.closeOut } : {}),
-    ...(before.recordOnly ? { preRebaseRecordOnly: before.recordOnly } : {}),
+    ...(before.recordOnly ? { preRebaseRecordOnly: reverifiedRecord(before.recordOnly) } : {}),
   };
 }
+// The one claim in that carried record the re-verification FALSIFIES. A
+// record-only exit is admitted over a tolerated post-run commit no fresh
+// reviewer saw; the re-verification then reviews the rebased tree over its own
+// `base..HEAD`, so a fresh reviewer has since read every commit on the branch,
+// that one included. Emptying the range and the check line describing it is how
+// the cycle already spells "this record names no post-run commit", and it is the
+// same correction the batch's collision re-review makes for the same reason
+// (`wf-address-tasks.js` → `collisionReviewedRecord`). The `note` and the `pass`
+// stay: the delivery run really did fail, that is what the gate admitted it on,
+// and the maintainer is owed it whoever has since read the commit. Range-only,
+// so a record already naming no commit is returned untouched.
+function reverifiedRecord(record) {
+  return record.range ? { ...record, range: "", verified: "" } : record;
+}
 // A re-verification fixes replay fallout rather than doing fresh work, so it
-// runs under a LOWERED cap: the cycle permits an invoker to lower one and never
-// to raise it, and two full 12-round cycles would put this run's worst case at
-// 24 reviewer rounds — the arcane token bloat the cap exists against.
+// runs under a LOWERED cap. But a per-cycle ceiling is not the whole rule:
+// `review-cycle` states its cap as at most 12 reviewer rounds TOTAL, which an
+// invoker may lower and never raise, and this run REPORTS `rounds` as its own
+// total across both cycles — so a first cycle that passed on its twelfth round
+// plus four more would spend, and report, 16. What bounds the second cycle is
+// therefore the run's REMAINING budget, of which 4 is the most a re-verification
+// may take; where none remains the run stops instead of buying rounds the cap
+// does not have (the arcane token bloat the cap exists against). Two full
+// 12-round cycles — the 24-round worst case this ceiling was first written
+// against — are ruled out by the budget on its own.
+const CYCLE_MAX_ROUNDS = 12;
 const REVERIFY_MAX_ROUNDS = 4;
 if (cycle.verdict === "error") {
   return { error: `Review cycle failed: ${cycle.detail}`, pr: packet.pr, rebase: rebaseRecord, rounds: cycle.rounds, dispositions: cycle.workReport, openQuestions: cycle.openQuestions, deviations: cycle.deviations, peerRounds: cycle.peerRounds, artifactDir: cycle.artifactDir, ...carriedOf(cycle) };
@@ -1209,6 +1276,29 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
     // below rather than dropped with it.
     const preRebaseCycle = cycle;
     const priorReport = preRebaseCycle.workReport || [];
+    // What is left of the run's total round budget after the cycle that just
+    // passed, capped at the re-verification's own lower ceiling. Exhausted, the
+    // rebased tree cannot be reviewed inside the cap at all — and this run
+    // never publishes on a verdict rendered over a tree it then rebased — so it
+    // stops here with the branch on the fresh base and nothing pushed, which is
+    // the same shape as every other stop this point can reach.
+    const reverifyBudget = Math.min(REVERIFY_MAX_ROUNDS, Math.max(0, CYCLE_MAX_ROUNDS - (Number(preRebaseCycle.rounds) || 0)));
+    if (reverifyBudget < 1) {
+      return {
+        status: "reverify-budget-exhausted",
+        pr: packet.pr,
+        rebase: rebaseRecord,
+        rounds: preRebaseCycle.rounds,
+        dispositions: preRebaseCycle.workReport,
+        openQuestions: preRebaseCycle.openQuestions,
+        deviations: preRebaseCycle.deviations,
+        peerRounds: preRebaseCycle.peerRounds,
+        artifactDir: preRebaseCycle.artifactDir,
+        ...carriedOf(preRebaseCycle),
+        detail: `The pre-push rebase replayed commits, so the verdict that passed describes a tree nobody will push — and the cycle that produced it had already spent all ${CYCLE_MAX_ROUNDS} of the run's reviewer rounds, leaving no budget to re-verify the rebased tree under a cap an invoker may lower and never raise.`,
+        note: `Nothing was pushed. The branch is on the rebased base${second.rebase.recoveryRef ? `, and its pre-rebase tip is saved at \`${second.rebase.recoveryRef}\`` : ""}. Re-run to review the rebased tree with a fresh round budget.`,
+      };
+    }
     const reverified = await workflow("wf-review-cycle", {
       worktree: locationMode === "worktree" ? worktreePath : "",
       branch: packet.pr.workingBranch,
@@ -1216,7 +1306,7 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
       artifactType: "code",
       peer: flags.peerOff ? "off" : "on",
       mode: "full",
-      maxRounds: REVERIFY_MAX_ROUNDS,
+      maxRounds: reverifyBudget,
       scope: {
         title: `pr-${packet.pr.number}-post-rebase`,
         instructions: rebaseReverifyInstructions(packet, second.rebase, priorReport),
@@ -1242,7 +1332,8 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
       rounds: reverified.rounds,
       verdict: reverified.verdict,
       roundsBeforeRebase: preRebaseCycle.rounds,
-      maxRounds: REVERIFY_MAX_ROUNDS,
+      maxRounds: reverifyBudget,
+      runCap: CYCLE_MAX_ROUNDS,
     };
     cycle = mergedCycle(preRebaseCycle, reverified);
     if (cycle.verdict === "error") {
@@ -1601,7 +1692,11 @@ const publishFlags = {
 };
 
 phase("Publish");
-const publishReport = await agent(publishPrompt(packet, workReport, publishFlags, cycle.deviations, cycle.deviationAssessments, cycle.recordOnly), {
+// Both cycles' records go to the publisher, not just the surviving cycle's:
+// `cycle` here may be the merged one, whose `preRebaseRecordOnly` is the failed
+// delivery run of the cycle the re-verification replaced. This comment is the
+// only PR-facing surface either record has.
+const publishReport = await agent(publishPrompt(packet, workReport, publishFlags, cycle.deviations, cycle.deviationAssessments, cycle.recordOnly, cycle.preRebaseRecordOnly), {
   label: "publish",
   schema: PUBLISH_SCHEMA,
 });

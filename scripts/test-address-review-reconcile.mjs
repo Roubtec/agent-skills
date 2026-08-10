@@ -59,7 +59,13 @@
 // dispositions that already passed rather than re-triaging them, its reviewer
 // compares against them, and the cycle it replaces still owns open questions and
 // deviations that are the maintainer's — so the harness scripts cycle results in
-// order instead of stopping at the first call.
+// order instead of stopping at the first call. Three properties of that merge
+// are pinned beside the verdict: the second cycle is bounded by what the first
+// LEFT of the run's 12-round total rather than by a fixed ceiling (and a run
+// with none left stops unpublished), a deviation both cycles state is folded to
+// one with one assessment, and the superseded cycle's `preRebase*` records reach
+// the PR comment rather than only the run's result — which is why the publisher
+// is stubbed here at all.
 //
 // And it covers the sibling gate that runs just ahead of this one (task 018):
 // the WORKING LOCATION, which decides not whether the run may act on the branch
@@ -107,7 +113,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 76;
+const EXPECTED_CHECKS = 83;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -177,6 +183,12 @@ const REBASE_REPLAY = {
 // `no-rebase` this is the run's review base — nothing rebased to pin one.
 const GATHERED_BASE_OID = "9988776655443322110099887766554433221100";
 
+// A deviation from a locked decision, in the shape `wf-review-cycle` reports
+// one: a STRING, which the cycle matches by exact text and has every later pass
+// restate VERBATIM. The fixture states that shape rather than an opaque object
+// because the exact text IS the identity the merge folds the two cycles' sets
+// on, and an assessment names its deviation by copying it.
+const DEVIATION = "delivered the guard inline rather than behind the flag the locked decision names; that flag does not exist on this base";
 // A passing first cycle, in the result shape `wf-review-cycle` returns: enough
 // of it that the consumer's coverage checks pass (one workReport entry per
 // gathered item) and its for-the-human sets are non-empty, since whether those
@@ -199,7 +211,8 @@ const CYCLE_PASS = {
     },
   ],
   openQuestions: [{ id: "pr-42-q1", origin: "reviewer", blocking: false, question: "parked before the rebase" }],
-  deviations: [{ decision: "one-checkout-at-a-time", why: "stated before the rebase" }],
+  deviations: [DEVIATION],
+  deviationAssessments: [{ deviation: DEVIATION, inSpecRoute: "none on the base it sat on", recommendation: "RATIFY — the flag lands with the follow-up" }],
   proactive: "swept the same pattern in two siblings",
   finalSha: "d00dfeed",
   artifactDir: "/artifacts/pr-42",
@@ -211,21 +224,52 @@ const CYCLE_REVERIFIED = {
   rounds: 1,
   openQuestions: [{ id: "pr-42-post-q1", origin: "reviewer", blocking: false, question: "parked after the rebase" }],
   deviations: [],
+  deviationAssessments: [],
   artifactDir: "/artifacts/pr-42-post-rebase",
+};
+// The re-verification RESTATING the deviation that still stands, which is what
+// the cycle orders every pass to do — so this, not the empty set above, is the
+// ordinary shape of a run whose deviation survives the rebase. Concatenated
+// blindly it publishes the same deviation twice and hands "beside the deviation
+// they name" two assessments for one deviation; its own assessment is the later
+// round's judgment of it, and disagrees with the first, so which one survives
+// the fold is observable.
+const CYCLE_REVERIFIED_RESTATING = {
+  ...CYCLE_REVERIFIED,
+  deviations: [DEVIATION],
+  deviationAssessments: [{ deviation: DEVIATION, inSpecRoute: "the replay brought the flag with it", recommendation: "CONFORM — the in-spec route exists on this base" }],
+};
+// A first cycle that CONCLUDED over a failed delivery run, on the flake rule's
+// evidenced-unrelated disposition, and over the one post-run commit that exit
+// tolerates. The re-verification supersedes its verdict; the failure is still
+// the maintainer's, and the PR comment is the run's only surface for it.
+const FLAKE_RECORD = {
+  pass: 4,
+  range: "abc1234..def5678",
+  verified: "the range holds one commit, the flake-diagnosis task file",
+  note: "the delivery run's only failure was the payments suite, which reproduces on the base; filed as tasks/041-flaky-payments-suite.md",
+};
+const CYCLE_PASS_RECORD_ONLY = {
+  ...CYCLE_PASS,
+  recordOnly: FLAKE_RECORD,
+  closeOut: { pass: 4, range: "abc1234..def5678", edits: ["reworded a comment"], verified: "every hunk non-semantic" },
 };
 
 // Run the shipped script with one scripted gather packet. `no-push` keeps the
-// run local-only by default: the gate is flag-independent, and a publish path
-// would need stubs for work this suite is not about. `opts.args` overrides the
-// request, which two gates beside it need: whether a working branch other than
-// the PR head ref was ever selected is read from the request rather than the
-// packet, and the rebase opt-out needs its own token. `opts.rebase` scripts what
-// every delegated rebase agent reports back and `opts.rebases` scripts one point
+// run local-only by default: the gate is flag-independent, and most of what is
+// under test here stops well before publication. `opts.args` overrides the
+// request, which three gates beside it need: whether a working branch other
+// than the PR head ref was ever selected is read from the request rather than
+// the packet, the rebase opt-out needs its own token, and the one scenario that
+// reads the PUBLISH brief needs `push`. `opts.rebase` scripts what every
+// delegated rebase agent reports back and `opts.rebases` scripts one point
 // at a time (keyed `pre-fix`/`pre-push`), and `opts.cycles` scripts what the
 // nested cycle RETURNS, call by call — without it the first call ends the
-// scenario, which is all the gates ahead of the cycle need.
+// scenario, which is all the gates ahead of the cycle need. The publisher is
+// stubbed as a clean success and its rendered brief kept, since what the caller
+// HANDS it is script logic even though the brief itself is prose.
 async function run(packet, opts = {}) {
-  const seen = { agentLabels: [], cycleOpts: null, cycleCalls: [], rebasePrompts: [] };
+  const seen = { agentLabels: [], cycleOpts: null, cycleCalls: [], rebasePrompts: [], publishPrompts: [] };
   const agent = async (prompt, aopts) => {
     const label = (aopts && aopts.label) || "";
     seen.agentLabels.push(label);
@@ -235,6 +279,12 @@ async function run(packet, opts = {}) {
       const point = label.slice("rebase-".length);
       if (opts.rebases && Object.prototype.hasOwnProperty.call(opts.rebases, point)) return opts.rebases[point];
       return opts.rebase === undefined ? REBASE_NOOP : opts.rebase;
+    }
+    if (label === "publish") {
+      seen.publishPrompts.push(prompt);
+      return opts.publish === undefined
+        ? { published: true, pushed: true, pushedNewCommits: true, threadOutcomes: [] }
+        : opts.publish;
     }
     throw new Error(`unexpected agent call past the gate: ${label}`);
   };
@@ -1078,6 +1128,106 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "and bounds it with a lowered round cap, so two cycles cannot double the run's worst case",
     typeof cap === "number" && cap > 0 && cap < 12,
     `maxRounds: ${JSON.stringify(cap)}`,
+  );
+  // A lowered ceiling is not the cap. `review-cycle` states its cap as at most
+  // 12 reviewer rounds TOTAL, an invoker may lower it and never raise it, and
+  // this run reports `rounds` as its own total across both cycles — so what
+  // bounds the second cycle is what the FIRST left of that budget, with the
+  // ceiling as the most a re-verification may take of it. A fixed 4 would hand
+  // a run that already spent 11 rounds four more and report 15.
+  const nearlySpent = await run(gathered(withWork), {
+    cycles: [{ ...CYCLE_PASS, rounds: 10 }, CYCLE_REVERIFIED],
+    rebases: { "pre-fix": REBASE_NOOP, "pre-push": REBASE_REPLAY },
+  });
+  const remaining = nearlySpent.seen.cycleCalls[1] ? nearlySpent.seen.cycleCalls[1].opts.maxRounds : undefined;
+  check(
+    "and the bound is what the first cycle LEFT of the run's 12 rounds, not a fixed ceiling",
+    remaining === 2,
+    `a 10-round first cycle left maxRounds: ${JSON.stringify(remaining)}`,
+  );
+  // And where it left nothing, there is no budget to review the rebased tree
+  // with at all. The verdict standing describes a tree nobody will push, so the
+  // run stops — no second cycle, and nothing published — rather than buying
+  // rounds the cap does not have.
+  const spent = await run(gathered(withWork), {
+    args: "push",
+    cycles: [{ ...CYCLE_PASS, rounds: 12 }, CYCLE_REVERIFIED],
+    rebases: { "pre-fix": REBASE_NOOP, "pre-push": REBASE_REPLAY },
+  });
+  check(
+    "a first cycle that spent the whole budget stops the run at the replay, with no second cycle and nothing published",
+    spent.status === "reverify-budget-exhausted" &&
+      spent.seen.cycleCalls.length === 1 &&
+      !spent.seen.agentLabels.includes("publish"),
+    JSON.stringify({ status: spent.status, cycles: spent.seen.cycleCalls.length, labels: spent.seen.agentLabels }),
+  );
+  check(
+    "and says so in terms of the cap and the rounds already spent, with the branch's recovery ref named",
+    /12/.test((spent.result || {}).detail || "") &&
+      /never raise/.test((spent.result || {}).detail || "") &&
+      /nothing was pushed/i.test((spent.result || {}).note || ""),
+    JSON.stringify({ detail: (spent.result || {}).detail, note: (spent.result || {}).note }),
+  );
+  // The merge folds the two human-facing sets rather than concatenating them: a
+  // deviation the re-verification restates VERBATIM (which the cycle orders it
+  // to) is ONE deviation, and it carries ONE assessment — the later round's,
+  // since that is the round that judged the tree being pushed. Concatenated, the
+  // publisher's summary comment leads with the same deviation twice and its
+  // "carry each assessment beside the deviation they name" names two.
+  const restated = await run(gathered(withWork), {
+    cycles: [CYCLE_PASS, CYCLE_REVERIFIED_RESTATING],
+    rebases: { "pre-fix": REBASE_NOOP, "pre-push": REBASE_REPLAY },
+  });
+  const rr = restated.result || {};
+  check(
+    "a deviation both cycles state appears ONCE in the merged result, with the re-verification's assessment of it",
+    JSON.stringify(rr.deviations) === JSON.stringify([DEVIATION]) &&
+      (rr.deviationAssessments || []).length === 1 &&
+      (rr.deviationAssessments || [])[0].recommendation === CYCLE_REVERIFIED_RESTATING.deviationAssessments[0].recommendation,
+    JSON.stringify({ deviations: rr.deviations, assessments: rr.deviationAssessments }),
+  );
+  // The superseded cycle's three `preRebase*` records. Each speaks for something
+  // the re-verification did not undo — a delivery run that FAILED, a close-out's
+  // unreviewed non-semantic edits, and a round history under another directory —
+  // so replacing the verdict must not take them with it.
+  const superseded = await run(gathered(withWork), {
+    args: "push",
+    cycles: [CYCLE_PASS_RECORD_ONLY, CYCLE_REVERIFIED],
+    rebases: { "pre-fix": REBASE_NOOP, "pre-push": REBASE_REPLAY },
+  });
+  const sr = superseded.result || {};
+  check(
+    "the superseded cycle's delivery-failure record, close-out and artifact directory ride out under their `preRebase*` names",
+    !!sr.preRebaseRecordOnly &&
+      JSON.stringify(sr.preRebaseCloseOut) === JSON.stringify(CYCLE_PASS_RECORD_ONLY.closeOut) &&
+      sr.preRebaseArtifactDir === CYCLE_PASS.artifactDir,
+    JSON.stringify({ record: sr.preRebaseRecordOnly, closeOut: sr.preRebaseCloseOut, artifactDir: sr.preRebaseArtifactDir }),
+  );
+  check(
+    "with the one claim in it the re-verification falsified corrected — a fresh reviewer has since read that commit — and the failure it exists to report intact",
+    !!sr.preRebaseRecordOnly &&
+      sr.preRebaseRecordOnly.range === "" &&
+      sr.preRebaseRecordOnly.verified === "" &&
+      sr.preRebaseRecordOnly.note === FLAKE_RECORD.note &&
+      sr.preRebaseRecordOnly.pass === FLAKE_RECORD.pass,
+    JSON.stringify(sr.preRebaseRecordOnly),
+  );
+  // And the record reaches the PR, which is the whole point of keeping it: the
+  // publish brief is this run's ONLY PR-facing surface, so a record that rides
+  // out in the result and not in that brief is a gap the maintainer never sees.
+  const publishBrief = superseded.seen.publishPrompts[0] || "";
+  check(
+    "and the publisher is handed it, under the same delivery-failure heading, labelled as the cycle the re-verification replaced",
+    publishBrief.includes(FLAKE_RECORD.note) &&
+      /## Delivery-run failure — recorded, not reviewed/.test(publishBrief) &&
+      /cycle before the pre-push rebase/.test(publishBrief) &&
+      /plus the delivery-run failure section defined below/.test(publishBrief),
+    JSON.stringify({
+      note: publishBrief.includes(FLAKE_RECORD.note),
+      heading: /## Delivery-run failure/.test(publishBrief),
+      labelled: /cycle before the pre-push rebase/.test(publishBrief),
+      crossReferenced: /plus the delivery-run failure section defined below/.test(publishBrief),
+    }),
   );
   // The replacement is what makes the verdict honest; it must not also make the
   // first cycle's for-the-human records disappear. A parked question or a
