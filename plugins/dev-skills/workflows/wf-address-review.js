@@ -897,6 +897,12 @@ if (!packet.items || packet.items.length === 0) {
 // push it would leave the maintainer's branch rewritten, diverged from the PR
 // head, with no verdict and no push behind it. A run stopped at the
 // reconciliation gate above rebases nothing for the same reason.
+// The alternative — rebase first, and send a zero-item change through review and
+// publication as the prose skill's zero-item path does — was considered and
+// deferred rather than rejected: what makes it correct is a zero-item path that
+// reviews and publishes at all, and this script's empty-`items` exit predates
+// task 016 and returns a no-op even where the local tip is ahead of the PR head.
+// Task 016a carries that, and re-decides this position once it lands.
 // `no-rebase` is the only opt-out.
 //
 // Each point pins its base to a COMMIT and rebases onto that, which is what
