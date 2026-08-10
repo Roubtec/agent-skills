@@ -1775,6 +1775,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "paginates both reads": /paginate BOTH reads/.test(step6),
     "an unconfirmed request neither fails nor re-issues":
       /do not fail publication, and do NOT issue the request again/.test(step6) && /requested, unconfirmed/.test(step6),
+    // The pings step's per-flag arms are plain STRINGS inside the template
+    // literal, so an interpolation written into one reaches the agent as its own
+    // source text. This clause was added because it did: the confirmation shipped
+    // telling the publisher to read `.../pulls/${packet.pr.number}/…`.
+    "leaves no builder interpolation unrendered": !/\$\{(?:packet|flags|dev|assessments)\b/.test(brief),
   };
   const confirmationMissing = Object.entries(confirmation).filter(([, ok]) => !ok).map(([what]) => what);
   check(
