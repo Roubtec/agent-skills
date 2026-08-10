@@ -835,6 +835,10 @@ const FIXTURES = {
     recordPrompt: [
       ["recordPrompt", (f) => f.recordPrompt(publishPacket, [], { why: "`no-push` was given.", rounds: 2, reviewerPassed: true, deviations: [] }), NO_BUILD],
       ["recordPrompt (worktree mode)", (f) => f.recordPrompt(publishPacketWorktree, [], { why: "the cycle hit its cap.", rounds: 12, reviewerPassed: false, deviations }), NO_BUILD],
+      // The third branch: a publication that stopped PART-WAY renders the same
+      // record with its status and provenance lines changed, so the branch is
+      // rendered here rather than left to the two that say nothing landed.
+      ["recordPrompt (a publication that stopped part-way)", (f) => f.recordPrompt(publishPacket, [], { why: "replying to a thread failed after the push landed.", rounds: 2, reviewerPassed: true, deviations: [], landed: "the push" }), NO_BUILD],
     ],
     reclaimPrompt: [["reclaimPrompt", (f) => f.reclaimPrompt("/w/.worktrees/c/pr-42", 42, "publication completed"), NO_BUILD]],
   },

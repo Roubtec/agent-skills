@@ -7,8 +7,10 @@
  * best-effort cross-harness codex peer, bounded by the cycle's round cap),
  * then publish by default (lease-safe push, reply + resolve threads, Summary
  * comment, pings) — a `no-push` run stays local-only, and the one PR write it
- * makes is the disposition record every non-publishing exit leaves behind (see
- * `recordPrompt`), which is `no-push`'s single documented exception.
+ * makes is the disposition record every exit that does not publish IN FULL
+ * leaves behind (see `recordPrompt` and `leaveDispositionRecord`), which is
+ * `no-push`'s single documented exception. A publication that stopped part-way
+ * leaves the same record, saying what landed rather than that nothing did.
  * The re-review pings fire ONLY when the push actually advanced the branch with
  * new commits/rewritten history; a no-op push (nothing new to review) skips them
  * so an automated review -> address -> review loop can terminate.
@@ -129,7 +131,7 @@ export const meta = {
     { title: "Rebase", detail: "delegated rebase onto the freshest base — before fixing, and again before publication" },
     { title: "Fix and verify", detail: "fix/push-back per thread through the nested wf-review-cycle" },
     { title: "Peer review (codex)", detail: "best-effort cross-harness second opinion beside each reviewer round; its outcome never blocks" },
-    { title: "Record", detail: "on every exit that publishes nothing: leave the run's disposition map on the PR as one record comment" },
+    { title: "Record", detail: "on every exit that does not publish in full: leave the run's disposition map on the PR as one record comment" },
     { title: "Publish", detail: "lease-safe push, thread replies, summary comment, pings" },
     { title: "Summary" },
   ],
@@ -700,7 +702,16 @@ function recordPrompt(packet, dispositions, facts) {
   const where = packet.pr && packet.pr.worktree
     ? `Your working location is the worktree \`${packet.pr.worktree}\`. Before anything else, \`cd\` into it and verify \`git rev-parse --show-toplevel\` prints exactly that path; if not, STOP and report. Every git read below runs there. Do NOT touch the main checkout: it is on another branch and is none of this run's business.`
     : `You work in the repository's current checkout, which is on the branch this run addressed — do NOT create a worktree and do NOT switch branches.`;
-  return `Leave this run's disposition record on PR #${packet.pr.number} (branch \`${packet.pr.workingBranch}\`). This run published NOTHING: ${facts.why} Read \`AGENTS.md\` / \`CLAUDE.md\` first.
+  // A publication that stopped PART-WAY holds the same map with replies left to
+  // replay, so it leaves the same record — but two of its lines would be lies:
+  // `status: not published` and "this run pushed nothing" are both false once a
+  // push landed and only the replies, resolves or Summary failed. `landed` is
+  // what reached origin, and it selects the rendering the skill's format defines
+  // for that case. Empty is the ordinary run: nothing reached origin at all.
+  const landed = typeof facts.landed === "string" ? facts.landed.trim() : "";
+  return `Leave this run's disposition record on PR #${packet.pr.number} (branch \`${packet.pr.workingBranch}\`). ${landed
+    ? `This run's publication stopped PART-WAY: ${facts.why} What reached origin: ${landed}. So this record says what landed rather than "not published", and its tips are NOT local-only — the two lines below marked for that case are the ones that differ.`
+    : `This run published NOTHING: ${facts.why}`} Read \`AGENTS.md\` / \`CLAUDE.md\` first.
 
 ${where}
 
@@ -719,10 +730,10 @@ The body, marker first (the marker line is what step 1 of the next run matches, 
 \`\`\`
 <!-- address-review:disposition-record -->
 # address-review packet — PR #${packet.pr.number} (${packet.pr.workingBranch})
-status: not published (<the reason above, one line>)
-starting HEAD ${facts.startingHead || "(not recorded — no rebase ran this run)"} | final HEAD <the tip you read> | recorded headRefOid ${packet.pr.headOid} | base ${packet.pr.base}
-validation <what ran> | reviewer ${facts.reviewerPassed ? "Pass" : "did NOT pass"} (${facts.rounds} round(s)) | peer <participation>
-the tips above are LOCAL ONLY — this run pushed nothing, so they are not on origin
+status: ${landed ? "published in part" : "not published"} (<the reason above, one line${landed ? ", saying what landed and what did not" : ""}>)
+starting HEAD ${facts.startingHead || "(not recorded — neither the gather nor a rebase point reported one)"} | final HEAD <the tip you read> | recorded headRefOid ${packet.pr.headOid}
+base ${packet.pr.base} | validation <what ran> | reviewer ${facts.reviewerPassed ? "Pass" : "did NOT pass"} (${facts.rounds} round(s)) | peer <participation>
+${landed ? `pushed to origin: ${landed} — the replies, resolves and Summary body below are what remains to replay` : "the tips above are LOCAL ONLY — this run pushed nothing, so they are not on origin"}
 
 ## Threads
 [<disposition>] <path>:<line>  <author>  thread=<threadId or url>
@@ -736,7 +747,11 @@ the tips above are LOCAL ONLY — this run pushed nothing, so they are not on or
 - \`final HEAD\` is what \`git rev-parse HEAD\` prints in the working location. Read it there rather than repeating a SHA from this brief.
 - One \`## Threads\` block entry per disposition below, in that shape: its disposition kind, its stable reference (path:line, author, and the \`threadId\` for a review thread or the \`url\` for a standalone item), the permalink, and the reply body VERBATIM. The drafted reply bodies and the ready-to-post Summary body are the only parts of this record that cannot be re-derived from the PR later, so they are the parts that must be exact.
 - The \`## Summary comment\` block holds the "Summary of Review Fixes" body a publishing run would have posted — what was fixed, a prominent "Pushed back — please re-examine" section, a "Deferred to follow-up tasks" section naming each committed task file, and any ambiguous/skipped item — ready to post unchanged. Where the cycle recorded locked-decision deviations, that body LEADS with them under a "Deviation from a locked decision" section, since a later turn posts what you wrote here as it stands. Standing deviations for this run: ${JSON.stringify(facts.deviations || [])}.
-- The SHAs are PROVENANCE, not a promise. Assert nothing about them holding later: the branch may be rebased before any push, which rewrites every one while changing nothing about whether the work is there. Do not write "the branch tip is <sha>" as a condition a replay must check, and do not omit the LOCAL ONLY line — a reader who takes those SHAs for origin's goes looking for commits that are not there.
+- The SHAs are PROVENANCE, not a promise. Assert nothing about them holding later: the branch may be rebased before any push, which rewrites every one while changing nothing about whether the work is there. Do not write "the branch tip is <sha>" as a condition a replay must check, and do not omit the header's last line${landed
+    ? " — a reader who takes a part-way publication for a complete one stops looking for the replies that never landed"
+    : " — a reader who takes those SHAs for origin's goes looking for commits that are not there"}.${landed
+    ? `\n- Every thread keeps its entry and its verbatim reply, this run's part-way publication included: one the publisher DID reply to and resolve says so on its own entry rather than being dropped, so a later turn can see what is left without re-deriving it from the thread state.`
+    : ""}
 
 Report \`posted\`, \`superseded\` (true when you updated a prior record of your own), \`url\` (the record comment's permalink), and one line of \`detail\`.
 
@@ -1535,6 +1550,64 @@ if (cycle.verdict === "error") {
   return { error: `Review cycle failed: ${cycle.detail}`, pr: packet.pr, rebase: rebaseRecord, rounds: cycle.rounds, dispositions: cycle.workReport, openQuestions: cycle.openQuestions, deviations: cycle.deviations, peerRounds: cycle.peerRounds, artifactDir: cycle.artifactDir, ...carriedOf(cycle) };
 }
 
+// --- The DISPOSITION RECORD, finalized in ONE place --------------------------
+// `recordPrompt` is this workflow's rendering of the `address-review` skill's
+// "The durable disposition record"; this is the single place the run decides to
+// leave one. Every exit that HOLDS this run's disposition map and does not
+// publish it in full finalizes through here, so the only question a new exit has
+// to answer is whether it calls this — not what it should re-derive. It was one
+// inline dispatch keyed on a reason computed from the conditions the exits
+// between it and publication branch on, which by construction left out the exits
+// AHEAD of that computation (the pre-push rebase's stops, and a replay with no
+// re-verification budget left) and the one PAST it (a publication that did not
+// complete).
+// A map with no entries records nothing: the skill's rule that a run with
+// nothing triaged says so in its report rather than posting an empty record.
+// An exit that passes no reason records nothing either, which is how the two
+// cycle-error exits stay silent — there no verdict describes the tree that
+// exists, so the run cannot say what the map it holds was verified against, and
+// a record replayed as if it were verified is worse than one the maintainer
+// reads out of the result. A run stopped by the pre-push rebase is NOT that
+// case: its verdict describes the tree the aborted replay left standing, and the
+// record says the rebase is why nothing was published.
+// It always runs before the worktree is given back, because every exit that
+// reclaims one is below the call that records for it — so the tips it cites are
+// read where the work happened.
+let dispositionRecord = null;
+async function leaveDispositionRecord(why, map, facts) {
+  const held = Array.isArray(map) ? map : [];
+  if (!why || !held.length) return {};
+  phase("Record");
+  // The tip this run started from. The gather reads it in the working location
+  // after the one fast-forward it may perform, so EVERY run has one — including
+  // `no-rebase`, which has no rebase report to take it from. A rebase point's
+  // `before` is the same commit and stands in where a gather reported none;
+  // absent both, the brief says it was not recorded rather than inventing one.
+  const startingHead =
+    (typeof packet.pr.startingHead === "string" ? packet.pr.startingHead.trim() : "") ||
+    (rebaseRecord.points[0] || {}).before ||
+    "";
+  const written = await agent(recordPrompt(packet, held, { ...facts, why, startingHead }), {
+    label: "record",
+    schema: RECORD_SCHEMA,
+  });
+  dispositionRecord = written || { posted: false, detail: "the record phase returned nothing, so this run's disposition map survives only in this result." };
+  return { dispositionRecord };
+}
+// The same fact in the one line a maintainer reads first. A record that failed
+// to post is the more important half: it means the map is in this result and
+// nowhere else, which is exactly the loss the record exists to prevent.
+function recordNoteText() {
+  if (!dispositionRecord) return "";
+  return dispositionRecord.posted
+    ? `This run's disposition map is on the PR as its disposition record${dispositionRecord.url ? ` (${dispositionRecord.url})` : ""} — the one PR write a run that does not publish in full makes.`
+    : `This run's disposition map could NOT be recorded on the PR (${dispositionRecord.detail}), so it survives only in this result.`;
+}
+// For the exits whose `note` is composed elsewhere (a rebase stop's is built by
+// `rebasePoint`, the published exit's by the ping accounting), so the record
+// still reaches the line a maintainer reads first.
+const withRecordNote = (note) => `${note || ""}${recordNoteText() ? ` ${recordNoteText()}` : ""}`.trim();
+
 // The SECOND rebase point: the fixes are committed and the next thing that
 // happens is publication, so this is where the branch meets the base as it
 // stands now. In the prose skill this point runs BEFORE the final reviewer
@@ -1566,8 +1639,18 @@ if (cycle.verdict === "error") {
 if (cycle.verdict === "pass" && !flags.noRebase) {
   const second = await rebasePoint("pre-push", rebaseTargetRef);
   if (second.stop) {
+    // A stop here is the first exit that HOLDS a triaged, reviewed map: the
+    // cycle passed, and the rebase aborted cleanly onto the tree that verdict
+    // describes. So it records like every other exit that publishes nothing,
+    // and the reason names the stop rather than a flag.
+    const record = await leaveDispositionRecord(
+      `the pre-push rebase stopped the run (${second.stop.status}), so publication was refused: ${second.stop.detail || "no detail reported"} The dispositions below passed review on the base the branch sat on before that point.`,
+      cycle.workReport,
+      { rounds: cycle.rounds, reviewerPassed: cycle.verdict === "pass", deviations: cycle.deviations },
+    );
     return {
       ...second.stop,
+      ...record,
       rounds: cycle.rounds,
       dispositions: cycle.workReport,
       // Oldest first, the order `mergedCycle` keeps every human-facing set in:
@@ -1578,6 +1661,7 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
       peerRounds: cycle.peerRounds,
       artifactDir: cycle.artifactDir,
       ...carriedOf(cycle),
+      note: withRecordNote(second.stop.note),
     };
   }
   if (!second.rebase.noop) {
@@ -1596,8 +1680,19 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
     // the same shape as every other stop this point can reach.
     const reverifyBudget = Math.min(REVERIFY_MAX_ROUNDS, Math.max(0, CYCLE_MAX_ROUNDS - (Number(preRebaseCycle.rounds) || 0)));
     if (reverifyBudget < 1) {
+      // The map here passed review too, on the base before the replay, and this
+      // exit is the one place a maintainer could otherwise lose it: the run
+      // spent its whole round budget and stops, so nothing downstream will ever
+      // post its drafted replies. The reason says the verdict is the pre-rebase
+      // tree's, which is the fact the record must not overstate.
+      const record = await leaveDispositionRecord(
+        `the pre-push rebase replayed commits and the run had no reviewer rounds left to re-verify the rebased tree, so publication was refused. The dispositions below passed review on the base the branch sat on before that replay.`,
+        preRebaseCycle.workReport,
+        { rounds: preRebaseCycle.rounds, reviewerPassed: preRebaseCycle.verdict === "pass", deviations: preRebaseCycle.deviations },
+      );
       return {
         status: "reverify-budget-exhausted",
+        ...record,
         pr: packet.pr,
         rebase: rebaseRecord,
         rounds: preRebaseCycle.rounds,
@@ -1611,7 +1706,7 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
         // Named unconditionally: `rebasePoint` adopts no successful report
         // without a `refs/pre-rebase/` ref, so by this line the branch's way
         // back is known rather than hoped for.
-        note: `Nothing was pushed. The branch is on the rebased base, and its pre-rebase tip is saved at \`${second.rebase.recoveryRef}\`. Re-run to review the rebased tree with a fresh round budget.`,
+        note: withRecordNote(`Nothing was pushed. The branch is on the rebased base, and its pre-rebase tip is saved at \`${second.rebase.recoveryRef}\`. Re-run to review the rebased tree with a fresh round budget.`),
       };
     }
     const reverified = await workflow("wf-review-cycle", {
@@ -1832,21 +1927,17 @@ const badDispDefect = dispDefects.length ? dispDefects[0].defect : "";
 const badDispRef = dispDefects.length ? dispDefects[0].ref : "";
 const moreDefects = dispDefects.length > 1 ? ` ${dispDefects.length - 1} further entr${dispDefects.length === 2 ? "y is" : "ies are"} unpublishable too — see malformedDispositions.` : "";
 
-// THE DISPOSITION RECORD, before any of the exits that publish nothing take it.
-// Which exits those are is not a list to maintain: the reason below is computed
-// from the very conditions the exits branch on, in their order, so it is
-// non-empty exactly when one of them is about to be taken and an exit cannot be
-// added past here without deciding what it records. It runs before the no-push
-// branch's worktree reclaim so the record's tips are read where the work
-// happened.
-// The two error exits above it deliberately record nothing: there the cycle
-// returned no verdict describing the tree that exists, so the run cannot say
-// what the map it holds was verified against, and a record replayed as if it
-// were verified is worse than one the maintainer reads out of the result.
-// A map with no entries records nothing either — the skill's rule that a run
-// with nothing triaged says so in its report rather than posting an empty
-// record. The zero-item exits upstream never reach here, so what this covers is
-// a cycle that returned an empty report.
+// THE DISPOSITION RECORD for the exits BETWEEN here and publication. Which
+// exits those are is not a list to maintain: the reason below is computed from
+// the very conditions they branch on, in their order, so it is non-empty exactly
+// when one of them is about to be taken. The exits AHEAD of this line (the
+// pre-push rebase's stops, and a replay with no re-verification budget left) and
+// the one PAST it (a publication that did not complete) each state their own
+// reason where they are taken, and all of them finalize through
+// `leaveDispositionRecord`, so an exit added anywhere has exactly one thing to
+// decide: whether it records.
+// The zero-item exits upstream never reach here, so the empty-map case this
+// covers is a cycle that returned an empty report.
 const noPublishReason = !flags.push
   ? passed
     ? "`no-push` was given, so this was a local-only run: nothing was pushed and no thread was touched."
@@ -1860,35 +1951,14 @@ const noPublishReason = !flags.push
         : badDispDefect
           ? `a disposition is not publishable (${badDispRef}: ${badDispDefect}), so publication was aborted before any push.`
           : "";
-let dispositionRecord = null;
-if (noPublishReason && workReport.length) {
-  phase("Record");
-  const written = await agent(
-    recordPrompt(packet, workReport, {
-      why: noPublishReason,
-      rounds,
-      reviewerPassed: !!passed,
-      deviations: cycle.deviations,
-      // The tip this run started from, which only a rebase point reports (its
-      // `before`). A `no-rebase` run has none, and the brief writes that it has
-      // none rather than inventing one.
-      startingHead: (rebaseRecord.points[0] || {}).before || "",
-    }),
-    { label: "record", schema: RECORD_SCHEMA }
-  );
-  dispositionRecord = written || { posted: false, detail: "the record phase returned nothing, so this run's disposition map survives only in this result." };
-}
 // Spread into every exit below that publishes nothing, so the result says where
 // the map went — or that it went nowhere.
-const recordResult = dispositionRecord ? { dispositionRecord } : {};
-// The same fact in the one line a maintainer reads first. A record that failed
-// to post is the more important half: it means the map is in this result and
-// nowhere else, which is exactly the loss the record exists to prevent.
-const recordNote = dispositionRecord
-  ? dispositionRecord.posted
-    ? `This run's disposition map is on the PR as its disposition record${dispositionRecord.url ? ` (${dispositionRecord.url})` : ""} — the one PR write a run that publishes nothing makes.`
-    : `This run's disposition map could NOT be recorded on the PR (${dispositionRecord.detail}), so it survives only in this result.`
-  : "";
+const recordResult = await leaveDispositionRecord(noPublishReason, workReport, {
+  rounds,
+  reviewerPassed: !!passed,
+  deviations: cycle.deviations,
+});
+const recordNote = recordNoteText();
 
 if (!flags.push) {
   // Local-only run: no push, no reply, no resolve, no Summary comment, no ping —
@@ -2081,10 +2151,27 @@ const publishReport = await agent(publishPrompt(packet, workReport, publishFlags
 });
 
 const published = !!(publishReport && publishReport.published);
-// One record for both the result field and the note below, so the reason the
-// note quotes is the one the report shows — including where the publisher
-// returned nothing at all and there is no report to quote from.
-const publishRecord = publishReport || { published: false, aborted: "publisher returned nothing" };
+// A publication that did NOT complete still holds this run's map with replies
+// left to replay, so it records through the same helper as every exit above —
+// the last of the exits that publish nothing in full, and the one the computed
+// reason above cannot reach because the publisher had not run yet.
+// What it records differs in two lines, and `landed` is what selects them: once
+// the push reached origin, "not published" and "the tips are LOCAL ONLY" are
+// both false, and a reader who believes either stops looking for the replies
+// that never landed. `pushed` false means nothing reached origin at all, so that
+// run records exactly like a pre-publication stop.
+const landed = !published && publishReport && publishReport.pushed
+  ? `the push${publishReport.pushedNewCommits === false ? " (a no-op — the remote already pointed at this tip)" : ""}${publishReport.summaryCommentUrl ? `, and the Summary comment at ${publishReport.summaryCommentUrl}` : ""}`
+  : "";
+const publishRecord = published
+  ? {}
+  : await leaveDispositionRecord(
+      `publication did not complete: ${(publishReport && publishReport.aborted) || "the publisher returned nothing"}${landed
+        ? " — the push had already landed, so what is left to replay is the replies, resolves and Summary comment."
+        : ", and nothing reached origin."}`,
+      workReport,
+      { rounds, reviewerPassed: true, deviations: cycle.deviations, landed },
+    );
 // Published is the finish this whole pipeline exists for, so the worktree goes
 // back here. A publication that aborted keeps it: whatever the publisher
 // stopped on is still standing in that tree, and `pr.worktree` names it in the
@@ -2111,6 +2198,7 @@ const notes = [
 ].filter(Boolean);
 return {
   status: published ? "fixed-published" : "fixed-publish-failed",
+  ...publishRecord,
   pr: packet.pr,
   rebase: rebaseRecord,
   rounds,
@@ -2129,5 +2217,5 @@ return {
   ...(reclaimed ? { worktreeReclaim: reclaimed } : {}),
   note: published
     ? (`${notes.join(" ")}${survivingWorktreeNote(reclaimed)}`.trim() || undefined)
-    : `Fixes passed review but publication did not fully complete: ${publishRecord.aborted || "no reason reported"}. Nothing may have been pushed.`,
+    : withRecordNote(`Fixes passed review but publication did not fully complete — see publishReport.aborted; ${landed ? "the push DID land, so what is outstanding is the replies, resolves and Summary comment" : "nothing reached origin"}.`),
 };

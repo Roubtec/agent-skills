@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 156;
+const EXPECTED_CHECKS = 157;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1522,6 +1522,17 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         "- **A non-empty result rejects nothing.**",
         [/patch-id cascade/, /Fall through to the tree/],
       ],
+      // The rendering for the one case the canonical format cannot state as
+      // written: once a push has landed, `status: not published` and the
+      // local-only line are both false, and a reader who believes either stops
+      // looking for the replies that never landed. Pinned in the skill because
+      // the skill is where the format is defined once; `recordPrompt` renders it
+      // and the exit matrix drives it.
+      [
+        "the part-way publication's rendering of that format",
+        "**A publication that stopped part-way**",
+        [/status: published in part/, /what remains to replay/, /keeps its entry and its verbatim reply/],
+      ],
     ];
     // Item 2's bullets are an ordered exclusion chain — "work these in order …
     // each excludes the ones above it and the last is 'everything else'" — so
@@ -1563,7 +1574,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         if (placed[i][1] < placed[i - 1][1]) missing.push(`${path} states ${placed[i][0]} before ${placed[i - 1][0]}`);
     }
     check(
-      "and the skill carries the same decisions in both mirrors, in the order that makes the stops reachable — the proper-ancestor stop and the off-shoot's gate ahead of both pushes, the PR's ref as the off-shoot's target with the fields both recipes resolve it from, the check that substitution excepts, and the disposition record's carve-out, marker, supersession, and SHA/patch-id rules",
+      "and the skill carries the same decisions in both mirrors, in the order that makes the stops reachable — the proper-ancestor stop and the off-shoot's gate ahead of both pushes, the PR's ref as the off-shoot's target with the fields both recipes resolve it from, the check that substitution excepts, and the disposition record's carve-out, marker, supersession, SHA/patch-id and part-way-publication rules",
       missing.length === 0,
       missing.join("; "),
     );
@@ -2604,16 +2615,18 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   }
 }
 
-// --- The disposition record, on every exit that publishes nothing ------------
+// --- The disposition record, on every exit that does not publish in full -----
 // Step 8's report is chat output, so an unpublished run's map — which thread was
 // pushed back, what the drafted rationale said — died with the session. It now
-// goes to the PR as one comment, and WHICH exits leave it is script logic: the
-// reason is computed from the same conditions the exits branch on, so the
-// failure mode worth testing is an exit that publishes nothing and records
-// nothing. The published exit is tested from the other side: it must record
-// NOTHING, because its replies, resolves and Summary comment are the durable
-// record there and a record beside them would say "not published" of published
-// work.
+// goes to the PR as one comment, and WHICH exits leave it is script logic, so
+// the failure mode worth testing is an exit that holds a map, does not publish
+// it, and records nothing. Every such exit is driven here, including the three
+// that no computed reason can reach: the pre-push rebase's stops and an
+// exhausted re-verification budget, both AHEAD of that computation, and a
+// publication that did not complete, PAST it.
+// The published exit is tested from the other side: it must record NOTHING,
+// because its replies, resolves and Summary comment are the durable record there
+// and a record beside them would say "not published" of published work.
 {
   const withWork = { reconcile: { outcome: "work" }, items: [ITEM] };
   // The cap: a cycle that returned its report without a passing verdict.
@@ -2627,29 +2640,90 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   };
   // The same abort with NO map at all — nothing to replay, so nothing to record.
   const CYCLE_NO_MAP = { ...CYCLE_PASS, workReport: [] };
+  // The pre-push rebase halting on a conflict it cannot judge: the map has
+  // passed review, and the abort left the tree that verdict describes.
+  const REBASE_HALTED = {
+    ok: true,
+    halted: true,
+    noop: false,
+    effectiveBase: REBASE_REPLAY.effectiveBase,
+    before: "cafebabe",
+    after: "cafebabe",
+    recoveryRef: "refs/pre-rebase/feature/x/20260810-101112",
+    validationPassed: false,
+    question: "the fix and the base both rewrote the same guard; which wins is a semantic call",
+    detail: "aborted the rebase and left the tree clean and idle",
+  };
+  // A publication that PUSHED and then failed: the map's replies are what is
+  // left to replay, and the record must not call those tips local-only.
+  const PUBLISH_PART_WAY = {
+    published: false,
+    pushed: true,
+    pushedNewCommits: true,
+    aborted: "the push landed but replying to thread T1 failed with a 502",
+    summaryCommentUrl: "",
+    threadOutcomes: [],
+  };
+  // And the same exit reached with nothing on origin at all, which records
+  // exactly like a stop before publication.
+  const PUBLISH_NOTHING = {
+    published: false,
+    pushed: false,
+    pushedNewCommits: false,
+    aborted: "the PR head moved under the run, so nothing was pushed",
+    threadOutcomes: [],
+  };
+  const REPLAY_POINTS = { rebases: { "pre-fix": REBASE_NOOP, "pre-push": REBASE_REPLAY } };
   const cases = [
-    ["a `no-push` run that passed", "no-push", CYCLE_PASS, "fixed-local", true],
-    ["a `no-push` run stopped at the round cap", "no-push", CYCLE_CAP, "review-cap", true],
-    ["a push run stopped at the round cap", "push", CYCLE_CAP, "review-cap-not-published", true],
-    ["a push run whose dispositions leave a gathered item uncovered", "push", CYCLE_UNCOVERED, "publish-aborted-incomplete-dispositions", true],
-    ["a run that published", "push", CYCLE_PASS, "fixed-published", false],
-    ["an abort with no dispositions at all", "push", CYCLE_NO_MAP, "publish-aborted-incomplete-dispositions", false],
+    ["a `no-push` run that passed", { args: "no-push no-rebase", cycles: [CYCLE_PASS] }, "fixed-local", true],
+    ["a `no-push` run stopped at the round cap", { args: "no-push no-rebase", cycles: [CYCLE_CAP] }, "review-cap", true],
+    ["a push run stopped at the round cap", { args: "push no-rebase", cycles: [CYCLE_CAP] }, "review-cap-not-published", true],
+    ["a push run whose dispositions leave a gathered item uncovered", { args: "push no-rebase", cycles: [CYCLE_UNCOVERED] }, "publish-aborted-incomplete-dispositions", true],
+    ["a pre-push rebase that halted on a conflict", { args: "push", cycles: [CYCLE_PASS], rebases: { "pre-fix": REBASE_NOOP, "pre-push": REBASE_HALTED } }, "rebase-halted", true],
+    ["a replay with no reviewer rounds left to re-verify it", { args: "push", cycles: [{ ...CYCLE_PASS, rounds: 12 }], ...REPLAY_POINTS }, "reverify-budget-exhausted", true],
+    ["a publication that pushed and then failed part-way", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_PART_WAY }, "fixed-publish-failed", true],
+    ["a publication that aborted with nothing on origin", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_NOTHING }, "fixed-publish-failed", true],
+    ["a run that published", { args: "push no-rebase", cycles: [CYCLE_PASS] }, "fixed-published", false],
+    ["an abort with no dispositions at all", { args: "push no-rebase", cycles: [CYCLE_NO_MAP] }, "publish-aborted-incomplete-dispositions", false],
   ];
   const wrong = [];
   let recordBrief = "";
-  for (const [what, args, cycle, status, records] of cases) {
-    const r = await run(gathered(withWork), { args: `${args} no-rebase`, cycles: [cycle] });
+  const briefs = {};
+  for (const [what, opts, status, records] of cases) {
+    const r = await run(gathered(withWork), opts);
     const dispatched = r.seen.agentLabels.includes("record");
     const reported = !!(r.result || {}).dispositionRecord;
     if (r.status !== status) wrong.push(`${what} exited ${r.status}, expected ${status}`);
     if (dispatched !== records) wrong.push(`${what} ${dispatched ? "recorded" : "recorded nothing"}, expected the opposite`);
     if (reported !== records) wrong.push(`${what} ${reported ? "reports" : "does not report"} a dispositionRecord, expected the opposite`);
+    briefs[what] = r.seen.recordPrompts[0] || "";
     if (records && !recordBrief) recordBrief = r.seen.recordPrompts[0] || "";
   }
   check(
-    "every exit that publishes nothing while holding a disposition map leaves the record, and a published run leaves none",
+    "every exit that does not publish in full while holding a disposition map leaves the record, and a published run leaves none",
     wrong.length === 0,
     wrong.join("; "),
+  );
+
+  // The two lines a landed push makes false. A part-way publication's record
+  // must say what reached origin and what is left; the same exit reached with
+  // nothing pushed must still say the tips are local-only, which is what pins
+  // the rendering to the FACT rather than to the exit.
+  const partWay = briefs["a publication that pushed and then failed part-way"];
+  const nothingLanded = briefs["a publication that aborted with nothing on origin"];
+  check(
+    "a part-way publication's record says what landed and what remains, while the same exit with nothing on origin still says LOCAL ONLY",
+    /status: published in part/.test(partWay) &&
+      /pushed to origin: .* — the replies, resolves and Summary body below are what remains to replay/.test(partWay) &&
+      !/LOCAL ONLY/.test(partWay) &&
+      /status: not published/.test(nothingLanded) &&
+      /the tips above are LOCAL ONLY — this run pushed nothing, so they are not on origin/.test(nothingLanded) &&
+      !/published in part/.test(nothingLanded),
+    JSON.stringify({
+      partWayStatus: (partWay.match(/status: [^(]*/) || [])[0],
+      partWayLocalOnly: /LOCAL ONLY/.test(partWay),
+      nothingLandedStatus: (nothingLanded.match(/status: [^(]*/) || [])[0],
+    }),
   );
 
   // The brief itself. What a later run needs from this comment is the marker
