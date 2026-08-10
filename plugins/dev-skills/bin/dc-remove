@@ -249,13 +249,36 @@ if [ "${#SLUG}" -gt 64 ] || [[ ! "$SLUG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; the
 	die "expected a slug, not a path: '$SLUG' (slugs are 1-64 chars matching [A-Za-z0-9][A-Za-z0-9._-]*)"
 fi
 
+# --- Trusting the repository we were asked to read ---------------------------
+# The same exception dc-enter grants, for the same reason and with the same
+# scope — see the long note there. This helper has the identical exposure: a
+# root-owned bind mount under an unprivileged agent makes git refuse to read the
+# repository at all, and dc-remove's whole refusal list (the paths it must never
+# delete) is derived from reads of it. Failing those reads is safe, since the
+# helper dies rather than guessing, but it also leaves every clone dc-enter made
+# undroppable. Literal paths only, never `*`, never written to the caller's
+# configuration, and `-c` goes before the subcommand.
+SRC_TRUST=()
+trust_path() { SRC_TRUST+=(-c "safe.directory=$1"); }
+canon "$PWD" || die "could not canonicalize the current directory"
+TRUST_DIR="$CANON_RESULT"
+while :; do
+	trust_path "$TRUST_DIR"
+	trust_path "${TRUST_DIR%/}/.git"
+	[ "$TRUST_DIR" != "/" ] || break
+	TRUST_DIR="${TRUST_DIR%/*}"
+	[ -n "$TRUST_DIR" ] || TRUST_DIR=/
+done
+
 # --- The invoking repository -------------------------------------------------
-capture_path git rev-parse --show-toplevel 2>/dev/null ||
+capture_path git "${SRC_TRUST[@]}" rev-parse --show-toplevel 2>/dev/null ||
 	die "not inside a git working tree (run this from the repository dc-enter was run in)"
 SRC_TOP="$CAPTURED_PATH"
 [ -n "$SRC_TOP" ] || die "could not resolve the invoking worktree (bare repository?)"
 canon "$SRC_TOP" || die "could not canonicalize the invoking worktree path"
 SRC_TOP="$CANON_RESULT"
+trust_path "$SRC_TOP"
+trust_path "$SRC_TOP/.git"
 
 # --- Drop the caller's repository-targeting environment -----------------------
 # The same drop dc-enter makes, at the same point and for the same reason: the
@@ -320,7 +343,7 @@ collect_worktree_paths() {
 	# git's own stderr is reported rather than swallowed: an old git, a corrupt
 	# repository, and an unreadable .git/worktrees entry all fail here, and
 	# blaming the version for all three sends the reader after the wrong bug.
-	if ! git -C "$SRC_TOP" worktree list --porcelain -z >"$WT_LIST_FILE" 2>"$WT_ERR_FILE"; then
+	if ! git "${SRC_TRUST[@]}" -C "$SRC_TOP" worktree list --porcelain -z >"$WT_LIST_FILE" 2>"$WT_ERR_FILE"; then
 		IFS= read -r -d '' git_err <"$WT_ERR_FILE" || true
 		die "could not enumerate this repository's worktrees with 'git worktree list --porcelain -z' (needs git 2.36+, but any repository error fails here too — git said: ${git_err:-nothing}). Refusing to place a clone without knowing where the worktrees are: the newline form cannot report a path containing a newline unambiguously."
 	fi
@@ -349,10 +372,10 @@ collect_worktree_paths() {
 # from this script's `$PWD` — and add_repo_path canonicalizes against `$PWD`. Run
 # from a nested subdirectory the two would disagree and the path added to the
 # refuse-list would be one that does not exist.
-capture_path git -C "$SRC_TOP" rev-parse --path-format=absolute --git-common-dir ||
+capture_path git "${SRC_TRUST[@]}" -C "$SRC_TOP" rev-parse --path-format=absolute --git-common-dir ||
 	die "could not resolve this repository's shared git directory"
 add_repo_path "$CAPTURED_PATH"
-capture_path git -C "$SRC_TOP" rev-parse --absolute-git-dir ||
+capture_path git "${SRC_TRUST[@]}" -C "$SRC_TOP" rev-parse --absolute-git-dir ||
 	die "could not resolve this worktree's git directory"
 add_repo_path "$CAPTURED_PATH"
 collect_worktree_paths

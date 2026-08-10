@@ -617,13 +617,57 @@ if [ "${#SLUG}" -gt 64 ] || [[ ! "$SLUG" =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]]; the
 	die "slug must be 1-64 chars matching [A-Za-z0-9][A-Za-z0-9._-]*: '$SLUG'"
 fi
 
+# --- Trusting the repository we were asked to clone --------------------------
+# git refuses to read a repository whose directory belongs to another user
+# ("fatal: detected dubious ownership in repository at …") unless that path is
+# listed in `safe.directory`. In a container that mismatch is ORDINARY rather
+# than a signal of anything: the project arrives on a bind mount owned by root
+# while the agent runs unprivileged. Every read of the source below then fails —
+# the FIRST of them, the toplevel lookup, included, so the helper dies with "not
+# inside a git working tree", prints nothing, and a caller that wrote
+# `DC="$(dc-enter <slug>)"` is left with an empty variable in the shared checkout
+# this clone exists to keep it out of. That has happened.
+# So the exception is granted here, on this helper's own git invocations and for
+# the length of this process only. Its scope is the repository dc-enter was
+# EXPLICITLY asked to clone — which is the one containing the directory it was
+# run in — so the entries are that directory and its ancestors, each a literal
+# path, plus the source's own git directory once git has named it. Never
+# `safe.directory=*`, which would trust every repository on the machine, and
+# never written into the caller's configuration, which is not this helper's to
+# edit. Trusting a path only lets git READ it, and reading the source is the one
+# thing this helper is for.
+# Command-line `-c` is protected configuration for this key, so git honours it
+# where a repository-local setting would be ignored; measured on 2.47.3. It goes
+# BEFORE the subcommand at every site: `git clone -c …` would write the setting
+# into the new repository, and `git -c … clone` does not.
+SRC_TRUST=()
+SRC_TRUST_PATHS=()
+trust_path() {
+	SRC_TRUST+=(-c "safe.directory=$1")
+	SRC_TRUST_PATHS+=("$1")
+}
+canon "$PWD" || die "could not canonicalize the current directory"
+TRUST_DIR="$CANON_RESULT"
+while :; do
+	trust_path "$TRUST_DIR"
+	trust_path "${TRUST_DIR%/}/.git"
+	[ "$TRUST_DIR" != "/" ] || break
+	TRUST_DIR="${TRUST_DIR%/*}"
+	[ -n "$TRUST_DIR" ] || TRUST_DIR=/
+done
+
 # --- The invoking repository -------------------------------------------------
-capture_path git rev-parse --show-toplevel 2>/dev/null ||
+capture_path git "${SRC_TRUST[@]}" rev-parse --show-toplevel 2>/dev/null ||
 	die "not inside a git working tree (run this from the repository you want to clone)"
 SRC_TOP="$CAPTURED_PATH"
 [ -n "$SRC_TOP" ] || die "could not resolve the invoking worktree (bare repository?)"
 canon "$SRC_TOP" || die "could not canonicalize the invoking worktree path"
 SRC_TOP="$CANON_RESULT"
+# The ancestor walk above covers this in every ordinary run; an inherited
+# `GIT_WORK_TREE` can put the toplevel somewhere else entirely, and it is still
+# the repository we were asked to clone.
+trust_path "$SRC_TOP"
+trust_path "$SRC_TOP/.git"
 
 # --- Drop the caller's repository-targeting environment -----------------------
 # The source has been chosen; from here on every git command either targets the
@@ -716,9 +760,12 @@ fi
 # This worktree's own git directory, resolved once now that the environment can
 # no longer redirect it: the clone-root guard needs it further down, and it is
 # the worktree's own `.git/worktrees/<name>` rather than the shared directory.
-capture_path git -C "$SRC_TOP" rev-parse --absolute-git-dir ||
+capture_path git "${SRC_TRUST[@]}" -C "$SRC_TOP" rev-parse --absolute-git-dir ||
 	die "could not resolve this worktree's git directory"
 SRC_GIT_DIR="$CAPTURED_PATH"
+# A linked worktree's git directory lives under the MAIN repository's `.git`,
+# outside the ancestor walk, so it is trusted by name now that git has named it.
+trust_path "$SRC_GIT_DIR"
 
 # --- Refuse a source whose object store is incomplete by design ---------------
 # A partial clone (`git clone --filter=…`) omits objects and records a PROMISOR
@@ -783,7 +830,7 @@ SRC_GIT_DIR="$CAPTURED_PATH"
 # slipped past this refusal and was caught only by the surviving-remote check
 # after the clone had been built.
 PROMISOR_CONFIG_RC=0
-PROMISOR_KEYS="$(env ${SAVED_CONFIG_ENV[@]+"${SAVED_CONFIG_ENV[@]}"} git -C "$SRC_TOP" config --name-only --get-regexp '^remote\..*\.(promisor|partialclonefilter)$')" ||
+PROMISOR_KEYS="$(env ${SAVED_CONFIG_ENV[@]+"${SAVED_CONFIG_ENV[@]}"} git "${SRC_TRUST[@]}" -C "$SRC_TOP" config --name-only --get-regexp '^remote\..*\.(promisor|partialclonefilter)$')" ||
 	PROMISOR_CONFIG_RC=$?
 # 1 is "no such key", the ordinary answer for a repository that is not a partial
 # clone. Anything else means the question was not answered, and a helper that
@@ -805,7 +852,7 @@ while IFS= read -r promisor_key; do
 		# than a removal — measured, a `promisor = true` followed by a
 		# `promisor = false` still lazily fetches, while `--get` sees only the
 		# trailing `false` and would wave that repository through.
-		promisor_values="$(env ${SAVED_CONFIG_ENV[@]+"${SAVED_CONFIG_ENV[@]}"} git -C "$SRC_TOP" config --type=bool --get-all "$promisor_key")" ||
+		promisor_values="$(env ${SAVED_CONFIG_ENV[@]+"${SAVED_CONFIG_ENV[@]}"} git "${SRC_TRUST[@]}" -C "$SRC_TOP" config --type=bool --get-all "$promisor_key")" ||
 			promisor_values=unreadable
 		promisor_registers=""
 		while IFS= read -r promisor_value; do
@@ -833,7 +880,7 @@ if [ -z "$SRC_PARTIAL_MARKER" ]; then
 	# into its own config. Asking any wider here would refuse repositories git
 	# itself considers complete.
 	PROMISOR_CONFIG_RC=0
-	git -C "$SRC_TOP" config --local --get extensions.partialClone >/dev/null ||
+	git "${SRC_TRUST[@]}" -C "$SRC_TOP" config --local --get extensions.partialClone >/dev/null ||
 		PROMISOR_CONFIG_RC=$?
 	[ "$PROMISOR_CONFIG_RC" -eq 0 ] || [ "$PROMISOR_CONFIG_RC" -eq 1 ] ||
 		die "could not ask git whether the invoking repository is a partial clone: 'git config --local --get extensions.partialClone' exited $PROMISOR_CONFIG_RC"
@@ -855,7 +902,7 @@ REF_DISPLAY="$REF_ARG"
 # also decides WHICH commit is resolved — see the REF_ARG rewrite below.
 BRANCH=""
 if [ -z "$REF_SEEN" ]; then
-	if HEAD_SYMREF="$(git -C "$SRC_TOP" symbolic-ref --quiet HEAD 2>/dev/null)"; then
+	if HEAD_SYMREF="$(git "${SRC_TRUST[@]}" -C "$SRC_TOP" symbolic-ref --quiet HEAD 2>/dev/null)"; then
 		case "$HEAD_SYMREF" in
 		refs/heads/*) BRANCH="${HEAD_SYMREF#refs/heads/}" ;;
 		esac
@@ -909,14 +956,14 @@ else
 		# which resolves root refs, and symref chains through them, on every git
 		# this helper supports; measured on 2.36.6, 2.39.5, 2.43.7 and 2.47.3.
 		BRANCH_CANDIDATE=""
-		REF_FULL_NAME="$(git -C "$SRC_TOP" -c core.warnAmbiguousRefs=false rev-parse \
+		REF_FULL_NAME="$(git "${SRC_TRUST[@]}" -C "$SRC_TOP" -c core.warnAmbiguousRefs=false rev-parse \
 			--verify --quiet --symbolic-full-name --end-of-options "$REF" 2>/dev/null)" ||
 			REF_FULL_NAME=""
 		if [ "$REF_FULL_NAME" = "refs/heads/$REF" ]; then
 			BRANCH_CANDIDATE="$REF"
 		elif [ "$REF_FULL_NAME" = "refs/tags/$REF" ] &&
-			! git -C "$SRC_TOP" symbolic-ref --quiet -- "$REF" >/dev/null 2>&1 &&
-			! git -C "$SRC_TOP" show-ref --verify --quiet -- "refs/$REF" 2>/dev/null; then
+			! git "${SRC_TRUST[@]}" -C "$SRC_TOP" symbolic-ref --quiet -- "$REF" >/dev/null 2>&1 &&
+			! git "${SRC_TRUST[@]}" -C "$SRC_TOP" show-ref --verify --quiet -- "refs/$REF" 2>/dev/null; then
 			# The deliberate branch-over-tag departure documented above, applied
 			# only where it was meant. git can land on `refs/tags/<name>` two
 			# other ways: a root ref `<name>`, or a `refs/<name>`, that is a
@@ -931,7 +978,7 @@ else
 		;;
 	esac
 	if [ -n "$BRANCH_CANDIDATE" ] &&
-		git -C "$SRC_TOP" show-ref --verify --quiet "refs/heads/$BRANCH_CANDIDATE" 2>/dev/null; then
+		git "${SRC_TRUST[@]}" -C "$SRC_TOP" show-ref --verify --quiet "refs/heads/$BRANCH_CANDIDATE" 2>/dev/null; then
 		BRANCH="$BRANCH_CANDIDATE"
 		# Resolve the COMMIT through that branch's full ref name too. A bare
 		# short name is disambiguated by gitrevisions in favour of
@@ -945,7 +992,7 @@ else
 	fi
 fi
 
-SHA="$(git -C "$SRC_TOP" rev-parse --verify --quiet "${REF_ARG}^{commit}" 2>/dev/null)" ||
+SHA="$(git "${SRC_TRUST[@]}" -C "$SRC_TOP" rev-parse --verify --quiet "${REF_ARG}^{commit}" 2>/dev/null)" ||
 	die "'$REF_DISPLAY' does not resolve to a commit in the invoking worktree"
 [ -n "$SHA" ] || die "'$REF_DISPLAY' does not resolve to a commit in the invoking worktree"
 
@@ -992,7 +1039,7 @@ collect_worktree_paths() {
 	# git's own stderr is reported rather than swallowed: an old git, a corrupt
 	# repository, and an unreadable .git/worktrees entry all fail here, and
 	# blaming the version for all three sends the reader after the wrong bug.
-	if ! git -C "$SRC_TOP" worktree list --porcelain -z >"$WT_LIST_FILE" 2>"$WT_ERR_FILE"; then
+	if ! git "${SRC_TRUST[@]}" -C "$SRC_TOP" worktree list --porcelain -z >"$WT_LIST_FILE" 2>"$WT_ERR_FILE"; then
 		IFS= read -r -d '' git_err <"$WT_ERR_FILE" || true
 		die "could not enumerate this repository's worktrees with 'git worktree list --porcelain -z' (needs git 2.36+, but any repository error fails here too — git said: ${git_err:-nothing}). Refusing to place a clone without knowing where the worktrees are: the newline form cannot report a path containing a newline unambiguously."
 	fi
@@ -1024,7 +1071,7 @@ collect_worktree_paths() {
 # since a non-linked worktree's common dir always sits under `$SRC_TOP`, which is
 # on the list already; asking for an absolute answer costs nothing and removes
 # the need to know that.
-capture_path git -C "$SRC_TOP" rev-parse --path-format=absolute --git-common-dir ||
+capture_path git "${SRC_TRUST[@]}" -C "$SRC_TOP" rev-parse --path-format=absolute --git-common-dir ||
 	die "could not resolve this repository's shared git directory"
 add_repo_path "$CAPTURED_PATH"
 add_repo_path "$SRC_GIT_DIR"
@@ -1244,9 +1291,32 @@ CLONE_ARGS=(--quiet --no-checkout --origin "$SRC_REMOTE")
 if [ "${DC_HARDLINKS:-}" != "1" ]; then
 	CLONE_ARGS+=(--no-hardlinks)
 fi
+# The one place the `-c safe.directory=…` above cannot reach. `git clone` reads
+# the source through a CHILD process, `git-upload-pack`, and git UNSETS
+# `GIT_CONFIG_PARAMETERS` and `GIT_CONFIG_COUNT` when it spawns it — measured on
+# 2.47.3 under `GIT_TRACE=1`, which prints the unset in the child's command line
+# — so command-scope config, however it was supplied, stops at the parent and a
+# root-owned source still fails there with "detected dubious ownership". The
+# child takes it the one way git offers, `--upload-pack`: git appends the source
+# path to that value and runs the whole string through `sh -c`, so the same
+# trust is spelled out for the child's own git. Each path is POSIX-quoted for
+# that shell (single quotes, with an embedded one closed and re-opened), which
+# survives a source path holding a space, a quote, or a newline. git hands the
+# value to that child for this one invocation and writes none of it down —
+# measured on 2.47.3, a fresh clone's `--local` config holds `core.*`,
+# `remote.<origin>.url`, `remote.<origin>.fetch` and the `branch.*` upstream
+# pair and nothing else, with `config --local --get remote.<origin>.uploadpack`
+# exiting 1 — so nothing of it reaches what is handed back, independently of the
+# remote-section removal further down.
+UPLOAD_PACK="git"
+for trust_path_value in "${SRC_TRUST_PATHS[@]}"; do
+	UPLOAD_PACK+=" -c 'safe.directory=${trust_path_value//\'/\'\\\'\'}'"
+done
+UPLOAD_PACK+=" upload-pack"
+CLONE_ARGS+=(--upload-pack "$UPLOAD_PACK")
 # Every git stdout below is redirected to stderr: the only thing this helper is
 # allowed to print on stdout is the final path.
-git clone "${CLONE_ARGS[@]}" -- "$SRC_TOP" "$CLONE_DIR" >&2 ||
+git "${SRC_TRUST[@]}" clone "${CLONE_ARGS[@]}" -- "$SRC_TOP" "$CLONE_DIR" >&2 ||
 	die "git clone failed: $SRC_TOP -> $CLONE_DIR"
 
 # Drop the remote-tracking HEAD `git clone` invents, explicitly and by name. The
@@ -1290,7 +1360,7 @@ done <"$CLONE_REFS_FILE"
 git -C "$CLONE_DIR" update-ref --stdin -z <"$REF_UPDATES_FILE" >&2 ||
 	die "could not clear the refs git clone created in the clone"
 
-git -C "$SRC_TOP" for-each-ref --format='%(refname) %(objectname) %(symref)' >"$SRC_REFS_FILE" ||
+git "${SRC_TRUST[@]}" -C "$SRC_TOP" for-each-ref --format='%(refname) %(objectname) %(symref)' >"$SRC_REFS_FILE" ||
 	die "could not enumerate the source's refs"
 : >"$REF_UPDATES_FILE" || die "could not stage the clone's ref updates"
 while IFS= read -r ref_line; do
