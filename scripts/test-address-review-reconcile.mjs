@@ -966,19 +966,37 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // A gutted instruction — "do not use `git rev-parse FETCH_HEAD`; retain the
   // recorded OID" — contains the command, and an existence gate re-spelled as
   // `git rev-parse --verify <headRefOid>^{commit}` with the fetched head demoted
-  // to a fallback contains it too. So each paragraph is read for the rule's
-  // DIRECTION as each skill states it (`address-review` reconciles against the
-  // fetched head rather than the recorded `headRefOid`; `address-reviews` adopts
-  // it as the entry's head), and for the absence of an existence gate on the
-  // recorded OID however the probe is spelled. `cat-file -e` is banned
+  // to a fallback contains it too. So each paragraph is read for two more
+  // things: the PHRASE its own skill states the rule in (`address-review`'s
+  // "rather than the recorded `headRefOid`"; `address-reviews`' "adopt the
+  // fetched OID as this entry's head"), and the absence of either enumerated
+  // existence probe on anything but `FETCH_HEAD`. `cat-file -e` is banned
   // file-wide as well, because re-importing that probe anywhere in either skill
   // is the regression.
+  //
+  // Both are pins on the PHRASING, not on the meaning, and the claim goes no
+  // further than that: a regex over prose cannot tell "adopt X" from "adopt X
+  // only where Y", so what these catch is an edit that drops the phrasing or
+  // re-imports a probe — the shape an ordinary rewrite takes. What they do not
+  // catch, stated so nobody reads a pass as a semantic guarantee: a rule
+  // REVERSED while the pinned phrase survives ("never adopt the fetched OID as
+  // this entry's head" contains it), a demotion of the fetched head stated
+  // without naming any git command, and a probe spelled outside the two
+  // enumerated below — including one that names `FETCH_HEAD` in the same
+  // command, which the benign-use exclusion lets through. Polarity is the
+  // reviewer's to hold; sharpening a regex at it only buys the next evasion.
   {
     const mirrors = ["plugins/dev-skills/skills", "codex/dev-skills/skills"];
-    // `git rev-parse --verify FETCH_HEAD` is a benign spelling of the rule
-    // itself, so a probe counts as the replaced gate only where it names the
-    // RECORDED side.
-    const existenceGate = /(?:cat-file\s+-[et]\b|rev-parse\s+--verify)[^`\n]{0,40}(?:headRefOid|recorded)/;
+    // The probe is looked for command-first, not by proximity to a name for the
+    // recorded OID: `<headRefOid>`, `"$PR_HEAD"` and a bare `HEAD^{commit}` are
+    // the same gate, and `--verify` is redundant for an existence test so bare
+    // `rev-parse` is the likelier spelling. Exactly one use of these commands is
+    // benign — reading the fetch itself — and it is excluded by name, so a
+    // backticked command counts as the replaced gate whenever it runs one of
+    // them without naming `FETCH_HEAD`.
+    const existenceProbe = /cat-file\s+-[et]\b|rev-parse\b/;
+    const gatingProbes = (para) =>
+      (para.match(/`[^`\n]+`/g) || []).filter((span) => existenceProbe.test(span) && !/FETCH_HEAD/.test(span));
     const rulePara = [
       [
         "address-review",
@@ -988,11 +1006,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       ["address-reviews", "The canonical path.", /adopt(?:ing)? the fetched OID as (?:this|the) entry's head/],
     ];
     const unread = [];
-    const undirected = [];
+    const unphrased = [];
     const gated = [];
     const probed = [];
     for (const mirror of mirrors) {
-      for (const [skill, anchor, direction] of rulePara) {
+      for (const [skill, anchor, phrase] of rulePara) {
         const path = `${mirror}/${skill}/SKILL.md`;
         let text;
         try {
@@ -1006,8 +1024,9 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
           unread.push(`${path} has no paragraph carrying ${JSON.stringify(anchor)}`);
         } else {
           if (!/git rev-parse (?:--verify )?FETCH_HEAD/.test(para)) unread.push(`${path}'s rule paragraph does not read the fetched head`);
-          if (!direction.test(para)) undirected.push(`${path} does not state ${direction}`);
-          if (existenceGate.test(para)) gated.push(`${path} matches ${existenceGate}`);
+          if (!phrase.test(para)) unphrased.push(`${path} does not state ${phrase}`);
+          const probes = gatingProbes(para);
+          if (probes.length) gated.push(`${path} runs ${probes.join(", ")}`);
         }
         if (/cat-file -e/.test(text)) probed.push(path);
       }
@@ -1018,12 +1037,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       unread.join("; "),
     );
     check(
-      "and each states it directionally — the fetched head displaces the recorded `headRefOid`, not the reverse",
-      undirected.length === 0,
-      undirected.join("; "),
+      "and each carries the phrase its own skill states the rule in, so a rewrite that drops the phrasing fails",
+      unphrased.length === 0,
+      unphrased.join("; "),
     );
     check(
-      "and no rule paragraph gates on the recorded OID being present, however the probe is spelled",
+      "and no rule paragraph runs either enumerated existence probe on anything but `FETCH_HEAD`",
       gated.length === 0,
       gated.join("; "),
     );
