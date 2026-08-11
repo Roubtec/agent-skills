@@ -88,7 +88,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 54;
+const EXPECTED_CHECKS = 53;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -315,7 +315,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // which is what the question is about — and the pins follow that root. Every
   // open PR whose head IS that ref comes back whatever repository its base is
   // in, and nothing else does, which is why one filter now does what two could
-  // not: exclude the PR being addressed by number, since where the branch IS
+  // not: exclude the PR being addressed by its `url`, since where the branch IS
   // that PR's head the query answers with the very PR under work and an
   // unqualified stop would halt an ordinary target-branch run on a token that is
   // merely redundant there.
@@ -418,26 +418,33 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // same reason the registration read is: stated inside one arm it would exempt
   // the other two, and the fork arm is always helper-free. Both halves are read,
   // because the probe without the write is a check nothing acts on: the
-  // `check-ignore` probe, and the repo-local `.git/info/exclude` it appends to
-  // rather than the tracked `.gitignore`, which is the maintainer's.
-  // Both halves have a shape that fails silently and is worth naming. The probe
-  // carries a TRAILING SLASH because `/.worktrees/` is a directory-only rule and
-  // `git check-ignore` answers NO for a bare `.worktrees` that is not on disk
-  // yet — which is every first run, so the slashless form only ever agrees by
+  // `check-ignore` probe, and the untracked repo-local exclude file it appends
+  // to rather than the tracked `.gitignore`, which is the maintainer's.
+  // Three shapes fail silently here and each is worth naming. The probe carries
+  // a TRAILING SLASH because `/.worktrees/` is a directory-only rule and `git
+  // check-ignore` answers NO for a bare `.worktrees` that is not on disk yet —
+  // which is every first run, so the slashless form only ever agrees by
   // accident of ordering, and a re-probe after the append would fail outright.
   // The exclude file is asked of GIT rather than spelled `.git/info/exclude`,
   // because this checkout may itself be a linked worktree — as the run that
   // wrote this one was — where `.git` is a gitfile, `.git/info` is not a
   // directory, and the literal append fails before the base is ever protected.
+  // And that question is asked from inside `<repo>`, because the answer is
+  // CWD-relative where the neighbouring probe's `<repo>/…` placeholder is
+  // absolute: in a primary checkout `--git-path` prints the relative
+  // `.git/info/exclude` (a linked worktree gets an absolute path), so an agent
+  // that runs it as `git -C <repo> …` and appends from its own directory writes
+  // the rule to a file `check-ignore` never reads.
   const probesTheIgnoreRule = /git check-ignore -q "<repo>\/\.worktrees\/"/.test(registrationRule);
   const resolvesTheExcludeThroughGit =
     /append `\/\.worktrees\/` to the file `git rev-parse --git-path info\/exclude` names/.test(registrationRule) &&
     /rather than writing a literal `\.git\/info\/exclude`/.test(registrationRule) &&
     /NOT the tracked/.test(registrationRule);
+  const resolvesItFromInsideTheRepo = /run (?:it )?from inside `<repo>`[\s\S]*?RELATIVE/.test(registrationRule);
   check(
-    "the worktree base is made ignored before any arm adds under it, probed as a directory and appended to the exclude file Git itself names rather than a literal `.git/info/exclude` or the tracked `.gitignore`",
-    probesTheIgnoreRule && resolvesTheExcludeThroughGit,
-    `ignore rule probed as a directory: ${probesTheIgnoreRule}; exclude resolved through git instead of a literal path or .gitignore: ${resolvesTheExcludeThroughGit}`,
+    "the worktree base is made ignored before any arm adds under it, probed as a directory and appended to the exclude file Git itself names — resolved from inside `<repo>`, never a literal `.git/info/exclude` and never the tracked `.gitignore`",
+    probesTheIgnoreRule && resolvesTheExcludeThroughGit && resolvesItFromInsideTheRepo,
+    `ignore rule probed as a directory: ${probesTheIgnoreRule}; exclude resolved through git instead of a literal path or .gitignore: ${resolvesTheExcludeThroughGit}; resolved from inside the repo, the answer being CWD-relative: ${resolvesItFromInsideTheRepo}`,
   );
   // Arm ORDER is a contract in its own right, and prose has to settle it: a
   // prior fork run's `gh pr checkout` leaves a same-named local `T` behind, so
@@ -636,50 +643,77 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     unselected.seen.cycleOpts === null && unselected.seen.agentLabels.join(",") === "gather",
     JSON.stringify(unselected.seen),
   );
-  // Parsing is lenient over free prose exactly as the push/ping tokens are, so
-  // the spaced spelling a maintainer actually types selects the mode too. Pinned
-  // because the failure is silent in the safe direction — a token the parse
-  // misses stops a run that was entitled to proceed, which reads as the guard
-  // working.
-  const spaced = await run(gathered(off), "#42 off shoot, no-push");
+  // Parsing is lenient over free prose exactly as the push/ping tokens are, and
+  // the two directions of that leniency do NOT cost the same, which is what
+  // decides how it is pinned. A false positive disables this gate for one run
+  // and leaves the behaviour that shipped before it existed. A false negative
+  // REFUSES a run the request genuinely selected — `skipped-unselected-working-
+  // branch` on a supported case — and it is silent in the direction that reads
+  // as the guard working. So the ADMIT direction is swept wide, over every
+  // spelling a maintainer plausibly types: spaced and joined, quoted and
+  // backticked, abutting a slash, and sharing a request with a quoted phrase or
+  // a ref path. A round that narrows the text the token is read out of has to
+  // keep every one of these.
+  const selections = [
+    "#42 off-shoot, no-push",
+    "#42 off shoot, no-push",
+    "#42 offshoot, no-push",
+    "#42 off-shoots, no-push",
+    '#42 "off-shoot", no-push',
+    "#42 `off-shoot`, no-push",
+    '#42 please use "off-shoot mode", no-push',
+    "#42 off-shoot/no-push",
+    '#42 the review says "use origin/main" and off-shoot "yes"',
+    "#42 off-shoot; rebase onto origin/main first, no-push",
+    "#42 work on the off-shoot at task/021c-guard, no-push",
+    "#42 use off-shoot mode (see `docs/off-shoot.md`), no-push",
+    "#42 this run is an off-shoot of the head, no-push",
+    "#42 don't push; off-shoot",
+  ];
+  const refused = [];
+  for (const req of selections) {
+    const r = await run(gathered(off), req);
+    if (r.status !== "reached-cycle") refused.push(`${req} -> ${r.status}`);
+  }
   check(
-    "and the token is read leniently, so a spaced spelling still selects the off-shoot",
-    spaced.status === "reached-cycle",
-    spaced.status,
+    "and every genuine selection reaches the cycle — spaced, joined, plural, quoted, backticked, slash-abutted, and beside a quoted phrase or a ref path",
+    refused.length === 0,
+    refused.join("; "),
   );
-  // Lenient is not the same as indiscriminate, and the other direction has a
-  // cost the "a false positive only restores the old behaviour" reading misses:
-  // the old behaviour WAS the defect this gate exists for, so an incidental
-  // mention silently disables it and lets the deviating packet through. Three
-  // contexts mention an off-shoot without selecting one and each occurs in an
-  // ordinary request — a ref PATH (`rebase on top of <branch>` is a supported
-  // argument form and this repository really has such a branch), a quoted
-  // PHRASE, and a NEGATION — so the token is read out of text with those
-  // stripped first, the way `push-back` is stripped before `push`.
+  // The residual, pinned as the deliberate choice it is rather than left to be
+  // rediscovered: a request that merely MENTIONS an off-shoot selects one too,
+  // so an incidental mention disables this gate for that run. A narrowing pass
+  // over the text the token is read from — strip ref paths, quoted phrases,
+  // negations, the way `push-back` is stripped before `push` — was written and
+  // removed: measured against this same harness it caught 4 of 10 incidental
+  // mentions while REFUSING 3 of the genuine selections above, and the
+  // categories leaked anyway. Every row here is one that pass was supposed to
+  // catch and the last four are ones it did not, so restoring it in that form
+  // fails the check above by name before this one is even consulted. Widening
+  // it further is the same trade in the costlier direction. What the gate still
+  // catches, and what it is for, is the check at the top of this block: a
+  // deviating packet from a request that never says `off-shoot` at all.
   const incidental = [
     "#42 rebase on top of task/021c-publication-guard-for-an-off-shoot, no-push",
     "#42 branch feature/offshoot-ui, no-push",
     '#42 title "Fix offshoot accounting", no-push',
     "#42 this is not an off shoot, no-push",
+    '#42 title "Fix the off-shoot in src/a"',
+    "#42 no off-shoot, use a worktree",
+    "#42 do not use off-shoot mode",
+    "#42 don't use the off-shoot mode",
+    "#42 don't work on the off-shoot",
+    "#42 rebase onto off-shoot-guard, no-push",
   ];
-  const leaked = [];
+  const stopped = [];
   for (const req of incidental) {
     const r = await run(gathered(off), req);
-    if (r.status !== "skipped-unselected-working-branch") leaked.push(`${req} -> ${r.status}`);
+    if (r.status !== "reached-cycle") stopped.push(`${req} -> ${r.status}`);
   }
   check(
-    "and an incidental mention that selects nothing — a ref path, a quoted phrase, a negation — does not disable the gate",
-    leaked.length === 0,
-    leaked.join("; "),
-  );
-  // The stripping must not eat the token itself, which is the worse failure of
-  // the two: it would refuse the supported case outright. A quoted TOKEN is
-  // still the token, and the docs themselves write it in backticks.
-  const quotedToken = await run(gathered(off), '#42 "off-shoot", no-push');
-  check(
-    "while a quoted spelling of the token itself still selects it",
-    quotedToken.status === "reached-cycle",
-    quotedToken.status,
+    "while an incidental mention — a ref path, a quoted phrase, a negation — selects the off-shoot too: the accepted residual of reading the token from the whole request, no context stripped",
+    stopped.length === 0,
+    stopped.join("; "),
   );
 }
 
