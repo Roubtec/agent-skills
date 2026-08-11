@@ -320,16 +320,25 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   const namesOtherHeadRepo = /headRepositoryOwner\.login[^`]*headRepository\.name/.test(cases);
   const namesOtherHeadRef = /plus `headRefName`/.test(cases);
   const comparesAgainstPushTarget = /resolved push (?:remote\/ref|target)/.test(cases);
-  // And a comparison whose fields the probe never requests reads them as absent:
-  // the short-circuit this same sentence names has to be in the `--json` list,
-  // not merely mentioned, or an agent running the command as written gets
-  // `undefined` and an absent field reads falsy — "not cross-repository" — which
-  // is the fork misfire this qualification exists to prevent.
-  const requestsProbeFields = /--json number,headRefName,headRepository,headRepositoryOwner,isCrossRepository/.test(cases);
+  // A comparison whose fields the probe never requests reads them as absent, so
+  // the `--json` list is pinned — and pinned CLOSED, by the backtick that ends
+  // the command, because it must request the fields the comparison reads and
+  // nothing else. `isCrossRepository` was such an extra field, named here as a
+  // cheap short-circuit until it was found to license skipping the very
+  // comparison it stood in front of: the field says whether the OTHER PR's own
+  // head and base repositories differ, which is not the question asked — whether
+  // that head is the repository `C` pushes to. In a fork clone the two part
+  // company (an upstream PR reads false while `C` still pushes to the fork), so
+  // the short-circuit fired exactly where the repository qualification exists to
+  // keep an unrelated same-named head from halting the run. Both halves are
+  // pinned: re-adding the field fails the closed list, and re-adding the CLAIM
+  // alone fails the refusal beside it.
+  const requestsProbeFields = /--json number,headRefName,headRepository,headRepositoryOwner`/.test(cases);
+  const refusesShortCircuit = /`isCrossRepository` does NOT short-circuit/.test(cases);
   check(
-    "the conflicting-PR stop excludes the PR being addressed and identifies the other head by repository plus ref, against this branch's push target",
-    excludesAddressedPr && namesOtherHeadRepo && namesOtherHeadRef && comparesAgainstPushTarget && requestsProbeFields,
-    `different-number filter stated: ${excludesAddressedPr}; other head's repository stated: ${namesOtherHeadRepo}; its ref stated: ${namesOtherHeadRef}; compared against the resolved push target: ${comparesAgainstPushTarget}; probe requests every field: ${requestsProbeFields}`,
+    "the conflicting-PR stop excludes the PR being addressed and identifies the other head by repository plus ref, against this branch's push target, with nothing short-circuiting that comparison",
+    excludesAddressedPr && namesOtherHeadRepo && namesOtherHeadRef && comparesAgainstPushTarget && requestsProbeFields && refusesShortCircuit,
+    `different-number filter stated: ${excludesAddressedPr}; other head's repository stated: ${namesOtherHeadRepo}; its ref stated: ${namesOtherHeadRef}; compared against the resolved push target: ${comparesAgainstPushTarget}; probe requests exactly the fields it reads: ${requestsProbeFields}; short-circuit refused: ${refusesShortCircuit}`,
   );
   // Forced `inline` checks the target branch out in THIS checkout, and the
   // branch it checks out may already be there: a maintainer who has worked this
