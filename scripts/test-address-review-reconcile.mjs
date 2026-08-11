@@ -113,7 +113,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 91;
+const EXPECTED_CHECKS = 92;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1050,6 +1050,24 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       !/git fetch /.test(explicitBriefDispatched),
     explicitBriefDispatched
       ? `the dispatched brief takes the ${/named outright/.test(explicitBriefDispatched) ? "explicit" : "default"} arm and ${/git fetch /.test(explicitBriefDispatched) ? "still fetches" : "fetches nothing"}`
+      : "no rebase brief was dispatched at all",
+  );
+  // The same wiring where the named target's NAME EQUALS the PR's base ref —
+  // `rebase on top of main` on a PR based on `main`. It is redundant but legal,
+  // and the likeliest redundant form now that rebasing is the default, so the
+  // arm cannot be chosen by comparing the two names: that comparison reads this
+  // request as "named none" and fetches `refs/heads/main` from the PR's base
+  // repository instead of resolving the ref the maintainer named right here.
+  // The check above cannot see it — its target differs from the base by
+  // construction — so the equality case is driven on its own.
+  const redundantlyTargeted = await run({ ...gathered(withWork), rebaseTarget: "main" });
+  const redundantBriefDispatched = redundantlyTargeted.seen.rebasePrompts[0] || "";
+  check(
+    "and a gathered `rebaseTarget` whose name EQUALS the PR's base ref still reaches the brief as an explicitly named one",
+    /The target is `main`, named outright by this run's request/.test(redundantBriefDispatched) &&
+      !/git fetch /.test(redundantBriefDispatched),
+    redundantBriefDispatched
+      ? `the dispatched brief takes the ${/named outright/.test(redundantBriefDispatched) ? "explicit" : "default"} arm and ${/git fetch /.test(redundantBriefDispatched) ? "still fetches" : "fetches nothing"}`
       : "no rebase brief was dispatched at all",
   );
   const unpinned = await run(gathered(withWork), { rebase: { ...REBASE_NOOP, effectiveBase: "origin/main" } });

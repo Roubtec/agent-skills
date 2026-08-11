@@ -952,13 +952,18 @@ if (!packet.items || packet.items.length === 0) {
 // of HEAD when nothing moved, and replays nothing. Both resolve the same
 // TARGET REF afresh, never the OID the first one pinned — reusing that would
 // make the second a guaranteed no-op and defeat the whole point of running it.
-const rebaseTargetRef = (() => {
-  const explicit = typeof packet.rebaseTarget === "string" ? packet.rebaseTarget.trim() : "";
-  return explicit || packet.pr.base;
-})();
+// Whether the request NAMED a target is what decides where the delegated step
+// resolves it, and the gather reports that fact directly: `rebaseTarget` is the
+// token verbatim, empty when the request named none. Read it, never infer it
+// from `target !== pr.base` — `rebase on top of main` on a PR based on `main`
+// is a redundant-but-legal request whose two names are equal, and inferring
+// would hand it the default arm, sending a fetch at the base repository for a
+// ref the maintainer named here, in the working location.
+const explicitRebaseTarget = typeof packet.rebaseTarget === "string" ? packet.rebaseTarget.trim() : "";
+const rebaseTargetRef = explicitRebaseTarget || packet.pr.base;
 const rebaseRecord = {
   target: rebaseTargetRef,
-  explicitTarget: rebaseTargetRef !== packet.pr.base,
+  explicitTarget: Boolean(explicitRebaseTarget),
   points: [],
   ...(flags.noRebase ? { suppressed: "`no-rebase` was given: neither point ran, and the branch is addressed and published on the base it already sits on. The review base is that base ref resolved to a commit, since nothing rebased to pin one." } : {}),
 };
@@ -1305,6 +1310,16 @@ if (cycle.verdict === "error") {
 // verdict that authorizes the push describes the exact tree being pushed. A
 // no-op replays nothing, so the verdict already standing describes that tree
 // and no round is spent proving it.
+// That is deliberately the WEAKER of the two conditions the skill's step 2
+// states, and the divergence is bounded here rather than closed: the skill also
+// asks that no push-authorizing verdict be rendered on a tree whose last base
+// refresh predates its last fix, and the re-verification below runs in `full`
+// mode and is told to fix replay fallout, so its fixer commits land after this
+// point's rebase with nothing rebasing again before publication. A third
+// rebase would not close it — that one can replay too, needing its own
+// re-verification, whose fixes would again postdate it — so the stronger
+// condition has no fixed point inside a bounded round budget, and the
+// exact-tree condition is the one this pipeline keeps and publication rests on.
 // It runs on `no-push` runs too, exactly as the skill's step 5 does: the local
 // branch is left on the fresh base either way, and a dry run that reported a
 // pass on a tree it then rebased would be reporting on nothing.
