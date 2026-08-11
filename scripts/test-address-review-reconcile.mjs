@@ -3219,6 +3219,21 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     ...PUBLISH_CLAIMED_COMPLETE_UNREPLIED,
     threadOutcomes: [{ ref: "src/app.ts:12 a-reviewer", threadId: "T1", outcome: "replied; the resolve was rejected", replied: true, resolved: false }],
   };
+  // And the PUSH half of the same contradiction: a schema-valid report claiming
+  // completion over `pushed: false`, its per-item account keyed and complete and
+  // the Summary URL present, so every readability test and both halves above
+  // pass it — the one field saying the opposite of the claim is the push itself,
+  // which step 2 makes the start of every complete publication (an `Everything
+  // up-to-date` no-op reports `pushed: true`). Waved through, this report exits
+  // `fixed-published`, reclaims the tree, and spends the prior record while the
+  // fixes its replies cite never reached origin.
+  const PUBLISH_CLAIMED_COMPLETE_UNPUSHED = {
+    published: true,
+    pushed: false,
+    pushedNewCommits: false,
+    summaryCommentUrl: "https://example.invalid/pr/42#issuecomment-5",
+    threadOutcomes: [{ ref: "src/app.ts:12 a-reviewer", threadId: "T1", outcome: "replied and resolved", replied: true, resolved: true }],
+  };
   // The two controls that keep that gate from refusing the publications this
   // workflow's own brief PRESCRIBES, which is the only way the stronger test
   // could be wrong. Step 4 replies to neither a `standalone` item (the Summary
@@ -3322,6 +3337,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // of every row for a reason the gate has nothing to do with.
     ["a publisher claiming a COMPLETE publication its own account says never replied", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_CLAIMED_COMPLETE_UNREPLIED }, "fixed-publish-failed", true, inWorktree(withPrior)],
     ["a publisher claiming a COMPLETE publication over a thread its account leaves unresolved", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_CLAIMED_COMPLETE_UNRESOLVED }, "fixed-publish-failed", true, inWorktree(withWork)],
+    ["a publisher claiming a COMPLETE publication whose push never succeeded", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_CLAIMED_COMPLETE_UNPUSHED }, "fixed-publish-failed", true, inWorktree(withPrior)],
     // The controls for it: the publications the brief PRESCRIBES, whose entries
     // report `replied: false`/`resolved: false` because nothing was owed there.
     // In worktree mode too, so the control shows the tree actually going back.
@@ -3846,6 +3862,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       "its own account contradicts that claim — 1 of 1 thread(s) publication owes a reply report that none reached the PR, and 1 of 1 it owes a resolve report the thread still unresolved",
     "a publisher claiming a COMPLETE publication over a thread its account leaves unresolved":
       "its own account contradicts that claim — 1 of 1 it owes a resolve report the thread still unresolved",
+    "a publisher claiming a COMPLETE publication whose push never succeeded":
+      "its own account contradicts that claim — it reports that no push command succeeded (`pushed: false`), which no complete publication reports: step 2's push is where publication starts, and an `Everything up-to-date` no-op already reports true",
   };
   const notRefused = Object.entries(contradicted).filter(([what, why]) => {
     const r = results[what] || {};
@@ -3867,12 +3885,16 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     );
   });
   check(
-    "a completion claim its own account CONTRADICTS is refused like one it cannot support — over the reply half and the resolve half alike — and is told as a contradiction rather than as a silence, so the worktree is kept, the record written, and the prior record not spent",
+    "a completion claim its own account CONTRADICTS is refused like one it cannot support — over the push half, the reply half and the resolve half alike — and is told as a contradiction rather than as a silence, so the worktree is kept, the record written, and the prior record not spent",
     notRefused.length === 0 &&
-      spends["a publisher claiming a COMPLETE publication its own account says never replied"] === "",
+      spends["a publisher claiming a COMPLETE publication its own account says never replied"] === "" &&
+      spends["a publisher claiming a COMPLETE publication whose push never succeeded"] === "",
     JSON.stringify({
       notRefused: notRefused.map(([what]) => `${what}: ${(results[what] || {}).status}`),
-      spentAnyway: spends["a publisher claiming a COMPLETE publication its own account says never replied"] ? "a spend brief was rendered over a contradicted claim" : "none, as required",
+      spentAnyway: [
+        spends["a publisher claiming a COMPLETE publication its own account says never replied"] ? "a spend brief was rendered over a contradicted claim" : "",
+        spends["a publisher claiming a COMPLETE publication whose push never succeeded"] ? "a spend brief was rendered over an unpushed completion claim" : "",
+      ].filter(Boolean).join("; ") || "none, as required",
     }),
   );
 
@@ -4301,6 +4323,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // cover: a report that is READABLE and says the opposite of what it claims.
     "and refused likewise where the account CONTRADICTS the claim rather than falling short of it":
       "and neither has one whose account **contradicts** the claim",
+    // The push half of that contradiction: a completion claim over a report
+    // saying no push command succeeded is refused even where the per-item
+    // account is complete and the Summary URL present — the shape that once
+    // spent the record and reclaimed the tree with every fix still local.
+    "and the push named among what a completion claim's own report can contradict":
+      "or while reporting that no push command succeeded, which no complete publication reports",
   };
   const missingRules = [];
   for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {

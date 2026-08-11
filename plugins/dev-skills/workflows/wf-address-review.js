@@ -2760,6 +2760,16 @@ const owedResolves = resolveKeys.filter((k) => !(accountByKey.get(k) || {}).reso
 // holding this map, so a contradiction waved through there destroys the durable
 // copy of work the report itself says never reached the PR. It gets the same
 // treatment as every silence above: not published, worktree kept, record written.
+// The PUSH is the first half of that agreement, before either per-thread half:
+// step 2's push is what every complete publication starts with, and `pushed`
+// reports whether a push command SUCCEEDED — an `Everything up-to-date` no-op
+// reports true, so no complete publication reports false there. A report
+// claiming completion over `pushed: false` therefore says the opposite of its
+// claim in one required field — its account can be keyed, complete, and carry a
+// Summary URL while the fixes it replied about never left the local branch, so
+// without this half the gate accepts exactly that report, spends the prior
+// record, and reclaims the tree with feedback marked addressed on origin's
+// behalf by a run that never reached origin.
 // It is not a second copy of the publish brief's per-kind table. It reads the
 // very predicates the record's debt count reads, defined once above, so the gate
 // and the count cannot disagree about what step 4 owes — and both carve out
@@ -2781,8 +2791,10 @@ const owedResolves = resolveKeys.filter((k) => !(accountByKey.get(k) || {}).reso
 // asymmetry is the whole reason the reply half cannot afford an under-count here
 // and the resolve half can: a missed resolve degrades to the state policy
 // produces for a human thread anyway, which is the maintainer's to close.
-const contradictedByAccount = owedReplies || owedResolves
+const unpushedClaim = !!publishReport && publishReport.pushed !== true;
+const contradictedByAccount = unpushedClaim || owedReplies || owedResolves
   ? `its own account contradicts that claim — ${[
+      unpushedClaim ? "it reports that no push command succeeded (`pushed: false`), which no complete publication reports: step 2's push is where publication starts, and an `Everything up-to-date` no-op already reports true" : "",
       owedReplies ? `${owedReplies} of ${owedKeys.length} thread(s) publication owes a reply report that none reached the PR` : "",
       owedResolves ? `${owedResolves} of ${resolveKeys.length} it owes a resolve report the thread still unresolved` : "",
     ].filter(Boolean).join(", and ")}`
