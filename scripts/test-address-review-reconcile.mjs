@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 184;
+const EXPECTED_CHECKS = 185;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -3543,7 +3543,21 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       recordBrief.includes('select((.body | split("\\n")[0] | rtrimstr("\\r")) == "<!-- address-review:disposition-record -->")') &&
       !/select\(\.body \| contains\(/.test(recordBrief) &&
       /Keep the ones authored by the authenticated user/.test(recordBrief),
-    "superseding its own prior record in place rather than appending a second": /--method PATCH repos\/\{owner\}\/\{repo\}\/issues\/comments\/<id>/.test(recordBrief) && /instead of a stack of near-duplicates/.test(recordBrief),
+    "superseding its own prior record in place rather than appending a second": /--method PATCH repos\/<owner>\/<repo>\/issues\/comments\/<id>/.test(recordBrief) && /instead of a stack of near-duplicates/.test(recordBrief),
+    // All three of this brief's PR writes address the repository the PR is IN,
+    // named from the PR's own URL. Left to `{owner}`/`{repo}` and a bare `gh pr
+    // comment`, every one of them answers for the current directory's
+    // repository — the HEAD fork on a cross-repository PR — so the lookup finds
+    // no prior record, the PATCH addresses a comment id in the fork, and the
+    // create posts onto a same-numbered PR there. The negative half is the
+    // point: a re-introduced placeholder fails rather than passing on the
+    // prose alone.
+    "the three PR writes qualified at the repository the PR is in, named from its own URL":
+      recordBrief.includes("the PR's own URL `https://example.invalid/pr/42`") &&
+      /gh api --paginate repos\/<owner>\/<repo>\/issues\/\d+\/comments/.test(recordBrief) &&
+      /gh pr comment \d+ --repo <owner>\/<repo> --body-file -/.test(recordBrief) &&
+      !/repos\/\{owner\}\/\{repo\}/.test(recordBrief) &&
+      /never the repository your working location resolves to/.test(recordBrief),
     "exactly one PR write, and no reply, resolve, push or ping beside it": /You make exactly ONE PR write/.test(recordBrief) && /no push, no reply, no resolve, no Summary comment, no ping/.test(recordBrief),
     "the drafted replies and the ready-to-post Summary body, verbatim": /reply: "<the exact reply body a publishing turn would post, verbatim>"/.test(recordBrief) && /ready to post unchanged/.test(recordBrief),
     // Which thread a follow-up closes is not re-derivable from the PR, so an
@@ -3772,6 +3786,19 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       priorPara.includes("Report the most recent one as `priorRecord`") &&
       /body VERBATIM and WHOLE/.test(priorPara),
     priorPara ? priorPara.slice(0, 200) : "the gather brief says nothing about a prior disposition record",
+  );
+
+  // And the sweep that finds it addresses the repository the PR is in. It is
+  // the same paragraph, so the same `{owner}`/`{repo}` default that would send
+  // the record's own writes at the head fork would send this sweep there too —
+  // and a prior record the sweep cannot see is a replay that silently does not
+  // happen, which no later step reports as a failure.
+  check(
+    "and the sweep that finds it is repository-qualified, so a fork clone does not read the head fork's comments instead",
+    /gh api --paginate repos\/<owner>\/<repo>\/issues\/<PR>\/comments/.test(priorPara) &&
+      /repository-qualified from the PR's OWN URL/.test(priorPara) &&
+      !/repos\/\{owner\}\/\{repo\}\/issues/.test(priorPara),
+    priorPara ? priorPara.slice(0, 240) : "the gather brief says nothing about a prior disposition record",
   );
 }
 

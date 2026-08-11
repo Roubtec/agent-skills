@@ -366,6 +366,7 @@ Purpose: run inside a parallelized agent that has no direct line to the user (e.
 ## GitHub API recipes
 
 `gh api` expands `{owner}`/`{repo}` to the current repo. For GraphQL, pass real values (`gh repo view --json owner,name`).
+On a **cross-repository PR handled from a fork clone** the current repo is the head fork, while the PR and its comments live in the base repository — and a bare `gh pr comment` resolves the same way — so qualify every PR-scoped call there with the `<owner>/<repo>` of the PR's own URL (`repos/<owner>/<repo>/…`, `--repo <owner>/<repo>`) rather than letting it default. Not from a bare `gh repo view --json nameWithOwner` either, which with no repository argument answers for the directory: the fork again.
 
 **List unresolved review threads** (id for resolve, comment `databaseId` for replies).
 
@@ -422,11 +423,13 @@ gh pr comment NUMBER --body '@claude review'
 **The disposition record** — find a prior one by its marker, then update that comment in place; post a new one only where there is none (see "The durable disposition record"). The match is on the body's **first line, byte for byte**, never `contains`: an ordinary comment that merely quotes the marker would otherwise be selected and `PATCH`ed away. (`rtrimstr("\r")` is why a body GitHub returns with CRLF endings still matches its own first line.) Both writes read the body from stdin, so composing it puts no file in the working location:
 
 ```sh
-gh api --paginate repos/{owner}/{repo}/issues/NUMBER/comments \
+gh api --paginate repos/<owner>/<repo>/issues/NUMBER/comments \
   --jq '.[] | select((.body | split("\n")[0] | rtrimstr("\r")) == "<!-- address-review:disposition-record -->") | {id, login: .user.login, updated_at}'
-gh api --method PATCH repos/{owner}/{repo}/issues/comments/COMMENT_ID -F body=@-   # supersede your own
-gh pr comment NUMBER --body-file -                                                 # none found: post one
+gh api --method PATCH repos/<owner>/<repo>/issues/comments/COMMENT_ID -F body=@-   # supersede your own
+gh pr comment NUMBER --repo <owner>/<repo> --body-file -                           # none found: post one
 ```
+
+`<owner>/<repo>` is written out rather than left to `{owner}`/`{repo}` and a bare `gh pr comment` for the reason the section intro gives: from a fork clone all three would otherwise address the head fork, where this record's prior copy is not and this PR is not.
 
 **Request a Copilot review** — this request, never an `@copilot review` comment (the `ping-copilot` table row says why and carries the gh version floor):
 
