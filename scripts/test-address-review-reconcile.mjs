@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 183;
+const EXPECTED_CHECKS = 184;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -3643,6 +3643,56 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "and both mirrors of that skill state the rules the brief renders — the push's three states, the status line agreeing with them, wholesale distrust, and what a claim of publication needs",
     missingRules.length === 0,
     missingRules.join("; "),
+  );
+
+  // The FOURTH rendering (task 021f), read the same way and out of the same two
+  // mirrors: the record shape for a run whose own push read-back could not
+  // confirm the ref — the stop step 7's read-back ends on, which is the only one
+  // reachable AFTER `git push` has already returned 0. Every other rendering
+  // asserts presence or absence on origin, and that is exactly what the stop
+  // failed to establish, so the shape has to claim neither.
+  //
+  // The ROUTE into it is pinned beside the shape, and it is not decoration: the
+  // third state's own closing sentence used to send this run to the canonical
+  // rendering (an empty per-item account is complete rather than defective,
+  // because the read-back stops before the first reply), so the record printed
+  // `not published` and the LOCAL ONLY line — a stated route to a FALSE claim of
+  // absence, which no amount of new shape below it corrects while the sentence
+  // stands. A pin on the shape alone would pass over the very defect.
+  //
+  // These are pins on the PHRASING, like the RULE_CLAUSES above and with the
+  // same limit stated for the same reason: a substring read cannot tell a rule
+  // from its reversal, so what it catches is a clause deleted or reworded away
+  // — the shape an ordinary edit takes — and polarity stays the reviewer's.
+  // Each span is long enough that a clause GUTTED down to its keywords ("the
+  // status line stays as it is, though whether its push reached origin is
+  // UNKNOWN", or a route reverted to "keeps the canonical rendering above") no
+  // longer contains it; a bare keyword pin would have survived all three.
+  //
+  // The workflow's rendering of this same case (`unconfirmedPush` in
+  // `recordPrompt`, entered off the push read-back's abort) is not on this base,
+  // so there is nothing here to compare the skill against yet; the wording below
+  // is written to match it, and the two-sided comparison joins the brief-vs-skill
+  // reads above once both halves sit on one base.
+  const UNCONFIRMED_PUSH_CLAUSES = {
+    "the fourth rendering's status line, which claims neither presence nor absence on origin":
+      "status: UNKNOWN whether its push reached origin, and nothing else was published",
+    "and the line that replaces the local-only one, sending the reader to the ref itself":
+      "whether this run's push reached origin is UNKNOWN — `git push` returned and the read-back at the ref did not confirm the ref moved, so read the ref itself before treating the tips above as either published or local",
+    "and the route into it, so the empty-account rule stops sending this stop to the canonical rendering":
+      "that run keeps the canonical rendering above unless its own push read-back is what stopped it",
+  };
+  const missingUnconfirmed = [];
+  for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
+    const text = readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8");
+    for (const [name, clause] of Object.entries(UNCONFIRMED_PUSH_CLAUSES)) {
+      if (!text.includes(clause)) missingUnconfirmed.push(`${mirror}: ${name}`);
+    }
+  }
+  check(
+    "and both mirrors give a push whose read-back could not confirm the ref its own rendering — its status line, the line in place of the local-only one, and the route into it out of the empty-account rule",
+    missingUnconfirmed.length === 0,
+    missingUnconfirmed.join("; "),
   );
 
   // The three-state lookup's DEFAULT, which no exit reaches today because the
