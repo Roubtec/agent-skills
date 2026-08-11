@@ -665,15 +665,16 @@ function flattenArgs(a) {
   return String(a);
 }
 const raw = flattenArgs(args);
-// Every flag below is read from THIS text rather than from the request as
+// Every flag below except `offShootTok`, whose reason is stated at its
+// declaration, is read from THIS text rather than from the request as
 // written, because one construct in the request carries a value that is not
 // flag text at all: `rebase on top of <target>` names a ref, and an ordinary
 // ref component is spelled exactly like one of these flags. `rebase on top of
 // feature/no-rebase` set `noRebase` and suppressed the very rebase it asked
 // for, silently ignoring the target the gather went on to report; `fix/no-push`
 // and `wip/ping-codex` are the same defect on the other flags. So the target
-// VALUE is elided once, here, ahead of all of them — one construct removed
-// rather than a guard bolted onto each flag.
+// VALUE is elided once, here, ahead of every flag that reads this text — one
+// construct removed rather than a guard bolted onto each flag.
 // The VALUE only. The words `rebase on top of` stay exactly where they are,
 // because a negation governing them is a real opt-out that must still be read:
 // `do not rebase on top of main` means no rebase, and eliding the phrase

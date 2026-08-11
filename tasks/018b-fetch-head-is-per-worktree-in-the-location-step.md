@@ -1,4 +1,4 @@
-# 018a — `one fetch serves both` is false in worktree mode: `FETCH_HEAD` is per-worktree
+# 018b — `one fetch serves both` is false in worktree mode: `FETCH_HEAD` is per-worktree
 
 ## Why this task exists
 
