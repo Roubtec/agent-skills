@@ -996,7 +996,7 @@ The body, marker first (the marker line is mandatory and must be byte-exact: a s
 <!-- address-review:disposition-record -->
 # address-review packet — PR #${packet.pr.number} (${packet.pr.workingBranch})
 status: SPENT — the map this record held has since been published in full by a later run of this workflow${summaryUrl ? `, whose Summary comment is at ${summaryUrl}` : ""}
-nothing here is outstanding: every reply and resolve that publication owed reached the PR, and every standalone item this record named was addressed in that run's Summary comment. This record is kept, and kept findable by its marker, so a later run reads a SPENT record rather than a live one.
+nothing here is outstanding: every reply and resolve that publication owed reached the PR, and every standalone item this record named was carried into that run's Summary comment — one it could not settle appearing there as the ambiguous/skipped item it is, which is where a maintainer picks it up, since a spent record hands nothing to a later run. This record is kept, and kept findable by its marker, so a later run reads a SPENT record rather than a live one.
 \`\`\`
 
 Write NOTHING else into it — no \`## Threads\` block and no \`## Summary comment\` block, and do not carry the old ones forward. Their content is on the PR now, and their ABSENCE is what ends this record: a run REPLAYS a record rather than re-triaging it, and while the review threads a record names self-terminate on having been resolved, a standalone item has no resolved state on the PR at all — so an entry left standing here would be re-gathered as fresh work by every later run, forever.
