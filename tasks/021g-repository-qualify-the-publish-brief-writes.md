@@ -15,6 +15,10 @@ The publish brief is handed to a subagent told only to read `AGENTS.md`/`CLAUDE.
 
 This was raised as a codex peer finding on PR #77 and judged out of scope there: thread 1 named the record's own writes ("all three operations"), the publish brief was untouched by that commit range, and bundling it would have mixed a second, larger surface into a fix-up round. It is recorded here rather than left in a review thread.
 
+Confirmed by the maintainer to stay QUEUED. Two facts drove that and are worth having here rather than in a session's memory. First, reachability: the hole needs a working location whose repository differs from the PR's — a fork clone addressing an upstream PR — so it is unreachable from a clone of the base repository itself and has never bitten this repo's own runs; it bites consumers and fork workflows. Second, placement: `publishPrompt` is also what task 023c edits, so implementing both at once collides in one function, and implementing this one on #77's branch would re-gate and republish a settled PR with #78 stacked above it.
+
+Ordering, since neither is obvious from the file: this task's own home (#77) sits fifth in a chain rooted at PR #72 — #72 → #73 (017b) → #74 (045) → #75 (021d) → #76 (021c) → #77 — so the task file itself only reaches `main` when that chain drains. Sequence this ahead of 023c if both are implemented in one pass, since 023c's clause sits one step earlier in the same brief.
+
 ## Scope
 
 `plugins/dev-skills/workflows/wf-address-review.js` — the brief rendered by `publishPrompt`. Both `address-review` skill mirrors where they restate any of these calls as prose (`plugins/dev-skills/skills/address-review/SKILL.md` and `codex/dev-skills/skills/address-review/SKILL.md`, headings "Step 7 — Publish after the review gate" and "GitHub API recipes").
