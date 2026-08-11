@@ -85,7 +85,7 @@ function check(name, cond, detail) {
 // does not count. Bump it deliberately when adding or removing one — a
 // scenario that silently stops running is invisible to a suite that only gates
 // on failures.
-const EXPECTED_CHECKS = 47;
+const EXPECTED_CHECKS = 48;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -327,6 +327,23 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "the conflicting-PR stop excludes the PR being addressed and identifies the other head by repository plus ref, against this branch's push target",
     excludesAddressedPr && namesOtherHeadRepo && namesOtherHeadRef && comparesAgainstPushTarget && requestsProbeFields,
     `different-number filter stated: ${excludesAddressedPr}; other head's repository stated: ${namesOtherHeadRepo}; its ref stated: ${namesOtherHeadRef}; compared against the resolved push target: ${comparesAgainstPushTarget}; probe requests every field: ${requestsProbeFields}`,
+  );
+  // Forced `inline` checks the target branch out in THIS checkout, and the
+  // branch it checks out may already be there: a maintainer who has worked this
+  // PR before still has a local `T` lying around, which is an ordinary place to
+  // force the mode from. A create is not a checkout — `git checkout -b` and
+  // `git switch -c` REFUSE a branch that already exists — so an unconditional
+  // "create a local tracking branch" fails that run at setup, before the
+  // supported mode is entered at all. Case 4's worktree arms already split
+  // EXISTS from NONE; nothing but this text makes case 2 split it too.
+  const inlineCase = cases.split("\n").find((l) => l.startsWith("2. ")) || "";
+  if (!inlineCase) throw new Error(`${SOURCE}: forced-inline case not found; its checkout rule cannot be read`);
+  const reusesExistingT = /where one EXISTS/.test(inlineCase);
+  const createsOnlyWhenAbsent = /only where NONE/.test(inlineCase);
+  check(
+    "forced `inline` checks out an existing local `T` and creates one only where none exists",
+    reusesExistingT && createsOnlyWhenAbsent,
+    `reuse arm stated: ${reusesExistingT}; create conditioned on absence: ${createsOnlyWhenAbsent}`,
   );
   // Four clauses in the same case list, each of which the worktree case fails as
   // written without — and none of the failures is visible to the gate above,
