@@ -6,7 +6,7 @@
 
 Task 018 fixed exactly this in `wf-address-review.js`'s gather brief: probe `git check-ignore -q "<repo>/.worktrees/"` with the trailing slash a directory-only rule needs, and where it answers no, append `/.worktrees/` to the file `git rev-parse --git-path info/exclude` names — asked from inside `<repo>`, because in a primary checkout that answer comes back CWD-relative — then re-probe and make a still-no answer a blocker. The skills were left carrying the literal, because the defect is pre-existing on `main` and 018's reviewer correctly scoped it out of that PR.
 
-What makes it worth a task of its own rather than a note: `address-review`'s own "Branch resolution and attach follow `address-reviews` → 'Resolving and checking out each entry' wholesale" paragraph means a single-PR run inherits the broken recipe too, and a batch run reads the broken literal directly. The workflow is fixed and the skills it mirrors are not, which is also a standing invitation for a later round to "reconcile" them in the wrong direction.
+What makes it worth a task of its own rather than a note: the drift spans both skills, in two different shapes, and only one of them is the literal. The literal sits in `address-reviews`' `## Session Bootstrap` step beginning "**Prepare the worktree base and prune stale state.**", so a batch run reads it directly. `address-review` does NOT inherit that step — its paragraph beginning "Branch resolution and attach follow `address-reviews`" inherits that skill's "Resolving and checking out each entry" section wholesale, and the literal is not in that section, so the inheritance pointer never reaches it. That paragraph restates the ignore rule itself instead, already in the resolved form: it names the file `git rev-parse --git-path info/exclude` names and says why a literal `.git/info/exclude` is not a path at all where the checkout is a linked worktree, and it carries the trailing-slash probe. What it omits is the CWD clause — it never says the question is asked from inside the repository — so a single-PR run standing anywhere else resolves that relative answer against the wrong directory and appends the rule to a file `check-ignore` never reads: the same silent failure as the literal, one step removed. The workflow is fixed and neither skill matches it, which is also a standing invitation for a later round to "reconcile" them in the wrong direction.
 
 ## Scope
 
@@ -14,7 +14,7 @@ Included:
 
 - Replace the literal `.git/info/exclude` in the `address-reviews` bootstrap step with the resolved form, matching what `wf-address-review.js`'s gather brief now states: the trailing-slash `check-ignore` probe, the append to the file `git rev-parse --git-path info/exclude` names, that question asked from inside the repository, and a re-probe whose still-no answer is a blocker.
 - Apply the same change to the Codex mirror, in lockstep — there is no generator; both files are hand-edited and their divergence count must not move.
-- Audit `address-review`'s own steps for any second spelling of the literal, since it inherits the recipe wholesale rather than restating it; fix it there and in its mirror if one is found.
+- Add the CWD clause to `address-review`'s own restatement — the paragraph beginning "Branch resolution and attach follow `address-reviews`" — so it says the `git rev-parse --git-path info/exclude` question is asked from inside the repository, matching the workflow's wording; apply it to the Codex mirror in lockstep. This pair is a REQUIRED edit, not an audit: it already carries the resolved form, so grepping it for the literal finds nothing and an implementer who stops there marks it unaffected and leaves the drift standing.
 - Keep the reason in the prose: the literal is not merely less portable, it FAILS from a linked worktree, and the trailing slash is what makes the probe honest before the directory exists.
 
 Out of scope:
@@ -27,7 +27,7 @@ Out of scope:
 
 - `plugins/dev-skills/skills/address-reviews/SKILL.md` — the bootstrap step beginning "**Prepare the worktree base and prune stale state.**", which carries the literal.
 - `codex/dev-skills/skills/address-reviews/SKILL.md` — the same step in the Codex mirror.
-- `plugins/dev-skills/skills/address-review/SKILL.md` and its Codex mirror — the paragraph beginning "Branch resolution and attach follow `address-reviews`", which is why the broken literal reaches a single-PR run too.
+- `plugins/dev-skills/skills/address-review/SKILL.md` and its Codex mirror — the paragraph beginning "Branch resolution and attach follow `address-reviews`", which restates the ignore rule in the resolved form but without the CWD clause. The section it inherits wholesale, "Resolving and checking out each entry", is not where the literal lives, so no broken literal reaches a single-PR run by inheritance; the gap here is the missing clause, and `grep -c "from inside"` answering 0 for this file and its mirror is how it shows.
 - `plugins/dev-skills/workflows/wf-address-review.js` — the gather brief's worktree case (arm 4, "Anything else"), which states the corrected recipe to copy from.
 - `scripts/test-address-review-reconcile.mjs` — the check named "the worktree base is made ignored before any arm adds under it…", which pins that recipe on the workflow side and is the model for pinning it on the skill side.
 - Raised as a nit in PR #71's round-5 review and deferred there rather than bundled.
@@ -36,8 +36,8 @@ Out of scope:
 
 - `plugins/dev-skills/skills/address-reviews/SKILL.md`
 - `codex/dev-skills/skills/address-reviews/SKILL.md`
-- `plugins/dev-skills/skills/address-review/SKILL.md` (audit; fix if a second spelling is there)
-- `codex/dev-skills/skills/address-review/SKILL.md` (mirror, only if the skill changes)
+- `plugins/dev-skills/skills/address-review/SKILL.md` (add the CWD clause)
+- `codex/dev-skills/skills/address-review/SKILL.md` (mirror, in lockstep)
 
 ## Implementation notes
 
@@ -48,7 +48,7 @@ Out of scope:
 ## Acceptance criteria
 
 - Neither `address-reviews` SKILL.md names `.git/info/exclude` as a path to write; both name the resolved form, the trailing-slash probe, the CWD the question is asked from, and the blocker on a still-no re-probe.
-- The `address-review` pair is confirmed either unaffected or fixed, with its mirror in step.
+- Both `address-review` SKILL.md files carry the CWD clause: each says the `git rev-parse --git-path info/exclude` question is asked from inside the repository. `grep -c "from inside"` answers 0 for both on the `main` baseline and must answer non-zero for both after. "Unaffected" is not an available disposition for this pair.
 - Mirror divergence for each edited pair is unchanged from its `main` baseline; the edited paragraphs are byte-identical across the two mirrors.
 - The workflow's own recipe is untouched.
 
@@ -60,4 +60,4 @@ Out of scope:
 
 ## Review plan
 
-Reviewer confirms the linked-worktree failure was reproduced rather than asserted, that both mirrors moved together with unchanged divergence, that the `address-review` audit was performed rather than claimed, and that the workflow's recipe and the tracked `.gitignore` are untouched.
+Reviewer confirms the linked-worktree failure was reproduced rather than asserted, that both mirrors moved together with unchanged divergence, that the `address-review` pair gained the CWD clause rather than being waved through as unaffected because it holds no literal, and that the workflow's recipe and the tracked `.gitignore` are untouched.
