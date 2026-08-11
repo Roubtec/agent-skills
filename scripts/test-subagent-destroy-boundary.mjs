@@ -840,6 +840,12 @@ const FIXTURES = {
       // rendered here rather than left to the two that say nothing landed.
       ["recordPrompt (a publication that stopped part-way)", (f) => f.recordPrompt(publishPacket, [], { why: "replying to a thread failed after the push landed.", rounds: 2, reviewerPassed: true, deviations: [], landed: "the push" }), NO_BUILD],
     ],
+    // The record's other write, and the only one a fully published run makes:
+    // it spends the record it replayed so nothing replays from a map that is
+    // now on the PR. It reads nothing in the working location — the body goes
+    // to `gh` on stdin — so it has no location arm to branch on and orders no
+    // build, and one render covers it.
+    spendRecordPrompt: [["spendRecordPrompt", (f) => f.spendRecordPrompt(publishPacket, { summaryUrl: "https://example.invalid/pr/42#issuecomment-5" }), NO_BUILD]],
     reclaimPrompt: [["reclaimPrompt", (f) => f.reclaimPrompt("/w/.worktrees/c/pr-42", 42, "publication completed"), NO_BUILD]],
   },
 };

@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 188;
+const EXPECTED_CHECKS = 191;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -309,7 +309,7 @@ const CYCLE_PASS_RECORD_ONLY = {
 // stubbed as a clean success and its rendered brief kept, since what the caller
 // HANDS it is script logic even though the brief itself is prose.
 async function run(packet, opts = {}) {
-  const seen = { agentLabels: [], cycleOpts: null, cycleCalls: [], rebasePrompts: [], publishPrompts: [], recordPrompts: [] };
+  const seen = { agentLabels: [], cycleOpts: null, cycleCalls: [], rebasePrompts: [], publishPrompts: [], recordPrompts: [], spendPrompts: [] };
   const agent = async (prompt, aopts) => {
     const label = (aopts && aopts.label) || "";
     seen.agentLabels.push(label);
@@ -353,6 +353,16 @@ async function run(packet, opts = {}) {
       return opts.record === undefined
         ? { posted: true, superseded: false, url: "https://example.invalid/pr/42#issuecomment-1", detail: "posted" }
         : opts.record;
+    }
+    // The record's OTHER write, and the only one a fully published run makes: it
+    // SPENDS the record it replayed, so nothing replays from a map that is now
+    // on the PR. Stubbed for the same reason — which exit reaches it, whether it
+    // is reached at all, and what it is handed are script logic.
+    if (label === "spend-record") {
+      seen.spendPrompts.push(prompt);
+      return opts.spend === undefined
+        ? { posted: true, superseded: true, url: "https://example.invalid/pr/42#issuecomment-9", detail: "superseded the prior record in place" }
+        : opts.spend;
     }
     throw new Error(`unexpected agent call past the gate: ${label}`);
   };
@@ -2692,7 +2702,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // A second gathered thread on the SAME line by the SAME author — what a
   // re-review round ordinarily leaves behind — so the two dispositions below
   // share a `ref` and are told apart only by `threadId`.
-  const ITEM_2 = { ...ITEM, threadId: "T2", commentId: "C2", body: "a second finding on the same line", url: "https://example.invalid/pr/42#d2" };
+  // `authorIsBot` true while the login stays `a-reviewer`: publication compares
+  // the echoed flag against this item, and the flag alone — never the login —
+  // decides whether a push-back may be resolved. Keeping the login is what lets
+  // the two entries go on sharing a `ref`.
+  const ITEM_2 = { ...ITEM, threadId: "T2", commentId: "C2", authorIsBot: true, body: "a second finding on the same line", url: "https://example.invalid/pr/42#d2" };
   const withTwo = { reconcile: { outcome: "work" }, items: [ITEM, ITEM_2] };
   const CYCLE_PASS_TWO = {
     ...CYCLE_PASS,
@@ -2704,6 +2718,13 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         commentId: "C2",
         url: "https://example.invalid/pr/42#d2",
         kind: "push-back",
+        // A BOT thread, so this push-back is one publication genuinely still
+        // owes a resolve on — step 7 resolves a push-back exactly there. The
+        // login is left alone on purpose: `authorIsBot` is the flag both the
+        // brief and the debt count read, never a guess from the name, and
+        // keeping the login means the two entries still share a `ref` so the
+        // standing lines can only be told apart by `threadId`.
+        authorIsBot: true,
         detail: "the guard is deliberate; the same line was re-raised without new grounds",
         newFinding: false,
       },
@@ -2786,6 +2807,70 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     body: "<!-- address-review:disposition-record -->\n# address-review packet — PR #42 (feature/x)\nstatus: not published (a local-only run)\n",
   };
   const withPrior = { reconcile: { outcome: "work" }, items: [ITEM], priorRecord: PRIOR_RECORD };
+  // The OTHER kind that turns on the thread rather than on the kind, and the one
+  // the fixture above omits: step 7 resolves a push-back or a deferral only on a
+  // BOT thread and leaves the human one open unless the maintainer explicitly
+  // authorized otherwise. So an unresolved human push-back and an unresolved
+  // human deferral are policy on a complete publication, while the bot
+  // push-back beside them genuinely still owes its resolve — which is what makes
+  // the count observable in both directions rather than merely small.
+  const ITEM_4 = { ...ITEM, threadId: "T4", commentId: "C4", body: "a fourth finding", url: "https://example.invalid/pr/42#d4" };
+  const ITEM_5 = { ...ITEM, threadId: "T5", commentId: "C5", body: "a fifth finding", url: "https://example.invalid/pr/42#d5" };
+  const ITEM_6 = { ...ITEM, threadId: "T6", commentId: "C6", author: "a-bot", authorIsBot: true, body: "a sixth finding", url: "https://example.invalid/pr/42#d6" };
+  const withPolicyResolves = { reconcile: { outcome: "work" }, items: [ITEM_4, ITEM_5, ITEM_6] };
+  const CYCLE_PASS_POLICY_RESOLVES = {
+    ...CYCLE_PASS,
+    workReport: [
+      {
+        ...CYCLE_PASS.workReport[0],
+        threadId: "T4",
+        commentId: "C4",
+        url: "https://example.invalid/pr/42#d4",
+        ref: "src/app.ts:12 a-reviewer",
+        kind: "push-back",
+        detail: "the guard is deliberate; declined with the rationale drafted below",
+        authorIsBot: false,
+        newFinding: false,
+      },
+      {
+        ...CYCLE_PASS.workReport[0],
+        threadId: "T5",
+        commentId: "C5",
+        url: "https://example.invalid/pr/42#d5",
+        ref: "src/app.ts:20 a-reviewer",
+        kind: "deferred-to-task",
+        detail: "queued as tasks/099x-something.md; agent-proposed, so the thread stays open",
+        authorIsBot: false,
+        newFinding: false,
+      },
+      {
+        ...CYCLE_PASS.workReport[0],
+        threadId: "T6",
+        commentId: "C6",
+        url: "https://example.invalid/pr/42#d6",
+        ref: "src/app.ts:31 a-bot",
+        kind: "push-back",
+        author: "a-bot",
+        authorIsBot: true,
+        detail: "the bot re-raised a settled point; declined, and a bot thread IS resolved",
+        newFinding: false,
+      },
+    ],
+  };
+  // Every reply landed and no resolve did, so the reply half is silent and the
+  // resolve half is the only thing the outstanding line can be wrong about.
+  const PUBLISH_PART_WAY_POLICY_RESOLVES = {
+    published: false,
+    pushed: true,
+    pushedNewCommits: true,
+    aborted: "all three replies landed, then resolving thread T6 failed with a 502",
+    summaryCommentUrl: "",
+    threadOutcomes: [
+      { ref: "src/app.ts:12 a-reviewer", threadId: "T4", outcome: "replied; left open per policy", replied: true, resolved: false },
+      { ref: "src/app.ts:20 a-reviewer", threadId: "T5", outcome: "replied; left open per policy", replied: true, resolved: false },
+      { ref: "src/app.ts:31 a-bot", threadId: "T6", outcome: "replied; resolve rejected with a 502", replied: true, resolved: false },
+    ],
+  };
   // A cycle that reported an ERROR instead of a verdict, holding a nonempty map
   // no reviewer ever passed. `workReportReviewed: false` is the cycle's own
   // answer to that, and it is stated rather than omitted: the field is what the
@@ -2801,6 +2886,21 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     ...CYCLE_ERROR,
     workReportReviewed: true,
     detail: "the final confirmation pass returned nothing on pass 4",
+  };
+  // The same shape with the TREE MOVED under the map that passed. A pass packet
+  // is adopted only after the cycle accepts it, while the working location's
+  // HEAD moves the moment that pass COMMITS — so a pass that commits and is then
+  // rejected (returning nothing, blocking, coming back unclean) leaves the
+  // cycle's `finalSha` at the reviewed tip while `git rev-parse HEAD` prints a
+  // later one. `carried` therefore has to CITE the reported tip exactly as
+  // `replaced` does: reading it in the working location would cite a tree no
+  // reviewer passed, and the recorded commits all being its ancestors, the next
+  // run's replay probe prints nothing and the record reads as replaying as
+  // written. The distinct SHA is what makes the citation observable at all.
+  const CYCLE_ERROR_REVIEWED_MOVED = {
+    ...CYCLE_ERROR_REVIEWED,
+    finalSha: "0ddba11",
+    detail: "the pass after the one that passed committed its fix and then blocked, so its packet was never adopted",
   };
   // The re-verification erroring, with a map of its OWN — distinguishable from
   // the pre-rebase cycle's, so "the merged report is the failed
@@ -3057,6 +3157,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     ["a publication that aborted with nothing on origin", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_NOTHING }, "fixed-publish-failed", true],
     ["a publication whose reply and resolve landed on one of two threads", { args: "push no-rebase", cycles: [CYCLE_PASS_TWO], publish: PUBLISH_PART_WAY_RESOLVED }, "fixed-publish-failed", true, withTwo],
     ["a publication holding items publication owes neither a reply nor a resolve", { args: "push no-rebase", cycles: [CYCLE_PASS_POLICY_KINDS], publish: PUBLISH_PART_WAY_POLICY_KINDS }, "fixed-publish-failed", true, withPolicyKinds],
+    ["a publication holding human push-backs and deferrals it owes no resolve on", { args: "push no-rebase", cycles: [CYCLE_PASS_POLICY_RESOLVES], publish: PUBLISH_PART_WAY_POLICY_RESOLVES }, "fixed-publish-failed", true, withPolicyResolves],
     // The three shapes in which the publisher's account cannot carry a claim
     // about origin. Every one of them used to render as "nothing reached
     // origin", which is a statement about a state the run has no fact about.
@@ -3074,6 +3175,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     ["a publisher claiming a COMPLETE publication with no Summary comment posted", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_CLAIMED_COMPLETE_NO_SUMMARY }, "fixed-publish-failed", true],
     ["a publisher claiming a COMPLETE publication over a blank Summary comment url", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_CLAIMED_COMPLETE_BLANK_SUMMARY }, "fixed-publish-failed", true],
     ["a run that published", { args: "push no-rebase", cycles: [CYCLE_PASS] }, "fixed-published", false],
+    // The same publication on a PR that already carries a record. It still
+    // leaves none of its own — the map is on the PR — but it must SPEND the one
+    // standing, or that record's `standalone` entry is re-gathered as fresh work
+    // by every later run, forever.
+    ["a run that published on a PR that already carries a record", { args: "push no-rebase", cycles: [CYCLE_PASS] }, "fixed-published", false, withPrior],
     ["an abort with no dispositions at all", { args: "push no-rebase", cycles: [CYCLE_NO_MAP] }, "publish-aborted-incomplete-dispositions", false],
     // What the exemption covers, stated as the FACT it now rests on rather than
     // as the two exits it used to name: a map no reviewer round ever judged, of
@@ -3087,6 +3193,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // passed, so a confirmation pass that stops the cycle leaves an `error`
     // verdict standing over the map that just passed review.
     ["a first cycle that errored after a round had passed over its map", { args: "push no-rebase", cycles: [CYCLE_ERROR_REVIEWED] }, "error", true],
+    ["a first cycle that errored after a pass committed and was then rejected", { args: "push no-rebase", cycles: [CYCLE_ERROR_REVIEWED_MOVED] }, "error", true],
     ["a re-verification that errored after a round had passed over its map", { args: "push", cycles: [CYCLE_PASS, CYCLE_REVERIFIED_ERROR_REVIEWED], ...REPLAY_POINTS }, "error", true],
     // And the two shapes in which the map a reviewer judged is NOT the map the
     // cycle carries out: a later pass replaced it, or the judged one is empty.
@@ -3097,6 +3204,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   const wrong = [];
   let recordBrief = "";
   const briefs = {};
+  const spends = {};
   const results = {};
   // The account each row's publisher reported, so the record's DUMP of it can be
   // compared against the fixture rather than against a shape restated here — an
@@ -3114,6 +3222,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     if (dispatched !== records) wrong.push(`${what} ${dispatched ? "recorded" : "recorded nothing"}, expected the opposite`);
     if (reported !== records) wrong.push(`${what} ${reported ? "reports" : "does not report"} a dispositionRecord, expected the opposite`);
     briefs[what] = r.seen.recordPrompts[0] || "";
+    spends[what] = r.seen.spendPrompts[0] || "";
     results[what] = r.result || {};
     if (records && !recordBrief) recordBrief = r.seen.recordPrompts[0] || "";
   }
@@ -3179,7 +3288,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     /1 thread reply/.test(landedLine) &&
       landedLine.includes("the Summary comment at https://example.invalid/pr/42#issuecomment-7") &&
       !/still outstanding: [^\n]*Summary comment/.test(landedLine) &&
-      /still outstanding: 1 not resolved/.test(landedLine) &&
+      /still outstanding: 1 of 1 not resolved/.test(landedLine) &&
       /thread=T1 {2}src\/app\.ts:12 a-reviewer — reply ALREADY POSTED — do not post it again; resolve still owed\./.test(replied),
     JSON.stringify({ landedLine: landedLine || "no origin line at all", standing: (replied.match(/^ {2}thread=.*/m) || ["no standing line"])[0] }),
   );
@@ -3199,8 +3308,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   check(
     "and a resolve that landed is named as landed, never also as outstanding, with its own entry keyed by threadId rather than by the ref it shares",
     /1 thread reply, 1 thread resolve/.test(resolvedLanded) &&
-      /still outstanding: 1 of 2 thread\(s\) still owed their reply, 1 not resolved/.test(resolvedLanded) &&
-      !/still outstanding: [^\n]*2 not resolved/.test(resolvedLanded) &&
+      /still outstanding: 1 of 2 thread\(s\) still owed their reply, 1 of 2 not resolved/.test(resolvedLanded) &&
+      !/\b2 of 2 not resolved/.test(resolvedLanded) &&
       /thread=T1 {2}src\/app\.ts:12 a-reviewer — reply ALREADY POSTED — do not post it again; thread ALREADY RESOLVED — do not resolve it again\./.test(resolved) &&
       /thread=T2 {2}src\/app\.ts:12 a-reviewer — no reply reached the PR — the reply below is still owed; resolve still owed\./.test(resolved) &&
       !/thread=T1[^\n]*resolve still owed/.test(resolved),
@@ -3236,6 +3345,31 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     JSON.stringify({ landedLine: policyLanded || "no origin line at all", standing: (policyKinds.match(/^ {2}thread=.*\n {2}thread=.*\n {2}thread=.*/m) || ["no standing lines"])[0] }),
   );
 
+  // And the OTHER half of that rule, which turns on the thread rather than on
+  // the kind: step 7 resolves a push-back or a deferral only on a BOT thread and
+  // leaves the human one open unless the maintainer explicitly authorized
+  // otherwise. So a human push-back and a human deferral are unresolved BY
+  // POLICY on a complete publication — counting either as debt, or telling its
+  // entry a resolve is still owed, asks the next turn for exactly the action the
+  // brief forbids, and the per-entry line is the sharper half since it is what
+  // that turn acts on entry by entry. The bot push-back beside them is the
+  // control: its resolve genuinely IS owed, so the count is observable in both
+  // directions rather than merely small.
+  const policyResolves = briefs["a publication holding human push-backs and deferrals it owes no resolve on"];
+  const resolvesLanded = (policyResolves.match(/^reached origin: .*/m) || [""])[0];
+  check(
+    "and the resolve debt excludes a human push-back and a human deferral, while the bot thread beside them still owes one",
+    // All three replies landed, so the reply half is silent; of the three
+    // threads only the bot one is owed a resolve, and it is the only one counted.
+    /still outstanding: 1 of 1 not resolved, the Summary comment$/.test(resolvesLanded) &&
+      !/still owed their reply/.test(resolvesLanded) &&
+      /thread=T4 {2}src\/app\.ts:12 a-reviewer — reply ALREADY POSTED — do not post it again; resolve NOT owed — a human push-back or deferral is left open unless the maintainer explicitly authorized resolving it; do not resolve it on this record's word\./.test(policyResolves) &&
+      /thread=T5 {2}src\/app\.ts:20 a-reviewer — reply ALREADY POSTED — do not post it again; resolve NOT owed — a human push-back or deferral is left open unless the maintainer explicitly authorized resolving it/.test(policyResolves) &&
+      /thread=T6 {2}src\/app\.ts:31 a-bot — reply ALREADY POSTED — do not post it again; resolve still owed\./.test(policyResolves) &&
+      !/(T4|T5)[^\n]*resolve still owed/.test(policyResolves),
+    JSON.stringify({ landedLine: resolvesLanded || "no origin line at all", standing: (policyResolves.match(/^ {2}thread=.*\n {2}thread=.*\n {2}thread=.*/m) || ["no standing lines"])[0] }),
+  );
+
   // What a KNOWN-INCOMPLETE map may not do to a record that is already on the
   // PR. Supersession is a `PATCH` in place, so writing this run's map over an
   // earlier record destroys the entry that record holds for every item this map
@@ -3266,6 +3400,50 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     JSON.stringify({
       incompleteStep2: (incompleteOverPrior.match(/^2\. Compose the body below[^\n]*/m) || ["no step 2"])[0].slice(0, 200),
       completeStep2: (completeOverPrior.match(/^2\. Compose the body below[^\n]*/m) || ["no step 2"])[0].slice(0, 160),
+    }),
+  );
+
+  // What ENDS a record. A record is replayed rather than re-triaged, and the
+  // review-thread half of that replay self-terminates on the PR: step 3 keeps
+  // only unresolved threads, so a record whose threads a later run resolved
+  // replays to nothing. A `standalone` entry has no such state — nothing on the
+  // PR marks a comment as addressed, which is exactly why the gather
+  // reintroduces one FROM the record — so the record is the whole claim that the
+  // item is outstanding, and one left standing over a map that has since been
+  // published hands that item to every later run as fresh work, indefinitely.
+  // So a full publication SPENDS the record it replayed: superseded in place,
+  // marker kept so the next run still FINDS it and reads it as spent rather than
+  // absent, and no entries — the absence being what leaves nothing to replay.
+  // Both directions are driven, since each loses the property on its own: the
+  // spend happens where a record stands, and NOTHING is written where none does,
+  // a new comment there being the very thing this ends.
+  const spentBrief = spends["a run that published on a PR that already carries a record"];
+  const spentResult = results["a run that published on a PR that already carries a record"];
+  check(
+    "a run that publishes in full spends the prior record it replayed — superseded in place, marker kept, entries gone — and posts nothing where no record stands",
+    // The write itself, at the repository the PR is in and never as a new comment.
+    /--method PATCH repos\/<owner>\/<repo>\/issues\/comments\/<id>/.test(spentBrief) &&
+      !/repos\/\{owner\}\/\{repo\}/.test(spentBrief) &&
+      !/gh pr comment/.test(spentBrief) &&
+      /Where none of them is yours, write NOTHING/.test(spentBrief) &&
+      // The body: the marker it must still be findable by, the spent status, and
+      // the two blocks whose ABSENCE is the termination.
+      spentBrief.includes("<!-- address-review:disposition-record -->") &&
+      /status: SPENT — the map this record held has since been published in full/.test(spentBrief) &&
+      /no `## Threads` block and no `## Summary comment` block/.test(spentBrief) &&
+      // The Summary comment the publisher actually posted, so a reader of the
+      // spent record is sent to where the map now lives.
+      spentBrief.includes("https://example.invalid/pr/42#issuecomment-5") &&
+      // It is not a disposition record: the published exit still reports none.
+      !spentResult.dispositionRecord &&
+      spentResult.spentRecord &&
+      spentResult.spentRecord.superseded === true &&
+      // And the control: the same publication on a PR carrying no record writes
+      // nothing at all, rather than posting one nobody asked for.
+      spends["a run that published"] === "",
+    JSON.stringify({
+      spentStatus: (spentBrief.match(/^status: [^\n]*/m) || ["no status line"])[0].slice(0, 140),
+      noPriorSpend: spends["a run that published"] ? "a spend brief was rendered with no prior record" : "none, as required",
     }),
   );
 
@@ -3573,6 +3751,30 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     }),
   );
 
+  // And the tip THAT map is cited over, which the `carried` case used to read in
+  // the working location on the reasoning that the two are the same commit. They
+  // are not always: a pass packet is adopted only once the cycle accepts it,
+  // while the working location's HEAD moves the moment that pass COMMITS — so a
+  // pass that commits and is then rejected before adoption leaves the cycle's
+  // `finalSha` at the reviewed tip while `git rev-parse HEAD` prints a later one.
+  // Reading it there would cite a tree no reviewer passed, and since the recorded
+  // commits are all its ancestors the next run's replay probe prints nothing and
+  // the record reads as replaying as written. So `carried` cites the reported tip
+  // exactly as `replaced` does.
+  const carriedMoved = briefs["a first cycle that errored after a pass committed and was then rejected"];
+  check(
+    "and a carried map cites the tip the cycle reported for the round that judged it, rather than reading the working location a rejected pass may have moved",
+    /The `final HEAD` below is `0ddba11` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass may have moved past\./.test(carriedMoved) &&
+      /\| final HEAD 0ddba11 \| recorded headRefOid/.test(carriedMoved) &&
+      /`final HEAD` is given above as `0ddba11` — write it EXACTLY as given and read no tip for it/.test(carriedMoved) &&
+      // Still the carried map's own reason, not the replaced one's.
+      /errored AFTER a reviewer round had passed over the dispositions below/.test(carriedMoved) &&
+      carriedMoved.includes(CYCLE_PASS.workReport[0].detail),
+    JSON.stringify({
+      header: (carriedMoved.match(/^starting HEAD [^\n]*/m) || ["no header line"])[0].slice(0, 140),
+    }),
+  );
+
   // And the two shapes where the judged map is NOT the map the cycle carries out,
   // which selecting on "was the carried map reviewed" alone got wrong in opposite
   // directions. A later pass REPLACING a judged map left that map recorded nowhere
@@ -3606,7 +3808,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       // caveated because a replay PROBES this field: with the recorded commits
       // all ancestors of the later tip, probing that tip prints nothing and the
       // record reads as replaying as written over a tree no reviewer passed.
-      /The `final HEAD` below is `feedface` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass has moved past\./.test(replacedFirst) &&
+      /The `final HEAD` below is `feedface` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass may have moved past\./.test(replacedFirst) &&
       /\| final HEAD feedface \| recorded headRefOid/.test(replacedFirst) &&
       /`final HEAD` is given above as `feedface` — write it EXACTLY as given and read no tip for it/.test(replacedFirst) &&
       // The post-rebase exit: its own judged map, not the pre-rebase map that used
@@ -3618,7 +3820,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       // its own copy of it.
       /errored after a later pass had SUPERSEDED the map its reviewer round passed over — replacing its entries, or committing a new tip under the same ones —/.test(replacedReverify) &&
       /reviewer passed a round over the rebased tree, after which a later pass superseded the map it judged and the cycle errored/.test(replacedReverify) &&
-      /The `final HEAD` below is `feedface` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass has moved past\./.test(replacedReverify) &&
+      /The `final HEAD` below is `feedface` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass may have moved past\./.test(replacedReverify) &&
       /\| final HEAD feedface \| recorded headRefOid/.test(replacedReverify) &&
       // The empty judged map: the record is written, over the map that passed on
       // the pre-replay base, rather than not written at all.

@@ -824,9 +824,9 @@ function recordPrompt(packet, dispositions, facts) {
   const outcomes = Array.isArray(facts.outcomes) ? facts.outcomes : [];
   const unknown = typeof facts.unknown === "string" ? facts.unknown.trim() : "";
   const perThread = Array.isArray(facts.perThread) ? facts.perThread.filter((l) => typeof l === "string" && l.trim()) : [];
-  // The tip the map below was JUDGED on, where that is not the tip standing in
-  // the working location — the `replaced` case of `reviewedMapOf`. Empty is the
-  // ordinary run, whose `final HEAD` is read where the work happened.
+  // The tip the map below was JUDGED on, which the working location's HEAD is
+  // not known to be — either case of `reviewedMapOf`. Empty is the ordinary run,
+  // whose `final HEAD` is read where the work happened.
   const judgedTip = typeof facts.judgedTip === "string" ? facts.judgedTip.trim() : "";
   // And whether this map is known NOT to account for the gathered items
   // one-for-one, which is what forbids superseding an earlier record with it:
@@ -919,7 +919,7 @@ ${unknown
 ${incomplete
     ? `- This map is INCOMPLETE (${incomplete}), so say so in the \`status:\` line's reason${priorUrl ? ` and name the earlier record that still stands (${priorUrl})` : ""}: a reader must not take this record for the whole account of this PR, and the entries it does carry are a real triage of the items they cover rather than a draft. Every one of them still gets its full entry below.\n`
     : ""}- ${judgedTip
-    ? `\`final HEAD\` is given above as \`${judgedTip}\` — write it EXACTLY as given and read no tip for it. It is the tip the reviewer's verdict was rendered over, and the dispositions below are that round's; the tip standing in the working location is a LATER one a pass committed on top, and citing it would hand the next run's replay probe a tree no reviewer ever passed — which, the recorded commits all being its ancestors, prints nothing and so reads as "the record replays as written". Report what \`git rev-parse HEAD\` prints in the working location in \`detail\` instead, as this run's parting tip.`
+    ? `\`final HEAD\` is given above as \`${judgedTip}\` — write it EXACTLY as given and read no tip for it. It is the tip the reviewer's verdict was rendered over, and the dispositions below are that round's; the tip standing in the working location may be a LATER one a pass committed on top of it, and citing that would hand the next run's replay probe a tree no reviewer ever passed — which, the recorded commits all being its ancestors, prints nothing and so reads as "the record replays as written". Report what \`git rev-parse HEAD\` prints in the working location in \`detail\` instead, as this run's parting tip.`
     : "`final HEAD` is what `git rev-parse HEAD` prints in the working location. Read it there rather than repeating a SHA from this brief."}
 - One \`## Threads\` block entry per disposition below, in that shape, and EVERY entry carries the same field set whatever its kind: the disposition kind, its stable reference (path:line, author, and the \`threadId\` for a review thread or the \`url\` for a standalone item), the permalink, and the reply body VERBATIM — a \`deferred-to-task\` entry adding the committed task file and its queued or deferred placement beside them rather than in place of them, since which thread a follow-up closes is not re-derivable from the PR. The drafted reply bodies and the ready-to-post Summary body are the only parts of this record that cannot be re-derived from the PR later, so they are the parts that must be exact.
 - The \`## Summary comment\` block holds the "Summary of Review Fixes" body a publishing run would have posted — what was fixed, a prominent "Pushed back — please re-examine" section, a "Deferred to follow-up tasks" section naming each committed task file, and any ambiguous/skipped item — ready to post unchanged. Where the cycle recorded locked-decision deviations, that body LEADS with them under a "Deviation from a locked decision" section, since a later turn posts what you wrote here as it stands. Standing deviations for this run: ${JSON.stringify(facts.deviations || [])}.
@@ -938,6 +938,53 @@ Report \`posted\`, \`superseded\` (true when you updated a prior record of your 
 ## Dispositions to record
 
 ${JSON.stringify(dispositions, null, 2)}`;
+}
+
+// The write that ENDS a record's life, and the only PR write a fully published
+// run makes beyond publication itself.
+// A record is REPLAYED rather than re-triaged, and the review-thread half of
+// that replay terminates on the PR: the gather keeps only `isResolved == false`,
+// so a record whose threads a later run resolved replays to nothing. A
+// `standalone` entry has no such state — nothing on the PR marks a comment as
+// addressed, which is precisely why the gather reintroduces one from the record
+// at all — so the RECORD is the claim that the item is outstanding. A record
+// that outlives the publication of its own map therefore hands that item to
+// every later run as fresh work, indefinitely: re-gathered, re-judged, re-listed
+// in every future Summary comment, and turning what should be the zero-item
+// no-op into a full fix/review/publish cycle. So the run that publishes the map
+// in full spends the record that held it, by the same in-place supersession the
+// record already uses: same marker, so a later run still FINDS it, and no
+// entries, which is what leaves nothing for any replay to pick up.
+// It supersedes only a record that is already there. Where the PR carries none
+// there is nothing to spend, and posting one would create the very thing this
+// step exists to end — so the brief's step 2 writes nothing in that case.
+function spendRecordPrompt(packet, facts) {
+  const summaryUrl = typeof facts.summaryUrl === "string" ? facts.summaryUrl.trim() : "";
+  return `Spend the prior disposition record on PR #${packet.pr.number} (branch \`${packet.pr.workingBranch}\`). This run PUBLISHED the addressed review IN FULL, so the map that record holds is on the PR and nothing in it is outstanding. Read \`AGENTS.md\` / \`CLAUDE.md\` first.
+
+${DEPUTY_FINISH_IN_TURN}
+
+${DESTROY_BOUNDARY}
+
+You make at most ONE PR write — updating that record comment in place — and nothing else: no push, no reply, no resolve, no Summary comment, no ping, no label, no review request. If you cannot make that one write, report \`posted: false\` with what failed; never compensate by writing something else. And you make NO write at all where step 1 finds no record of your own: there is then nothing to spend, and posting a new comment would create exactly what this step exists to end.
+
+WHICH REPOSITORY every command below addresses: the one this PR is IN, whose \`<owner>/<repo>\` is already resolved and handed to you in the PR's own URL \`${packet.pr.url}\` — never the repository your working location resolves to. On a cross-repository PR the checkout is the HEAD fork while the PR and its comments live in the base repository, and \`gh api\`'s \`{owner}\`/\`{repo}\` placeholders expand to the repository of the current directory — so unqualified, the lookup searches the fork and finds no record to spend, and the \`PATCH\` addresses a comment id in the fork. So write that \`<owner>/<repo>\` out LITERALLY in each command below. Do not re-derive it from a bare \`gh repo view --json nameWithOwner\`, which with no repository argument answers for the directory — in a fork clone the head fork again.
+1. Find the prior record. \`gh api --paginate repos/<owner>/<repo>/issues/${packet.pr.number}/comments --jq '.[] | select((.body | split("\\n")[0] | rtrimstr("\\r")) == "<!-- address-review:disposition-record -->") | {id, login: .user.login, updated_at}'\` — the MARKER identifies a record, never its prose, and it must be the body's FIRST LINE byte for byte. A \`contains\` test is what you must NOT use: it also selects an ordinary comment that merely QUOTES the marker (a maintainer asking about this mechanism, a review summary echoing it), and step 2 would then \`PATCH\` that person's comment away. The \`rtrimstr("\\r")\` is why a body GitHub hands back with CRLF line endings still matches its own first line. Keep the ones authored by the authenticated user (\`gh api user --jq .login\`).
+2. Where none of them is yours, write NOTHING: report \`posted: false\`, \`superseded: false\`, and say in \`detail\` that no record of your own was on the PR. Otherwise update the most recent of your own IN PLACE with the body below, read from stdin so composing it puts no file in the working location: \`gh api --method PATCH repos/<owner>/<repo>/issues/comments/<id> -F body=@-\`. Report any further records of your own in \`detail\` rather than touching them, and never touch another actor's comment: delete, sweep or expire NOTHING.
+3. Write "codex"/"claude"/"copilot" PLAIN in the body, with no bare \`@\`-mentions anywhere — a mention here would summon a review round for work that is already published.
+
+The body, marker first (the marker line is mandatory and must be byte-exact: a spent record must still be FOUND as a record by the next run, which is how it reads as spent rather than as absent):
+
+\`\`\`
+<!-- address-review:disposition-record -->
+# address-review packet — PR #${packet.pr.number} (${packet.pr.workingBranch})
+status: SPENT — the map this record held has since been published in full by a later run of this workflow${summaryUrl ? `, whose Summary comment is at ${summaryUrl}` : ""}
+nothing here is outstanding: every reply and resolve that publication owed reached the PR, and every standalone item this record named was addressed in that run's Summary comment. This record is kept, and kept findable by its marker, so a later run reads a SPENT record rather than a live one.
+\`\`\`
+
+Write NOTHING else into it — no \`## Threads\` block and no \`## Summary comment\` block, and do not carry the old ones forward. Their content is on the PR now, and their ABSENCE is what ends this record: a run REPLAYS a record rather than re-triaging it, and while the review threads a record names self-terminate on having been resolved, a standalone item has no resolved state on the PR at all — so an entry left standing here would be re-gathered as fresh work by every later run, forever.
+
+Report \`posted\`, \`superseded\` (true when you updated a prior record of your own), \`url\` (that comment's permalink), and one line of \`detail\`.`;
 }
 
 // The one deputy whose whole job is giving the worktree back. It runs only on
@@ -1792,6 +1839,23 @@ async function leaveDispositionRecord(why, map, facts) {
   dispositionRecord = written || { posted: false, detail: "the record phase returned nothing, so this run's disposition map survives only in this result." };
   return { dispositionRecord };
 }
+// And the mirror of it on the ONE path that leaves no record: a full
+// publication, which has just put on the PR everything a prior record was
+// holding. `spendRecordPrompt` above says why that record cannot simply be left
+// standing. Nothing is written where the gather found no record — the loop it
+// ends needs one to exist — so this is a no-op on the ordinary first run.
+async function spendPriorRecord(summaryUrl) {
+  const priorUrl = packet.priorRecord && typeof packet.priorRecord.url === "string" ? packet.priorRecord.url.trim() : "";
+  if (!priorUrl) return {};
+  phase("Record");
+  const spent = await agent(spendRecordPrompt(packet, { summaryUrl }), {
+    label: "spend-record",
+    schema: RECORD_SCHEMA,
+  });
+  return {
+    spentRecord: spent || { posted: false, detail: "the record-spending phase returned nothing, so whether the prior record still holds this run's now-published map is unknown." },
+  };
+}
 // WHICH map a stopped cycle records, in one place because two exits ask it. Both
 // halves of the test earn their keep. A map with NO ENTRIES records nothing
 // (`leaveDispositionRecord`'s rule above), so selecting on "was it reviewed"
@@ -1819,24 +1883,34 @@ async function leaveDispositionRecord(why, map, facts) {
 // citing the tip standing in the working location for a map judged on an
 // earlier one hands that probe a tree no reviewer ever passed — and since the
 // later pass committed OVER the judged tip, the probe prints nothing and the
-// record reads as replaying "as written". Only the `replaced` case needs it:
-// `carried` is true exactly when the cycle's own `finalSha` is the tip its
-// reviewer round passed over, which is the tip in the working location, so
-// reading it there is already right. A cycle that reported no
-// `reviewedFinalSha` yields an empty one and the record falls back to that
-// read rather than inventing a tip.
+// record reads as replaying "as written". BOTH cases need it, from the same
+// mechanism read in two places: the cycle's `finalSha` moves only when a pass
+// packet is ADOPTED, while the working location's HEAD moves the moment that
+// pass commits. A pass that commits and is then rejected before adoption —
+// returning nothing, blocking, coming back unclean — leaves `carried` true over
+// a tip the working location has already advanced past. So each case cites the
+// tip the cycle reported for the round that judged it: `finalSha` for `carried`
+// (which `workReportReviewed` makes exactly that round's tip) and
+// `reviewedFinalSha` for `replaced`. A cycle that reported neither yields an
+// empty one and the record falls back to reading the tip rather than inventing
+// one.
 function reviewedMapOf(cycle) {
   const carried = Array.isArray(cycle.workReport) ? cycle.workReport : [];
-  if (cycle.workReportReviewed && carried.length) return { which: "carried", map: carried, sha: "" };
+  if (cycle.workReportReviewed && carried.length) return { which: "carried", map: carried, sha: typeof cycle.finalSha === "string" ? cycle.finalSha.trim() : "" };
   const judged = Array.isArray(cycle.reviewedWorkReport) ? cycle.reviewedWorkReport : [];
   if (judged.length) return { which: "replaced", map: judged, sha: typeof cycle.reviewedFinalSha === "string" ? cycle.reviewedFinalSha.trim() : "" };
   return { which: "none", map: [], sha: "" };
 }
-// The one sentence a REPLACED map's reason owes about its tip, in one place
-// because both cycle-error exits state it and they must not drift.
+// The one sentence a JUDGED map's reason owes about its tip, in one place
+// because four cycle-error exits state it and they must not drift. "May have
+// moved past" rather than "has": the tip is cited because the working location's
+// HEAD is not KNOWN to be the judged one, and both cases reach here with it
+// unmoved just as ordinarily as with it moved — a `replaced` pass that returned
+// different entries without committing, and a `carried` pass that was rejected
+// having committed nothing.
 const judgedTipClause = (judged) =>
   judged.sha
-    ? ` The \`final HEAD\` below is \`${judged.sha}\` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass has moved past.`
+    ? ` The \`final HEAD\` below is \`${judged.sha}\` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass may have moved past.`
     : " The `final HEAD` below is the tip standing in the working location, which is therefore NOT necessarily the tree that verdict was rendered over: the cycle reported no tip for the round that judged this map.";
 // The same fact in the one line a maintainer reads first. A record that failed
 // to post is the more important half: it means the map is in this result and
@@ -1860,13 +1934,13 @@ if (cycle.verdict === "error") {
   const judged = reviewedMapOf(cycle);
   const record = await leaveDispositionRecord(
     judged.which === "carried"
-      ? `the review cycle errored AFTER a reviewer round had passed over the dispositions below — its final confirmation pass stopped the cycle — so publication was refused: ${cycle.detail || "no detail reported"}`
+      ? `the review cycle errored AFTER a reviewer round had passed over the dispositions below — its final confirmation pass stopped the cycle — so publication was refused: ${cycle.detail || "no detail reported"}${judgedTipClause(judged)}`
       : judged.which === "replaced"
         ? `the review cycle errored after a later pass had SUPERSEDED the map a reviewer round passed over — replacing its entries, or committing a new tip under the same ones — so publication was refused: ${cycle.detail || "no detail reported"} The dispositions below are that judged map — the most recent one a reviewer actually passed over; the unjudged map the cycle carried out is in this run's result under \`dispositions\` and is deliberately not recorded, since a record is replayed rather than re-triaged.${judgedTipClause(judged)}`
         : "",
     judged.map,
     judged.which === "carried"
-      ? { rounds: cycle.rounds, reviewerStatus: "passed a round, after which the cycle errored", deviations: cycle.deviations }
+      ? { rounds: cycle.rounds, reviewerStatus: "passed a round, after which the cycle errored", deviations: cycle.deviations, judgedTip: judged.sha }
       : { rounds: cycle.rounds, reviewerStatus: "passed a round, after which a later pass superseded the map it judged and the cycle errored", deviations: cycle.deviations, judgedTip: judged.sha },
   );
   return {
@@ -2054,13 +2128,13 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
       const judged = reviewedMapOf(cycle);
       const record = await leaveDispositionRecord(
         judged.which === "carried"
-          ? `the post-rebase re-verification errored AFTER a reviewer round had passed over the dispositions below, so publication was refused: ${cycle.detail || "no detail reported"} They are the re-verification's own map, judged over the rebased tree.`
+          ? `the post-rebase re-verification errored AFTER a reviewer round had passed over the dispositions below, so publication was refused: ${cycle.detail || "no detail reported"} They are the re-verification's own map, judged over the rebased tree.${judgedTipClause(judged)}`
           : judged.which === "replaced"
             ? `the post-rebase re-verification errored after a later pass had SUPERSEDED the map its reviewer round passed over — replacing its entries, or committing a new tip under the same ones — so publication was refused: ${cycle.detail || "no detail reported"} The dispositions below are that judged map, rendered over the rebased tree; the unjudged map the cycle carried out is in this run's result under \`dispositions\` and is deliberately not recorded, since a record is replayed rather than re-triaged.${judgedTipClause(judged)}`
             : `the post-rebase re-verification errored with no judged map of its own to record — no reviewer round passed over a map with entries over the rebased tree — so publication was refused: ${cycle.detail || "no detail reported"} The dispositions below are the ones that PASSED review on the base the branch sat on before that replay; the re-verification's own map is in this run's result under \`dispositions\` and is deliberately not recorded, since a record is replayed rather than re-triaged.`,
         judged.which === "none" ? preRebaseCycle.workReport : judged.map,
         judged.which === "carried"
-          ? { rounds: cycle.rounds, reviewerStatus: "passed a round over the rebased tree, after which the cycle errored", deviations: cycle.deviations }
+          ? { rounds: cycle.rounds, reviewerStatus: "passed a round over the rebased tree, after which the cycle errored", deviations: cycle.deviations, judgedTip: judged.sha }
           : judged.which === "replaced"
             ? { rounds: cycle.rounds, reviewerStatus: "passed a round over the rebased tree, after which a later pass superseded the map it judged and the cycle errored", deviations: cycle.deviations, judgedTip: judged.sha }
             : { rounds: preRebaseCycle.rounds, reviewerStatus: "Pass, on the base the branch sat on before the replay", deviations: preRebaseCycle.deviations },
@@ -2688,18 +2762,31 @@ const pushNoop = !published && !landed && !!(publishReport && publishReport.push
 // on a genuinely COMPLETE publication.
 // That is deliberately the two kinds the brief NEVER acts on rather than a copy
 // of its whole per-kind table here — the residual the publication gate records
-// above names why a second copy of that table is the wrong trade. The one
-// remaining policy case, a push-back or a deferral left unresolved on a HUMAN
-// thread, turns on `authorIsBot` per disposition and stays a hedge on the
-// resolve line rather than a third rule to drift.
-const owedKeys = workReport.filter((d) => d && d.type === "review-thread" && d.kind !== "ambiguous-skipped").map(dispKeyOf);
+// above names why a second copy of that table is the wrong trade.
+// The RESOLVE is owed over a narrower set again, and for the same reason: step 4
+// resolves a `push-back` only when the thread's author is a bot and leaves a
+// human one open unless the maintainer explicitly authorized otherwise, and it
+// resolves a `deferred-to-task` on the same condition. So a human push-back or
+// deferral is unresolved BY POLICY on a complete publication, and counting it as
+// debt — or telling its entry below that a resolve is still owed — asks the next
+// turn for the one action the brief forbids. That is two facts read off each
+// disposition (`kind`, `authorIsBot`), not a third table: what step 4 makes
+// conditional is exactly what is not counted.
+const isReviewThreadOwed = (d) => !!d && d.type === "review-thread" && d.kind !== "ambiguous-skipped";
+// A human deferral MAY be resolved where the maintainer directed the deferral,
+// which no field here records — so this set is what publication is KNOWN to owe,
+// and the entry standing below says the resolve turns on that authorization
+// rather than that it is owed.
+const isResolveOwed = (d) => isReviewThreadOwed(d) && !((d.kind === "push-back" || d.kind === "deferred-to-task") && d.authorIsBot === false);
+const owedKeys = workReport.filter(isReviewThreadOwed).map(dispKeyOf);
+const resolveKeys = workReport.filter(isResolveOwed).map(dispKeyOf);
 const owedReplies = owedKeys.filter((k) => !(accountByKey.get(k) || {}).replied).length;
-const owedResolves = owedKeys.filter((k) => !(accountByKey.get(k) || {}).resolved).length;
+const owedResolves = resolveKeys.filter((k) => !(accountByKey.get(k) || {}).resolved).length;
 const outstanding = published
   ? ""
   : [
       owedReplies ? `${owedReplies} of ${owedKeys.length} thread(s) still owed their reply` : "",
-      owedResolves ? `${owedResolves} not resolved (which for a push-back or a deferral on a human thread is the policy rather than a debt)` : "",
+      owedResolves ? `${owedResolves} of ${resolveKeys.length} not resolved` : "",
       summaryUrl ? "" : "the Summary comment",
     ].filter(Boolean).join(", ") || "no reply, resolve or Summary comment — publication stopped past all of them, so its reason above is what is left to act on";
 // Where each entry stands, one line per disposition, matched to it by key. The
@@ -2717,17 +2804,27 @@ const standingLine = (d) => {
   // standing of "still owed" on one of them would have the replay turn post
   // what the publish brief forbids — a thread reply an item has no thread for,
   // or a reply on a thread the run deliberately left silent and open.
-  if (!(d && d.type === "review-thread" && d.kind !== "ambiguous-skipped")) {
+  if (!isReviewThreadOwed(d)) {
     const why = d && d.type === "standalone"
       ? "a standalone item is addressed in the Summary comment alone, never by a thread reply, and is never resolved as a thread"
       : "an ambiguous-skipped thread is deliberately left without a reply and left open";
     return `${label} — NOTHING is owed on it: ${why}.${o && (o.replied || o.resolved) ? " Its account nevertheless reports one, so check the thread on the PR before acting." : ""}`;
   }
-  return `${label} — ${o && o.replied ? "reply ALREADY POSTED — do not post it again" : "no reply reached the PR — the reply below is still owed"}; ${o && o.resolved ? "thread ALREADY RESOLVED — do not resolve it again" : "resolve still owed"}.`;
+  // The reply is owed on every entry that reaches here; the RESOLVE is the half
+  // that turns on the thread rather than the kind, so an unresolved human
+  // push-back or deferral is told it is policy — the same fact the count above
+  // reads — rather than told a resolve is still owed, which is the line the next
+  // turn acts on entry by entry and the one thing step 4 forbids it to do.
+  const resolveStanding = o && o.resolved
+    ? "thread ALREADY RESOLVED — do not resolve it again"
+    : isResolveOwed(d)
+      ? "resolve still owed"
+      : "resolve NOT owed — a human push-back or deferral is left open unless the maintainer explicitly authorized resolving it; do not resolve it on this record's word";
+  return `${label} — ${o && o.replied ? "reply ALREADY POSTED — do not post it again" : "no reply reached the PR — the reply below is still owed"}; ${resolveStanding}.`;
 };
 const perThread = published || !(landed || accountDefect) ? [] : workReport.map(standingLine);
 const publishRecord = published
-  ? {}
+  ? await spendPriorRecord(summaryUrl)
   : await leaveDispositionRecord(
       `publication did not complete: ${stopReason}${accountDefect
         ? ` — and WHAT REACHED ORIGIN IS UNKNOWN: ${accountDefect}. Treat nothing below as posted and nothing as unposted until the PR itself says which.`
@@ -2786,6 +2883,13 @@ const notes = [
     : null,
   droppedForNoContribution.length
     ? `ping-contributing: did not re-ping ${droppedForNoContribution.join(", ")} — no new finding from ${droppedForNoContribution.length > 1 ? "them" : "it"} this round.`
+    : null,
+  // Only ever present on the published path, and only where a prior record was
+  // there to spend. A record left standing over a map that is now published is
+  // replayed by the next run, so a failure to spend it is the maintainer's to
+  // see rather than a silent one.
+  publishRecord.spentRecord && !publishRecord.spentRecord.posted
+    ? `The prior disposition record was not spent (${publishRecord.spentRecord.detail}); one left standing over a published map is replayed by the next run.`
     : null,
 ].filter(Boolean);
 return {
