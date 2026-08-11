@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 199;
+const EXPECTED_CHECKS = 200;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1624,6 +1624,13 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
           /`status: not published` is false once part of the map is on origin/,
           /a map that landed through the API with no successful push/,
           /leaves the tips still LOCAL-ONLY/,
+          // The surface the tips claim is attributed to: the replacement LINE
+          // carries the clause, in the two states whose landed list cannot —
+          // the renderer's side of the same fact is pinned where the rendered
+          // record line is read, so the two cannot drift apart again.
+          /so the line appends that the tips above are still LOCAL-ONLY/,
+          /so the line appends that the tips above are already on origin/,
+          /the one state that appends no tips clause, the landed list already saying it/,
           /reached origin: <what landed> — still outstanding: <what is left>/,
           /What counts as landed is what \*\*is on the PR\*\*, never what this run itself did/,
           /a reply an earlier run posted and a resolve already done are landed too/,
@@ -3494,7 +3501,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   check(
     "a reply that is on the PR is landed whichever run posted it — a no-op push over one renders as published in part, while the same push over a PR carrying none does not",
     /status: published in part/.test(noopPrior) &&
-      /^reached origin: 1 thread reply — still outstanding: 1 of 1 not resolved, the Summary comment$/m.test(noopPrior) &&
+      /^reached origin: 1 thread reply — still outstanding: 1 of 1 not resolved, the Summary comment — and the tips above are already on origin, this run having put nothing there: its push was an `Everything up-to-date` no-op$/m.test(noopPrior) &&
       // The push moved nothing, so no push clause may be named as landed, and
       // the no-op line the control row prints belongs to the control row alone.
       !/the push, which advanced the remote branch/.test(noopPrior) &&
@@ -4016,6 +4023,26 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       unpushed: (unpushedClaimBrief.match(/and its tips are [^\n]*/) || ["no tips clause"])[0].slice(0, 120),
       partWay: (partWay.match(/and its tips are [^\n]*/) || ["no tips clause"])[0].slice(0, 60),
       noopPrior: (noopPrior.match(/and its tips are [^\n]*/) || ["no tips clause"])[0].slice(0, 60),
+    }),
+  );
+
+  // And the RECORD LINE carries the same tips fact durably, which is the surface
+  // the skill's part-way paragraph attributes it to — the brief's lead dies with
+  // the run, while the `reached origin:` line is what a later turn replays — so
+  // this pin reads that line rather than the lead: the API-landed shape appends
+  // its still-LOCAL-ONLY clause, the no-op shape appends already-on-origin
+  // (asserted in full on its own row above), and the advanced shape appends
+  // nothing, its landed list already naming the push that put the tips there.
+  check(
+    "the replacement line itself says where the push leaves the tips — still LOCAL-ONLY appended on an API-landed map, already-on-origin appended on a no-op push, nothing appended where the landed push already says it",
+    /^reached origin: [^\n]+ — and the tips above are still LOCAL-ONLY: what landed rode the API with no successful push, so nothing of the branch is on origin$/m.test(unpushedClaimBrief) &&
+      /^reached origin: [^\n]+ — and the tips above are already on origin, this run having put nothing there: its push was an `Everything up-to-date` no-op$/m.test(noopPrior) &&
+      /^reached origin: the push, which advanced the remote branch — still outstanding: [^\n]+$/m.test(partWay) &&
+      !/— and the tips above are/.test(partWay),
+    JSON.stringify({
+      unpushedLine: (unpushedClaimBrief.match(/^reached origin: .*/m) || ["no origin line at all"])[0].slice(-130),
+      noopPriorLine: (noopPrior.match(/^reached origin: .*/m) || ["no origin line at all"])[0].slice(-130),
+      partWayLine: (partWay.match(/^reached origin: .*/m) || ["no origin line at all"])[0],
     }),
   );
 

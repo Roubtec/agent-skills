@@ -800,7 +800,7 @@ function recordPrompt(packet, dispositions, facts) {
   // replay, so it leaves the same record — but `status: not published` would be
   // a lie once part of the map is on origin and only the rest failed, and what
   // "this run pushed nothing" claims of the tips follows the push rather than
-  // the map (the LANDED-lead note below). `landed` is what the
+  // the map (the LANDED-rendering note below). `landed` is what the
   // publisher's account puts ON the PR — end state, so a reply an earlier run
   // posted counts, which is why the lead below says the map is part-way rather
   // than that this run put it there — `outstanding` what is still owed, and
@@ -817,12 +817,16 @@ function recordPrompt(packet, dispositions, facts) {
   // something landed" is the ORDINARY shape of a part-way stop rather than an
   // exotic one. `perThread` is the standing of each entry, keyed to the
   // dispositions by the caller (never by `ref`, which two threads can share).
-  // The LANDED lead reads the push states too, for its one claim about the
-  // tips: replies and resolves land through the API, so a map part-way on the
-  // PR does not imply a push — a refused completion claim whose own account
-  // says no push succeeded is landed (its replies are on the PR) while its
-  // tips are still local-only, and a lead saying "NOT local-only" over that
-  // shape overstated the one thing its author might act on.
+  // The LANDED rendering reads the push states too, for its one claim about
+  // the tips — in the lead, and again on the record's own `reached origin`
+  // line, which is the durable copy a later turn acts on and so must not leave
+  // the tips fact to the brief that dies with this run: replies and resolves
+  // land through the API, so a map part-way on the PR does not imply a push —
+  // a refused completion claim whose own account says no push succeeded is
+  // landed (its replies are on the PR) while its tips are still local-only,
+  // and a record silent about that would send its reader looking for commits
+  // origin does not have. Only the `advanced` state appends no tips clause
+  // there: its landed list already names the push that put the tips on origin.
   // What an unusable account does NOT put in doubt is the push, which is
   // reported positively and in three states rather than two — so the third
   // state's own rendering says which of them holds and reserves "unknown" for
@@ -923,7 +927,11 @@ base ${packet.pr.base} | validation <what ran> | reviewer ${facts.reviewerStatus
 ${unknown
     ? `${pushCase.origin}: ${unknown}; the publisher pushes BEFORE it replies, so a stop with something already on origin is the ordinary shape of this failure: check the PR itself before acting on any tip or any entry below`
     : landed
-      ? `reached origin: ${landed} — still outstanding: ${outstanding}`
+      ? `reached origin: ${landed} — still outstanding: ${outstanding}${facts.pushState === "advanced"
+        ? ""
+        : facts.pushState === "noop"
+          ? " — and the tips above are already on origin, this run having put nothing there: its push was an \`Everything up-to-date\` no-op"
+          : " — and the tips above are still LOCAL-ONLY: what landed rode the API with no successful push, so nothing of the branch is on origin"}`
       : facts.pushNoop
         ? "this run changed NOTHING on origin: its push was an `Everything up-to-date` no-op, so the tips above are already on origin while no reply, resolve or Summary comment reached it"
         : "the tips above are LOCAL ONLY — this run pushed nothing, so they are not on origin"}
