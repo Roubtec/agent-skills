@@ -1741,6 +1741,10 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "idempotence — why two points cannot double-apply": /cannot double-apply/.test(brief),
     "the merge guard — a merge that introduced its own content halts rather than being silently flattened":
       /git rev-list --merges/.test(brief) && /--remerge-diff/.test(brief) && /On such a merge rebase NOTHING/.test(brief),
+    "the octopus blind spot — a merge the probe cannot answer for halts unprobed instead of reading as a pure join":
+      /octopus/.test(brief) && /declining to answer/.test(brief) && /treat such a merge as content-bearing without probing it/.test(brief),
+    "the replay confined to this branch — `--no-update-refs` on the rebase it runs, against an inherited `rebase.updateRefs=true`":
+      /git rebase --no-update-refs <the effectiveBase OID>/.test(brief) && /rebase\.updateRefs=true/.test(brief),
     "the delivery-tier validation after a replay": /the project's build AND its test suite/.test(brief),
     "reporting the conflicts it resolved and the commits it skipped": /git rebase --skip/.test(brief) && /Narrate one line each in `detail`/.test(brief),
     "the halt reported with a question naming the conflict it turns on": /report `halted: true` with a `question` naming the conflicting files, the offending commit/.test(brief),
