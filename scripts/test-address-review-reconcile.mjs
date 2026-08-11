@@ -113,7 +113,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 114;
+const EXPECTED_CHECKS = 118;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1753,6 +1753,46 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     absent.length === 0,
     `missing: ${absent.join("; ")}`,
   );
+}
+
+// --- The mirrors' restatements of the rebase halt ----------------------------
+// Two consecutive review rounds landed the same class of finding in the
+// `address-review` SKILL.md pair: prose equating the delegated rebase's halt
+// with an aborted conflict, written before the merge guard added a second halt
+// source that aborts nothing (a content-bearing merge met before any replay).
+// The canonical rule already forbids the shape — `review-cycle` → "The
+// delegated rebase step" is "defined here and referenced rather than restated"
+// — so the structural fix makes the two spots that kept restating it (the
+// `hands-off`+default-rebase flag bullet and the Hands-off mode stop list)
+// DEFER to step 2's definitional bullet by reference, enumerating no cases of
+// their own. This pin is what keeps a later round from restoring the closed
+// enumeration as the obvious simplification, and both halves are pinned: the
+// deferring spots still defer (each names the definitional bullet instead of a
+// case list), and the conflict-only phrasings the two spots carried do not come
+// back anywhere in either mirror. It reads the SKILL.md pair rather than the
+// workflow source because the workflow's own restatements are schema and brief
+// text the checks above already exercise, while nothing else reads the mirrors.
+{
+  const mirrors = {
+    "plugins mirror": join(here, "..", "plugins", "dev-skills", "skills", "address-review", "SKILL.md"),
+    "codex mirror": join(here, "..", "codex", "dev-skills", "skills", "address-review", "SKILL.md"),
+  };
+  for (const [name, path] of Object.entries(mirrors)) {
+    const text = readFileSync(path, "utf8");
+    const deferrals = (text.match(/step 2's "A halt is a stop, not a guess" defines the cases/g) || []).length;
+    const bulletDefers = /defines the cases, and this bullet does not restate them/.test(text);
+    const listDefers = /defines the cases, and this list does not restate them/.test(text);
+    check(
+      `${name}: the flag bullet and the hands-off stop list defer to step 2's halt definition instead of restating its cases`,
+      deferrals >= 2 && bulletDefers && listDefers,
+      `deferrals: ${deferrals}; flag bullet defers: ${bulletDefers}; stop list defers: ${listDefers}`,
+    );
+    check(
+      `${name}: no prose equates the delegated rebase's halt with an aborted conflict`,
+      !/delegated rebase aborts cleanly/.test(text) && !/Non-trivial rebase conflict/.test(text) && !/sharp edge is a conflict/.test(text),
+      "a conflict-only restatement of the halt is back",
+    );
+  }
 }
 
 check(`suite ran all ${EXPECTED_CHECKS} checks`, ran === EXPECTED_CHECKS, `ran ${ran}`);
