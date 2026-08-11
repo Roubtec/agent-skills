@@ -1316,15 +1316,15 @@ if (cycle.verdict === "error") {
 // refresh predates its last fix, and the re-verification below runs in `full`
 // mode and is told to fix replay fallout, so its fixer commits land after this
 // point's rebase with nothing rebasing again before publication. Closing it
-// would mean LOOPING this point and the re-verification until a point reports a
-// no-op — which is reachable, and is what the very next point reports whenever
-// the base did not move during one re-verification. What a bounded round budget
-// cannot promise is reaching it INSIDE the budget: a base that keeps moving
-// costs a re-verification per pass until the budget runs out and the run stops
-// unpublished. This pipeline runs the pair exactly ONCE, so the residual is that
-// one cycle wide — the re-verification's own fixes sit on a base pinned before
-// them — and the exact-tree condition is the one this pipeline keeps and
-// publication rests on.
+// would mean LOOPING this point and the re-verification until the last base
+// refresh postdates the last fix — which is reachable, and is what one
+// re-verification that commits no fixes leaves behind. What a bounded round
+// budget cannot promise is reaching it INSIDE the budget: a base that keeps
+// moving, each replay drawing another fix, costs a re-verification per pass
+// until the budget runs out and the run stops unpublished. This pipeline runs
+// the pair exactly ONCE, so the residual is that one cycle wide — the
+// re-verification's own fixes sit on a base pinned before them — and the
+// exact-tree condition is the one this pipeline keeps and publication rests on.
 // It runs on `no-push` runs too, exactly as the skill's step 5 does: the local
 // branch is left on the fresh base either way, and a dry run that reported a
 // pass on a tree it then rebased would be reporting on nothing.
