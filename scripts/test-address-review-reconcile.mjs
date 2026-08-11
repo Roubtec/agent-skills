@@ -113,7 +113,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 92;
+const EXPECTED_CHECKS = 105;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -160,7 +160,10 @@ const REACHED_CYCLE = Symbol("nested review cycle reached");
 // brief saves it before anything is replayed and orders the step not to skip it,
 // the caller refuses to adopt a report without one, and the stops name it to the
 // maintainer — a fixture that omitted it would have this suite asserting a
-// promise it never made the report keep.
+// promise it never made the report keep. It carries the read-back beside it for
+// the same reason: the name alone says nothing about whether the ref exists or
+// what it points at, so the report the caller accepts is the one that shows it
+// resolving to the tip the rebase started from.
 const REBASE_NOOP = {
   ok: true,
   halted: false,
@@ -169,6 +172,7 @@ const REBASE_NOOP = {
   before: "cafebabe",
   after: "cafebabe",
   recoveryRef: "refs/pre-rebase/feature/x/20260809-090000",
+  recoveryTip: "cafebabe",
   validationPassed: true,
   detail: "already on the pinned base; nothing replayed",
 };
@@ -183,6 +187,7 @@ const REBASE_REPLAY = {
   before: "cafebabe",
   after: "d00dfeed",
   recoveryRef: "refs/pre-rebase/feature/x/20260809-121314",
+  recoveryTip: "cafebabe",
   validationPassed: true,
   detail: "replayed 2 commits onto the fresh base; build and tests passed",
 };
@@ -778,7 +783,13 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       ((clean.result || {}).reconcile || {}).outcome === "not-applicable",
     JSON.stringify(clean.result),
   );
-  const working = await run(gathered({ ...off, reconcile: { outcome: "not-applicable" }, items: [ITEM] }), { args: SELECTED });
+  // This is the one scenario here that reaches a rebase point, and the rebase
+  // report names the branch it saved a recovery ref FOR — which the caller checks
+  // against the branch it dispatched. So an off-shoot run's report carries the
+  // off-shoot's ref: the shared fixture's `feature/x` one would be another
+  // branch's backup, which is exactly what that check refuses.
+  const offRebase = { rebase: { ...REBASE_NOOP, recoveryRef: `refs/pre-rebase/${off.workingBranch}/20260809-090000` } };
+  const working = await run(gathered({ ...off, reconcile: { outcome: "not-applicable" }, items: [ITEM] }), { args: SELECTED, ...offRebase });
   check("off-shoot `not-applicable` with threads proceeds to the nested cycle", working.status === "reached-cycle", working.status);
   check(
     "and the cycle runs on the off-shoot, not on the PR's head ref",
@@ -808,6 +819,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
 // the packet that merely claims it.
 {
   const off = { workingBranch: "feature/x-offshoot", reconcile: { outcome: "not-applicable" }, items: [ITEM] };
+  // Every selecting row below reaches a rebase point, and the caller checks the
+  // recovery ref the rebase reports against the branch it dispatched. So these
+  // runs need the OFF-SHOOT's ref; the shared fixture's `feature/x` one is
+  // another branch's backup and would stop every row on `rebase-unsaved-
+  // recovery-ref` — a refusal that says nothing about the token read under test.
+  const offRebase = { rebase: { ...REBASE_NOOP, recoveryRef: `refs/pre-rebase/${off.workingBranch}/20260809-090000` } };
   const unselected = await run(gathered(off));
   const u = unselected.result || {};
   check(
@@ -849,7 +866,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   ];
   const refused = [];
   for (const req of selections) {
-    const r = await run(gathered(off), { args: req });
+    const r = await run(gathered(off), { args: req, ...offRebase });
     if (r.status !== "reached-cycle") refused.push(`${req} -> ${r.status}`);
   }
   check(
@@ -884,7 +901,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   ];
   const stopped = [];
   for (const req of incidental) {
-    const r = await run(gathered(off), { args: req });
+    const r = await run(gathered(off), { args: req, ...offRebase });
     if (r.status !== "reached-cycle") stopped.push(`${req} -> ${r.status}`);
   }
   check(
@@ -1155,6 +1172,53 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     noWayBack.status === "rebase-unsaved-recovery-ref" && noWayBack.seen.cycleOpts === null,
     JSON.stringify({ status: noWayBack.status, cycle: noWayBack.seen.cycleOpts }),
   );
+  // And the values a PREFIX test would wave through, which are worse than the
+  // absent one above because they read as an answer: a truncated ref, and a ref
+  // that is somebody else's backup. Neither names the backup of THIS replay, so
+  // adopting either publishes a rewritten history whose advertised way back does
+  // not exist or restores another branch.
+  for (const [label, ref] of [
+    ["truncated to the namespace", "refs/pre-rebase/"],
+    ["naming another branch's backup", "refs/pre-rebase/feature/other/20260809-121314"],
+    ["carrying no timestamp", "refs/pre-rebase/feature/x/main"],
+  ]) {
+    const misnamed = await run(gathered(withWork), { rebase: { ...REBASE_REPLAY, recoveryRef: ref } });
+    check(
+      `a recovery ref ${label} stops the run, dispatching nothing`,
+      misnamed.status === "rebase-unsaved-recovery-ref" && misnamed.seen.cycleOpts === null,
+      JSON.stringify({ status: misnamed.status, cycle: misnamed.seen.cycleOpts }),
+    );
+    check(
+      `and the stop stops promising the maintainer a saved tip it just refused (${label})`,
+      !/saved at/.test((misnamed.result || {}).note || ""),
+      JSON.stringify((misnamed.result || {}).note),
+    );
+  }
+  // The other half: a perfectly-shaped name still says nothing about whether the
+  // ref was created or where it points. The brief reads it back for exactly
+  // that, so a report that cannot show the ref resolving to the tip the rebase
+  // started from is refused on the evidence rather than accepted on the string.
+  const unverifiedNotes = [];
+  for (const [label, patch] of [
+    ["resolving to some other commit than the tip it started from", { recoveryTip: "0badf00d" }],
+    ["reporting no resolved tip at all", { recoveryTip: undefined }],
+    ["reporting no pre-rebase tip to check it against", { before: undefined }],
+  ]) {
+    const unverified = { ...REBASE_REPLAY, ...patch };
+    for (const [k, v] of Object.entries(patch)) if (v === undefined) delete unverified[k];
+    const bad = await run(gathered(withWork), { rebase: unverified });
+    unverifiedNotes.push((bad.result || {}).note || "");
+    check(
+      `a recovery ref ${label} stops the run, dispatching nothing`,
+      bad.status === "rebase-unverified-recovery-ref" && bad.seen.cycleOpts === null,
+      JSON.stringify({ status: bad.status, cycle: bad.seen.cycleOpts }),
+    );
+  }
+  check(
+    "and none of those stops promises the maintainer a pre-rebase tip saved at the ref it just refused",
+    unverifiedNotes.length === 3 && unverifiedNotes.every((n) => !/saved at/.test(n)),
+    JSON.stringify(unverifiedNotes),
+  );
   // The rebase brief hands the delegated step the base repository's identity as
   // this PR's own URL, which makes that field load-bearing rather than
   // decorative: absent, the brief would interpolate `undefined` and the step
@@ -1193,6 +1257,47 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       JSON.stringify({ status: unpinned.status, cycle: unpinned.seen.cycleOpts }),
     );
   }
+  // The opt-out is read out of free prose, and one thing in that prose is not
+  // prose at all: `rebase on top of <target>` carries a REF NAME, and
+  // `feature/no-rebase` is an ordinary one. Read as written it suppresses the
+  // very rebase the request asked for and silently drops the target the gather
+  // reported — one instruction, both halves of it defeated. Both directions are
+  // driven, because the trap in fixing this is trading the false positive for a
+  // false negative: a request that negates the phrase itself is a real opt-out
+  // and must stay one.
+  const targetNamedNoRebase = await run(
+    { ...gathered(withWork), rebaseTarget: "feature/no-rebase" },
+    { args: "no-push rebase on top of feature/no-rebase" },
+  );
+  check(
+    "a rebase TARGET whose branch name contains `no-rebase` does not opt the run out of rebasing",
+    targetNamedNoRebase.status === "reached-cycle" &&
+      targetNamedNoRebase.seen.agentLabels.join(",") === "gather,rebase-pre-fix" &&
+      /The target is `feature\/no-rebase`, named outright/.test(targetNamedNoRebase.seen.rebasePrompts[0] || ""),
+    JSON.stringify({ labels: targetNamedNoRebase.seen.agentLabels, brief: (targetNamedNoRebase.seen.rebasePrompts[0] || "").slice(0, 120) }),
+  );
+  const negatedTheTarget = await run(gathered(withWork), { args: "no-push do not rebase on top of main" });
+  check(
+    "while a request that NEGATES the phrase still opts out — the value is elided, the words are not",
+    negatedTheTarget.status === "reached-cycle" &&
+      negatedTheTarget.seen.agentLabels.join(",") === "gather" &&
+      negatedTheTarget.seen.cycleOpts.opts.base === GATHERED_BASE_OID,
+    JSON.stringify({ labels: negatedTheTarget.seen.agentLabels, base: negatedTheTarget.seen.cycleOpts && negatedTheTarget.seen.cycleOpts.opts.base }),
+  );
+  // The same defect on the flag that decides whether this run touches the PR at
+  // all: `fix/no-push` is an equally ordinary ref component, and read out of the
+  // target it turns a publishing run into a local-only one that reports success
+  // having pushed nothing. One elision covers every flag, so one direction of it
+  // is driven here rather than the whole set.
+  const targetNamedNoPush = await run(gathered(withWork), {
+    args: "rebase on top of fix/no-push",
+    cycles: [CYCLE_PASS],
+  });
+  check(
+    "and a target branch containing `no-push` does not suppress publication",
+    targetNamedNoPush.seen.agentLabels.includes("publish"),
+    JSON.stringify({ status: targetNamedNoPush.status, labels: targetNamedNoPush.seen.agentLabels }),
+  );
 }
 
 // --- The pre-push point and its re-verification ------------------------------
@@ -1524,6 +1629,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   const reportSentence = (brief.match(/Report `ok`[\s\S]*?`question` when you halted\./) || [""])[0];
   const nuggetClauses = {
     "saving the recovery ref before the first replay, and not skipping it": /git update-ref "refs\/pre-rebase\//.test(brief) && /do not skip it/.test(brief),
+    "reading that ref back and reporting what it resolves to, so the name is not the evidence":
+      /must print `\$before`/.test(brief) && /that read-back OID as `recoveryTip`/.test(brief),
     "verifying the target is a commit, and the full OID it prints": /rev-parse --verify/.test(brief) && /never an abbreviation/.test(brief),
     "the working location it runs in — verified first in a worktree, never switched inline":
       /`cd` into it and verify `git rev-parse --show-toplevel` prints exactly that path/.test(briefInWorktree) &&
@@ -1535,7 +1642,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "the delivery-tier validation after a replay": /the project's build AND its test suite/.test(brief),
     "reporting the conflicts it resolved and the commits it skipped": /git rebase --skip/.test(brief) && /Narrate one line each in `detail`/.test(brief),
     "the halt reported with a question naming the conflict it turns on": /report `halted: true` with a `question` naming the conflicting files, the offending commit/.test(brief),
-    "the packet it hands back": ["effectiveBase", "recoveryRef", "validationPassed", "before", "after"].every((f) => reportSentence.includes(f)),
+    "the packet it hands back": ["effectiveBase", "recoveryRef", "recoveryTip", "validationPassed", "before", "after"].every((f) => reportSentence.includes(f)),
     "and nothing else changed — no commits, no push, no PR mutation": /Change nothing else/.test(brief),
   };
   const absent = Object.entries(nuggetClauses).filter(([, present]) => !present).map(([name]) => name);

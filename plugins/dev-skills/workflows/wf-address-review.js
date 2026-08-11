@@ -206,9 +206,10 @@ const REBASE_SCHEMA = {
     question: { type: "string", description: "REQUIRED when halted: the conflicting files, the offending commit, and what the judgment turns on. It is reported as this run's open question, so write it for the maintainer rather than as a log line." },
     effectiveBase: { type: "string", description: "The full OID actually rebased onto, as `git rev-parse --verify <target>^{commit}` printed it — a commit, never a ref name and never an abbreviation. REQUIRED whenever ok is true; the caller rejects anything that is not a full hex OID (40 characters, or 64 in a SHA-256 repository) and stops the run, because every delegation range afterwards is taken against this value." },
     noop: { type: "boolean", description: "True when the rebase replayed nothing and the tip is unchanged (the pinned base was already an ancestor of HEAD) — the common and cheap outcome, and what makes two rebase points safe. It is the one value that switches checks off (no validation here, no re-verification of the rebased tree at the pre-push point), so the caller adopts it only where `before` and `after` are both reported and equal, and stops the run otherwise." },
-    before: { type: "string", description: "Tip SHA before the rebase. REQUIRED whenever noop is true — it and `after` are the evidence the caller accepts the no-op on." },
+    before: { type: "string", description: "Tip SHA before the rebase — the pre-rebase tip step 3 saved. REQUIRED whenever ok is true: the caller checks the recovery ref against it, and where noop is true it and `after` are also the evidence the no-op is accepted on." },
     after: { type: "string", description: "Tip SHA after it. REQUIRED whenever noop is true, and equal to `before` there; a no-op naming a moved tip, or naming none, is treated as an unevidenced claim and stops the run." },
-    recoveryRef: { type: "string", description: "The `refs/pre-rebase/<branch>/<ts>` ref saved before the first replay, so a report can name it. REQUIRED whenever ok is true — step 3 saves it unconditionally and is told not to skip it, and every stop this point can reach promises the maintainer the pre-rebase tip is saved at this ref by name; the caller rejects a report that cannot name one and stops the run rather than adopting a replay with no way back." },
+    recoveryRef: { type: "string", description: "The recovery ref saved before the first replay, written in full: exactly `refs/pre-rebase/<the branch you rebased>/<the UTC timestamp>`, nothing truncated. REQUIRED whenever ok is true — step 3 saves it unconditionally and is told not to skip it, and every stop this point can reach promises the maintainer the pre-rebase tip is saved at this ref by name. The caller checks the whole name against the branch it dispatched and the timestamp shape the brief stamps, because a truncated or mistyped value names no backup of this replay while still starting with the right characters." },
+    recoveryTip: { type: "string", description: "The OID `recoveryRef` resolves to, read back with `git rev-parse --verify` AFTER the `update-ref`. REQUIRED whenever ok is true, and equal to `before`. A name is a way back only where it is seen resolving to the tip the rebase started from: a ref that was never created, or one left over from another branch's replay, is a report the caller refuses rather than a recovery point." },
     validationPassed: { type: "boolean", description: "Whether the post-rebase build/tests passed. Report `true` for a no-op rebase, which runs none. A rebase that replayed anything must report `true` here to go on: the caller requires that value positively, so `false` and an absent field stop the run alike, before any review verdict or push rests on the replay." },
     detail: { type: "string", description: "One line: the target, what was replayed, skipped or resolved, and what validation ran." },
   },
@@ -445,7 +446,7 @@ Rebasing twice in one run is deliberate and cannot double-apply: each point pins
 
 1. **Preflight.** \`git status --porcelain\` must print nothing AND no Git operation may be in progress — \`git rev-parse --git-path rebase-merge\` and \`rebase-apply\` for an existing path, plus \`MERGE_HEAD\`, \`CHERRY_PICK_HEAD\`, \`REVERT_HEAD\`, \`BISECT_LOG\` (a tree left mid-cherry-pick prints empty porcelain). Either failing is \`ok: false\` with what you found in \`detail\`. Stash nothing, clean nothing, force nothing.
 2. **Pin the base.** ${pin} Report exactly that full OID as \`effectiveBase\` and rebase onto THAT OID, never onto the name, and never an abbreviation of it: a short id is a prefix, and a growing repository can make one match a second object, so the caller rejects anything but the full length. The name is not an answer: \`origin/<base>\` moves whenever anything else pushes or fetches, and every range this run delegates afterwards is taken against \`effectiveBase\`, so a name would bound a reviewer's diff at a tip this branch was never rebased onto. The caller rejects a non-commit \`effectiveBase\` and stops the run.
-3. **Save the recovery ref.** \`current_branch="$(git branch --show-current)"\` (require it non-empty), \`ts="$(date -u +%Y%m%d-%H%M%S)"\`, then \`git update-ref "refs/pre-rebase/$current_branch/$ts" HEAD\`. That is the one \`update-ref\` this assignment spells out and the run's only rebase recovery ref — do not skip it, and report it as \`recoveryRef\`.
+3. **Save the recovery ref, then read it back.** \`current_branch="$(git branch --show-current)"\` (require it non-empty), \`ts="$(date -u +%Y%m%d-%H%M%S)"\`, \`before="$(git rev-parse --verify HEAD)"\`, then \`git update-ref "refs/pre-rebase/$current_branch/$ts" "$before"\`. That is the one \`update-ref\` this assignment spells out and the run's only rebase recovery ref — do not skip it. Then prove it is there and points where you say: \`git rev-parse --verify "refs/pre-rebase/$current_branch/$ts^{commit}"\` must print \`$before\`. Report the ref path IN FULL as \`recoveryRef\` — \`refs/pre-rebase/\` then this branch then the timestamp, nothing truncated and no other branch's — that read-back OID as \`recoveryTip\`, and the pre-rebase tip as \`before\`. The caller checks the three against each other, so a ref it cannot see resolve to that tip stops the run instead of standing as this replay's only way back.
 4. **Rebase:** \`git rebase <the effectiveBase OID>\`. Git's patch-id detection drops commits the base already carries. If nothing was replayed and the tip is unchanged, that is the expected no-op: report \`noop: true\` with \`before\` equal to \`after\`, run no validation, and you are done. Those two tips are the evidence, not decoration: \`noop: true\` is what tells the caller to run no validation on this point and to spend no reviewer round re-verifying the tree afterwards, so the caller adopts it only where both are reported and equal, and stops the run on a no-op claim that names a moved tip or names none.
 5. **Conflicts — by hunk, in place.** Preserve cleanly auto-merged changes elsewhere in each file. Whole-file \`git checkout --ours\`/\`--theirs\` is safe ONLY after inspecting the merged result and confirming the file carries no cleanly auto-merged content from the other side; otherwise it silently deletes a sibling's already-shipped behavior with no conflict marker left behind.
    - TRIVIAL (import/whitespace/formatting collisions, pure additions, or a patch the new base already represents) → resolve in-file and \`git add\` + \`git rebase --continue\`, or \`git rebase --skip\` for an already-represented commit. Narrate one line each in \`detail\`.
@@ -454,7 +455,7 @@ Rebasing twice in one run is deliberate and cannot double-apply: each point pins
     ? "A failure here stops the run before the review verdict or the push can rest on the replay"
     : "A failure here stops the run rather than handing a fixer a branch that does not build for reasons it did not cause"} — report it rather than fixing it, and name the recovery ref so the maintainer can get back. If you redirect any build output to a file, create a UNIQUE directory for it first, OUTSIDE the checkout (\`mktemp -d "\${TMPDIR:-/tmp}/rebase-${point}.XXXXXX"\`) — never a fixed shared scratchpad name, since one session's agents share that directory and a fixed one has crossed results between concurrent runs before.
 
-Change nothing else: no commits of your own, no push, no PR mutation, no branch creation or deletion. Report \`ok\`, \`halted\`, \`noop\`, \`effectiveBase\`, \`before\`, \`after\`, \`recoveryRef\`, \`validationPassed\`, \`detail\`, and \`question\` when you halted.`;
+Change nothing else: no commits of your own, no push, no PR mutation, no branch creation or deletion. Report \`ok\`, \`halted\`, \`noop\`, \`effectiveBase\`, \`before\`, \`after\`, \`recoveryRef\`, \`recoveryTip\`, \`validationPassed\`, \`detail\`, and \`question\` when you halted.`;
 }
 
 // The fix -> review -> fix loop is the nested wf-review-cycle's, not this
@@ -664,7 +665,25 @@ function flattenArgs(a) {
   return String(a);
 }
 const raw = flattenArgs(args);
-const lower = raw.toLowerCase();
+// Every flag below is read from THIS text rather than from the request as
+// written, because one construct in the request carries a value that is not
+// flag text at all: `rebase on top of <target>` names a ref, and an ordinary
+// ref component is spelled exactly like one of these flags. `rebase on top of
+// feature/no-rebase` set `noRebase` and suppressed the very rebase it asked
+// for, silently ignoring the target the gather went on to report; `fix/no-push`
+// and `wip/ping-codex` are the same defect on the other flags. So the target
+// VALUE is elided once, here, ahead of all of them — one construct removed
+// rather than a guard bolted onto each flag.
+// The VALUE only. The words `rebase on top of` stay exactly where they are,
+// because a negation governing them is a real opt-out that must still be read:
+// `do not rebase on top of main` means no rebase, and eliding the phrase
+// wholesale would turn that request into a rebase onto `main` — a false
+// negative traded for the false positive, which is not a fix. Nothing else is
+// stripped: this is the one construct in the argument grammar that carries a
+// free-form value, so the elision is bounded to it and does not generalize into
+// heuristic context-stripping (quotes, negations, path shapes), which has been
+// measured to admit the phrases it meant to reject while rejecting genuine ones.
+const flagText = raw.toLowerCase().replace(/(\brebase[\s-]*on[\s-]*top[\s-]*of\s+)\S+/g, "$1");
 // Publish-by-default model (changed): a bare run now PUBLISHES and re-pings the
 // contributing bots — i.e. it behaves like `ping-contributing`. The flags adjust it:
 //   (nothing)                 -> push + ping the contributing bots   (the default)
@@ -695,32 +714,37 @@ const lower = raw.toLowerCase();
 // publish request into a local-only run. The positive token below reads the
 // un-normalized text for the same reason, so an incidental `I already pushed that
 // branch` cannot silently suppress the pings the way a deliberate `push` flag does.
-const pushWords = lower.replace(/\bpush(?:ed|es|ing)?[\s-]*back\b/g, " ");
+const pushWords = flagText.replace(/\bpush(?:ed|es|ing)?[\s-]*back\b/g, " ");
 const pushNegWords = pushWords.replace(/\bpush(?:es|ing)\b/g, "push");
 const noPush =
   /\bno[\s-]*push\b/.test(pushNegWords) ||
   /\b(?:not|never|without|skip|cannot|can't|cant|dont|don't|do not)\b[\s-]*push\b/.test(pushNegWords);
 // `peer-opinions=off` suppresses the nested cycle's cross-harness peer stage;
 // it must arrive through args (the workflow cannot read prose elsewhere).
-const peerOffTok = /\bpeer[\s-]*opinions?\s*=\s*off\b/.test(lower);
+const peerOffTok = /\bpeer[\s-]*opinions?\s*=\s*off\b/.test(flagText);
 // The one token that may put this run on a branch that is NOT the PR's head ref.
 // The gather agent acts on it, but the caller parses it here too, because the
 // gather's own report cannot be the evidence that it was given: `workingBranch`
 // differing from `branch` is the ONLY thing that tells the reconciliation gate
 // below to skip, and a gather that made the history-shape inference its brief
 // forbids reports exactly that shape from a request that never selected it.
-// It is read from the WHOLE request, as permissively as its neighbours, and
-// deliberately nothing is stripped from that text first. The two errors do not
-// cost the same. A false positive only DISABLES this guard for that one run,
-// leaving exactly the behaviour that shipped before the guard existed. A false
-// negative STOPS a run the request genuinely selected, with
-// `skipped-unselected-working-branch` — refusing the supported case outright,
-// and reading as the guard working. So the accepted residual is stated rather
-// than narrowed: a request that mentions an off-shoot without selecting one —
-// a ref path (`rebase on top of task/021c-publication-guard-for-an-off-shoot`),
-// a quoted phrase, a negation — disables the guard for that run. What the
-// guard still catches is the shape it was added for, a gather that deviates on
-// a request which never says `off-shoot` at all.
+//
+// This one token reads the RAW request rather than `flagText`, and is the only
+// one that does. The elision above exists because a ref component spelled like
+// a flag silently flips that flag; this token's two errors are not symmetric in
+// that way, and the residual was measured rather than assumed. A false positive
+// only DISABLES this guard for that one run, leaving exactly the behaviour that
+// shipped before the guard existed. A false negative STOPS a run the request
+// genuinely selected, with `skipped-unselected-working-branch` — refusing the
+// supported case outright, and reading as the guard working. So the accepted
+// residual is stated rather than narrowed: a request that mentions an off-shoot
+// without selecting one — a ref path (`rebase on top of
+// task/021c-publication-guard-for-an-off-shoot`), a quoted phrase, a negation —
+// disables the guard for that run. Reading it from `flagText` would remove the
+// ref-path row specifically, which is why it is NOT read from there: that row
+// is pinned as a mention that still selects, so narrowing it here would flip a
+// check by name. What the guard is for, and still catches, is the shape it was
+// added for: a gather that deviates on a request which never says `off-shoot`.
 //
 // A narrowing pass over that text (strip ref paths, quoted phrases, negations,
 // the way `pushWords` strips `push-back` before reading `push`) was written and
@@ -731,11 +755,11 @@ const peerOffTok = /\bpeer[\s-]*opinions?\s*=\s*off\b/.test(lower);
 // off-shoot mode`, and `rebase onto off-shoot-guard` all still selected). Both
 // its directions are pinned in `scripts/test-address-review-reconcile.mjs`, so
 // a re-narrowing that reintroduces either has to fail a check by name first.
-const offShootTok = /\boff[\s-]*shoots?\b/.test(lower);
-const pingCodexTok = /\bping[\s-]*codex\b/.test(lower);
-const pingClaudeTok = /\bping[\s-]*claude\b/.test(lower);
-const pingCopilotTok = /\bping[\s-]*copilot\b/.test(lower);
-const pingContribTok = /\bping[\s-]*contributing\b/.test(lower);
+const offShootTok = /\boff[\s-]*shoots?\b/.test(raw.toLowerCase());
+const pingCodexTok = /\bping[\s-]*codex\b/.test(flagText);
+const pingClaudeTok = /\bping[\s-]*claude\b/.test(flagText);
+const pingCopilotTok = /\bping[\s-]*copilot\b/.test(flagText);
+const pingContribTok = /\bping[\s-]*contributing\b/.test(flagText);
 const anyNamedPing = pingCodexTok || pingClaudeTok || pingCopilotTok;
 // A positive `push` token — only meaningful when not negated (a negation set noPush
 // above). Spelling out `push` means "publish, but ping nobody".
@@ -750,12 +774,14 @@ const pingContributing =
 // here, so the only token that can suppress it is a negation — there is no
 // positive `rebase` flag to read, since `rebase on top of <branch>` names a
 // TARGET rather than switching the behavior on, and the gather agent reports
-// that target as free text (lenient parsing is its job, not this regex's).
+// that target as free text (lenient parsing is its job, not this regex's) —
+// which is also why that target's value is gone from `flagText` by the time
+// these two read it, and why `do not rebase on top of main` still opts out.
 // Present-tense inflections collapse the same way `no-push` handles them, so
 // `no rebasing` and `without rebasing` opt out exactly like `no-rebase`.
 const noRebase =
-  /\bno[\s-]*rebas(?:e|ing)\b/.test(lower) ||
-  /\b(?:not|never|without|skip|cannot|can't|cant|dont|don't|do not)\b[\s-]*rebas(?:e|ing)\b/.test(lower);
+  /\bno[\s-]*rebas(?:e|ing)\b/.test(flagText) ||
+  /\b(?:not|never|without|skip|cannot|can't|cant|dont|don't|do not)\b[\s-]*rebas(?:e|ing)\b/.test(flagText);
 const flags = {
   push: wantPush,
   noRebase,
@@ -970,8 +996,8 @@ const rebaseRecord = {
 // Runs one point and returns either `{ rebase }` — the report, with `pr.base`
 // already replaced by the pinned OID — or `{ stop }`, a result the run returns
 // as it stands. Everything that is not a clean rebase stops the run: a halted
-// conflict, a failed one, a broken build, a recovery ref the report cannot name,
-// and an `effectiveBase` that is not a commit. That last check is the load-bearing one, and it is a check rather
+// conflict, a failed one, a broken build, a recovery ref the report cannot name in full or show resolving to the tip
+// it started from, and an `effectiveBase` that is not a commit. That last check is the load-bearing one, and it is a check rather
 // than trust because the whole run's diff boundaries hang off that field: a
 // movable name accepted here reaches the review cycle as a base that a sibling
 // push or the next fetch moves, so a reviewer would bound its diff at a tip
@@ -990,8 +1016,14 @@ async function rebasePoint(point, target) {
       pr: packet.pr,
       rebase: { ...rebaseRecord, stoppedAt: { point, target, ...(report || {}) } },
       detail,
-      ...(extra || {}),
       note: `Nothing was pushed. The branch is where the rebase left it${report && report.recoveryRef ? `, and its pre-rebase tip is saved at \`${report.recoveryRef}\`` : ""}.`,
+      // Spread LAST so a stop can replace what the default note promises. The
+      // two stops that reject the recovery ref do exactly that: repeating "its
+      // pre-rebase tip is saved at <ref>" for the ref they just refused to
+      // believe would hand the maintainer the unusable name as their way back,
+      // which is the failure those checks exist to prevent, restated by the
+      // sentence that is supposed to help.
+      ...(extra || {}),
     },
   });
   if (!report) {
@@ -1055,21 +1087,44 @@ async function rebasePoint(point, target) {
       `The ${point} rebase replayed commits without reporting a PASSING post-rebase build and test run (validationPassed: ${JSON.stringify(report.validationPassed === undefined ? null : report.validationPassed)}): ${report.detail || "no detail reported"}`,
     );
   }
-  // The way back, required rather than hoped for. Step 3 of the brief saves the
-  // pre-rebase tip before anything is replayed and is told not to skip it, and
-  // every stop past this point tells the maintainer that tip is saved at that
-  // ref BY NAME. A report that cannot name one has either skipped the single
-  // `update-ref` the brief spells out or lost the name of it, so this run would
-  // build on a replay with no way back while its notes silently dropped the
-  // sentence promising one.
+  // The way back, required rather than hoped for — and checked as a REF, not as
+  // a prefix. Step 3 of the brief saves the pre-rebase tip before anything is
+  // replayed, reads the ref back, and is told not to skip either half; every
+  // stop past this point tells the maintainer that tip is saved at that ref BY
+  // NAME. A report that cannot name one has skipped the single `update-ref` the
+  // brief spells out or lost the name of it. But a prefix test alone lets
+  // through the values that are WORSE than an absent one, because they read as
+  // an answer: a truncated `refs/pre-rebase/`, or a leftover ref for some other
+  // branch's replay, both start with the right characters while naming no
+  // backup of this one. The run would then adopt the rewritten history — and at
+  // the pre-push point force-push it — advertising a recovery point that does
+  // not exist or belongs to a different branch. So the name is checked whole:
+  // this branch's, stamped with the UTC timestamp the brief writes.
   const recoveryRef = typeof report.recoveryRef === "string" ? report.recoveryRef.trim() : "";
-  if (!recoveryRef.startsWith("refs/pre-rebase/")) {
+  const recoveryPrefix = `refs/pre-rebase/${packet.pr.workingBranch}/`;
+  const recoveryStamp = recoveryRef.startsWith(recoveryPrefix) ? recoveryRef.slice(recoveryPrefix.length) : "";
+  if (!/^\d{8}-\d{6}$/.test(recoveryStamp)) {
     return stop(
       "rebase-unsaved-recovery-ref",
-      `The ${point} rebase reported ${JSON.stringify(report.recoveryRef === undefined ? null : report.recoveryRef)} as its recovery ref, which is not the \`refs/pre-rebase/<branch>/<ts>\` ref the brief orders saved before the first replay. That ref is this run's only way back to the pre-rebase tip, so nothing is adopted from a report that cannot name it.`,
+      `The ${point} rebase reported ${JSON.stringify(report.recoveryRef === undefined ? null : report.recoveryRef)} as its recovery ref, which is not the \`${recoveryPrefix}<YYYYmmdd-HHMMSS>\` ref the brief orders saved before the first replay for this branch. That ref is this run's only way back to the pre-rebase tip, so nothing is adopted from a report that cannot name it in full.`,
+      { note: `Nothing was pushed. The branch is where the rebase left it, and this run can name no recovery ref for it — look for one under \`${recoveryPrefix}\` before doing anything else with the branch.` },
     );
   }
-  const record = { point, target, ...report, effectiveBase: pinned, recoveryRef };
+  // And the name is only half of it: a well-formed one still says nothing about
+  // whether the ref was ever created, or what it points at. The brief reads it
+  // back for exactly that, so the caller has the ref's own OID beside the tip
+  // the rebase started from and can require the two to agree — evidence the way
+  // back leads where the report says, rather than a string that looks right.
+  const recoveryTip = typeof report.recoveryTip === "string" ? report.recoveryTip.trim() : "";
+  const preRebaseTip = typeof report.before === "string" ? report.before.trim() : "";
+  if (!preRebaseTip || recoveryTip !== preRebaseTip) {
+    return stop(
+      "rebase-unverified-recovery-ref",
+      `The ${point} rebase named \`${recoveryRef}\` as its recovery ref while reporting ${JSON.stringify(report.recoveryTip === undefined ? null : report.recoveryTip)} as what that ref resolves to and ${JSON.stringify(report.before === undefined ? null : report.before)} as the tip it started from. A ref is a way back only where it is read back pointing AT that tip, so a report that cannot show the two agreeing is not adopted.`,
+      { note: `Nothing was pushed. The branch is where the rebase left it, and \`${recoveryRef}\` was NOT shown resolving to the tip it started from — check that ref yourself before treating it as this branch's way back.` },
+    );
+  }
+  const record = { point, target, ...report, effectiveBase: pinned, recoveryRef, recoveryTip };
   rebaseRecord.points.push(record);
   // The pinned commit becomes this run's effective review base and the
   // boundary of every range delegated from here on, replacing the ref NAME
