@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 191;
+const EXPECTED_CHECKS = 192;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -3999,6 +3999,34 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "and both mirrors of that skill state the rules the brief renders — the push's three states, the status line agreeing with them, wholesale distrust, and what a claim of publication needs",
     missingRules.length === 0,
     missingRules.join("; "),
+  );
+
+  // And the record's LIFECYCLE rules, read the same way and out of the same two
+  // mirrors. Both are carve-outs from the one-record-per-PR supersession the
+  // skill states two paragraphs above, and both are invisible from the brief a
+  // single run renders: a map this run knows is incomplete goes BESIDE the
+  // earlier record rather than over it, and a map published in full SPENDS the
+  // record it came from. The spend is what makes the standalone replay
+  // terminate, so a mirror that lost it would document an unbounded rule.
+  const LIFECYCLE_CLAUSES = {
+    "an incomplete map posted beside the earlier record rather than PATCHed over it":
+      "**One map may not supersede: a map this run already knows is incomplete**",
+    "and a full publication spending the record it replayed, leaving no entries to replay":
+      "**A run that publishes in full SPENDS the record it replayed.**",
+    "the spend named as what ends the standalone replay":
+      "What ends this — the standalone half's answer to the unresolved-only rule the thread half self-terminates on — is the spend above",
+  };
+  const missingLifecycle = [];
+  for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
+    const text = readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8");
+    for (const [name, clause] of Object.entries(LIFECYCLE_CLAUSES)) {
+      if (!text.includes(clause)) missingLifecycle.push(`${mirror}: ${name}`);
+    }
+  }
+  check(
+    "and both mirrors state the two carve-outs from one-record-per-PR — the incomplete map posted beside it, and the published map that spends it",
+    missingLifecycle.length === 0,
+    missingLifecycle.join("; "),
   );
 
   // The FOURTH rendering (task 021f), read the same way and out of the same two
