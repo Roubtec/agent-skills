@@ -1600,8 +1600,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       ],
       // The rendering for the one case the canonical format cannot state as
       // written: once part of the map is on origin, `status: not published`
-      // and the local-only line are both false, and a reader who believes
-      // either stops looking for the replies that never landed. Pinned
+      // is false — while what the local-only line claims of the tips follows
+      // the push rather than the map, false only where the remote moved or
+      // already held the tips and still true where the map landed through the
+      // API with no successful push — and a reader who believes the canonical
+      // lines stops looking for the replies that never landed. Pinned
       // in the skill because the skill is where the format is defined once;
       // `recordPrompt` renders it and the exit matrix drives it. What "landed"
       // MEANS is pinned beside the rendering, because that is where it went
@@ -1618,7 +1621,9 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         "**A publication that stopped part-way**",
         [
           /status: published in part/,
-          /both false once part of the map is on origin/,
+          /`status: not published` is false once part of the map is on origin/,
+          /a map that landed through the API with no successful push/,
+          /leaves the tips still LOCAL-ONLY/,
           /reached origin: <what landed> — still outstanding: <what is left>/,
           /What counts as landed is what \*\*is on the PR\*\*, never what this run itself did/,
           /a reply an earlier run posted and a resolve already done are landed too/,
@@ -3428,10 +3433,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     wrong.join("; "),
   );
 
-  // The two lines that are false once part of the map is on origin. A part-way publication's record
-  // must say what reached origin and what is left; the same exit reached with
-  // nothing pushed must still say the tips are local-only, which is what pins
-  // the rendering to the FACT rather than to the exit.
+  // The two lines this part-way publication falsifies — its push advanced the
+  // remote, so the tips claim falls with the status here. A part-way
+  // publication's record must say what reached origin and what is left; the
+  // same exit reached with nothing pushed must still say the tips are
+  // local-only, which is what pins the rendering to the FACT rather than to
+  // the exit.
   const partWay = briefs["a publication that pushed and then failed part-way"];
   const nothingLanded = briefs["a publication that aborted with nothing on origin"];
   check(
