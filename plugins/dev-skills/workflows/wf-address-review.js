@@ -828,6 +828,12 @@ function recordPrompt(packet, dispositions, facts) {
   // the working location — the `replaced` case of `reviewedMapOf`. Empty is the
   // ordinary run, whose `final HEAD` is read where the work happened.
   const judgedTip = typeof facts.judgedTip === "string" ? facts.judgedTip.trim() : "";
+  // And whether this map is known NOT to account for the gathered items
+  // one-for-one, which is what forbids superseding an earlier record with it:
+  // the update is a `PATCH` in place, and an entry the earlier record holds for
+  // an item this map omits, doubles, or cannot publish would go with it.
+  const incomplete = typeof facts.mapIncomplete === "string" ? facts.mapIncomplete.trim() : "";
+  const priorUrl = packet.priorRecord && typeof packet.priorRecord.url === "string" ? packet.priorRecord.url.trim() : "";
   // The three push states, each with the lead, the `status:` line and the origin
   // line it implies. An unrecognized or absent state reads as `unknown`, which
   // claims the least. `noop` is the state a two-valued flag lost: a push that
@@ -880,7 +886,9 @@ You make exactly ONE PR write — this record comment — and nothing else: no p
 
 WHICH REPOSITORY every command below addresses: the one this PR is IN, whose \`<owner>/<repo>\` is already resolved and handed to you in the PR's own URL \`${packet.pr.url}\` — never the repository your working location resolves to. On a cross-repository PR the checkout is the HEAD fork while the PR and its comments live in the base repository, and BOTH command families default to the wrong one there: \`gh api\`'s \`{owner}\`/\`{repo}\` placeholders expand to the repository of the current directory, and a bare \`gh pr comment\` posts into the repository it resolves the same way — so unqualified, the lookup searches the fork and finds no prior record, the \`PATCH\` addresses a comment id in the fork, and the create comments on a same-numbered PR there or fails outright. So write that \`<owner>/<repo>\` out LITERALLY in each command below. Do not re-derive it from a bare \`gh repo view --json nameWithOwner\`, which with no repository argument answers for the directory — in a fork clone the head fork, the one repository this item exists to keep these three writes away from.
 1. Find a prior record. \`gh api --paginate repos/<owner>/<repo>/issues/${packet.pr.number}/comments --jq '.[] | select((.body | split("\\n")[0] | rtrimstr("\\r")) == "<!-- address-review:disposition-record -->") | {id, login: .user.login, updated_at}'\` — the MARKER identifies a record, never its prose, and it must be the body's FIRST LINE byte for byte. A \`contains\` test is what you must NOT use: it also selects an ordinary comment that merely QUOTES the marker (a maintainer asking about this mechanism, a review summary echoing it), and step 2 would then \`PATCH\` that person's comment away. The \`rtrimstr("\\r")\` is why a body GitHub hands back with CRLF line endings still matches its own first line. Keep the ones authored by the authenticated user (\`gh api user --jq .login\`).
-2. Compose the body below, then write it ONCE, reading it from stdin so composing it puts no file in the working location: a prior record of your own → \`gh api --method PATCH repos/<owner>/<repo>/issues/comments/<id> -F body=@-\`, which supersedes it IN PLACE so the PR keeps one record instead of a stack of near-duplicates; none → \`gh pr comment ${packet.pr.number} --repo <owner>/<repo> --body-file -\`. Where several of your own are present (one predating the marker, say), update the most recent and report the rest in \`detail\`: delete, sweep or expire NOTHING, and never touch another actor's comment.
+2. Compose the body below, then write it ONCE, reading it from stdin so composing it puts no file in the working location: ${incomplete
+    ? `this run's map is INCOMPLETE (${incomplete}), so it SUPERSEDES NOTHING — post it as a new comment with \`gh pr comment ${packet.pr.number} --repo <owner>/<repo> --body-file -\` and leave every record step 1 found standing, your own included, reporting \`superseded: false\`. The update is a \`PATCH\` in place, so an entry an earlier record of yours holds for an item this map leaves out, names twice, or cannot publish would be destroyed by it and the next run would inherit only this replacement — the very loss this record exists against. Name in \`detail\` the record(s) you left standing${priorUrl ? ` (the most recent is ${priorUrl})` : ""}.`
+    : `a prior record of your own → \`gh api --method PATCH repos/<owner>/<repo>/issues/comments/<id> -F body=@-\`, which supersedes it IN PLACE so the PR keeps one record instead of a stack of near-duplicates; none → \`gh pr comment ${packet.pr.number} --repo <owner>/<repo> --body-file -\`.`} Where several of your own are present (one predating the marker, say), ${incomplete ? "report them all in \`detail\`" : "update the most recent and report the rest in \`detail\`"}: delete, sweep or expire NOTHING, and never touch another actor's comment.
 3. Write "codex"/"claude"/"copilot" PLAIN in the body, with no bare \`@\`-mentions anywhere, exactly as the Summary comment does — a mention here would summon a review round for work this run did not publish.
 
 The body, marker first (the marker line is what step 1 of the next run matches, so it is mandatory and must be byte-exact):
@@ -908,7 +916,9 @@ ${unknown
 <the full markdown body>
 \`\`\`
 
-- ${judgedTip
+${incomplete
+    ? `- This map is INCOMPLETE (${incomplete}), so say so in the \`status:\` line's reason${priorUrl ? ` and name the earlier record that still stands (${priorUrl})` : ""}: a reader must not take this record for the whole account of this PR, and the entries it does carry are a real triage of the items they cover rather than a draft. Every one of them still gets its full entry below.\n`
+    : ""}- ${judgedTip
     ? `\`final HEAD\` is given above as \`${judgedTip}\` — write it EXACTLY as given and read no tip for it. It is the tip the reviewer's verdict was rendered over, and the dispositions below are that round's; the tip standing in the working location is a LATER one a pass committed on top, and citing it would hand the next run's replay probe a tree no reviewer ever passed — which, the recorded commits all being its ancestors, prints nothing and so reads as "the record replays as written". Report what \`git rev-parse HEAD\` prints in the working location in \`detail\` instead, as this run's parting tip.`
     : "`final HEAD` is what `git rev-parse HEAD` prints in the working location. Read it there rather than repeating a SHA from this brief."}
 - One \`## Threads\` block entry per disposition below, in that shape, and EVERY entry carries the same field set whatever its kind: the disposition kind, its stable reference (path:line, author, and the \`threadId\` for a review thread or the \`url\` for a standalone item), the permalink, and the reply body VERBATIM — a \`deferred-to-task\` entry adding the committed task file and its queued or deferred placement beside them rather than in place of them, since which thread a follow-up closes is not re-derivable from the PR. The drafted reply bodies and the ready-to-post Summary body are the only parts of this record that cannot be re-derived from the PR later, so they are the parts that must be exact.
@@ -2277,12 +2287,34 @@ const noPublishReason = !flags.push
         : badDispDefect
           ? `a disposition is not publishable (${badDispRef}: ${badDispDefect}), so publication was aborted before any push.`
           : "";
+// Whether THIS run's map is known not to account for the gathered items
+// one-for-one — the same three guards, read for a different question. It is
+// computed off the guards rather than off `noPublishReason`, which does not name
+// them on the `no-push` path, where the map is just as defective and the record
+// is written just the same.
+// What it decides is whether the record may SUPERSEDE an earlier one. Superseding
+// is a `PATCH` in place, so an entry a prior record holds for an item this map
+// omits, doubles, or cannot publish is destroyed by it, and the next run inherits
+// only the unusable replacement — the exact loss this whole mechanism exists
+// against, arriving through the mechanism itself. The replacement is still
+// written: its entries are a real triage of the items they do cover, and letting
+// them die with the session to protect the older record would trade one loss for
+// the other. So both survive — this one as a new comment, the earlier one
+// standing where it is.
+const mapIncomplete = uncoveredItems.length
+  ? `${uncoveredItems.length} gathered item(s) carry no disposition`
+  : duplicatedItems.length
+    ? `${duplicatedItems.length} gathered item(s) carry more than one disposition`
+    : badDispDefect
+      ? `a disposition is not publishable (${badDispRef}: ${badDispDefect})`
+      : "";
 // Spread into every exit below that publishes nothing, so the result says where
 // the map went — or that it went nowhere.
 const recordResult = await leaveDispositionRecord(noPublishReason, workReport, {
   rounds,
   reviewerPassed: !!passed,
   deviations: cycle.deviations,
+  mapIncomplete,
 });
 const recordNote = recordNoteText();
 

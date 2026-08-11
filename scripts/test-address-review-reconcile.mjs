@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 186;
+const EXPECTED_CHECKS = 187;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -2777,6 +2777,15 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   };
   // The same abort with NO map at all — nothing to replay, so nothing to record.
   const CYCLE_NO_MAP = { ...CYCLE_PASS, workReport: [] };
+  // The same abort on a PR that already carries a record. Superseding is a
+  // `PATCH` in place, so writing this run's known-incomplete map over that
+  // comment destroys the entry it holds for the item this map leaves uncovered
+  // — the one durable copy of a previous run's judgment and drafted reply.
+  const PRIOR_RECORD = {
+    url: "https://example.invalid/pr/42#issuecomment-9",
+    body: "<!-- address-review:disposition-record -->\n# address-review packet — PR #42 (feature/x)\nstatus: not published (a local-only run)\n",
+  };
+  const withPrior = { reconcile: { outcome: "work" }, items: [ITEM], priorRecord: PRIOR_RECORD };
   // A cycle that reported an ERROR instead of a verdict, holding a nonempty map
   // no reviewer ever passed. `workReportReviewed: false` is the cycle's own
   // answer to that, and it is stated rather than omitted: the field is what the
@@ -3037,6 +3046,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     ["a `no-push` run stopped at the round cap", { args: "no-push no-rebase", cycles: [CYCLE_CAP] }, "review-cap", true],
     ["a push run stopped at the round cap", { args: "push no-rebase", cycles: [CYCLE_CAP] }, "review-cap-not-published", true],
     ["a push run whose dispositions leave a gathered item uncovered", { args: "push no-rebase", cycles: [CYCLE_UNCOVERED] }, "publish-aborted-incomplete-dispositions", true],
+    ["an incomplete map on a PR that already carries a record", { args: "push no-rebase", cycles: [CYCLE_UNCOVERED] }, "publish-aborted-incomplete-dispositions", true, withPrior],
+    ["a complete map on a PR that already carries a record", { args: "no-push no-rebase", cycles: [CYCLE_PASS] }, "fixed-local", true, withPrior],
     ["a pre-push rebase that halted on a conflict", { args: "push", cycles: [CYCLE_PASS], rebases: { "pre-fix": REBASE_NOOP, "pre-push": REBASE_HALTED } }, "rebase-halted", true],
     ["a replay with no reviewer rounds left to re-verify it", { args: "push", cycles: [{ ...CYCLE_PASS, rounds: 12 }], ...REPLAY_POINTS }, "reverify-budget-exhausted", true],
     ["a re-verification that returned nothing", { args: "push", cycles: [CYCLE_PASS, null], ...REPLAY_POINTS }, "error", true],
@@ -3223,6 +3234,39 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /thread=T3 {2}src\/app\.ts:31 a-reviewer — NOTHING is owed on it: an ambiguous-skipped thread is deliberately left without a reply and left open\./.test(policyKinds) &&
       !/(issuecomment-3|T3)[^\n]*still owed/.test(policyKinds),
     JSON.stringify({ landedLine: policyLanded || "no origin line at all", standing: (policyKinds.match(/^ {2}thread=.*\n {2}thread=.*\n {2}thread=.*/m) || ["no standing lines"])[0] }),
+  );
+
+  // What a KNOWN-INCOMPLETE map may not do to a record that is already on the
+  // PR. Supersession is a `PATCH` in place, so writing this run's map over an
+  // earlier record destroys the entry that record holds for every item this map
+  // omits, doubles, or cannot publish — the only durable copy of a previous
+  // run's judgment and drafted reply for it, lost through the very mechanism
+  // that exists to keep it. The replacement is still written, as a new comment
+  // beside the one it does not replace: its entries are a real triage of the
+  // items they do cover, and dropping them to protect the older record would
+  // trade one loss for the other. The complete-map row is the control — the
+  // supersession this rule must not cost the ordinary run.
+  const incompleteOverPrior = briefs["an incomplete map on a PR that already carries a record"];
+  const completeOverPrior = briefs["a complete map on a PR that already carries a record"];
+  check(
+    "a known-incomplete map is posted beside a prior record rather than superseding it in place, while a complete one still supersedes",
+    /SUPERSEDES NOTHING/.test(incompleteOverPrior) &&
+      /this run's map is INCOMPLETE \(1 gathered item\(s\) carry no disposition\)/.test(incompleteOverPrior) &&
+      /leave every record step 1 found standing, your own included, reporting `superseded: false`/.test(incompleteOverPrior) &&
+      incompleteOverPrior.includes("the most recent is https://example.invalid/pr/42#issuecomment-9") &&
+      !/--method PATCH/.test(incompleteOverPrior) &&
+      // And the record says it of itself, so a reader does not take a partial
+      // account for the whole one.
+      /- This map is INCOMPLETE \(1 gathered item\(s\) carry no disposition\), so say so in the `status:` line's reason and name the earlier record that still stands \(https:\/\/example\.invalid\/pr\/42#issuecomment-9\)/.test(incompleteOverPrior) &&
+      // The control: nothing here narrows the ordinary run's one-record-per-PR
+      // supersession, which is the property the whole rule is a carve-out from.
+      /--method PATCH repos\/<owner>\/<repo>\/issues\/comments\/<id>/.test(completeOverPrior) &&
+      !/SUPERSEDES NOTHING/.test(completeOverPrior) &&
+      !/This map is INCOMPLETE/.test(completeOverPrior),
+    JSON.stringify({
+      incompleteStep2: (incompleteOverPrior.match(/^2\. Compose the body below[^\n]*/m) || ["no step 2"])[0].slice(0, 200),
+      completeStep2: (completeOverPrior.match(/^2\. Compose the body below[^\n]*/m) || ["no step 2"])[0].slice(0, 160),
+    }),
   );
 
   // The THIRD state, in all three shapes it arrives in. Absence of a report is
