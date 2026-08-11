@@ -10,8 +10,9 @@
  * makes is the disposition record every exit that does not publish IN FULL
  * leaves behind (see `recordPrompt` and `leaveDispositionRecord`), which is
  * `no-push`'s single documented exception. A publication that stopped part-way
- * leaves the same record, saying what the publisher confirmed reaching origin —
- * a mutation, never that a push command ran — and what it still owes.
+ * leaves the same record, saying what of the map the PR already CARRIES — end
+ * state, whichever run put it there, never that a push command ran — and what
+ * it still owes.
  * The re-review pings fire ONLY when the push actually advanced the branch with
  * new commits/rewritten history; a no-op push (nothing new to review) skips them
  * so an automated review -> address -> review loop can terminate.
@@ -2617,14 +2618,19 @@ const publishClaimed = !!(publishReport && publishReport.published);
 // left to replay, so it records through the same helper as every exit above —
 // the last of the exits that publish nothing in full, and the one the computed
 // reason above cannot reach because the publisher had not run yet.
-// What it records differs in two lines, and what selects them is what actually
-// REACHED ORIGIN — a successful mutation, never `pushed`. `pushed` says a push
-// command succeeded, which an `Everything up-to-date` no-op also does, so a run
-// whose no-op push was followed by a failure on its first reply changed nothing
-// remotely and must not read as "published in part": a reader who believes it
-// goes looking for replies and a Summary comment that were never posted. Only
-// three things can have landed, and the publisher reports each one: a push that
-// ADVANCED the remote, replies/resolves it confirmed, and a posted Summary.
+// What it records differs in two lines, and what selects them is what of this
+// map the PR ALREADY CARRIES when the publisher stopped — end state, never a
+// diary of this run's own writes, so a reply a PRIOR run posted counts and a
+// replay whose push moved nothing over it still reads as "published in part".
+// `pushed` is not that selector either: it says a push command succeeded, which
+// an `Everything up-to-date` no-op also does, so `pushedNewCommits` — the flag
+// that says the remote MOVED — is the push half a record may name. What must
+// not read as "published in part" is the run NO part of whose map is on the PR:
+// a reader who believes it goes looking for replies and a Summary comment that
+// were never posted. Only three things can be on the PR, and the publisher
+// reports each one: a push that ADVANCED the remote, replies/resolves its
+// account confirms (a reply skipped as a duplicate of one already there
+// included), and a posted Summary.
 // And what the publisher's account cannot say, this run must not say either.
 // Absence of a report is not evidence of absence of mutations: the publisher
 // pushes at step 2 and replies at step 4, so "died after something landed" is the

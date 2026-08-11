@@ -1599,21 +1599,26 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         [/patch-id cascade/, /Fall through to the tree/],
       ],
       // The rendering for the one case the canonical format cannot state as
-      // written: once something this run did reached origin, `status: not
-      // published` and the local-only line are both false, and a reader who
-      // believes either stops looking for the replies that never landed. Pinned
+      // written: once part of the map is on origin, `status: not published`
+      // and the local-only line are both false, and a reader who believes
+      // either stops looking for the replies that never landed. Pinned
       // in the skill because the skill is where the format is defined once;
       // `recordPrompt` renders it and the exit matrix drives it. What "landed"
       // MEANS is pinned beside the rendering, because that is where it went
       // wrong twice: a push command running is not the remote moving, and the
       // per-thread account states END STATE rather than this run's own writes,
       // so what the record may call landed is what the PR CARRIES — which is the
-      // reading that keeps a turn from re-posting a reply already there.
+      // reading that keeps a turn from re-posting a reply already there. The
+      // paragraph's own ENTRY CONDITION is pinned with it, an opener selecting
+      // on this run's own writes contradicting the rule its next sentence
+      // states; and on the codex mirror, which no workflow renders, that opener
+      // IS the contract an agent derives the rendering from.
       [
         "the part-way publication's rendering of that format",
         "**A publication that stopped part-way**",
         [
           /status: published in part/,
+          /both false once part of the map is on origin/,
           /reached origin: <what landed> — still outstanding: <what is left>/,
           /What counts as landed is what \*\*is on the PR\*\*, never what this run itself did/,
           /a reply an earlier run posted and a resolve already done are landed too/,
@@ -3364,7 +3369,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     wrong.join("; "),
   );
 
-  // The two lines a landed mutation makes false. A part-way publication's record
+  // The two lines that are false once part of the map is on origin. A part-way publication's record
   // must say what reached origin and what is left; the same exit reached with
   // nothing pushed must still say the tips are local-only, which is what pins
   // the rendering to the FACT rather than to the exit.
