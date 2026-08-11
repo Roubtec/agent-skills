@@ -208,7 +208,7 @@ const REBASE_SCHEMA = {
     noop: { type: "boolean", description: "True when the rebase replayed nothing and the tip is unchanged (the pinned base was already an ancestor of HEAD) — the common and cheap outcome, and what makes two rebase points safe. It is the one value that switches checks off (no validation here, no re-verification of the rebased tree at the pre-push point), so the caller adopts it only where `before` and `after` are both reported and equal, and stops the run otherwise." },
     before: { type: "string", description: "Tip SHA before the rebase — the pre-rebase tip step 3 saved. REQUIRED whenever ok is true: the caller checks the recovery ref against it, and where noop is true it and `after` are also the evidence the no-op is accepted on." },
     after: { type: "string", description: "Tip SHA after it. REQUIRED whenever noop is true, and equal to `before` there; a no-op naming a moved tip, or naming none, is treated as an unevidenced claim and stops the run." },
-    recoveryRef: { type: "string", description: "The recovery ref saved before the first replay, written in full: exactly `refs/pre-rebase/<the branch you rebased>/<the UTC timestamp>`, nothing truncated. REQUIRED whenever ok is true — step 3 saves it unconditionally and is told not to skip it, and every stop this point can reach promises the maintainer the pre-rebase tip is saved at this ref by name. The caller checks the whole name against the branch it dispatched and the timestamp shape the brief stamps, because a truncated or mistyped value names no backup of this replay while still starting with the right characters." },
+    recoveryRef: { type: "string", description: "The recovery ref saved before the first replay, written in full: exactly `refs/pre-rebase/<the branch you rebased>/<the UTC timestamp>`, nothing truncated. REQUIRED whenever ok is true — step 3 saves it unconditionally and is told not to skip it. The caller checks the whole name against the branch it dispatched and the timestamp shape the brief stamps, because a truncated or mistyped value names no backup of this replay while still starting with the right characters." },
     recoveryTip: { type: "string", description: "The OID `recoveryRef` resolves to, read back with `git rev-parse --verify` AFTER the `update-ref`. REQUIRED whenever ok is true, and equal to `before`. A name is a way back only where it is seen resolving to the tip the rebase started from: a ref that was never created, or one left over from another branch's replay, is a report the caller refuses rather than a recovery point." },
     validationPassed: { type: "boolean", description: "Whether the post-rebase build/tests passed. Report `true` for a no-op rebase, which runs none. A rebase that replayed anything must report `true` here to go on: the caller requires that value positively, so `false` and an absent field stop the run alike, before any review verdict or push rests on the replay." },
     detail: { type: "string", description: "One line: the target, what was replayed, skipped or resolved, and what validation ran." },
@@ -683,7 +683,20 @@ const raw = flattenArgs(args);
 // free-form value, so the elision is bounded to it and does not generalize into
 // heuristic context-stripping (quotes, negations, path shapes), which has been
 // measured to admit the phrases it meant to reject while rejecting genuine ones.
-const flagText = raw.toLowerCase().replace(/(\brebase[\s-]*on[\s-]*top[\s-]*of\s+)\S+/g, "$1");
+// The value ends at a SEPARATOR, not merely at whitespace: this parsing is
+// documented as lenient over commas and `&` (`address-review` → Arguments, and
+// the gather brief below says so to the agent), so `rebase on top of
+// main,no-push` is an ordinary way to write the request — and a value taken to
+// the next space would swallow the `no-push` with the target and publish a run
+// the maintainer asked to keep local, which is the one direction the default
+// must never get wrong. Git does permit both characters IN a ref name, so a
+// branch actually called `feature,x` keeps only its first component elided —
+// residue that reaches a flag only where the rest is itself spelled like one,
+// the same bounded leak the whitespace form already left for a target written
+// as several words. The elision is still ONE value, once: it is not widened to
+// swallow whatever follows a separator, which would be the context-stripping
+// this comment rules out.
+const flagText = raw.toLowerCase().replace(/(\brebase[\s-]*on[\s-]*top[\s-]*of\s+)[^\s,&]+/g, "$1");
 // Publish-by-default model (changed): a bare run now PUBLISHES and re-pings the
 // contributing bots — i.e. it behaves like `ping-contributing`. The flags adjust it:
 //   (nothing)                 -> push + ping the contributing bots   (the default)
@@ -1010,19 +1023,45 @@ async function rebasePoint(point, target) {
     label: `rebase-${point}`,
     schema: REBASE_SCHEMA,
   });
+  // The way back, ESTABLISHED before anything is said about it. The note every
+  // stop below carries is where this run tells the maintainer how to get the
+  // pre-rebase tip back, so it is built from the same evidence the two checks
+  // further down require rather than from the bare presence of a string: a stop
+  // that says "your pre-rebase tip is saved at <ref>" about a value nobody
+  // checked hands over a name that may point nowhere, which is the failure those
+  // checks exist to prevent, restated by the sentence meant to help. It matters
+  // most exactly where the run has already lost the tree it started from —
+  // `rebase-validation-failed` is reachable with history rewritten.
+  // The NAME is checked whole rather than as a prefix, because a prefix test
+  // lets through the values that are WORSE than an absent one, since they read
+  // as an answer: a truncated `refs/pre-rebase/`, or a leftover ref for some
+  // other branch's replay, both start with the right characters while naming no
+  // backup of this one. And the name is only half of it: a well-formed one still
+  // says nothing about whether the ref was ever created, or where it points. The
+  // brief reads it back for exactly that, so the caller has the ref's own OID
+  // beside the tip the rebase started from and can require the two to agree —
+  // evidence the way back leads where the report says, rather than a string that
+  // looks right.
+  const recoveryRef = report && typeof report.recoveryRef === "string" ? report.recoveryRef.trim() : "";
+  const recoveryPrefix = `refs/pre-rebase/${packet.pr.workingBranch}/`;
+  const recoveryStamp = recoveryRef.startsWith(recoveryPrefix) ? recoveryRef.slice(recoveryPrefix.length) : "";
+  const recoveryNamed = /^\d{8}-\d{6}$/.test(recoveryStamp);
+  const recoveryTip = report && typeof report.recoveryTip === "string" ? report.recoveryTip.trim() : "";
+  const preRebaseTip = report && typeof report.before === "string" ? report.before.trim() : "";
+  const recoverySaved = recoveryNamed && Boolean(preRebaseTip) && recoveryTip === preRebaseTip;
   const stop = (status, detail, extra) => ({
     stop: {
       status,
       pr: packet.pr,
       rebase: { ...rebaseRecord, stoppedAt: { point, target, ...(report || {}) } },
       detail,
-      note: `Nothing was pushed. The branch is where the rebase left it${report && report.recoveryRef ? `, and its pre-rebase tip is saved at \`${report.recoveryRef}\`` : ""}.`,
-      // Spread LAST so a stop can replace what the default note promises. The
-      // two stops that reject the recovery ref do exactly that: repeating "its
-      // pre-rebase tip is saved at <ref>" for the ref they just refused to
-      // believe would hand the maintainer the unusable name as their way back,
-      // which is the failure those checks exist to prevent, restated by the
-      // sentence that is supposed to help.
+      note: recoverySaved
+        ? `Nothing was pushed. The branch is where the rebase left it, and its pre-rebase tip is saved at \`${recoveryRef}\`.`
+        : `Nothing was pushed. The branch is where the rebase left it, and this run could NOT establish a recovery ref for it — look for one under \`${recoveryPrefix}\` before doing anything else with the branch.`,
+      // Spread LAST so a stop can say something more specific than that pair.
+      // `rebase-unverified-recovery-ref` is the one that does: the ref it
+      // refused EXISTS as a name, so naming it beside what it failed on is
+      // worth more to the maintainer than the namespace the fallback points at.
       ...(extra || {}),
     },
   });
@@ -1040,7 +1079,7 @@ async function rebasePoint(point, target) {
             origin: "rebase",
             blocking: true,
             question: report.question || "(the rebase reported a halt with no question — re-run it, or resolve the rebase by hand)",
-            artifacts: [packet.pr.url, `branch ${packet.pr.workingBranch}`, `target ${target}`, ...(report.recoveryRef ? [report.recoveryRef] : [])],
+            artifacts: [packet.pr.url, `branch ${packet.pr.workingBranch}`, `target ${target}`, ...(recoverySaved ? [recoveryRef] : [])],
           },
         ],
       },
@@ -1087,37 +1126,20 @@ async function rebasePoint(point, target) {
       `The ${point} rebase replayed commits without reporting a PASSING post-rebase build and test run (validationPassed: ${JSON.stringify(report.validationPassed === undefined ? null : report.validationPassed)}): ${report.detail || "no detail reported"}`,
     );
   }
-  // The way back, required rather than hoped for — and checked as a REF, not as
-  // a prefix. Step 3 of the brief saves the pre-rebase tip before anything is
-  // replayed, reads the ref back, and is told not to skip either half; every
-  // stop past this point tells the maintainer that tip is saved at that ref BY
-  // NAME. A report that cannot name one has skipped the single `update-ref` the
-  // brief spells out or lost the name of it. But a prefix test alone lets
-  // through the values that are WORSE than an absent one, because they read as
-  // an answer: a truncated `refs/pre-rebase/`, or a leftover ref for some other
-  // branch's replay, both start with the right characters while naming no
-  // backup of this one. The run would then adopt the rewritten history — and at
-  // the pre-push point force-push it — advertising a recovery point that does
-  // not exist or belongs to a different branch. So the name is checked whole:
-  // this branch's, stamped with the UTC timestamp the brief writes.
-  const recoveryRef = typeof report.recoveryRef === "string" ? report.recoveryRef.trim() : "";
-  const recoveryPrefix = `refs/pre-rebase/${packet.pr.workingBranch}/`;
-  const recoveryStamp = recoveryRef.startsWith(recoveryPrefix) ? recoveryRef.slice(recoveryPrefix.length) : "";
-  if (!/^\d{8}-\d{6}$/.test(recoveryStamp)) {
+  // The way back, required rather than hoped for. Both halves were read above,
+  // where the note is built from them; here they decide whether the run goes on.
+  // A report that cannot name one has skipped the single `update-ref` the brief
+  // spells out or lost the name of it, and adopting it would take the run on to
+  // the rewritten history — force-pushed at the pre-push point — while
+  // advertising a recovery point that does not exist or belongs to a different
+  // branch.
+  if (!recoveryNamed) {
     return stop(
       "rebase-unsaved-recovery-ref",
       `The ${point} rebase reported ${JSON.stringify(report.recoveryRef === undefined ? null : report.recoveryRef)} as its recovery ref, which is not the \`${recoveryPrefix}<YYYYmmdd-HHMMSS>\` ref the brief orders saved before the first replay for this branch. That ref is this run's only way back to the pre-rebase tip, so nothing is adopted from a report that cannot name it in full.`,
-      { note: `Nothing was pushed. The branch is where the rebase left it, and this run can name no recovery ref for it — look for one under \`${recoveryPrefix}\` before doing anything else with the branch.` },
     );
   }
-  // And the name is only half of it: a well-formed one still says nothing about
-  // whether the ref was ever created, or what it points at. The brief reads it
-  // back for exactly that, so the caller has the ref's own OID beside the tip
-  // the rebase started from and can require the two to agree — evidence the way
-  // back leads where the report says, rather than a string that looks right.
-  const recoveryTip = typeof report.recoveryTip === "string" ? report.recoveryTip.trim() : "";
-  const preRebaseTip = typeof report.before === "string" ? report.before.trim() : "";
-  if (!preRebaseTip || recoveryTip !== preRebaseTip) {
+  if (!recoverySaved) {
     return stop(
       "rebase-unverified-recovery-ref",
       `The ${point} rebase named \`${recoveryRef}\` as its recovery ref while reporting ${JSON.stringify(report.recoveryTip === undefined ? null : report.recoveryTip)} as what that ref resolves to and ${JSON.stringify(report.before === undefined ? null : report.before)} as the tip it started from. A ref is a way back only where it is read back pointing AT that tip, so a report that cannot show the two agreeing is not adopted.`,

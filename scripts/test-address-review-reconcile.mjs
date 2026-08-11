@@ -113,7 +113,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 105;
+const EXPECTED_CHECKS = 113;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1219,6 +1219,55 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     unverifiedNotes.length === 3 && unverifiedNotes.every((n) => !/saved at/.test(n)),
     JSON.stringify(unverifiedNotes),
   );
+  // This one says more than the namespace the fallback points at, and that is
+  // why it overrides it: a ref by that exact name EXISTS, it just was not shown
+  // pointing at the tip the rebase started from, so the maintainer has something
+  // specific to go and look at rather than a directory to search.
+  check(
+    "and the unverified stop names the ref it refused, telling the maintainer to check that one itself",
+    unverifiedNotes.every((n) => n.includes(REBASE_REPLAY.recoveryRef) && /check that ref yourself/.test(n)),
+    JSON.stringify(unverifiedNotes),
+  );
+  // The note every rebase stop carries is built from the same two-part evidence
+  // those checks require, rather than from the bare presence of a string — so
+  // the stops that run BEFORE them stop promising a ref nobody established
+  // either. `rebase-validation-failed` is the one that matters: it is reachable
+  // with history ALREADY rewritten, which is exactly when a maintainer needs an
+  // honest way back, and it cannot tell an established ref from a plausible
+  // string on its own.
+  const failedWithWayBack = await run(gathered(withWork), { rebase: { ...REBASE_REPLAY, validationPassed: false } });
+  check(
+    "a stop reached BEFORE the recovery checks names the ref where the report did establish one",
+    failedWithWayBack.status === "rebase-validation-failed" &&
+      ((failedWithWayBack.result || {}).note || "").includes(`saved at \`${REBASE_REPLAY.recoveryRef}\``),
+    JSON.stringify((failedWithWayBack.result || {}).note),
+  );
+  for (const [label, patch] of [
+    ["a name truncated to the namespace", { recoveryRef: "refs/pre-rebase/" }],
+    ["a well-formed name resolving somewhere else", { recoveryTip: "0badf00d" }],
+  ]) {
+    const unestablished = await run(gathered(withWork), { rebase: { ...REBASE_REPLAY, validationPassed: false, ...patch } });
+    const note = (unestablished.result || {}).note || "";
+    check(
+      `and promises nothing where it did not — ${label} — pointing at the namespace to search instead`,
+      unestablished.status === "rebase-validation-failed" && !/saved at/.test(note) && /`refs\/pre-rebase\/feature\/x\/`/.test(note),
+      JSON.stringify(note),
+    );
+  }
+  // The halt says it in two places, and both are gated on the same evidence: its
+  // note, and the list of artifacts its open question hands the maintainer to
+  // look at. An unestablished ref belongs in neither.
+  const haltedUnsaved = await run(gathered(withWork), {
+    rebase: { ok: true, halted: true, noop: false, question: "which side owns the guard?", detail: "aborted", recoveryRef: "refs/pre-rebase/" },
+  });
+  const haltedArtifacts = ((((haltedUnsaved.result || {}).openQuestions || [])[0] || {}).artifacts) || [];
+  check(
+    "and a halt neither promises an unestablished ref nor lists it among its open question's artifacts",
+    haltedUnsaved.status === "rebase-halted" &&
+      !/saved at/.test((haltedUnsaved.result || {}).note || "") &&
+      !haltedArtifacts.some((a) => /refs\/pre-rebase/.test(String(a))),
+    JSON.stringify({ note: (haltedUnsaved.result || {}).note, artifacts: haltedArtifacts }),
+  );
   // The rebase brief hands the delegated step the base repository's identity as
   // this PR's own URL, which makes that field load-bearing rather than
   // decorative: absent, the brief would interpolate `undefined` and the step
@@ -1297,6 +1346,36 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "and a target branch containing `no-push` does not suppress publication",
     targetNamedNoPush.seen.agentLabels.includes("publish"),
     JSON.stringify({ status: targetNamedNoPush.status, labels: targetNamedNoPush.seen.agentLabels }),
+  );
+  // The elision ends at a SEPARATOR, not at the next space, because this parsing
+  // is documented as lenient over commas and `&`: `rebase on top of main,no-push`
+  // is an ordinary way to write the request, not an exotic one. Taken to the next
+  // space the target swallows the flag glued to it, and the flag it swallows
+  // most expensively is the one that keeps the run local — publishing what the
+  // maintainer asked not to publish, the one direction this whole construct
+  // exists to get right.
+  for (const [label, args] of [
+    ["a comma", "rebase on top of main,no-push"],
+    ["an `&`", "rebase on top of main&no-push"],
+  ]) {
+    const joined = await run(gathered(withWork), { args, cycles: [CYCLE_PASS] });
+    check(
+      `a \`no-push\` joined to the target by ${label} survives the elision and keeps the run local`,
+      !joined.seen.agentLabels.includes("publish"),
+      JSON.stringify({ status: joined.status, labels: joined.seen.agentLabels }),
+    );
+  }
+  // Both halves at once: the target VALUE is still elided (its own `no-push`
+  // component does not suppress anything) while the genuine flag written after
+  // the separator is still read.
+  const separatedBoth = await run(gathered(withWork), {
+    args: "rebase on top of fix/no-push,ping-codex",
+    cycles: [CYCLE_PASS],
+  });
+  check(
+    "while the target value itself is still elided across that separator, so only the genuine flag is read",
+    separatedBoth.seen.agentLabels.includes("publish"),
+    JSON.stringify({ status: separatedBoth.status, labels: separatedBoth.seen.agentLabels }),
   );
 }
 
