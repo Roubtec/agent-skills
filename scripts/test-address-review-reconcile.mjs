@@ -113,7 +113,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 113;
+const EXPECTED_CHECKS = 114;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1159,11 +1159,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     moved.status === "rebase-unevidenced-noop" && moved.seen.cycleOpts === null,
     JSON.stringify({ status: moved.status, cycle: moved.seen.cycleOpts }),
   );
-  // The way back from a replay. Every stop past a successful point tells the
-  // maintainer the pre-rebase tip is saved at a named ref, so the report has to
-  // carry one: a successful rebase that names none has skipped the single
-  // `update-ref` the brief spells out, and adopting it would leave the run's
-  // notes silently dropping the sentence that promises a way back.
+  // The way back from a replay. A stop past a successful point promises the
+  // maintainer a saved pre-rebase tip only where the report ESTABLISHED the ref
+  // holding it, so the report has to carry one: a successful rebase that names
+  // none has skipped the single `update-ref` the brief spells out, and adopting
+  // it would leave every later stop with nothing to offer but the namespace to
+  // search.
   const unsaved = { ...REBASE_REPLAY };
   delete unsaved.recoveryRef;
   const noWayBack = await run(gathered(withWork), { rebase: unsaved });
@@ -1220,9 +1221,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     JSON.stringify(unverifiedNotes),
   );
   // This one says more than the namespace the fallback points at, and that is
-  // why it overrides it: a ref by that exact name EXISTS, it just was not shown
-  // pointing at the tip the rebase started from, so the maintainer has something
-  // specific to go and look at rather than a directory to search.
+  // why it overrides it: the report named that exact ref and the name is
+  // well-formed for this branch, it just was not shown pointing at the tip the
+  // rebase started from, so the maintainer has one specific name to go and look
+  // at rather than a directory to search. Whether the ref exists is what this
+  // stop could not establish, which is why the note sends them to check it.
   check(
     "and the unverified stop names the ref it refused, telling the maintainer to check that one itself",
     unverifiedNotes.every((n) => n.includes(REBASE_REPLAY.recoveryRef) && /check that ref yourself/.test(n)),
@@ -1367,15 +1370,32 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   }
   // Both halves at once: the target VALUE is still elided (its own `no-push`
   // component does not suppress anything) while the genuine flag written after
-  // the separator is still read.
+  // the separator is still read. Publication on its own evidences only the first
+  // half — `push` is the default, so a run that read `ping-codex` nowhere still
+  // publishes — so the flag itself is read back where the caller resolves it:
+  // the publish brief renders the flag object it hands the publisher.
   const separatedBoth = await run(gathered(withWork), {
     args: "rebase on top of fix/no-push,ping-codex",
     cycles: [CYCLE_PASS],
   });
+  const separatedFlags = (separatedBoth.seen.publishPrompts[0] || "").match(/Flags for this publication: .*/);
   check(
     "while the target value itself is still elided across that separator, so only the genuine flag is read",
-    separatedBoth.seen.agentLabels.includes("publish"),
-    JSON.stringify({ status: separatedBoth.status, labels: separatedBoth.seen.agentLabels }),
+    separatedBoth.seen.agentLabels.includes("publish") && /"pingCodex":true/.test(separatedFlags ? separatedFlags[0] : ""),
+    JSON.stringify({ status: separatedBoth.status, labels: separatedBoth.seen.agentLabels, flags: separatedFlags && separatedFlags[0] }),
+  );
+  // The same second half on the other separator and the other consumer, since a
+  // flag read out of `flagText` need not reach the publisher at all:
+  // `peer-opinions=off` reaches the nested cycle, so it is read back out of the
+  // options the run hands it rather than out of a rendered brief.
+  const separatedPeer = await run(gathered(withWork), {
+    args: "rebase on top of fix/x&peer-opinions=off",
+    cycles: [CYCLE_PASS],
+  });
+  check(
+    "and a `peer-opinions=off` written after that separator reaches the nested cycle as `peer: off`",
+    Boolean(separatedPeer.seen.cycleOpts) && separatedPeer.seen.cycleOpts.opts.peer === "off",
+    JSON.stringify({ status: separatedPeer.status, peer: separatedPeer.seen.cycleOpts && separatedPeer.seen.cycleOpts.opts.peer }),
   );
 }
 

@@ -1060,8 +1060,11 @@ async function rebasePoint(point, target) {
         : `Nothing was pushed. The branch is where the rebase left it, and this run could NOT establish a recovery ref for it — look for one under \`${recoveryPrefix}\` before doing anything else with the branch.`,
       // Spread LAST so a stop can say something more specific than that pair.
       // `rebase-unverified-recovery-ref` is the one that does: the ref it
-      // refused EXISTS as a name, so naming it beside what it failed on is
-      // worth more to the maintainer than the namespace the fallback points at.
+      // refused is at least well-formed for THIS branch, so naming it beside
+      // what it failed on gives the maintainer one specific name to check
+      // rather than the namespace the fallback points at. Whether that ref
+      // exists is precisely what this stop could NOT establish — its own note
+      // says so — so the name is a lead, not a promise.
       ...(extra || {}),
     },
   });
