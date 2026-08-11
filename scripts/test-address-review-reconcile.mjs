@@ -88,7 +88,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 52;
+const EXPECTED_CHECKS = 54;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -326,7 +326,17 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // remote/ref — without which the query names no ref at all), and the standing
   // refusal of the list form, which is what a later round would otherwise
   // restore as the obvious simplification.
-  const excludesAddressedPr = /DIFFERENT number/.test(cases);
+  // Which PR is "a DIFFERENT one" has to be asked of a GLOBALLY unique
+  // identifier, and the number is not one: a PR number is scoped to that PR's
+  // own BASE repository, while this answer set spans base repositories by
+  // construction — which is the entire reach the query root was widened for. So
+  // an addressed #71 and a conflicting #71 based elsewhere compare EQUAL, and
+  // the number filter discards precisely the case the widening reached. The
+  // query already asks for `url`; both halves are pinned, the comparison and
+  // the standing refusal of the number, because "just compare the number" is
+  // what a later round restores as the obvious simplification.
+  const excludesAddressedPr = /count a hit only where the PR's `url` DIFFERS from the resolved PR's own `url`/.test(cases);
+  const refusesTheNumberComparison = /Compare the `url` and never the `number`/.test(cases);
   const rootsAtTheHeadRef = /ref\(qualifiedName:"refs\/heads\/<ref>"\)\{ associatedPullRequests\(states:OPEN/.test(cases);
   const resolvesThatRefFromPushTarget = /resolve `C`'s own push remote\/ref/.test(cases);
   const refusesTheListForm = /`gh pr list --head` delivers neither half/.test(cases);
@@ -339,9 +349,9 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // cheap answer that got it added the first time.
   const refusesShortCircuit = /`isCrossRepository` has no part in this and is not requested/.test(cases);
   check(
-    "the conflicting-PR stop excludes the PR being addressed and asks the head repository's own ref which open PRs it heads, refusing the base-scoped PR list and any short-circuit of it",
-    excludesAddressedPr && rootsAtTheHeadRef && resolvesThatRefFromPushTarget && refusesTheListForm && refusesShortCircuit,
-    `different-number filter stated: ${excludesAddressedPr}; rooted at the head ref: ${rootsAtTheHeadRef}; that ref resolved from this branch's push target: ${resolvesThatRefFromPushTarget}; base-scoped list form refused: ${refusesTheListForm}; short-circuit refused: ${refusesShortCircuit}`,
+    "the conflicting-PR stop excludes the PR being addressed by its globally unique `url` — never by a base-scoped number — and asks the head repository's own ref which open PRs it heads, refusing the base-scoped PR list and any short-circuit of it",
+    excludesAddressedPr && refusesTheNumberComparison && rootsAtTheHeadRef && resolvesThatRefFromPushTarget && refusesTheListForm && refusesShortCircuit,
+    `url-identity filter stated: ${excludesAddressedPr}; number comparison refused: ${refusesTheNumberComparison}; rooted at the head ref: ${rootsAtTheHeadRef}; that ref resolved from this branch's push target: ${resolvesThatRefFromPushTarget}; base-scoped list form refused: ${refusesTheListForm}; short-circuit refused: ${refusesShortCircuit}`,
   );
   // Forced `inline` checks the target branch out in THIS checkout, and the
   // branch it checks out may already be there: a maintainer who has worked this
@@ -410,12 +420,24 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // because the probe without the write is a check nothing acts on: the
   // `check-ignore` probe, and the repo-local `.git/info/exclude` it appends to
   // rather than the tracked `.gitignore`, which is the maintainer's.
-  const probesTheIgnoreRule = /git check-ignore -q "<repo>\/\.worktrees"/.test(registrationRule);
-  const writesTheRepoLocalExclude = /\.git\/info\/exclude/.test(registrationRule) && /NOT the tracked/.test(registrationRule);
+  // Both halves have a shape that fails silently and is worth naming. The probe
+  // carries a TRAILING SLASH because `/.worktrees/` is a directory-only rule and
+  // `git check-ignore` answers NO for a bare `.worktrees` that is not on disk
+  // yet — which is every first run, so the slashless form only ever agrees by
+  // accident of ordering, and a re-probe after the append would fail outright.
+  // The exclude file is asked of GIT rather than spelled `.git/info/exclude`,
+  // because this checkout may itself be a linked worktree — as the run that
+  // wrote this one was — where `.git` is a gitfile, `.git/info` is not a
+  // directory, and the literal append fails before the base is ever protected.
+  const probesTheIgnoreRule = /git check-ignore -q "<repo>\/\.worktrees\/"/.test(registrationRule);
+  const resolvesTheExcludeThroughGit =
+    /append `\/\.worktrees\/` to the file `git rev-parse --git-path info\/exclude` names/.test(registrationRule) &&
+    /rather than writing a literal `\.git\/info\/exclude`/.test(registrationRule) &&
+    /NOT the tracked/.test(registrationRule);
   check(
-    "the worktree base is made ignored before any arm adds under it, through the repo-local exclude rather than the tracked `.gitignore`",
-    probesTheIgnoreRule && writesTheRepoLocalExclude,
-    `ignore rule probed: ${probesTheIgnoreRule}; repo-local exclude written instead of .gitignore: ${writesTheRepoLocalExclude}`,
+    "the worktree base is made ignored before any arm adds under it, probed as a directory and appended to the exclude file Git itself names rather than a literal `.git/info/exclude` or the tracked `.gitignore`",
+    probesTheIgnoreRule && resolvesTheExcludeThroughGit,
+    `ignore rule probed as a directory: ${probesTheIgnoreRule}; exclude resolved through git instead of a literal path or .gitignore: ${resolvesTheExcludeThroughGit}`,
   );
   // Arm ORDER is a contract in its own right, and prose has to settle it: a
   // prior fork run's `gh pr checkout` leaves a same-named local `T` behind, so
@@ -624,6 +646,40 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "and the token is read leniently, so a spaced spelling still selects the off-shoot",
     spaced.status === "reached-cycle",
     spaced.status,
+  );
+  // Lenient is not the same as indiscriminate, and the other direction has a
+  // cost the "a false positive only restores the old behaviour" reading misses:
+  // the old behaviour WAS the defect this gate exists for, so an incidental
+  // mention silently disables it and lets the deviating packet through. Three
+  // contexts mention an off-shoot without selecting one and each occurs in an
+  // ordinary request — a ref PATH (`rebase on top of <branch>` is a supported
+  // argument form and this repository really has such a branch), a quoted
+  // PHRASE, and a NEGATION — so the token is read out of text with those
+  // stripped first, the way `push-back` is stripped before `push`.
+  const incidental = [
+    "#42 rebase on top of task/021c-publication-guard-for-an-off-shoot, no-push",
+    "#42 branch feature/offshoot-ui, no-push",
+    '#42 title "Fix offshoot accounting", no-push',
+    "#42 this is not an off shoot, no-push",
+  ];
+  const leaked = [];
+  for (const req of incidental) {
+    const r = await run(gathered(off), req);
+    if (r.status !== "skipped-unselected-working-branch") leaked.push(`${req} -> ${r.status}`);
+  }
+  check(
+    "and an incidental mention that selects nothing — a ref path, a quoted phrase, a negation — does not disable the gate",
+    leaked.length === 0,
+    leaked.join("; "),
+  );
+  // The stripping must not eat the token itself, which is the worse failure of
+  // the two: it would refuse the supported case outright. A quoted TOKEN is
+  // still the token, and the docs themselves write it in backticks.
+  const quotedToken = await run(gathered(off), '#42 "off-shoot", no-push');
+  check(
+    "while a quoted spelling of the token itself still selects it",
+    quotedToken.status === "reached-cycle",
+    quotedToken.status,
   );
 }
 
