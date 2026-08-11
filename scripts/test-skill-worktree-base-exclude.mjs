@@ -6,12 +6,16 @@
 // The same recipe is also stated in prose by three skill steps, each shipped in
 // two hand-edited mirrors with no generator between them, so six files can drift
 // from the workflow and from each other one review-driven edit at a time. That
-// is exactly what task 018a had to repair: all three carried a literal
-// `.git/info/exclude`, which is not a path at all when the checkout is itself a
-// linked worktree (`.git` is a gitfile, `.git/info` is not a directory, the
-// append fails outright), so the protection was never established and the nested
-// `git worktree add` left `?? .worktrees/` in the very checkout the step
-// promises not to dirty.
+// is what task 018a had to repair, in two different shapes. The two BOOTSTRAP
+// steps told a run to append to a literal `.git/info/exclude`, which is not a
+// path at all when the checkout is itself a linked worktree (`.git` is a
+// gitfile, `.git/info` is not a directory, the append fails outright). The
+// `address-review` restatement already resolved the path through Git and named
+// the literal only to warn against it; its defect was solely the missing CWD
+// clause — a primary checkout answers RELATIVE, so an answer appended to from
+// another directory writes the rule where nothing reads it. Either way the
+// protection was never established and the nested `git worktree add` left
+// `?? .worktrees/` in the very checkout the step promises not to dirty.
 //
 // What is pinned here is the resolved form's load-bearing clauses, not whole
 // sentences: reword freely around them. The clauses are asserted to appear in
@@ -71,15 +75,25 @@ const SHARED = [
   ["probes with the trailing slash", /trailing slash/i],
 ];
 
-// The two BOOTSTRAP steps state the full recipe, command and all. The
-// `address-review` restatement deliberately carries neither the re-probe nor its
-// blocker (task 018a scoped that out rather than reconciling it); do not add it
-// to that file's list without deciding that question first.
+// The two BOOTSTRAP steps state the full recipe, command and all.
 const FULL = [
   ["gives the probe command with the trailing slash", /git check-ignore -q "<repo>\/\.worktrees\/"/],
   ["re-probes and makes a still-no answer a blocker", /re-probe and make a still-no answer a blocker/],
   ["warns that a linked worktree has no `.git/info` directory", /`\.git\/info` is not a directory at all/],
   ["points away from the tracked `.gitignore`", /NOT the tracked `\.gitignore`/],
+];
+
+// The `address-review` restatement deliberately carries neither the re-probe nor
+// its blocker — task 018a scoped that deviation out rather than reconciling it —
+// so the exclusion is pinned as ABSENCE rather than as omission from the list
+// above. Omission pins one direction only: it stops the clause being dropped
+// where it belongs, while the reconciliation this decision refuses — adding it
+// here — would sail through. Asserted both ways, moving that clause in either
+// direction costs a deliberate edit to this file, which is what "pinned as a
+// decision" has to mean. The pattern is loose on purpose: a reconciliation
+// copies the workflow's own spelling, and either half of it selects.
+const ABSENT_REPROBE = [
+  ["deliberately carries no re-probe and no still-no blocker", /re-?probe|still-no/i],
 ];
 
 const STEPS = [
@@ -101,10 +115,11 @@ const STEPS = [
       ["warns that a literal `.git/info/exclude` is not a path at all", /a literal `\.git\/info\/exclude` is not a path at all/],
       ["points away from the tracked `.gitignore`", /the tracked `\.gitignore`/],
     ],
+    absent: ABSENT_REPROBE,
   },
 ];
 
-for (const { skill, anchor, clauses } of STEPS) {
+for (const { skill, anchor, clauses, absent = [] } of STEPS) {
   const plugins = stepLine("plugins", skill, anchor);
   const codex = stepLine("codex", skill, anchor);
 
@@ -114,6 +129,10 @@ for (const { skill, anchor, clauses } of STEPS) {
 
   for (const [name, re] of clauses) {
     check(`${skill}: ${name}`, re.test(plugins) && re.test(codex));
+  }
+
+  for (const [name, re] of absent) {
+    check(`${skill}: ${name}`, !re.test(plugins) && !re.test(codex));
   }
 
   // Nothing may name `.git/info/exclude` as a path to WRITE. Every occurrence
@@ -139,15 +158,27 @@ for (const [name, re] of SHARED) {
 }
 
 // `declare-shadows` names `.git/info/exclude` too, as a rule source that does
-// not reach teammates rather than a file to append to. It is out of this pin's
-// scope on purpose; this check keeps that decision visible instead of leaving a
-// later audit to rediscover the mention and "fix" it.
+// not reach teammates rather than a file to append to. It is out of the step
+// pins' scope on purpose; this check keeps that decision visible instead of
+// leaving a later audit to rediscover the mention and "fix" it. The undisclaimed
+// scan above runs over the three step LINES, so this file is the one place the
+// literal appears with no scan over it — which is why the mention is counted
+// rather than merely looked for. "Only" has to mean only: a SECOND mention, such
+// as an added instruction to append there directly, is the defect this file's
+// single disclaimed mention would otherwise camouflage.
 for (const tree of ["plugins", "codex"]) {
   const path = join(repo, tree, "dev-skills", "skills", "declare-shadows", "SKILL.md");
-  const text = readFileSync(path, "utf8");
+  const mentions = readFileSync(path, "utf8")
+    .split("\n")
+    .flatMap((line) => [...line.matchAll(/`\.git\/info\/exclude`/g)].map(() => line));
+  check(
+    `${tree}/declare-shadows names the exclude exactly once`,
+    mentions.length === 1,
+    `${mentions.length} mention(s)`,
+  );
   check(
     `${tree}/declare-shadows names the exclude only as an unshared rule source`,
-    /`\.git\/info\/exclude`/.test(text) && /does not ignore the path for teammates/.test(text),
+    mentions.length === 1 && /does not ignore the path for teammates/.test(mentions[0]),
   );
 }
 
