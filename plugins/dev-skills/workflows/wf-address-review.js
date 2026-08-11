@@ -2646,13 +2646,28 @@ const landed = published
 const pushNoop = !published && !landed && !!(publishReport && publishReport.pushed);
 // What is left, as the COMPLEMENT of what landed over the same keyed set rather
 // than a second count of its own: every disposition is named exactly once above,
-// so an item is owed its reply precisely when the account does not report one.
-const owedReplies = dispKeys.length - repliedCount;
+// so an item is owed its reply precisely when the account does not report one —
+// over the items publication OWES one at all. Two kinds it never owes, and
+// counting them as debt tells the maintainer and the replay turn that a
+// forbidden action is outstanding: step 4 of the publish brief posts no reply to
+// a `standalone` item (it is addressed in the Summary comment alone and is never
+// resolved as a thread) and none to an `ambiguous-skipped` thread (it is
+// deliberately left without one and left open), so both carry `replied: false`
+// on a genuinely COMPLETE publication.
+// That is deliberately the two kinds the brief NEVER acts on rather than a copy
+// of its whole per-kind table here — the residual the publication gate records
+// above names why a second copy of that table is the wrong trade. The one
+// remaining policy case, a push-back or a deferral left unresolved on a HUMAN
+// thread, turns on `authorIsBot` per disposition and stays a hedge on the
+// resolve line rather than a third rule to drift.
+const owedKeys = workReport.filter((d) => d && d.type === "review-thread" && d.kind !== "ambiguous-skipped").map(dispKeyOf);
+const owedReplies = owedKeys.filter((k) => !(accountByKey.get(k) || {}).replied).length;
+const owedResolves = owedKeys.filter((k) => !(accountByKey.get(k) || {}).resolved).length;
 const outstanding = published
   ? ""
   : [
-      owedReplies ? `${owedReplies} of ${workReport.length} thread(s) still owed their reply` : "",
-      resolvedCount < workReport.length ? `${workReport.length - resolvedCount} not resolved (which for a push-back on a human thread is the policy rather than a debt)` : "",
+      owedReplies ? `${owedReplies} of ${owedKeys.length} thread(s) still owed their reply` : "",
+      owedResolves ? `${owedResolves} not resolved (which for a push-back or a deferral on a human thread is the policy rather than a debt)` : "",
       summaryUrl ? "" : "the Summary comment",
     ].filter(Boolean).join(", ") || "no reply, resolve or Summary comment — publication stopped past all of them, so its reason above is what is left to act on";
 // Where each entry stands, one line per disposition, matched to it by key. The
@@ -2666,6 +2681,16 @@ const standingLine = (d) => {
   const label = `thread=${key || "(no threadId or url)"}  ${String((d && d.ref) || "").trim() || "(no ref)"}`;
   if (accountDefect) return `${label} — UNKNOWN whether its reply is posted or its thread resolved: check it on the PR before replying, and before resolving.`;
   const o = accountByKey.get(key);
+  // The same two kinds the debt counts above exclude, said per entry: a
+  // standing of "still owed" on one of them would have the replay turn post
+  // what the publish brief forbids — a thread reply an item has no thread for,
+  // or a reply on a thread the run deliberately left silent and open.
+  if (!(d && d.type === "review-thread" && d.kind !== "ambiguous-skipped")) {
+    const why = d && d.type === "standalone"
+      ? "a standalone item is addressed in the Summary comment alone, never by a thread reply, and is never resolved as a thread"
+      : "an ambiguous-skipped thread is deliberately left without a reply and left open";
+    return `${label} — NOTHING is owed on it: ${why}.${o && (o.replied || o.resolved) ? " Its account nevertheless reports one, so check the thread on the PR before acting." : ""}`;
+  }
   return `${label} — ${o && o.replied ? "reply ALREADY POSTED — do not post it again" : "no reply reached the PR — the reply below is still owed"}; ${o && o.resolved ? "thread ALREADY RESOLVED — do not resolve it again" : "resolve still owed"}.`;
 };
 const perThread = published || !(landed || accountDefect) ? [] : workReport.map(standingLine);

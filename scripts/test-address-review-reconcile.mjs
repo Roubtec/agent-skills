@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 185;
+const EXPECTED_CHECKS = 186;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -2709,6 +2709,63 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       },
     ],
   };
+  // A gathered STANDALONE item and a thread the run left ambiguous — the two
+  // kinds step 4 of the publish brief never replies to, and never resolves. Both
+  // carry `replied: false` on a genuinely COMPLETE publication, so a record that
+  // counts them as debt tells the replay turn to post what the brief forbids: a
+  // thread reply for an item with no thread, and a reply on a thread this run
+  // deliberately left silent and open.
+  const ITEM_STANDALONE = {
+    type: "standalone",
+    author: "a-maintainer",
+    authorIsBot: false,
+    body: "a decision comment the request named as outstanding",
+    url: "https://example.invalid/pr/42#issuecomment-3",
+  };
+  const ITEM_3 = { ...ITEM, threadId: "T3", commentId: "C3", body: "a third finding", url: "https://example.invalid/pr/42#d3" };
+  const withPolicyKinds = { reconcile: { outcome: "work" }, items: [ITEM, ITEM_STANDALONE, ITEM_3] };
+  const CYCLE_PASS_POLICY_KINDS = {
+    ...CYCLE_PASS,
+    workReport: [
+      CYCLE_PASS.workReport[0],
+      {
+        type: "standalone",
+        url: "https://example.invalid/pr/42#issuecomment-3",
+        ref: "issue comment a-maintainer",
+        kind: "actionable-fixed",
+        detail: "folded into the Summary comment, which is where a standalone item is addressed",
+        author: "a-maintainer",
+        authorIsBot: false,
+        newFinding: true,
+      },
+      {
+        ...CYCLE_PASS.workReport[0],
+        threadId: "T3",
+        commentId: "C3",
+        url: "https://example.invalid/pr/42#d3",
+        ref: "src/app.ts:31 a-reviewer",
+        kind: "ambiguous-skipped",
+        detail: "needs a call on which of the two contracts wins; left open",
+        newFinding: false,
+      },
+    ],
+  };
+  // The publication that stops after replying to the one thread it owes a reply
+  // to. Its account is COMPLETE — one entry per disposition — and the two
+  // policy-ineligible entries are `replied: false` because nothing was ever owed
+  // on them, not because anything failed.
+  const PUBLISH_PART_WAY_POLICY_KINDS = {
+    published: false,
+    pushed: true,
+    pushedNewCommits: true,
+    aborted: "thread T1 was replied to and resolved, then posting the Summary comment failed with a 502",
+    summaryCommentUrl: "",
+    threadOutcomes: [
+      { ref: "src/app.ts:12 a-reviewer", threadId: "T1", outcome: "replied and resolved", replied: true, resolved: true },
+      { ref: "issue comment a-maintainer", url: "https://example.invalid/pr/42#issuecomment-3", outcome: "Summary-only; no thread to reply to", replied: false, resolved: false },
+      { ref: "src/app.ts:31 a-reviewer", threadId: "T3", outcome: "left open, per its disposition", replied: false, resolved: false },
+    ],
+  };
   // The cap: a cycle that returned its report without a passing verdict.
   const CYCLE_CAP = { ...CYCLE_PASS, verdict: "fail", outstanding: { reviewer: [{ finding: "still wrong" }] } };
   // A passing cycle whose one entry names a thread that was never gathered, so
@@ -2988,6 +3045,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     ["a publication whose push was a no-op before it failed", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_NOOP_PUSH }, "fixed-publish-failed", true],
     ["a publication that aborted with nothing on origin", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_NOTHING }, "fixed-publish-failed", true],
     ["a publication whose reply and resolve landed on one of two threads", { args: "push no-rebase", cycles: [CYCLE_PASS_TWO], publish: PUBLISH_PART_WAY_RESOLVED }, "fixed-publish-failed", true, withTwo],
+    ["a publication holding items publication owes neither a reply nor a resolve", { args: "push no-rebase", cycles: [CYCLE_PASS_POLICY_KINDS], publish: PUBLISH_PART_WAY_POLICY_KINDS }, "fixed-publish-failed", true, withPolicyKinds],
     // The three shapes in which the publisher's account cannot carry a claim
     // about origin. Every one of them used to render as "nothing reached
     // origin", which is a statement about a state the run has no fact about.
@@ -3136,6 +3194,35 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /thread=T2 {2}src\/app\.ts:12 a-reviewer — no reply reached the PR — the reply below is still owed; resolve still owed\./.test(resolved) &&
       !/thread=T1[^\n]*resolve still owed/.test(resolved),
     JSON.stringify({ landedLine: resolvedLanded || "no origin line at all", standing: (resolved.match(/^ {2}thread=.*\n {2}thread=.*/m) || ["no standing lines"])[0] }),
+  );
+
+  // And the debt counted over the items publication OWES something on, rather
+  // than over every disposition. Step 4 of the publish brief replies to no
+  // `standalone` item (it is addressed in the Summary comment alone and never
+  // resolved as a thread) and to no `ambiguous-skipped` thread (it is left
+  // without a reply and left open), so both are `replied: false` on a COMPLETE
+  // publication. Counted as debt, this record tells the maintainer and the
+  // replay turn that a forbidden action is outstanding — and the per-entry
+  // standing is the sharper half of the same defect, since it is the line the
+  // next turn acts on entry by entry: "the reply below is still owed" on a
+  // standalone item asks for a reply on a thread it does not have.
+  // The map here holds one of each beside one ordinary fixed thread whose reply
+  // and resolve both landed, so the counts have a nonzero complement to be wrong
+  // about in either direction.
+  const policyKinds = briefs["a publication holding items publication owes neither a reply nor a resolve"];
+  const policyLanded = (policyKinds.match(/^reached origin: .*/m) || [""])[0];
+  check(
+    "and the debt excludes what publication never owed — a standalone item and an ambiguous-skipped thread are neither counted nor told they are owed a reply",
+    // One repliable thread, and it was replied to and resolved: nothing at all
+    // is owed but the Summary comment.
+    /still outstanding: the Summary comment$/.test(policyLanded) &&
+      !/still owed their reply/.test(policyLanded) &&
+      !/not resolved/.test(policyLanded) &&
+      /thread=T1 {2}src\/app\.ts:12 a-reviewer — reply ALREADY POSTED — do not post it again; thread ALREADY RESOLVED — do not resolve it again\./.test(policyKinds) &&
+      /thread=https:\/\/example\.invalid\/pr\/42#issuecomment-3 {2}issue comment a-maintainer — NOTHING is owed on it: a standalone item is addressed in the Summary comment alone, never by a thread reply, and is never resolved as a thread\./.test(policyKinds) &&
+      /thread=T3 {2}src\/app\.ts:31 a-reviewer — NOTHING is owed on it: an ambiguous-skipped thread is deliberately left without a reply and left open\./.test(policyKinds) &&
+      !/(issuecomment-3|T3)[^\n]*still owed/.test(policyKinds),
+    JSON.stringify({ landedLine: policyLanded || "no origin line at all", standing: (policyKinds.match(/^ {2}thread=.*\n {2}thread=.*\n {2}thread=.*/m) || ["no standing lines"])[0] }),
   );
 
   // The THIRD state, in all three shapes it arrives in. Absence of a report is
