@@ -1,4 +1,4 @@
-# 047 — Confine rebase-stack's per-branch rebase against an inherited `rebase.updateRefs=true`
+# 016c — Confine rebase-stack's per-branch rebase against an inherited `rebase.updateRefs=true`
 
 ## Why
 
