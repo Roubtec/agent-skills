@@ -113,7 +113,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 89;
+const EXPECTED_CHECKS = 91;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1035,6 +1035,23 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     clean.seen.cycleOpts && clean.seen.cycleOpts.opts.base === REBASE_NOOP.effectiveBase,
     JSON.stringify(clean.seen.cycleOpts && clean.seen.cycleOpts.opts && clean.seen.cycleOpts.opts.base),
   );
+  // The default target is the PR's base ref; an explicit
+  // `rebase on top of <branch>` token is a ref of the maintainer's, and the two
+  // are resolved in different places (the brief's two arms are read directly
+  // below). WHICH arm a run gets is the caller's to say, so the wiring is read
+  // here rather than only the builder: the gather reports the token in
+  // `rebaseTarget`, and a brief rendered for the default arm on it would send
+  // the fetch at the base repository for a ref that need not exist there.
+  const explicitlyTargeted = await run({ ...gathered(withWork), rebaseTarget: "my-local-base" });
+  const explicitBriefDispatched = explicitlyTargeted.seen.rebasePrompts[0] || "";
+  check(
+    "and a gathered `rebaseTarget` reaches the rebase brief as an explicitly named target, not as the PR's own base ref",
+    /The target is `my-local-base`, named outright by this run's request/.test(explicitBriefDispatched) &&
+      !/git fetch /.test(explicitBriefDispatched),
+    explicitBriefDispatched
+      ? `the dispatched brief takes the ${/named outright/.test(explicitBriefDispatched) ? "explicit" : "default"} arm and ${/git fetch /.test(explicitBriefDispatched) ? "still fetches" : "fetches nothing"}`
+      : "no rebase brief was dispatched at all",
+  );
   const unpinned = await run(gathered(withWork), { rebase: { ...REBASE_NOOP, effectiveBase: "origin/main" } });
   check(
     "a rebase reporting a movable ref instead of the commit it landed on stops the run, dispatching nothing",
@@ -1437,6 +1454,33 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "and fetches the target from the repository that ref lives in — the PR's own, handed over as its resolved URL rather than re-derived from the working directory — never through the branch's push remote",
     fetchesFromBaseRepo && carriesThePrUrl && refusesTheDirectoryDerivedRepo && fetchesTheRef && resolvesWhatItFetched,
     `base repository stated: ${fetchesFromBaseRepo}; carries the PR url: ${carriesThePrUrl}; directory-derived repo refused: ${refusesTheDirectoryDerivedRepo}; fetches the ref: ${fetchesTheRef}; resolves what it fetched: ${resolvesWhatItFetched}`,
+  );
+
+  // And the other half of "the repository that ref lives in": that clause is
+  // true of the DEFAULT target, which is the PR's base ref, and false of an
+  // explicit `rebase on top of <branch>` token, which names whatever the
+  // maintainer named — routinely a local branch, or one in the head fork.
+  // `git fetch <repository> <refspec>` reads the refspec in the repository
+  // operand, so rendering the paragraph above for an explicit target either
+  // pins an unrelated same-named branch upstream or stops a run whose target
+  // was on disk the whole time — the token's pre-default behaviour was to
+  // resolve it locally, and that is what the explicit arm restores. Read the
+  // arm for what it ORDERS (resolve here, fetch nothing) and for the absence of
+  // the fetch it must not inherit, since the two arms share one builder and a
+  // careless merge of them would silently reinstate it.
+  const explicitBrief = rebasePrompt("pre-fix", briefPacket, "my-local-base", true);
+  const resolvesWhereNamed = /Resolve it WHERE IT WAS NAMED/.test(explicitBrief) &&
+    /git rev-parse --verify my-local-base\^\{commit\}/.test(explicitBrief);
+  const fetchesNothingForIt = /Fetch NOTHING for it/.test(explicitBrief) && !/git fetch /.test(explicitBrief);
+  const refusesTheBaseRepoLookup = /do not go looking for it in the PR's base repository/.test(explicitBrief);
+  const stopsRatherThanSubstitute = /report `ok: false` naming what you tried, and substitute nothing/.test(explicitBrief);
+  // The shared tail still applies to both arms: whatever it resolved is what
+  // gets reported and rebased onto, at full length.
+  const stillPinsTheOid = /Report exactly that full OID as `effectiveBase` and rebase onto THAT OID/.test(explicitBrief);
+  check(
+    "but an explicitly named target is resolved in the working location and fetched from nowhere, since the token routinely names a local branch the base repository does not have",
+    resolvesWhereNamed && fetchesNothingForIt && refusesTheBaseRepoLookup && stopsRatherThanSubstitute && stillPinsTheOid,
+    `resolves where named: ${resolvesWhereNamed}; fetches nothing: ${fetchesNothingForIt}; base-repo lookup refused: ${refusesTheBaseRepoLookup}; stops rather than substitutes: ${stopsRatherThanSubstitute}; still pins the OID: ${stillPinsTheOid}`,
   );
 
   // This brief is the workflow layer's rendering of the canonical nugget
