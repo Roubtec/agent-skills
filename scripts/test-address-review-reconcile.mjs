@@ -288,8 +288,9 @@ const CYCLE_PASS_RECORD_ONLY = {
 // under test here stops well before publication. `opts.args` overrides the
 // request, which three gates beside it need: whether a working branch other
 // than the PR head ref was ever selected is read from the request rather than
-// the packet, the rebase opt-out needs its own token, and the one scenario that
-// reads the PUBLISH brief needs `push`. `opts.rebase` scripts what every
+// the packet, the rebase opt-out needs its own token, and the scenarios that
+// read the PUBLISH brief need a request carrying no `no-push` flag, since
+// publication is the default. `opts.rebase` scripts what every
 // delegated rebase agent reports back and `opts.rebases` scripts one point
 // at a time (keyed `pre-fix`/`pre-push`), and `opts.cycles` scripts what the
 // nested cycle RETURNS, call by call — without it the first call ends the
