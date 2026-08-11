@@ -1739,6 +1739,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "the no-op reported as one, with no validation run on it and the two tips that evidence it":
       /noop: true/.test(brief) && /run no validation/.test(brief) && /adopts it only where both are reported and equal/.test(brief),
     "idempotence — why two points cannot double-apply": /cannot double-apply/.test(brief),
+    "the merge guard — a merge that introduced its own content halts rather than being silently flattened":
+      /git rev-list --merges/.test(brief) && /--remerge-diff/.test(brief) && /On such a merge rebase NOTHING/.test(brief),
     "the delivery-tier validation after a replay": /the project's build AND its test suite/.test(brief),
     "reporting the conflicts it resolved and the commits it skipped": /git rebase --skip/.test(brief) && /Narrate one line each in `detail`/.test(brief),
     "the halt reported with a question naming the conflict it turns on": /report `halted: true` with a `question` naming the conflicting files, the offending commit/.test(brief),
