@@ -75,6 +75,10 @@ const SHARED = [
   ["probes with the trailing slash", /trailing slash/i],
 ];
 
+// The literal, matched bare or backticked: the scans below promise "every
+// occurrence", and a mention that drops the code span must not slip past them.
+const EXCLUDE_LITERAL = /`?\.git\/info\/exclude`?/g;
+
 // The two BOOTSTRAP steps state the full recipe, command and all. The recipe
 // probes and appends the one name `.worktrees/`, so the step may not offer a
 // differently named in-repo base the re-probe would wave through unignored.
@@ -143,7 +147,7 @@ for (const { skill, anchor, clauses, absent = [] } of STEPS) {
   // or the literal you must not spell — which is what distinguishes the fixed
   // text from the instruction it replaced.
   for (const [tree, line] of [["plugins", plugins], ["codex", codex]]) {
-    const bad = [...line.matchAll(/`\.git\/info\/exclude`/g)].filter(
+    const bad = [...line.matchAll(EXCLUDE_LITERAL)].filter(
       (m) => !/literal|RELATIVE/.test(line.slice(Math.max(0, m.index - 60), m.index)),
     );
     check(
@@ -173,7 +177,7 @@ for (const tree of ["plugins", "codex"]) {
   const path = join(repo, tree, "dev-skills", "skills", "declare-shadows", "SKILL.md");
   const mentions = readFileSync(path, "utf8")
     .split("\n")
-    .flatMap((line) => [...line.matchAll(/`\.git\/info\/exclude`/g)].map(() => line));
+    .flatMap((line) => [...line.matchAll(EXCLUDE_LITERAL)].map(() => line));
   check(
     `${tree}/declare-shadows names the exclude exactly once`,
     mentions.length === 1,
