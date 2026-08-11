@@ -63,9 +63,11 @@
  * Workflows have no mid-run user input, so this is structurally the skill's
  * `hands-off` mode: low-stakes ambiguity is decided best-effort by the agents
  * and recorded; high-stakes ambiguity is left open and reported, never guessed.
- * A rebase conflict beyond the delegated step's competence is aborted cleanly,
- * the tree left clean and idle, and the run stops carrying that conflict out as
- * an open question — the hands-off shape of the skill's interactive loop-in.
+ * A rebase conflict beyond the delegated step's competence is aborted cleanly —
+ * and a merge carrying its own content halts the step before any replay, with
+ * no rebase started and so nothing to abort — the tree left clean and idle
+ * either way, and the run stops carrying what it turns on as an open question —
+ * the hands-off shape of the skill's interactive loop-in.
  *
  * Worktree model
  * --------------
@@ -202,8 +204,8 @@ const REBASE_SCHEMA = {
   type: "object",
   properties: {
     ok: { type: "boolean", description: "False when the rebase could not be carried out at all — dirty or mid-operation tree, a target that does not resolve, a git failure. The run stops; nothing is fixed or pushed on the strength of it." },
-    halted: { type: "boolean", description: "True when a conflict beyond this step's competence was met: the rebase was ABORTED, the tree left clean and idle, and `question` carries what the maintainer has to decide. Not a failure of the run's mechanics — a decision it cannot make." },
-    question: { type: "string", description: "REQUIRED when halted: the conflicting files, the offending commit, and what the judgment turns on. It is reported as this run's open question, so write it for the maintainer rather than as a log line." },
+    halted: { type: "boolean", description: "True when the step stopped for a decision beyond its competence — a conflict met mid-rebase, where the rebase was ABORTED, or a merge carrying its own content found in the range before any replay, where no rebase was started and there was nothing to abort. Either way the tree is left clean and idle and `question` carries what the maintainer has to decide. Not a failure of the run's mechanics — a decision it cannot make." },
+    question: { type: "string", description: "REQUIRED when halted: the offending commit (the conflicting one, or the content-bearing merge), the files at issue, and what the judgment turns on. It is reported as this run's open question, so write it for the maintainer rather than as a log line." },
     effectiveBase: { type: "string", description: "The full OID actually rebased onto, as `git rev-parse --verify <target>^{commit}` printed it — a commit, never a ref name and never an abbreviation. REQUIRED whenever ok is true; the caller rejects anything that is not a full hex OID (40 characters, or 64 in a SHA-256 repository) and stops the run, because every delegation range afterwards is taken against this value." },
     noop: { type: "boolean", description: "True when the rebase replayed nothing and the tip is unchanged (the pinned base was already an ancestor of HEAD) — the common and cheap outcome, and what makes two rebase points safe. It is the one value that switches checks off (no validation here, no re-verification of the rebased tree at the pre-push point), so the caller adopts it only where `before` and `after` are both reported and equal, and stops the run otherwise." },
     before: { type: "string", description: "Tip SHA before the rebase — the pre-rebase tip step 3 saved. REQUIRED whenever ok is true: the caller checks the recovery ref against it, and where noop is true it and `after` are also the evidence the no-op is accepted on." },
@@ -1009,8 +1011,9 @@ const rebaseRecord = {
 };
 // Runs one point and returns either `{ rebase }` — the report, with `pr.base`
 // already replaced by the pinned OID — or `{ stop }`, a result the run returns
-// as it stands. Everything that is not a clean rebase stops the run: a halted
-// conflict, a failed one, a broken build, a recovery ref the report cannot name in full or show resolving to the tip
+// as it stands. Everything that is not a clean rebase stops the run: a halt
+// (a mid-rebase conflict aborted, or a content-bearing merge met before any
+// replay), a failed rebase, a broken build, a recovery ref the report cannot name in full or show resolving to the tip
 // it started from, and an `effectiveBase` that is not a commit. That last check is the load-bearing one, and it is a check rather
 // than trust because the whole run's diff boundaries hang off that field: a
 // movable name accepted here reaches the review cycle as a base that a sibling
@@ -1075,7 +1078,7 @@ async function rebasePoint(point, target) {
   if (report.halted) {
     return stop(
       "rebase-halted",
-      `The ${point} rebase met a conflict beyond the delegated step's competence, aborted it, and left the tree clean and idle.`,
+      `The ${point} rebase halted on a decision beyond the delegated step's competence — a mid-rebase conflict it aborted, or a content-bearing merge it met before any replay, with no rebase started — and left the tree clean and idle.`,
       {
         openQuestions: [
           {
