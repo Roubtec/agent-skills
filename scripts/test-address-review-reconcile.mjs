@@ -82,9 +82,12 @@ function check(name, cond, detail) {
 }
 
 // How many checks this suite must run. Read BEFORE the assertion itself, so it
-// does not count. Bump it deliberately when adding or removing one — a
-// scenario that silently stops running is invisible to a suite that only gates
-// on failures.
+// does not count: that final `check(...)` evaluates `ran === EXPECTED_CHECKS`
+// as an argument, ahead of its own `ran++`. So this number is one LESS than the
+// `check(` call sites in the file, by construction — counting the sites reads
+// one too many and is not a way to audit it. Bump it deliberately when adding
+// or removing a check — a scenario that silently stops running is invisible to
+// a suite that only gates on failures.
 const EXPECTED_CHECKS = 48;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
