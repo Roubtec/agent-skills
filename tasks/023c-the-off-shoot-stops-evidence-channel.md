@@ -12,6 +12,10 @@ It was left out of 023a deliberately rather than missed. The clause and its pins
 
 PR #76 (task 021c) must have landed, so this task edits a settled clause rather than one being rewritten under it. This is an ordering constraint only — the work does not depend on any behavior 021c adds beyond the clause existing in its final wording.
 
+That prerequisite is deeper than it reads: PR #76 is itself the fifth link of a stacked chain rooted at PR #72 (016) — #72 → #73 (017b) → #74 (045) → #75 (021d) → #76 — so every one of those must land before this task's clause is settled. Recorded because an earlier session twice understated the chain as beginning at #75, and the whole point of naming a prerequisite is that the next session does not have to re-derive it.
+
+Confirmed by the maintainer to stay QUEUED here rather than be implemented early or deferred: implementing it before #76 lands would edit the clause on that branch while #77 and #78 sit on top, forcing restacks of both — which is the collision this task was split out to avoid. The waking condition is a live PR rather than an uncertain one, so `tasks/deferred/` is the wrong home.
+
 ## Scope
 
 Included:
