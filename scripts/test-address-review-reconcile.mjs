@@ -1627,6 +1627,22 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
           /reported no outcome for says that rather than guessing/,
         ],
       ],
+      // The third state's ENTRY CONDITION, for the same reason the part-way
+      // opener above is pinned and by the same mechanism: it is the one line an
+      // agent decides from, and it drifted once already into "the run has
+      // already mutated the PR" — which `claimsPRState` is not. That selector
+      // reads END STATE, so a no-op push that moved nothing and an entry
+      // reporting a reply a PRIOR run posted both satisfy it with this run
+      // having written nothing; the record's own printed reason says so in the
+      // words pinned here. The prose is the whole contract on the codex mirror,
+      // where a reader who takes those two shapes for "not unknown" emits the
+      // canonical rendering and asserts nothing reached origin over a reply the
+      // PR is carrying.
+      [
+        "the third state's entry condition",
+        "**A publication whose outcome is not known**",
+        [/incomplete while the PR already carries part of this map/],
+      ],
     ];
     // Item 2's bullets are an ordered exclusion chain — "work these in order …
     // each excludes the ones above it and the last is 'everything else'" — so
