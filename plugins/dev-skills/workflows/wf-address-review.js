@@ -246,7 +246,7 @@ const PUBLISH_SCHEMA = {
     pushedNewCommits: { type: "boolean", description: "True ONLY if the push actually advanced the remote branch — new commits or rewritten history. False when no push happened or for a no-op `Everything up-to-date` push. Gates whether the re-review pings may fire, and it is the push half of what a disposition record may call landed." },
     threadOutcomes: {
       type: "array",
-      description: "Your ACCOUNT of what you posted, keyed one entry per item: its machine identity, its stable reference, what was done in prose, and the two facts a later turn acts on. REQUIRED on every report, ABORTED ONES INCLUDED — one entry per item you were given, whether or not you reached it. What landed and what is still owed are derived as complements of this account, so an item you leave out is not read as untouched: the caller cannot tell a thread you never reached from one whose reply landed unreported, and it says the outcome is UNKNOWN rather than guessing either way. An abort before the push touched anything reports `[]`, which is the complete account of having acted on nothing.",
+      description: "Your ACCOUNT of where each item STANDS ON THE PR when your turn ends — not a log of your own writes: an equivalent reply of yours that was already there counts as replied, and a thread you found resolved counts as resolved. Keyed one entry per item: its machine identity, its stable reference, what was done in prose, and the two facts a later turn acts on. REQUIRED on every report, ABORTED ONES INCLUDED — one entry per item you were given, whether or not you reached it. What a disposition record calls landed and what it calls still owed are derived as complements of this account — so `landed` is what the PR CARRIES rather than what this run put there — and an item you leave out is not read as untouched: the caller cannot tell a thread you never reached from one whose reply is on the PR unreported, and it says the outcome is UNKNOWN rather than guessing either way. An abort before the push touched anything reports `[]`, which is the complete account of having acted on nothing.",
       items: {
         type: "object",
         properties: {
@@ -974,6 +974,9 @@ ${JSON.stringify(dispositions, null, 2)}`;
 // write FAILS CLOSED where the PR no longer carries it: an unspent record is
 // replayed again by the next run, which the run's `note` surfaces, while a
 // mis-targeted spend is a silent deletion nothing later can notice.
+// `priorUrl` is always a url here: `spendPriorRecord` returns before rendering
+// this where the gather reported none, so step 1 below names one rather than
+// carrying a fallback nothing reaches.
 function spendRecordPrompt(packet, facts) {
   const summaryUrl = typeof facts.summaryUrl === "string" ? facts.summaryUrl.trim() : "";
   const priorUrl = typeof facts.priorUrl === "string" ? facts.priorUrl.trim() : "";
@@ -986,7 +989,7 @@ ${DESTROY_BOUNDARY}
 You make at most ONE PR write — updating that record comment in place — and nothing else: no push, no reply, no resolve, no Summary comment, no ping, no label, no review request. If you cannot make that one write, report \`posted: false\` with what failed; never compensate by writing something else. And you make NO write at all where step 1 does not find THAT record, still there and still yours: there is then nothing this run may spend, and posting a new comment would create exactly what this step exists to end.
 
 WHICH REPOSITORY every command below addresses: the one this PR is IN, whose \`<owner>/<repo>\` is already resolved and handed to you in the PR's own URL \`${packet.pr.url}\` — never the repository your working location resolves to. On a cross-repository PR the checkout is the HEAD fork while the PR and its comments live in the base repository, and \`gh api\`'s \`{owner}\`/\`{repo}\` placeholders expand to the repository of the current directory — so unqualified, the lookup searches the fork and finds no record to spend, and the \`PATCH\` addresses a comment id in the fork. So write that \`<owner>/<repo>\` out LITERALLY in each command below. Do not re-derive it from a bare \`gh repo view --json nameWithOwner\`, which with no repository argument answers for the directory — in a fork clone the head fork again.
-1. Find THE record this run replayed — the comment at ${priorUrl || "(no url was reported for it, so there is nothing to spend: write nothing and report `posted: false` saying so)"}, whose comment id is the number its \`#issuecomment-<id>\` fragment ends with. It is the ONLY record this run may spend: its map is the one this publication put on the PR, and any other record on this PR is some other run's account, which the in-place update below would EMPTY rather than replace. Confirm it is still there and still yours: \`gh api --paginate repos/<owner>/<repo>/issues/${packet.pr.number}/comments --jq '.[] | select((.body | split("\\n")[0] | rtrimstr("\\r")) == "<!-- address-review:disposition-record -->") | {id, login: .user.login, updated_at}'\` — the MARKER identifies a record, never its prose, and it must be the body's FIRST LINE byte for byte. A \`contains\` test is what you must NOT use: it also selects an ordinary comment that merely QUOTES the marker (a maintainer asking about this mechanism, a review summary echoing it), and step 2 would then \`PATCH\` that person's comment away. The \`rtrimstr("\\r")\` is why a body GitHub hands back with CRLF line endings still matches its own first line. Yours are the ones authored by the authenticated user (\`gh api user --jq .login\`).
+1. Find THE record this run replayed — the comment at ${priorUrl}, whose comment id is the number its \`#issuecomment-<id>\` fragment ends with. It is the ONLY record this run may spend: its map is the one this publication put on the PR, and any other record on this PR is some other run's account, which the in-place update below would EMPTY rather than replace. Confirm it is still there and still yours: \`gh api --paginate repos/<owner>/<repo>/issues/${packet.pr.number}/comments --jq '.[] | select((.body | split("\\n")[0] | rtrimstr("\\r")) == "<!-- address-review:disposition-record -->") | {id, login: .user.login, updated_at}'\` — the MARKER identifies a record, never its prose, and it must be the body's FIRST LINE byte for byte. A \`contains\` test is what you must NOT use: it also selects an ordinary comment that merely QUOTES the marker (a maintainer asking about this mechanism, a review summary echoing it), and step 2 would then \`PATCH\` that person's comment away. The \`rtrimstr("\\r")\` is why a body GitHub hands back with CRLF line endings still matches its own first line. Yours are the ones authored by the authenticated user (\`gh api user --jq .login\`).
 2. Where that listing does not carry that id as a record of your own — it is gone, it is another actor's, or no id could be read from the url — write NOTHING: report \`posted: false\`, \`superseded: false\`, and say in \`detail\` which of those it was. Do NOT fall back to the most recent record of your own, or to any other: an unspent record is replayed by the next run and this run's report says so, while a spend written over the wrong record deletes a map nothing later can recover. Otherwise update THAT id IN PLACE with the body below, read from stdin so composing it puts no file in the working location: \`gh api --method PATCH repos/<owner>/<repo>/issues/comments/<id> -F body=@-\`. Report any further records the listing shows in \`detail\` rather than touching them, and never touch another actor's comment: delete, sweep or expire NOTHING.
 3. Write "codex"/"claude"/"copilot" PLAIN in the body, with no bare \`@\`-mentions anywhere — a mention here would summon a review round for work that is already published.
 
@@ -2657,12 +2660,17 @@ for (const o of outcomes) {
 const unaccountedKeys = dispKeys.filter((k) => !accountByKey.has(k));
 const summaryReported = !!publishReport && typeof publishReport.summaryCommentUrl === "string";
 const summaryUrl = summaryReported ? publishReport.summaryCommentUrl.trim() : "";
-// Nothing the publisher reported claims a mutation at all: no push, no reply, no
-// resolve, no Summary. Then an account short of an entry per item is COMPLETE
-// rather than missing — the push is step 2 and the replies and Summary are steps
-// 4 and 5, so there is nothing an unnamed item's entry could say — and this is
-// the one shape in which `[]` is the whole truth.
-const claimsAMutation =
+// Nothing the publisher reported puts any part of this map on the PR: no push,
+// no Summary, and no entry reporting a reply or a resolve there. Then an account
+// short of an entry per item is COMPLETE rather than missing — the push is step 2
+// and the replies and Summary are steps 4 and 5, so there is nothing an unnamed
+// item's entry could say — and this is the one shape in which `[]` is the whole
+// truth.
+// It is NOT "did this run mutate the PR". `replied`/`resolved` are END STATE, so
+// an entry reporting a reply a PRIOR run posted puts this shape out of reach too
+// — which is the right direction: the PR is then carrying part of this map, and
+// an item the account leaves unnamed beside it really is unstated.
+const claimsPRState =
   !!(publishReport && (publishReport.pushed || publishReport.pushedNewCommits)) ||
   !!summaryUrl ||
   outcomes.some((o) => o && (o.replied || o.resolved));
@@ -2689,8 +2697,8 @@ const accountDefect = !publishReport
         ? `its account names ${duplicateKeys.length === 1 ? "an item" : `${duplicateKeys.length} items`} more than once (${duplicateKeys.join(", ")}), so which entry is that item's outcome is undecidable`
         : strayKeys.length
           ? `its account names ${strayKeys.join(", ")}, which is no disposition this run holds, so it is an account of some other work`
-          : unaccountedKeys.length && claimsAMutation
-            ? `its account leaves ${unaccountedKeys.length} of ${workReport.length} item(s) unnamed (${unaccountedKeys.join(", ")}) while reporting that it already mutated the PR, so whether those replies landed is unstated`
+          : unaccountedKeys.length && claimsPRState
+            ? `its account leaves ${unaccountedKeys.length} of ${workReport.length} item(s) unnamed (${unaccountedKeys.join(", ")}) while reporting that the PR already carries part of this map, so whether those replies are on it is unstated`
             : "";
 // WHAT PUBLICATION OWES each disposition, read off two fields of the disposition
 // itself (`type`/`kind` and `authorIsBot`) rather than out of a copy of the
@@ -2710,11 +2718,16 @@ const isReviewThreadOwed = (d) => !!d && d.type === "review-thread" && d.kind !=
 // human one open unless the maintainer explicitly authorized otherwise, and it
 // resolves a `deferred-to-task` on the same condition. So a human push-back or
 // deferral is unresolved BY POLICY on a complete publication. That authorization
-// is a fact no field here records, so this set is what publication is KNOWN to
-// owe — and under-counting is the safe direction on BOTH consumers: the gate
-// refuses a completion claim only over a resolve publication certainly owed, and
-// the record's per-entry standing tells the next turn the resolve turns on that
-// authorization rather than asking it for the one action step 4 forbids.
+// is a fact no field here records — it rides in the disposition's `detail` prose,
+// which is where the fix step is told to say whether a deferral was
+// maintainer-directed — so this set is what publication is KNOWN to owe, and
+// under-counting is what each consumer can defend separately. The record's
+// per-entry standing tells the next turn the resolve turns on that authorization
+// rather than asking it for the one action step 4 forbids. The gate refuses a
+// completion claim only over a resolve publication is CERTAINLY owed, which
+// leaves one case to the publisher's own contract rather than to a standing line
+// — no record is written on the path that would carry one — and the gate below
+// names that residual where it names the other thing it cannot see.
 const isResolveOwed = (d) => isReviewThreadOwed(d) && !((d.kind === "push-back" || d.kind === "deferred-to-task") && d.authorIsBot === false);
 const owedKeys = workReport.filter(isReviewThreadOwed).map(dispKeyOf);
 const resolveKeys = workReport.filter(isResolveOwed).map(dispKeyOf);
@@ -2744,9 +2757,22 @@ const owedResolves = resolveKeys.filter((k) => !(accountByKey.get(k) || {}).reso
 // and the count cannot disagree about what step 4 owes — and both carve out
 // exactly the kinds step 4 acts on conditionally or not at all, so a genuinely
 // COMPLETE publication passes it with nothing to spare.
-// What it still does not test is what nothing here can: an entry claiming
-// `replied: true` that is not true on the PR. That is a report lying rather than
-// contradicting itself, and no reading of the report catches it.
+// What it still does not test is what nothing here can, and there are two such
+// shapes. An entry claiming `replied: true` that is not true on the PR: a report
+// LYING rather than contradicting itself, which no reading of the report catches.
+// And the resolve `isResolveOwed` carves out — the maintainer having authorized
+// resolving a human push-back, or directed a human deferral, and the resolve then
+// FAILING. Step 4 owes that resolve, and the publisher's own contract answers for
+// it (`published: true` only where every required resolve succeeded); what the
+// carve-out costs is the caller's ability to CHECK that answer, the authorization
+// living in `detail` prose rather than in a field. Buying that field was weighed
+// against what it would buy, and what it would buy is bounded: the thread is left
+// UNRESOLVED on the PR, so the next run's gather takes it as an item under its
+// unresolved-only rule, and the reply — the half whose drafted body lives only in
+// the record, and so the half a spend destroys — is already on the PR. That
+// asymmetry is the whole reason the reply half cannot afford an under-count here
+// and the resolve half can: a missed resolve degrades to the state policy
+// produces for a human thread anyway, which is the maintainer's to close.
 const contradictedByAccount = owedReplies || owedResolves
   ? `its own account contradicts that claim — ${[
       owedReplies ? `${owedReplies} of ${owedKeys.length} thread(s) publication owes a reply report that none reached the PR` : "",
@@ -2764,16 +2790,36 @@ const published = publishClaimed && !publicationDefect;
 // Why this run stopped short of a complete publication, in the words the record
 // prints. A report claiming completion has no `aborted` to quote — that field is
 // empty when published — so the claim it could not support is the reason.
+// The two ways it fails are not one, and the tests above already draw the line:
+// they ask whether the account can be READ, this one asks what it SAYS. A report
+// that cannot say the publication completed is SILENT about it; one whose own
+// entries report no reply on a thread publication owes one says the OPPOSITE.
+// Told "a report that cannot say so" over the second, the maintainer is told the
+// report was silent where it in fact contradicted the claim — so the one phrase
+// is picked here, once, and both readers of it (the record's `status:` line and
+// the run's `note`) take it from here rather than restating it.
+const claimRefusal = contradictedByAccount && publicationDefect === contradictedByAccount
+  ? "a report that says the OPPOSITE"
+  : "a report that cannot say so";
 const stopReason = publishClaimed
-  ? `the publisher reported the publication COMPLETE over a report that cannot say so — ${publicationDefect}`
+  ? `the publisher reported the publication COMPLETE over ${claimRefusal} — ${publicationDefect}`
   : (publishReport && publishReport.aborted) || "the publisher returned nothing";
-// Only three things can have landed, and the publisher reports each one: a push
-// that ADVANCED the remote, replies/resolves it confirmed, and a posted Summary.
-// `pushed` is NOT one of them — it says a push command succeeded, which an
-// `Everything up-to-date` no-op also does, so a run whose no-op push was followed
-// by a failure on its first reply changed nothing remotely and must not read as
-// "published in part": a reader who believes it goes looking for replies and a
-// Summary comment that were never posted.
+// What of this map the PR ALREADY CARRIES — which is what the next turn must not
+// do again — and NOT a diary of this run's own writes. `replied` and `resolved`
+// report each thread's state when the publisher's turn ended, a reply it skipped
+// under step 4's duplicate rule (an equivalent one of its own already being
+// there) included, so these counts take in a reply a PRIOR run posted and a
+// resolve that was already done. That reading is the one the record was
+// redefined for: a turn told a reply that is on the PR is still owed posts it
+// twice. So "reached origin" here means "is on origin", never "this run put it
+// there" — and a replay whose push moved nothing over replies already on the PR
+// renders as a publication published IN PART, which is exactly what it is: the
+// map is on the PR, whichever run posted it, and only the rest is left to replay.
+// The push is the one ACT in the list, and `pushed` is still not it: it says a
+// push command succeeded, which an `Everything up-to-date` no-op also does, so
+// `pushedNewCommits` — the flag that says the remote MOVED — is the push half a
+// record may name here. Nothing about the no-op is lost by that: `pushNoop` below
+// is what says it, over the runs where no part of the map is on the PR at all.
 const repliedKeys = dispKeys.filter((k) => (accountByKey.get(k) || {}).replied);
 const resolvedKeys = dispKeys.filter((k) => (accountByKey.get(k) || {}).resolved);
 const repliedCount = repliedKeys.length;
@@ -2793,8 +2839,11 @@ const landed = published
     ].filter(Boolean).join(", ");
 // A push that ran and moved nothing is neither case: the tips ARE on origin
 // (the remote already pointed at them), so the local-only line is false too.
-// One fact, one extra line in the record, rather than a rendering of its own. The
-// line it renders says no reply, resolve or Summary followed, which is a claim an
+// One fact, one extra line in the record, rather than a rendering of its own. It
+// keys on `!landed`, which under the end-state reading above is the stronger
+// statement it needs — the PR carries no reply, resolve or Summary of this map at
+// all, so this run certainly posted none of them. The line it renders says no
+// reply, resolve or Summary reached the PR, which is a claim an
 // unusable account cannot support — and that is settled in the ONE place named
 // just above rather than a second time here: every consumer reads `accountDefect`
 // FIRST, so this flag is only ever read where there is none. Guarding it here as
@@ -2938,7 +2987,7 @@ return {
   ...(reclaimed ? { worktreeReclaim: reclaimed } : {}),
   note: published
     ? (`${notes.join(" ")}${survivingWorktreeNote(reclaimed)}`.trim() || undefined)
-    : withRecordNote(`Fixes passed review but publication did not fully complete — ${publishClaimed ? `the publisher reported it COMPLETE over a report that cannot say so: ${publicationDefect}` : "see publishReport.aborted"}; ${accountDefect
+    : withRecordNote(`Fixes passed review but publication did not fully complete — ${publishClaimed ? `the publisher reported it COMPLETE over ${claimRefusal}: ${publicationDefect}` : "see publishReport.aborted"}; ${accountDefect
         ? `what reached origin is UNKNOWN: ${accountDefect}`
         : landed
           ? `what reached origin: ${landed}; what is outstanding: ${outstanding}`

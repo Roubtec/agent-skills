@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 195;
+const EXPECTED_CHECKS = 196;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -308,8 +308,12 @@ const CYCLE_PASS_RECORD_ONLY = {
 // scenario, which is all the gates ahead of the cycle need. The publisher is
 // stubbed as a clean success and its rendered brief kept, since what the caller
 // HANDS it is script logic even though the brief itself is prose.
+// The attached worktree a `worktree`-mode row works in, in one place because the
+// packet, the reclaim stub and the assertions over it must all name the same
+// tree.
+const WORKTREE_PATH = "/w/.worktrees/c/pr-42";
 async function run(packet, opts = {}) {
-  const seen = { agentLabels: [], cycleOpts: null, cycleCalls: [], rebasePrompts: [], publishPrompts: [], recordPrompts: [], spendPrompts: [] };
+  const seen = { agentLabels: [], cycleOpts: null, cycleCalls: [], rebasePrompts: [], publishPrompts: [], recordPrompts: [], spendPrompts: [], reclaimPrompts: [] };
   const agent = async (prompt, aopts) => {
     const label = (aopts && aopts.label) || "";
     seen.agentLabels.push(label);
@@ -363,6 +367,18 @@ async function run(packet, opts = {}) {
       return opts.spend === undefined
         ? { posted: true, superseded: true, url: "https://example.invalid/pr/42#issuecomment-9", detail: "superseded the prior record in place" }
         : opts.spend;
+    }
+    // Giving the worktree back — the one thing only a run that FINISHED does,
+    // and the reason the completion gate matters at all: a claim waved through
+    // it takes the exit that tears the tree down. It runs solely in `worktree`
+    // mode, so a row that wants the property OBSERVED says so in its packet;
+    // every other row spawns none of these and the assertions over them would
+    // be vacuous, which is what this stub exists to stop.
+    if (label === "reclaim") {
+      seen.reclaimPrompts.push(prompt);
+      return opts.reclaim === undefined
+        ? { removed: true, path: WORKTREE_PATH, detail: "removed" }
+        : opts.reclaim;
     }
     throw new Error(`unexpected agent call past the gate: ${label}`);
   };
@@ -1589,15 +1605,18 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       // in the skill because the skill is where the format is defined once;
       // `recordPrompt` renders it and the exit matrix drives it. What "landed"
       // MEANS is pinned beside the rendering, because that is where it went
-      // wrong: a push command running is not a mutation reaching origin, and an
-      // `Everything up-to-date` push followed by a failed reply changed nothing.
+      // wrong twice: a push command running is not the remote moving, and the
+      // per-thread account states END STATE rather than this run's own writes,
+      // so what the record may call landed is what the PR CARRIES — which is the
+      // reading that keeps a turn from re-posting a reply already there.
       [
         "the part-way publication's rendering of that format",
         "**A publication that stopped part-way**",
         [
           /status: published in part/,
           /reached origin: <what landed> — still outstanding: <what is left>/,
-          /mutation that succeeded\*\*, never that a push command ran/,
+          /What counts as landed is what \*\*is on the PR\*\*, never what this run itself did/,
+          /a reply an earlier run posted and a resolve already done are landed too/,
           /`Everything up-to-date` moved nothing/,
           /keeps its entry and its verbatim reply/,
           /reported no outcome for says that rather than guessing/,
@@ -2817,7 +2836,24 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   const ITEM_4 = { ...ITEM, threadId: "T4", commentId: "C4", body: "a fourth finding", url: "https://example.invalid/pr/42#d4" };
   const ITEM_5 = { ...ITEM, threadId: "T5", commentId: "C5", body: "a fifth finding", url: "https://example.invalid/pr/42#d5" };
   const ITEM_6 = { ...ITEM, threadId: "T6", commentId: "C6", author: "a-bot", authorIsBot: true, body: "a sixth finding", url: "https://example.invalid/pr/42#d6" };
-  const withPolicyResolves = { reconcile: { outcome: "work" }, items: [ITEM_4, ITEM_5, ITEM_6] };
+  // And the branch of that policy the three above do not reach: step 4 resolves a
+  // human deferral where the deferral was MAINTAINER-DIRECTED, so this is a
+  // human thread publication does owe a resolve on — and the caller cannot know
+  // it, the direction living in the disposition's `detail` prose rather than in a
+  // field. It is therefore out of the resolve count like its agent-proposed
+  // sibling above, which is the declined half of the peer's finding: the run
+  // still publishes over `resolved: false` here, and the record still tells the
+  // next turn the resolve turns on that authorization rather than that one is
+  // owed. Driven rather than argued, so whichever way a later round decides it,
+  // the decision is visible.
+  const ITEM_7 = { ...ITEM, threadId: "T7", commentId: "C7", body: "a seventh finding", url: "https://example.invalid/pr/42#d7" };
+  const withPolicyResolves = { reconcile: { outcome: "work" }, items: [ITEM_4, ITEM_5, ITEM_6, ITEM_7] };
+  // The same packet with the work happening in an attached WORKTREE, which is
+  // the only mode that reclaims one. Rows asserting that a refused completion
+  // KEEPS the tree, and that a prescribed one gives it back, run through this:
+  // in `inline` mode nothing is ever reclaimed, so those assertions hold for a
+  // reason that has nothing to do with the gate under test.
+  const inWorktree = (o) => ({ ...o, locationMode: "worktree", worktree: WORKTREE_PATH });
   const CYCLE_PASS_POLICY_RESOLVES = {
     ...CYCLE_PASS,
     workReport: [
@@ -2855,6 +2891,17 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         detail: "the bot re-raised a settled point; declined, and a bot thread IS resolved",
         newFinding: false,
       },
+      {
+        ...CYCLE_PASS.workReport[0],
+        threadId: "T7",
+        commentId: "C7",
+        url: "https://example.invalid/pr/42#d7",
+        ref: "src/app.ts:44 a-reviewer",
+        kind: "deferred-to-task",
+        detail: "queued as tasks/099y-something.md; MAINTAINER-DIRECTED, so step 4 resolves this human thread",
+        authorIsBot: false,
+        newFinding: false,
+      },
     ],
   };
   // Every reply landed and no resolve did, so the reply half is silent and the
@@ -2869,6 +2916,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       { ref: "src/app.ts:12 a-reviewer", threadId: "T4", outcome: "replied; left open per policy", replied: true, resolved: false },
       { ref: "src/app.ts:20 a-reviewer", threadId: "T5", outcome: "replied; left open per policy", replied: true, resolved: false },
       { ref: "src/app.ts:31 a-bot", threadId: "T6", outcome: "replied; resolve rejected with a 502", replied: true, resolved: false },
+      { ref: "src/app.ts:44 a-reviewer", threadId: "T7", outcome: "replied; the maintainer-directed resolve was rejected with a 502 too", replied: true, resolved: false },
     ],
   };
   // A cycle that reported an ERROR instead of a verdict, holding a nonempty map
@@ -2965,6 +3013,25 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     aborted: "the push was a no-op and replying to thread T1 failed with a 502",
     summaryCommentUrl: "",
     threadOutcomes: [{ ref: "src/app.ts:12 a-reviewer", threadId: "T1", outcome: "reply rejected with a 502", replied: false, resolved: false }],
+  };
+  // The SAME no-op push over an account that reports the reply already ON the
+  // PR. This is the ordinary replay: a prior run posted that reply and died
+  // before its Summary, so this run's push is `Everything up-to-date`, step 4
+  // SKIPS the reply under its duplicate rule and reports `replied: true` — the
+  // end state the schema requires — and then the Summary post fails. Nothing
+  // this run did reached the PR, and the record still says the map is published
+  // IN PART, because that is what a record is for: the reply is on the PR and
+  // the next turn must not post it again. The row above is the same push with
+  // nothing of the map on the PR, which keeps the canonical status — so the two
+  // together pin that the rendering turns on what the PR CARRIES and not on
+  // which run put it there.
+  const PUBLISH_NOOP_PUSH_PRIOR_REPLY = {
+    published: false,
+    pushed: true,
+    pushedNewCommits: false,
+    aborted: "the push was `Everything up-to-date`, an equivalent reply of mine was already on T1, and posting the Summary comment failed with a 502",
+    summaryCommentUrl: "",
+    threadOutcomes: [{ ref: "src/app.ts:12 a-reviewer", threadId: "T1", outcome: "an equivalent reply of mine was already on the thread, so I posted none", replied: true, resolved: false }],
   };
   // And the same exit reached with nothing on origin at all, which records
   // exactly like a stop before publication. Its account is EMPTY and complete:
@@ -3158,6 +3225,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       { ref: "src/app.ts:12 a-reviewer", threadId: "T4", outcome: "replied; left open per policy", replied: true, resolved: false },
       { ref: "src/app.ts:20 a-reviewer", threadId: "T5", outcome: "replied; left open per policy", replied: true, resolved: false },
       { ref: "src/app.ts:31 a-bot", threadId: "T6", outcome: "replied and resolved — a bot thread", replied: true, resolved: true },
+      { ref: "src/app.ts:44 a-reviewer", threadId: "T7", outcome: "replied; the maintainer-directed resolve did not go through", replied: true, resolved: false },
     ],
   };
   // A first cycle whose round PASSED over one map and whose later pass replaced it
@@ -3204,6 +3272,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     ["a publication that pushed and then failed part-way", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_PART_WAY }, "fixed-publish-failed", true],
     ["a publication whose reply and Summary landed before it failed", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_PART_WAY_REPLIED }, "fixed-publish-failed", true],
     ["a publication whose push was a no-op before it failed", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_NOOP_PUSH }, "fixed-publish-failed", true],
+    ["a publication whose no-op push found the reply already on the PR", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_NOOP_PUSH_PRIOR_REPLY }, "fixed-publish-failed", true],
     ["a publication that aborted with nothing on origin", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_NOTHING }, "fixed-publish-failed", true],
     ["a publication whose reply and resolve landed on one of two threads", { args: "push no-rebase", cycles: [CYCLE_PASS_TWO], publish: PUBLISH_PART_WAY_RESOLVED }, "fixed-publish-failed", true, withTwo],
     ["a publication holding items publication owes neither a reply nor a resolve", { args: "push no-rebase", cycles: [CYCLE_PASS_POLICY_KINDS], publish: PUBLISH_PART_WAY_POLICY_KINDS }, "fixed-publish-failed", true, withPolicyKinds],
@@ -3227,12 +3296,16 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // And the readable account that CONTRADICTS the claim rather than falling
     // short of it — on a PR carrying a record, since the exit this refuses is
     // the one that would spend it.
-    ["a publisher claiming a COMPLETE publication its own account says never replied", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_CLAIMED_COMPLETE_UNREPLIED }, "fixed-publish-failed", true, withPrior],
-    ["a publisher claiming a COMPLETE publication over a thread its account leaves unresolved", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_CLAIMED_COMPLETE_UNRESOLVED }, "fixed-publish-failed", true],
+    // Both run in WORKTREE mode, since the exit this gate keeps them out of is
+    // the one that tears that tree down: inline, "the worktree is kept" is true
+    // of every row for a reason the gate has nothing to do with.
+    ["a publisher claiming a COMPLETE publication its own account says never replied", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_CLAIMED_COMPLETE_UNREPLIED }, "fixed-publish-failed", true, inWorktree(withPrior)],
+    ["a publisher claiming a COMPLETE publication over a thread its account leaves unresolved", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_CLAIMED_COMPLETE_UNRESOLVED }, "fixed-publish-failed", true, inWorktree(withWork)],
     // The controls for it: the publications the brief PRESCRIBES, whose entries
     // report `replied: false`/`resolved: false` because nothing was owed there.
-    ["a complete publication over the two kinds it owes no reply", { args: "push no-rebase", cycles: [CYCLE_PASS_POLICY_KINDS], publish: PUBLISH_COMPLETE_POLICY_KINDS }, "fixed-published", false, withPolicyKinds],
-    ["a complete publication leaving human push-backs and deferrals unresolved by policy", { args: "push no-rebase", cycles: [CYCLE_PASS_POLICY_RESOLVES], publish: PUBLISH_COMPLETE_POLICY_RESOLVES }, "fixed-published", false, withPolicyResolves],
+    // In worktree mode too, so the control shows the tree actually going back.
+    ["a complete publication over the two kinds it owes no reply", { args: "push no-rebase", cycles: [CYCLE_PASS_POLICY_KINDS], publish: PUBLISH_COMPLETE_POLICY_KINDS }, "fixed-published", false, inWorktree(withPolicyKinds)],
+    ["a complete publication leaving human push-backs and deferrals unresolved by policy", { args: "push no-rebase", cycles: [CYCLE_PASS_POLICY_RESOLVES], publish: PUBLISH_COMPLETE_POLICY_RESOLVES }, "fixed-published", false, inWorktree(withPolicyResolves)],
     ["a run that published", { args: "push no-rebase", cycles: [CYCLE_PASS] }, "fixed-published", false],
     // The same publication on a PR that already carries a record. It still
     // leaves none of its own — the map is on the PR — but it must SPEND the one
@@ -3333,6 +3406,40 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     }),
   );
 
+  // The SAME no-op push over an account reporting the reply already on the PR,
+  // which is what "`replied` is END STATE" made reachable: a replay whose push
+  // moves nothing, whose reply step 4 skips as a duplicate of an earlier run's,
+  // and whose Summary then fails. What the record may call landed is what the PR
+  // CARRIES, not what this run put there — so it is a part-way publication, and
+  // the entry says the reply is already posted. Read as a diary of this run's own
+  // writes it would be a lie; read as the state of the PR it is exactly what the
+  // next turn needs, and the alternative — a record naming only this run's writes
+  // — has it post that reply a second time. The row above is the control: the
+  // same push flags with nothing of the map on the PR still keep the canonical
+  // status and the no-op line, so the rendering turns on the PR's state rather
+  // than on `pushed`.
+  const noopPrior = briefs["a publication whose no-op push found the reply already on the PR"];
+  const noopPriorResult = results["a publication whose no-op push found the reply already on the PR"];
+  check(
+    "a reply that is on the PR is landed whichever run posted it — a no-op push over one renders as published in part, while the same push over a PR carrying none does not",
+    /status: published in part/.test(noopPrior) &&
+      /^reached origin: 1 thread reply — still outstanding: 1 of 1 not resolved, the Summary comment$/m.test(noopPrior) &&
+      // The push moved nothing, so no push clause may be named as landed, and
+      // the no-op line the control row prints belongs to the control row alone.
+      !/the push, which advanced the remote branch/.test(noopPrior) &&
+      !/this run changed NOTHING on origin/.test(noopPrior) &&
+      !/LOCAL ONLY/.test(noopPrior) &&
+      // And the entry says the reply is there, which is the whole point: a
+      // standing of "still owed" here posts it twice.
+      /thread=T1 {2}src\/app\.ts:12 a-reviewer — reply ALREADY POSTED — do not post it again; resolve still owed\./.test(noopPrior) &&
+      /what reached origin: 1 thread reply/.test(noopPriorResult.note || ""),
+    JSON.stringify({
+      status: (noopPrior.match(/status: [^(]*/) || ["no status line"])[0],
+      originLine: (noopPrior.match(/^(this run changed|the tips above|reached origin).*/m) || ["no origin line at all"])[0].slice(0, 110),
+      standing: (noopPrior.match(/^ {2}thread=.*/m) || ["no standing line"])[0],
+    }),
+  );
+
   // The breakdown itself, which is what a later turn acts on. A reply and a
   // Summary comment already on the PR are LANDED, so neither may be named as
   // outstanding — a Summary listed as both is a record contradicting itself —
@@ -3414,18 +3521,24 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // that turn acts on entry by entry. The bot push-back beside them is the
   // control: its resolve genuinely IS owed, so the count is observable in both
   // directions rather than merely small.
+  // T7 is the MAINTAINER-DIRECTED human deferral, the branch step 4 does resolve
+  // and the caller cannot see (the direction is `detail` prose). It is treated
+  // exactly as its agent-proposed sibling — out of the count, and told the
+  // resolve turns on that authorization — which is the declined half of the
+  // peer's finding, driven so the decision is observable rather than argued.
   const policyResolves = briefs["a publication holding human push-backs and deferrals it owes no resolve on"];
   const resolvesLanded = (policyResolves.match(/^reached origin: .*/m) || [""])[0];
   check(
-    "and the resolve debt excludes a human push-back and a human deferral, while the bot thread beside them still owes one",
-    // All three replies landed, so the reply half is silent; of the three
-    // threads only the bot one is owed a resolve, and it is the only one counted.
+    "and the resolve debt excludes a human push-back and a human deferral — the maintainer-directed one included — while the bot thread beside them still owes one",
+    // All four replies landed, so the reply half is silent; of the four threads
+    // only the bot one is owed a resolve, and it is the only one counted.
     /still outstanding: 1 of 1 not resolved, the Summary comment$/.test(resolvesLanded) &&
       !/still owed their reply/.test(resolvesLanded) &&
       /thread=T4 {2}src\/app\.ts:12 a-reviewer — reply ALREADY POSTED — do not post it again; resolve NOT owed — a human push-back or deferral is left open unless the maintainer explicitly authorized resolving it; do not resolve it on this record's word\./.test(policyResolves) &&
       /thread=T5 {2}src\/app\.ts:20 a-reviewer — reply ALREADY POSTED — do not post it again; resolve NOT owed — a human push-back or deferral is left open unless the maintainer explicitly authorized resolving it/.test(policyResolves) &&
       /thread=T6 {2}src\/app\.ts:31 a-bot — reply ALREADY POSTED — do not post it again; resolve still owed\./.test(policyResolves) &&
-      !/(T4|T5)[^\n]*resolve still owed/.test(policyResolves),
+      /thread=T7 {2}src\/app\.ts:44 a-reviewer — reply ALREADY POSTED — do not post it again; resolve NOT owed — a human push-back or deferral is left open unless the maintainer explicitly authorized resolving it/.test(policyResolves) &&
+      !/(T4|T5|T7)[^\n]*resolve still owed/.test(policyResolves),
     JSON.stringify({ landedLine: resolvesLanded || "no origin line at all", standing: (policyResolves.match(/^ {2}thread=.*\n {2}thread=.*\n {2}thread=.*/m) || ["no standing lines"])[0] }),
   );
 
@@ -3571,7 +3684,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       "unknown",
     ],
     "a publication that pushed and then accounted for no thread": [
-      "its account leaves 1 of 1 item(s) unnamed (T1) while reporting that it already mutated the PR",
+      "its account leaves 1 of 1 item(s) unnamed (T1) while reporting that the PR already carries part of this map",
       "advanced",
     ],
     "a publication whose account names one thread twice and the other not at all": [
@@ -3579,7 +3692,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       "advanced",
     ],
     "a publication whose no-op push left an item unaccounted": [
-      "its account leaves 1 of 2 item(s) unnamed (T2) while reporting that it already mutated the PR",
+      "its account leaves 1 of 2 item(s) unnamed (T2) while reporting that the PR already carries part of this map",
       "noop",
     ],
     "a publication whose report carries no threadOutcomes array": [
@@ -3595,7 +3708,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       "advanced",
     ],
     "a publisher claiming a COMPLETE publication over an account of nothing": [
-      "its account leaves 1 of 1 item(s) unnamed (T1) while reporting that it already mutated the PR",
+      "its account leaves 1 of 1 item(s) unnamed (T1) while reporting that the PR already carries part of this map",
       "advanced",
     ],
   };
@@ -3685,7 +3798,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       claimedShort.publishReport.published === true &&
       !claimedShort.worktreeReclaim &&
       /the publisher reported the publication COMPLETE over a report that cannot say so — its account leaves 1 of 1 item\(s\) unnamed \(T1\)/.test(claimedShortBrief) &&
-      /the publisher reported it COMPLETE over a report that cannot say so/.test(claimedShort.note || ""),
+      /the publisher reported it COMPLETE over a report that cannot say so/.test(claimedShort.note || "") &&
+      // The other side of the split the contradiction rows drive: this report is
+      // SILENT about the claim, so neither line may call it a contradiction.
+      !/says the OPPOSITE/.test(claimedShortBrief) &&
+      !/says the OPPOSITE/.test(claimedShort.note || ""),
     JSON.stringify({ status: claimedShort.status, claim: (claimedShort.publishReport || {}).published, note: (claimedShort.note || "").slice(0, 140) }),
   );
 
@@ -3712,12 +3829,19 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       // run stopped reading it as the answer.
       (r.publishReport || {}).published === true &&
       !r.worktreeReclaim &&
-      briefs[what].includes(`the publisher reported the publication COMPLETE over a report that cannot say so — ${why}`) &&
-      (r.note || "").includes("the publisher reported it COMPLETE over a report that cannot say so")
+      // And it is refused in the words of what it DID: a report whose own
+      // entries say the opposite of the claim is not a report that could not
+      // say so. Both readers of that phrase — the record's `status:` line and
+      // the note a maintainer reads first — must carry the same one, and
+      // neither may fall back to the silence wording that the rows above earn.
+      briefs[what].includes(`the publisher reported the publication COMPLETE over a report that says the OPPOSITE — ${why}`) &&
+      !briefs[what].includes("over a report that cannot say so") &&
+      (r.note || "").includes("the publisher reported it COMPLETE over a report that says the OPPOSITE") &&
+      !(r.note || "").includes("over a report that cannot say so")
     );
   });
   check(
-    "a completion claim its own account CONTRADICTS is refused like one it cannot support — over the reply half and the resolve half alike — so the worktree is kept, the record written, and the prior record not spent",
+    "a completion claim its own account CONTRADICTS is refused like one it cannot support — over the reply half and the resolve half alike — and is told as a contradiction rather than as a silence, so the worktree is kept, the record written, and the prior record not spent",
     notRefused.length === 0 &&
       spends["a publisher claiming a COMPLETE publication its own account says never replied"] === "",
     JSON.stringify({
@@ -3734,16 +3858,33 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // `replied: false` or `resolved: false` on a genuinely COMPLETE publication, so
   // a gate that read the raw account rather than what step 4 OWES would refuse
   // them — and these two rows are what says it does not.
+  // The second row also carries the MAINTAINER-DIRECTED human deferral, whose
+  // resolve step 4 does owe and this gate cannot see. It publishes over
+  // `resolved: false` there, which is the residual the completion gate's own
+  // comment names and bounds: the thread stays unresolved on the PR and the next
+  // gather takes it back as an item, while the reply — the half a spend would
+  // destroy — is already posted. Driven here so the decision is a fixture rather
+  // than an argument, and so a later round that buys the missing field breaks
+  // this row rather than finding nothing to change.
   const prescribed = [
     "a complete publication over the two kinds it owes no reply",
     "a complete publication leaving human push-backs and deferrals unresolved by policy",
   ];
   const wronglyRefused = prescribed.filter((what) => {
     const r = results[what] || {};
-    return !(r.status === "fixed-published" && !r.dispositionRecord && r.worktreeReclaim === undefined && briefs[what] === "");
+    return !(
+      r.status === "fixed-published" &&
+      !r.dispositionRecord &&
+      briefs[what] === "" &&
+      // And the tree GOES BACK, which is the half the refused rows above must
+      // not reach. Both rows run in worktree mode, so this is the reclaim
+      // actually happening rather than the absent one an inline row reports.
+      r.worktreeReclaim &&
+      r.worktreeReclaim.removed === true
+    );
   });
   check(
-    "while the publications the publish brief prescribes still publish — the two kinds it never replies to, and the human push-back or deferral it leaves open by policy",
+    "while the publications the publish brief prescribes still publish and give their worktree back — the two kinds it never replies to, and the human push-back or deferral it leaves open by policy, the maintainer-directed one included",
     wronglyRefused.length === 0,
     wronglyRefused.map((what) => `${what}: ${(results[what] || {}).status}`).join("; "),
   );
@@ -3986,7 +4127,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   const publishBriefRun = await run(gathered(withWork), { args: "push no-rebase", cycles: [CYCLE_PASS] });
   const pubBrief = publishBriefRun.seen.publishPrompts[0] || "";
   check(
-    "and the publisher is what produces it — per thread, only what SUCCEEDED, keyed by threadId/url, and reported even where publication aborted",
+    "and the publisher is what produces it — per thread, the state ON THE PR when its turn ended, keyed by threadId/url, and reported even where publication aborted",
     ["ref", "outcome", "replied", "resolved"].every((f) => (outcomeItem.required || []).includes(f)) &&
       /True ONLY if the reply is ON THE PR when your turn ends/.test(outcomeItem.properties.replied.description) &&
       /Never what you intended or attempted/.test(outcomeItem.properties.resolved.description) &&
@@ -4000,6 +4141,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /MANDATORY on a `review-thread` item's entry/.test(outcomeItem.properties.threadId.description) &&
       /two threads a re-review left on the same line by the same author share it, so it can key nothing/.test(outcomeItem.properties.ref.description) &&
       /REQUIRED on every report, ABORTED ONES INCLUDED/.test(PUBLISH_SCHEMA.properties.threadOutcomes.description) &&
+      // And the field's own description says which question it answers, since
+      // that is what a record's `landed` is derived from: where each item
+      // STANDS on the PR, not what this publisher wrote.
+      /Your ACCOUNT of where each item STANDS ON THE PR when your turn ends/.test(PUBLISH_SCHEMA.properties.threadOutcomes.description) &&
+      /`landed` is what the PR CARRIES rather than what this run put there/.test(PUBLISH_SCHEMA.properties.threadOutcomes.description) &&
       /NOT evidence that anything this run did reached origin/.test(PUBLISH_SCHEMA.properties.pushed.description) &&
       /set that entry's `replied` and `resolved` to the state of the thread ON THE PR when your turn ends rather than to what you attempted/.test(pubBrief) &&
       /a reply you skipped under the duplicate rule above, an equivalent one of yours already being there, is `replied: true`/.test(pubBrief) &&
