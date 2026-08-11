@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 198;
+const EXPECTED_CHECKS = 199;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -3986,6 +3986,29 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         spends["a publisher claiming a COMPLETE publication its own account says never replied"] ? "a spend brief was rendered over a contradicted claim" : "",
         spends["a publisher claiming a COMPLETE publication whose push never succeeded"] ? "a spend brief was rendered over an unpushed completion claim" : "",
       ].filter(Boolean).join("; ") || "none, as required",
+    }),
+  );
+
+  // The landed lead's one claim about the TIPS, which used to be unconditional:
+  // replies and resolves land through the API, so a map part-way on the PR does
+  // not imply a push, and the refused unpushed completion claim above is landed
+  // — its replies are on the PR — while its own account says no push succeeded,
+  // so its tips are still local-only. The two controls are the landed shapes
+  // whose tips ARE on origin: a push that advanced the remote, and a no-op push
+  // over a reply already posted.
+  const unpushedClaimBrief = briefs["a publisher claiming a COMPLETE publication whose push never succeeded"];
+  check(
+    "a landed map with no successful push is told its tips are still LOCAL-ONLY, while a landed map whose push advanced the remote or no-opped keeps NOT local-only",
+    /and its tips are still LOCAL-ONLY — replies and resolves land through the API without a push, and this run's own account reports no successful push, so what is on the PR does not put these tips on origin/.test(unpushedClaimBrief) &&
+      !/its tips are NOT local-only/.test(unpushedClaimBrief) &&
+      /and its tips are NOT local-only/.test(partWay) &&
+      !/still LOCAL-ONLY/.test(partWay) &&
+      /and its tips are NOT local-only/.test(noopPrior) &&
+      !/still LOCAL-ONLY/.test(noopPrior),
+    JSON.stringify({
+      unpushed: (unpushedClaimBrief.match(/and its tips are [^\n]*/) || ["no tips clause"])[0].slice(0, 120),
+      partWay: (partWay.match(/and its tips are [^\n]*/) || ["no tips clause"])[0].slice(0, 60),
+      noopPrior: (noopPrior.match(/and its tips are [^\n]*/) || ["no tips clause"])[0].slice(0, 60),
     }),
   );
 

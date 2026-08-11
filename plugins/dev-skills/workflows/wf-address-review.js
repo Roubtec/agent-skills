@@ -816,6 +816,12 @@ function recordPrompt(packet, dispositions, facts) {
   // something landed" is the ORDINARY shape of a part-way stop rather than an
   // exotic one. `perThread` is the standing of each entry, keyed to the
   // dispositions by the caller (never by `ref`, which two threads can share).
+  // The LANDED lead reads the push states too, for its one claim about the
+  // tips: replies and resolves land through the API, so a map part-way on the
+  // PR does not imply a push — a refused completion claim whose own account
+  // says no push succeeded is landed (its replies are on the PR) while its
+  // tips are still local-only, and a lead saying "NOT local-only" over that
+  // shape overstated the one thing its author might act on.
   // What an unusable account does NOT put in doubt is the push, which is
   // reported positively and in three states rather than two — so the third
   // state's own rendering says which of them holds and reserves "unknown" for
@@ -885,7 +891,9 @@ function recordPrompt(packet, dispositions, facts) {
   return `Leave this run's disposition record on PR #${packet.pr.number} (branch \`${packet.pr.workingBranch}\`). ${unknown
     ? `${pushCase.lead}: ${facts.why} ${pushCase.claims} — the lines below marked for that case say what is unknown, and every thread entry carries the same reservation.`
     : landed
-      ? `This run's publication stopped with PART OF THIS MAP ALREADY ON THE PR: ${facts.why} So this record says what is on it rather than "not published", and its tips are NOT local-only — the two lines below marked for that case are the ones that differ. What is named as having reached origin is what the PR CARRIES, whichever run put it there — a reply an earlier run posted counts — so write it as that rather than as an account of this run's own writes.`
+      ? `This run's publication stopped with PART OF THIS MAP ALREADY ON THE PR: ${facts.why} So this record says what is on it rather than "not published", and its tips are ${facts.pushState === "advanced" || facts.pushState === "noop"
+        ? "NOT local-only"
+        : "still LOCAL-ONLY — replies and resolves land through the API without a push, and this run's own account reports no successful push, so what is on the PR does not put these tips on origin"} — the two lines below marked for that case are the ones that differ. What is named as having reached origin is what the PR CARRIES, whichever run put it there — a reply an earlier run posted counts — so write it as that rather than as an account of this run's own writes.`
       : `This run published NOTHING: ${facts.why}`} Read \`AGENTS.md\` / \`CLAUDE.md\` first.
 
 ${where}
