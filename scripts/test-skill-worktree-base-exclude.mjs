@@ -75,8 +75,11 @@ const SHARED = [
   ["probes with the trailing slash", /trailing slash/i],
 ];
 
-// The two BOOTSTRAP steps state the full recipe, command and all.
+// The two BOOTSTRAP steps state the full recipe, command and all. The recipe
+// probes and appends the one name `.worktrees/`, so the step may not offer a
+// differently named in-repo base the re-probe would wave through unignored.
 const FULL = [
+  ["constrains the in-repo base to `.worktrees/` and nothing else", /in-repo base is `\.worktrees\/` and nothing else/],
   ["gives the probe command with the trailing slash", /git check-ignore -q "<repo>\/\.worktrees\/"/],
   ["re-probes and makes a still-no answer a blocker", /re-probe and make a still-no answer a blocker/],
   ["warns that a linked worktree has no `.git/info` directory", /`\.git\/info` is not a directory at all/],
