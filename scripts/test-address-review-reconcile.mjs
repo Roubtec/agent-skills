@@ -88,7 +88,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 48;
+const EXPECTED_CHECKS = 52;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -129,8 +129,10 @@ const REACHED_CYCLE = Symbol("nested review cycle reached");
 
 // Run the shipped script with one scripted gather packet. `no-push` keeps the
 // run local-only: the gate is flag-independent, and a publish path would need
-// stubs for work this suite is not about.
-async function run(packet) {
+// stubs for work this suite is not about. The ARGS are a parameter because one
+// gate beside it is not flag-independent: whether a working branch other than
+// the PR head ref was ever selected is read from the request, not the packet.
+async function run(packet, args = "no-push") {
   const seen = { agentLabels: [], cycleOpts: null };
   const agent = async (prompt, opts) => {
     const label = (opts && opts.label) || "";
@@ -146,7 +148,7 @@ async function run(packet) {
     throw new Error("unexpected fan-out call");
   };
   try {
-    const result = await script("no-push", agent, () => {}, workflow, nope, nope, () => {});
+    const result = await script(args, agent, () => {}, workflow, nope, nope, () => {});
     return { status: (result && (result.status || (result.error ? "error" : "?"))) || "?", result, seen };
   } catch (err) {
     if (err === REACHED_CYCLE) return { status: "reached-cycle", result: null, seen };
@@ -298,47 +300,48 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     `token route stated: ${tokenRoutes}; carries-the-head predicate present: ${inferredFromShape}`,
   );
   // The one check that survives beside the token is a stop for AMBIGUITY — the
-  // named branch is also another open PR's head — and it must not fire on the PR
-  // being addressed: where the branch IS that PR's head, a bare
-  // `gh pr list --head <branch>` answers with the very PR under work, so an
-  // unqualified stop halts an ordinary target-branch run on a token that is
-  // merely redundant there. Both qualifications are pinned: exclude the resolved
-  // PR by number, and identify the other head repository-qualified rather than
-  // by bare branch name, which a fork's same-named head also answers.
+  // named branch is also another open PR's head — and it has to answer exactly
+  // that question and no neighbouring one. Two neighbouring ones are what a
+  // base-repository PR LIST answers instead: `gh pr list --head <branch>` reads
+  // one base repository (a PR based in another is simply absent), matches a bare
+  // branch NAME (its own `--help` refuses `<owner>:<branch>`, so a fork's
+  // same-named head answers for a branch it has nothing to do with), and stops
+  // at 30 items. Filtering its rows back down to the right question took a
+  // repository-qualified comparison whose components each had to be pinned
+  // separately here, and it still could not recover the rows the list never
+  // returned.
   //
-  // The second qualification is pinned COMPONENT BY COMPONENT, because a single
-  // field name does not pin a comparison. `/headRepositoryOwner/` alone did not:
-  // that string also occurs in the probe's `--json` request list, so the whole
-  // comparison could be replaced by a bare `headRefName` equality and the
-  // assertion still held. Each substring below occurs only where that component
-  // is actually USED, so dropping any one of them fails this check: the other
-  // head's repository (owner login joined to repository name, not the owner
-  // alone), the ref that repository qualifies, and the thing it is compared
-  // AGAINST — this branch's own resolved push target, without which "same
-  // repository-qualified ref" names no comparand at all.
+  // So the probe is ROOTED at the head instead — the head repository's own ref,
+  // which is what the question is about — and the pins follow that root. Every
+  // open PR whose head IS that ref comes back whatever repository its base is
+  // in, and nothing else does, which is why one filter now does what two could
+  // not: exclude the PR being addressed by number, since where the branch IS
+  // that PR's head the query answers with the very PR under work and an
+  // unqualified stop would halt an ordinary target-branch run on a token that is
+  // merely redundant there.
+  //
+  // Three things hold that root up and each is a separate way to lose it: the
+  // query shape (a `ref(qualifiedName:...)` carrying `associatedPullRequests`,
+  // not a PR list), the ref it is rooted AT (this branch's own resolved push
+  // remote/ref — without which the query names no ref at all), and the standing
+  // refusal of the list form, which is what a later round would otherwise
+  // restore as the obvious simplification.
   const excludesAddressedPr = /DIFFERENT number/.test(cases);
-  const namesOtherHeadRepo = /headRepositoryOwner\.login[^`]*headRepository\.name/.test(cases);
-  const namesOtherHeadRef = /plus `headRefName`/.test(cases);
-  const comparesAgainstPushTarget = /resolved push (?:remote\/ref|target)/.test(cases);
-  // A comparison whose fields the probe never requests reads them as absent, so
-  // the `--json` list is pinned — and pinned CLOSED, by the backtick that ends
-  // the command, because it must request the fields the comparison reads and
-  // nothing else. `isCrossRepository` was such an extra field, named here as a
-  // cheap short-circuit until it was found to license skipping the very
-  // comparison it stood in front of: the field says whether the OTHER PR's own
-  // head and base repositories differ, which is not the question asked — whether
-  // that head is the repository `C` pushes to. In a fork clone the two part
-  // company (an upstream PR reads false while `C` still pushes to the fork), so
-  // the short-circuit fired exactly where the repository qualification exists to
-  // keep an unrelated same-named head from halting the run. Both halves are
-  // pinned: re-adding the field fails the closed list, and re-adding the CLAIM
-  // alone fails the refusal beside it.
-  const requestsProbeFields = /--json number,headRefName,headRepository,headRepositoryOwner`/.test(cases);
-  const refusesShortCircuit = /`isCrossRepository` does NOT short-circuit/.test(cases);
+  const rootsAtTheHeadRef = /ref\(qualifiedName:"refs\/heads\/<ref>"\)\{ associatedPullRequests\(states:OPEN/.test(cases);
+  const resolvesThatRefFromPushTarget = /resolve `C`'s own push remote\/ref/.test(cases);
+  const refusesTheListForm = /`gh pr list --head` delivers neither half/.test(cases);
+  // `isCrossRepository` was named here as a cheap short-circuit until it was
+  // found to license skipping the very comparison it stood in front of: the
+  // field says whether the OTHER PR's own head and base repositories differ,
+  // which is not the question asked. The query root now settles whose head it
+  // is, so the field is not merely unqualified but has nothing left to answer —
+  // and the refusal stays, because what invites it back is the same look of a
+  // cheap answer that got it added the first time.
+  const refusesShortCircuit = /`isCrossRepository` has no part in this and is not requested/.test(cases);
   check(
-    "the conflicting-PR stop excludes the PR being addressed and identifies the other head by repository plus ref, against this branch's push target, with nothing short-circuiting that comparison",
-    excludesAddressedPr && namesOtherHeadRepo && namesOtherHeadRef && comparesAgainstPushTarget && requestsProbeFields && refusesShortCircuit,
-    `different-number filter stated: ${excludesAddressedPr}; other head's repository stated: ${namesOtherHeadRepo}; its ref stated: ${namesOtherHeadRef}; compared against the resolved push target: ${comparesAgainstPushTarget}; probe requests exactly the fields it reads: ${requestsProbeFields}; short-circuit refused: ${refusesShortCircuit}`,
+    "the conflicting-PR stop excludes the PR being addressed and asks the head repository's own ref which open PRs it heads, refusing the base-scoped PR list and any short-circuit of it",
+    excludesAddressedPr && rootsAtTheHeadRef && resolvesThatRefFromPushTarget && refusesTheListForm && refusesShortCircuit,
+    `different-number filter stated: ${excludesAddressedPr}; rooted at the head ref: ${rootsAtTheHeadRef}; that ref resolved from this branch's push target: ${resolvesThatRefFromPushTarget}; base-scoped list form refused: ${refusesTheListForm}; short-circuit refused: ${refusesShortCircuit}`,
   );
   // Forced `inline` checks the target branch out in THIS checkout, and the
   // branch it checks out may already be there: a maintainer who has worked this
@@ -395,6 +398,24 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "the registration read precedes every attach arm, reuses a `pr-<N>` tree already on the head ref, and stops on any other",
     readsRegistrations && coversEveryArm && reusesMatch && stopsOnMismatch,
     `reads registrations ahead of the arms: ${readsRegistrations}; scoped to every arm: ${coversEveryArm}; reuse arm: ${reusesMatch}; mismatch stop: ${stopsOnMismatch}`,
+  );
+  // The base every arm adds under has to be IGNORED, and this case is the only
+  // thing that makes it so: `git worktree add` excludes nothing on its own and
+  // neither does `wt-enter`, so in a repository not already carrying the rule
+  // the nested add leaves `?? .worktrees/` in the main checkout — the one tree
+  // this case promises never to dirty — and a halt, which is precisely what
+  // KEEPS the worktree, leaves it standing. Pinned ahead of the arms for the
+  // same reason the registration read is: stated inside one arm it would exempt
+  // the other two, and the fork arm is always helper-free. Both halves are read,
+  // because the probe without the write is a check nothing acts on: the
+  // `check-ignore` probe, and the repo-local `.git/info/exclude` it appends to
+  // rather than the tracked `.gitignore`, which is the maintainer's.
+  const probesTheIgnoreRule = /git check-ignore -q "<repo>\/\.worktrees"/.test(registrationRule);
+  const writesTheRepoLocalExclude = /\.git\/info\/exclude/.test(registrationRule) && /NOT the tracked/.test(registrationRule);
+  check(
+    "the worktree base is made ignored before any arm adds under it, through the repo-local exclude rather than the tracked `.gitignore`",
+    probesTheIgnoreRule && writesTheRepoLocalExclude,
+    `ignore rule probed: ${probesTheIgnoreRule}; repo-local exclude written instead of .gitignore: ${writesTheRepoLocalExclude}`,
   );
   // Arm ORDER is a contract in its own right, and prose has to settle it: a
   // prior fork run's `gh pr checkout` leaves a same-named local `T` behind, so
@@ -528,14 +549,17 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
 // A local off-shoot of a merge-pending PR: `workingBranch` legitimately differs
 // from the PR's head ref, fixes land on the off-shoot, and `branch`/`headOid`
 // stay publication metadata. A run only arrives in that shape by the request
-// NAMING the off-shoot (the `off-shoot` token, pinned above); the gate itself is
-// keyed on the two branch names and is indifferent to how the location was
-// chosen, which is why these scenarios state the packet rather than the route.
+// NAMING the off-shoot (the `off-shoot` token, pinned above and, in the block
+// after this one, enforced against the request); reconciliation itself is keyed
+// on the two branch names and is indifferent to how the location was chosen,
+// which is why these scenarios state the packet rather than the route — while
+// carrying the token, without which the run stops before reaching this gate.
 // Reconciliation is skipped WHOLE here, so no reported outcome — including none
 // at all, and including one that contradicts the exemption — may stop the run.
 {
   const off = { workingBranch: "feature/x-offshoot" };
-  const clean = await run(gathered({ ...off, reconcile: { outcome: "not-applicable" } }));
+  const SELECTED = "#42 off-shoot no-push";
+  const clean = await run(gathered({ ...off, reconcile: { outcome: "not-applicable" } }), SELECTED);
   check("off-shoot `not-applicable` with no threads is a plain no-op", clean.status === "no-op", JSON.stringify(clean.result));
   // The no-op's reconciliation record is not path-dependent: the off-shoot run
   // reports what reconciliation concluded exactly as the same-branch one above
@@ -548,17 +572,59 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       ((clean.result || {}).reconcile || {}).outcome === "not-applicable",
     JSON.stringify(clean.result),
   );
-  const working = await run(gathered({ ...off, reconcile: { outcome: "not-applicable" }, items: [ITEM] }));
+  const working = await run(gathered({ ...off, reconcile: { outcome: "not-applicable" }, items: [ITEM] }), SELECTED);
   check("off-shoot `not-applicable` with threads proceeds to the nested cycle", working.status === "reached-cycle", working.status);
   check(
     "and the cycle runs on the off-shoot, not on the PR's head ref",
     working.seen.cycleOpts && working.seen.cycleOpts.opts.branch === "feature/x-offshoot",
     JSON.stringify(working.seen.cycleOpts && working.seen.cycleOpts.opts && working.seen.cycleOpts.opts.branch),
   );
-  const absent = await run(gathered({ ...off }));
+  const absent = await run(gathered({ ...off }), SELECTED);
   check("off-shoot with no `reconcile` report at all still proceeds", absent.status === "no-op", absent.status);
-  const contradicting = await run(gathered({ ...off, reconcile: { outcome: "unrecognized", detail: "behind the PR head" } }));
+  const contradicting = await run(gathered({ ...off, reconcile: { outcome: "unrecognized", detail: "behind the PR head" } }), SELECTED);
   check("off-shoot `unrecognized` still proceeds — behind the head is that case's normal state", contradicting.status === "no-op", contradicting.status);
+}
+
+// --- What ENTITLES a run to that exemption ----------------------------------
+// The exemption above is triggered by two branch names the gather agent chose,
+// and nothing in the packet says the request ever asked for a working branch
+// other than the PR's head ref. So the token is parsed from the ARGS here, by
+// the caller, and a differing `workingBranch` without it is a stop. Read the
+// exemption without this gate and one gather deviation — the history-shape
+// inference its brief forbids, or a plain misread of which branch it stood on —
+// skips reconciliation whole and hands the fixing cycle a stacked child to edit
+// and commit on, whose own commits publication then pushes onto this PR under
+// `branch`. Nothing downstream can catch that: differing names are exactly what
+// the supported case looks like, so every later step reads the deviation as the
+// mode working. The two directions are pinned together, because a gate keyed on
+// the wrong thing passes one of them: the token must ADMIT the supported case
+// (covered above, and again here from a differently-spelled request) and REFUSE
+// the packet that merely claims it.
+{
+  const off = { workingBranch: "feature/x-offshoot", reconcile: { outcome: "not-applicable" }, items: [ITEM] };
+  const unselected = await run(gathered(off));
+  const u = unselected.result || {};
+  check(
+    "a working branch other than the PR head ref, from a request that never carried `off-shoot`, stops the run",
+    unselected.status === "skipped-unselected-working-branch" && /off-shoot/.test(u.detail || ""),
+    JSON.stringify(u),
+  );
+  check(
+    "and nothing runs past the gather: no nested cycle, and the off-shoot is never edited",
+    unselected.seen.cycleOpts === null && unselected.seen.agentLabels.join(",") === "gather",
+    JSON.stringify(unselected.seen),
+  );
+  // Parsing is lenient over free prose exactly as the push/ping tokens are, so
+  // the spaced spelling a maintainer actually types selects the mode too. Pinned
+  // because the failure is silent in the safe direction — a token the parse
+  // misses stops a run that was entitled to proceed, which reads as the guard
+  // working.
+  const spaced = await run(gathered(off), "#42 off shoot, no-push");
+  check(
+    "and the token is read leniently, so a spaced spelling still selects the off-shoot",
+    spaced.status === "reached-cycle",
+    spaced.status,
+  );
 }
 
 // --- The producer half: the rule the gather brief states ---------------------
