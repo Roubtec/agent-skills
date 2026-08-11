@@ -824,6 +824,10 @@ function recordPrompt(packet, dispositions, facts) {
   const outcomes = Array.isArray(facts.outcomes) ? facts.outcomes : [];
   const unknown = typeof facts.unknown === "string" ? facts.unknown.trim() : "";
   const perThread = Array.isArray(facts.perThread) ? facts.perThread.filter((l) => typeof l === "string" && l.trim()) : [];
+  // The tip the map below was JUDGED on, where that is not the tip standing in
+  // the working location — the `replaced` case of `reviewedMapOf`. Empty is the
+  // ordinary run, whose `final HEAD` is read where the work happened.
+  const judgedTip = typeof facts.judgedTip === "string" ? facts.judgedTip.trim() : "";
   // The three push states, each with the lead, the `status:` line and the origin
   // line it implies. An unrecognized or absent state reads as `unknown`, which
   // claims the least. `noop` is the state a two-valued flag lost: a push that
@@ -885,7 +889,7 @@ The body, marker first (the marker line is what step 1 of the next run matches, 
 <!-- address-review:disposition-record -->
 # address-review packet — PR #${packet.pr.number} (${packet.pr.workingBranch})
 status: ${unknown ? pushCase.status : landed ? "published in part" : "not published"} (<the reason above, one line${unknown ? ", saying which facts are missing" : landed ? ", saying what landed and what did not" : ""}>)
-starting HEAD ${facts.startingHead || "(not recorded — neither the gather nor a rebase point reported one)"} | final HEAD <the tip you read> | recorded headRefOid ${packet.pr.headOid}
+starting HEAD ${facts.startingHead || "(not recorded — neither the gather nor a rebase point reported one)"} | final HEAD ${judgedTip || "<the tip you read>"} | recorded headRefOid ${packet.pr.headOid}
 base ${packet.pr.base} | validation <what ran> | reviewer ${facts.reviewerStatus || (facts.reviewerPassed ? "Pass" : "did NOT pass")} (${facts.rounds} round(s)) | peer <participation>
 ${unknown
     ? `${pushCase.origin}: ${unknown}; the publisher pushes BEFORE it replies, so a stop with something already on origin is the ordinary shape of this failure: check the PR itself before acting on any tip or any entry below`
@@ -904,7 +908,9 @@ ${unknown
 <the full markdown body>
 \`\`\`
 
-- \`final HEAD\` is what \`git rev-parse HEAD\` prints in the working location. Read it there rather than repeating a SHA from this brief.
+- ${judgedTip
+    ? `\`final HEAD\` is given above as \`${judgedTip}\` — write it EXACTLY as given and read no tip for it. It is the tip the reviewer's verdict was rendered over, and the dispositions below are that round's; the tip standing in the working location is a LATER one a pass committed on top, and citing it would hand the next run's replay probe a tree no reviewer ever passed — which, the recorded commits all being its ancestors, prints nothing and so reads as "the record replays as written". Report what \`git rev-parse HEAD\` prints in the working location in \`detail\` instead, as this run's parting tip.`
+    : "`final HEAD` is what `git rev-parse HEAD` prints in the working location. Read it there rather than repeating a SHA from this brief."}
 - One \`## Threads\` block entry per disposition below, in that shape, and EVERY entry carries the same field set whatever its kind: the disposition kind, its stable reference (path:line, author, and the \`threadId\` for a review thread or the \`url\` for a standalone item), the permalink, and the reply body VERBATIM — a \`deferred-to-task\` entry adding the committed task file and its queued or deferred placement beside them rather than in place of them, since which thread a follow-up closes is not re-derivable from the PR. The drafted reply bodies and the ready-to-post Summary body are the only parts of this record that cannot be re-derived from the PR later, so they are the parts that must be exact.
 - The \`## Summary comment\` block holds the "Summary of Review Fixes" body a publishing run would have posted — what was fixed, a prominent "Pushed back — please re-examine" section, a "Deferred to follow-up tasks" section naming each committed task file, and any ambiguous/skipped item — ready to post unchanged. Where the cycle recorded locked-decision deviations, that body LEADS with them under a "Deviation from a locked decision" section, since a later turn posts what you wrote here as it stands. Standing deviations for this run: ${JSON.stringify(facts.deviations || [])}.
 - The SHAs are PROVENANCE, not a promise. Assert nothing about them holding later: the branch may be rebased before any push, which rewrites every one while changing nothing about whether the work is there. Do not write "the branch tip is <sha>" as a condition a replay must check, and do not omit the header's last line${unknown
@@ -1797,13 +1803,31 @@ async function leaveDispositionRecord(why, map, facts) {
 // this map carries was not rendered over the tree leaving the cycle, so the tip
 // the record cites is not the tree the reviewer judged. Telling them apart would
 // buy a third rendering to say what one honest sentence already says.
+// It also carries the TIP that map was judged on, because the record's `final
+// HEAD` is not provenance alone: a replay probes it (`priorRecordSection` step
+// 1 makes it the `F` of `git rev-list --right-only --cherry-pick B...F`), so
+// citing the tip standing in the working location for a map judged on an
+// earlier one hands that probe a tree no reviewer ever passed — and since the
+// later pass committed OVER the judged tip, the probe prints nothing and the
+// record reads as replaying "as written". Only the `replaced` case needs it:
+// `carried` is true exactly when the cycle's own `finalSha` is the tip its
+// reviewer round passed over, which is the tip in the working location, so
+// reading it there is already right. A cycle that reported no
+// `reviewedFinalSha` yields an empty one and the record falls back to that
+// read rather than inventing a tip.
 function reviewedMapOf(cycle) {
   const carried = Array.isArray(cycle.workReport) ? cycle.workReport : [];
-  if (cycle.workReportReviewed && carried.length) return { which: "carried", map: carried };
+  if (cycle.workReportReviewed && carried.length) return { which: "carried", map: carried, sha: "" };
   const judged = Array.isArray(cycle.reviewedWorkReport) ? cycle.reviewedWorkReport : [];
-  if (judged.length) return { which: "replaced", map: judged };
-  return { which: "none", map: [] };
+  if (judged.length) return { which: "replaced", map: judged, sha: typeof cycle.reviewedFinalSha === "string" ? cycle.reviewedFinalSha.trim() : "" };
+  return { which: "none", map: [], sha: "" };
 }
+// The one sentence a REPLACED map's reason owes about its tip, in one place
+// because both cycle-error exits state it and they must not drift.
+const judgedTipClause = (judged) =>
+  judged.sha
+    ? ` The \`final HEAD\` below is \`${judged.sha}\` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass has moved past.`
+    : " The `final HEAD` below is the tip standing in the working location, which is therefore NOT necessarily the tree that verdict was rendered over: the cycle reported no tip for the round that judged this map.";
 // The same fact in the one line a maintainer reads first. A record that failed
 // to post is the more important half: it means the map is in this result and
 // nowhere else, which is exactly the loss the record exists to prevent.
@@ -1828,12 +1852,12 @@ if (cycle.verdict === "error") {
     judged.which === "carried"
       ? `the review cycle errored AFTER a reviewer round had passed over the dispositions below — its final confirmation pass stopped the cycle — so publication was refused: ${cycle.detail || "no detail reported"}`
       : judged.which === "replaced"
-        ? `the review cycle errored after a later pass had SUPERSEDED the map a reviewer round passed over — replacing its entries, or committing a new tip under the same ones — so publication was refused: ${cycle.detail || "no detail reported"} The dispositions below are that judged map — the most recent one a reviewer actually passed over; the unjudged map the cycle carried out is in this run's result under \`dispositions\` and is deliberately not recorded, since a record is replayed rather than re-triaged. The \`final HEAD\` below is the tip standing in the working location, which is therefore NOT necessarily the tree that verdict was rendered over.`
+        ? `the review cycle errored after a later pass had SUPERSEDED the map a reviewer round passed over — replacing its entries, or committing a new tip under the same ones — so publication was refused: ${cycle.detail || "no detail reported"} The dispositions below are that judged map — the most recent one a reviewer actually passed over; the unjudged map the cycle carried out is in this run's result under \`dispositions\` and is deliberately not recorded, since a record is replayed rather than re-triaged.${judgedTipClause(judged)}`
         : "",
     judged.map,
     judged.which === "carried"
       ? { rounds: cycle.rounds, reviewerStatus: "passed a round, after which the cycle errored", deviations: cycle.deviations }
-      : { rounds: cycle.rounds, reviewerStatus: "passed a round, after which a later pass superseded the map it judged and the cycle errored", deviations: cycle.deviations },
+      : { rounds: cycle.rounds, reviewerStatus: "passed a round, after which a later pass superseded the map it judged and the cycle errored", deviations: cycle.deviations, judgedTip: judged.sha },
   );
   return {
     error: `Review cycle failed: ${cycle.detail}`,
@@ -2022,13 +2046,13 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
         judged.which === "carried"
           ? `the post-rebase re-verification errored AFTER a reviewer round had passed over the dispositions below, so publication was refused: ${cycle.detail || "no detail reported"} They are the re-verification's own map, judged over the rebased tree.`
           : judged.which === "replaced"
-            ? `the post-rebase re-verification errored after a later pass had SUPERSEDED the map its reviewer round passed over — replacing its entries, or committing a new tip under the same ones — so publication was refused: ${cycle.detail || "no detail reported"} The dispositions below are that judged map, rendered over the rebased tree; the unjudged map the cycle carried out is in this run's result under \`dispositions\` and is deliberately not recorded, since a record is replayed rather than re-triaged. The \`final HEAD\` below is the tip standing in the working location, which is therefore NOT necessarily the tree that verdict was rendered over.`
+            ? `the post-rebase re-verification errored after a later pass had SUPERSEDED the map its reviewer round passed over — replacing its entries, or committing a new tip under the same ones — so publication was refused: ${cycle.detail || "no detail reported"} The dispositions below are that judged map, rendered over the rebased tree; the unjudged map the cycle carried out is in this run's result under \`dispositions\` and is deliberately not recorded, since a record is replayed rather than re-triaged.${judgedTipClause(judged)}`
             : `the post-rebase re-verification errored with no judged map of its own to record — no reviewer round passed over a map with entries over the rebased tree — so publication was refused: ${cycle.detail || "no detail reported"} The dispositions below are the ones that PASSED review on the base the branch sat on before that replay; the re-verification's own map is in this run's result under \`dispositions\` and is deliberately not recorded, since a record is replayed rather than re-triaged.`,
         judged.which === "none" ? preRebaseCycle.workReport : judged.map,
         judged.which === "carried"
           ? { rounds: cycle.rounds, reviewerStatus: "passed a round over the rebased tree, after which the cycle errored", deviations: cycle.deviations }
           : judged.which === "replaced"
-            ? { rounds: cycle.rounds, reviewerStatus: "passed a round over the rebased tree, after which a later pass superseded the map it judged and the cycle errored", deviations: cycle.deviations }
+            ? { rounds: cycle.rounds, reviewerStatus: "passed a round over the rebased tree, after which a later pass superseded the map it judged and the cycle errored", deviations: cycle.deviations, judgedTip: judged.sha }
             : { rounds: preRebaseCycle.rounds, reviewerStatus: "Pass, on the base the branch sat on before the replay", deviations: preRebaseCycle.deviations },
       );
       return {

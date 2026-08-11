@@ -3463,13 +3463,21 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       !replacedFirst.includes(CYCLE_PASS.workReport[0].detail) &&
       /errored after a later pass had SUPERSEDED the map a reviewer round passed over — replacing its entries, or committing a new tip under the same ones —/.test(replacedFirst) &&
       /reviewer passed a round, after which a later pass superseded the map it judged and the cycle errored/.test(replacedFirst) &&
-      // The tip the record cites is the working location's, and on this branch it
-      // is not the tree the recorded verdict was rendered over. Said, because
-      // "replaced" alone reads as a claim the same-map/new-tip shape falsifies:
-      // the cycle reports `workReportReviewed: false` for a later pass that
-      // committed a new `finalSha` over the IDENTICAL entries, and nothing was
-      // replaced there — what changed is the tree under the map.
-      /The `final HEAD` below is the tip standing in the working location, which is therefore NOT necessarily the tree that verdict was rendered over\./.test(replacedFirst) &&
+      // The tip the record cites is the one the recorded verdict was rendered
+      // over — `reviewedFinalSha` — and NOT the working location's, which a
+      // later pass moved past. Both halves are pinned: the reason says which it
+      // is, and the header line carries that SHA in place of the read the
+      // ordinary run makes. Said at all because "replaced" alone reads as a
+      // claim the same-map/new-tip shape falsifies: the cycle reports
+      // `workReportReviewed: false` for a later pass that committed a new
+      // `finalSha` over the IDENTICAL entries, and nothing was replaced there —
+      // what changed is the tree under the map. And cited rather than merely
+      // caveated because a replay PROBES this field: with the recorded commits
+      // all ancestors of the later tip, probing that tip prints nothing and the
+      // record reads as replaying as written over a tree no reviewer passed.
+      /The `final HEAD` below is `feedface` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass has moved past\./.test(replacedFirst) &&
+      /\| final HEAD feedface \| recorded headRefOid/.test(replacedFirst) &&
+      /`final HEAD` is given above as `feedface` — write it EXACTLY as given and read no tip for it/.test(replacedFirst) &&
       // The post-rebase exit: its own judged map, not the pre-rebase map that used
       // to stand in for it, and not the replacement either.
       replacedReverify.includes("judged over the rebased tree, then replaced by a later pass") &&
@@ -3479,7 +3487,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       // its own copy of it.
       /errored after a later pass had SUPERSEDED the map its reviewer round passed over — replacing its entries, or committing a new tip under the same ones —/.test(replacedReverify) &&
       /reviewer passed a round over the rebased tree, after which a later pass superseded the map it judged and the cycle errored/.test(replacedReverify) &&
-      /The `final HEAD` below is the tip standing in the working location, which is therefore NOT necessarily the tree that verdict was rendered over\./.test(replacedReverify) &&
+      /The `final HEAD` below is `feedface` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass has moved past\./.test(replacedReverify) &&
+      /\| final HEAD feedface \| recorded headRefOid/.test(replacedReverify) &&
       // The empty judged map: the record is written, over the map that passed on
       // the pre-replay base, rather than not written at all.
       emptyReviewed.includes(CYCLE_PASS.workReport[0].detail) &&
