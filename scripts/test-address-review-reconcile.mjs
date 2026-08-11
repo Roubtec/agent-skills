@@ -129,7 +129,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 207;
+const EXPECTED_CHECKS = 209;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -4958,10 +4958,9 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // longer contains it; a bare keyword pin would have survived all three.
   //
   // The workflow's rendering of this same case (`unconfirmedPush` in
-  // `recordPrompt`, entered off the push read-back's abort) is not on this base,
-  // so there is nothing here to compare the skill against yet; the wording below
-  // is written to match it, and the two-sided comparison joins the brief-vs-skill
-  // reads above once both halves sit on one base.
+  // `recordPrompt`, entered off the push read-back's abort) now sits on the same
+  // base as the skill's, so the two-sided comparison the shape was written for
+  // follows this check, beside the brief-vs-skill reads above.
   const UNCONFIRMED_PUSH_CLAUSES = {
     "the fourth rendering's status line, which claims neither presence nor absence on origin":
       "status: UNKNOWN whether its push reached origin, and nothing else was published",
@@ -4981,6 +4980,41 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "and both mirrors give a push whose read-back could not confirm the ref its own rendering — its status line, the line in place of the local-only one, and the route into it out of the empty-account rule",
     missingUnconfirmed.length === 0,
     missingUnconfirmed.join("; "),
+  );
+
+  // And the TWO-SIDED half of that, which the check above could not have: the two
+  // lines this rendering changes are BYTE-SHARED between the skill's paragraph and
+  // the brief's `unconfirmedPush` entry, so they are read out of the RENDERED
+  // brief and both mirrors together, the way the header grouping and the two
+  // reliability recipes are. Neither half is derived from the other and no
+  // generator keeps them in step, so a rewording on either side alone leaves the
+  // other's copy standing and fails here — the skill would otherwise describe a
+  // second shape while the brief kept printing the first, which is the exact drift
+  // this rendering exists in two places to buy back.
+  //
+  // Same limit as every pin above, stated for the same reason: these are substring
+  // reads, so a rule REVERSED while its span survives passes, and polarity stays
+  // the reviewer's. What this catches is a span deleted, reworded, or gutted on one
+  // side.
+  const SHARED_UNCONFIRMED_SPANS = {
+    "the status line": "UNKNOWN whether its push reached origin, and nothing else was published",
+    "and the line in place of the local-only one":
+      "whether this run's push reached origin is UNKNOWN — `git push` returned and the read-back at the ref did not confirm the ref moved, so read the ref itself before treating the tips above as either published or local, while no reply, resolve or Summary comment reached the PR",
+  };
+  const unconfirmedSurfaces = { "the record brief": briefs["a publication whose push could not be confirmed at the ref"] || "" };
+  for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
+    unconfirmedSurfaces[mirror] = readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8");
+  }
+  const unsharedSpans = [];
+  for (const [where, text] of Object.entries(unconfirmedSurfaces)) {
+    for (const [name, span] of Object.entries(SHARED_UNCONFIRMED_SPANS)) {
+      if (!text.includes(span)) unsharedSpans.push(`${where}: ${name}`);
+    }
+  }
+  check(
+    "and the skill's wording for it is word for word what the brief prints — its status line and its origin line read out of the rendered brief and both mirrors together, so rewording either side alone fails",
+    unsharedSpans.length === 0,
+    unsharedSpans.join("; "),
   );
 
   // The three-state lookup's DEFAULT, which no exit reaches today because the
