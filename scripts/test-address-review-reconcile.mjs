@@ -1765,7 +1765,17 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "names the per-URL ls-remote": /git ls-remote "<url>" refs\/heads\//.test(step2) && /git remote get-url --push --all <remote>/.test(step2),
     "requires every push URL": /require every one of them to come back with the HEAD you pushed/.test(step2),
     "treats silence as a stop": /exits 0 even when it prints nothing/.test(step2) && /is a stop rather than a pass/.test(step2),
-    "stops rather than claiming publication": step2.includes('aborted: "push not confirmed at the ref"'),
+    "stops rather than claiming publication": step2.includes('aborted: "push not confirmed at the ref'),
+    // The per-URL evidence has exactly ONE channel, so the brief has to name it:
+    // `aborted` is the only free-text field in `PUBLISH_SCHEMA`, the caller quotes
+    // it verbatim as the record's reason, and that record's status line is
+    // required to say what each push URL returned. Both readers of the phrase
+    // match it as a LEADING substring — the record's `pushUnconfirmed` and the
+    // result echo — so appending costs the stop nothing. Told merely to "report"
+    // the evidence with no field named, a publisher satisfies the literal abort
+    // and drops it, and the status line downstream has nothing to say.
+    "sends the per-URL evidence into that same field":
+      step2.includes('aborted: "push not confirmed at the ref: <what each URL returned>"'),
     // The abort is the ONE fact the record and the run's result read to withhold
     // their origin claims, so the stop leaves the advance TO it: ordering
     // `pushedNewCommits: false` here would have the publisher assert the very fact
