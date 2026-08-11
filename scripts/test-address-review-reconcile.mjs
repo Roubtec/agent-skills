@@ -129,7 +129,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 209;
+const EXPECTED_CHECKS = 210;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1767,13 +1767,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "treats silence as a stop": /exits 0 even when it prints nothing/.test(step2) && /is a stop rather than a pass/.test(step2),
     "stops rather than claiming publication": step2.includes('aborted: "push not confirmed at the ref'),
     // The per-URL evidence has exactly ONE channel, so the brief has to name it:
-    // `aborted` is the only free-text field in `PUBLISH_SCHEMA`, the caller quotes
-    // it verbatim as the record's reason, and that record's status line is
-    // required to say what each push URL returned. Both readers of the phrase
-    // match it as a LEADING substring — the record's `pushUnconfirmed` and the
-    // result echo — so appending costs the stop nothing. Told merely to "report"
-    // the evidence with no field named, a publisher satisfies the literal abort
-    // and drops it, and the status line downstream has nothing to say.
+    // `aborted` is the only field `PUBLISH_SCHEMA` has for a stop's reason, the
+    // caller quotes it verbatim as the record's reason, and that record's status
+    // line is required to say what each push URL returned. Told merely to
+    // "report" the evidence with no field named, a publisher satisfies the
+    // literal abort and drops it, and the status line downstream has nothing to
+    // say.
     "sends the per-URL evidence into that same field":
       step2.includes('aborted: "push not confirmed at the ref: <what each URL returned>"'),
     // The abort is the ONE fact the record and the run's result read to withhold
@@ -1792,6 +1791,20 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "the publish brief verifies its push at the ref rather than through the PR API, after the push and before the replies",
     readBackMissing.length === 0,
     readBackMissing.join("; ") || `step 2 carries all ${Object.keys(readBack).length} clauses`,
+  );
+
+  // The third place that must agree with the step above: the schema the publisher
+  // fills that field FROM. An example list offering the bare literal offers
+  // precisely the value the step forbids for this stop, and a publisher that takes
+  // it satisfies the abort while the record's status line is left with nothing to
+  // say. The phrase is one shared constant across all three, so it cannot drift;
+  // the evidence placeholder is written per site, so it is the half pinned here.
+  const abortedExample = PUBLISH_SCHEMA.properties.aborted.description;
+  check(
+    "and the schema it fills that field from offers the appended form rather than the bare literal",
+    /`push not confirmed at the ref: <what each URL returned>`/.test(abortedExample) &&
+      !/`push not confirmed at the ref`/.test(abortedExample),
+    (abortedExample.match(/`push not confirmed[^`]*`/) || ["no example for this stop"])[0],
   );
 
   // The reviewer request, whose confirmation the brief gave no instruction for at
