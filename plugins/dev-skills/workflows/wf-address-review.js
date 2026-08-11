@@ -798,13 +798,15 @@ function recordPrompt(packet, dispositions, facts) {
   // A publication that stopped PART-WAY holds the same map with replies left to
   // replay, so it leaves the same record — but two of its lines would be lies:
   // `status: not published` and "this run pushed nothing" are both false once
-  // something reached origin and only the rest failed. `landed` is what the
-  // publisher confirmed reaching origin, `outstanding` what it owes, and
+  // part of the map is on origin and only the rest failed. `landed` is what the
+  // publisher's account puts ON the PR — end state, so a reply an earlier run
+  // posted counts, which is why the lead below says the map is part-way rather
+  // than that this run put it there — `outstanding` what is still owed, and
   // `outcomes` its per-thread account of which is which; `landed` selects the
   // rendering the skill's format defines for that case. Empty is the ordinary
-  // run: nothing reached origin at all — and `pushNoop` is the one shape between
-  // them, a push that succeeded while moving nothing, where the tips are on
-  // origin though this run put nothing there.
+  // run: nothing of the map is on the PR at all — and `pushNoop` is the one shape
+  // between them, a push that succeeded while moving nothing, where the tips are
+  // on origin though nothing of the map is.
   // `unknown` is the THIRD state, and it is not a fourth flavour of "nothing
   // reached origin": it says the publisher gave no usable account of what it
   // posted, so this run does not KNOW. It outranks the other three, because
@@ -875,7 +877,7 @@ function recordPrompt(packet, dispositions, facts) {
   return `Leave this run's disposition record on PR #${packet.pr.number} (branch \`${packet.pr.workingBranch}\`). ${unknown
     ? `${pushCase.lead}: ${facts.why} ${pushCase.claims} — the lines below marked for that case say what is unknown, and every thread entry carries the same reservation.`
     : landed
-      ? `This run's publication stopped PART-WAY: ${facts.why} So this record says what landed rather than "not published", and its tips are NOT local-only — the two lines below marked for that case are the ones that differ.`
+      ? `This run's publication stopped with PART OF THIS MAP ALREADY ON THE PR: ${facts.why} So this record says what is on it rather than "not published", and its tips are NOT local-only — the two lines below marked for that case are the ones that differ. What is named as having reached origin is what the PR CARRIES, whichever run put it there — a reply an earlier run posted counts — so write it as that rather than as an account of this run's own writes.`
       : `This run published NOTHING: ${facts.why}`} Read \`AGENTS.md\` / \`CLAUDE.md\` first.
 
 ${where}

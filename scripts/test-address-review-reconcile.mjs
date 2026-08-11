@@ -3432,7 +3432,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       // And the entry says the reply is there, which is the whole point: a
       // standing of "still owed" here posts it twice.
       /thread=T1 {2}src\/app\.ts:12 a-reviewer — reply ALREADY POSTED — do not post it again; resolve still owed\./.test(noopPrior) &&
-      /what reached origin: 1 thread reply/.test(noopPriorResult.note || ""),
+      /what reached origin: 1 thread reply/.test(noopPriorResult.note || "") &&
+      // And the brief's own lead says which claim its author is writing, in the
+      // same terms: this run did not put that reply there, and a lead saying it
+      // did is the sentence the rendering was wrong about.
+      /This run's publication stopped with PART OF THIS MAP ALREADY ON THE PR/.test(noopPrior) &&
+      /What is named as having reached origin is what the PR CARRIES, whichever run put it there — a reply an earlier run posted counts/.test(noopPrior),
     JSON.stringify({
       status: (noopPrior.match(/status: [^(]*/) || ["no status line"])[0],
       originLine: (noopPrior.match(/^(this run changed|the tips above|reached origin).*/m) || ["no origin line at all"])[0].slice(0, 110),
