@@ -838,6 +838,13 @@ function recordPrompt(packet, dispositions, facts) {
   // the update is a `PATCH` in place, and an entry the earlier record holds for
   // an item this map omits, doubles, or cannot publish would go with it.
   const incomplete = typeof facts.mapIncomplete === "string" ? facts.mapIncomplete.trim() : "";
+  // The identities carried only by dispositions that ARE the incompleteness —
+  // doubled or unpublishable — which the carry step below must treat as carried
+  // by nothing: the caller computes them against the gathered items, which the
+  // record's author cannot re-derive from the dispositions JSON alone.
+  const compromised = Array.isArray(facts.compromisedIdentities)
+    ? facts.compromisedIdentities.filter((v) => typeof v === "string" && v.trim()).map((v) => v.trim())
+    : [];
   const priorUrl = packet.priorRecord && typeof packet.priorRecord.url === "string" ? packet.priorRecord.url.trim() : "";
   // The three push states, each with the lead, the `status:` line and the origin
   // line it implies. An unrecognized or absent state reads as `unknown`, which
@@ -923,7 +930,9 @@ ${unknown
 
 ${incomplete
     ? `- This map is INCOMPLETE (${incomplete}), so say so in the \`status:\` line's reason${priorUrl ? ` and name the earlier record that still stands (${priorUrl})` : ""}: a reader must not take this record for the whole account of this PR, and the entries it does carry are a real triage of the items they cover rather than a draft. Every one of them still gets its full entry below.${priorUrl
-      ? ` And leaving the earlier record standing preserves nothing on its own: the next run's gather replays only the MOST RECENT record — this one, once posted — so an entry living only in the record this one displaces is never replayed again, and a \`standalone\` item only that record names is never even re-gathered, for as long as the older comment stands unread. So CARRY the earlier record's orphaned entries into this one: fetch the body of the record this run replayed — the comment at ${priorUrl}, whose comment id is the number its \`#issuecomment-<id>\` fragment ends with: \`gh api repos/<owner>/<repo>/issues/comments/<id> --jq .body\` — and append to this record's \`## Threads\` block, verbatim and whole (kind, reference, permalink, reply body, any task line), every entry of its own \`## Threads\` block whose identity (\`thread=<threadId or url>\`) no disposition below carries, marking each \`carried unchanged from ${priorUrl}\` so a reader knows this run did not re-judge it — the next run's replay re-judges every entry against the tree either way. Where that comment is gone, or is spent and holds no \`## Threads\` block, carry nothing and say so in \`detail\`.`
+      ? ` And leaving the earlier record standing preserves nothing on its own: the next run's gather replays only the MOST RECENT record — this one, once posted — so an entry living only in the record this one displaces is never replayed again, and a \`standalone\` item only that record names is never even re-gathered, for as long as the older comment stands unread. So CARRY the earlier record's orphaned entries into this one: fetch the body of the record this run replayed — the comment at ${priorUrl}, whose comment id is the number its \`#issuecomment-<id>\` fragment ends with: \`gh api repos/<owner>/<repo>/issues/comments/<id> --jq .body\` — and append to this record's \`## Threads\` block, verbatim and whole (kind, reference, permalink, reply body, any task line), every entry of its own \`## Threads\` block whose identity (\`thread=<threadId or url>\`) no disposition below carries${compromised.length
+        ? ` — a disposition that is itself part of what makes this map incomplete (one of several naming the same gathered item, or one publication rejected as unpublishable) carrying NOTHING for this test, since the account it gives of its item is the very thing this map cannot publish while the displaced record's entry is the one durable copy of a judged reply for it: the identities so compromised here are ${compromised.map((v) => `\`${v}\``).join(", ")}, so a prior entry keyed to one of them is carried too`
+        : ""}, marking each \`carried unchanged from ${priorUrl}\` so a reader knows this run did not re-judge it — the next run's replay re-judges every entry against the tree either way. Where that comment is gone, or is spent and holds no \`## Threads\` block, carry nothing and say so in \`detail\`.`
       : ""}\n`
     : ""}- ${judgedTip
     ? `\`final HEAD\` is given above as \`${judgedTip}\` — write it EXACTLY as given and read no tip for it. It is the tip the reviewer's verdict was rendered over, and the dispositions below are that round's; the tip standing in the working location may be a LATER one a pass committed on top of it, and citing that would hand the next run's replay probe a tree no reviewer ever passed — which, the recorded commits all being its ancestors, prints nothing and so reads as "the record replays as written". Report what \`git rev-parse HEAD\` prints in the working location in \`detail\` instead, as this run's parting tip.`
@@ -2411,6 +2420,23 @@ const mapIncomplete = uncoveredItems.length
     : badDispDefect
       ? `a disposition is not publishable (${badDispRef}: ${badDispDefect})`
       : "";
+// The identities those same guards found COMPROMISED — each carried by a
+// disposition that is itself part of the incompleteness: one of several
+// naming the same gathered item, or one publication rejected as
+// unpublishable. The record brief's carry step needs them by name, because
+// its predicate skips a prior-record entry whose identity a disposition of
+// this map carries — and for these identities the disposition carrying them
+// is exactly what this map cannot publish, so treating it as coverage would
+// strand the displaced record's entry for the item — the durable copy of a
+// judged reply the no-supersede rule above exists to keep, for the doubled
+// and unpublishable shapes as much as the omitted one — off the replay
+// surface the newest record becomes. An uncovered item needs no entry here:
+// no disposition carries its identity, so the base predicate already carries
+// its prior entry.
+const compromisedIdentities = [...new Set([
+  ...duplicatedItems.map((it) => (it.type === "review-thread" ? it.threadId : it.url)),
+  ...workReport.filter((d) => d && dispositionDefect(d)).flatMap((d) => [d.threadId, d.url]),
+].filter((v) => typeof v === "string" && v))];
 // Spread into every exit below that publishes nothing, so the result says where
 // the map went — or that it went nowhere.
 const recordResult = await leaveDispositionRecord(noPublishReason, workReport, {
@@ -2418,6 +2444,7 @@ const recordResult = await leaveDispositionRecord(noPublishReason, workReport, {
   reviewerPassed: !!passed,
   deviations: cycle.deviations,
   mapIncomplete,
+  compromisedIdentities,
 });
 const recordNote = recordNoteText();
 

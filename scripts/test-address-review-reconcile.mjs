@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 197;
+const EXPECTED_CHECKS = 198;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -2847,6 +2847,30 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     body: "<!-- address-review:disposition-record -->\n# address-review packet — PR #42 (feature/x)\nstatus: not published (a local-only run)\n",
   };
   const withPrior = { reconcile: { outcome: "work" }, items: [ITEM], priorRecord: PRIOR_RECORD };
+  // The OTHER two shapes of the same incompleteness, each COVERING the gathered
+  // item while being exactly what publication cannot act on: two entries naming
+  // the same thread, and one entry rejected as unpublishable. In both, the
+  // item's identity IS carried by a disposition — so the carry step's base
+  // predicate ("no disposition below carries it") would skip the prior record's
+  // entry for it, stranding the one durable copy of a judged reply behind a
+  // doubled or unusable account. The brief must name those identities as
+  // compromised and have the prior entry carried anyway.
+  const CYCLE_DOUBLED = {
+    ...CYCLE_PASS,
+    workReport: [
+      CYCLE_PASS.workReport[0],
+      { ...CYCLE_PASS.workReport[0], kind: "push-back", detail: "the guard is deliberate; the same line was re-raised without new grounds" },
+    ],
+  };
+  const CYCLE_DEFECT = {
+    ...CYCLE_PASS,
+    workReport: [{ ...CYCLE_PASS.workReport[0], detail: "" }],
+  };
+  // And the CONTROL for the compromised clause: an incompleteness that is ONLY
+  // an uncovered item, beside a disposition that is clean — no identity is
+  // compromised, since an uncovered item's prior entry is one the base
+  // predicate already carries, so the clause must not render.
+  const withTwoPrior = { reconcile: { outcome: "work" }, items: [ITEM, ITEM_2], priorRecord: PRIOR_RECORD };
   // The OTHER kind that turns on the thread rather than on the kind, and the one
   // the fixture above omits: step 7 resolves a push-back or a deferral only on a
   // BOT thread and leaves the human one open unless the maintainer explicitly
@@ -3301,6 +3325,9 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     ["a push run stopped at the round cap", { args: "push no-rebase", cycles: [CYCLE_CAP] }, "review-cap-not-published", true],
     ["a push run whose dispositions leave a gathered item uncovered", { args: "push no-rebase", cycles: [CYCLE_UNCOVERED] }, "publish-aborted-incomplete-dispositions", true],
     ["an incomplete map on a PR that already carries a record", { args: "push no-rebase", cycles: [CYCLE_UNCOVERED] }, "publish-aborted-incomplete-dispositions", true, withPrior],
+    ["a doubled disposition on a PR that already carries a record", { args: "push no-rebase", cycles: [CYCLE_DOUBLED] }, "publish-aborted-conflicting-dispositions", true, withPrior],
+    ["an unpublishable disposition on a PR that already carries a record", { args: "push no-rebase", cycles: [CYCLE_DEFECT] }, "publish-aborted-incomplete-dispositions", true, withPrior],
+    ["an uncovered item beside a clean disposition on a PR that already carries a record", { args: "push no-rebase", cycles: [CYCLE_PASS] }, "publish-aborted-incomplete-dispositions", true, withTwoPrior],
     ["a complete map on a PR that already carries a record", { args: "no-push no-rebase", cycles: [CYCLE_PASS] }, "fixed-local", true, withPrior],
     ["a pre-push rebase that halted on a conflict", { args: "push", cycles: [CYCLE_PASS], rebases: { "pre-fix": REBASE_NOOP, "pre-push": REBASE_HALTED } }, "rebase-halted", true],
     ["a replay with no reviewer rounds left to re-verify it", { args: "push", cycles: [{ ...CYCLE_PASS, rounds: 12 }], ...REPLAY_POINTS }, "reverify-budget-exhausted", true],
@@ -3644,6 +3671,40 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       carry: (incompleteOverPrior.match(/CARRY the earlier record's orphaned entries[^\n]*/) || ["no carry instruction"])[0].slice(0, 160),
       completeCarries: /CARRY the earlier record's orphaned entries/.test(completeOverPrior),
       priorlessCarries: /CARRY the earlier record's orphaned entries/.test(incompleteNoPrior),
+    }),
+  );
+
+  // The carry's base predicate — "no disposition below carries it" — is blind to
+  // the other two shapes of the same incompleteness: a DOUBLED item's identity
+  // and an UNPUBLISHABLE entry's identity ARE carried by a disposition, which is
+  // exactly the account this map cannot publish, so the prior record's entry for
+  // them would be skipped and stranded off the replay surface the newest record
+  // becomes. The brief must name those identities as compromised — carried by
+  // nothing, so the displaced record's entry is carried anyway. The uncovered
+  // row above is the union shape: its one entry names a never-gathered thread,
+  // so the item it left uncovered rides the base predicate while the stray
+  // entry's own identities are compromised. The control: a map whose only
+  // incompleteness is an uncovered item beside a CLEAN disposition names no
+  // compromised identity at all.
+  const doubledOverPrior = briefs["a doubled disposition on a PR that already carries a record"];
+  const defectOverPrior = briefs["an unpublishable disposition on a PR that already carries a record"];
+  const cleanUncoveredOverPrior = briefs["an uncovered item beside a clean disposition on a PR that already carries a record"];
+  check(
+    "a doubled or unpublishable disposition's identity is named compromised — carrying nothing, so the displaced record's entry for it is carried too — while a clean map's uncovered item names none",
+    /this run's map is INCOMPLETE \(1 gathered item\(s\) carry more than one disposition\)/.test(doubledOverPrior) &&
+      /carrying NOTHING for this test/.test(doubledOverPrior) &&
+      /the identities so compromised here are `T1`, so a prior entry keyed to one of them is carried too/.test(doubledOverPrior) &&
+      /this run's map is INCOMPLETE \(a disposition is not publishable/.test(defectOverPrior) &&
+      /the identities so compromised here are `T1`, `https:\/\/example\.invalid\/pr\/42#d1`, so a prior entry keyed to one of them is carried too/.test(defectOverPrior) &&
+      /the identities so compromised here are `T2`, `https:\/\/example\.invalid\/pr\/42#d2`/.test(incompleteOverPrior) &&
+      /CARRY the earlier record's orphaned entries into this one/.test(cleanUncoveredOverPrior) &&
+      !/carrying NOTHING for this test/.test(cleanUncoveredOverPrior) &&
+      !/identities so compromised/.test(cleanUncoveredOverPrior),
+    JSON.stringify({
+      doubled: (doubledOverPrior.match(/the identities so compromised[^\n]*/) || ["no compromised clause"])[0].slice(0, 160),
+      defect: (defectOverPrior.match(/the identities so compromised[^\n]*/) || ["no compromised clause"])[0].slice(0, 160),
+      uncoveredUnion: (incompleteOverPrior.match(/the identities so compromised[^\n]*/) || ["no compromised clause"])[0].slice(0, 160),
+      cleanHasClause: /carrying NOTHING for this test/.test(cleanUncoveredOverPrior),
     }),
   );
 
@@ -4391,6 +4452,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // newest record stays the one complete replay surface.
     "the incomplete record carrying the displaced record's orphaned entries forward":
       "carries the displaced record's orphaned entries forward",
+    // And the shapes the carry's base predicate is blind to: a doubled or
+    // unpublishable disposition CARRIES the item's identity while being exactly
+    // the account the map cannot publish, so it counts as carrying nothing and
+    // the displaced record's entry for the identity is carried anyway.
+    "a doubled or unpublishable disposition counting as carrying nothing, so the prior entry it would mask is carried too":
+      "a disposition that is itself the incompleteness (one of several naming the same gathered item, or one publication rejected as unpublishable) carrying nothing for this test",
     "and a full publication spending the record it replayed, leaving no entries to replay":
       "**A run that publishes in full SPENDS the record it replayed.**",
     "the spend named as what ends the standalone replay":
