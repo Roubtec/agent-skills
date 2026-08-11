@@ -113,7 +113,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 118;
+const EXPECTED_CHECKS = 122;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1795,6 +1795,48 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       `${name}: no prose equates the delegated rebase's halt with an aborted conflict`,
       !/delegated rebase aborts cleanly/.test(text) && !/Non-trivial rebase conflict/.test(text) && !/sharp edge is a conflict/.test(text),
       "a conflict-only restatement of the halt is back",
+    );
+  }
+}
+
+// --- The canonical nugget's own new clauses, in the mirrors ------------------
+// The two clauses the brief pins above — the octopus blind spot and
+// `--no-update-refs` on the replay — are the workflow's RENDERING of rules that
+// live in `review-cycle` → "The delegated rebase step", and the stacked
+// `--onto` form exists only there and in the `address-reviews` pair that quotes
+// it (the single-PR pipeline cannot reach it, so no brief check can cover it).
+// A peer round proved the gap: with only the brief pinned, gutting either
+// canonical clause — or stripping the flag off every stacked quote — left the
+// whole suite green. So the canonical mirrors are pinned by their imperatives
+// here, and the quoting pair is held to carrying no unflagged stacked form.
+{
+  const rcMirrors = {
+    "plugins review-cycle": join(here, "..", "plugins", "dev-skills", "skills", "review-cycle", "SKILL.md"),
+    "codex review-cycle": join(here, "..", "codex", "dev-skills", "skills", "review-cycle", "SKILL.md"),
+  };
+  for (const [name, path] of Object.entries(rcMirrors)) {
+    const text = readFileSync(path, "utf8");
+    check(
+      `${name}: the canonical nugget orders --no-update-refs on every rebase and halts the octopus merge unprobed`,
+      /So every rebase this step runs passes `--no-update-refs`/.test(text) &&
+        /`git rebase --no-update-refs --onto <new parent tip> <old parent tip>`/.test(text) &&
+        !/`git rebase --onto <new parent tip> <old parent tip>`/.test(text) &&
+        /halts unprobed, exactly as if it carried content/.test(text) &&
+        /declining to answer/.test(text),
+      "a canonical clause the brief renders was gutted, or the stacked form lost its flag",
+    );
+  }
+  const quotingMirrors = {
+    "plugins address-reviews": join(here, "..", "plugins", "dev-skills", "skills", "address-reviews", "SKILL.md"),
+    "codex address-reviews": join(here, "..", "codex", "dev-skills", "skills", "address-reviews", "SKILL.md"),
+  };
+  for (const [name, path] of Object.entries(quotingMirrors)) {
+    const text = readFileSync(path, "utf8");
+    const flagged = (text.match(/`git rebase --no-update-refs --onto <new parent tip> <old parent tip>`/g) || []).length;
+    check(
+      `${name}: every quoted stacked rebase carries --no-update-refs`,
+      flagged >= 2 && !/`git rebase --onto <new parent tip> <old parent tip>`/.test(text),
+      `flagged quotes: ${flagged}; an unflagged stacked form is back`,
     );
   }
 }
