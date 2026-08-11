@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 187;
+const EXPECTED_CHECKS = 188;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -3926,6 +3926,28 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       priorPara.includes("Report the most recent one as `priorRecord`") &&
       /body VERBATIM and WHOLE/.test(priorPara),
     priorPara ? priorPara.slice(0, 200) : "the gather brief says nothing about a prior disposition record",
+  );
+
+  // A recorded STANDALONE disposition is replayable only if the item behind it
+  // is gathered again. Step 3's rule admits a standalone comment only where the
+  // request names it, so on a later "push now" turn the recorded disposition has
+  // no item to attach to — the fixer owes exactly one disposition per gathered
+  // item, and the publication guard rejects a standalone disposition whose url
+  // was never gathered. The recorded judgment and the Summary text drafted for
+  // it are then dropped in silence by the very run that read the record.
+  const standalonePara = brief.split("\n").find((l) => l.includes('type: "standalone"')) || "";
+  check(
+    "and a standalone item a prior record holds a disposition for is gathered again, so that entry has something to replay onto",
+    /OR if the prior record above already holds a `standalone` disposition for it/.test(standalonePara) &&
+      /re-fetch that url and emit the comment as an item where it is still there/.test(standalonePara) &&
+      /publication rejects a `standalone` disposition whose url was never gathered/.test(standalonePara) &&
+      // And it is re-judged rather than replayed on the record's word, the same
+      // authority every other replayed disposition answers to.
+      /re-judges it against the branch exactly as it re-judges a thread's disposition/.test(standalonePara) &&
+      // A comment that is gone is not outstanding work: gathering it would put
+      // an item on the run that nothing can be done about.
+      /Where the comment is gone \(deleted, or the url no longer resolves\), emit no item/.test(standalonePara),
+    standalonePara ? standalonePara.slice(0, 240) : "the gather brief says nothing about standalone items",
   );
 
   // And the sweep that finds it addresses the repository the PR is in. It is
