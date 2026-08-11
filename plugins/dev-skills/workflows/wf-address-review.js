@@ -797,9 +797,10 @@ function recordPrompt(packet, dispositions, facts) {
     ? `Your working location is the worktree \`${packet.pr.worktree}\`. Before anything else, \`cd\` into it and verify \`git rev-parse --show-toplevel\` prints exactly that path; if not, STOP and report. Every git read below runs there. Do NOT touch the main checkout: it is on another branch and is none of this run's business.`
     : `You work in the repository's current checkout, which is on the branch this run addressed — do NOT create a worktree and do NOT switch branches.`;
   // A publication that stopped PART-WAY holds the same map with replies left to
-  // replay, so it leaves the same record — but two of its lines would be lies:
-  // `status: not published` and "this run pushed nothing" are both false once
-  // part of the map is on origin and only the rest failed. `landed` is what the
+  // replay, so it leaves the same record — but `status: not published` would be
+  // a lie once part of the map is on origin and only the rest failed, and what
+  // "this run pushed nothing" claims of the tips follows the push rather than
+  // the map (the LANDED-lead note below). `landed` is what the
   // publisher's account puts ON the PR — end state, so a reply an earlier run
   // posted counts, which is why the lead below says the map is part-way rather
   // than that this run put it there — `outstanding` what is still owed, and
