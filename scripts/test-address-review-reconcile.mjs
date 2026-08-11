@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 196;
+const EXPECTED_CHECKS = 197;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -3617,6 +3617,36 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     }),
   );
 
+  // Standing beside the new comment is not preservation on its own: the gather
+  // replays only the MOST RECENT record, so once the incomplete one is posted,
+  // an entry living only in the record it displaces would never be replayed
+  // again — a `standalone` item only that record names never even re-gathered —
+  // while the older comment stood unread. So the incomplete brief has the record
+  // CARRY the displaced record's orphaned entries forward, keyed by the identity
+  // publication routes on rather than by `ref`, marked as carried so a reader
+  // knows this run did not re-judge them. The two controls: a complete map
+  // supersedes in place and carries nothing this way, and an incomplete map on a
+  // PR with NO prior record has nothing to carry and no instruction to try.
+  const incompleteNoPrior = briefs["a push run whose dispositions leave a gathered item uncovered"];
+  check(
+    "an incomplete record carries the displaced record's orphaned entries forward — fetched from the replayed record, keyed by thread identity, marked as carried — while a complete map and a prior-less incomplete one carry nothing",
+    /CARRY the earlier record's orphaned entries into this one/.test(incompleteOverPrior) &&
+      /whose identity \(`thread=<threadId or url>`\) no disposition below carries/.test(incompleteOverPrior) &&
+      incompleteOverPrior.includes("marking each `carried unchanged from https://example.invalid/pr/42#issuecomment-9`") &&
+      /the next run's gather replays only the MOST RECENT record/.test(incompleteOverPrior) &&
+      /gh api repos\/<owner>\/<repo>\/issues\/comments\/<id> --jq \.body/.test(incompleteOverPrior) &&
+      // Gone or spent, the replayed record has no entries to carry — say so
+      // rather than inventing any.
+      /Where that comment is gone, or is spent and holds no `## Threads` block, carry nothing and say so in `detail`/.test(incompleteOverPrior) &&
+      !/CARRY the earlier record's orphaned entries/.test(completeOverPrior) &&
+      !/CARRY the earlier record's orphaned entries/.test(incompleteNoPrior),
+    JSON.stringify({
+      carry: (incompleteOverPrior.match(/CARRY the earlier record's orphaned entries[^\n]*/) || ["no carry instruction"])[0].slice(0, 160),
+      completeCarries: /CARRY the earlier record's orphaned entries/.test(completeOverPrior),
+      priorlessCarries: /CARRY the earlier record's orphaned entries/.test(incompleteNoPrior),
+    }),
+  );
+
   // What ENDS a record. A record is replayed rather than re-triaged, and the
   // review-thread half of that replay self-terminates on the PR: step 3 keeps
   // only unresolved threads, so a record whose threads a later run resolved
@@ -4355,6 +4385,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   const LIFECYCLE_CLAUSES = {
     "an incomplete map posted beside the earlier record rather than PATCHed over it":
       "**One map may not supersede: a map this run already knows is incomplete**",
+    // And what keeps that carve-out from stranding the older record's entries:
+    // the gather replays only the most recent record, so the partial one copies
+    // the displaced record's uncovered entries in, marked as carried, and the
+    // newest record stays the one complete replay surface.
+    "the incomplete record carrying the displaced record's orphaned entries forward":
+      "carries the displaced record's orphaned entries forward",
     "and a full publication spending the record it replayed, leaving no entries to replay":
       "**A run that publishes in full SPENDS the record it replayed.**",
     "the spend named as what ends the standalone replay":
