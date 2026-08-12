@@ -1532,7 +1532,6 @@ for (const name of WORKFLOWS) {
       artifactDir: "/tmp/review-cycle-preflight-test",
       packet: { workReport: [] },
       handedFindings: [],
-      peerPreflighted: false,
       peerState,
       peerThrottle,
     });
@@ -1664,20 +1663,20 @@ const BATCH_CONTRACT_CHECKS = 5;
 }
 
 // The Claude-provider rendering is prose rather than executable workflow code,
-// so exercise the exact identity helpers it ships by extracting their code
-// block. A fake proc root lets the test replace field 22 while keeping the PID
+// so exercise the exact direct-PID helpers it ships by extracting their code.
+// A fake proc root lets the test replace field 22 while keeping the PID
 // constant — the reuse failure this guard exists for — without ever probing or
-// signalling a real process. The fake `kill` records every operand, which also
-// proves the PID and deliberately-created PGID paths use the same identity.
-const PEER_LIFECYCLE_CHECKS = 10;
+// signalling a real process. The fake `kill` records every operand and can
+// model TERM resistance, KILL death, or a teardown survivor.
+const PEER_LIFECYCLE_CHECKS = 15;
 {
   console.log("# codex review-cycle prose — peer lifecycle negative controls");
   const before = legOk + legFail;
   const prose = readFileSync(join(here, "..", "codex", "dev-skills", "skills", "review-cycle", "SKILL.md"), "utf8");
-  const blockStart = prose.indexOf("peer_proc_identity() {");
-  const blockEnd = prose.indexOf("\n```", blockStart);
+  const blockStart = prose.indexOf("peer_start_time() {");
+  const blockEnd = prose.indexOf("\nnohup claude", blockStart);
   const helperBlock = blockStart >= 0 && blockEnd > blockStart ? prose.slice(blockStart, blockEnd) : "";
-  check("the canonical helper identity block is extractable", helperBlock.length > 0, `${blockStart}/${blockEnd}`);
+  check("the canonical direct-provider identity block is extractable", helperBlock.length > 0, `${blockStart}/${blockEnd}`);
 
   const scratch = mkdtempSync(join(tmpdir(), "peer-incarnation-test-"));
   try {
@@ -1688,43 +1687,53 @@ const PEER_LIFECYCLE_CHECKS = 10;
     // mkdir is kept inside the dynamic shell fixture because the test itself
     // imports no recursive directory-writing helper just for this one path.
     execFileSync("mkdir", ["-p", pidDir]);
-    const statLine = (start, pgrp = "731", session = "731") => `731 (peer ) name with spaces) S 1 ${pgrp} ${session} ${Array(15).fill("0").join(" ")} ${start} 0\n`;
+    const statLine = (start) => `731 (peer ) name with spaces) S 1 731 731 ${Array(15).fill("0").join(" ")} ${start} 0\n`;
     const runnableBlock = helperBlock.replaceAll('"/proc/$1/stat"', '"$peer_proc_root/$1/stat"');
-    const runFixture = (actions) => {
+    const runFixture = (actions, survivor = false) => {
       writeFileSync(signalLog, "");
-      execFileSync("sh", ["-c", `${runnableBlock}\npeer_proc_root=$1\nhelper_pid_file=$2\nsignal_log=$3\nkill() { printf '%s\\n' "$*" >> "$signal_log"; return 0; }\n${actions}`, "peer-test", procRoot, identityFile, signalLog]);
-      return readFileSync(signalLog, "utf8").trim().split("\n").filter(Boolean);
+      let status = 0;
+      try {
+        execFileSync("sh", ["-c", `${runnableBlock}\npeer_proc_root=$1\npeer_pid_file=$2\nsignal_log=$3\nsurvivor=$4\nkill() { printf '%s\\n' "$*" >> "$signal_log"; if [ "$1" = -KILL ] && [ "$survivor" != yes ]; then rm -f "$peer_proc_root/$2/stat"; fi; return 0; }\nsleep() { :; }\n${actions}`, "peer-test", procRoot, identityFile, signalLog, survivor ? "yes" : "no"]);
+      } catch (err) {
+        status = Number(err.status || 1);
+      }
+      return { signals: readFileSync(signalLog, "utf8").trim().split("\n").filter(Boolean), status };
     };
 
     writeFileSync(join(pidDir, "stat"), statLine("424242"));
-    writeFileSync(identityFile, "731 424242 731 731\n");
-    const liveSignals = runFixture("helper_pid_alive; helper_group_alive; helper_term_group");
-    check("the robust parser accepts field 22 after a comm containing spaces and a closing parenthesis", liveSignals.length === 3, JSON.stringify(liveSignals));
-    check("PID probe, PGID probe, and TERM target only the identity-checked handoff", JSON.stringify(liveSignals) === JSON.stringify(["-0 731", "-0 -731", "-TERM -731"]), JSON.stringify(liveSignals));
+    writeFileSync(identityFile, "731 424242\n");
+    const live = runFixture("peer_pid_alive; peer_signal_pid TERM");
+    check("the robust parser accepts field 22 after a comm containing spaces and a closing parenthesis", live.signals.length === 2, JSON.stringify(live));
+    check("probe and TERM target only the identity-checked positive provider PID", JSON.stringify(live.signals) === JSON.stringify(["-0 731", "-TERM 731"]), JSON.stringify(live));
 
     writeFileSync(join(pidDir, "stat"), statLine("999999"));
-    const reusedSignals = runFixture("helper_pid_alive || :; helper_group_alive || :; helper_term_group || :");
-    check("a reused PID/PGID with a different start time is never probed or signalled", reusedSignals.length === 0, JSON.stringify(reusedSignals));
-
-    writeFileSync(join(pidDir, "stat"), statLine("424242", "800", "800"));
-    const regroupedSignals = runFixture("helper_pid_alive || :; helper_group_alive || :; helper_term_group || :");
-    check("a matching PID/start time with changed process-group or session identity is never probed or signalled", regroupedSignals.length === 0, JSON.stringify(regroupedSignals));
+    const reused = runFixture("peer_pid_alive || :; peer_signal_pid TERM || :");
+    check("a reused PID with a different start time is never probed or signalled", reused.signals.length === 0, JSON.stringify(reused));
 
     rmSync(join(pidDir, "stat"));
-    const deadSignals = runFixture("helper_pid_alive || :; helper_group_alive || :; helper_term_group || :");
-    check("a missing proc identity is treated as original-process death without a signal", deadSignals.length === 0, JSON.stringify(deadSignals));
+    const dead = runFixture("peer_pid_alive || :; peer_signal_pid TERM || :");
+    check("a missing proc identity is treated as original-process death without a signal", dead.signals.length === 0, JSON.stringify(dead));
 
     writeFileSync(join(pidDir, "stat"), statLine("424242"));
-    writeFileSync(identityFile, "731 424242 731 731 surplus\n");
-    const malformedSignals = runFixture("helper_pid_alive || :; helper_group_alive || :; helper_term_group || :");
-    check("a malformed handoff with extra fields fails closed before every kill", malformedSignals.length === 0, JSON.stringify(malformedSignals));
+    writeFileSync(identityFile, "731 424242 surplus\n");
+    const malformed = runFixture("peer_pid_alive || :; peer_signal_pid TERM || :");
+    check("a malformed handoff with extra fields fails closed before every kill", malformed.signals.length === 0, JSON.stringify(malformed));
+
+    writeFileSync(identityFile, "731 424242\n");
+    const killed = runFixture("peer_stop_pid");
+    check("TERM resistance reaches KILL on the same positive PID and confirmed death succeeds", killed.status === 0 && killed.signals.includes("-TERM 731") && killed.signals.includes("-KILL 731"), JSON.stringify(killed));
+
+    writeFileSync(join(pidDir, "stat"), statLine("424242"));
+    const survivor = runFixture("peer_stop_pid", true);
+    check("an identity that survives TERM and KILL makes teardown fail", survivor.status !== 0 && survivor.signals.includes("-TERM 731") && survivor.signals.includes("-KILL 731"), JSON.stringify(survivor));
   } finally {
     rmSync(scratch, { recursive: true, force: true });
   }
 
   const pluginsProse = readFileSync(join(here, "..", "plugins", "dev-skills", "skills", "review-cycle", "SKILL.md"), "utf8");
   check("the direct Codex provider gets bounded TERM, death verification, safe KILL, and a survivor stop", /send TERM[\s\S]*at most ten seconds[\s\S]*send KILL only if[\s\S]*ten more seconds[\s\S]*stop the cycle and escalate/.test(pluginsProse), "raw Codex lifecycle prose");
-  check("the Claude helper and fallback both route every group signal through identity reload", /helper_term_group[\s\S]*identity is checked again immediately before that signal/.test(prose) && /peer_signal_group KILL/.test(prose) && /Every liveness probe and TERM\/KILL reloads the leader identity immediately before `kill`/.test(prose), "Claude PID/PGID lifecycle prose");
+  check("the helper is one foreground call beneath the caller cap and delegates supervision", /if peer-review-run --provider claude[\s\S]*--timeout 540[\s\S]*peer_helper_status=0[\s\S]*peer_helper_status=\$\?[\s\S]*at least 570 seconds but strictly below[\s\S]*Do not background, detach, poll, or externally signal the helper/.test(prose), "foreground helper shape");
+  check("the Claude fallback is direct-PID only and stops on a survivor", /records `\$!` as the direct provider PID[\s\S]*peer_stop_pid[\s\S]*A surviving identity stops the entire cycle/.test(prose) && !/peer_group_alive|peer_signal_group|setsid --fork/.test(prose), "Claude direct-PID lifecycle prose");
   check(
     "the helper verdict is proved from literal embedded evidence and exact pinned OIDs without an external read grant",
     /BEGIN GENERATED REVIEW DATA/.test(prose) &&
@@ -1737,11 +1746,28 @@ const PEER_LIFECYCLE_CHECKS = 10;
       !/`printf '%s\\n' -- "\$value"`/.test(prose) &&
       /The separate `diff_evidence_file` is retained for audit but is not verdict proof and is never a provider read dependency/.test(prose) &&
       /embedded diff evidence or proof absent/.test(prose) &&
-      /never accept the verdict on the helper's outcome alone/.test(prose) &&
+      /Missing or mismatched proof changes `passed` to `forfeited`/.test(prose) &&
+      /For `issues`, preserve the `issues` outcome and relay every finding/.test(prose) &&
       !/Read the complete diff evidence at:/.test(prose) &&
       !/native read-only tools may read the one absolute out-of-worktree evidence path/.test(prose),
     "embedded evidence contract",
   );
+  const evidenceGate = (outcome, proof, findings) => proof || outcome !== "passed"
+    ? { outcome, findings, reason: proof ? "" : "embedded diff evidence or proof absent", note: proof ? "" : "evidence proof failed; findings retained" }
+    : { outcome: "forfeited", findings: [], reason: "embedded diff evidence or proof absent", note: "" };
+  const passedNegative = evidenceGate("passed", false, []);
+  check("a passed verdict with absent proof dynamically forfeits", passedNegative.outcome === "forfeited" && passedNegative.reason === "embedded diff evidence or proof absent", JSON.stringify(passedNegative));
+  const issueFindings = [{ severity: "blocking", claim: "grounded finding" }];
+  const issuesNegative = evidenceGate("issues", false, issueFindings);
+  check("an issues verdict with absent proof dynamically retains its findings and evidence reason", issuesNegative.outcome === "issues" && issuesNegative.findings === issueFindings && issuesNegative.reason === "embedded diff evidence or proof absent" && /findings retained/.test(issuesNegative.note), JSON.stringify(issuesNegative));
+
+  const workflowCores = WORKFLOWS.map((file) => {
+    const src = readFileSync(join(here, "..", "plugins", "dev-skills", "workflows", file), "utf8");
+    const b = src.indexOf("BEGIN EMBEDDABLE SECTION: review-cycle-core");
+    const e = src.indexOf("END EMBEDDABLE SECTION: review-cycle-core");
+    return src.slice(src.indexOf("\n", b) + 1, src.lastIndexOf("\n", e));
+  });
+  check("the two executable review-cycle cores remain byte-identical", workflowCores[0] === workflowCores[1], `${workflowCores[0].length}/${workflowCores[1].length}`);
 
   const n = legOk + legFail - before;
   check(`peer lifecycle checks ran all ${PEER_LIFECYCLE_CHECKS}`, n === PEER_LIFECYCLE_CHECKS, `ran ${n}`);

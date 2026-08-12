@@ -19,7 +19,7 @@ Three roles, freshly spawned every round. Fix-ups and re-reviews always use a fr
 
 - **Fixer** (the implementer on round 1). Its prompt carries: the worktree/branch contract first (`cd` there, verify `git rev-parse --show-toplevel` and `git branch --show-current`; stop and report rather than guess), the work item(s) verbatim, every previous-round finding verbatim as separately labeled blocks, an instruction to read the repository's agent-context files (`AGENTS.md`, `CLAUDE.md`, or `.github/CLAUDE.md`) first, commit/validation instructions — where output those redirect to a file goes is the all-roles rule under **Artifacts and hygiene** below, not something to compose per role — and the disposition duty below. It returns a packet: what changed, the disposition of every finding it was handed, and the final SHA, with `git status --porcelain` empty, every intended change committed, and no Git operation left in progress — an unclean, half-committed, or mid-operation tree is resolved or reported, never handed to review. Do not give it your own or the reviewer's reasoning beyond the verbatim findings, and tell it not to write to any shared task or plan tracker (child entries leak into the orchestrator's view).
 - **Reviewer** — a fresh-eyes verification of the committed state, spawned only after the fixer's commits have landed. Give it the work item(s) and any proposed dispositions verbatim, the effective review base, and the branch — never the fixer's reasoning or report. It reads whole touched files rather than diffs or commit messages (both anchor it to the fixer's intent); if `git diff --name-only <base>...HEAD` looks empty despite claimed work, it reports a likely race/wrong-worktree flag rather than reviewing nothing. For code it runs the build/typecheck first at the validation tier the round's brief states (a failure at that tier is an automatic blocker; it does not block on a heavier suite the stated tier did not run) — tell it where any output of that build goes, a path under the cycle's artifact directory below or inside the reviewed worktree, never a fixed shared scratchpad name and never left to the reviewer to pick — then verifies the artifact per its type below, then does a quality pass on the touched files (logic correctness, error handling, edge cases, dead code, consistency, duplication, type safety). Like the fixer it reads the repository's agent-context files (`AGENTS.md`, `CLAUDE.md`, or `.github/CLAUDE.md`) first — a repo's stated view of what a finding is worth is part of the standard it reviews against — and it weights findings accordingly: real gaps and functional problems over style nits, a divergence an ordinary run reaches over one only deliberately hand-crafted input produces. It reports **Pass** or a numbered, actionable **Issues** list, carries anything below that bar as a pass note rather than an issue, edits nothing, and writes to no shared task or plan tracker.
-- **Peer** (best-effort, cross-harness) — a read-only `claude` review launched in the background at the same moment as the Reviewer, from the committed checkout. On the primary path, background the `peer-review-run` helper itself while it supervises its provider tree; when the helper is absent, use the hardened manual supervisor below. On the primary path, wait for the helper group to finish and read its result — not merely for the short-lived `setsid --fork` bootstrap to return — and ensure that bootstrap has been reaped; if helper-supported teardown does not finish, stop the cycle for operator intervention rather than converting a possibly live provider into a non-blocking peer outcome. On the fallback path, wait for and reap its wait supervisor and verify the provider group is dead before deciding the round. The peer receives the same evidence as the Reviewer — items and dispositions verbatim, worktree, base, branch — but no reasoning, no fixer report, and no Reviewer execution steps. It reads the actual files, edits nothing, uses no network access (pass any GitHub thread text or diff verbatim instead), and runs no builds or tests; the Reviewer alone owns execution, which is what makes the concurrent launch safe. Require exactly `VERDICT: PASS | ISSUES`, followed by an explicit statement that it executed no tests and judged verification statically, then for Issues by numbered findings tagged `blocking` or `minor`, each with `file:line` and a one-line rationale. Brief it with the Reviewer's weighting rules too — both the nit weighting above and the comment weighting below: both of its severities gate, so a peer that never received them spends a whole round on a nit, or on the narration the fixer is told not to ship.
+- **Peer** (best-effort, cross-harness) — a read-only `claude` review started at the same moment as the Reviewer, from the committed checkout. Give this role its own concurrent tool invocation and have that invocation run one supervised foreground `peer-review-run` call; concurrency belongs between the Peer and Reviewer roles, while the helper owns its provider timeout, retry, and reaping. When the helper is absent, the same role uses the bounded direct-provider PID fallback below and proves that PID dead before it returns. The peer receives the same evidence as the Reviewer — items and dispositions verbatim, worktree, base, branch — but no reasoning, no fixer report, and no Reviewer execution steps. It reads the actual files, edits nothing, uses no network access (pass any GitHub thread text or diff verbatim instead), and runs no builds or tests; the Reviewer alone owns execution, which is what makes the concurrent launch safe. Require exactly `VERDICT: PASS | ISSUES`, followed by an explicit statement that it executed no tests and judged verification statically, then for Issues by numbered findings tagged `blocking` or `minor`, each with `file:line` and a one-line rationale. Brief it with the Reviewer's weighting rules too — both the nit weighting above and the comment weighting below: both of its severities gate, so a peer that never received them spends a whole round on a nit, or on the narration the fixer is told not to ship.
 
 The rule is about committed state, not turn structure: never spawn the Reviewer until the fixer's commits are on disk — a reviewer racing an unfinished fixer diffs a half-written branch, sees nothing, and ships the work unverified. A harness may run spawns asynchronously, returning an id immediately and delivering the result as a later notification, so the obligation is to wait for that completion notification; "one checkout-dependent agent at a time" is the proxy for the invariant, sufficient where spawns are synchronous and neither sufficient nor necessary where they are not. The examination-only peer launched beside the Reviewer after the tree is clean and committed is the sole concurrency exception: two readers are safe.
 
@@ -90,189 +90,92 @@ In either deferred-classification path, an auth/usage failure at the first real 
 
 **Review strength is pinned per invocation.** This codex-led side reviews with `claude` and pins both dimensions, `--model opus --effort medium`, because that side has a stable capability alias to pin and a container may most recently have selected an economy tier. The Claude-led mirror of this skill reviews with codex and always passes `-c model_reasoning_effort=medium`, leaving the model to the peer's configured high-capability default (`~/.codex/config.toml` — that configuration is what "configured high-capability model" means wherever these skills say it). Each form pins everything its CLI gives a stable handle on, so no pinned dimension follows whichever value a container most recently selected; the pin is per-invocation and never writes back to the saved configuration.
 
-**Launch through the helper.** Create one unique owner-only `invocation_dir` outside the reviewed worktree in session-scoped scratch space, then allocate every path explicitly beneath it: `prompt_file="$invocation_dir/peer-review.prompt"`, `diff_evidence_file="$invocation_dir/diff-evidence.txt"`, `result_file="$invocation_dir/peer-review-result.json"`, `helper_stderr_file="$invocation_dir/peer-review.stderr"`, `helper_pid_file="$invocation_dir/peer-review.pid"`, and `artifact_root="$invocation_dir/artifacts"` (create that private artifact root before launch). Resolve the already-selected effective review base and the worktree's current `HEAD` to full commit OIDs as `effective_base_oid` and `review_tip_oid`, then, before starting either reviewer and under `umask 077`, render exactly `git -C "$worktree" log --oneline "$effective_base_oid..$review_tip_oid"` followed by `git -C "$worktree" diff "$effective_base_oid...$review_tip_oid"` into `diff_evidence_file` and make that retained audit copy read-only with `chmod 400`; any resolution, render, write, or mode-setting failure forfeits the peer launch rather than handing it partial evidence. Construct `prompt_file` from two precisely separated classes of content: write static instructions verbatim with quoted heredocs (`<<'PEER_PROMPT'`), then append generated review data only as literal bytes with `printf -- '%s\n' "$value"` or `cat -- "$file"`, never by interpolation into an unquoted heredoc and never through `eval`. Open that second class with a fixed `BEGIN GENERATED REVIEW DATA` marker, append the full per-round work items, findings, and proposed dispositions, then the lines `Effective base OID: $effective_base_oid` and `Review tip OID: $review_tip_oid`, followed by a fixed `BEGIN EMBEDDED GIT EVIDENCE` marker, the complete bytes of `diff_evidence_file`, a fixed `END EMBEDDED GIT EVIDENCE` marker, and finally `END GENERATED REVIEW DATA`. No generated review content belongs outside the outer generated-data markers, and nothing except the exact log/diff bytes belongs between the inner git-evidence markers. The static instructions must order the peer to inspect that embedded section before rendering its verdict and to copy all three proof lines into its final response: `EVIDENCE_BASE_OID: <full OID>`, `EVIDENCE_TIP_OID: <full OID>`, and `EVIDENCE_TOKEN: <token>`, choosing the token as an exact distinctive non-whitespace token from an added or removed diff line that occurs exactly once between the evidence markers. The caller reveals no expected token in the prompt. The helper has no caller-facing `--add-dir` option, and none is needed: the provider receives the evidence in `prompt_file` itself and never has to read `diff_evidence_file`; preserve that file only as the caller's audit copy and never invent an unsupported flag or grant a shared scratch parent. Verify this embedded-evidence boundary with a real helper invocation when validating the rendering. At the same moment the Reviewer starts, require `setsid` (otherwise forfeit this best-effort peer) and use the launch below: `setsid --fork` moves the helper out of the launching tool's process group, while the short-lived inner shell persists the new session leader's PID and incarnation token before it becomes the helper, so later Bash calls address the same process without keeping the launching tool call open.
+**Launch through the helper.** Create one unique owner-only `invocation_dir` outside the reviewed worktree in session-scoped scratch space, then allocate every path explicitly beneath it: `prompt_file="$invocation_dir/peer-review.prompt"`, `diff_evidence_file="$invocation_dir/diff-evidence.txt"`, `result_file="$invocation_dir/peer-review-result.json"`, `helper_stderr_file="$invocation_dir/peer-review.stderr"`, and `artifact_root="$invocation_dir/artifacts"` (create that private artifact root before launch). Resolve the already-selected effective review base and the worktree's current `HEAD` to full commit OIDs as `effective_base_oid` and `review_tip_oid`, then, before starting either reviewer and under `umask 077`, render exactly `git -C "$worktree" log --oneline "$effective_base_oid..$review_tip_oid"` followed by `git -C "$worktree" diff "$effective_base_oid...$review_tip_oid"` into `diff_evidence_file` and make that retained audit copy read-only with `chmod 400`; any resolution, render, write, or mode-setting failure forfeits the peer launch rather than handing it partial evidence. Construct `prompt_file` from two precisely separated classes of content: write static instructions verbatim with quoted heredocs (`<<'PEER_PROMPT'`), then append generated review data only as literal bytes with `printf -- '%s\n' "$value"` or `cat -- "$file"`, never by interpolation into an unquoted heredoc and never through `eval`. Open that second class with a fixed `BEGIN GENERATED REVIEW DATA` marker, append the full per-round work items, findings, and proposed dispositions, then the lines `Effective base OID: $effective_base_oid` and `Review tip OID: $review_tip_oid`, followed by a fixed `BEGIN EMBEDDED GIT EVIDENCE` marker, the complete bytes of `diff_evidence_file`, a fixed `END EMBEDDED GIT EVIDENCE` marker, and finally `END GENERATED REVIEW DATA`. No generated review content belongs outside the outer generated-data markers, and nothing except the exact log/diff bytes belongs between the inner git-evidence markers. The static instructions must order the peer to inspect that embedded section before rendering its verdict and to copy all three proof lines into its final response: `EVIDENCE_BASE_OID: <full OID>`, `EVIDENCE_TIP_OID: <full OID>`, and `EVIDENCE_TOKEN: <token>`, choosing the token as an exact distinctive non-whitespace token from an added or removed diff line that occurs exactly once between the evidence markers. The caller reveals no expected token in the prompt. The helper has no caller-facing `--add-dir` option, and none is needed: the provider receives the evidence in `prompt_file` itself and never has to read `diff_evidence_file`; preserve that file only as the caller's audit copy and never invent an unsupported flag or grant a shared scratch parent. Verify this embedded-evidence boundary with a real helper invocation when validating the rendering.
+
+At the same moment the Reviewer starts, start the Peer role or stage concurrently. Inside that Peer invocation run exactly one supervised helper call in the foreground:
 
 ```sh
-if (umask 077 && : > "$helper_pid_file"); then
-  setsid --fork sh -c '
-    helper_pid_file=$1
-    shift
-    proc_identity() {
-      stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
-      rest=${stat##*) }
-      [ "$rest" != "$stat" ] || return 1
-      set -- $rest
-      [ "$#" -ge 20 ] || return 1
-      pgrp=$3
-      session=$4
-      shift 19
-      start_time=$1
-      for value in "$start_time" "$pgrp" "$session"; do
-        case $value in ""|0|*[!0-9]*) return 1 ;; esac
-      done
-      printf "%s %s %s\n" "$start_time" "$pgrp" "$session"
-    }
-    identity=$(proc_identity "$$") || exit 125
-    printf "%s %s\n" "$$" "$identity" > "$helper_pid_file" || exit 125
-    exec "$@"
-  ' peer-helper "$helper_pid_file" \
-    peer-review-run --provider claude --worktree "$worktree" --prompt-file "$prompt_file" \
-      --artifact-root "$artifact_root" --timeout 720 --model opus --effort medium \
-    > "$result_file" 2> "$helper_stderr_file" < /dev/null &
-  peer_bootstrap_pid=$!
+if peer-review-run --provider claude --worktree "$worktree" --prompt-file "$prompt_file" \
+  --artifact-root "$artifact_root" --timeout 540 --model opus --effort medium \
+  > "$result_file" 2> "$helper_stderr_file" < /dev/null; then
+  peer_helper_status=0
 else
-  peer_bootstrap_pid=
-  peer_launch_status=125
+  peer_helper_status=$?
 fi
 ```
 
-If `peer_bootstrap_pid` is non-empty, immediately `wait "$peer_bootstrap_pid"`: that wait covers only the short `setsid --fork` handoff, not the helper, and a nonzero status is a launch failure. An empty value already denotes the preparation failure above; do not call `wait` with it. Poll briefly for `helper_pid_file` to become non-empty; require exactly four positive-decimal fields — PID, start time, process group, and session — otherwise record a launch failure and do not interpret or signal that attempt. Every later Bash call re-reads and validates all four values with these helpers; parsing removes everything through the final closing parenthesis plus following space before counting `/proc/<pid>/stat` fields because its parenthesized comm field may itself contain spaces or `)`. A missing record or mismatch in start time, process group, or session means the original PID and deliberately established PGID incarnation are dead, so no probe or signal may touch a reused numeric identity. The same parser and identity loader also bind the raw-fallback helpers below.
+Set that tool invocation's caller-side wait to at least 570 seconds but strictly below the caller's roughly 600-second cap. Do not background, detach, poll, or externally signal the helper, and do not reproduce any helper supervision internals: `peer-review-run` owns timeout, transient-only retry, provider-tree reaping, and its one-line JSON result. After the foreground call returns, read only the final stdout line, require schema `powbox.peer-review-run/v1`, and parse it; the helper exits 0 for every produced outcome. Copy a valid result's `reason` exactly, including an empty or absent value, and never replace it with an inferred cause. A nonzero helper exit or absence of a valid final result is `failed`, with the separately captured stderr copied exactly as its reason.
+
+Verify a valid result's reported `model` is `opus` and `effort` is `medium`. Before accepting a `passed` verdict, require the full review prose to repeat the exact embedded `effective_base_oid` and `review_tip_oid` on its `EVIDENCE_BASE_OID:` and `EVIDENCE_TIP_OID:` lines, require one `EVIDENCE_TOKEN: <token>` line, and mechanically confirm that exact non-whitespace token occurs exactly once on an added or removed line between the `BEGIN EMBEDDED GIT EVIDENCE` and `END EMBEDDED GIT EVIDENCE` markers in `prompt_file`. The separate `diff_evidence_file` is retained for audit but is not verdict proof and is never a provider read dependency. Missing or mismatched proof changes `passed` to `forfeited` with reason exactly `embedded diff evidence or proof absent`. For `issues`, preserve the `issues` outcome and relay every finding from that same full review prose verbatim even when proof is missing; attach the same exact evidence-failure reason and note so the audit gap stays visible without dropping grounded findings. Otherwise `passed` and `issues` feed the gate; `unavailable`, `timeout`, `forfeited`, `failed`, and any unrecognized outcome are explicit non-blocking results.
+
+**Fallback only when `command -v peer-review-run` fails.** Reuse the literal prompt and unique directory above, allocate fresh `outfile`, `errfile`, and `peer_pid_file` paths beneath it, grant only this invocation directory with `--add-dir`, and keep `outfile` reserved for Claude's JSON stdout and `errfile` for diagnostics. Managed hooks and organization settings policy can still apply under `--safe-mode`, so an operator in a managed environment must disable peer opinions or first ensure those hooks cannot mutate the worktree before launching a peer concurrently with the Reviewer. The launch pins `--model opus --effort medium`, uses `nohup claude -p ... < "$prompt_file" > "$outfile" 2> "$errfile" &`, and records `$!` as the direct provider PID plus its `/proc/<pid>/stat` start time in the owner-only identity file; do not insert a shell wrapper, wait supervisor, session, or process-group leader.
 
 ```sh
-peer_proc_identity() {
+peer_start_time() {
   stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
   rest=${stat##*) }
   [ "$rest" != "$stat" ] || return 1
   set -- $rest
   [ "$#" -ge 20 ] || return 1
-  pgrp=$3
-  session=$4
   shift 19
-  start_time=$1
-  for value in "$start_time" "$pgrp" "$session"; do
-    case $value in ""|0|*[!0-9]*) return 1 ;; esac
-  done
-  printf '%s %s %s\n' "$start_time" "$pgrp" "$session"
+  case $1 in ""|0|*[!0-9]*) return 1 ;; esac
+  printf '%s\n' "$1"
 }
 
 peer_load_identity() {
-  IFS=' ' read -r peer_identity_pid peer_identity_start peer_identity_pgrp peer_identity_session peer_identity_extra < "$1" || return 1
-  for value in "$peer_identity_pid" "$peer_identity_start" "$peer_identity_pgrp" "$peer_identity_session"; do
+  IFS=' ' read -r peer_identity_pid peer_identity_start peer_identity_extra < "$peer_pid_file" || return 1
+  for value in "$peer_identity_pid" "$peer_identity_start"; do
     case $value in ""|0|*[!0-9]*) return 1 ;; esac
   done
   [ -z "$peer_identity_extra" ] || return 1
-  peer_identity_now=$(peer_proc_identity "$peer_identity_pid") || return 1
-  [ "$peer_identity_now" = "$peer_identity_start $peer_identity_pgrp $peer_identity_session" ]
+  peer_identity_now=$(peer_start_time "$peer_identity_pid") || return 1
+  [ "$peer_identity_now" = "$peer_identity_start" ]
 }
 
-helper_pid_alive() {
-  peer_load_identity "$helper_pid_file" || return 1
-  kill -0 "$peer_identity_pid" 2>/dev/null
+peer_pid_alive() {
+  peer_load_identity && kill -0 "$peer_identity_pid" 2>/dev/null
 }
 
-helper_group_alive() {
-  peer_load_identity "$helper_pid_file" || return 1
-  [ "$peer_identity_pgrp" = "$peer_identity_pid" ] || return 1
-  [ "$peer_identity_session" = "$peer_identity_pid" ] || return 1
-  kill -0 "-$peer_identity_pgrp" 2>/dev/null
+peer_signal_pid() {
+  signal=$1
+  peer_load_identity && kill "-$signal" "$peer_identity_pid" 2>/dev/null
 }
 
-helper_term_group() {
-  peer_load_identity "$helper_pid_file" || return 1
-  [ "$peer_identity_pgrp" = "$peer_identity_pid" ] || return 1
-  [ "$peer_identity_session" = "$peer_identity_pid" ] || return 1
-  kill -TERM "-$peer_identity_pgrp" 2>/dev/null
+peer_stop_pid() {
+  peer_signal_pid TERM || :
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    peer_pid_alive || break
+    sleep 1
+  done
+  if peer_pid_alive; then
+    peer_signal_pid KILL || :
+  fi
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    peer_pid_alive || break
+    sleep 1
+  done
+  ! peer_pid_alive
 }
-```
 
-Once the handoff succeeds, return from the launching Bash call instead of waiting for the helper there: `--timeout 720` may outlive that tool's roughly ten-minute cap, and the helper owns provider timeout, transient-only retry, process-group supervision, and provider reaping. While the Reviewer runs and after it returns, use later Bash calls, each bounded comfortably below the caller's tool timeout, to poll both `helper_pid_alive` and `helper_group_alive`; the group probe is valid because this launch deliberately made the same identity the new session and process-group leader. A still-live helper or outer group means `running`, even if `result_file` is already non-empty, so yield and poll again rather than deciding the round. Bound those polls by an outer orchestration deadline of 26 minutes for this invocation: two 720-second provider budgets for the helper's initial attempt and transient-only retry, plus two minutes of helper serialization and reaping grace. If that deadline expires, call `helper_term_group` and give the helper ten seconds to run its own TERM trap and reap the supervised provider tree; the helper's identity is checked again immediately before that signal. Never send KILL to the helper or its outer group: the provider deliberately runs in a separate process group, and killing the helper would discard the only supervisor that captured that descendant relationship. The helper's public contract exposes its result and artifact directory, not stable provider PID or PGID artifacts, so do not infer an external kill target from its private files or reproduce its descendant walk. If both identity-checked probes then report dead, record `timeout` with the exact reason `outer orchestration deadline expired`; do not treat a partial or late result as authoritative. If either probe remains live, disable further peer attempts and stop the entire cycle with a teardown failure requiring operator intervention, naming whether the helper PID, helper process group, or both remain live. Do not decide the round, advance another entry, or publish: a peer outcome being non-blocking never licenses leaving a process alive, and this stop remains in force until the helper finishes its supported teardown and both probes prove it dead. On ordinary completion before the deadline, only after both probes say dead has the helper exited, its provider tree has been reaped under the helper's contract, and the orphaned helper itself been reaped by the system; then read the final stdout line, require schema `powbox.peer-review-run/v1`, and parse it. Copy a valid result's `reason` exactly, including an empty or absent value, and never replace it with an inferred cause. If the helper dies before the outer deadline without one valid result line, record `failed` with the separate stderr copied exactly as its reason; only a valid helper `forfeited` result supplies a helper-path forfeiture reason. Never decide the round or start another attempt while either identity-checked probe remains live. Nothing else writes to `result_file`, and stderr is never merged into it. The helper exits 0 for every produced outcome. Verify its reported `model` is `opus` and `effort` is `medium`. Before accepting any `passed` or `issues` verdict, require the full review prose to repeat the exact embedded `effective_base_oid` and `review_tip_oid` on its `EVIDENCE_BASE_OID:` and `EVIDENCE_TIP_OID:` lines, require one `EVIDENCE_TOKEN: <token>` line, and mechanically confirm that exact non-whitespace token occurs exactly once on an added or removed line between the `BEGIN EMBEDDED GIT EVIDENCE` and `END EMBEDDED GIT EVIDENCE` markers in `prompt_file`. The separate `diff_evidence_file` is retained for audit but is not verdict proof and is never a provider read dependency. A missing or mismatched OID line, an absent token proof line, or a token that does not satisfy that exact embedded-evidence check forfeits the verdict with reason exactly `embedded diff evidence or proof absent`; never accept the verdict on the helper's outcome alone. Otherwise `passed` and `issues` feed the gate; `unavailable`, `timeout`, `forfeited`, `failed`, and any unrecognized outcome are explicit non-blocking results. For `issues`, relay every finding from that same full review prose verbatim.
-
-**Fallback only when `command -v peer-review-run` fails.** Before launching the raw peer CLI process, create a unique directory outside the worktree for this invocation and attempt; never reuse or share that directory. Write the prompt verbatim to a file there without evaluating it, and write `git -C <worktree> log --oneline <base>..HEAD` plus `git -C <worktree> diff <base>...HEAD` from this exact worktree to a read-only diff artifact in that same directory. Include the artifact path in the prompt and grant only this invocation directory with `--add-dir`; without that grant an out-of-cwd Read can be auto-denied, while granting a shared parent directory would let concurrent peers cross-read another invocation. Managed hooks and organization settings policy can still apply under `--safe-mode`, so an operator in a managed environment must disable peer opinions or first ensure those hooks cannot mutate the worktree before launching a peer concurrently with the Reviewer. The fallback launch below pins `--model opus --effort medium`. Keep both flags exactly as written on every invocation, and never swap in another alias or drop one because the current configuration looks adequate. Never put bracketed optional tokens in the command. Shell-quote every generated path when replacing the placeholders, keep `--safe-mode` and both read-only tool guard flags, and never pass permission-bypass flags.
-
-Launch the peer in a dedicated session and process group; do not use a plain background subshell, because killing that subshell can orphan `claude` or its descendants. Require `setsid` for this path (otherwise disable/forfeit the peer), assign the worktree, invocation directory, prompt, JSON `outfile`, and diagnostic `errfile` paths to shell variables, require both output paths to be inside the invocation directory, and use this launch shape; `--fork --wait` keeps a waitable supervisor alive, while the inner shell records the distinct session/process-group leader before it becomes `claude`:
-
-```sh
-peer_session_file="$invocation_dir/session.pid"
-if (umask 077 && : > "$peer_session_file"); then
-  setsid --fork --wait sh -c '
-    session_file=$1
-    worktree=$2
-    shift 2
-    peer_proc_identity() {
-      stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
-      rest=${stat##*) }
-      [ "$rest" != "$stat" ] || return 1
-      set -- $rest
-      [ "$#" -ge 20 ] || return 1
-      pgrp=$3
-      session=$4
-      shift 19
-      start_time=$1
-      for value in "$start_time" "$pgrp" "$session"; do
-        case $value in ""|0|*[!0-9]*) return 1 ;; esac
-      done
-      printf "%s %s %s\n" "$start_time" "$pgrp" "$session"
-    }
-    identity=$(peer_proc_identity "$$") || exit 125
-    printf "%s %s\n" "$$" "$identity" > "$session_file" || exit 125
-    cd "$worktree" || exit 125
-    exec "$@"
-  ' peer-launch "$peer_session_file" "$worktree" \
-    claude -p --model opus --effort medium --safe-mode --tools "Read,Glob,Grep" --disallowedTools "mcp__*" \
-    --add-dir "$invocation_dir" --output-format json \
-    < "$prompt_file" > "$outfile" 2> "$errfile" &
-  peer_wait_pid=$!
+nohup claude -p --model opus --effort medium --safe-mode --tools "Read,Glob,Grep" \
+  --disallowedTools "mcp__*" --add-dir "$invocation_dir" --output-format json \
+  < "$prompt_file" > "$outfile" 2> "$errfile" &
+peer_pid=$!
+peer_start=$(peer_start_time "$peer_pid") || peer_start=
+if [ -n "$peer_start" ]; then
+  (umask 077 && printf '%s %s\n' "$peer_pid" "$peer_start" > "$peer_pid_file") || peer_launch_status=125
 else
-  peer_wait_pid=
   peer_launch_status=125
 fi
 ```
 
-Create `peer_session_file` as an empty, owner-only regular file before the launch and do not launch if that preparation fails. The inner shell uses the `peer_proc_identity` parser above before its write. Poll for the file to become non-empty and require its exact four positive-decimal identity fields; do not infer any of them from `peer_wait_pid`, because `setsid --fork` deliberately makes the wait supervisor and session leader different processes. Require the persisted process group and session both to equal the persisted PID, proving that this launch established the negative-PGID target it later uses. The identity-file write is the first operation in the session and is checked, so `claude` cannot start unless the handoff succeeds. If the supervisor exits before a valid handoff, immediately `wait "$peer_wait_pid"` to reap it, record the launch failure (normally status 125 for the write or `cd` guard), and never advance or retry from that attempt. Use a loose roughly 12-minute timeout, extending it when review size warrants.
+Every later probe or signal reloads the two-field identity and compares the current start time before touching the PID, so PID reuse is death of the original and never a target. Poll until the loose roughly 12-minute deadline. At timeout, send TERM to that identity-checked PID, poll for at most ten seconds, send KILL only if the identity still matches, then poll for at most ten more seconds. A surviving identity stops the entire cycle for operator intervention: do not retry, decide the round, advance another entry, or publish. Retry a timeout or transient failure once with entirely fresh paths only after death is proved; auth/usage errors are `unavailable` without retry. Never infer or signal a process group, target a supervisor, use `pkill -f`, or replace this fallback with a capped foreground call. This best-effort fallback proves only the direct provider PID dead and makes no descendant-group guarantee.
 
-After the session identity file passes that four-field check, use the following helpers. The negative PID operand targets the validated process group; omitting `--` is intentional because the Dash `kill` builtin rejects it. Keep this form for TERM, KILL, and every death probe:
-
-```sh
-peer_group_alive() {
-  peer_load_identity "$peer_session_file" || return 1
-  [ "$peer_identity_pgrp" = "$peer_identity_pid" ] || return 1
-  [ "$peer_identity_session" = "$peer_identity_pid" ] || return 1
-  kill -0 "-$peer_identity_pgrp" 2>/dev/null
-}
-
-peer_signal_group() {
-  signal=$1
-  peer_load_identity "$peer_session_file" || return 1
-  [ "$peer_identity_pgrp" = "$peer_identity_pid" ] || return 1
-  [ "$peer_identity_session" = "$peer_identity_pid" ] || return 1
-  kill "-$signal" "-$peer_identity_pgrp" 2>/dev/null
-}
-
-peer_stop_group() {
-  peer_signal_group TERM || :
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    peer_group_alive || break
-    sleep 1
-  done
-  if peer_group_alive; then
-    peer_signal_group KILL || :
-  fi
-  wait "$peer_wait_pid" 2>/dev/null || :
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    peer_group_alive || break
-    sleep 1
-  done
-  ! peer_group_alive
-}
-
-peer_finish_group() {
-  if wait "$peer_wait_pid"; then
-    peer_wait_status=0
-  else
-    peer_wait_status=$?
-  fi
-  if peer_group_alive; then
-    peer_stop_group || return 1
-  fi
-  ! peer_group_alive
-}
-```
-
-On timeout, call `peer_stop_group`; on observed supervisor completion, call `peer_finish_group` and interpret its saved `peer_wait_status` only after it succeeds. The final command on either path must succeed. Every liveness probe and TERM/KILL reloads the leader identity immediately before `kill`; if its `/proc` record is missing or its start time, process group, or session differs, the original PID and PGID are dead and the reused number is never touched. `peer_stop_group` otherwise performs TERM → bounded wait → KILL when needed → supervisor `wait` → bounded death check, and failure means an identity-checked group member survived: do not retry or advance until it is gone. Apply this verification on every completion path, not only timeouts. Keep `outfile` reserved for parseable JSON and use `errfile` only for diagnostics and the retained failure reason. Retry a timeout or transient failure once with an entirely new invocation directory, prompt, outfile, errfile, artifact, session identity file, and process group, then forfeit that round. Never use `pkill -f`: probe and signal only the identity-checked group established by this launch. Never run the peer as a capped foreground call. `claude -p` may print nothing until completion; after the process-group checks, a non-empty result artifact containing a `VERDICT:` line is authoritative only if its final message also contains the expected full base and tip OIDs and an exact `EVIDENCE_TOKEN` that occurs once on an added or removed line in this fallback's granted read-only diff artifact. Parse the captured JSON only far enough to extract that final message and its proof and verdict lines; denial, mismatched OIDs, or missing proof forfeits it with reason exactly `diff evidence unreadable or proof absent`.
+After the PID is dead, a non-empty result artifact containing a `VERDICT:` line is authoritative. Parse the captured JSON only far enough to extract the final message, proof lines, and verdict. Missing or mismatched OID/token proof changes `passed` to `forfeited` with reason exactly `diff evidence unreadable or proof absent`; for `issues`, keep the `issues` outcome and every finding verbatim, attaching that exact reason and an evidence-failure note instead of dropping grounded findings.
 
 **Outcome vocabulary.** Whatever launches the peer, its result lands in one vocabulary: `passed` and `issues` feed the gate; `unavailable` (missing binary, logged out, auth/usage exhaustion), `timeout` (after the one retry), `forfeited` (empty or unintelligible output), and `failed` (provider crash or exhausted retry) are explicit non-blocking round outcomes. Carry the helper result's `reason` exactly. On the raw path, carry the exact provider diagnostic when it supplies the cause; use the literal reason `empty output` or `garbled output` only after observing that condition, and otherwise leave `reason` empty rather than inventing one. That exact carried value is what the batch throttle reads. Anything that is not `passed` or `issues` is non-blocking — normalize an unrecognized outcome the same way rather than letting it fall through.
 
-**Provider split.** Nothing powbox owes blocks this Claude-provider path: the helper carries and reports both `--model opus` and `--effort medium`. The outstanding configured-model passthrough is Codex-provider-only and deliberately leaves the Claude-led mirror on its hardened pinned manual path; it is not a reason to hold this conversion back.
+**Provider split.** Nothing powbox owes blocks this Claude-provider path: the helper carries and reports both `--model opus` and `--effort medium`. The outstanding configured-model passthrough is Codex-provider-only ([powbox issue #145](https://github.com/Roubtec/powbox/issues/145)) and deliberately leaves the Claude-led mirror on its hardened pinned manual path; it is not a reason to hold this conversion back.
 
 **Batch concurrency is an optimistic session-local adaptive throttle.** Start with no cap. A `timeout` or `failed` outcome is trouble. A `forfeited` outcome is trouble only when its exact retained reason maps to empty/garbled output: the raw-path literals `empty output` and `garbled output`, or the helper literals `provider exited 0 with an empty final message` and `provider exited 0 but produced a malformed/unparseable response`. Do not substring-match or paraphrase reasons; in particular, `provider exited 0 but emitted no recognizable VERDICT token`, other forfeitures, and auth/usage `unavailable` outcomes are not throttle events. On the first trouble, cap new launches at `max(2, min(8, current in-flight))`; never kill calls already in flight, and queue launches beyond the cap. Each later trouble cluster halves the cap as `max(2, floor(cap / 2))`: a cluster is one cap generation, so only trouble from a call launched under the current cap can step it down and results from calls already in flight at the prior step cannot collapse it again. The floor of 2 applies whichever rule produced the cap. The counter is shared by every peer launch in this orchestration session, has no cross-container coordination, resets next session, and every step-down is surfaced in the run summary.
 
