@@ -1668,7 +1668,7 @@ const BATCH_CONTRACT_CHECKS = 5;
 // constant — the reuse failure this guard exists for — without ever probing or
 // signalling a real process. The fake `kill` records every operand and can
 // model TERM resistance, KILL death, or a teardown survivor.
-const PEER_LIFECYCLE_CHECKS = 17;
+const PEER_LIFECYCLE_CHECKS = 19;
 {
   console.log("# codex review-cycle prose — peer lifecycle negative controls");
   const before = legOk + legFail;
@@ -1752,6 +1752,11 @@ const PEER_LIFECYCLE_CHECKS = 17;
 
   const pluginsProse = readFileSync(join(here, "..", "plugins", "dev-skills", "skills", "review-cycle", "SKILL.md"), "utf8");
   check("the direct Codex provider gets bounded TERM, death verification, safe KILL, and a survivor stop", /send TERM[\s\S]*at most ten seconds[\s\S]*send KILL only if[\s\S]*ten more seconds[\s\S]*stop the cycle and escalate/.test(pluginsProse), "raw Codex lifecycle prose");
+  check(
+    "the future Codex helper gets a private session artifact root and a caller wait that covers retry plus reaping",
+    /first establish `artifact_root` as a unique, private, session-scoped directory outside the reviewed worktree[\s\S]*peer-review-run --provider codex[\s\S]*caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(pluginsProse),
+    "future Codex helper envelope",
+  );
   const futureHelperStart = prose.indexOf("**Future helper conversion, only after both powbox prerequisites land.**");
   const retainedRawStart = prose.indexOf("**Retained raw launch until both powbox prerequisites land.**");
   const futureHelperProse = futureHelperStart >= 0 && retainedRawStart > futureHelperStart ? prose.slice(futureHelperStart, retainedRawStart) : "";
@@ -1823,6 +1828,11 @@ const PEER_LIFECYCLE_CHECKS = 17;
     return src.slice(src.indexOf("\n", b) + 1, src.lastIndexOf("\n", e));
   });
   check("the two executable review-cycle cores remain byte-identical", workflowCores[0] === workflowCores[1], `${workflowCores[0].length}/${workflowCores[1].length}`);
+  check(
+    "both workflow cores pin the future helper's private artifact root and caller wait budget",
+    workflowCores.every((core) => /first establish \\`artifact_root\\` as a unique, private, session-scoped directory outside the reviewed worktree[\s\S]*peer-review-run --provider codex[\s\S]*caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(core)),
+    "future helper envelope in workflow cores",
+  );
 
   const n = legOk + legFail - before;
   check(`peer lifecycle checks ran all ${PEER_LIFECYCLE_CHECKS}`, n === PEER_LIFECYCLE_CHECKS, `ran ${n}`);
