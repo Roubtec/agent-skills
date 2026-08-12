@@ -183,7 +183,7 @@ Collect decisions across the whole list, then apply. The mechanics depend on the
   (tests, build/lint, isolated validation), and require a clean commit before review.
   Hand it the path any of that output must land in — namespaced by the item, or created with `mktemp -d` — never a fixed shared scratchpad name: one session's agents share that directory, and two of them redirecting to `<scratchpad>/verify.log` once had one report a verdict for the wrong branch. Never leave the choice to the subagent.
 
-For **every code-writing decision**, run a scoped `review-cycle` on the applied decision's diff (artifact type: decision) before recording the item as applied or offering the change for delivery — the fresh-eyes reviewer, the best-effort peer with its pinned-strength launch and timeout, the gates, verbatim finding relay, and round cap are all that skill's and are not restated here. Deltas for this skill:
+For **every code-writing decision**, run a scoped `review-cycle` on the applied decision's diff (artifact type: decision) before recording the item as applied or offering the change for delivery. Every rule that skill states under *The peer step* and *The loop and its gates* binds here whole, later additions included. Deltas for this skill:
 
 - The cycle's work item is the locked decision verbatim with its commit range; its reviewer verifies the diff implements exactly the locked option and nothing beyond it, under whatever verification the repo expects.
 - When a dispute is a judgment call rather than a factual claim, prefer surfacing the peer finding verbatim in the item's brief for the maintainer to decide instead of spending more subagent rounds. The peer informs; the maintainer still makes every judgment call.

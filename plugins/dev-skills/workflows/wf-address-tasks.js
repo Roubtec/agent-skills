@@ -25,11 +25,11 @@
  * header below). EMBEDDED rather than nested deliberately: this script owns
  * the task fan-out, so every peer launch must be made by this one flat script,
  * whose module state is shared across the parallel() fan-out — the place
- * where task 015's session-local peer throttle can live beside the wave
- * throttling below and actually see every launch. A nested child would hold
- * its own state, and a throttle there would count one peer, never see a
- * sibling's, and cap nothing. No peer cap, floor, or fan-out shape is set
- * here; that policy is 015's alone.
+ * where task 015's session-local peer throttle lives beside the wave
+ * throttling below and sees every launch. A nested child would hold its own
+ * state, and a throttle there would count one peer, never see a sibling's,
+ * and cap nothing. The embedded canonical section owns the exact policy; this
+ * fan-out owner supplies its one shared state object and reports its steps.
  *
  * Worktree model — why NOT `isolation: "worktree"`
  * ------------------------------------------------
@@ -841,6 +841,7 @@ const CYCLE_PEER_SCHEMA = {
     },
     notes: { type: "string", description: "Anything after the verdict worth carrying (pass-notes), verbatim." },
     detail: { type: "string", description: "For a non-passed/issues outcome: why (logged out, timed out after retry, empty output, provider crash...)." },
+    reason: { type: "string", description: "The provider/helper reason verbatim; distinguishes empty/garbled forfeitures for the adaptive throttle." },
   },
   required: ["outcome", "findings"],
 };
@@ -1255,37 +1256,39 @@ ${CYCLE_DESTROY_BOUNDARY}
 
 The peer examines this worktree READ-ONLY; you edit nothing either. The cycle's fresh reviewer is examining the same committed state concurrently — two readers are safe, and the reviewer alone owns builds/execution.
 
-${CYCLE_FINISH_IN_TURN} That is why the launch below is one supervised foreground call: you return its outcome, never a promise to report the peer's result later.
+${CYCLE_FINISH_IN_TURN} The retained manual path therefore launches a supervised background peer, waits or times it out, and reaps it inside this turn: you return its outcome, never a promise to report the peer's result later.
 
 ## Steps
 
 ${preflightStep}
-2. Prepare unique per-attempt paths under this cycle's artifact directory: \`round_dir=${cycleShq(`${state.artifactDir}/round-${state.round}`)}\`, \`mkdir -p "$round_dir"\`, with \`prompt_file\`, \`outfile\`, \`stderr_file\` inside it (suffix \`-attempt2\` on a retry; never reuse a path).
+2. Prepare unique per-attempt paths under this cycle's artifact directory: \`round_dir=${cycleShq(`${state.artifactDir}/round-${state.round}`)}\`, \`mkdir -p "$round_dir"\`, with \`prompt_file\`, \`outfile\`, \`stderr_file\`, and \`pid_file\` inside it (suffix \`-attempt2\` on a retry; never reuse a path).
 3. Write the peer prompt below VERBATIM to \`$prompt_file\` with a quoted heredoc (\`<<'PEER_PROMPT'\`) — never assemble it through shell interpolation.
-4. Launch the peer as ONE supervised foreground call, bounded UNDER your own Bash tool limit so the tool can never kill it mid-run unaccounted (set the Bash tool timeout to 600000 ms and bound the peer tighter with \`timeout\` — including its hard-kill escalation, because expiry alone sends only TERM, which a hung provider can catch or block and so outlive you into the tool's own kill):
+4. The configured-model prerequisite for the helper's codex provider is still unmet: its config isolation discards the configured high-capability model, so this task-015 rendering deliberately retains the pinned raw launch instead of silently downgrading the peer. Once that prerequisite lands, set \`artifact_root\` to this cycle's artifact directory (outside the worktree), use \`peer-review-run --provider codex --worktree "$worktree" --prompt-file "$prompt_file" --artifact-root "$artifact_root" --timeout 720 --effort medium\` as the primary path, and keep the hardened manual launch below only when \`command -v peer-review-run\` fails. For the incomplete landing now, launch it with \`nohup\` and record the peer PID directly:
 
    \`\`\`bash
    worktree="<the worktree path from the contract above>"
    # Pin peer effort per invocation; never changes the container's saved config.
-   timeout --kill-after=30 540 codex exec --sandbox read-only --cd "$worktree" -o "$outfile" \\
+   nohup codex exec --sandbox read-only --cd "$worktree" -o "$outfile" \\
      -c mcp_servers={} -c model_reasoning_effort=medium "$(<"$prompt_file")" \\
-     < /dev/null 2> "$stderr_file"
+     < /dev/null 2> "$stderr_file" &
+   peer_pid=$!
+   printf '%s\\n' "$peer_pid" > "$pid_file"
    \`\`\`
 
-   Exit 124 means the bounded timeout fired — as does 137, when the peer rode out TERM and the \`--kill-after\` grace ended in an uncatchable KILL (540 s + 30 s still lands under the 600 s tool limit): retry ONCE with fresh attempt paths, then return outcome \`timeout\`. Any other failure (crash, non-zero exit with no usable output): retry once, then return \`failed\`. Auth/usage errors: \`unavailable\` without retry.
-5. Read \`$outfile\`. A \`VERDICT: PASS\` line → outcome \`passed\` (anything after it goes to \`notes\` verbatim). A \`VERDICT: ISSUES\` line → outcome \`issues\`, with every numbered finding mapped verbatim into \`findings\` (severity from its \`blocking\`/\`minor\` tag — default \`blocking\` when untagged — plus its \`file:line\` as \`location\` and the finding text as \`claim\`; do not summarize, merge, or rewrite). No verdict line, or empty/unintelligible output → \`forfeited\`.
+   In later Bash calls read the positive decimal PID from \`$pid_file\` and use \`kill -0 "$peer_pid"\` as the liveness answer. On the loose roughly 12-minute timeout, signal that same PID directly, verify it is gone, and retry ONCE with fresh paths; never infer a process group from plain \`nohup … &\`, never signal a wait supervisor, never use \`pkill -f\`, and never replace this with a capped foreground call. If recovering by the unique \`-o\` path is unavoidable, disambiguate \`pgrep -f\` to the codex peer binary after excluding the probing shell and every ancestor: one survivor is alive, none dead, more than one indeterminate and signals nothing. The probe's resolved identifier is the only signal target. Auth/usage errors are \`unavailable\` without retry.
+5. Read \`$outfile\` even when the liveness probe has just gone dead: a non-empty artifact with a \`VERDICT:\` line is authoritative. A \`VERDICT: PASS\` line → outcome \`passed\` (anything after it goes to \`notes\` verbatim). A \`VERDICT: ISSUES\` line → outcome \`issues\`, with every numbered finding mapped verbatim into \`findings\` (severity from its \`blocking\`/\`minor\` tag — default \`blocking\` when untagged — plus its \`file:line\` as \`location\` and the finding text as \`claim\`; do not summarize, merge, or rewrite). No verdict line, or empty/unintelligible output → \`forfeited\`, with \`reason\` exactly identifying \`empty output\` or \`garbled output\` where that is what happened. A timeout after retry is \`timeout\`; a provider crash or exhausted non-auth retry is \`failed\`.
 
 ## Peer prompt (write this text to the prompt file verbatim, filling only the placeholders)
 
-You are an independent read-only peer reviewer. Review the committed state of branch ${JSON.stringify(cycle.branch)} against base ${JSON.stringify(cycle.base)} in the current directory (artifact type: ${cycle.artifactType}). Read the actual files; edit nothing; run no builds or tests. Verify the work items and any proposed dispositions below in the committed code; a declined finding must be technically justified.${commentWeighting} ${CYCLE_CARRIED_CLAIMS} Evidence (verbatim):
+You are an independent read-only peer reviewer. Review the committed state of branch ${JSON.stringify(cycle.branch)} against base ${JSON.stringify(cycle.base)} in the current directory (artifact type: ${cycle.artifactType}). Read the actual files; edit nothing; use no network access — all GitHub thread text and diffs needed for the review are embedded here verbatim — and run no builds or tests. Verify the work items and any proposed dispositions below in the committed code; a declined finding must be technically justified.${commentWeighting} ${CYCLE_CARRIED_CLAIMS} Evidence (verbatim):
 
 ${JSON.stringify(evidence, null, 2)}
 
-Reply with exactly \`VERDICT: PASS\` or \`VERDICT: ISSUES\`, followed for issues by numbered findings each tagged \`blocking\` or \`minor\`, with \`file:line\` and a one-line rationale.
+Reply with exactly \`VERDICT: PASS\` or \`VERDICT: ISSUES\`, then \`VERIFICATION: STATIC (executed no tests)\`, followed for issues by numbered findings each tagged \`blocking\` or \`minor\`, with \`file:line\` and a one-line rationale.
 
 ## Output
 
-Return the structured result: \`outcome\`, \`findings\` (verbatim, tagged), \`notes\`, \`detail\`.`;
+Return the structured result: \`outcome\`, \`findings\` (verbatim, tagged), \`notes\`, \`detail\`, and \`reason\` copied exactly from the provider/helper reason when present.`;
 }
 
 // The peer stage NEVER fails the round: a dead subagent (null return /
@@ -1305,6 +1308,7 @@ function normalizeCyclePeerResult(res) {
     outcome,
     findings: outcome === "issues" && Array.isArray(res.findings) ? res.findings : [],
     notes: typeof res.notes === "string" ? res.notes : "",
+    reason: typeof res.reason === "string" ? res.reason : "",
     detail: typeof res.detail === "string" && res.detail
       ? res.detail
       : (gating ? "" : `peer outcome ${JSON.stringify(res.outcome)} recorded non-blocking`),
@@ -1316,21 +1320,85 @@ function normalizeCyclePeerResult(res) {
   };
 }
 
+// Optimistic session-local adaptive peer throttle. A fan-out owner passes one
+// shared object to every embedded cycle; a standalone cycle gets one whose
+// unbounded start is observationally a no-op. Calls already in flight are never
+// killed, and queued calls wake when completions leave room under the current
+// cap. One generation identifies one trouble cluster: a result from a call
+// launched before the latest step-down cannot collapse the cap again.
+function createCyclePeerThrottle() {
+  return { cap: null, generation: 0, inFlight: 0, waiters: [], steps: [] };
+}
+
+async function acquireCyclePeerSlot(throttle) {
+  while (throttle.cap != null && throttle.inFlight >= throttle.cap) {
+    await new Promise((resolve) => throttle.waiters.push(resolve));
+  }
+  throttle.inFlight += 1;
+  return throttle.generation;
+}
+
+function cyclePeerTrouble(result) {
+  if (!result || result.synthesized) return false;
+  if (result.outcome === "timeout" || result.outcome === "failed") return true;
+  return result.outcome === "forfeited" && /\b(?:empty|garbled|malformed|unparseable)\b/i.test(String(result.reason || ""));
+}
+
+function releaseCyclePeerSlot(throttle, launchGeneration, result) {
+  throttle.inFlight = Math.max(0, throttle.inFlight - 1);
+  if (cyclePeerTrouble(result) && (throttle.cap == null || launchGeneration === throttle.generation)) {
+    const from = throttle.cap;
+    const to = from == null
+      ? Math.max(2, Math.min(8, throttle.inFlight))
+      : Math.max(2, Math.floor(from / 2));
+    throttle.cap = to;
+    throttle.generation += 1;
+    if (from == null || to < from) {
+      const step = {
+        generation: throttle.generation,
+        from: from == null ? "unbounded" : from,
+        to,
+        inFlight: throttle.inFlight,
+        outcome: result.outcome,
+        reason: result.reason || result.detail || "",
+      };
+      throttle.steps.push(step);
+      log(`Peer launch throttle stepped from ${step.from} to ${to} after ${result.outcome}${step.reason ? ` (${step.reason})` : ""}; ${throttle.inFlight} call(s) remain in flight.`);
+    }
+  }
+  const waiters = throttle.waiters.splice(0);
+  waiters.forEach((resolve) => resolve());
+}
+
+function cyclePeerThrottleSummary(throttle) {
+  return {
+    cap: throttle.cap == null ? "unbounded" : throttle.cap,
+    inFlight: throttle.inFlight,
+    steps: throttle.steps.slice(),
+    sessionLocal: true,
+    crossContainerCoordination: false,
+  };
+}
+
 async function runCyclePeerStage(cycle, state) {
   if (cycle.peer === "off") {
     return { outcome: "disabled", findings: [], notes: "", detail: "peer-opinions=off" };
   }
+  const launchGeneration = await acquireCyclePeerSlot(state.peerThrottle);
+  let result;
   try {
     const res = await agent(cyclePeerPrompt(cycle, state), {
       label: `${cycle.labelPrefix || ""}peer#${state.round}`,
       schema: CYCLE_PEER_SCHEMA,
       phase: CYCLE_PEER_PHASE,
     });
-    return normalizeCyclePeerResult(res);
+    result = normalizeCyclePeerResult(res);
   } catch (e) {
     // A thrown stage must not drop the round (or, under pipeline(), the item).
-    return { outcome: "forfeited", findings: [], notes: "", detail: `peer stage threw (${e && e.message ? e.message : String(e)}); recorded non-blocking`, synthesized: true };
+    result = { outcome: "forfeited", findings: [], notes: "", reason: "", detail: `peer stage threw (${e && e.message ? e.message : String(e)}); recorded non-blocking`, synthesized: true };
   }
+  releaseCyclePeerSlot(state.peerThrottle, launchGeneration, result);
+  return result;
 }
 
 // The close-out's diff check. Cheap and read-only like the grounding
@@ -1630,9 +1698,10 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     { preflighted: false, unavailable: false, unavailableDetail: "" } and
 //     the install/login preflight runs once for the whole batch, with an
 //     unavailable peer sticking batch-wide (the canonical batch rule).
-//     Availability state ONLY — no peer cap, queue, or fan-out shape lives
-//     here (that policy is task 015's). Omitted, each cycle keeps its own
-//     (the standalone behavior).
+//   peerThrottle — optional SHARED adaptive-throttle state created by
+//     createCyclePeerThrottle() for a fan-out owner. It starts unbounded,
+//     queues only after trouble steps it down, and records every step for the
+//     run summary. Omitted, each cycle keeps its own (standalone behavior).
 // }
 //
 // Returns the cycle result contract (lean; bulk prose stays behind artifactDir):
@@ -1779,6 +1848,7 @@ async function runReviewCycle(cycle) {
   // runtime is single-threaded JS, so sibling cycles mutate a shared object
   // safely between awaits.)
   const peerState = cycle.peerState || { preflighted: false, unavailable: false, unavailableDetail: "" };
+  const peerThrottle = cycle.peerThrottle || createCyclePeerThrottle();
   let reviewerNotes = ""; // the latest reviewer's pass-notes (PR-body caveats for consumers)
   // The reviewer's half of report-don't-correct, as accepted by the last round
   // that PASSED. Replaced rather than accumulated, for the reason `deviations`
@@ -1832,6 +1902,7 @@ async function runReviewCycle(cycle) {
       notes: (packet && packet.summary) || "",
       reviewerNotes,
       peerRounds,
+      peerThrottle: cyclePeerThrottleSummary(peerThrottle),
       discardedPeerFindings,
       artifactDir,
       ...(artifactDirAnomalies.length ? { artifactDirAnomalies } : {}),
@@ -2326,6 +2397,7 @@ async function runReviewCycle(cycle) {
       tier: cycleValidationTier(cycle, { confirming }),
       proposedRetirements: pendingRetirements,
       peerPreflighted: peerState.preflighted,
+      peerThrottle,
       // What still stands after the pass just made — the reviewer adds the
       // in-spec-route judgment and a ratify/conform recommendation to it — plus
       // the ones this pass claims no longer stand, which the same reviewer
@@ -2356,7 +2428,7 @@ async function runReviewCycle(cycle) {
     // one path it cannot: a runtime that hands back a null parallel slot. The
     // cycle's `disabled` outcome is not helper vocabulary, so carry it as-is.
     const peer = rawPeer && rawPeer.outcome === "disabled" ? rawPeer : normalizeCyclePeerResult(rawPeer);
-    peerRounds.push({ round: rounds, outcome: peer.outcome, detail: peer.detail });
+    peerRounds.push({ round: rounds, outcome: peer.outcome, detail: peer.detail, reason: peer.reason || "" });
     if (peer.outcome === "unavailable") {
       peerState.unavailable = true;
       if (peer.detail && !peerState.unavailableDetail) peerState.unavailableDetail = peer.detail;
@@ -2539,10 +2611,11 @@ async function runReviewCycle(cycle) {
 // per-task cycle gets this same object, so the codex install/login preflight
 // runs once for the batch and an unavailable peer sticks batch-wide, per the
 // canonical batch rule, instead of each task's cycle re-probing. This is the
-// fan-out owner's cross-cycle state the embedding mode exists for.
-// Availability state ONLY — task 015's peer-launch throttle policy does not
-// live here.
+// fan-out owner's cross-cycle state the embedding mode exists for. The throttle
+// is a separate shared object because availability and launch pressure have
+// different lifecycles, though both reset with this orchestration session.
 const batchPeerState = { preflighted: false, unavailable: false, unavailableDetail: "" };
+const batchPeerThrottle = createCyclePeerThrottle();
 
 // Build one task's cycle config for the embedded runReviewCycle. The worktree
 // lifecycle stays with the wt-* helpers via worktreeContract (per-role
@@ -2562,6 +2635,7 @@ function taskCycleConfig(task, remote, peerMode) {
     peer: peerMode,
     mode: "full",
     peerState: batchPeerState,
+    peerThrottle: batchPeerThrottle,
     labelPrefix: `${task.slug}:`,
     contracts: {
       fixer: worktreeContract(task, { mayCreate: true }),
@@ -3560,7 +3634,7 @@ try {
   // reader than an unwound stack. `finalMainCheckoutReport` cannot throw, so
   // this exit always carries a report — an unmeasured one if the reading failed.
   phase("Summary");
-  return { error: `Batch aborted: ${e && e.message ? e.message : String(e)}`, batch: args, remote, peer: peerMode, throttled, collisions, results, mainCheckout: await finalMainCheckoutReport() };
+  return { error: `Batch aborted: ${e && e.message ? e.message : String(e)}`, batch: args, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), throttled, collisions, results, mainCheckout: await finalMainCheckoutReport() };
 }
 
 phase("Summary");
@@ -3583,4 +3657,4 @@ const deviations = results.flatMap((r) => (Array.isArray(r.deviations) ? r.devia
 // read here without it is one the maintainer would rule on knowing only what
 // the implementer said.
 const deviationAssessments = results.flatMap((r) => (Array.isArray(r.deviationAssessments) ? r.deviationAssessments : []));
-return { batch: args, defaultBase: plan.defaultBase, remote, peer: peerMode, waves: plan.waves.length, throttled, collisions, mainCheckout, openQuestions, deviations, deviationAssessments, results };
+return { batch: args, defaultBase: plan.defaultBase, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), waves: plan.waves.length, throttled, collisions, mainCheckout, openQuestions, deviations, deviationAssessments, results };
