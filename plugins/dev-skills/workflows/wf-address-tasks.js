@@ -1422,9 +1422,18 @@ function cyclePeerTrouble(result) {
   if (!result || result.synthesized) return false;
   if (result.outcome === "timeout" || result.outcome === "failed") return true;
   if (result.outcome !== "forfeited") return false;
-  const reason = String(result.reason || "");
-  return /\b(?:empty|garbled)\s+(?:(?:peer|provider|final|result)\s+){0,2}(?:output|response|artifact)\b/i.test(reason)
-    || /\b(?:(?:peer|provider|final|result)\s+){0,2}(?:output|response|artifact)\s+(?:is|was|became|returned|looks?|appears?)\s+(?:empty|garbled)\b/i.test(reason);
+  // Reasons are retained verbatim in the result and summary. Classification is
+  // deliberately a separate exact mapping: helper diagnostics are a documented
+  // wire contract, while broad matches on words such as "empty" or "garbled"
+  // can throttle on unrelated forfeitures. The two short forms are emitted only
+  // by the retained raw path after it observes the corresponding condition.
+  const reasonClass = new Map([
+    ["empty output", "empty"],
+    ["garbled output", "garbled"],
+    ["provider exited 0 with an empty final message", "empty"],
+    ["provider exited 0 but produced a malformed/unparseable response", "garbled"],
+  ]).get(String(result.reason || ""));
+  return reasonClass === "empty" || reasonClass === "garbled";
 }
 
 function releaseCyclePeerSlot(throttle, launchGeneration, result) {

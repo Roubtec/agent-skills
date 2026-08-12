@@ -74,7 +74,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 166;
+const CHECKS_PER_LEG = 170;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -107,7 +107,7 @@ function loadCycle(src, agent) {
   // every renderer outside a cycle today, so driving the cycle can never
   // exercise the default and only a direct call can.
   // eslint-disable-next-line no-new-func
-  return new Function("agent", "parallel", "pipeline", "log", "phase", `${section}\nreturn { runReviewCycle, cycleReviewChecks, runCyclePeerStage, createCyclePeerThrottle };`)(
+  return new Function("agent", "parallel", "pipeline", "log", "phase", `${section}\nreturn { runReviewCycle, cycleReviewChecks, runCyclePeerStage, createCyclePeerThrottle, cyclePeerTrouble };`)(
     agent,
     parallel,
     pipeline,
@@ -1495,7 +1495,35 @@ for (const name of WORKFLOWS) {
       peerPrompts.push(prompt);
       return { outcome: "passed", findings: [], notes: "", detail: "" };
     };
-    const { runCyclePeerStage, createCyclePeerThrottle } = loadCycle(src, agent);
+    const { runCyclePeerStage, createCyclePeerThrottle, cyclePeerTrouble } = loadCycle(src, agent);
+    check(
+      "the helper's exact empty and malformed reasons are eligible forfeiture trouble",
+      cyclePeerTrouble({ outcome: "forfeited", reason: "provider exited 0 with an empty final message" }) &&
+        cyclePeerTrouble({ outcome: "forfeited", reason: "provider exited 0 but produced a malformed/unparseable response" }),
+      "documented helper reason mapping",
+    );
+    check(
+      "the retained raw path's exact empty and garbled reasons remain eligible",
+      cyclePeerTrouble({ outcome: "forfeited", reason: "empty output" }) &&
+        cyclePeerTrouble({ outcome: "forfeited", reason: "garbled output" }),
+      "documented raw reason mapping",
+    );
+    check(
+      "the helper's no-verdict forfeiture is intentionally excluded from throttle trouble",
+      !cyclePeerTrouble({ outcome: "forfeited", reason: "provider exited 0 but emitted no recognizable VERDICT token" }),
+      "no-verdict helper reason",
+    );
+    check(
+      "near-match and decorated empty/garbled reasons do not trigger the exact mapping",
+      [
+        "provider exited 0 with an empty final messages",
+        "provider exited 0 but produced a malformed response",
+        "prefix: provider exited 0 with an empty final message",
+        "garbled output from an unrelated parser",
+        "EMPTY OUTPUT",
+      ].every((reason) => !cyclePeerTrouble({ outcome: "forfeited", reason })),
+      "negative exact-match cases",
+    );
     const peerState = { preflighted: false, preflightInProgress: null, unavailable: false, unavailableDetail: "" };
     const peerThrottle = createCyclePeerThrottle();
     const cycle = { ...CYCLE, peer: "on", contracts: {}, labelPrefix: "batch:" };
@@ -1697,7 +1725,21 @@ const PEER_LIFECYCLE_CHECKS = 10;
   const pluginsProse = readFileSync(join(here, "..", "plugins", "dev-skills", "skills", "review-cycle", "SKILL.md"), "utf8");
   check("the direct Codex provider gets bounded TERM, death verification, safe KILL, and a survivor stop", /send TERM[\s\S]*at most ten seconds[\s\S]*send KILL only if[\s\S]*ten more seconds[\s\S]*stop the cycle and escalate/.test(pluginsProse), "raw Codex lifecycle prose");
   check("the Claude helper and fallback both route every group signal through identity reload", /helper_term_group[\s\S]*identity is checked again immediately before that signal/.test(prose) && /peer_signal_group KILL/.test(prose) && /Every liveness probe and TERM\/KILL reloads the leader identity immediately before `kill`/.test(prose), "Claude PID/PGID lifecycle prose");
-  check("evidence denial or an absent exact token forfeits the verdict with the pinned reason", prose.includes("diff evidence unreadable or EVIDENCE_TOKEN absent") && /never accept the verdict on the helper's outcome alone/.test(prose) && /denial or missing proof forfeits it with the same exact reason/.test(prose), "evidence failure contract");
+  check(
+    "the helper verdict is proved from literal embedded evidence and exact pinned OIDs without an external read grant",
+    /BEGIN GENERATED REVIEW DATA/.test(prose) &&
+      /END GENERATED REVIEW DATA/.test(prose) &&
+      /BEGIN EMBEDDED GIT EVIDENCE/.test(prose) &&
+      /END EMBEDDED GIT EVIDENCE/.test(prose) &&
+      /EVIDENCE_BASE_OID: <full OID>/.test(prose) &&
+      /EVIDENCE_TIP_OID: <full OID>/.test(prose) &&
+      /The separate `diff_evidence_file` is retained for audit but is not verdict proof and is never a provider read dependency/.test(prose) &&
+      /embedded diff evidence or proof absent/.test(prose) &&
+      /never accept the verdict on the helper's outcome alone/.test(prose) &&
+      !/Read the complete diff evidence at:/.test(prose) &&
+      !/native read-only tools may read the one absolute out-of-worktree evidence path/.test(prose),
+    "embedded evidence contract",
+  );
 
   const n = legOk + legFail - before;
   check(`peer lifecycle checks ran all ${PEER_LIFECYCLE_CHECKS}`, n === PEER_LIFECYCLE_CHECKS, `ran ${n}`);
