@@ -113,7 +113,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 128;
+const EXPECTED_CHECKS = 130;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1902,8 +1902,22 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         text.includes("| `rebase on top of <target>` |") &&
         text.includes("resolved WHERE IT WAS NAMED") &&
         text.includes("Fetch nothing for it, and never send it at the base repository") &&
+        // The failure mode is half the rule: a named ref that does not resolve
+        // must stop the batch, since the one substitution available is the very
+        // base-ref fetch the sentence before it forbids.
+        text.includes("stop the batch and report what you tried rather than substituting anything") &&
         !text.includes("A target the invocation itself named as an exact commit is pinned as given"),
-      "the exact-commit-only exemption is back, or the token is undocumented: a named branch falls through to the base-ref fetch",
+      "the exact-commit-only exemption is back, the token is undocumented, or a target that does not resolve no longer stops the batch",
+    );
+    check(
+      `${name}: a named ref is re-resolved at each point by its OWN resolution, and the paragraph that says so is not titled for the default alone`,
+      text.includes("Re-pin a movable target at each rebase point") &&
+        !text.includes("Re-pin a default target at each rebase point") &&
+        text.includes("a ref the invocation named, by the local `rev-parse` above") &&
+        // The two immovable kinds keep their exemption; losing this half would
+        // re-resolve a deliberately pinned commit out from under the batch.
+        text.includes("an exact commit the invocation itself named, which was pinned deliberately and cannot move"),
+      "the movable/frozen split lost a kind, or the paragraph governs a named ref while its lead-in still says 'default'",
     );
   }
 }
