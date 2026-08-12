@@ -24,7 +24,7 @@ function check(name, cond, detail) {
   }
 }
 
-const EXPECTED_CHECKS = 36;
+const EXPECTED_CHECKS = 40;
 
 function loadDiscovery(agent, events) {
   const at = src.indexOf(CUT);
@@ -97,6 +97,15 @@ check("partly unattributable packet → nothing is deliverable", partlyUnattribu
 check("partly unattributable packet → nothing routes to resolution", partlyUnattributable.heldTasks.length === 0, JSON.stringify(slugs(partlyUnattributable.heldTasks)));
 check("partly unattributable packet → the whole reviewed wave is held", JSON.stringify(slugs(partlyUnattributable.held)) === JSON.stringify(["a", "b", "c"]), JSON.stringify(slugs(partlyUnattributable.held)));
 check("partly unattributable packet → no extra agent call is added", partlyUnattributable.calls.length === 1, JSON.stringify(partlyUnattributable.calls.map((call) => call.label)));
+
+const partlyAttributedEntry = await run(
+  [mkReady("a"), mkReady("b"), mkReady("c")],
+  { collisions: [clash(["task/a", "task/b", "origin/task/c"])] },
+);
+check("partly attributed entry → nothing is deliverable", partlyAttributedEntry.deliverable.length === 0, JSON.stringify(slugs(partlyAttributedEntry.deliverable)));
+check("partly attributed entry → nothing routes to resolution", partlyAttributedEntry.heldTasks.length === 0, JSON.stringify(slugs(partlyAttributedEntry.heldTasks)));
+check("partly attributed entry → the whole reviewed wave is held", JSON.stringify(slugs(partlyAttributedEntry.held)) === JSON.stringify(["a", "b", "c"]), JSON.stringify(slugs(partlyAttributedEntry.held)));
+check("partly attributed entry → the foreign name is reported as an attribution failure", partlyAttributedEntry.held.every((held) => /unknown branch/.test(held.detail) && /exact branch strings/.test(held.detail)), JSON.stringify(partlyAttributedEntry.held.map((held) => held.detail)));
 
 const oneBranch = await run(
   [mkReady("a"), mkReady("b")],

@@ -60,7 +60,7 @@ function check(name, cond, detail) {
 // it — an edit that drops one, or a guard that swallows a throw, would pass.
 // Counting the oks too lets the run assert it executed the whole suite. Bump
 // this deliberately when adding or removing a check; the number is the assertion.
-const EXPECTED_CHECKS = 187;
+const EXPECTED_CHECKS = 191;
 
 async function scenario(name, fn) {
   try {
@@ -311,6 +311,24 @@ await scenario("fully-qualified re-scan clears another clash", async () => {
   check("qualified packet → both branches still carrying the qualified clash are held", JSON.stringify(slugs(out.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(out.held)));
   check("qualified packet → the cleared branch receives its re-review", labels(out.calls).includes("re-review:c"), JSON.stringify(labels(out.calls)));
   check("qualified packet → still-colliding branches receive no re-review", !labels(out.calls).includes("re-review:a") && !labels(out.calls).includes("re-review:b"), JSON.stringify(labels(out.calls)));
+});
+
+// 5bd. Attributable names do not make a partly foreign entry usable. The shared
+//       gate requires every reported name to belong to a held task; otherwise
+//       the foreign side could deliver without ever being checked again.
+await scenario("partly attributed re-scan entry", async () => {
+  const out = await run({
+    held: [mkHeld("a"), mkHeld("b"), mkHeld("c")],
+    collisions: [clash(["task/a", "task/b", "task/c"])],
+    packets: {
+      resolution: renamed(["task/a"]),
+      rescan: { collisions: [clash(["task/a", "task/b", "origin/task/c"])] },
+    },
+  });
+  check("partly attributed re-scan entry → nothing delivers", out.deliverable.length === 0, JSON.stringify(slugs(out.deliverable)));
+  check("partly attributed re-scan entry → all three branches are held", JSON.stringify(slugs(out.held)) === JSON.stringify(["a", "b", "c"]), JSON.stringify(slugs(out.held)));
+  check("partly attributed re-scan entry → every hold says the re-scan established nothing", out.held.every((h) => /established nothing/.test(h.detail) && /attribute every named branch/.test(h.detail)), JSON.stringify(out.held.map((h) => h.detail)));
+  check("partly attributed re-scan entry → no re-review is paid for", !labels(out.calls).some((l) => l.startsWith("re-review:")), JSON.stringify(labels(out.calls)));
 });
 
 // 5c. One unattributable entry voids the WHOLE packet rather than being filtered

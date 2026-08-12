@@ -2672,6 +2672,9 @@ Method:
 Flag only genuine overlaps between independently-based branches; never flag a file a branch merely inherited from its base. If nothing overlaps, return an empty \`collisions\` array.`;
 }
 
+// A qualified local ref and its ordinary branch name identify the same ref.
+// Canonicalize that spelling here so discovery and the post-resolution re-scan
+// deliberately use the same attribution rule and both can consume it as evidence.
 function normalizeBranchName(s) {
   let value = String(s || "").trim();
   if (value.length >= 2) {
@@ -2695,10 +2698,18 @@ function collisionInvolvesTask(collision, task) {
   return names.includes(normalizeBranchName(task.branch)) || names.includes(normalizeBranchName(task.slug));
 }
 
-function collisionNamesTwoTasks(collision, taskEntries) {
-  return taskEntries.filter(({ task }) => collisionInvolvesTask(collision, task)).length >= 2;
+function collisionIsAttributable(collision, taskEntries) {
+  const names = collisionBranchNames(collision);
+  const reportedNameCount = Array.isArray(collision.branches) ? collision.branches.length : 0;
+  const knownNames = new Set(taskEntries.flatMap(({ task }) => [normalizeBranchName(task.branch), normalizeBranchName(task.slug)]));
+  return names.length === reportedNameCount && names.every((name) => knownNames.has(name)) && taskEntries.filter(({ task }) => collisionInvolvesTask(collision, task)).length >= 2;
 }
 
+// A non-empty discovery packet is usable only when every reported name belongs
+// to this reviewed wave and every entry identifies at least two distinct tasks.
+// One malformed or foreign name voids the whole packet and holds the whole wave:
+// partial attribution could otherwise deliver an omitted side of a live clash.
+// A genuinely empty packet remains the ordinary clean-wave path.
 async function discoverWaveCollisions({ ready, wave, defaultBase }) {
   let scanError = "";
   let waveCollisions = [];
@@ -2713,8 +2724,8 @@ async function discoverWaveCollisions({ ready, wave, defaultBase }) {
       log(scanError);
     } else if (scan.collisions.length) {
       waveCollisions = scan.collisions.map((c) => ({ ...c, wave }));
-      if (!scan.collisions.every((c) => collisionNamesTwoTasks(c, ready))) {
-        scanError = `collision scan for wave ${wave} reported a clash attributable to fewer than two reviewed branches; holding every reviewed branch before PR delivery — re-run the scan with the exact branch strings from its prompt, then deconflict and re-review`;
+      if (!scan.collisions.every((c) => collisionIsAttributable(c, ready))) {
+        scanError = `collision scan for wave ${wave} reported a clash with an unknown branch or attributable to fewer than two reviewed branches; holding every reviewed branch before PR delivery — re-run the scan with the exact branch strings from its prompt, then deconflict and re-review`;
         log(scanError);
       } else {
         const heldCount = ready.filter(({ task }) => scan.collisions.some((c) => collisionInvolvesTask(c, task))).length;
@@ -3146,13 +3157,15 @@ async function settleWaveCollisions({ heldTasks, waveCollisions, wave, defaultBa
   // deliveries this wave's uncontested branches already earned and leaves the
   // held ones with no result to act on, while this task's degraded path owes
   // them an actionable hold. And an entry naming fewer than TWO of the held
-  // branches — `branches: []`, a lone name, or names this wave cannot attribute
-  // to its held tasks — is not a clash as COLLISION_SCHEMA defines one, "the two
-  // or more branches that each independently added it", so it is evidence about
-  // nobody. Two rather than one is what 027's 3+ branch rule costs: a three-way
-  // clash malformed down to a
-  // single name leaves the two branches it omits with an empty still-colliding
-  // set, and both would deliver still carrying the value.
+  // branches — `branches: []`, a lone name, or a name this wave cannot attribute
+  // to one of its held tasks — is not a clash as COLLISION_SCHEMA defines one,
+  // "the two or more branches that each independently added it", so the whole
+  // packet is evidence about nobody. Qualified local refs are deliberately
+  // attributable here through the shared `normalizeBranchName`; unknown names
+  // still void the packet even when the same entry also names two held tasks.
+  // Two rather than one is what 027's 3+ branch rule costs: a three-way clash
+  // malformed down to a single name leaves the two branches it omits with an
+  // empty still-colliding set, and both would deliver still carrying the value.
   let rescanned = null;
   if (resolutions && heldTasks.length >= 2) {
     phase(`Collision re-scan (wave ${wave})`);
@@ -3165,7 +3178,7 @@ async function settleWaveCollisions({ heldTasks, waveCollisions, wave, defaultBa
     } catch (e) {
       log(`collision re-scan failed for wave ${wave}: ${e && e.message ? e.message : String(e)}`);
     }
-    if (rescan && Array.isArray(rescan.collisions) && rescan.collisions.every((c) => collisionNamesTwoTasks(c, heldTasks))) {
+    if (rescan && Array.isArray(rescan.collisions) && rescan.collisions.every((c) => collisionIsAttributable(c, heldTasks))) {
       rescanned = rescan.collisions;
     }
   }
@@ -3181,7 +3194,7 @@ async function settleWaveCollisions({ heldTasks, waveCollisions, wave, defaultBa
       // touched — keep it held for a human/design decision.
       held.push({ slug: task.slug, branch: task.branch, status: "collision-blocked", detail: "shared name must stay identical (imperative); resolver could not deconflict — needs a human/design decision", collisions: related, ...cycleCarried(result) });
     } else if (!stillColliding) {
-      held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "post-resolution collision re-scan established nothing (it failed, returned no usable result, attributed a clash to fewer than two of the held branches, or fewer than two of the colliding branches were in hand to compare); branch held before PR delivery — re-scan these branches by hand, deconflict what remains, and re-review", collisions: related, ...cycleCarried(result) });
+      held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "post-resolution collision re-scan established nothing (it failed, returned no usable result, could not attribute every named branch, attributed a clash to fewer than two of the held branches, or fewer than two of the colliding branches were in hand to compare); branch held before PR delivery — re-scan these branches by hand, deconflict what remains, and re-review", collisions: related, ...cycleCarried(result) });
     } else if (stillColliding.length) {
       held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "the clash is still in the refs after the resolver ran; branch held before PR delivery — rename enough sides that at most one branch keeps the name, regenerate whatever derives from it, and re-review", collisions: stillColliding, ...cycleCarried(result) });
     } else {
