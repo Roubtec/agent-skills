@@ -74,7 +74,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 186;
+const CHECKS_PER_LEG = 195;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -157,7 +157,7 @@ function scriptedAgent(fixes, reviews, seen, closeOuts = [], records = [], packe
     if (label.startsWith("closeout#")) {
       seen.closeOutPrompts.push(prompt);
       const p = closeOutQueue.shift();
-      return p === undefined ? { nonSemantic: true, editsPresent: true, why: "scripted: every hunk non-semantic, every claimed edit present" } : p;
+      return p === undefined ? { nonSemantic: true, editsPresent: true, recordOnlySuffix: false, recordOnlyRange: "", why: "scripted: every hunk non-semantic, every claimed edit present, no record suffix" } : p;
     }
     if (label.startsWith("record#")) {
       seen.recordPrompts.push(prompt);
@@ -345,7 +345,12 @@ const closeOutRetire = (findingId) => ({ ...retireOn(findingId), closeOutEdits: 
 // consumer — which is why the note is a conjunct of the exit and not merely its
 // payload.
 const FLAKE_NOTE = "the delivery run's only failure was the payments suite, which reproduces on the base; queued as tasks/046-flaky-payments-suite.md";
+const RECORD_PARENT = "a".repeat(40);
+const RECORD_TIP = "b".repeat(40);
+const RECORD_RANGE = `${RECORD_PARENT}..${RECORD_TIP}`;
+const WRONG_RECORD_RANGE = `${RECORD_PARENT}..${"c".repeat(40)}`;
 const confirmRecordOnly = { ...PASS_PACKET, dispositions: [], flakeRecord: FLAKE_NOTE };
+const closeOutRecordOnly = (findingId) => ({ ...closeOutFix(findingId), finalSha: RECORD_TIP, flakeRecord: FLAKE_NOTE });
 // The same pass with no record of its OWN: it committed the same range and says
 // nothing about what failed, so there is nothing for the conclusion to publish.
 const confirmRecordOnlySilent = { ...PASS_PACKET, dispositions: [] };
@@ -979,6 +984,57 @@ for (const name of WORKFLOWS) {
     });
     check("a fix-only non-semantic pass concludes with no further round", concluded.res.verdict === "pass" && concluded.seen.reviewPrompts.length === 1 && !!concluded.res.closeOut, `${concluded.res.verdict}/${concluded.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(concluded.res.closeOut)}`);
     check("and the result records the pass, range and unreviewed edits", !!concluded.res.closeOut && concluded.res.closeOut.pass === 2 && concluded.res.closeOut.range === "sha..sha" && JSON.stringify(concluded.res.closeOut.edits) === JSON.stringify(CLOSE_OUT_EDITS), JSON.stringify(concluded.res.closeOut));
+
+    // Option (a): the delivery run follows the non-semantic fixes, then the
+    // flake policy appends its one diagnosis-only record commit. The same
+    // read-only close-out check splits that suffix itself; the packet's note is
+    // withheld from the check so it cannot self-certify the licence.
+    const withRecord = await run(src, {
+      fixes: [PASS_PACKET, closeOutRecordOnly("r1-1")],
+      reviews: [FAIL("a wording nit")],
+      closeOuts: [{ nonSemantic: true, editsPresent: true, recordOnlySuffix: true, recordOnlyRange: RECORD_RANGE, why: "non-semantic fixes followed by one diagnosis-only record commit" }],
+      cycle: { closeOut: "on" },
+    });
+    check("a non-confirming close-out pass survives its delivery run's record-only suffix", withRecord.res.verdict === "pass" && withRecord.seen.reviewPrompts.length === 1 && !!withRecord.res.closeOut && !!withRecord.res.recordOnly, `${withRecord.res.verdict}/${withRecord.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(withRecord.res)}`);
+    check("the conclusion detail names both kinds of unreviewed content", /non-semantic fixes plus the independently checked unrelated-flake record suffix/.test(withRecord.res.detail || ""), withRecord.res.detail);
+    check("the conclusion names the whole unreviewed close-out range and its non-semantic edits", withRecord.res.closeOut && withRecord.res.closeOut.range === `sha..${RECORD_TIP}` && JSON.stringify(withRecord.res.closeOut.edits) === JSON.stringify(CLOSE_OUT_EDITS), JSON.stringify(withRecord.res.closeOut));
+    check("and names the independently checked flake suffix and carries the delivery note", withRecord.res.recordOnly && withRecord.res.recordOnly.range === RECORD_RANGE && withRecord.res.recordOnly.note === FLAKE_NOTE && /diagnosis-only record/.test(withRecord.res.recordOnly.verified || ""), JSON.stringify(withRecord.res.recordOnly));
+    check("the one check is asked to split and judge all three claims without seeing the pass's flake note", withRecord.seen.closeOutPrompts.length === 1 && /answer THREE questions/.test(withRecord.seen.closeOutPrompts[0] || "") && /recordOnlySuffix/.test(withRecord.seen.closeOutPrompts[0] || "") && /FINAL commit/.test(withRecord.seen.closeOutPrompts[0] || "") && !(withRecord.seen.closeOutPrompts[0] || "").includes(FLAKE_NOTE), "close-out check prompt");
+
+    // Negative control for the new split: a valid record suffix cannot hide a
+    // semantic hunk in the preceding fixes portion. It forfeits both records
+    // for the normal round, just like the unsplit close-out veto below.
+    const semanticBeforeRecord = await run(src, {
+      fixes: [PASS_PACKET, closeOutRecordOnly("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      closeOuts: [{ nonSemantic: false, editsPresent: true, recordOnlySuffix: true, recordOnlyRange: RECORD_RANGE, why: "an executable hunk preceded the diagnosis-only suffix" }],
+      cycle: { closeOut: "on" },
+    });
+    check("a semantic hunk before a valid record suffix still buys the normal reviewer round", semanticBeforeRecord.res.verdict === "pass" && semanticBeforeRecord.seen.reviewPrompts.length === 2 && !semanticBeforeRecord.res.closeOut && !semanticBeforeRecord.res.recordOnly, `${semanticBeforeRecord.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(semanticBeforeRecord.res)}`);
+
+    const silentRecord = await run(src, {
+      fixes: [PASS_PACKET, closeOutFix("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      closeOuts: [{ nonSemantic: true, editsPresent: true, recordOnlySuffix: true, recordOnlyRange: RECORD_RANGE, why: "a diagnosis-only suffix" }],
+      cycle: { closeOut: "on" },
+    });
+    check("a verified suffix with no pass note to publish forfeits the close-out", silentRecord.seen.reviewPrompts.length === 2 && !silentRecord.res.closeOut && !silentRecord.res.recordOnly, `${silentRecord.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(silentRecord.res)}`);
+
+    const unnamedRecord = await run(src, {
+      fixes: [PASS_PACKET, closeOutRecordOnly("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      closeOuts: [{ nonSemantic: true, editsPresent: true, recordOnlySuffix: true, recordOnlyRange: "HEAD^..HEAD", why: "a diagnosis-only suffix without exact OIDs" }],
+      cycle: { closeOut: "on" },
+    });
+    check("a suffix not named by its exact OID range cannot conclude", unnamedRecord.seen.reviewPrompts.length === 2 && !unnamedRecord.res.closeOut && !unnamedRecord.res.recordOnly, `${unnamedRecord.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(unnamedRecord.res)}`);
+
+    const wrongTipRecord = await run(src, {
+      fixes: [PASS_PACKET, closeOutRecordOnly("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      closeOuts: [{ nonSemantic: true, editsPresent: true, recordOnlySuffix: true, recordOnlyRange: WRONG_RECORD_RANGE, why: "a valid-looking range ending at another commit" }],
+      cycle: { closeOut: "on" },
+    });
+    check("a valid-looking suffix range that does not end at the pass tip cannot conclude", wrongTipRecord.seen.reviewPrompts.length === 2 && !wrongTipRecord.res.closeOut && !wrongTipRecord.res.recordOnly, `${wrongTipRecord.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(wrongTipRecord.res)}`);
 
     const declined = await run(src, {
       fixes: [PASS_PACKET, closeOutDecline("r1-1"), idle],

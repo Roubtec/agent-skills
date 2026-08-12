@@ -867,10 +867,13 @@ const CYCLE_PEER_PREFLIGHT_SCHEMA = {
 
 // Verdict of the trivial-round close-out's diff check — the orchestrator's own
 // look at what would ship unreviewed, delegated the only way a script that
-// cannot run git can look at a diff. It asks TWO questions, one per direction
+// cannot run git can look at a diff. It asks THREE questions: one per direction
 // the list and the diff can disagree: `nonSemantic` stops the list licensing
 // what the diff actually holds, and `editsPresent` stops the pass claiming a
-// fix the diff never received. Only the first was asked at first, which left
+// fix the diff never received. `recordOnlySuffix` is the one narrow exception
+// to the first: the delivery run's diagnosis-only record may be the FINAL
+// commit, but it cannot make any preceding semantic hunk disappear. Only the
+// first was asked at first, which left
 // an empty range VACUOUSLY non-semantic — so a pass reporting findings `fixed`
 // with nothing committed concluded the cycle, its claims adjudicated by
 // exactly nobody, since the round that would have caught it is the round this
@@ -887,11 +890,13 @@ const CYCLE_PEER_PREFLIGHT_SCHEMA = {
 const CYCLE_CLOSEOUT_SCHEMA = {
   type: "object",
   properties: {
-    nonSemantic: { type: "boolean", description: "True ONLY if every hunk of the close-out diff is non-semantic. Any executable or behavioral change — however it got there, listed or not — is false, which simply buys the normal reviewer round." },
-    editsPresent: { type: "boolean", description: "True ONLY if the range is NON-EMPTY and carries everything the pass claims it shipped: every edit it listed, AND a change answering every finding it disposed `fixed`. An EMPTY range is false: it holds no fix at all, so a finding reported `fixed` over it never landed. A claimed edit, or a claimed fix, you cannot find in the diff is false too — an unrelated tidy-up that IS in the range does not stand in for a requested fix that is not. Extra non-semantic hunks beyond the list do not make it false — `nonSemantic` judges those on their own merits." },
-    why: { type: "string", description: "One line: what the diff held, or the semantic change, missing claimed edit, or unlanded `fixed` claim that forfeits the close-out." },
+    nonSemantic: { type: "boolean", description: "True ONLY if every hunk before a valid record-only suffix is non-semantic, or every hunk in the whole range when no valid suffix exists. Any executable or behavioral change — however it got there, listed or not — is false, which simply buys the normal reviewer round." },
+    editsPresent: { type: "boolean", description: "True ONLY if the portion before a valid record-only suffix is NON-EMPTY and carries everything the pass claims it shipped: every edit it listed, AND a change answering every finding it disposed `fixed`. The suffix cannot stand in for either. An EMPTY fixes portion is false: it holds no fix at all, so a finding reported `fixed` over it never landed. A claimed edit, or a claimed fix, you cannot find in that portion is false too — an unrelated tidy-up that IS there does not stand in for a requested fix that is not. Extra non-semantic hunks beyond the list do not make it false — `nonSemantic` judges those on their own merits." },
+    recordOnlySuffix: { type: "boolean", description: "True ONLY if the FINAL commit is a suffix holding nothing but the unrelated-flake record: a NEW diagnosis-only follow-up task file, plus any PR-body or summary note recording what the delivery run surfaced. False when no such suffix exists, and also when the candidate suffix carries any other hunk." },
+    recordOnlyRange: { type: "string", description: "When `recordOnlySuffix` is true, the exact full-OID `<parent>..<tip>` range naming that final record-only commit; empty otherwise." },
+    why: { type: "string", description: "One line: what the fixes portion and candidate suffix held, or the semantic change, invalid suffix, missing claimed edit, or unlanded `fixed` claim that forfeits the close-out." },
   },
-  required: ["nonSemantic", "editsPresent", "why"],
+  required: ["nonSemantic", "editsPresent", "recordOnlySuffix", "recordOnlyRange", "why"],
 };
 
 // Verdict of the record-only check — the same look at a diff, asked of the one
@@ -1535,7 +1540,7 @@ async function runCyclePeerStage(cycle, state) {
 
 // The close-out's diff check. Cheap and read-only like the grounding
 // spot-check, and for the same reason: it is what lets the cycle skip a whole
-// reviewer-plus-peer round. Neither question lets the fixer's list decide
+// reviewer-plus-peer round. None of its questions lets the fixer's list decide
 // anything: question 1 judges the DIFF against the list's claim of triviality
 // — the difference between a bounded discretion and a self-granted licence —
 // and question 2 judges the pass's whole claim against the diff, which is the
@@ -1543,16 +1548,21 @@ async function runCyclePeerStage(cycle, state) {
 // received it. That claim is the list AND the `fixed` dispositions, because a
 // list is silent about the fix it omits: a pass that skipped one requested fix
 // and listed an unrelated tidy-up would otherwise clear a list-only check with
-// the skipped fix seen by nobody.
+// the skipped fix seen by nobody. Question 3 recognizes one exact suffix: the
+// diagnosis-only record committed after the delivery run. The check, not the
+// pass, identifies that suffix and names its exact range; all preceding hunks
+// remain subject to the original non-semantic and completeness rules.
 function cycleCloseOutPrompt(cycle, state) {
   const fixes = Array.isArray(state.fixes) ? state.fixes : [];
-  return `Trivial-round close-out check, read-only. The cycle is about to conclude WITHOUT another reviewer round, so this diff would ship unreviewed. Read \`git diff ${cycleShq(state.passBase)}..HEAD\` in full and answer TWO questions about it.
+  return `Trivial-round close-out check, read-only. The cycle is about to conclude WITHOUT another reviewer round, so this diff would ship unreviewed. Read the commits and \`git diff ${cycleShq(state.passBase)}..HEAD\` in full and answer THREE questions about it. The only split you may make is a valid record-only FINAL commit: if one exists, judge the preceding fixes portion separately and report that exact suffix range. Otherwise judge the whole range as the fixes portion.
 
-1. \`nonSemantic\` — is EVERY hunk non-semantic: wording, typos, comment phrasing, formatting, with nothing touching behavior, logic, or the meaning of an acceptance criterion? Judge the DIFF, not the list below, and remember that prose can carry behavior here: a prompt's text, a config or contract expressed as text, an instruction an agent follows. Anything else is \`nonSemantic: false\`.
+1. \`nonSemantic\` — is EVERY hunk in the fixes portion non-semantic: wording, typos, comment phrasing, formatting, with nothing touching behavior, logic, or the meaning of an acceptance criterion? Judge the DIFF, not the list below, and remember that prose can carry behavior here: a prompt's text, a config or contract expressed as text, an instruction an agent follows. Anything else is \`nonSemantic: false\`. An invalid candidate record is not a suffix you may split away, so its hunks remain in this question and ordinarily make it false.
 
-2. \`editsPresent\` — is the range NON-EMPTY, and does it actually carry everything the pass claims below: every EDIT it listed, and a change answering every FINDING it disposed \`fixed\`? An EMPTY range is \`false\`: nothing landed, so a finding this pass reported \`fixed\` was never fixed at all. A claimed edit you cannot find in the diff is \`false\` too, and so is a \`fixed\` finding the range holds no change for — the two lists are checked separately on purpose, because a tidy-up that IS in the range does not stand in for a requested fix that is not. Extra non-semantic hunks beyond the list are fine here — question 1 already judges those.
+2. \`editsPresent\` — is the fixes portion NON-EMPTY, and does it actually carry everything the pass claims below: every EDIT it listed, and a change answering every FINDING it disposed \`fixed\`? The record suffix cannot stand in for either. An EMPTY fixes portion is \`false\`: nothing landed, so a finding this pass reported \`fixed\` was never fixed at all. A claimed edit you cannot find in that portion is \`false\` too, and so is a \`fixed\` finding it holds no change for — the two lists are checked separately on purpose, because a tidy-up that IS there does not stand in for a requested fix that is not. Extra non-semantic hunks beyond the list are fine here — question 1 already judges those.
 
-Either question answered \`false\` costs nothing but the normal reviewer round.
+3. \`recordOnlySuffix\` — is the FINAL commit a suffix holding NOTHING but the unrelated-flake RECORD: a NEW diagnosis-only follow-up task file carrying the diagnosis already in hand, plus any PR-body or summary note recording what the delivery run surfaced? Judge the commit diff, never an account from the pass (none is provided). Any source, test, config, contract, artifact-under-review, or attempted flake fix in that commit makes this \`false\` and leaves its hunks in questions 1 and 2. When true, return its exact full-OID \`<parent>..<tip>\` as \`recordOnlyRange\`; otherwise return an empty range.
+
+Questions 1 or 2 answered \`false\` cost nothing but the normal reviewer round. Question 3 may be \`false\` when no candidate suffix exists; an invalid candidate still fails question 1 because it cannot be split away.
 
 ${cycleContract(cycle, "reviewer")}
 
@@ -1873,11 +1883,14 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     the record-only exit is refused for the normal reviewer round. Where the
 //     record was a post-run COMMIT — the delivery gate's one tolerated one —
 //     `range` names it and `verified` is what the diff check found in it; both
-//     are EMPTY on the other three conclusions, where this field names no
-//     commit of its OWN — the terminal check's pass committed nothing (the
-//     flake rule's cited-active-task outcome), the light conclusion's commits
-//     were seen by the round that just passed, and the close-out's ride in the
-//     `closeOut.range` this same result carries. So the discriminator a
+//     are EMPTY on conclusions where this field names no commit of its OWN —
+//     the terminal check's pass committed nothing (the flake rule's
+//     cited-active-task outcome), the light conclusion's commits were seen by
+//     the round that just passed, and an ordinary close-out's record rides in
+//     the `closeOut.range` this same result carries. A close-out whose delivery
+//     run appended the tolerated diagnosis-only record instead names that
+//     independently checked suffix here while `closeOut.range` names the whole
+//     range. So the discriminator a
 //     consumer rendering the record reads is exactly that, and no more:
 //     whether `recordOnly` names an unreviewed post-run commit, never why it
 //     does not),
@@ -2386,7 +2399,7 @@ async function runReviewCycle(cycle) {
     // round that adjudicates it, so those claims hold the cycle open exactly
     // as they do at the terminal check above.
     //
-    // The check answers TWO questions, because a diff read for triviality
+    // The check's first TWO questions exist because a diff read for triviality
     // alone is blind in the other direction: an EMPTY range is vacuously
     // non-semantic, so a pass reporting its findings `fixed` while committing
     // nothing — or fixing something else instead — would conclude the cycle
@@ -2397,7 +2410,14 @@ async function runReviewCycle(cycle) {
     // saying so while listing `closeOutEdits` is a contradiction the gate
     // settles here rather than spending an agent call on.
     //
-    // The `fixed` dispositions go to that question BESIDE the edit list, and
+    // Its THIRD answer identifies one narrow suffix the first answer may set
+    // aside: the final diagnosis-only record committed after the delivery run.
+    // That exception is checked from the commit diff, not the packet's account,
+    // and the preceding range still has to clear both original questions. The
+    // check returns the suffix's exact range so the result can name the flake
+    // commit separately from the non-semantic edits in `closeOut.range`.
+    //
+    // The `fixed` dispositions go to the second question BESIDE the edit list, and
     // that pairing is what makes it answer the case it is named for. The list
     // is the pass's account of what it shipped; the dispositions are its
     // account of what it was ASKED for, and only the second names a fix that
@@ -2414,13 +2434,21 @@ async function runReviewCycle(cycle) {
         schema: CYCLE_CLOSEOUT_SCHEMA,
         effort: "low",
       });
-      if (closeOut && closeOut.nonSemantic === true && closeOut.editsPresent === true) {
-        return result("pass", `trivial-round close-out on fixer pass ${fixerPasses}: non-semantic fixes concluded the cycle without a further reviewer round`, {
-          ...flakeCarried,
+      const suffixRange = closeOut && typeof closeOut.recordOnlyRange === "string" ? closeOut.recordOnlyRange.trim() : "";
+      const suffixReported = !!closeOut && closeOut.recordOnlySuffix === true;
+      const suffixMatch = suffixRange.match(/^([0-9a-f]{40}|[0-9a-f]{64})\.\.([0-9a-f]{40}|[0-9a-f]{64})$/);
+      const suffixShapeValid = !!closeOut && ((closeOut.recordOnlySuffix === false && suffixRange === "") || (suffixReported && suffixMatch && suffixMatch[1].length === suffixMatch[2].length && suffixMatch[2] === fix.finalSha));
+      const suffixPublishable = !suffixReported || !!flakeNote;
+      if (closeOut && closeOut.nonSemantic === true && closeOut.editsPresent === true && suffixShapeValid && suffixPublishable) {
+        const closeOutFlake = suffixReported
+          ? { recordOnly: { pass: fixerPasses, range: suffixRange, verified: (closeOut && closeOut.why) || "", note: flakeNote } }
+          : flakeCarried;
+        return result("pass", `trivial-round close-out on fixer pass ${fixerPasses}: non-semantic fixes${suffixReported ? " plus the independently checked unrelated-flake record suffix" : ""} concluded the cycle without a further reviewer round`, {
+          ...closeOutFlake,
           closeOut: { pass: fixerPasses, range: `${passBase}..${fix.finalSha || "HEAD"}`, edits: fix.closeOutEdits, verified: (closeOut && closeOut.why) || "" },
         });
       }
-      log(`fixer pass ${fixerPasses} offered a trivial-round close-out; the diff check ${!closeOut ? "returned nothing" : closeOut.nonSemantic !== true ? "found a semantic change" : "did not find every claimed edit and fix in the range"}, so the normal reviewer round runs.`);
+      log(`fixer pass ${fixerPasses} offered a trivial-round close-out; the diff check ${!closeOut ? "returned nothing" : closeOut.nonSemantic !== true ? "found a semantic change outside a valid record suffix" : closeOut.editsPresent !== true ? "did not find every claimed edit and fix before the record suffix" : !suffixShapeValid ? "returned an invalid record-suffix shape or range" : "found a record suffix but the pass reported no flake note to publish"}, so the normal reviewer round runs.`);
     }
 
     // Record-only close: the terminal check above, with its one conjunct taken

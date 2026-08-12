@@ -26,6 +26,10 @@ The failure mode is also conservative: nothing ships unreviewed. The cycle spend
 
 No shipped consumer grants the close-out. The grant is read only from a direct `wf-review-cycle` invocation carrying the bare `close-out` token (or the structured `closeOut: "on"`); `wf-address-tasks` and `wf-address-review` configure their nested cycles without it. So the collision needs a hand-invoked cycle that grants the close-out **and** whose non-confirming pass's delivery run surfaces an evidenced-unrelated failure. Schedule it accordingly — this is queued rather than deferred because the work is well specified and the condition becomes live the moment a consumer grants the close-out, not because it is expected to bite soon.
 
+## Implementation decision
+
+Choose option (a), a record-only suffix on the close-out range. The confirming-pass conjunct remains the safety boundary on the standalone record-only exit, so an intermediate pass that did not offer the bounded close-out cannot bypass a round while findings remain undisposed; the close-out's existing fixed-only, no-deviation-move, no-retirement, and diff-read gates instead authorize the narrow composition. The same read-only check identifies an exact final diagnosis-only commit, judges every preceding hunk by the existing non-semantic and completeness rules, and returns the suffix's exact range so the result can carry both records without treating the whole close-out range as record-only.
+
 ## Scope
 
 - Decide the shape first, and record the decision in the task's PR: either (a) teach the close-out check to accept a record-only **suffix** on the range while judging the preceding hunks by the existing non-semantic rule, or (b) drop the `confirming` conjunct from the record-only exit and let it run on any pass that meets the rest of its conditions. Option (b) is smaller but weaker — the record-only exit's other conjuncts were written for a confirmation pass, and an intermediate pass can leave findings undisposed, which the retirement suite's scenario for the record-only close pins deliberately. Do not do both.
