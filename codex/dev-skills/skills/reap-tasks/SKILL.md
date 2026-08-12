@@ -5,7 +5,17 @@ description: Reap completed task files by verifying their acceptance criteria ag
 
 Reap the specified task files by checking them against the current state of the codebase and determining whether each task has been delivered satisfactorily.
 
-**Arguments:** `<glob-or-file-list of task files to reap>`
+**Arguments:** `<mixed-list of task numbers, task-file paths, and globs to reap>`
+
+## Task-pointer preflight
+
+Before verification, run `resolve-tasks` in a fresh resolution subagent with its own context window. Hand it the complete raw task-pointer list, have it follow the shared resolver contract, and consume its task-resolution packet; do not scavenge or re-resolve task filenames in the reaping orchestrator's context.
+
+Use the packet's `selectedBy` provenance to apply policy. A path selected by an explicit path or glob is reaped exactly as it was before this additive preflight, whatever its `active`, `done`, `deferred`, or `ambiguous` report context; if both explicit and number provenance selected it, explicit selection wins. A number-selected unambiguous `active` or `deferred` path is eligible for verification. A number that resolves only to `done` means already reaped: report it and do not re-verify it. An unmatched number, path, or glob never executes and its `not-found` diagnostic is always surfaced.
+
+In an interactive run, show the resolved mapping before verifying a bare-numbers invocation. Require an explicit continue decision when any number-selected full number is `done`, `deferred`, or `ambiguous`, or when any input is `not-found`: `done` is reported as already reaped; `deferred` needs explicit inclusion; for each `ambiguous` number, ask the maintainer to select exactly one candidate or exclude that number — a blanket continue must never verify every candidate. Explicit path/glob selections remain executable while this decision is made.
+
+In a hands-off run, verify only the number-selected unambiguous `active` paths plus every explicit path/glob selection. Exclude and document every number-selected `done` (already reaped), `deferred`, or `ambiguous` classification and every `not-found` input; never guess an ambiguous number. Carry the complete mapping and exclusions into the run summary.
 
 ## Primary objective
 

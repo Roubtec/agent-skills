@@ -1,7 +1,7 @@
 /**
  * wf-address-tasks — dynamic-workflow form of the `address-tasks` skill.
  *
- * Resolve a batch of pre-planned task files into dependency waves, then run
+ * Resolve a batch of pre-planned task pointers into dependency waves, then run
  * each task through the shared review cycle — implement -> fresh-eyes review
  * plus a best-effort cross-harness codex peer review -> fix, bounded by the
  * cycle's canonical round cap — scan reviewed sibling branches for add/add
@@ -10,7 +10,7 @@
  * which sides may deliver, and every branch a cleared clash covered is
  * re-reviewed first) — or hold a name that must stay identical — then open PRs
  * for the delivered tasks and report. Invoke as
- * `/dev-skills:wf-address-tasks <glob-or-file-list> [peer-opinions=off]`.
+ * `/dev-skills:wf-address-tasks <task-numbers-paths-or-globs> [peer-opinions=off]`.
  *
  * Why a workflow rather than a skill
  * ----------------------------------
@@ -78,8 +78,8 @@
 // mismatch silently splits the progress display into an extra group.
 export const meta = {
   name: "wf-address-tasks",
-  description: "Implement a batch of pre-planned task files: dependency waves, per-task worktree, and the shared review cycle per task — implement -> fresh-eyes review plus a best-effort cross-harness codex peer review -> fix (review is cross-harness; peer outcomes never block; bounded round cap) — with a pre-PR collision guard that deconflicts add/add clashes (rename one side + re-review) or holds an imperative name, one PR per delivered task.",
-  whenToUse: "Execute a folder/glob of pre-planned task files end to end with per-task worktree isolation and cross-harness review (a best-effort codex peer beside each task's fresh reviewer). Not for one-off coding requests or planning new tasks.",
+  description: "Implement a batch selected by task numbers, paths, or globs: dependency waves, per-task worktree, and the shared review cycle per task — implement -> fresh-eyes review plus a best-effort cross-harness codex peer review -> fix (review is cross-harness; peer outcomes never block; bounded round cap) — with a pre-PR collision guard that deconflicts add/add clashes (rename one side + re-review) or holds an imperative name, one PR per delivered task.",
+  whenToUse: "Execute numbers, paths, or globs for pre-planned task files end to end with per-task worktree isolation and cross-harness review (a best-effort codex peer beside each task's fresh reviewer). Not for one-off coding requests or planning new tasks.",
   phases: [
     { title: "Bootstrap", detail: "wt-bootstrap: root-safety checks, orphan prune, remote probe" },
     { title: "Resolve batch", detail: "read task files, derive dependency waves and branches" },
@@ -136,6 +136,70 @@ const PLAN_SCHEMA = {
   type: "object",
   properties: {
     defaultBase: { type: "string", description: "PR base branch for independent tasks (the user's override, else the current branch, else main)." },
+    resolution: {
+      type: "object",
+      description: "The resolve-tasks packet plus the hands-off exclusions applied before planning. It is report context even when no task remains executable.",
+      properties: {
+        paths: {
+          type: "array",
+          description: "Every deduplicated resolved path, including excluded ambiguous/non-active number candidates and explicit selections.",
+          items: {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              number: { type: "string" },
+              classification: { type: "string", description: "active | done | deferred | ambiguous" },
+              selectedBy: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: { raw: { type: "string" }, kind: { type: "string", description: "number | path | glob" } },
+                  required: ["raw", "kind"],
+                },
+              },
+            },
+            required: ["path", "number", "classification", "selectedBy"],
+          },
+        },
+        numbers: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              number: { type: "string" },
+              classification: { type: "string", description: "active | done | deferred | ambiguous" },
+              paths: { type: "array", items: { type: "string" } },
+            },
+            required: ["number", "classification", "paths"],
+          },
+        },
+        notFound: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { raw: { type: "string" }, kind: { type: "string", description: "number | path | glob" }, diagnostic: { type: "string" } },
+            required: ["raw", "kind", "diagnostic"],
+          },
+        },
+        exclusions: {
+          type: "array",
+          description: "Every non-active number selection and not-found input excluded by the workflow's hands-off policy.",
+          items: {
+            type: "object",
+            properties: {
+              raw: { type: "string" },
+              kind: { type: "string" },
+              number: { type: "string" },
+              classification: { type: "string" },
+              paths: { type: "array", items: { type: "string" } },
+              reason: { type: "string" },
+            },
+            required: ["raw", "kind", "classification", "paths", "reason"],
+          },
+        },
+      },
+      required: ["paths", "numbers", "notFound", "exclusions"],
+    },
     waves: {
       type: "array",
       description: "Tasks grouped into dependency waves; wave N runs only after wave N-1 has finished.",
@@ -157,7 +221,7 @@ const PLAN_SCHEMA = {
       },
     },
   },
-  required: ["defaultBase", "waves"],
+  required: ["defaultBase", "resolution", "waves"],
 };
 
 const PR_SCHEMA = {
@@ -479,25 +543,26 @@ function mainCheckoutSummary(baseline, final) {
 }
 
 function resolvePrompt(input) {
-  return `You are scoping a batch of pre-planned task files for implementation. Do NOT implement anything.
+  return `You are scoping a batch of pre-planned task pointers for implementation. Do NOT implement anything. This is the batch's own-context-window resolver; do all task-tree scavenging here so the orchestrator receives only your structured result.
 
 ${DESTROY_BOUNDARY}
 
 Read \`AGENTS.md\` / \`CLAUDE.md\` first for project conventions.
 
-Argument (a glob or file list; a \`peer-opinions=off\` token is a flag the loop already handled, not a task file — ignore it here): ${JSON.stringify(input)}
+Argument (a mixed list of task numbers, task-file paths, and globs; a \`peer-opinions=off\` token is a flag the loop already handled, not a task pointer — ignore it here): ${JSON.stringify(input)}
 
 Do this:
-1. Resolve the argument to the concrete set of task files and read each one in full.
-2. Determine dependencies: an explicit "Depends on" field, shared infrastructure, or files/modules two tasks both create or migrate. When in doubt, treat tasks that touch the same files or migrations as dependent.
-3. Group tasks into WAVES: wave 1 is every task with no unmet dependency; wave 2 depends only on wave 1; and so on. Tasks within a wave are independent and will run concurrently.
-4. For each task set:
+1. Follow the \`resolve-tasks\` skill's shared contract to produce its deduplicated provenance-tagged \`paths\`, per-full-number \`numbers\`, and per-input \`notFound\` collections. Do not invent a second filename parser here.
+2. Apply the workflow's HANDS-OFF consumer policy. Include as executable every explicit path/glob selection whatever its classification (explicit wins when a path also has number provenance), plus number-selected unambiguous \`active\` paths. Exclude every number-selected \`done\`, \`deferred\`, or \`ambiguous\` classification and every \`not-found\` input; never guess an ambiguous number. Record every exclusion with its raw input, classification, candidate paths, and reason in \`resolution.exclusions\` while preserving the complete resolver packet beside it.
+3. Read each executable task file in full. Determine dependencies: an explicit "Depends on" field, shared infrastructure, or files/modules two tasks both create or migrate. When in doubt, treat tasks that touch the same files or migrations as dependent.
+4. Group executable tasks into WAVES: wave 1 is every task with no unmet dependency; wave 2 depends only on wave 1; and so on. Tasks within a wave are independent and will run concurrently. Return an empty \`waves\` array when resolution leaves no executable task; the exclusions still make that a successful, documented no-op.
+5. For each task set:
    - a ref-safe \`slug\` (task number + short name; also its worktree dir name),
    - a \`branch\` to implement on,
    - a \`base\`: the user's explicit base (if given) else the current branch for independent tasks; for a dependent task, the \`branch\` of the dependency it most directly extends (stacked PRs),
    - \`dependsOn\`: the slugs of in-batch tasks it depends on (the task(s) whose branch is its base), or empty,
    - \`upstream\`: a one-line note on what an in-batch dependency introduced, if any.
-5. Set \`defaultBase\` to the user's explicit base override, else the current checked-out branch, else \`main\`.
+6. Set \`defaultBase\` to the user's explicit base override, else the current checked-out branch, else \`main\`.
 
 Return the structured plan. Paste each task file's FULL content verbatim into \`content\` — downstream agents have no other access to it.`;
 }
@@ -3658,11 +3723,15 @@ const collisions = [];
 try {
   phase("Resolve batch");
   plan = await agent(resolvePrompt(args), { label: "resolve", schema: PLAN_SCHEMA });
-  if (!plan || !Array.isArray(plan.waves) || plan.waves.length === 0) {
+  if (!plan || !Array.isArray(plan.waves)) {
     // A batch that resolves no task is still a batch that terminated with the
     // baseline already taken, so it owes the same report as a delivering one.
     phase("Summary");
-    return { error: "Could not resolve any task files from the argument.", args, mainCheckout: await finalMainCheckoutReport() };
+    return { error: "Could not resolve task pointers from the argument.", args, mainCheckout: await finalMainCheckoutReport() };
+  }
+  if (plan.waves.length === 0) {
+    phase("Summary");
+    return { batch: args, defaultBase: plan.defaultBase, remote, peer: peerMode, waves: 0, resolution: plan.resolution, results: [], mainCheckout: await finalMainCheckoutReport() };
   }
 
   // Map every in-batch branch to the slug that produces it. A dependent task's
@@ -3833,7 +3902,7 @@ try {
   // reader than an unwound stack. `finalMainCheckoutReport` cannot throw, so
   // this exit always carries a report — an unmeasured one if the reading failed.
   phase("Summary");
-  return { error: `Batch aborted: ${e && e.message ? e.message : String(e)}`, batch: args, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), throttled, collisions, results, mainCheckout: await finalMainCheckoutReport() };
+  return { error: `Batch aborted: ${e && e.message ? e.message : String(e)}`, batch: args, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), throttled, collisions, resolution: plan && plan.resolution ? plan.resolution : null, results, mainCheckout: await finalMainCheckoutReport() };
 }
 
 phase("Summary");
@@ -3856,4 +3925,4 @@ const deviations = results.flatMap((r) => (Array.isArray(r.deviations) ? r.devia
 // read here without it is one the maintainer would rule on knowing only what
 // the implementer said.
 const deviationAssessments = results.flatMap((r) => (Array.isArray(r.deviationAssessments) ? r.deviationAssessments : []));
-return { batch: args, defaultBase: plan.defaultBase, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), waves: plan.waves.length, throttled, collisions, mainCheckout, openQuestions, deviations, deviationAssessments, results };
+return { batch: args, defaultBase: plan.defaultBase, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), waves: plan.waves.length, throttled, collisions, resolution: plan.resolution, mainCheckout, openQuestions, deviations, deviationAssessments, results };

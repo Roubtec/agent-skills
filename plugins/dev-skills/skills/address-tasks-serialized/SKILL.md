@@ -5,9 +5,19 @@ description: Execute a batch of pre-planned task files end to end, strictly sequ
 
 Implement the given task or a set of tasks using a delegated subagent workflow.
 
-**Arguments:** `<glob-or-file-list of task files to implement> [peer-opinions=off]`
+**Arguments:** `<mixed-list of task numbers, task-file paths, and globs to implement> [peer-opinions=off]`
 
 `peer-opinions=off` is the only accepted explicit peer-opinion setting. Omit it to use the default, which enables best-effort peer opinions.
+
+## Task-pointer preflight
+
+Before reading task dependencies, run `resolve-tasks` in a fresh resolution subagent with its own context window. Hand it the complete raw task-pointer list, have it follow the shared resolver contract, and consume its task-resolution packet; do not scavenge or re-resolve task filenames in the orchestrator's context.
+
+Use the packet's `selectedBy` provenance to apply policy. A path selected by an explicit path or glob executes exactly as it did before this additive preflight, whatever its `active`, `done`, `deferred`, or `ambiguous` report context; if both explicit and number provenance selected it, explicit selection wins. A number-selected unambiguous `active` path executes normally. An unmatched number, path, or glob never executes and its `not-found` diagnostic is always surfaced.
+
+In an interactive run, show the resolved mapping before executing a bare-numbers invocation. Require an explicit continue decision when any number-selected full number is `done`, `deferred`, or `ambiguous`, or when any input is `not-found`: `done` means already delivered and is skipped unless the maintainer explicitly includes it; `deferred` means deliberately unscheduled and needs explicit inclusion; for each `ambiguous` number, ask the maintainer to select exactly one candidate or exclude that number — a blanket continue must never include every candidate. Explicit path/glob selections remain executable while this decision is made.
+
+In a hands-off run, execute only the number-selected unambiguous `active` paths plus every explicit path/glob selection. Exclude and document every number-selected `done`, `deferred`, or `ambiguous` classification and every `not-found` input; never guess an ambiguous number. Carry the complete mapping and exclusions into the run summary.
 
 ## Architecture
 
@@ -35,7 +45,7 @@ You own the overall workflow.
 You MUST NOT do implementation work yourself (except for the trivial-task escape hatch above).
 Your responsibilities are:
 
-1. Resolve the input arguments to a list of task files.
+1. Consume the **Task-pointer preflight** packet as the hard list of task files and the resolution context to report.
 2. Read each task file enough to understand dependencies and sequencing — do not deeply analyze implementation details.
 3. Manage branch creation and PR base determination.
 4. Construct focused prompts and spawn subagents **one at a time** — implementer, await its result, then a fresh reviewer — for each task. The rule is that the reviewer does not start until its implementer's commits are on disk, so wait for the completion notification; keeping the two out of one turn is the **proxy** for that, not the rule (see the shared-working-tree rule above).

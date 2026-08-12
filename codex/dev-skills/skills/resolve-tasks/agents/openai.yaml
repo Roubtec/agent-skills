@@ -1,0 +1,4 @@
+interface:
+  display_name: "Resolve Tasks"
+  short_description: "Resolve task numbers, paths, and globs"
+  default_prompt: "Use $resolve-tasks to resolve these task pointers without modifying task files: <numbers-paths-or-globs>."
