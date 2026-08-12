@@ -190,7 +190,7 @@ const PACKET_SCHEMA = {
       },
     },
   },
-  required: ["ok", "items", "rebaseTarget"],
+  required: ["ok", "items"],
 };
 
 // What one rebase point hands back. `effectiveBase` is the field the rest of
@@ -287,8 +287,9 @@ function shq(s) {
 // object or stop resolving at all, and a 7-character hex string is also a legal
 // branch name — which is the very thing a pinned base may not be. Every
 // delegation range this run hands out is taken against a value that passed
-// this, whether the rebase phase pinned it or `no-rebase` pinned the base ref
-// the gather resolved.
+// this, whether the rebase phase pinned it or `no-rebase` pinned the commit
+// the gather resolved this run's target to — the target an explicit
+// `rebase on top of <target>` named, else the PR's base ref.
 function isFullOid(s) {
   return /^(?:[0-9a-f]{40}|[0-9a-f]{64})$/.test(s);
 }
@@ -1002,7 +1003,26 @@ if (!packet.items || packet.items.length === 0) {
 // is a redundant-but-legal request whose two names are equal, and inferring
 // would hand it the default arm, sending a fetch at the base repository for a
 // ref the maintainer named here, in the working location.
-const explicitRebaseTarget = typeof packet.rebaseTarget === "string" ? packet.rebaseTarget.trim() : "";
+// The echo is owed on every packet, and its ABSENCE is a contract violation
+// rather than "the request named none": the caller reads this field alone, and
+// since it also decides the review base on the `no-rebase` path, a silent
+// fallback is a wrong boundary for every range this run delegates and not only
+// a wrong rebase target. Checked HERE rather than in the schema's `required`,
+// and for the reason `PUBLISH_SCHEMA` records against itself: a packet that
+// misses validation reaches the caller as nothing at all, so requiring this
+// echo would take a blocker packet's `blocker` and `pr.worktree` down with it —
+// the only channel that reports a worktree a halted run left standing. An
+// omitted field is distinguishable from an empty one here, so the guard costs
+// nothing that the schema would have risked.
+if (typeof packet.rebaseTarget !== "string") {
+  return {
+    status: "gather-contract",
+    pr: packet.pr,
+    detail: "The gather reported no `rebaseTarget` at all. That field is the run's only record of whether an explicit `rebase on top of <target>` token was given, and an absent one cannot be told apart from a target the caller must honor — on a `no-rebase` run it decides the review base too, so continuing would bound every delegated range at the PR's base ref on a request that may have named another target.",
+    note: "Nothing was addressed and nothing was pushed. Re-run: the gather must report `rebaseTarget` on every packet, as the empty string where the request named no target.",
+  };
+}
+const explicitRebaseTarget = packet.rebaseTarget.trim();
 const rebaseTargetRef = explicitRebaseTarget || packet.pr.base;
 const rebaseRecord = {
   target: rebaseTargetRef,

@@ -113,7 +113,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 133;
+const EXPECTED_CHECKS = 136;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -359,6 +359,11 @@ const ITEM = {
 function gathered({ workingBranch = "feature/x", items = [], reconcile, locationMode = "inline", worktree, baseOid = GATHERED_BASE_OID }) {
   const packet = {
     ok: true,
+    // Every `ok: true` gather owes this echo — empty where the request named no
+    // target — and the caller stops a run that omits it, since an absent token
+    // cannot be told apart from one it must honor. Scenarios that exercise a
+    // named target override it; the default is the ordinary "none named" run.
+    rebaseTarget: "",
     pr: {
       number: 42,
       url: "https://example.invalid/pr/42",
@@ -1019,10 +1024,14 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // takes the base-ref arm silently, which since this field became the review
   // base is a wrong boundary rather than only a wrong rebase target.
   check(
-    "and `rebaseTarget` is required of every packet, so an omission cannot read as `the request named none`",
-    /required: \["ok", "items", "rebaseTarget"\]/.test(src) &&
-      /Report the token on EVERY packet, empty string and not omitted/.test(src),
-    "the token is optional again, so a gather that forgets it silently selects the base-ref arm",
+    "and an OMITTED `rebaseTarget` stops the run rather than reading as `the request named none`",
+    /status: "gather-contract"/.test(src) &&
+      /if \(typeof packet\.rebaseTarget !== "string"\)/.test(src) &&
+      /Report the token on EVERY packet, empty string and not omitted/.test(src) &&
+      // Guarded HERE and not in the schema's `required`, which would take a
+      // blocker packet's `blocker` and `pr.worktree` down with the validation.
+      !/required: \["ok", "items", "rebaseTarget"\]/.test(src),
+    "the omission is unguarded again, or it was pushed into the schema where a blocker packet pays for it",
   );
 
   // And that paragraph renders ONLY where its value is consumed. The caller
@@ -1139,6 +1148,18 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       ? `the dispatched brief takes the ${/named outright/.test(explicitBriefDispatched) ? "explicit" : "default"} arm and ${/git fetch /.test(explicitBriefDispatched) ? "still fetches" : "fetches nothing"}`
       : "no rebase brief was dispatched at all",
   );
+  // And the same wiring's failure mode, driven rather than read: a gather that
+  // OMITS the echo must stop the run, not be read as "the request named none".
+  // The two are indistinguishable downstream, and since this field also decides
+  // the review base on the `no-rebase` path, guessing wrong bounds every range
+  // this run delegates at a commit the request never asked for.
+  const echoOmitted = await run({ ...gathered(withWork), rebaseTarget: undefined });
+  check(
+    "and a gather that omits `rebaseTarget` altogether stops the run rather than being read as `the request named none`",
+    echoOmitted.result && echoOmitted.result.status === "gather-contract" && echoOmitted.seen.rebasePrompts.length === 0,
+    `status: ${echoOmitted.result && echoOmitted.result.status}; rebase briefs dispatched: ${echoOmitted.seen.rebasePrompts.length}`,
+  );
+
   // The same wiring where the named target's NAME EQUALS the PR's base ref —
   // `rebase on top of main` on a PR based on `main`. It is redundant but legal,
   // and the likeliest redundant form now that rebasing is the default, so the
@@ -1859,6 +1880,25 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       `${name}: the flag bullet and the hands-off stop list defer to step 2's halt definition instead of restating its cases`,
       deferrals >= 2 && bulletDefers && listDefers,
       `deferrals: ${deferrals}; flag bullet defers: ${bulletDefers}; stop list defers: ${listDefers}`,
+    );
+    // The single-PR skill is where the two-arm `no-rebase` review base was
+    // first stated, and it is the site the same defect keeps returning to: a
+    // `rebase on top of <branch>` target that `no-rebase` did not discard is
+    // what bounds every range, and falling back to `baseRefName` there hands
+    // the reviewer and the peer the underlying branch's own commits as this
+    // PR's diff. Pinned in both mirrors because nothing else reaches this file:
+    // gutted back to one arm, the rest of the suite stays green.
+    const keepsTheStandingTarget = text.includes("A `rebase on top of <branch>` target still standing") &&
+      text.includes("not discarded by `no-rebase`, which suppresses the rebase and not the target");
+    const resolvesItWhereNamed = /resolves where it was named: locally, `git rev-parse --verify/.test(text);
+    const baseRefIsTheOtherArm = text.includes("Otherwise pin `baseRefName`");
+    // ...and the flag rule that an agent reads FIRST must not have told it the
+    // token was simply ignored, or it arrives at step 6 with nothing standing.
+    const flagRuleAgrees = text.includes("for the REBASE only: the token is not discarded");
+    check(
+      `${name}: a \`rebase on top of <branch>\` target survives \`no-rebase\` as the review base, and the flag rule says so too`,
+      keepsTheStandingTarget && resolvesItWhereNamed && baseRefIsTheOtherArm && flagRuleAgrees,
+      `keeps the standing target: ${keepsTheStandingTarget}; resolves where named: ${resolvesItWhereNamed}; base ref is the other arm: ${baseRefIsTheOtherArm}; flag rule agrees: ${flagRuleAgrees}`,
     );
     check(
       `${name}: no prose equates the delegated rebase's halt with an aborted conflict`,

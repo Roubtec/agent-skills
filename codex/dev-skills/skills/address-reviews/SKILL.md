@@ -107,12 +107,13 @@ You are the orchestrator. You do **not** edit the PR branches yourself; delegate
 
 1. Parse the batch into a list of entries, classifying each as a PR number or a branch name (see Arguments); capture the pass-through flag set.
 2. Run the **Session Bootstrap**.
-3. Resolve every entry to a `(local-or-origin branch, PR number)` pair before creating worktrees. De-duplicate aliases for the same PR (for example `#38` plus its branch name), and group different PRs that share one head branch so they run serially rather than contending for the same ref.
-4. **Create one worktree per distinct head branch in the current sub-batch** (see next section). Create a later same-head entry's worktree only after the earlier entry is complete and removed. Skip-and-record any entry that cannot be set up (closed/merged or PR-less, branch checked out elsewhere, unsupported fork branch entry).
-5. Run the per-PR **fix → review → fix-up** loop, bounded by the `review-cycle` round cap, in topological waves for rebase-enabled stacks, with unrelated entries advancing concurrently (see "Per-PR phased subagents": the parent gate, **Descendant invalidation**, and the **Remote-tip refresh guard**).
-6. For entries that pass, spawn `publish-reviewed` subagents parent-before-dependent on a best-effort basis, concurrently for unrelated entries, under the "Publication" rules (the blocked-parent carve-out, honest-diff ping suppression, and merged-parent content gate). If the run is `no-push` (local-only), skip publication and keep each entry's disposition map for a later push.
-7. **Clean up** each worktree once its subagents return (never delete the PR branch).
-8. **Aggregate** every per-PR report into one batch summary, surfacing the hands-off blockers prominently.
+3. **Pin this batch's rebase target**, where the invocation named one, per "For any rebase target…" — once, here, after Bootstrap's fetch and before any entry launches, since every entry's two points and every no-rebase effective base are taken against that one OID.
+4. Resolve every entry to a `(local-or-origin branch, PR number)` pair before creating worktrees. De-duplicate aliases for the same PR (for example `#38` plus its branch name), and group different PRs that share one head branch so they run serially rather than contending for the same ref.
+5. **Create one worktree per distinct head branch in the current sub-batch** (see next section). Create a later same-head entry's worktree only after the earlier entry is complete and removed. Skip-and-record any entry that cannot be set up (closed/merged or PR-less, branch checked out elsewhere, unsupported fork branch entry).
+6. Run the per-PR **fix → review → fix-up** loop, bounded by the `review-cycle` round cap, in topological waves for rebase-enabled stacks, with unrelated entries advancing concurrently (see "Per-PR phased subagents": the parent gate, **Descendant invalidation**, and the **Remote-tip refresh guard**).
+7. For entries that pass, spawn `publish-reviewed` subagents parent-before-dependent on a best-effort basis, concurrently for unrelated entries, under the "Publication" rules (the blocked-parent carve-out, honest-diff ping suppression, and merged-parent content gate). If the run is `no-push` (local-only), skip publication and keep each entry's disposition map for a later push.
+8. **Clean up** each worktree once its subagents return (never delete the PR branch).
+9. **Aggregate** every per-PR report into one batch summary, surfacing the hands-off blockers prominently.
 
 ## Resolving and checking out each entry
 
