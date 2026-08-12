@@ -1752,12 +1752,23 @@ const PEER_LIFECYCLE_CHECKS = 17;
 
   const pluginsProse = readFileSync(join(here, "..", "plugins", "dev-skills", "skills", "review-cycle", "SKILL.md"), "utf8");
   check("the direct Codex provider gets bounded TERM, death verification, safe KILL, and a survivor stop", /send TERM[\s\S]*at most ten seconds[\s\S]*send KILL only if[\s\S]*ten more seconds[\s\S]*stop the cycle and escalate/.test(pluginsProse), "raw Codex lifecycle prose");
+  const futureHelperStart = prose.indexOf("**Future helper conversion, only after both powbox prerequisites land.**");
+  const retainedRawStart = prose.indexOf("**Retained raw launch until both powbox prerequisites land.**");
+  const futureHelperProse = futureHelperStart >= 0 && retainedRawStart > futureHelperStart ? prose.slice(futureHelperStart, retainedRawStart) : "";
   check(
-    "the Claude-provider helper conversion stays deferred until its stable review payload is documented",
+    "the Claude-provider helper conversion is exact, prerequisite-bound, and still leaves raw as the current primary",
     /schema `powbox\.peer-review-run\/v1` must expose the complete provider-neutral review through a documented field such as `reviewFile` or `reviewText`/.test(prose) &&
       /`artifactDir` alone does not identify a stable file/.test(prose) &&
       /Until both prerequisites land, use the direct launch below even when `peer-review-run` is installed/.test(prose) &&
-      !/peer-review-run --provider claude/.test(prose),
+      /The direct launch below remains the current primary path/.test(futureHelperProse) &&
+      /peer-review-run --provider claude --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --model opus --effort medium/.test(futureHelperProse) &&
+      /caller-side tool wait to at least 570 seconds[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(futureHelperProse) &&
+      /require schema `powbox\.peer-review-run\/v1`[\s\S]*reported `model` is `opus` and `effort` is `medium`/.test(futureHelperProse) &&
+      /when the contract supplies `reviewFile`, read that file in full and relay every finding from it verbatim/.test(futureHelperProse) &&
+      /Never infer the review from `artifactDir`/.test(futureHelperProse) &&
+      (prose.match(/peer-review-run --provider claude/g) || []).length === 1 &&
+      retainedRawStart > futureHelperStart &&
+      /nohup claude -p --model opus --effort medium/.test(prose.slice(retainedRawStart)),
     "provider-neutral review payload prerequisite",
   );
   check("the retained Claude launch is direct-PID only and stops on a survivor", /records `\$!` as the direct provider PID[\s\S]*peer_stop_pid[\s\S]*A surviving identity stops the entire cycle/.test(prose) && !/peer_group_alive|peer_signal_group|setsid --fork/.test(prose), "Claude direct-PID lifecycle prose");
