@@ -74,7 +74,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 176;
+const CHECKS_PER_LEG = 177;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -1570,10 +1570,17 @@ for (const name of WORKFLOWS) {
     check("the shared state records completion and leaves no in-progress latch", peerState.preflighted === true && peerState.preflightInProgress === null, JSON.stringify(peerState));
 
     const summarizedPass = async (notes) => {
-      const summaryAgent = async (_prompt, opts) => {
+      const fixPrompts = [];
+      const summaryAgent = async (prompt, opts) => {
         const label = (opts && opts.label) || "";
-        if (label === "fix#1") return { ...PASS_PACKET, changed: true, dispositions: [] };
-        if (label === "fix#2") return { ...idle };
+        if (label === "fix#1") {
+          fixPrompts.push(prompt);
+          return { ...PASS_PACKET, changed: true, dispositions: [] };
+        }
+        if (label === "fix#2") {
+          fixPrompts.push(prompt);
+          return { ...idle };
+        }
         if (label.startsWith("packet#")) return { measured: true, dirty: [], operation: "", detail: "" };
         if (label === "review#1") return { ...OK };
         if (label === "peer-preflight") return { outcome: "available", detail: "" };
@@ -1581,19 +1588,44 @@ for (const name of WORKFLOWS) {
         return null;
       };
       const loaded = loadCycle(src, summaryAgent);
-      return loaded.runReviewCycle({ ...CYCLE, peer: "on" });
+      return { result: await loaded.runReviewCycle({ ...CYCLE, peer: "on" }), fixPrompts };
     };
-    const notedPass = await summarizedPass("- src/example.js:7 — Naming could be clearer.");
+    const noteMarker = "- src/example.js:7 — Naming could be clearer.";
+    const notedPass = await summarizedPass(noteMarker);
     check(
-      "a passing peer note is surfaced compactly in its existing round-detail field",
-      notedPass.verdict === "pass" && notedPass.peerRounds.length === 1 && notedPass.peerRounds[0].detail === "advisory notes:\n- src/example.js:7 — Naming could be clearer.",
-      JSON.stringify(notedPass.peerRounds),
+      "a passing peer note is surfaced compactly but never reaches a fixer or opens another reviewer round",
+      notedPass.result.verdict === "pass" && notedPass.result.rounds === 1 && notedPass.fixPrompts.length === 2 && notedPass.fixPrompts.every((p) => !p.includes(noteMarker)) && notedPass.result.peerRounds.length === 1 && notedPass.result.peerRounds[0].detail === `advisory notes:\n${noteMarker}`,
+      `${JSON.stringify(notedPass.result.peerRounds)} / ${notedPass.result.rounds} round(s) / ${notedPass.fixPrompts.filter((p) => p.includes(noteMarker)).length} fixer leak(s)`,
     );
     const cleanPass = await summarizedPass("");
     check(
       "a clean peer pass keeps the round detail empty and the usual one-line outcome",
-      cleanPass.verdict === "pass" && cleanPass.peerRounds.length === 1 && cleanPass.peerRounds[0].outcome === "passed" && cleanPass.peerRounds[0].detail === "",
-      JSON.stringify(cleanPass.peerRounds),
+      cleanPass.result.verdict === "pass" && cleanPass.result.rounds === 1 && cleanPass.result.peerRounds.length === 1 && cleanPass.result.peerRounds[0].outcome === "passed" && cleanPass.result.peerRounds[0].detail === "",
+      JSON.stringify(cleanPass.result.peerRounds),
+    );
+
+    const issuesNoteMarker = "- src/example.js:8 — Advisory-only marker.";
+    const issuesFixPrompts = [];
+    const issuesAgent = async (prompt, opts) => {
+      const label = (opts && opts.label) || "";
+      if (label.startsWith("fix#")) issuesFixPrompts.push(prompt);
+      if (label === "fix#1") return { ...PASS_PACKET, changed: true, dispositions: [] };
+      if (label === "fix#2") return { ...PASS_PACKET, changed: false, dispositions: [{ findingId: "p1-1", finding: "fix the defect", origin: "peer", disposition: "declined", detail: "reviewed and declined" }] };
+      if (label === "fix#3") return { ...idle };
+      if (label.startsWith("packet#")) return { measured: true, dirty: [], operation: "", detail: "" };
+      if (label.startsWith("review#")) return { ...OK };
+      if (label === "peer-preflight") return { outcome: "available", detail: "" };
+      if (label === "peer#1") return { outcome: "issues", findings: [{ claim: "fix the defect" }], notes: issuesNoteMarker, detail: "" };
+      if (label === "peer#2") return { outcome: "passed", findings: [], notes: "", detail: "" };
+      if (label === "ground#1") return { verdicts: [] };
+      return null;
+    };
+    const issuesLoaded = loadCycle(src, issuesAgent);
+    const issuesResult = await issuesLoaded.runReviewCycle({ ...CYCLE, peer: "on" });
+    check(
+      "advisory notes beside an issues verdict stay in peerRounds and out of every later fixer input",
+      issuesResult.verdict === "pass" && issuesResult.rounds === 2 && issuesResult.peerRounds[0].detail === `advisory notes:\n${issuesNoteMarker}` && issuesFixPrompts.length === 3 && issuesFixPrompts.every((p) => !p.includes(issuesNoteMarker)),
+      `${JSON.stringify(issuesResult.peerRounds)} / ${issuesResult.rounds} round(s) / ${issuesFixPrompts.filter((p) => p.includes(issuesNoteMarker)).length} fixer leak(s)`,
     );
 
     let preflightAttempts = 0;

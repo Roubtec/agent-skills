@@ -401,7 +401,7 @@ const CYCLE_PEER_SCHEMA = {
         required: ["severity", "claim"],
       },
     },
-    notes: { type: "string", description: "Only valid bullets from the optional bounded NOTES section, preserved verbatim; empty for a clean pass." },
+    notes: { type: "string", description: "Only valid bullets from the optional bounded NOTES section, preserved verbatim; empty when no valid advisory bullets survive (including a clean pass)." },
     detail: { type: "string", description: "For a non-passed/issues outcome: why (logged out, timed out after retry, empty output, provider crash...)." },
     reason: { type: "string", description: "The provider/helper reason verbatim; distinguishes empty/garbled forfeitures for the adaptive throttle. Always emit it: an empty string where the outcome carries no reason, never an omitted field." },
     teardownFailure: { type: "boolean", description: "The ONE result that is not non-blocking: true ONLY when a provider process this stage launched could not be proven dead after the bounded TERM/KILL sequence. The cycle stops on it for operator intervention. False on every ordinary path, including this stage's own failures." },
@@ -615,9 +615,6 @@ function cycleFindingsBlock(findings) {
   }
   if (Array.isArray(findings.peer) && findings.peer.length) {
     parts.push(`### Peer (codex) findings\n\n${JSON.stringify(findings.peer, null, 2)}`);
-  }
-  if (findings.peerNotes) {
-    parts.push(`### Peer (codex) notes\n\n${findings.peerNotes}`);
   }
   return parts.length ? `\n## Findings to dispose (each given VERBATIM — reconcile overlap or conflict yourself)\n\nWhere the reviewer and the peer name the SAME fact and differ only in whether it gates, the two channels agree on the substance and split on severity: dispose it on the merits and say which way, rather than re-litigating a fact neither disputes. Framing only — the gate is unchanged, and a grounded finding keeps its full force.\n\n${parts.join("\n\n")}\n` : "";
 }
@@ -2215,7 +2212,6 @@ async function runReviewCycle(cycle) {
         reviewer: [...(review.issues || []), ...assessmentIssues].map((f, i) => ({ ...f, id: `r${rounds}-${i + 1}` })),
         reviewerNotes: review.notes || "",
         peer: peerGating.map((f, i) => ({ ...f, id: `p${rounds}-${i + 1}` })),
-        peerNotes: peer.notes || "",
       };
       // A failed round at the cap stops HERE — no further fixer pass may run,
       // or its changes would land committed but never reviewed.
@@ -2272,13 +2268,14 @@ async function runReviewCycle(cycle) {
     if (cycle.mode === "light") {
       return result("pass", "reviewer passed (light mode: final confirmation pass skipped)", {
         ...flakeCarried,
-        undisposed: [review.notes, peer.notes].filter(Boolean),
+        undisposed: [review.notes].filter(Boolean),
       });
     }
 
-    // Full mode: one final fixer confirmation pass over the passing reports, so
-    // pass-notes get considered by an agent with full context, never dropped by
-    // the orchestrator. If it disposes nothing new, the loop terminates above;
+    // Full mode: one final fixer confirmation pass over the passing reviewer's
+    // remarks. Peer pass-notes remain advisory output in `peerRounds`: they are
+    // never fixer input and therefore cannot cause edits or another round. If
+    // the confirmation disposes nothing new, the loop terminates above;
     // anything it fixes or disputes goes through another reviewer round.
     confirming = true;
     findings = {
@@ -2286,7 +2283,6 @@ async function runReviewCycle(cycle) {
       reviewer: [],
       reviewerNotes: review.notes || "(no notes — confirm nothing in the passing reports needs acting on)",
       peer: [],
-      peerNotes: peer.notes || "",
     };
   }
 }
