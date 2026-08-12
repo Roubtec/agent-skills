@@ -113,7 +113,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 136;
+const EXPECTED_CHECKS = 139;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -359,10 +359,13 @@ const ITEM = {
 function gathered({ workingBranch = "feature/x", items = [], reconcile, locationMode = "inline", worktree, baseOid = GATHERED_BASE_OID }) {
   const packet = {
     ok: true,
-    // Every `ok: true` gather owes this echo — empty where the request named no
-    // target — and the caller stops a run that omits it, since an absent token
-    // cannot be told apart from one it must honor. Scenarios that exercise a
-    // named target override it; the default is the ordinary "none named" run.
+    // Every `ok: true` gather WITH ITEMS owes this echo — empty where the
+    // request named no target — and the caller stops a run that omits it, since
+    // an absent token cannot be told apart from one it must honor. An empty
+    // gather owes nothing: its no-op exit runs ahead of the guard, and the
+    // scenario below pins that, since with every fixture carrying the field a
+    // guard moved ahead of the no-op would leave this suite green. Scenarios
+    // that exercise a named target override it; the default is "none named".
     rebaseTarget: "",
     pr: {
       number: 42,
@@ -1135,7 +1138,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     JSON.stringify(clean.seen.cycleOpts && clean.seen.cycleOpts.opts && clean.seen.cycleOpts.opts.base),
   );
   // The default target is the PR's base ref; an explicit
-  // `rebase on top of <branch>` token is a ref of the maintainer's, and the two
+  // `rebase on top of <target>` token is a ref of the maintainer's, and the two
   // are resolved in different places (the brief's two arms are read directly
   // below). WHICH arm a run gets is the caller's to say, so the wiring is read
   // here rather than only the builder: the gather reports the token in
@@ -1151,6 +1154,19 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       ? `the dispatched brief takes the ${/named outright/.test(explicitBriefDispatched) ? "explicit" : "default"} arm and ${/git fetch /.test(explicitBriefDispatched) ? "still fetches" : "fetches nothing"}`
       : "no rebase brief was dispatched at all",
   );
+  // The other side of that guard, and the reason it sits where it does: an
+  // EMPTY successful gather owes no echo, because the terminal no-op exit runs
+  // ahead of the guard and finishes the run before anything reads the field.
+  // Driven, because every other fixture carries `rebaseTarget` and so a guard
+  // hoisted ahead of that exit would turn this legitimate no-op into a stop
+  // with the whole suite still green.
+  const emptyWithoutEcho = await run({ ...gathered({ reconcile: { outcome: "work" } }), rebaseTarget: undefined });
+  check(
+    "but an EMPTY gather owes no echo — the terminal no-op finishes ahead of the guard rather than stopping on it",
+    emptyWithoutEcho.result && emptyWithoutEcho.result.status === "no-op",
+    `status: ${emptyWithoutEcho.result && emptyWithoutEcho.result.status}`,
+  );
+
   // And the same wiring's failure mode, driven rather than read: a gather that
   // OMITS the echo must stop the run, not be read as "the request named none".
   // The two are indistinguishable downstream, and since this field also decides
@@ -1774,7 +1790,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
 
   // And the other half of "the repository that ref lives in": that clause is
   // true of the DEFAULT target, which is the PR's base ref, and false of an
-  // explicit `rebase on top of <branch>` token, which names whatever the
+  // explicit `rebase on top of <target>` token, which names whatever the
   // maintainer named — routinely a local branch, or one in the head fork.
   // `git fetch <repository> <refspec>` reads the refspec in the repository
   // operand, so rendering the paragraph above for an explicit target either
@@ -1886,12 +1902,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     );
     // The single-PR skill is where the two-arm `no-rebase` review base was
     // first stated, and it is the site the same defect keeps returning to: a
-    // `rebase on top of <branch>` target that `no-rebase` did not discard is
+    // `rebase on top of <target>` target that `no-rebase` did not discard is
     // what bounds every range, and falling back to `baseRefName` there hands
     // the reviewer and the peer the underlying branch's own commits as this
     // PR's diff. Pinned in both mirrors because nothing else reaches this file:
     // gutted back to one arm, the rest of the suite stays green.
-    const keepsTheStandingTarget = text.includes("A `rebase on top of <branch>` target still standing") &&
+    const keepsTheStandingTarget = text.includes("A `rebase on top of <target>` target still standing") &&
       text.includes("not discarded by `no-rebase`, which suppresses the rebase and not the target");
     const resolvesItWhereNamed = /resolves where it was named: locally, `git rev-parse --verify/.test(text);
     const baseRefIsTheOtherArm = text.includes("pin `baseRefName`, resolved exactly as the rebasing path's default target is");
@@ -1904,7 +1920,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // token was simply ignored, or it arrives at step 6 with nothing standing.
     const flagRuleAgrees = text.includes("for the REBASE only: the token is not discarded");
     check(
-      `${name}: a \`rebase on top of <branch>\` target survives \`no-rebase\` as the review base, and the flag rule says so too`,
+      `${name}: a \`rebase on top of <target>\` target survives \`no-rebase\` as the review base, and the flag rule says so too`,
       keepsTheStandingTarget && resolvesItWhereNamed && baseRefIsTheOtherArm && failureIsNotTheBaseRef && flagRuleAgrees,
       `keeps the standing target: ${keepsTheStandingTarget}; resolves where named: ${resolvesItWhereNamed}; base ref is the other arm: ${baseRefIsTheOtherArm}; a failed resolution stops rather than falling back: ${failureIsNotTheBaseRef}; flag rule agrees: ${flagRuleAgrees}`,
     );
@@ -2035,6 +2051,18 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         !/guaranteed no-op for a named target/.test(text) &&
         text.includes("never a reason for you not to spawn it"),
       "the named target is re-resolved per point, a site still falls back to `baseRefName` under `no-rebase`, or the second point is claimed to be a guaranteed no-op",
+    );
+    // This file's frontmatter `description` is the longest in the repository and
+    // this branch grew it twice. It is what the harness loads the skill by, and
+    // nothing else here measures it, so the next clause anyone appends would
+    // break loading with the suite green. The cap is 1024; the margin is what
+    // makes the check useful rather than a tripwire that fires on the change
+    // that breaks it.
+    const description = (text.match(/^description: (.*)$/m) || [])[1] || "";
+    check(
+      `${name}: the frontmatter description stays clear of the 1024-character load limit`,
+      description.length > 0 && description.length <= 1000,
+      `description is ${description.length} characters`,
     );
   }
 }
