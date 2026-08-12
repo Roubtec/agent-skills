@@ -238,11 +238,18 @@ const REBASE_SCHEMA = {
   required: ["ok", "halted", "noop", "detail"],
 };
 
+// The publisher's stop when its own read-back could not establish that the ref
+// moved (the push recipe at step 2 of the brief below). Authored here because
+// three places must agree on it byte for byte: the step that tells the publisher
+// to report it, the schema that enumerates it, and the disposition record, whose
+// push claims are the ones it withdraws.
+const PUSH_UNCONFIRMED_ABORT = "push not confirmed at the ref";
+
 const PUBLISH_SCHEMA = {
   type: "object",
   properties: {
     published: { type: "boolean", description: "True only if the push AND every required reply/resolve/summary/ping step succeeded. False if any guard (moved head, unmatched remote, rejected lease, failed comment) aborted publication. The caller accepts it only over a report that can SUPPORT it — an account of every item it can read, and the `summaryCommentUrl` of the Summary comment this step ends with. Claimed over less, the run reports an incomplete publication, keeps its worktree, and leaves its disposition record: a completion nobody can check is not a completion." },
-    aborted: { type: "string", description: "Why publication stopped, when published is false (e.g. `head moved`, `working location moved off the branch`, `lease rejected`, `local behind PR head`, `off-shoot does not carry the PR head`, `push remote unmatched`). Empty when published. Write it: the run's own note carries this reason inline, so an omitted one reads as `no reason reported` there." },
+    aborted: { type: "string", description: "Why publication stopped, when published is false (e.g. `head moved`, `working location moved off the branch`, `lease rejected`, `local behind PR head`, `off-shoot does not carry the PR head`, `push remote unmatched`, `" + PUSH_UNCONFIRMED_ABORT + ": <what each URL returned>`). Empty when published. Write it: the run's own note carries this reason inline, so an omitted one reads as `no reason reported` there." },
     pushed: { type: "boolean", description: "Whether a push command SUCCEEDED — an `Everything up-to-date` no-op counts, since it leaves the remote pointing at this tip. False when none was attempted, or when one was rejected or failed. This is NOT evidence that anything this run did reached origin: a no-op push changed nothing there, so `pushedNewCommits` is what says the remote moved." },
     pushedNewCommits: { type: "boolean", description: "True ONLY if the push actually advanced the remote branch — new commits or rewritten history. False when no push happened or for a no-op `Everything up-to-date` push. Gates whether the re-review pings may fire, and it is the push half of what a disposition record may call landed." },
     threadOutcomes: {
@@ -684,6 +691,28 @@ You may reclassify any item.`;
 // re-verifies that the checkout still stands on `workingBranch`, which is what
 // makes the NAME both gates key on a present fact rather than a record taken
 // before the fixes landed.
+//
+// Two of task 023's GitHub-reliability recipes are rendered INLINE here — the
+// push read-back at step 2, the reviewer-request confirmation at step 6 — and
+// that is the answer to 023a's prior question rather than an assumption. This
+// workflow is a peer ENTRY POINT to the `address-review` skill, not a driver
+// whose subagents have read it: it registers its own command, and no brief it
+// renders names a file under `skills/` — this publication brief included. So a
+// pointer was rejected, exactly as it was for `DESTROY_BOUNDARY` and the
+// delegated rebase nugget above: a brief handed to a subagent that has read
+// nothing else must be self-contained.
+// Each is the instruction and its one settling read and no more (task 044), and
+// each is pinned against the skill's own sentence in
+// `test-address-review-reconcile.mjs`. That pin is on the PHRASES the two sides
+// share and claims no more: it fails a rewording that drops one on either side,
+// and it MISSES a rewrite that keeps every pinned phrase while reversing what
+// they say — the same hole README states of its own `FETCH_HEAD` pins, and for
+// the same reason, so polarity here is the reviewer's to hold rather than the
+// pin's. The other three recipes get no text: item 5 is
+// already satisfied by steps 1 and 3 re-fetching the PR before the push and
+// re-reading the threads after, so restating it would be the copy commit
+// 390156a declined, and items 3 and 4 are pre-merge check polling and
+// `gh pr merge --delete-branch`, which nothing in this pipeline performs.
 function publishPrompt(packet, dispositions, flags, deviations, deviationAssessments, recordOnly, preRebaseRecordOnly) {
   const dev = Array.isArray(deviations) ? deviations : [];
   const assessments = Array.isArray(deviationAssessments) ? deviationAssessments : [];
@@ -744,6 +773,8 @@ Report a STRUCTURED result: set \`published: true\` ONLY if the push and every r
    - Then, BEFORE any lease, establish that the expected tip is REPRESENTED in what you are about to push. This is the off-shoot's gate: where the branch you addressed is not the PR's head ref (\`workingBranch\` \`${packet.pr.workingBranch}\` against head ref \`${packet.pr.branch}\`) the gather step skipped reconciliation WHOLE — "behind the PR head" is that case's normal state — so nothing in this run has yet compared the two tips. Run \`git rev-list --right-only --cherry-pick HEAD...${shq(packet.pr.headOid)}\`, the reconciliation's own probe (patch-id rather than raw ancestry, so a branch rebased onto a newer base still reads as carrying the head), and require it to print NOTHING. Whatever it prints is work the recorded head carries and this push would delete, and no lease protects it: the recorded OID is exactly what the remote still points at, so the lease MATCHES, the push succeeds, and the PR branch is rewound over commits this run never saw. Set \`published: false\`, \`aborted: "off-shoot does not carry the PR head"\`, and STOP without pushing, naming BOTH tips — the expected tip \`${packet.pr.headOid}\` and the HEAD you would have pushed — and every commit the probe printed. Do NOT fast-forward, merge, rebase or otherwise reconcile the off-shoot to make the push legal: that state goes back to the maintainer, exactly as the reconciliation's third outcome does. One shape reaches this stop with nothing actually lost: an off-shoot that carried the head until this run's own rebase flattened a merge commit the head carries — content replayed, patch-id gone — so the probe prints that merge. Report it the same way rather than filtering merges out, which is the trade the reconciliation's own probe already makes: one extra ask where a UI \"Update branch\" merge is in the head, against never silently dropping what such a merge resolved. Where the two names are the SAME, this is already settled — the reconciliation established representation before any fix landed, and item 1 has just re-verified both that the head has not moved since and that the checkout still stands on that same branch — the name is therefore a present fact rather than a record from the start of the run — so run no probe there and go on.
    - Then, if the expected tip is an ancestor of HEAD, normal push (\`git push <remote> HEAD:refs/heads/${shq(packet.pr.branch)}\`).
    - OTHERWISE — every remaining state, whether or not this run rewrote history (rebased: ${packet.pr.rebased ? "yes" : "no"}) — use an exact lease: \`git push <remote> --force-with-lease=refs/heads/${shq(packet.pr.branch)}:${shq(packet.pr.headOid)} HEAD:refs/heads/${shq(packet.pr.branch)}\`. The remainder is deliberately not "history was rewritten": a tip carrying the expected head by patch-id without having it as an ancestor is the ordinary result of a rebase, and it reaches this same instruction whether that rebase happened in this run or before it. If the lease is rejected, NEVER escalate to bare \`--force\`; set \`published: false\`, \`aborted: "lease rejected"\`, and stop.
+
+   Then, whichever push ran, confirm what actually LANDED against the ref itself rather than from \`gh pr view --json headRefOid\`, which can still report the pre-push head for a while after the push returns: run one \`git ls-remote "<url>" refs/heads/${shq(packet.pr.branch)}\` for each URL \`git remote get-url --push --all <remote>\` lists, and require every one of them to come back with the HEAD you pushed. Read those push URLs back one at a time rather than the remote NAME: \`git push\` writes to EVERY configured push URL, plain \`--push\` names only the first, and where a remote carries a distinct \`pushurl\` the name reads a repository the push never wrote to. \`git ls-remote\` is observational and exits 0 even when it prints nothing, so an absent ref, a disagreeing OID, or a URL you could not reach is a stop rather than a pass: set \`published: false\` and \`aborted: "${PUSH_UNCONFIRMED_ABORT}: <what each URL returned>"\` — the phrase LEADS that field and the per-URL evidence rides after it in the SAME one, which is the only field this schema has for the reason: the record this run leaves quotes this field verbatim, and its status line is required to say what each push URL returned. Report \`pushed\`/\`pushedNewCommits\` as what your push COMMAND itself reported and nothing more: whether the ref MOVED is exactly the fact this read-back failed to establish, so do not set either flag to stand for it in either direction — that abort is what says it is unestablished, and it is read ahead of both.
 3. Re-read unresolved threads after the push. Do not mutate newly-arrived feedback that was not triaged this run — leave it open and call it out.
 4. Per-item hygiene for each disposition:
    - \`review-thread\` items: reply via REST \`pulls/.../comments/<commentId>/replies\`, resolve via GraphQL \`resolveReviewThread\` on \`threadId\`:
@@ -755,7 +786,7 @@ Report a STRUCTURED result: set \`published: true\` ONLY if the push and every r
    - \`standalone\` items (no thread to resolve): address them only in the Summary comment below; do NOT call \`resolveReviewThread\`. Record their outcome by \`url\`.
    Avoid duplicate replies (check for an equivalent prior reply by the authed user); resolve only after the reply succeeds.
 5. Summary comment: post a top-level "Summary of Review Fixes" (\`gh pr comment\`) — ${dev.length ? "opening with the locked-decision deviation section defined below, then " : ""}what was fixed (with proactive same-pattern fixes), a prominent "Pushed back — please re-examine" section, a "Deferred to follow-up tasks" section listing each deferral with its committed task file (agent-proposed deferrals flagged for confirmation), and any ambiguous/skipped or newly-arrived items${recordOnly || preRebaseRecordOnly ? ", plus the delivery-run failure section defined below" : ""}. Write "codex"/"claude"/"copilot" plain (no bare @-mentions) so only the dedicated pings below trigger a re-review. Put its URL in \`summaryCommentUrl\`.
-6. Pings (only after push + summary succeeded, AND only when the push ACTUALLY advanced the remote branch with new commits or rewritten history — never on an \`Everything up-to-date\` no-op push): ${flags.pingCodex ? "post a dedicated comment \`@codex review\`. " : ""}${flags.pingClaude ? "post a dedicated comment \`@claude review\`. " : ""}${flags.pingCopilot ? "request a fresh Copilot review with \`gh pr edit <PR#> --add-reviewer @copilot\` (the canonical CLI request; needs gh >= 2.88.0). Do NOT post an \`@copilot review\` comment — a bare \`@copilot\` mention drives Copilot's coding agent (it can start editing the branch), not its reviewer. The add-reviewer request re-triggers Copilot's review even on a PR it already reviewed (tested working — not a silent no-op), and never misfires into the coding agent. GUARD: before issuing it, confirm the installed \`gh\` supports the \`@copilot\` reviewer value (gh >= 2.88.0 — e.g. check \`gh --version\`); on an older powbox base image where \`gh pr edit --add-reviewer @copilot\` errors, SKIP the Copilot request WITHOUT failing publication — the push and summary already succeeded, so this is non-fatal: keep \`published: true\`, record it in \`pings\` as 'copilot: skipped (gh too old)', and note that the base image needs refreshing (\`agent-update\`) or a one-off manual re-request from the PR's web reviewer menu." : ""}${!flags.pingCodex && !flags.pingClaude && !flags.pingCopilot ? "none requested. " : "If more than one ping was requested, perform each as its own dedicated action (never one comment mentioning several bots). "}If nothing new was pushed this run (the remote ref already pointed at your HEAD — e.g. every disposition was already-addressed/push-back, or the branch was up to date), SKIP all pings even if requested above: re-requesting a review with nothing new to look at would spin the review->address->review loop forever. Set \`pushedNewCommits\` to whether the push advanced the branch, and record which pings (if any) you posted in \`pings\`.${deviationLead}${flakeRecord}
+6. Pings (only after push + summary succeeded, AND only when the push ACTUALLY advanced the remote branch with new commits or rewritten history — never on an \`Everything up-to-date\` no-op push): ${flags.pingCodex ? "post a dedicated comment \`@codex review\`. " : ""}${flags.pingClaude ? "post a dedicated comment \`@claude review\`. " : ""}${flags.pingCopilot ? "request a fresh Copilot review with \`gh pr edit <PR#> --add-reviewer @copilot\` (the canonical CLI request; needs gh >= 2.88.0). Do NOT post an \`@copilot review\` comment — a bare \`@copilot\` mention drives Copilot's coding agent (it can start editing the branch), not its reviewer. The add-reviewer request re-triggers Copilot's review even on a PR it already reviewed (tested working — not a silent no-op), and never misfires into the coding agent. GUARD: before issuing it, confirm the installed \`gh\` supports the \`@copilot\` reviewer value (gh >= 2.88.0 — e.g. check \`gh --version\`); on an older powbox base image where \`gh pr edit --add-reviewer @copilot\` errors, SKIP the Copilot request WITHOUT failing publication — the push and summary already succeeded, so this is non-fatal: keep \`published: true\`, record it in \`pings\` as 'copilot: skipped (gh too old)', and note that the base image needs refreshing (\`agent-update\`) or a one-off manual re-request from the PR's web reviewer menu. CONFIRM the request you issued from the TIMELINE, never from \`gh pr view --json reviewRequests\`: that GraphQL-backed field reads back empty on a request that succeeded, and REST \`gh api repos/{owner}/{repo}/pulls/<PR#>/requested_reviewers\` lists one only while it is still pending, so it can confirm a request but never refute one — the durable evidence is a \`review_requested\` event in \`gh api --paginate repos/{owner}/{repo}/issues/<PR#>/timeline\`. Snapshot the \`id\`s of the events naming that reviewer BEFORE issuing the request and afterwards require one that is NOT in that snapshot, matching by event id rather than against your own clock, and paginate BOTH reads. Where no unseen event appears, record it in \`pings\` as 'copilot: requested, unconfirmed' and carry on with whatever pings remain: do not fail publication, and do NOT issue the request again." : ""}${!flags.pingCodex && !flags.pingClaude && !flags.pingCopilot ? "none requested. " : "If more than one ping was requested, perform each as its own dedicated action (never one comment mentioning several bots). "}If nothing new was pushed this run (the remote ref already pointed at your HEAD — e.g. every disposition was already-addressed/push-back, or the branch was up to date), SKIP all pings even if requested above: re-requesting a review with nothing new to look at would spin the review->address->review loop forever. Set \`pushedNewCommits\` to whether the push advanced the branch, and record which pings (if any) you posted in \`pings\`.${deviationLead}${flakeRecord}
 
 ## Dispositions to publish
 
@@ -893,13 +924,33 @@ function recordPrompt(packet, dispositions, facts) {
     },
   });
   const pushCase = UNKNOWN_BY_PUSH[facts.pushState] || UNKNOWN_BY_PUSH.unknown;
+  // A push whose own read-back did not CONFIRM the ref is none of the cases
+  // above: `git push` returned, so the tips may be on origin, and every line
+  // this record would otherwise print asserts their absence — "published
+  // NOTHING", `not published`, LOCAL ONLY, and the warning about commits that
+  // are not there. All of them come from this ONE entry, the way the three push
+  // states' do, because that is what stopped those drifting apart. It defers to
+  // the two cases that already claim less or more precisely: an unusable
+  // account, which knows nothing about the push either, and a part-way
+  // publication, whose lines name what the account CONFIRMED reaching origin —
+  // never this push, which the caller withholds from `landed` for that reason.
+  const unconfirmedPush = facts.pushUnconfirmed && !unknown && !landed
+    ? {
+        lead: `This run's publication PUSHED and could not CONFIRM that push at the ref: ${facts.why} So this record says whether the push reached origin is UNKNOWN rather than calling its tips local-only — the two lines below marked for that case are the ones that differ.`,
+        status: "UNKNOWN whether its push reached origin, and nothing else was published",
+        origin: "whether this run's push reached origin is UNKNOWN — `git push` returned and the read-back at the ref did not confirm the ref moved, so read the ref itself before treating the tips above as either published or local, while no reply, resolve or Summary comment reached the PR",
+        reader: " — a reader who takes this record for \"nothing reached origin\" treats these tips as unpushed when the ref may already carry them",
+      }
+    : null;
   return `Leave this run's disposition record on PR #${packet.pr.number} (branch \`${packet.pr.workingBranch}\`). ${unknown
     ? `${pushCase.lead}: ${facts.why} ${pushCase.claims} — the lines below marked for that case say what is unknown, and every thread entry carries the same reservation.`
     : landed
       ? `This run's publication stopped with PART OF THIS MAP ALREADY ON THE PR: ${facts.why} So this record says what is on it rather than "not published", and its tips are ${facts.pushState === "advanced" || facts.pushState === "noop"
         ? "NOT local-only"
         : "still LOCAL-ONLY — replies and resolves land through the API without a push, and this run's own account reports no successful push, so what is on the PR does not put these tips on origin"} — the two lines below marked for that case are the ones that differ. What is named as having reached origin is what the PR CARRIES, whichever run put it there — a reply an earlier run posted counts — so write it as that rather than as an account of this run's own writes.`
-      : `This run published NOTHING: ${facts.why}`} Read \`AGENTS.md\` / \`CLAUDE.md\` first.
+      : unconfirmedPush
+        ? unconfirmedPush.lead
+        : `This run published NOTHING: ${facts.why}`} Read \`AGENTS.md\` / \`CLAUDE.md\` first.
 
 ${where}
 
@@ -921,7 +972,7 @@ The body, marker first (the marker line is what step 1 of the next run matches, 
 \`\`\`
 <!-- address-review:disposition-record -->
 # address-review packet — PR #${packet.pr.number} (${packet.pr.workingBranch})
-status: ${unknown ? pushCase.status : landed ? "published in part" : "not published"} (<the reason above, one line${unknown ? ", saying which facts are missing" : landed ? ", saying what landed and what did not" : ""}>)
+status: ${unknown ? pushCase.status : landed ? "published in part" : unconfirmedPush ? unconfirmedPush.status : "not published"} (<the reason above, one line${unknown ? ", saying which facts are missing" : landed ? ", saying what landed and what did not" : unconfirmedPush ? ", saying what each push URL returned" : ""}>)
 starting HEAD ${facts.startingHead || "(not recorded — neither the gather nor a rebase point reported one)"} | final HEAD ${judgedTip || "<the tip you read>"} | recorded headRefOid ${packet.pr.headOid}
 base ${packet.pr.base} | validation <what ran> | reviewer ${facts.reviewerStatus || (facts.reviewerPassed ? "Pass" : "did NOT pass")} (${facts.rounds} round(s)) | peer <participation>
 ${unknown
@@ -932,9 +983,11 @@ ${unknown
         : facts.pushState === "noop"
           ? " — and the tips above are already on origin, this run having put nothing there: its push was an \`Everything up-to-date\` no-op"
           : " — and the tips above are still LOCAL-ONLY: what landed rode the API with no successful push, so nothing of the branch is on origin"}`
-      : facts.pushNoop
-        ? "this run changed NOTHING on origin: its push was an `Everything up-to-date` no-op, so the tips above are already on origin while no reply, resolve or Summary comment reached it"
-        : "the tips above are LOCAL ONLY — this run pushed nothing, so they are not on origin"}
+      : unconfirmedPush
+        ? unconfirmedPush.origin
+        : facts.pushNoop
+          ? "this run changed NOTHING on origin: its push was an `Everything up-to-date` no-op, so the tips above are already on origin while no reply, resolve or Summary comment reached it"
+          : "the tips above are LOCAL ONLY — this run pushed nothing, so they are not on origin"}
 
 ## Threads
 [<disposition>] <path>:<line>  <author>  thread=<threadId or url>
@@ -960,7 +1013,9 @@ ${incomplete
     ? " — a reader who takes this record for \"nothing was published\" either re-posts a reply that already landed or never posts one that did not"
     : landed
       ? " — a reader who takes a part-way publication for a complete one stops looking for the replies that never landed"
-      : " — a reader who takes those SHAs for origin's goes looking for commits that are not there"}.${perThread.length
+      : unconfirmedPush
+        ? unconfirmedPush.reader
+        : " — a reader who takes those SHAs for origin's goes looking for commits that are not there"}.${perThread.length
     ? `\n- Every thread keeps its entry and its verbatim reply, this run's stopped publication included — and each entry says WHERE IT STANDS. That standing is NOT yours to derive: the lines below are already matched to the dispositions by the identity publication routes on (\`thread=<threadId or url>\`, never \`ref\` — file:line plus author is shared by two threads a re-review left on one line, so it identifies neither). Copy each line's standing onto the entry it names, above that entry's verbatim reply body, and change nothing else:\n${perThread.map((l) => `  ${l}`).join("\n")}\n  Never drop an entry because its reply landed, and never drop one because its standing is unknown: the difference between the two is the whole reason this rendering exists.${unknown
       ? ` What the publisher DID report is below, for a maintainer's eye and not as a fact to act on — a report that broke the contract these facts are read under is distrusted WHOLE, so no part of its per-thread account is acted on here, an entry that looks complete included: ${JSON.stringify(outcomes)}.`
       : ""}`
@@ -2899,10 +2954,31 @@ const resolvedCount = resolvedKeys.length;
 // reason, the per-entry standing, and the result's note — so guarding these two
 // as well would be a second copy of that precedence, unobservable while it
 // agreed and silent when it stopped agreeing.
+// The push's FOURTH standing, and the one the three states below cannot hold:
+// `git push` returned and the read-back at the ref did not establish that the ref
+// moved, so the tips MAY be on origin. Every claim this run would otherwise make
+// asserts more than that — "advanced" and "noop" both put the tips there, and
+// "pushed nothing" puts them nowhere — so this fact SUPERSEDES all three rather
+// than being carried as a fourth value of any of them, whatever the publisher's
+// own push flags say: it is exactly those flags the stop declares unestablished.
+// Read as a case-folded substring rather than an equality, because failing to
+// recognize the stop is the only direction that reads as a claim: an abort that
+// appends which URL disagreed still withdraws it, and some other abort quoting
+// the phrase only ever claims less.
+// It outranks `pushNoop` and the push's three states by being READ FIRST in
+// every chain below rather than by being subtracted from each of them, which is
+// the precedence this file settles in one place per fact for the reason its
+// neighbours give: a second copy of it is unobservable while it agrees and
+// silent when it stops.
+const pushUnconfirmed =
+  !published &&
+  !!publishReport &&
+  typeof publishReport.aborted === "string" &&
+  publishReport.aborted.toLowerCase().includes(PUSH_UNCONFIRMED_ABORT);
 const landed = published
   ? ""
   : [
-      publishReport && publishReport.pushedNewCommits ? "the push, which advanced the remote branch" : "",
+      publishReport && publishReport.pushedNewCommits && !pushUnconfirmed ? "the push, which advanced the remote branch" : "",
       repliedCount ? `${repliedCount} thread ${repliedCount === 1 ? "reply" : "replies"}` : "",
       resolvedCount ? `${resolvedCount} thread resolve${resolvedCount === 1 ? "" : "s"}` : "",
       summaryUrl ? `the Summary comment at ${summaryUrl}` : "",
@@ -2974,9 +3050,11 @@ const publishRecord = published
         ? ` — and WHAT REACHED ORIGIN IS UNKNOWN: ${accountDefect}. Treat nothing below as posted and nothing as unposted until the PR itself says which.`
         : landed
           ? ` — what reached origin: ${landed}; what is left to replay: ${outstanding}.`
-          : pushNoop
-            ? ", and nothing reached origin: its push was an `Everything up-to-date` no-op that moved nothing, and its own account reports no reply, resolve or Summary comment after it."
-            : ", and nothing reached origin: its own account reports no push, no reply, no resolve and no Summary comment."}`,
+          : pushUnconfirmed
+            ? ", and whether its push reached origin is UNKNOWN: `git push` returned and the read-back at the ref did not confirm the ref moved, so read the ref itself before treating these tips as either published or local; its own account reports no reply, resolve or Summary comment after it."
+            : pushNoop
+              ? ", and nothing reached origin: its push was an `Everything up-to-date` no-op that moved nothing, and its own account reports no reply, resolve or Summary comment after it."
+              : ", and nothing reached origin: its own account reports no push, no reply, no resolve and no Summary comment."}`,
       workReport,
       {
         rounds,
@@ -2985,6 +3063,7 @@ const publishRecord = published
         landed,
         outstanding,
         pushNoop,
+        pushUnconfirmed,
         outcomes,
         unknown: accountDefect,
         perThread,
@@ -2998,11 +3077,18 @@ const publishRecord = published
         // what `PUBLISH_SCHEMA.pushed` says of itself and what the non-unknown
         // rendering says in the same breath, so reading it as "no push is known"
         // understates the same fact in the same direction.
-        pushState: publishReport && publishReport.pushedNewCommits
-          ? "advanced"
-          : publishReport && publishReport.pushed
-            ? "noop"
-            : "unknown",
+        // What a push whose read-back did not CONFIRM the ref puts in doubt is
+        // that same half, so it takes the state that claims the least rather
+        // than a fourth of its own: "not even a push is known to have advanced
+        // the remote branch" is exactly what that stop establishes, and the
+        // reason printed beside it is still the account's.
+        pushState: pushUnconfirmed
+          ? "unknown"
+          : publishReport && publishReport.pushedNewCommits
+            ? "advanced"
+            : publishReport && publishReport.pushed
+              ? "noop"
+              : "unknown",
       },
     );
 // Published is the finish this whole pipeline exists for, so the worktree goes
@@ -3053,7 +3139,27 @@ return {
   peerRounds: cycle.peerRounds,
   artifactDir: cycle.artifactDir,
   ...carried,
-  publishReport: publishReport || { published: false, aborted: "publisher returned nothing" },
+  // The publisher's own report, echoed for a reader of the RESULT — with the one
+  // flag this run cannot stand behind carrying no value where the read-back's stop
+  // says nothing established it. `false` there is a positive claim that the remote
+  // did not move, which is no better founded than `true`, and it is the claim the
+  // rest of this exit spends three renderings withdrawing. `null` states neither,
+  // beside the `aborted` that says why and the note below that says it in prose.
+  // The schema governs what the PUBLISHER reports and still asks it for a boolean —
+  // what its push command did; this is the run's own result, and the fact the
+  // publisher was never able to report is stated as unheld here rather than
+  // rounded to a boolean. Nothing the run DOES turns on the substitution: every
+  // consumer reads `publishReport` (the local), which this spread copies rather
+  // than rewrites. Not all of them read the abort, and the ones that do not are
+  // meant to: `claimsAMutation` counts a push command that RAN as a claimed
+  // mutation — which is what puts an account short of an entry per item in doubt —
+  // so do not "repair" it to match this echo. What the abort gates is every CLAIM
+  // about origin: `landed` withholds the advance under it, `pushState` reads it
+  // ahead of both flags, and the disposition record's rendering and the note below
+  // reach it before `pushNoop`.
+  publishReport: publishReport
+    ? { ...publishReport, ...(pushUnconfirmed ? { pushedNewCommits: null } : {}) }
+    : { published: false, aborted: "publisher returned nothing" },
   ...(reclaimed ? { worktreeReclaim: reclaimed } : {}),
   note: published
     ? (`${notes.join(" ")}${survivingWorktreeNote(reclaimed)}`.trim() || undefined)
@@ -3061,7 +3167,9 @@ return {
         ? `what reached origin is UNKNOWN: ${accountDefect}`
         : landed
           ? `what reached origin: ${landed}; what is outstanding: ${outstanding}`
-          : pushNoop
-            ? "nothing reached origin — its push was an `Everything up-to-date` no-op that moved nothing"
-            : "nothing reached origin"}.`),
+          : pushUnconfirmed
+            ? "whether its push reached origin is UNKNOWN — the read-back at the ref did not confirm the ref moved"
+            : pushNoop
+              ? "nothing reached origin — its push was an `Everything up-to-date` no-op that moved nothing"
+              : "nothing reached origin"}.`),
 };
