@@ -38,11 +38,13 @@
 // nothing else pins.
 //
 // That brief is one of three renderings of where the compared head comes from;
-// the other two are the two review-addressing SKILLs, in both mirrors (task
-// 021d). They are prose no scenario can execute, and the probe they replaced
-// (`git cat-file -e` on the OID `gh pr view` reported) is exactly the shape a
-// later edit re-imports as a "safety check", so their paragraphs are read here
-// beside the brief's.
+// the other two are the two review-addressing SKILLs, in both mirrors (tasks
+// 021d and 021e). They are prose no scenario can execute, and the probe they
+// replaced (`git cat-file -e` on the OID `gh pr view` reported) is exactly the
+// shape a later edit re-imports as a "safety check", so their paragraphs are
+// read here beside the brief's. The same read pins the one exception to fetched-
+// head adoption: a fetched tip behind that reported OID blocks as a rewind,
+// while an advance or an undownloaded force-push keeps the adoption rule.
 //
 // It also covers the publication guard that landed beside the gate, which is
 // prompt prose rather than script logic: a HEAD that is a proper ancestor of
@@ -129,7 +131,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 210;
+const EXPECTED_CHECKS = 214;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1180,10 +1182,19 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       ],
       ["address-reviews", "The canonical path.", /adopt(?:ing)? the fetched OID as (?:this|the) entry's head/],
     ];
+    const rewindRule =
+      "when both commits are available and the fetched OID is a proper ancestor of the `headRefOid` that `gh pr view` reported, block the entry for a maintainer decision without adopting the fetched OID";
+    const unchangedCases =
+      /Every other difference keeps the existing adoption rule:.*including an advance and a force-push whose reported OID was not downloaded/;
     const unread = [];
     const unphrased = [];
+    const unclassifiedRewinds = [];
+    const changedExistingCases = [];
+    const inconsistentGuards = [];
     const gated = [];
     const probed = [];
+    const paragraphs = new Map();
+    const guards = new Map();
     for (const mirror of mirrors) {
       for (const [skill, anchor, phrase] of rulePara) {
         const path = `${mirror}/${skill}/SKILL.md`;
@@ -1198,10 +1209,29 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         if (!para) {
           unread.push(`${path} has no paragraph carrying ${JSON.stringify(anchor)}`);
         } else {
+          paragraphs.set(`${mirror}/${skill}`, para);
           if (!/git rev-parse (?:--verify )?FETCH_HEAD/.test(para)) unread.push(`${path}'s rule paragraph does not read the fetched head`);
           if (!phrase.test(para)) unphrased.push(`${path} does not state ${phrase}`);
+          if (!para.includes(rewindRule)) unclassifiedRewinds.push(`${path} does not state the fetched-behind-reported block`);
+          if (!unchangedCases.test(para)) changedExistingCases.push(`${path} does not preserve advances and undownloaded force-pushes`);
           const probes = gatingProbes(para);
           if (probes.length) gated.push(`${path} runs ${probes.join(", ")}`);
+        }
+        if (skill === "address-reviews") {
+          const guard = text.split("\n\n").find((p) => p.includes("**Remote-tip refresh guard** — the one rule"));
+          if (!guard) {
+            inconsistentGuards.push(`${path} has no Remote-tip refresh guard paragraph`);
+          } else {
+            guards.set(mirror, guard);
+            const guardClauses = [
+              "Before Phase A, where no cycle has recorded a head yet, use the `headRefOid` that `gh pr view` reported at setup as the earlier observation",
+              "if the fetched tip is a proper ancestor of that available reported OID, block the entry for the same maintainer decision rather than recording it as replaceable",
+              "Every other setup difference keeps the existing non-blocking behavior",
+              "this includes a head which advanced during setup and an unavailable reported OID in the undownloaded-force-push case",
+            ];
+            const missingClauses = guardClauses.filter((clause) => !guard.includes(clause));
+            if (missingClauses.length) inconsistentGuards.push(`${path}'s guard misses ${missingClauses.join("; ")}`);
+          }
         }
         if (catFileProbe.test(text)) probed.push(path);
       }
@@ -1215,6 +1245,30 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       "and each carries the phrase its own skill states the rule in, so a rewrite that drops the phrasing fails",
       unphrased.length === 0,
       unphrased.join("; "),
+    );
+    check(
+      "and both skills, in both mirrors, block a fetched tip behind the reported head as a maintainer rewind before adopting it",
+      unclassifiedRewinds.length === 0,
+      unclassifiedRewinds.join("; "),
+    );
+    check(
+      "while every other setup difference still adopts the fetched tip, including advances and undownloaded force-pushes",
+      changedExistingCases.length === 0,
+      changedExistingCases.join("; "),
+    );
+    check(
+      "and the batch guard uses the reported setup OID before Phase A to block that rewind while leaving advances and undownloaded force-pushes non-blocking",
+      inconsistentGuards.length === 0,
+      inconsistentGuards.join("; "),
+    );
+    const driftedParagraphs = ["address-review", "address-reviews"].filter(
+      (skill) => paragraphs.get(`plugins/dev-skills/skills/${skill}`) !== paragraphs.get(`codex/dev-skills/skills/${skill}`),
+    );
+    if (guards.get("plugins/dev-skills/skills") !== guards.get("codex/dev-skills/skills")) driftedParagraphs.push("address-reviews guard");
+    check(
+      "and the corrected setup and guard paragraphs are identical in their Codex mirrors",
+      driftedParagraphs.length === 0,
+      `drifted: ${driftedParagraphs.join(", ")}`,
     );
     check(
       "and no rule paragraph gates on an object's existence — `cat-file -e`/`-t`, or a `rev-parse` that asks `--verify` or peels — except in reading the fetched head itself",
