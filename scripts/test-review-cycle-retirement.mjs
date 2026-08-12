@@ -107,7 +107,7 @@ function loadCycle(src, agent) {
   // every renderer outside a cycle today, so driving the cycle can never
   // exercise the default and only a direct call can.
   // eslint-disable-next-line no-new-func
-  return new Function("agent", "parallel", "pipeline", "log", "phase", `${section}\nreturn { runReviewCycle, cycleReviewChecks, runCyclePeerStage, createCyclePeerThrottle, cyclePeerTrouble, normalizeCyclePeerResult, CYCLE_PEER_SCHEMA };`)(
+  return new Function("agent", "parallel", "pipeline", "log", "phase", `${section}\nreturn { runReviewCycle, cycleReviewChecks, cyclePeerPrompt, runCyclePeerStage, createCyclePeerThrottle, cyclePeerTrouble, normalizeCyclePeerResult, CYCLE_PEER_SCHEMA };`)(
     agent,
     parallel,
     pipeline,
@@ -1493,9 +1493,9 @@ for (const name of WORKFLOWS) {
         return { outcome: "available", detail: "" };
       }
       peerPrompts.push(prompt);
-      return { outcome: "passed", findings: [], notes: "", detail: "" };
+      return { outcome: "passed", findings: [], notes: "- src/example.js:7 — Naming could be clearer.", detail: "" };
     };
-    const { runCyclePeerStage, createCyclePeerThrottle, cyclePeerTrouble } = loadCycle(src, agent);
+    const { cyclePeerPrompt, runCyclePeerStage, createCyclePeerThrottle, cyclePeerTrouble } = loadCycle(src, agent);
     check(
       "the helper's exact empty and malformed reasons are eligible forfeiture trouble",
       cyclePeerTrouble({ outcome: "forfeited", reason: "provider exited 0 with an empty final message" }) &&
@@ -1535,6 +1535,28 @@ for (const name of WORKFLOWS) {
       peerState,
       peerThrottle,
     });
+    const renderedPeer = cyclePeerPrompt(cycle, state(1));
+    check(
+      "the peer prompt preserves the first-line verdict and keeps advisory notes compact and optional",
+      /exactly `VERDICT: PASS` or `VERDICT: ISSUES` on the first line/.test(renderedPeer) &&
+        /NOTES \(advisory; not necessarily fixes\)/.test(renderedPeer) &&
+        /at most three one-line bullets/.test(renderedPeer) &&
+        /at most 15 words/.test(renderedPeer) &&
+        /Omit the section entirely/.test(renderedPeer),
+      "rendered peer convention",
+    );
+    check(
+      "the prompt keeps every fix-worthy minor under ISSUES rather than pass notes",
+      /Anything you believe ought to be fixed remains a finding under `VERDICT: ISSUES`, even when minor; never demote it to a pass-note/.test(renderedPeer),
+      "pass-note bar",
+    );
+    check(
+      "the consumer extracts notes from raw output now and only documented helper payloads later",
+      /copy into `notes` ONLY valid bullets/.test(renderedPeer) &&
+        /documented `reviewFile`\/`reviewText` payload only/.test(renderedPeer) &&
+        /never enumerate `artifactDir`, guess a filename/.test(renderedPeer),
+      "raw/future payload split",
+    );
     const calls = Array.from({ length: 6 }, (_, i) => runCyclePeerStage(cycle, state(i + 1)));
     await ownerEntered;
     await Promise.resolve();
@@ -1542,9 +1564,37 @@ for (const name of WORKFLOWS) {
     releaseOwner();
     const results = await Promise.all(calls);
     check("every concurrent peer stage completes after the owner releases", results.length === 6 && results.every((r) => r.outcome === "passed"), JSON.stringify(results.map((r) => r.outcome)));
+    check("a passing peer's bounded note survives structurally while clean notes may stay empty", results.every((r) => r.notes === "- src/example.js:7 — Naming could be clearer."), JSON.stringify(results.map((r) => r.notes)));
     check("the parallel first wave executes exactly one real preflight", preflightCalls === 1, `${preflightCalls} preflight call(s)`);
     check("all six peer launches fan out after it and skip duplicate probes", peerPrompts.length === 6 && peerPrompts.every((p) => /Preflight: already done by the run-level shared preflight/.test(p)), `${peerPrompts.length} peer prompt(s)`);
     check("the shared state records completion and leaves no in-progress latch", peerState.preflighted === true && peerState.preflightInProgress === null, JSON.stringify(peerState));
+
+    const summarizedPass = async (notes) => {
+      const summaryAgent = async (_prompt, opts) => {
+        const label = (opts && opts.label) || "";
+        if (label === "fix#1") return { ...PASS_PACKET, changed: true, dispositions: [] };
+        if (label === "fix#2") return { ...idle };
+        if (label.startsWith("packet#")) return { measured: true, dirty: [], operation: "", detail: "" };
+        if (label === "review#1") return { ...OK };
+        if (label === "peer-preflight") return { outcome: "available", detail: "" };
+        if (label === "peer#1") return { outcome: "passed", findings: [], notes, detail: "" };
+        return null;
+      };
+      const loaded = loadCycle(src, summaryAgent);
+      return loaded.runReviewCycle({ ...CYCLE, peer: "on" });
+    };
+    const notedPass = await summarizedPass("- src/example.js:7 — Naming could be clearer.");
+    check(
+      "a passing peer note is surfaced compactly in its existing round-detail field",
+      notedPass.verdict === "pass" && notedPass.peerRounds.length === 1 && notedPass.peerRounds[0].detail === "advisory notes:\n- src/example.js:7 — Naming could be clearer.",
+      JSON.stringify(notedPass.peerRounds),
+    );
+    const cleanPass = await summarizedPass("");
+    check(
+      "a clean peer pass keeps the round detail empty and the usual one-line outcome",
+      cleanPass.verdict === "pass" && cleanPass.peerRounds.length === 1 && cleanPass.peerRounds[0].outcome === "passed" && cleanPass.peerRounds[0].detail === "",
+      JSON.stringify(cleanPass.peerRounds),
+    );
 
     let preflightAttempts = 0;
     let peerAttempts = 0;
