@@ -113,7 +113,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 122;
+const EXPECTED_CHECKS = 123;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -963,7 +963,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // paragraph exists for it names the HEAD fork and the fetch lands on a
   // same-named branch there. The PR's own URL is the explicit, already-resolved
   // value that cannot drift with the working directory.
-  const basePara = brief.split("\n\n").find((p) => p.includes("pr.baseOid")) || "";
+  const noRebaseBrief = gatherPrompt("#42 no-rebase", true);
+  const basePara = noRebaseBrief.split("\n\n").find((p) => p.includes("pr.baseOid")) || "";
   const readsBaseRepo = /base always lives in the repository the PR itself is in/.test(basePara);
   const notThePushRemote = /NOT this branch's push remote|not through this branch's push remote/.test(basePara);
   const namesItFromThePrUrl = /this PR's OWN URL names/.test(basePara) && /you report as `pr\.url`/.test(basePara);
@@ -976,6 +977,21 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "and resolves the base commit in the PR's OWN repository — named from the PR's URL, not from the directory `gh repo view` would answer for — freshly fetched, rather than through the branch's push remote or a remote-tracking ref",
     readsBaseRepo && notThePushRemote && namesItFromThePrUrl && refusesTheDirectoryDerivedRepo && fetchesIt && resolvesTheFetch && refusesTheTrackingRef,
     `base repository stated: ${readsBaseRepo}; push remote refused: ${notThePushRemote}; named from the PR url: ${namesItFromThePrUrl}; directory-derived repo refused: ${refusesTheDirectoryDerivedRepo}; fetches the ref: ${fetchesIt}; resolves the fetch: ${resolvesTheFetch}; refuses a tracking ref: ${refusesTheTrackingRef}`,
+  );
+
+  // And that paragraph renders ONLY where its value is consumed. The caller
+  // reads a gather-time `pr.baseOid` on the `no-rebase` path alone — a rebasing
+  // run supersedes it with the OID its rebase landed on — so the default
+  // rendering ordering the fetch anyway forces a base-repository fetch on every
+  // checkout that cannot reach that repository (a private fork clone with only
+  // a local explicit target) for a value nothing reads.
+  const defaultBasePara = brief.split("\n\n").find((p) => p.includes("pr.baseOid")) || "";
+  const reportsItEmpty = /report `pr\.baseOid` EMPTY and fetch NOTHING for it/.test(defaultBasePara);
+  const ordersNoBaseFetch = !/rev-parse --verify FETCH_HEAD\^\{commit\}/.test(defaultBasePara) && !/git fetch <the remote whose URL is that repository/.test(defaultBasePara);
+  check(
+    "while the default rendering reports the field empty and fetches nothing for it, since only the `no-rebase` path consumes a gather-time base OID",
+    reportsItEmpty && ordersNoBaseFetch,
+    `reports it empty: ${reportsItEmpty}; orders no base fetch: ${ordersNoBaseFetch}`,
   );
 
   const stated = [...new Set([...brief.matchAll(/outcome:\s*"([^"]*)"/g)].map((m) => m[1]))].sort();
@@ -1693,7 +1709,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // careless merge of them would silently reinstate it.
   const explicitBrief = rebasePrompt("pre-fix", briefPacket, "my-local-base", true);
   const resolvesWhereNamed = /Resolve it WHERE IT WAS NAMED/.test(explicitBrief) &&
-    /git rev-parse --verify my-local-base\^\{commit\}/.test(explicitBrief);
+    /git rev-parse --verify 'my-local-base\^\{commit\}'/.test(explicitBrief) && /quoted as ONE argument/.test(explicitBrief);
   const fetchesNothingForIt = /Fetch NOTHING for it/.test(explicitBrief) && !/git fetch /.test(explicitBrief);
   const refusesTheBaseRepoLookup = /do not go looking for it in the PR's base repository/.test(explicitBrief);
   const stopsRatherThanSubstitute = /report `ok: false` naming what you tried, and substitute nothing/.test(explicitBrief);
@@ -1743,8 +1759,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /git rev-list --merges/.test(brief) && /--remerge-diff/.test(brief) && /On such a merge rebase NOTHING/.test(brief),
     "the octopus blind spot — a merge the probe cannot answer for halts unprobed instead of reading as a pure join":
       /octopus/.test(brief) && /declining to answer/.test(brief) && /treat such a merge as content-bearing without probing it/.test(brief),
-    "the replay confined to this branch — `--no-update-refs` on the rebase it runs, against an inherited `rebase.updateRefs=true`":
-      /git rebase --no-update-refs <the effectiveBase OID>/.test(brief) && /rebase\.updateRefs=true/.test(brief),
+    "the replay's shape stated outright — `--no-update-refs --no-rebase-merges` on the rebase it runs, against inherited config on either axis":
+      /git rebase --no-update-refs --no-rebase-merges <the effectiveBase OID>/.test(brief) && /rebase\.updateRefs=true/.test(brief) && /rebase\.rebaseMerges=true/.test(brief),
     "the delivery-tier validation after a replay": /the project's build AND its test suite/.test(brief),
     "reporting the conflicts it resolved and the commits it skipped": /git rebase --skip/.test(brief) && /Narrate one line each in `detail`/.test(brief),
     "the halt reported with a question naming the conflict it turns on": /report `halted: true` with a `question` naming the conflicting files, the offending commit/.test(brief),
@@ -1817,10 +1833,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   for (const [name, path] of Object.entries(rcMirrors)) {
     const text = readFileSync(path, "utf8");
     check(
-      `${name}: the canonical nugget orders --no-update-refs on every rebase and halts the octopus merge unprobed`,
+      `${name}: the canonical nugget states the replay's shape on both axes and halts the octopus merge unprobed`,
       /So every rebase this step runs passes `--no-update-refs`/.test(text) &&
-        /`git rebase --no-update-refs --onto <new parent tip> <old parent tip>`/.test(text) &&
+        /the stated flags are `--no-update-refs --no-rebase-merges`/.test(text) &&
+        /`git rebase --no-update-refs --no-rebase-merges --onto <new parent tip> <old parent tip>`/.test(text) &&
         !/`git rebase --onto <new parent tip> <old parent tip>`/.test(text) &&
+        !/`git rebase --no-update-refs --onto <new parent tip> <old parent tip>`/.test(text) &&
         /halts unprobed, exactly as if it carried content/.test(text) &&
         /declining to answer/.test(text),
       "a canonical clause the brief renders was gutted, or the stacked form lost its flag",
@@ -1832,11 +1850,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   };
   for (const [name, path] of Object.entries(quotingMirrors)) {
     const text = readFileSync(path, "utf8");
-    const flagged = (text.match(/`git rebase --no-update-refs --onto <new parent tip> <old parent tip>`/g) || []).length;
+    const flagged = (text.match(/`git rebase --no-update-refs --no-rebase-merges --onto <new parent tip> <old parent tip>`/g) || []).length;
     check(
-      `${name}: every quoted stacked rebase carries --no-update-refs`,
-      flagged >= 2 && !/`git rebase --onto <new parent tip> <old parent tip>`/.test(text),
-      `flagged quotes: ${flagged}; an unflagged stacked form is back`,
+      `${name}: every quoted stacked rebase carries --no-update-refs --no-rebase-merges`,
+      flagged >= 2 && !/`git rebase --onto <new parent tip> <old parent tip>`/.test(text) && !/`git rebase --no-update-refs --onto <new parent tip> <old parent tip>`/.test(text),
+      `flagged quotes: ${flagged}; an unflagged or half-flagged stacked form is back`,
     );
   }
 }

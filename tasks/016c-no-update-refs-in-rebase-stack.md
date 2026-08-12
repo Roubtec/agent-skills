@@ -16,6 +16,7 @@ This queuing is maintainer-confirmed, and the linear fast-path scope is maintain
 - Specify a **linear-run fast path**: after the chain is confirmed (step 3), detect each maximal contiguous run of chain branches where every consecutive pair `X → Y` satisfies "X's tip is an ancestor of Y's tip" (`git merge-base --is-ancestor`), no branch in the run carries commits off that line, and no skipped branch points into it. For such a run, rebase once from its last branch with an explicit `git rebase --update-refs --onto <new-base> <run's old base> <last branch>` (exact command shape is the implementer's; the requirements are one replay for the run and the flag stated explicitly, never inherited), which moves every intermediate branch of the run to the commit the loop would have produced.
 - Preserve the loop's guarantees across the fast path, and spell each out in the skill text: a pre-rebase snapshot ref is still saved for **every** branch of the run before the single replay (the run-shared timestamp already fits this); a conflict mid-replay is still handled under step 5, and where it exceeds that competence the abort falls back to the per-branch loop for that run; validation (step 6) still gates per branch of the run, or the skill states explicitly where it now gates and why that is acceptable.
 - Branches outside a linear run — the first divergent leaf and anything past it — keep the existing per-branch loop, now with `--no-update-refs`.
+- State the merge-topology axis the same way while in there: `rebase.rebaseMerges=true` reshapes the loop's replay exactly as `rebase.updateRefs=true` moves its refs, so every replay-starting invocation also states `--no-rebase-merges` (or a deliberate topology choice, where a chain branch legitimately carries merges) rather than inheriting the config.
 - Update the "Why per-branch rebase instead of `git rebase --update-refs`" section in both flavors so it describes the fast path as the skill's own deliberate behavior on linear runs, rather than presenting `--update-refs` as a manual-only alternative; keep its warning for the non-linear case.
 - Keep the plugin and codex copies aligned in the touched passages as they are today.
 
@@ -23,7 +24,7 @@ This queuing is maintainer-confirmed, and the linear fast-path scope is maintain
 
 - Every replay-starting rebase command the `rebase-stack` loop itself prescribes carries `--no-update-refs`, in both flavors, with the why stated once; `--continue`/`--skip`/`--abort` forms are untouched.
 - The linear-run detection rule is stated precisely enough to implement (ancestry test, contiguity, the no-divergence and no-skipped-branch conditions), and the fast path's single replay states `--update-refs` explicitly.
-- No rebase invocation in either file relies on inherited config for its ref-update behavior, in either direction.
+- No rebase invocation in either file relies on inherited config for its ref-update or merge-topology behavior, in either direction.
 - The fast path's snapshot-ref, conflict-fallback, and validation-gating story is stated where the loop's guarantees are stated today.
 - The "Why per-branch rebase" section reflects the deliberate fast path and keeps its non-linear warning.
 - Every suite named in `.github/workflows/tests.yml` passes.
