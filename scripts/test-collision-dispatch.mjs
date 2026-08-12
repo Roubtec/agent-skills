@@ -60,7 +60,7 @@ function check(name, cond, detail) {
 // it — an edit that drops one, or a guard that swallows a throw, would pass.
 // Counting the oks too lets the run assert it executed the whole suite. Bump
 // this deliberately when adding or removing a check; the number is the assertion.
-const EXPECTED_CHECKS = 183;
+const EXPECTED_CHECKS = 191;
 
 async function scenario(name, fn) {
   try {
@@ -261,27 +261,74 @@ await scenario("degraded re-scan", async () => {
   }
 });
 
-// 5b. A re-scan entry this stage cannot attribute to any held branch. It is a
-//     clash reported with no owner, so filtering by branch name yields an empty
-//     "still colliding" set for every held branch and would deliver all of them
-//     off a packet that just said the clash survives — the exact inversion the
-//     guard exists to prevent. The packet reads as unusable instead.
+// 5b. A re-scan entry this stage cannot attribute to any held branch is a clash
+//     reported with no owner. Filtering it by branch name yields an empty "still
+//     colliding" set for every held branch and would deliver all of them off a
+//     packet that just said the clash survives — the exact inversion the guard
+//     exists to prevent. The packet reads as unusable instead.
 await scenario("unattributable re-scan entry", async () => {
-  const cases = [
-    ["re-scan entry names no branches at all", [clash([])]],
-    ["re-scan entry names branches in an unmatched form", [clash(["refs/heads/task/a", "refs/heads/task/b"])]],
-  ];
-  for (const [name, collisions] of cases) {
-    const out = await run({
-      held: [mkHeld("a"), mkHeld("b")],
-      collisions: [clash(["task/a", "task/b"])],
-      packets: { resolution: renamed(["task/a"]), rescan: { collisions } },
-    });
-    check(`${name} → nothing delivers`, out.deliverable.length === 0, JSON.stringify(slugs(out.deliverable)));
-    check(`${name} → both branches held`, JSON.stringify(slugs(out.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(out.held)));
-    check(`${name} → detail says the re-scan established nothing`, out.held.length === 2 && out.held.every((h) => /established nothing/.test(h.detail) && /by hand/.test(h.detail)), JSON.stringify(out.held.map((h) => h.detail)));
-    check(`${name} → no re-review is paid for`, !labels(out.calls).some((l) => l.startsWith("re-review:")), JSON.stringify(labels(out.calls)));
-  }
+  const out = await run({
+    held: [mkHeld("a"), mkHeld("b")],
+    collisions: [clash(["task/a", "task/b"])],
+    packets: { resolution: renamed(["task/a"]), rescan: { collisions: [clash([])] } },
+  });
+  check("re-scan entry names no branches at all → nothing delivers", out.deliverable.length === 0, JSON.stringify(slugs(out.deliverable)));
+  check("re-scan entry names no branches at all → both branches held", JSON.stringify(slugs(out.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(out.held)));
+  check("re-scan entry names no branches at all → detail says the re-scan established nothing", out.held.length === 2 && out.held.every((h) => /established nothing/.test(h.detail) && /by hand/.test(h.detail)), JSON.stringify(out.held.map((h) => h.detail)));
+  check("re-scan entry names no branches at all → no re-review is paid for", !labels(out.calls).some((l) => l.startsWith("re-review:")), JSON.stringify(labels(out.calls)));
+});
+
+// 5bb. Fully-qualified local refs name the same branches as their ordinary
+//      branch strings. The shared attribution helper deliberately makes that
+//      spelling usable at re-scan too; a packet that still reports the clash
+//      therefore holds as live evidence, not as a void packet.
+await scenario("fully-qualified re-scan entry", async () => {
+  const out = await run({
+    held: [mkHeld("a"), mkHeld("b")],
+    collisions: [clash(["task/a", "task/b"])],
+    packets: { resolution: renamed(["task/a"]), rescan: { collisions: [clash(["refs/heads/task/a", "heads/task/b"])] } },
+  });
+  check("fully-qualified re-scan entry → nothing delivers", out.deliverable.length === 0, JSON.stringify(slugs(out.deliverable)));
+  check("fully-qualified re-scan entry → both branches held", JSON.stringify(slugs(out.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(out.held)));
+  check("fully-qualified re-scan entry → detail says the clash remains in the refs", out.held.length === 2 && out.held.every((h) => /still in the refs/.test(h.detail)), JSON.stringify(out.held.map((h) => h.detail)));
+  check("fully-qualified re-scan entry → no re-review is paid for", !labels(out.calls).some((l) => l.startsWith("re-review:")), JSON.stringify(labels(out.calls)));
+});
+
+// 5bc. Making a qualified name attributable deliberately changes 027a's packet
+//       gate: another held branch that the usable re-scan no longer names can
+//       clear. This is the shared-helper reach 027b accepts, pinned here so it
+//       cannot arrive or disappear as an accidental assertion relaxation.
+await scenario("fully-qualified re-scan clears another clash", async () => {
+  const out = await run({
+    held: [mkHeld("a"), mkHeld("b"), mkHeld("c")],
+    collisions: [clash(["task/a", "task/b"]), clash(["task/b", "task/c"], "Widget")],
+    packets: {
+      resolution: renamed(["task/c"], "Widget"),
+      rescan: { collisions: [clash(["refs/heads/task/a", "heads/task/b"])] },
+    },
+  });
+  check("qualified packet → only the branch clear of its clash delivers", JSON.stringify(slugs(out.deliverable)) === JSON.stringify(["c"]), JSON.stringify(slugs(out.deliverable)));
+  check("qualified packet → both branches still carrying the qualified clash are held", JSON.stringify(slugs(out.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(out.held)));
+  check("qualified packet → the cleared branch receives its re-review", labels(out.calls).includes("re-review:c"), JSON.stringify(labels(out.calls)));
+  check("qualified packet → still-colliding branches receive no re-review", !labels(out.calls).includes("re-review:a") && !labels(out.calls).includes("re-review:b"), JSON.stringify(labels(out.calls)));
+});
+
+// 5bd. Attributable names do not make a partly foreign entry usable. The shared
+//       gate requires every reported name to belong to a held task; otherwise
+//       the foreign side could deliver without ever being checked again.
+await scenario("partly attributed re-scan entry", async () => {
+  const out = await run({
+    held: [mkHeld("a"), mkHeld("b"), mkHeld("c")],
+    collisions: [clash(["task/a", "task/b", "task/c"])],
+    packets: {
+      resolution: renamed(["task/a"]),
+      rescan: { collisions: [clash(["task/a", "task/b", "origin/task/c"])] },
+    },
+  });
+  check("partly attributed re-scan entry → nothing delivers", out.deliverable.length === 0, JSON.stringify(slugs(out.deliverable)));
+  check("partly attributed re-scan entry → all three branches are held", JSON.stringify(slugs(out.held)) === JSON.stringify(["a", "b", "c"]), JSON.stringify(slugs(out.held)));
+  check("partly attributed re-scan entry → every hold says the re-scan established nothing", out.held.every((h) => /established nothing/.test(h.detail) && /attribute every named branch/.test(h.detail)), JSON.stringify(out.held.map((h) => h.detail)));
+  check("partly attributed re-scan entry → no re-review is paid for", !labels(out.calls).some((l) => l.startsWith("re-review:")), JSON.stringify(labels(out.calls)));
 });
 
 // 5c. One unattributable entry voids the WHOLE packet rather than being filtered
