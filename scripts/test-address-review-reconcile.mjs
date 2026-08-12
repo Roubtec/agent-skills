@@ -113,7 +113,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 124;
+const EXPECTED_CHECKS = 128;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1862,6 +1862,48 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       `${name}: every quoted stacked rebase carries --no-update-refs --no-rebase-merges`,
       flagged >= 2 && !/`git rebase --onto <new parent tip> <old parent tip>`/.test(text) && !/`git rebase --no-update-refs --onto <new parent tip> <old parent tip>`/.test(text),
       `flagged quotes: ${flagged}; an unflagged or half-flagged stacked form is back`,
+    );
+  }
+}
+
+// --- Both target-pinning arms, in the prose mirrors --------------------------
+// The workflow's two `rebasePrompt` arms are driven as running code above, but
+// the SKILLS state the same rule in prose and are what a human-driven run
+// follows. The batch skill had exactly one arm: it exempted a target the
+// invocation named only where that target was already an exact commit, so a
+// named BRANCH fell through to the default recipe and was fetched as each
+// entry's own `refs/heads/<baseRefName>` — the request's target silently
+// replaced by every entry's own base, with the batch then reviewing and
+// force-pushing branches nobody asked to move. Both halves are pinned: the
+// canonical nugget must admit the working-location arm at all, and the batch
+// skill must resolve a named ref there rather than fetching it as a base ref.
+{
+  for (const [name, path] of Object.entries({
+    "plugins review-cycle": join(here, "..", "plugins", "dev-skills", "skills", "review-cycle", "SKILL.md"),
+    "codex review-cycle": join(here, "..", "codex", "dev-skills", "skills", "review-cycle", "SKILL.md"),
+  })) {
+    const text = readFileSync(path, "utf8");
+    check(
+      `${name}: the canonical pin states both arms — a request-named target is resolved in the working location, not fetched`,
+      text.includes("a target the **request** named outright") &&
+        text.includes("resolved in the working location (`git rev-parse --verify`") &&
+        text.includes("fetched from nowhere"),
+      "the nugget's pin describes only the base-repository fetch, so an explicitly named target has nowhere to resolve",
+    );
+  }
+  for (const [name, path] of Object.entries({
+    "plugins address-reviews": join(here, "..", "plugins", "dev-skills", "skills", "address-reviews", "SKILL.md"),
+    "codex address-reviews": join(here, "..", "codex", "dev-skills", "skills", "address-reviews", "SKILL.md"),
+  })) {
+    const text = readFileSync(path, "utf8");
+    check(
+      `${name}: an invocation-named target is a documented argument and a named REF resolves where it was named`,
+      text.includes("[rebase on top of <target>]") &&
+        text.includes("| `rebase on top of <target>` |") &&
+        text.includes("resolved WHERE IT WAS NAMED") &&
+        text.includes("Fetch nothing for it, and never send it at the base repository") &&
+        !text.includes("A target the invocation itself named as an exact commit is pinned as given"),
+      "the exact-commit-only exemption is back, or the token is undocumented: a named branch falls through to the base-ref fetch",
     );
   }
 }
