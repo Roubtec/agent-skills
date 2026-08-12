@@ -72,7 +72,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 152;
+const CHECKS_PER_LEG = 158;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -1373,6 +1373,102 @@ for (const name of WORKFLOWS) {
     check("and so is the record-only close's", !!recorded.res.recordOnly && (recorded.res.packetChecks || []).length === 2, JSON.stringify(recorded.res.packetChecks));
     const lit = await run(src, { fixes: [PASS_PACKET], reviews: [OK], cycle: { mode: "light" } });
     check("and the light conclusion's single pass, whose reviewer round it already had", lit.res.verdict === "pass" && (lit.res.packetChecks || []).length === 1, JSON.stringify(lit.res.packetChecks));
+  });
+
+  // 31. WHOSE VERDICT the map leaving the cycle carries. `workReport` is the
+  //     one field a consumer REPLAYS (wf-address-review posts thread replies
+  //     and resolves from it, and withholds its durable disposition record from
+  //     a map no reviewer ever judged), so "was this map reviewed" is a
+  //     contract rather than an internal detail — and it is not the verdict.
+  //     `confirming` is set only after a round PASSED, and the confirmation
+  //     pass that follows can stop the cycle outright, which leaves an `error`
+  //     verdict standing over exactly the map that just passed. A consumer
+  //     reading the verdict alone calls that map unreviewed and drops it.
+  await scenario("31. whether a reviewer judged the map the cycle carries out", async () => {
+    const REPORTED = [{ threadId: "T1", kind: "actionable-fixed", detail: "guarded the null case" }];
+    const REPLACED = [{ threadId: "T1", kind: "push-back", detail: "re-triaged after the round had passed" }];
+    const withMap = { ...PASS_PACKET, workReport: REPORTED };
+    const withReplacedMap = { ...PASS_PACKET, workReport: REPLACED };
+
+    // Nothing ever finished: pass 1 returned nothing, so no map and no round.
+    const never = await run(src, { fixes: [], reviews: [] });
+    check(
+      "a cycle stopped before any round says no reviewer judged the map it carries",
+      never.res.verdict === "error" && never.res.workReportReviewed === false,
+      `${never.res.verdict}/${never.res.workReportReviewed}`,
+    );
+
+    // The flagship: round 1 passed over this map, then the CONFIRMATION pass
+    // returned nothing. The cycle errors holding the map a reviewer passed.
+    const confirmDied = await run(src, { fixes: [withMap], reviews: [OK] });
+    check(
+      "a confirmation pass that stops the cycle still carries the map a round PASSED, and says so",
+      confirmDied.res.verdict === "error" &&
+        JSON.stringify(confirmDied.res.workReport) === JSON.stringify(REPORTED) &&
+        confirmDied.res.workReportReviewed === true,
+      `${confirmDied.res.verdict}/${confirmDied.res.workReportReviewed}/${JSON.stringify(confirmDied.res.workReport)}`,
+    );
+
+    // And the precision the flag would lose if it latched: the confirmation
+    // pass REPLACED the map, then round 2's reviewer returned nothing. What
+    // leaves the cycle is a map no round ever saw, whatever passed before it.
+    const replacedThenDied = await run(src, { fixes: [withMap, withReplacedMap], reviews: [OK, null], cycle: { maxRounds: 3 } });
+    check(
+      "and a map a later pass REPLACED is not reviewed, whatever passed before it",
+      replacedThenDied.res.verdict === "error" &&
+        JSON.stringify(replacedThenDied.res.workReport) === JSON.stringify(REPLACED) &&
+        replacedThenDied.res.workReportReviewed === false,
+      `${replacedThenDied.res.verdict}/${replacedThenDied.res.workReportReviewed}/${JSON.stringify(replacedThenDied.res.workReport)}`,
+    );
+
+    // A round that RAN AND FAILED, which is the only shape that separates "a
+    // round happened" from "a round PASSED": pass 1 reports the map, round 1
+    // fails, pass 2 returns nothing. Snapshot on every round rather than only a
+    // passing one and this reads as reviewed — and wf-address-review then heads a
+    // durable record "AFTER a reviewer round had passed" over the map the
+    // exemption exists to withhold, the one map only a failed round ever saw.
+    const failedThenDied = await run(src, { fixes: [withMap], reviews: [FAIL("r1")], cycle: { maxRounds: 3 } });
+    check(
+      "a round that RAN AND FAILED judged nothing, so the map it read is not reviewed",
+      failedThenDied.res.verdict === "error" &&
+        JSON.stringify(failedThenDied.res.workReport) === JSON.stringify(REPORTED) &&
+        failedThenDied.res.workReportReviewed === false &&
+        failedThenDied.res.reviewedWorkReport === undefined,
+      `${failedThenDied.res.verdict}/${failedThenDied.res.workReportReviewed}/${JSON.stringify(failedThenDied.res.reviewedWorkReport)}`,
+    );
+
+    // The same map over a DIFFERENT tree. A later pass can commit a new
+    // `finalSha` while returning the identical `workReport` text and then lose
+    // its reviewer: compared as text alone those dispositions read as reviewed
+    // while they now accompany a tree no reviewer ever read, which is the same
+    // false positive a replacement produces and the same consumer acts on it.
+    const sameMapNewTip = { ...withMap, finalSha: "b2b2b2b2" };
+    const movedThenDied = await run(src, { fixes: [withMap, sameMapNewTip], reviews: [OK, null], cycle: { maxRounds: 3 } });
+    check(
+      "and a map carried out over a tip no round judged is unreviewed too, its text unchanged though it is",
+      movedThenDied.res.verdict === "error" &&
+        JSON.stringify(movedThenDied.res.workReport) === JSON.stringify(REPORTED) &&
+        movedThenDied.res.finalSha === "b2b2b2b2" &&
+        movedThenDied.res.workReportReviewed === false &&
+        movedThenDied.res.reviewedFinalSha === "sha",
+      `${movedThenDied.res.verdict}/${movedThenDied.res.workReportReviewed}/${movedThenDied.res.finalSha} vs ${movedThenDied.res.reviewedFinalSha}`,
+    );
+
+    // And the judged map ITSELF, beside the tip it was judged on, reported
+    // separately from the map being carried out. That is what makes a judged map
+    // a later pass replaced recordable at all: the boolean says only that the map
+    // leaving is not the judged one, so a consumer whose job is to record the
+    // judged one (wf-address-review's disposition record) had nothing to record
+    // and the map with the drafted replies died with the session that judged it.
+    check(
+      "the judged map and its tip ride out beside the map being carried, so a replaced one is not lost",
+      JSON.stringify(replacedThenDied.res.reviewedWorkReport) === JSON.stringify(REPORTED) &&
+        replacedThenDied.res.reviewedFinalSha === "sha" &&
+        JSON.stringify(confirmDied.res.reviewedWorkReport) === JSON.stringify(REPORTED) &&
+        never.res.reviewedWorkReport === undefined &&
+        never.res.reviewedFinalSha === undefined,
+      `${JSON.stringify(replacedThenDied.res.reviewedWorkReport)}/${replacedThenDied.res.reviewedFinalSha}/${JSON.stringify(never.res.reviewedWorkReport)}`,
+    );
   });
 
   const ran = legOk + legFail;

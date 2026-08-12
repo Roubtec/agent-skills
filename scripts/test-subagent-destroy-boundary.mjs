@@ -826,6 +826,26 @@ const FIXTURES = {
       ["rebasePrompt (pre-push, inline)", (f) => f.rebasePrompt("pre-push", publishPacket, "main"), rebaseTempDirectory("pre-push")],
       ["rebasePrompt (pre-fix, worktree mode)", (f) => f.rebasePrompt("pre-fix", publishPacketWorktree, "abc1234def5678"), rebaseTempDirectory("pre-fix")],
     ],
+    // The disposition record's one PR write. It branches on the working
+    // location exactly as `publishPrompt` does — and only the worktree arm tells
+    // it to keep off the main checkout — so both arms are rendered, the same
+    // "new branch inside an existing builder" gap closed the same way. It orders
+    // no build: the body it composes goes to `gh` on stdin, which is what keeps
+    // it from needing an output destination at all.
+    recordPrompt: [
+      ["recordPrompt", (f) => f.recordPrompt(publishPacket, [], { why: "`no-push` was given.", rounds: 2, reviewerPassed: true, deviations: [] }), NO_BUILD],
+      ["recordPrompt (worktree mode)", (f) => f.recordPrompt(publishPacketWorktree, [], { why: "the cycle hit its cap.", rounds: 12, reviewerPassed: false, deviations }), NO_BUILD],
+      // The third branch: a publication that stopped PART-WAY renders the same
+      // record with its status and provenance lines changed, so the branch is
+      // rendered here rather than left to the two that say nothing landed.
+      ["recordPrompt (a publication that stopped part-way)", (f) => f.recordPrompt(publishPacket, [], { why: "replying to a thread failed after the push landed.", rounds: 2, reviewerPassed: true, deviations: [], landed: "the push" }), NO_BUILD],
+    ],
+    // The record's other write, and the only one a fully published run makes:
+    // it spends the record it replayed so nothing replays from a map that is
+    // now on the PR. It reads nothing in the working location — the body goes
+    // to `gh` on stdin — so it has no location arm to branch on and orders no
+    // build, and one render covers it.
+    spendRecordPrompt: [["spendRecordPrompt", (f) => f.spendRecordPrompt(publishPacket, { summaryUrl: "https://example.invalid/pr/42#issuecomment-5" }), NO_BUILD]],
     reclaimPrompt: [["reclaimPrompt", (f) => f.reclaimPrompt("/w/.worktrees/c/pr-42", 42, "publication completed"), NO_BUILD]],
   },
 };

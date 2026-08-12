@@ -6,7 +6,13 @@
  * disposition through the shared review cycle (fresh-eyes reviewer plus a
  * best-effort cross-harness codex peer, bounded by the cycle's round cap),
  * then publish by default (lease-safe push, reply + resolve threads, Summary
- * comment, pings) — a `no-push` run stays local-only and mutates nothing.
+ * comment, pings) — a `no-push` run stays local-only, and the one PR write it
+ * makes is the disposition record every exit that does not publish IN FULL
+ * leaves behind (see `recordPrompt` and `leaveDispositionRecord`), which is
+ * `no-push`'s single documented exception. A publication that stopped part-way
+ * leaves the same record, saying what of the map the PR already CARRIES — end
+ * state, whichever run put it there, never that a push command ran — and what
+ * it still owes.
  * The re-review pings fire ONLY when the push actually advanced the branch with
  * new commits/rewritten history; a no-op push (nothing new to review) skips them
  * so an automated review -> address -> review loop can terminate.
@@ -127,6 +133,7 @@ export const meta = {
     { title: "Rebase", detail: "delegated rebase onto the freshest base — before fixing, and again before publication" },
     { title: "Fix and verify", detail: "fix/push-back per thread through the nested wf-review-cycle" },
     { title: "Peer review (codex)", detail: "best-effort cross-harness second opinion beside each reviewer round; its outcome never blocks" },
+    { title: "Record", detail: "on every exit that does not publish in full: leave the run's disposition map on the PR as one record comment" },
     { title: "Publish", detail: "lease-safe push, thread replies, summary comment, pings" },
     { title: "Summary" },
   ],
@@ -150,6 +157,7 @@ const PACKET_SCHEMA = {
         base: { type: "string", description: "The PR's `baseRefName`. It is a REF NAME at this stage and nothing more: the rebase phase resolves it (or the requested target) to a commit and the caller replaces this field with that pinned OID, which is what every later delegation names as its review base." },
         baseOid: { type: "string", description: "The full OID THIS RUN'S TARGET resolves to right now — which of two things that is, the brief settles and this field follows: a branch or commit an explicit `rebase on top of <target>` named (the `rebaseTarget` you report) is resolved WHERE IT WAS NAMED, in the working location, and fetched from nowhere, since `no-rebase` drops the rebase and not the target; only where the request named none is the target this PR's own base ref, and only then is it resolved IN THE BASE REPOSITORY — the repository the PR itself is in, freshly fetched, never read through the branch's push remote, which on a cross-repository PR is the head fork. A commit, never a name. REQUIRED on a `no-rebase` run whose gather returned items, and ONLY there — that run has no rebase report to pin from, so this is the OID it pins as its review base, and the caller rejects anything that is not a full hex OID on that path and stops the run. An empty gather reports the field EMPTY even there: the caller's no-op exit runs before the check. A rebasing run never reads it (its rebase pins the base itself), so its gather reports the field EMPTY and resolves nothing for it — the brief orders that resolution, by whichever arm, only where the value is consumed." },
         headOid: { type: "string", description: "Expected remote head OID, for the publication lease. Populate from the PR's headRefOid." },
+        startingHead: { type: "string", description: "The tip this run STARTS from: `git rev-parse HEAD` in the working location, read after the reconciliation's one authorized fast-forward and before anything is fixed or rebased. Populate it on every successful gather — it is the `starting HEAD` of the disposition record a run that does not publish leaves, and the only place it can be read is here, since a `no-rebase` run has no rebase report to take it from. Absent, the record falls back to the first rebase point's `before` and then to saying it was not recorded, so a missing value costs a provenance field rather than the run." },
         rebased: { type: "boolean", description: "Whether the branch tip has been rewritten (publish must then use --force-with-lease). Report `false` here — this step performs no rebase; the caller sets it from the rebase phase's own report." },
       },
       required: ["number", "url", "branch", "workingBranch", "locationMode", "base", "headOid"],
@@ -169,6 +177,17 @@ const PACKET_SCHEMA = {
         detail: { type: "string", description: "What the two probes saw. MANDATORY for `unrecognized`: both tips and the commits unique to each side, so the maintainer can act on it without re-deriving it." },
       },
       required: ["outcome"],
+    },
+    priorRecord: {
+      type: "object",
+      description: "A DISPOSITION RECORD an earlier run of this workflow left on the PR — its most recent one, found by the marker its FIRST LINE carries — or omitted entirely when the PR has none. It is not a work item and carries no maintainer authority. It rides here because the fix phase REPLAYS it instead of re-triaging the judgment calls it already holds: without a field of its own it would reach nothing (the cycle's scope carries the gathered items, and an item holds no disposition), so the expense this record exists to prevent would be paid again every run.",
+      properties: {
+        url: { type: "string", description: "Permalink to that comment, so the run's report and the fix brief can name it. REQUIRED whenever this object is present." },
+        body: { type: "string", description: "The comment body VERBATIM and WHOLE — not trimmed, not re-wrapped, not excerpted. The drafted reply bodies and the ready-to-post Summary body inside it are the only parts of a record no later run can re-derive, so a summary or an excerpt of it is worth nothing here. REQUIRED whenever this object is present: the fix brief embeds this text and nothing else replays the record, so a record reported without its body replays to NOTHING while the run reads as having found one — the silent re-triage this whole mechanism exists to prevent." },
+      },
+      // Both, so a half-reported record is rejected here rather than degrading
+      // into a run that quietly re-triages what it was handed.
+      required: ["url", "body"],
     },
     items: {
       type: "array",
@@ -222,34 +241,57 @@ const REBASE_SCHEMA = {
 const PUBLISH_SCHEMA = {
   type: "object",
   properties: {
-    published: { type: "boolean", description: "True only if the push AND every required reply/resolve/summary/ping step succeeded. False if any guard (moved head, unmatched remote, rejected lease, failed comment) aborted publication." },
+    published: { type: "boolean", description: "True only if the push AND every required reply/resolve/summary/ping step succeeded. False if any guard (moved head, unmatched remote, rejected lease, failed comment) aborted publication. The caller accepts it only over a report that can SUPPORT it — an account of every item it can read, and the `summaryCommentUrl` of the Summary comment this step ends with. Claimed over less, the run reports an incomplete publication, keeps its worktree, and leaves its disposition record: a completion nobody can check is not a completion." },
     aborted: { type: "string", description: "Why publication stopped, when published is false (e.g. `head moved`, `working location moved off the branch`, `lease rejected`, `local behind PR head`, `off-shoot does not carry the PR head`, `push remote unmatched`). Empty when published. Write it: the run's own note carries this reason inline, so an omitted one reads as `no reason reported` there." },
-    pushed: { type: "boolean", description: "Whether a push was performed at all (may be an `Everything up-to-date` no-op)." },
-    pushedNewCommits: { type: "boolean", description: "True ONLY if the push actually advanced the remote branch — new commits or rewritten history. False when no push happened or for a no-op `Everything up-to-date` push. Gates whether the re-review pings may fire." },
+    pushed: { type: "boolean", description: "Whether a push command SUCCEEDED — an `Everything up-to-date` no-op counts, since it leaves the remote pointing at this tip. False when none was attempted, or when one was rejected or failed. This is NOT evidence that anything this run did reached origin: a no-op push changed nothing there, so `pushedNewCommits` is what says the remote moved." },
+    pushedNewCommits: { type: "boolean", description: "True ONLY if the push actually advanced the remote branch — new commits or rewritten history. False when no push happened or for a no-op `Everything up-to-date` push. Gates whether the re-review pings may fire, and it is the push half of what a disposition record may call landed." },
     threadOutcomes: {
       type: "array",
-      description: "Per item: its stable reference and what was done (replied/resolved/left-open).",
+      description: "Your ACCOUNT of where each item STANDS ON THE PR when your turn ends — not a log of your own writes: an equivalent reply of yours that was already there counts as replied, and a thread you found resolved counts as resolved. Keyed one entry per item: its machine identity, its stable reference, what was done in prose, and the two facts a later turn acts on. REQUIRED on every report, ABORTED ONES INCLUDED — one entry per item you were given, whether or not you reached it. What a disposition record calls landed and what it calls still owed are derived as complements of this account — so `landed` is what the PR CARRIES rather than what this run put there — and an item you leave out is not read as untouched: the caller cannot tell a thread you never reached from one whose reply is on the PR unreported, and it says the outcome is UNKNOWN rather than guessing either way. An abort before the push touched anything reports `[]`, which is the complete account of having acted on nothing.",
       items: {
         type: "object",
         properties: {
-          ref: { type: "string" },
+          threadId: { type: "string", description: "The thread's GraphQL node id, MANDATORY on a `review-thread` item's entry: it is the key this entry is matched to its disposition by, echoed VERBATIM from that disposition." },
+          url: { type: "string", description: "The item's url, MANDATORY on a `standalone` item's entry (where it is that item's whole identity, echoed VERBATIM); the thread's permalink on a `review-thread` entry, which is keyed by `threadId` instead." },
+          ref: { type: "string", description: "file:line + author, for a human reading the record. NOT an identity: two threads a re-review left on the same line by the same author share it, so it can key nothing — `threadId`/`url` above is what does." },
           outcome: { type: "string" },
+          replied: { type: "boolean", description: "True ONLY if the reply is ON THE PR when your turn ends. Never what you intended or attempted — and never a record of your API calls either: a reply you skipped under step 4's duplicate rule, an equivalent one of yours already being there, is on the PR, and reporting it false would have the caller read a complete publication as still owing that reply and a later turn post it twice." },
+          resolved: { type: "boolean", description: "True ONLY if the thread is RESOLVED on the PR when your turn ends. Never what you intended or attempted, and true likewise for a thread you found already resolved rather than resolving yourself." },
         },
-        required: ["ref", "outcome"],
+        required: ["ref", "outcome", "replied", "resolved"],
       },
     },
-    summaryCommentUrl: { type: "string", description: "URL of the posted Summary of Review Fixes, or empty if not posted." },
+    summaryCommentUrl: { type: "string", description: "URL of the posted Summary of Review Fixes, or empty if not posted. REQUIRED on every report, aborted ones included: absent, whether a Summary reached the PR is unstated, and an empty string read out of a missing field is a claim this run cannot make." },
     pings: { type: "string", description: "Which ping comments were posted, or empty." },
   },
-  // `aborted` stays out of `required`, beside `summaryCommentUrl` and `pings` —
-  // this schema's other may-be-empty fields. Requiring it was tried and
-  // reversed: a packet that misses validation reaches the caller as nothing at
-  // all, so one omitted reason would take `threadOutcomes`, `pushed`,
-  // `pushedNewCommits` and the summary URL down with it and force `published`
-  // false on a push that had completed. The result note carries whatever is
-  // here inline instead, which degrades to "no reason reported" and costs the
-  // rest of the report nothing.
-  required: ["published", "pushed", "pushedNewCommits"],
+  // `aborted` stays out of `required`, beside `pings` — this schema's other
+  // may-be-empty field. Requiring it was tried and reversed: a packet that
+  // misses validation reaches the caller as nothing at all, so one omitted
+  // reason would take `threadOutcomes`, `pushed`, `pushedNewCommits` and the
+  // summary URL down with it and force `published` false on a push that had
+  // completed. The result note carries whatever is here inline instead, which
+  // degrades to "no reason reported" and costs the rest of the report nothing.
+  // `threadOutcomes` and `summaryCommentUrl` ARE required, for the opposite
+  // reason: what a disposition record may say about origin is derived from
+  // them, and a field read as `[]`/`""` because it was absent turns silence
+  // into the positive claim "nothing reached origin". Required, silence is a
+  // visible schema violation instead.
+  required: ["published", "pushed", "pushedNewCommits", "threadOutcomes", "summaryCommentUrl"],
+};
+
+// What the disposition record's one write hands back. `posted` false is a report
+// rather than a failure of the run — the run's status still names what happened
+// to the PR — but it means this run's map exists only in the result, so the
+// reason rides in `detail` where a maintainer reads it.
+const RECORD_SCHEMA = {
+  type: "object",
+  properties: {
+    posted: { type: "boolean", description: "True only if the record comment is on the PR — either newly posted or a prior record of the authenticated user's updated in place." },
+    superseded: { type: "boolean", description: "True when this run UPDATED a prior record of its own rather than posting a new comment. Either way exactly one record write happened." },
+    url: { type: "string", description: "Permalink to the record comment, or empty when nothing was written." },
+    detail: { type: "string", description: "One line: whether it was posted or superseded, any further prior records left untouched, or what failed." },
+  },
+  required: ["posted", "detail"],
 };
 
 const RECLAIM_SCHEMA = {
@@ -313,7 +355,7 @@ function botKindOf(login, authorIsBot) {
 // shared main checkout: its setup clone had failed invisibly inside a pipeline
 // under `set -e` (a pipeline's status is its last command), so it was still at
 // the repository root while believing it stood in a clone. This script's own
-// two agents (gather, publish) carry it from here; the fix and review briefs
+// deputies (gather, record, publish, worktree reclaim) carry it from here; the fix and review briefs
 // below ride the NESTED wf-review-cycle, whose review-cycle-core section states
 // the same boundary in the prompts it composes, so they do not restate it.
 const DESTROY_BOUNDARY = `## DESTROY BOUNDARY
@@ -377,12 +419,14 @@ Where the names match: fetch the PR's exact head ref WITHOUT moving the local br
 
 Those two probes are the whole rule; do not grow them into a classifier of branch states, which is exactly what the third outcome exists to make unnecessary. The first is patch-id based on purpose: \`--cherry-pick\` drops commits with a patch-id twin on the other side, so a branch rebased onto a newer base reads as carrying the PR head's content though it shares no SHAs with it, where a raw-ancestry test would call that ordinary state divergent. Do NOT filter merge commits out of that probe: patch-id cannot speak for a merge, so an unrepresented merge on the remote head lands in outcome 3 deliberately — one extra ask when a UI "Update branch" merge advanced the head, in exchange for never silently dropping a conflict resolution such a merge carried.
 
+Read the tip this run STARTS from and report it as \`pr.startingHead\` — \`git rev-parse HEAD\` in the working location, after the reconciliation above (whether it fast-forwarded, found nothing to do, or was skipped whole as not-applicable) and before anything is fixed or rebased. EVERY run has one, the off-shoot and \`no-rebase\` paths included, which is why it is read here rather than taken from a rebase report a \`no-rebase\` run never produces: it is the \`starting HEAD\` of the disposition record a run that does not publish leaves, where it says which tree that run's verdict was rendered over.
+
 Rebase NOTHING here, whatever the request asked for. Report \`pr.base = baseRefName\` and \`pr.rebased = false\`. ${noRebase ? `This run's review base is the gather's to pin (\`no-rebase\`), but pin it ONLY where there is a run to bound: resolve it AFTER the gathering below, and only where \`items\` came back NON-EMPTY — an empty gather is a terminal no-op the caller finishes before reading any base OID, so there report \`pr.baseOid\` EMPTY and fetch nothing for it. Where items were gathered, resolve the run's target to a commit ONCE and report the full OID as \`pr.baseOid\`. WHICH target that is, is the one thing to settle first, and you are the one holding the answer: where you are about to report a NON-EMPTY \`rebaseTarget\`, that token is the target — \`no-rebase\` suppresses the REBASE, not the target the request named, and bounding this run at \`baseRefName\` instead would hand the reviewer and the peer the underlying branch's own commits as this PR's diff. Resolve THAT one where it was named — here, in this working location, \`git rev-parse --verify '<the token>^{commit}'\` with the operand quoted as ONE argument, taking a local branch, a remote-tracking ref or a commit — and fetch NOTHING for it; where it does not resolve, report \`ok: false\` naming what you tried and substitute nothing. Only where \`rebaseTarget\` is EMPTY is the target this PR's own \`baseRefName\`, and only then does the rest of this paragraph apply: resolve it in the BASE repository and not through this branch's push remote. Those are two different repositories whenever the PR is cross-repository: the push remote is the HEAD repository, so \`<push-remote>/<baseRefName>\` there names a same-named branch in the fork — a different branch's tip, or nothing at all — and the push remote stays what it is for, the publication target. There is no base-repository field to ask for and none is needed: a PR's base always lives in the repository the PR itself is in, so the base repository is the \`<owner>/<repo>\` this PR's OWN URL names — the \`https://<host>/<owner>/<repo>/pull/<number>\` you report as \`pr.url\`, an explicit repository-qualified value you already resolved. Do not ask a bare \`gh repo view --json nameWithOwner\` for it: with no repository argument that command answers for the repository the DIRECTORY it runs in resolves to, which in a fork clone is the head fork — the one repository this paragraph exists to keep the fetch away from. \`isCrossRepository\` is no substitute for matching that repository against a remote's URL: it compares the PR's OWN head and base and says nothing about which repository this clone's remotes point at — a fork clone working a PR whose head and base both live upstream reads \`false\` while \`origin\` is still the fork. Where the URL match does land on this branch's push remote, one remote serves both. Fetch that repository's exact base ref WITHOUT moving any branch — \`git fetch <the remote whose URL is that repository, or that repository's URL where a fork clone has no remote for it> refs/heads/<baseRefName>\` — and resolve what the fetch brought: \`git rev-parse --verify FETCH_HEAD^{commit}\`, reporting the full unabbreviated OID git prints. Read no \`<remote>/<baseRefName>\` in its place: a remote-tracking ref is only as fresh as whatever last fetched it, so it can pin a commit the base has since moved past, and nothing else here fetches the base at all. That fetch OVERWRITES \`FETCH_HEAD\`, so run it only after every read of \`R\` above — the location step's, and the reconciliation's where it ran. A \`no-rebase\` run pins its review base to that OID, because every range this run delegates is taken against a commit rather than a name — a name moves under the next fetch or a sibling push.` : `This run rebases, so the delegated rebase step pins the review base itself and the caller reads a gather-time \`pr.baseOid\` only on a \`no-rebase\` run: report \`pr.baseOid\` EMPTY and fetch NOTHING for it — the base repository is not touched from here, so a checkout that can inspect the PR through \`gh\` but cannot Git-fetch that repository still gathers.`} Then put an explicit \`rebase on top of <target>\` token's target — a branch name or an exact commit, verbatim — into \`rebaseTarget\` (empty when none was named). A delegated rebase step runs immediately after you and again before publication; it resolves that target to a commit, pins it, and reports back what it landed on, and the caller replaces \`pr.base\`/\`pr.rebased\` from that report. Two agents both rebasing would replay the same commits twice, which is precisely why this one does not.
 
 Gather feedback into \`items\` (each verbatim):
 - UNRESOLVED review threads — PRIMARY: use the baked \`gh-review-threads\` helper. \`gh-review-threads <PR#>\` prints the unresolved threads as a JSON array (each thread \`id isResolved isOutdated path line\` and \`comments[]\` with \`databaseId author{ login __typename } body diffHunk url\`); it already pages with fresh SINGLE-SHOT queries (never \`gh api graphql --paginate\`), does the nested comment fetch-up, and applies the scope check below, failing closed with exit 3 and no stdout on a contaminated response. FALLBACK, only when \`command -v gh-review-threads\` fails (a container built from an older image — the same graceful-degradation used for the gh-version-gated Copilot ping): run the GraphQL \`reviewThreads\` query by hand as SINGLE-SHOT queries, never \`gh api graphql --paginate\` (run concurrently with other gh GraphQL calls it has returned ANOTHER PR's threads); include \`totalCount\` + \`pageInfo{ hasNextPage endCursor }\` and page past 100 threads by passing the returned cursor to a fresh call. Either way SCOPE-CHECK the result (the helper does this for you): every comment \`url\` must match the exact repo-qualified PR path for this PR (\`https://github.com/<owner>/<repo>/pull/<number>\` followed by \`#\`, \`/\`, \`?\`, or end); do not use a plain substring check such as \`/pull/<number>\`. On any mismatch, discard the entire response, retry once with a fresh single-shot query, and if it repeats fail closed; never emit an item whose \`url\` points at a different PR. Keep only \`isResolved == false\`. Emit each as \`type: "review-thread"\` with \`threadId\` (the thread node \`id\`), \`commentId\` (the top comment's \`databaseId\`), \`path\`, \`line\`, \`author\` (the top comment's \`author.login\`), \`authorIsBot\` (true when that comment's \`author.__typename\` is \`Bot\` — from the helper's output or the GraphQL \`author{ login __typename }\`; do not guess from the login), \`body\`, \`url\`. \`threadId\` and \`commentId\` are mandatory for these — they are how publication resolves and replies.
-- Top-level context — ALWAYS fetch every review summary (\`gh pr view --json reviews\`) and every issue comment (\`gh api --paginate repos/{owner}/{repo}/issues/<PR>/comments\`), even when the request names no standalone item: this sweep is how maintainer replies and decision comments are discovered. A maintainer reply on an unresolved thread is authoritative — fold it into that thread's context. So is a top-level maintainer comment recording per-item verdicts (often titled "Maintainer Decisions" or similar) — fold each decision into the relevant thread's context as its binding disposition (including "defer to a follow-up task" and "keep as-is").
-- A standalone issue comment or review summary becomes its own item ONLY if the request explicitly identifies it as outstanding. Emit it as \`type: "standalone"\` with \`author\`, \`authorIsBot\`, \`body\`, and \`url\` (its permalink is the stable reference; it has no threadId and is never resolved as a thread).
+- Top-level context — ALWAYS fetch every review summary (\`gh pr view --json reviews\`) and every issue comment (\`gh api --paginate repos/<owner>/<repo>/issues/<PR>/comments\`, repository-qualified from the PR's OWN URL exactly as the base fetch above is: \`{owner}\`/\`{repo}\` expand to the repository of the current directory, which on a cross-repository PR is the head fork, where this PR's comments — and any prior record below — are not), even when the request names no standalone item: this sweep is how maintainer replies and decision comments are discovered. A maintainer reply on an unresolved thread is authoritative — fold it into that thread's context. So is a top-level maintainer comment recording per-item verdicts (often titled "Maintainer Decisions" or similar) — fold each decision into the relevant thread's context as its binding disposition (including "defer to a follow-up task" and "keep as-is"). One kind of issue comment is NEITHER of those: a DISPOSITION RECORD left by an earlier run of this workflow, recognized by the marker \`<!-- address-review:disposition-record -->\` as its FIRST LINE, byte for byte, rather than by its prose (a comment that merely quotes the marker is an ordinary comment). It is this workflow's own output, so it is never an item and carries no maintainer authority — do not fold its drafted replies into a thread as a decision. Report the most recent one as \`priorRecord\`: its permalink, and its body VERBATIM and WHOLE, since the drafted replies and the ready-to-post Summary body in it are the parts no later run can re-derive. The fix step below is handed exactly that text and told to re-judge every disposition it names against the branch as it now stands (its SHAs are provenance, not a promise: the recorded tip is local-only and a rebase since then may have rewritten every one of them), so an excerpt or a summary of it costs precisely the judgment the record exists to carry. Leave the comment itself alone — the record phase below is what supersedes it.
+- A standalone issue comment or review summary becomes its own item if the request explicitly identifies it as outstanding — OR if the prior record above already holds a \`standalone\` disposition for it, which is an earlier run's request having identified it and is why this is not a second way in. Without that, the record's account of such an item cannot be replayed AT ALL: the fix step must emit exactly one disposition per gathered item, and publication rejects a \`standalone\` disposition whose url was never gathered, so the recorded judgment and the Summary text drafted for it are dropped in silence by the very run that read the record. So for each \`standalone\` entry the record names, re-fetch that url and emit the comment as an item where it is still there — the fix step then re-judges it against the branch exactly as it re-judges a thread's disposition, rather than replaying it on the record's word. Where the comment is gone (deleted, or the url no longer resolves), emit no item and say so in \`detail\`: an item that no longer exists is not outstanding work. Emit each as \`type: "standalone"\` with \`author\`, \`authorIsBot\`, \`body\`, and \`url\` (its permalink is the stable reference; it has no threadId and is never resolved as a thread).
 
 If there are no unresolved threads and no included standalone item, return \`ok: true\` with an empty \`items\` array — the caller will exit as a successful no-op.
 
@@ -469,7 +513,65 @@ Change nothing else: no commits of your own, no push, no PR mutation, no branch 
 // untyped `workReport` — hence the explicit field list; the cycle's own
 // schemas cannot require consumer fields), and the disposition-verification
 // criteria the cycle hands verbatim to its reviewer AND its codex peer.
-function fixInstructions(packet) {
+// A prior DISPOSITION RECORD, REPLAYED rather than re-triaged. Replaying it is
+// the whole reason one was written: the drafted replies and the judgment behind
+// each disposition are the expensive part of a run, and a fixer that never sees
+// them pays for them again, most likely reaching a different answer on exactly
+// the calls that were costly the first time. So the record is embedded VERBATIM
+// in the round-1 brief — the same move `rebaseReverifyInstructions` makes with
+// the first cycle's report, for the same structural reason: the cycle's scope
+// carries `{ title, instructions, reviewInstructions, items }`, the items are the
+// gathered threads, and nothing in them holds a disposition.
+// Only the ROUND-1 brief gets it. The re-verification's fixer is handed THIS
+// run's own reviewed dispositions instead, which have already absorbed whatever
+// the replay concluded, so a second "prior" set there would put two baselines in
+// front of one round.
+// The rule below is `address-review`'s "Replaying a record" rendered for an agent
+// that has read no skill (task 023a's inline-the-instruction rule): patch-id as
+// the first probe and never a gate, the tree as the only authority, every SHA
+// re-derived. The probe belongs to whoever judges the dispositions, which is this
+// fixer — the gather has no dispositions to judge, and by the time it runs the
+// branch has not yet met this run's pre-fix rebase.
+// VERBATIM is the whole value of this section, and two things would quietly cost
+// it. The body is embedded UNCHANGED — trimming decides only whether there is a
+// record at all, never what gets embedded, since a reply body's own leading or
+// trailing blank line is content. And the delimiter is longer than the longest
+// backtick run inside the body, by construction: a record legitimately ENDS with
+// its `## Summary comment` block holding a full markdown body, which may itself
+// be fenced, so a fixed ``` wrapper is closed by the record's own fence and the
+// mark that says where the record ends goes ambiguous for exactly the part the
+// record exists to carry. `PACKET_SCHEMA.priorRecord` requires `url` and `body`
+// together, so a bodyless record is rejected before this runs; the emptiness test
+// is the last line of defense rather than a path a run is meant to take.
+function priorRecordSection(priorRecord) {
+  const body = priorRecord && typeof priorRecord.body === "string" ? priorRecord.body : "";
+  if (!body.trim()) return "";
+  const url = priorRecord.url ? ` (${priorRecord.url})` : "";
+  const longestRun = (body.match(/`+/g) || []).reduce((n, run) => Math.max(n, run.length), 0);
+  const fence = "`".repeat(Math.max(3, longestRun + 1));
+  return `
+
+## An earlier run left a DISPOSITION RECORD on this PR — replay it, do not re-triage it
+
+That comment${url} is an earlier run of this workflow's own output: not feedback, not a maintainer decision, authoritative over nothing, and never a reason on its own to reply to a thread. What it holds that you cannot re-derive is the drafted reply bodies and the judgment behind each disposition, so start from it rather than re-triaging the items it already covers.
+
+**First, is it SPENT?** A record whose \`status:\` line reads \`SPENT\` and which carries no \`## Threads\` block is one a later run already published in full and then emptied, keeping only the marker so this step reads it as spent rather than as absent. It holds no disposition and cites no \`final HEAD\`, so there is nothing to probe and nothing to carry forward: the steps below do not apply to it, every item you were given is ordinary untriaged work, and you say in your report that the record you were handed was spent. Everything below is about a record that still holds entries.
+
+1. **Patch-id first, as a probe and never a gate.** With \`F\` the \`final HEAD\` the record cites and \`B\` the branch tip now, run \`git rev-list --right-only --cherry-pick B...F\`. Printing NOTHING means every recorded commit is represented and the record replays as written.
+2. **A non-empty result rejects nothing.** A rebase that resolved a conflict, or split or squashed a commit, rewrites the resulting patch-ids while keeping the work — this run's own pre-fix rebase may have just done it — and it could not decide the question even if it were the gate: a fix that survived a conflict resolution and one that was later reverted both print the recorded commit as unrepresented. Neither can a probe that cannot run at all: \`F\` may no longer be a local object (a fresh clone, a pruned repository), and an absent recorded commit is not an absent fix. Fall through to the tree in every one of those cases, and assert nothing about \`F\` equalling \`B\`.
+3. **Then judge per thread, against the tree rather than the record.** Is the fix that disposition claims present in the branch as it now stands — for a \`deferred-to-task\` disposition, is its task file still committed there? Present → carry the disposition and its drafted reply forward, and RE-DERIVE the \`Fixed in <sha>\` citation from the branch as it now stands instead of copying the recorded SHA. Genuinely gone → that thread loses its disposition: triage it from scratch this round, and never report it as fixed on the record's word. Unsettleable from the tree → \`ambiguous-skipped\`, carrying the record's account of it in \`detail\`, rather than discarded because a probe was inconclusive.
+4. Say which of those three happened in that item's \`detail\` — replayed, re-triaged because the fix was gone, or handed back as unsettleable. A thread the record does not name is ordinary untriaged work. A record naming threads that are no longer unresolved replays to nothing, which is the right answer rather than a conflict: it is only ever the account of the run that wrote it. A \`standalone\` disposition it names was re-fetched and gathered as a work item for exactly this reason, so it is in your items and takes a disposition like any other; where the comment behind one is gone it was not gathered, and that entry replays to nothing too.
+
+### The prior record, verbatim
+
+Everything between the two lines of ${fence.length} backticks below is that comment's body, byte for byte. The fence is that long because it must be longer than any backtick run inside the record — the Summary body it ends with is itself markdown and may be fenced, and a shorter delimiter would be closed by the record's own fence rather than at its end.
+
+${fence}
+${body}
+${fence}`;
+}
+
+function fixInstructions(packet, priorRecord) {
   return `You are addressing review feedback on PR #${packet.pr.number} (base \`${packet.pr.base}\`). The PR's remote head ref is \`${packet.pr.branch}\`; that is the push target, which may be a different name for a local off-shoot — edit only the checked-out branch named in the contract above, never the remote ref name.
 
 This run is unattended (hands-off): decide low-stakes ambiguity best-effort and record it; for high-stakes ambiguity that needs an authoritative decision, do NOT guess — mark the item \`ambiguous-skipped\` and leave it open.
@@ -488,7 +590,7 @@ Do NOT push, reply, resolve, or comment on the PR — publication is a separate,
 
 Per-item report contract: return EXACTLY ONE \`workReport\` entry per work item — never a second entry for a thread you already reported, since publication would post both replies and resolve on whichever it routed first. Each entry carries: \`type\` (echoed from the item, so \`review-thread\` or \`standalone\`; publication can route no other value, and an entry typed anything else is rejected before publication); \`threadId\` and \`commentId\` (MANDATORY for \`review-thread\` items; publication cannot reply/resolve without them); \`url\` (a \`standalone\` entry's identity, MANDATORY there — echo the gathered item's url VERBATIM; an entry naming a url that was never gathered is untriaged work and is rejected before publication. On a \`review-thread\` entry it is the thread's permalink, for the record); \`ref\` (file:line + author, human-readable); \`kind\` (the disposition kind above); \`detail\` (for fixed: one line + commit sha; for already-addressed: where it's handled; for push-back: the rationale; for deferred: the committed task file path + one-line scope, and whether the deferral was maintainer-directed or agent-proposed; for ambiguous: what decision is needed); \`authorIsBot\` (echoed VERBATIM from the gathered item; MANDATORY — publication uses it to decide whether a push-back/deferred thread may be auto-resolved, so never omit it; if the gathered item lacked it, use false, the safe human default); \`author\` (the comment author's login, echoed VERBATIM — include it for \`standalone\` items too); and \`newFinding\` — true ONLY when the item surfaces a real concern not previously raised on this PR (typically an \`actionable-fixed\`, or a genuinely new \`deferred-to-task\`/\`already-addressed\`); false for a \`push-back\` (the comment was wrong), a re-raise of a concern already deferred to a committed task file, or a bot re-arguing a push-back it already lost — UNLESS the thread carries a genuinely new angle this round. (\`newFinding\` drives the \`ping-contributing\` flag, which re-pings a bot only when it brought a new finding this round; set it honestly even if no ping was requested.)
 
-Which of those fields are structurally enforced: every field publication acts on is re-checked before anything is pushed, and one bad entry aborts the whole publication — \`type\`, \`kind\`, \`detail\`, \`author\`, \`authorIsBot\`, \`newFinding\`, a \`review-thread\` entry's \`threadId\`/\`commentId\`, and a \`standalone\` entry's \`url\`. The identifying ids are matched against the gathered items, and the two echoed fields (\`author\`, \`authorIsBot\`) are compared against the item they came from — so echo what you were handed rather than what you judge to be more accurate. \`ref\` is not required at all, and neither is a \`review-thread\` entry's \`url\` nor a \`standalone\` entry's \`threadId\` — those two are only checked for not naming some OTHER gathered item, which would make one entry read as covering two. Write them anyway: \`ref\` is what names an entry in the run's own report, including when some other field gets that entry rejected.`;
+Which of those fields are structurally enforced: every field publication acts on is re-checked before anything is pushed, and one bad entry aborts the whole publication — \`type\`, \`kind\`, \`detail\`, \`author\`, \`authorIsBot\`, \`newFinding\`, a \`review-thread\` entry's \`threadId\`/\`commentId\`, and a \`standalone\` entry's \`url\`. The identifying ids are matched against the gathered items, and the two echoed fields (\`author\`, \`authorIsBot\`) are compared against the item they came from — so echo what you were handed rather than what you judge to be more accurate. \`ref\` is not required at all, and neither is a \`review-thread\` entry's \`url\` nor a \`standalone\` entry's \`threadId\` — those two are only checked for not naming some OTHER gathered item, which would make one entry read as covering two. Write them anyway: \`ref\` is what names an entry in the run's own report, including when some other field gets that entry rejected.${priorRecordSection(priorRecord)}`;
 }
 
 // After the PRE-PUSH rebase replayed something, the verdict that just passed
@@ -540,6 +642,7 @@ function reviewCriteria() {
 - \`ambiguous-skipped\` must genuinely require an authoritative decision.
 Every gathered work item must have EXACTLY ONE \`workReport\` entry (a \`review-thread\` matched by its \`threadId\`, a \`standalone\` by its \`url\`): an item with none was silently dropped, and an item named by two entries carries dispositions publication cannot choose between — it would post a reply per entry and resolve on whichever it routed first. Either is a blocking issue. So is one entry naming TWO gathered items — a \`review-thread\` entry that also carries a gathered standalone's \`url\`, or a \`standalone\` entry that also carries a gathered \`threadId\` — since that reads as covering both while publication only ever serves one.
 Each entry's \`author\` and \`authorIsBot\` must match the gathered item they are echoed from — they decide which bot is re-pinged and whether a thread may be auto-resolved, so a "corrected" value is a blocking issue even when it looks more accurate.
+A disposition the fixer REPLAYED from an earlier run's disposition record is confirmed against the tree exactly like a fresh one — the record is provenance, not evidence — and its \`Fixed in <sha>\` citation must name a commit the branch carries NOW: a replayed SHA that the tree does not carry is a blocking issue, since publication would post it into the thread.
 You may reclassify any item.`;
 }
 
@@ -658,7 +761,281 @@ Report a STRUCTURED result: set \`published: true\` ONLY if the push and every r
 
 ${JSON.stringify(dispositions, null, 2)}
 
-Record each item's outcome with its stable reference (file:line, author, threadId or url) in \`threadOutcomes\`.`;
+Record each item's outcome in \`threadOutcomes\`, and set that entry's \`replied\` and \`resolved\` to the state of the thread ON THE PR when your turn ends rather than to what you attempted — so a reply you skipped under the duplicate rule above, an equivalent one of yours already being there, is \`replied: true\`, and a thread you found already resolved is \`resolved: true\`. That account is read back against what step 4 above OWES each disposition: a report claiming the publication COMPLETE while its own entries say a thread it owed a reply never got one is a contradiction, and the caller refuses the completion claim over it exactly as it refuses one that accounts for nothing. Each entry carries the item's MACHINE IDENTITY — a \`review-thread\` item's \`threadId\`, a \`standalone\` item's \`url\`, echoed verbatim from its disposition — beside the human \`ref\` (file:line + author), which identifies nothing on its own: two threads a re-review left on the same line by the same author share a \`ref\`, and an account keyed on it cannot say which of them was replied to.
+
+Report them even where publication stops part-way, and report EXACTLY ONE entry per item you were given — every item, whether or not you reached it, and never a second entry for one you already reported. Such a run leaves a disposition record, and what it may say about origin is derived from this account as complements: an item your account names once is settled either way, while an item it leaves out, names twice, or names by an identity this run never handed you leaves the record no choice but to say the outcome is UNKNOWN and send the next turn to the PR — because a reply you posted and did not report would be posted twice by a turn that assumed it was owed, and one you never posted would never be posted at all. Where you abort before the push touched anything, report \`[]\` and an empty \`summaryCommentUrl\`: that is the complete account of having acted on nothing, and both fields are required either way.`;
+}
+
+// The DURABLE DISPOSITION RECORD — the `address-review` skill's section of that
+// name, rendered once for this workflow. Every exit that holds this run's
+// disposition map and does not publish it in full writes it, so the map outlives
+// the session: this run's result is chat output, and closing the session used to
+// lose which thread was pushed back, what the drafted rationale said, and what
+// the Summary comment would have said — precisely the judgment calls the next
+// run would otherwise re-derive from scratch, most likely differently.
+// It is the ONE PR write a `no-push` run makes, carved out as that flag's single
+// documented exception rather than gated behind a flag of its own: a gate would
+// make durability opt-in and so lose the record in exactly the runs that end
+// unexpectedly, and it would add a fifth token to a push/ping resolution this
+// family has already learned not to grow.
+// Nothing here REPLAYS a record. Replay belongs to the NEXT run: its gather
+// step reports a prior record into the packet as a proposal rather than an item,
+// and its round-1 fixer is handed that text and the rule for judging it against
+// the branch rather than trusting its SHAs (`priorRecordSection`). This brief
+// only writes one, and marks it so that step can find it. And it runs BEFORE the worktree is given back, so the
+// tips it cites are read where the work actually happened.
+// Its three PR writes are REPOSITORY-QUALIFIED from the PR's own URL, for the
+// reason the base fetch above already is: on a cross-repository PR handled from
+// a fork clone the working location IS the head fork, while the PR and its
+// comments live in the base repository — and both `gh api`'s `{owner}`/`{repo}`
+// placeholders and a bare `gh pr comment` answer for the current directory's
+// repository. Unqualified, the lookup would search the fork and report no prior
+// record, the `PATCH` would address a comment id there, and the create would
+// post this record onto a same-numbered PR in the fork.
+function recordPrompt(packet, dispositions, facts) {
+  const where = packet.pr && packet.pr.worktree
+    ? `Your working location is the worktree \`${packet.pr.worktree}\`. Before anything else, \`cd\` into it and verify \`git rev-parse --show-toplevel\` prints exactly that path; if not, STOP and report. Every git read below runs there. Do NOT touch the main checkout: it is on another branch and is none of this run's business.`
+    : `You work in the repository's current checkout, which is on the branch this run addressed — do NOT create a worktree and do NOT switch branches.`;
+  // A publication that stopped PART-WAY holds the same map with replies left to
+  // replay, so it leaves the same record — but `status: not published` would be
+  // a lie once part of the map is on origin and only the rest failed, and what
+  // "this run pushed nothing" claims of the tips follows the push rather than
+  // the map (the LANDED-rendering note below). `landed` is what the
+  // publisher's account puts ON the PR — end state, so a reply an earlier run
+  // posted counts, which is why the lead below says the map is part-way rather
+  // than that this run put it there — `outstanding` what is still owed, and
+  // `outcomes` its per-thread account of which is which; `landed` selects the
+  // rendering the skill's format defines for that case. Empty is the ordinary
+  // run: nothing of the map is on the PR at all — and `pushNoop` is the one shape
+  // between them, a push that succeeded while moving nothing, where the tips are
+  // on origin though nothing of the map is.
+  // `unknown` is the THIRD state, and it is not a fourth flavour of "nothing
+  // reached origin": it says the publisher gave no usable account of what it
+  // posted, so this run does not KNOW. It outranks the other three, because
+  // every one of them asserts something about origin that an unaccounted run
+  // cannot assert — and the publisher pushes before it replies, so "died after
+  // something landed" is the ORDINARY shape of a part-way stop rather than an
+  // exotic one. `perThread` is the standing of each entry, keyed to the
+  // dispositions by the caller (never by `ref`, which two threads can share).
+  // The LANDED rendering reads the push states too, for its one claim about
+  // the tips — in the lead, and again on the record's own `reached origin`
+  // line, which is the durable copy a later turn acts on and so must not leave
+  // the tips fact to the brief that dies with this run: replies and resolves
+  // land through the API, so a map part-way on the PR does not imply a push —
+  // a refused completion claim whose own account says no push succeeded is
+  // landed (its replies are on the PR) while its tips are still local-only,
+  // and a record silent about that would send its reader looking for commits
+  // origin does not have. Only the `advanced` state appends no tips clause
+  // there: its landed list already names the push that put the tips on origin.
+  // What an unusable account does NOT put in doubt is the push, which is
+  // reported positively and in three states rather than two — so the third
+  // state's own rendering says which of them holds and reserves "unknown" for
+  // what actually is unknown. All three of its lines come from ONE entry below,
+  // because they drifted apart the moment they did not: a status of "UNKNOWN
+  // whether anything was published" stood two lines above "what IS known is
+  // that the push advanced the remote branch", and the same record both refused
+  // to claim anything reached origin and said the tips were there.
+  const landed = typeof facts.landed === "string" ? facts.landed.trim() : "";
+  const outstanding = typeof facts.outstanding === "string" ? facts.outstanding.trim() : "";
+  const outcomes = Array.isArray(facts.outcomes) ? facts.outcomes : [];
+  const unknown = typeof facts.unknown === "string" ? facts.unknown.trim() : "";
+  const perThread = Array.isArray(facts.perThread) ? facts.perThread.filter((l) => typeof l === "string" && l.trim()) : [];
+  // The tip the map below was JUDGED on, which the working location's HEAD is
+  // not known to be — either case of `reviewedMapOf`. Empty is the ordinary run,
+  // whose `final HEAD` is read where the work happened.
+  const judgedTip = typeof facts.judgedTip === "string" ? facts.judgedTip.trim() : "";
+  // And whether this map is known NOT to account for the gathered items
+  // one-for-one, which is what forbids superseding an earlier record with it:
+  // the update is a `PATCH` in place, and an entry the earlier record holds for
+  // an item this map omits, doubles, or cannot publish would go with it.
+  const incomplete = typeof facts.mapIncomplete === "string" ? facts.mapIncomplete.trim() : "";
+  // The identities carried only by dispositions that ARE the incompleteness —
+  // doubled or unpublishable — which the carry step below must treat as carried
+  // by nothing: the caller computes them against the gathered items, which the
+  // record's author cannot re-derive from the dispositions JSON alone.
+  const compromised = Array.isArray(facts.compromisedIdentities)
+    ? facts.compromisedIdentities.filter((v) => typeof v === "string" && v.trim()).map((v) => v.trim())
+    : [];
+  const priorUrl = packet.priorRecord && typeof packet.priorRecord.url === "string" ? packet.priorRecord.url.trim() : "";
+  // The three push states, each with the lead, the `status:` line and the origin
+  // line it implies. An unrecognized or absent state reads as `unknown`, which
+  // claims the least. `noop` is the state a two-valued flag lost: a push that
+  // succeeded while moving nothing leaves the remote pointing at these tips
+  // (`PUBLISH_SCHEMA.pushed` says exactly that of itself), so telling the next
+  // turn their presence on origin is unknown understates what the run knows.
+  // The table is PROTOTYPE-LESS, and the fallback below is why that is not a
+  // flourish: on a plain object literal a `pushState` of `constructor`,
+  // `toString`, `valueOf`, `hasOwnProperty`, `isPrototypeOf` or `__proto__`
+  // resolves to a truthy INHERITED value, so the `||` never fires and the record
+  // renders `status: undefined`, its lead and claims sentences as the literal word
+  // `undefined`, and an origin line whose whole claim is that same word — so it
+  // matches none of the three renderings and says NOTHING where the fallback
+  // exists to say the least. A null prototype deletes that class rather than
+  // guarding each name in it.
+  const UNKNOWN_BY_PUSH = Object.assign(Object.create(null), {
+    advanced: {
+      lead: "This run's publication PUSHED and then stopped, and WHAT ELSE IT PUBLISHED IS UNKNOWN",
+      claims: "So this record says the push was published, and neither claims that any reply, resolve or Summary comment reached the PR nor claims that none did",
+      status: "published in part (the push), and UNKNOWN whether any reply, resolve or Summary comment was published",
+      origin: "the push WAS published — it advanced the remote branch, so the tips above ARE on origin — while whether any reply, resolve or Summary comment below was published is UNKNOWN",
+    },
+    noop: {
+      lead: "This run's publication stopped and WHAT IT PUBLISHED IS UNKNOWN",
+      claims: "Its push succeeded while moving nothing, so this record says the tips are already on origin, and neither claims that any reply, resolve or Summary comment reached the PR nor claims that none did",
+      status: "UNKNOWN whether any reply, resolve or Summary comment was published",
+      origin: "this run's push published NOTHING — it was an `Everything up-to-date` no-op, so the tips above are already on origin though this run put nothing there — while whether any reply, resolve or Summary comment below was published is UNKNOWN",
+    },
+    unknown: {
+      lead: "This run's publication stopped and WHAT IT PUBLISHED IS UNKNOWN",
+      claims: "So this record neither claims that nothing reached origin nor claims that anything did",
+      status: "UNKNOWN whether anything was published",
+      origin: "whether anything reached origin is UNKNOWN — not even a push is known to have advanced the remote branch, so whether the tips above are on origin is unknown too",
+    },
+  });
+  const pushCase = UNKNOWN_BY_PUSH[facts.pushState] || UNKNOWN_BY_PUSH.unknown;
+  return `Leave this run's disposition record on PR #${packet.pr.number} (branch \`${packet.pr.workingBranch}\`). ${unknown
+    ? `${pushCase.lead}: ${facts.why} ${pushCase.claims} — the lines below marked for that case say what is unknown, and every thread entry carries the same reservation.`
+    : landed
+      ? `This run's publication stopped with PART OF THIS MAP ALREADY ON THE PR: ${facts.why} So this record says what is on it rather than "not published", and its tips are ${facts.pushState === "advanced" || facts.pushState === "noop"
+        ? "NOT local-only"
+        : "still LOCAL-ONLY — replies and resolves land through the API without a push, and this run's own account reports no successful push, so what is on the PR does not put these tips on origin"} — the two lines below marked for that case are the ones that differ. What is named as having reached origin is what the PR CARRIES, whichever run put it there — a reply an earlier run posted counts — so write it as that rather than as an account of this run's own writes.`
+      : `This run published NOTHING: ${facts.why}`} Read \`AGENTS.md\` / \`CLAUDE.md\` first.
+
+${where}
+
+${DEPUTY_FINISH_IN_TURN}
+
+${DESTROY_BOUNDARY}
+
+You make exactly ONE PR write — this record comment — and nothing else: no push, no reply, no resolve, no Summary comment, no ping, no label, no review request. If you cannot make that one write, report \`posted: false\` with what failed; never compensate by writing something else.
+
+WHICH REPOSITORY every command below addresses: the one this PR is IN, whose \`<owner>/<repo>\` is already resolved and handed to you in the PR's own URL \`${packet.pr.url}\` — never the repository your working location resolves to. On a cross-repository PR the checkout is the HEAD fork while the PR and its comments live in the base repository, and BOTH command families default to the wrong one there: \`gh api\`'s \`{owner}\`/\`{repo}\` placeholders expand to the repository of the current directory, and a bare \`gh pr comment\` posts into the repository it resolves the same way — so unqualified, the lookup searches the fork and finds no prior record, the \`PATCH\` addresses a comment id in the fork, and the create comments on a same-numbered PR there or fails outright. So write that \`<owner>/<repo>\` out LITERALLY in each command below. Do not re-derive it from a bare \`gh repo view --json nameWithOwner\`, which with no repository argument answers for the directory — in a fork clone the head fork, the one repository this item exists to keep these three writes away from.
+1. Find a prior record. \`gh api --paginate repos/<owner>/<repo>/issues/${packet.pr.number}/comments --jq '.[] | select((.body | split("\\n")[0] | rtrimstr("\\r")) == "<!-- address-review:disposition-record -->") | {id, login: .user.login, updated_at}'\` — the MARKER identifies a record, never its prose, and it must be the body's FIRST LINE byte for byte. A \`contains\` test is what you must NOT use: it also selects an ordinary comment that merely QUOTES the marker (a maintainer asking about this mechanism, a review summary echoing it), and step 2 would then \`PATCH\` that person's comment away. The \`rtrimstr("\\r")\` is why a body GitHub hands back with CRLF line endings still matches its own first line. Keep the ones authored by the authenticated user (\`gh api user --jq .login\`).
+2. Compose the body below, then write it ONCE, reading it from stdin so composing it puts no file in the working location: ${incomplete
+    ? `this run's map is INCOMPLETE (${incomplete}), so it SUPERSEDES NOTHING — post it as a new comment with \`gh pr comment ${packet.pr.number} --repo <owner>/<repo> --body-file -\` and leave every record step 1 found standing, your own included, reporting \`superseded: false\`. The update is a \`PATCH\` in place, so an entry an earlier record of yours holds for an item this map leaves out, names twice, or cannot publish would be destroyed by it and the next run would inherit only this replacement — the very loss this record exists against. Name in \`detail\` the record(s) you left standing${priorUrl ? ` (the most recent is ${priorUrl})` : ""}.`
+    : `a prior record of your own → \`gh api --method PATCH repos/<owner>/<repo>/issues/comments/<id> -F body=@-\`, which supersedes it IN PLACE so the PR keeps one record instead of a stack of near-duplicates; none → \`gh pr comment ${packet.pr.number} --repo <owner>/<repo> --body-file -\`.`} Where several of your own are present (one predating the marker, say), ${incomplete ? "report them all in \`detail\`" : "update the most recent and report the rest in \`detail\`"}: delete, sweep or expire NOTHING, and never touch another actor's comment.
+3. Write "codex"/"claude"/"copilot" PLAIN in the body, with no bare \`@\`-mentions anywhere, exactly as the Summary comment does — a mention here would summon a review round for work this run did not publish.
+
+The body, marker first (the marker line is what step 1 of the next run matches, so it is mandatory and must be byte-exact):
+
+\`\`\`
+<!-- address-review:disposition-record -->
+# address-review packet — PR #${packet.pr.number} (${packet.pr.workingBranch})
+status: ${unknown ? pushCase.status : landed ? "published in part" : "not published"} (<the reason above, one line${unknown ? ", saying which facts are missing" : landed ? ", saying what landed and what did not" : ""}>)
+starting HEAD ${facts.startingHead || "(not recorded — neither the gather nor a rebase point reported one)"} | final HEAD ${judgedTip || "<the tip you read>"} | recorded headRefOid ${packet.pr.headOid}
+base ${packet.pr.base} | validation <what ran> | reviewer ${facts.reviewerStatus || (facts.reviewerPassed ? "Pass" : "did NOT pass")} (${facts.rounds} round(s)) | peer <participation>
+${unknown
+    ? `${pushCase.origin}: ${unknown}; the publisher pushes BEFORE it replies, so a stop with something already on origin is the ordinary shape of this failure: check the PR itself before acting on any tip or any entry below`
+    : landed
+      ? `reached origin: ${landed} — still outstanding: ${outstanding}${facts.pushState === "advanced"
+        ? ""
+        : facts.pushState === "noop"
+          ? " — and the tips above are already on origin, this run having put nothing there: its push was an \`Everything up-to-date\` no-op"
+          : " — and the tips above are still LOCAL-ONLY: what landed rode the API with no successful push, so nothing of the branch is on origin"}`
+      : facts.pushNoop
+        ? "this run changed NOTHING on origin: its push was an `Everything up-to-date` no-op, so the tips above are already on origin while no reply, resolve or Summary comment reached it"
+        : "the tips above are LOCAL ONLY — this run pushed nothing, so they are not on origin"}
+
+## Threads
+[<disposition>] <path>:<line>  <author>  thread=<threadId or url>
+                url:   <permalink>
+                reply: "<the exact reply body a publishing turn would post, verbatim>"
+
+## Summary comment (verbatim, ready to post)
+<the full markdown body>
+\`\`\`
+
+${incomplete
+    ? `- This map is INCOMPLETE (${incomplete}), so say so in the \`status:\` line's reason${priorUrl ? ` and name the earlier record that still stands (${priorUrl})` : ""}: a reader must not take this record for the whole account of this PR, and the entries it does carry are a real triage of the items they cover rather than a draft. Every one of them still gets its full entry below.${priorUrl
+      ? ` And leaving the earlier record standing preserves nothing on its own: the next run's gather replays only the MOST RECENT record — this one, once posted — so an entry living only in the record this one displaces is never replayed again, and a \`standalone\` item only that record names is never even re-gathered, for as long as the older comment stands unread. So CARRY the earlier record's orphaned entries into this one: fetch the body of the record this run replayed — the comment at ${priorUrl}, whose comment id is the number its \`#issuecomment-<id>\` fragment ends with: \`gh api repos/<owner>/<repo>/issues/comments/<id> --jq .body\` — and append to this record's \`## Threads\` block, verbatim and whole (kind, reference, permalink, reply body, any task line), every entry of its own \`## Threads\` block whose identity (\`thread=<threadId or url>\`) no disposition below carries${compromised.length
+        ? ` — a disposition that is itself part of what makes this map incomplete (one of several naming the same gathered item, or one publication rejected as unpublishable) carrying NOTHING for this test, since the account it gives of its item is the very thing this map cannot publish while the displaced record's entry is the one durable copy of a judged reply for it: the identities so compromised here are ${compromised.map((v) => `\`${v}\``).join(", ")}, so a prior entry keyed to one of them is carried too`
+        : ""}, marking each \`carried unchanged from ${priorUrl}\` so a reader knows this run did not re-judge it — the next run's replay re-judges every entry against the tree either way. Where that comment is gone, or is spent and holds no \`## Threads\` block, carry nothing and say so in \`detail\`.`
+      : ""}\n`
+    : ""}- ${judgedTip
+    ? `\`final HEAD\` is given above as \`${judgedTip}\` — write it EXACTLY as given and read no tip for it. It is the tip the reviewer's verdict was rendered over, and the dispositions below are that round's; the tip standing in the working location may be a LATER one a pass committed on top of it, and citing that would hand the next run's replay probe a tree no reviewer ever passed — which, the recorded commits all being its ancestors, prints nothing and so reads as "the record replays as written". Report what \`git rev-parse HEAD\` prints in the working location in \`detail\` instead, as this run's parting tip.`
+    : "`final HEAD` is what `git rev-parse HEAD` prints in the working location. Read it there rather than repeating a SHA from this brief."}
+- One \`## Threads\` block entry per disposition below, in that shape, and EVERY entry carries the same field set whatever its kind: the disposition kind, its stable reference (path:line, author, and the \`threadId\` for a review thread or the \`url\` for a standalone item), the permalink, and the reply body VERBATIM — a \`deferred-to-task\` entry adding the committed task file and its queued or deferred placement beside them rather than in place of them, since which thread a follow-up closes is not re-derivable from the PR. The drafted reply bodies and the ready-to-post Summary body are the only parts of this record that cannot be re-derived from the PR later, so they are the parts that must be exact.
+- The \`## Summary comment\` block holds the "Summary of Review Fixes" body a publishing run would have posted — what was fixed, a prominent "Pushed back — please re-examine" section, a "Deferred to follow-up tasks" section naming each committed task file, and any ambiguous/skipped item — ready to post unchanged. Where the cycle recorded locked-decision deviations, that body LEADS with them under a "Deviation from a locked decision" section, since a later turn posts what you wrote here as it stands. Standing deviations for this run: ${JSON.stringify(facts.deviations || [])}.
+- The SHAs are PROVENANCE, not a promise. Assert nothing about them holding later: the branch may be rebased before any push, which rewrites every one while changing nothing about whether the work is there. Do not write "the branch tip is <sha>" as a condition a replay must check, and do not omit the header's last line${unknown
+    ? " — a reader who takes this record for \"nothing was published\" either re-posts a reply that already landed or never posts one that did not"
+    : landed
+      ? " — a reader who takes a part-way publication for a complete one stops looking for the replies that never landed"
+      : " — a reader who takes those SHAs for origin's goes looking for commits that are not there"}.${perThread.length
+    ? `\n- Every thread keeps its entry and its verbatim reply, this run's stopped publication included — and each entry says WHERE IT STANDS. That standing is NOT yours to derive: the lines below are already matched to the dispositions by the identity publication routes on (\`thread=<threadId or url>\`, never \`ref\` — file:line plus author is shared by two threads a re-review left on one line, so it identifies neither). Copy each line's standing onto the entry it names, above that entry's verbatim reply body, and change nothing else:\n${perThread.map((l) => `  ${l}`).join("\n")}\n  Never drop an entry because its reply landed, and never drop one because its standing is unknown: the difference between the two is the whole reason this rendering exists.${unknown
+      ? ` What the publisher DID report is below, for a maintainer's eye and not as a fact to act on — a report that broke the contract these facts are read under is distrusted WHOLE, so no part of its per-thread account is acted on here, an entry that looks complete included: ${JSON.stringify(outcomes)}.`
+      : ""}`
+    : ""}
+
+Report \`posted\`, \`superseded\` (true when you updated a prior record of your own), \`url\` (the record comment's permalink), and one line of \`detail\`.
+
+## Dispositions to record
+
+${JSON.stringify(dispositions, null, 2)}`;
+}
+
+// The write that ENDS a record's life, and the only PR write a fully published
+// run makes beyond publication itself.
+// A record is REPLAYED rather than re-triaged, and the review-thread half of
+// that replay terminates on the PR: the gather keeps only `isResolved == false`,
+// so a record whose threads a later run resolved replays to nothing. A
+// `standalone` entry has no such state — nothing on the PR marks a comment as
+// addressed, which is precisely why the gather reintroduces one from the record
+// at all — so the RECORD is the claim that the item is outstanding. A record
+// that outlives the publication of its own map therefore hands that item to
+// every later run as fresh work, indefinitely: re-gathered, re-judged, re-listed
+// in every future Summary comment, and turning what should be the zero-item
+// no-op into a full fix/review/publish cycle. So the run that publishes the map
+// in full spends the record that held it, by the same in-place supersession the
+// record already uses: same marker, so a later run still FINDS it, and no
+// entries, which is what leaves nothing for any replay to pick up.
+// It supersedes only a record that is already there. Where the PR carries none
+// there is nothing to spend, and posting one would create the very thing this
+// step exists to end — so the brief's step 2 writes nothing in that case.
+// And it spends THE RECORD THIS RUN REPLAYED, named by the url the gather
+// reported, rather than "the most recent record of your own" the supersession
+// selects by. The two questions are different, and the difference is not
+// symmetric: a supersession that lands on the wrong record REPLACES one map with
+// another, while a spend EMPTIES it — so a record this run never read, holding
+// entries this publication did not put on the PR, would lose them outright. The
+// same-account cases where they differ are ordinary enough to name: a PR
+// carrying a record from another actor's account (the gather reports the most
+// recent record of ANY author, the writes here are filtered to this one), and a
+// second record of this account's own left standing beside an earlier one by the
+// incomplete-map carve-out. So the id is taken from `priorRecord.url` and the
+// write FAILS CLOSED where the PR no longer carries it: an unspent record is
+// replayed again by the next run, which the run's `note` surfaces, while a
+// mis-targeted spend is a silent deletion nothing later can notice.
+// `priorUrl` is always a url here: `spendPriorRecord` returns before rendering
+// this where the gather reported none, so step 1 below names one rather than
+// carrying a fallback nothing reaches.
+function spendRecordPrompt(packet, facts) {
+  const summaryUrl = typeof facts.summaryUrl === "string" ? facts.summaryUrl.trim() : "";
+  const priorUrl = typeof facts.priorUrl === "string" ? facts.priorUrl.trim() : "";
+  return `Spend the prior disposition record on PR #${packet.pr.number} (branch \`${packet.pr.workingBranch}\`). This run PUBLISHED the addressed review IN FULL, so the map that record holds is on the PR and nothing in it is outstanding. Read \`AGENTS.md\` / \`CLAUDE.md\` first.
+
+${DEPUTY_FINISH_IN_TURN}
+
+${DESTROY_BOUNDARY}
+
+You make at most ONE PR write — updating that record comment in place — and nothing else: no push, no reply, no resolve, no Summary comment, no ping, no label, no review request. If you cannot make that one write, report \`posted: false\` with what failed; never compensate by writing something else. And you make NO write at all where step 1 does not find THAT record, still there and still yours: there is then nothing this run may spend, and posting a new comment would create exactly what this step exists to end.
+
+WHICH REPOSITORY every command below addresses: the one this PR is IN, whose \`<owner>/<repo>\` is already resolved and handed to you in the PR's own URL \`${packet.pr.url}\` — never the repository your working location resolves to. On a cross-repository PR the checkout is the HEAD fork while the PR and its comments live in the base repository, and \`gh api\`'s \`{owner}\`/\`{repo}\` placeholders expand to the repository of the current directory — so unqualified, the lookup searches the fork and finds no record to spend, and the \`PATCH\` addresses a comment id in the fork. So write that \`<owner>/<repo>\` out LITERALLY in each command below. Do not re-derive it from a bare \`gh repo view --json nameWithOwner\`, which with no repository argument answers for the directory — in a fork clone the head fork again.
+1. Find THE record this run replayed — the comment at ${priorUrl}, whose comment id is the number its \`#issuecomment-<id>\` fragment ends with. It is the ONLY record this run may spend: its map is the one this publication put on the PR, and any other record on this PR is some other run's account, which the in-place update below would EMPTY rather than replace. Confirm it is still there and still yours: \`gh api --paginate repos/<owner>/<repo>/issues/${packet.pr.number}/comments --jq '.[] | select((.body | split("\\n")[0] | rtrimstr("\\r")) == "<!-- address-review:disposition-record -->") | {id, login: .user.login, updated_at}'\` — the MARKER identifies a record, never its prose, and it must be the body's FIRST LINE byte for byte. A \`contains\` test is what you must NOT use: it also selects an ordinary comment that merely QUOTES the marker (a maintainer asking about this mechanism, a review summary echoing it), and step 2 would then \`PATCH\` that person's comment away. The \`rtrimstr("\\r")\` is why a body GitHub hands back with CRLF line endings still matches its own first line. Yours are the ones authored by the authenticated user (\`gh api user --jq .login\`).
+2. Where that listing does not carry that id as a record of your own — it is gone, it is another actor's, or no id could be read from the url — write NOTHING: report \`posted: false\`, \`superseded: false\`, and say in \`detail\` which of those it was. Do NOT fall back to the most recent record of your own, or to any other: an unspent record is replayed by the next run and this run's report says so, while a spend written over the wrong record deletes a map nothing later can recover. Otherwise update THAT id IN PLACE with the body below, read from stdin so composing it puts no file in the working location: \`gh api --method PATCH repos/<owner>/<repo>/issues/comments/<id> -F body=@-\`. Report any further records the listing shows in \`detail\` rather than touching them, and never touch another actor's comment: delete, sweep or expire NOTHING.
+3. Write "codex"/"claude"/"copilot" PLAIN in the body, with no bare \`@\`-mentions anywhere — a mention here would summon a review round for work that is already published.
+
+The body, marker first (the marker line is mandatory and must be byte-exact: a spent record must still be FOUND as a record by the next run, which is how it reads as spent rather than as absent):
+
+\`\`\`
+<!-- address-review:disposition-record -->
+# address-review packet — PR #${packet.pr.number} (${packet.pr.workingBranch})
+status: SPENT — the map this record held has since been published in full by a later run of this workflow${summaryUrl ? `, whose Summary comment is at ${summaryUrl}` : ""}
+nothing here is outstanding: every reply and resolve that publication owed reached the PR, and every standalone item this record named was carried into that run's Summary comment — one it could not settle appearing there as the ambiguous/skipped item it is, which is where a maintainer picks it up, since a spent record hands nothing to a later run. This record is kept, and kept findable by its marker, so a later run reads a SPENT record rather than a live one.
+\`\`\`
+
+Write NOTHING else into it — no \`## Threads\` block and no \`## Summary comment\` block, and do not carry the old ones forward. Their content is on the PR now, and their ABSENCE is what ends this record: a run REPLAYS a record rather than re-triaging it, and while the review threads a record names self-terminate on having been resolved, a standalone item has no resolved state on the PR at all — so an entry left standing here would be re-gathered as fresh work by every later run, forever.
+
+Report \`posted\`, \`superseded\` (true when you updated a prior record of your own), \`url\` (that comment's permalink), and one line of \`detail\`.`;
 }
 
 // The one deputy whose whole job is giving the worktree back. It runs only on
@@ -737,7 +1114,9 @@ const flagText = raw.toLowerCase().replace(/(\brebase[\s-]*on[\s-]*top[\s-]*of\s
 //   ping-contributing         -> same as the default (redundant, kept for reference)
 //   push                      -> push, ping NOBODY (publish quietly)
 //   ping-codex|claude|copilot -> push + ping exactly those (overrides contributing)
-//   no-push                   -> local-only; mutate no PR at all (the pre-change default)
+//   no-push                   -> local-only; the ONE PR write is the disposition
+//                                record every non-publishing exit leaves (the
+//                                pre-change default, which mutated nothing)
 // `no-push` WINS: it is the only way to suppress the now-default push, so honor it
 // even when combined with a (contradictory) ping flag.
 //
@@ -1289,7 +1668,9 @@ let cycle = await workflow("wf-review-cycle", {
   mode: "full",
   scope: {
     title: `pr-${packet.pr.number}`,
-    instructions: fixInstructions(packet),
+    // The prior record goes to the ROUND-1 fixer only, which is the one round
+    // that triages: this is where replaying it saves the judgment it holds.
+    instructions: fixInstructions(packet, packet.priorRecord),
     reviewInstructions: reviewCriteria(),
     items: packet.items,
   },
@@ -1445,8 +1826,188 @@ function reverifiedRecord(record) {
 // against — are ruled out by the budget on its own.
 const CYCLE_MAX_ROUNDS = 12;
 const REVERIFY_MAX_ROUNDS = 4;
+
+// --- The DISPOSITION RECORD, finalized in ONE place --------------------------
+// `recordPrompt` is this workflow's rendering of the `address-review` skill's
+// "The durable disposition record"; this is the single place the run decides to
+// leave one. Every exit that HOLDS this run's disposition map and does not
+// publish it in full finalizes through here, so the only question a new exit has
+// to answer is whether it calls this — not what it should re-derive. It was one
+// inline dispatch keyed on a reason computed from the conditions the exits
+// between it and publication branch on, which by construction left out the exits
+// AHEAD of that computation (the pre-push rebase's stops, and a replay with no
+// re-verification budget left) and the one PAST it (a publication that did not
+// complete).
+// A map with no entries records nothing: the skill's rule that a run with
+// nothing triaged says so in its report rather than posting an empty record.
+// An exit that passes no reason records nothing either.
+// The ONE substantive exemption is a map NO REVIEWER EVER JUDGED, and it is
+// keyed on that fact rather than on which exit is asking — the distinction it
+// used to be keyed on, "a cycle that errored", is not the same question and is
+// FALSE for some errors. `wf-review-cycle` sets `confirming` only after a round
+// PASSED, and the confirmation pass that follows can stop the cycle outright
+// (returning nothing, blocking, coming back on an unclean worktree), which
+// leaves `verdict: "error"` standing over exactly the map that just passed
+// review. So the cycle reports `workReportReviewed` — whether a reviewer round
+// passed over the map being carried out, which is false again once a later pass
+// replaced it — and every exit reads that. A cap-hit cycle records for the same
+// reason it always did: its dispositions are a finished round's triage with
+// findings still outstanding, and `reviewer did NOT pass (N rounds)` is a line
+// its record prints truthfully.
+// What the exemption still covers is a map of genuinely unknown completeness
+// over an unknown tree: a round that never finished, no verdict of any kind
+// rendered over its entries. A record is REPLAYED rather than re-triaged
+// (`priorRecordSection`), so recording that would hand the next run's round 1 a
+// baseline no reviewer ever stood behind — while the map itself rides out in the
+// result, beside the error that produced it, where a maintainer reads both.
+// The post-merge error exit holds TWO maps and neither is exempt by that test:
+// `mergedCycle` spreads `after`, so its `workReport` is the failed
+// re-verification's own, but `preRebaseCycle`'s PASSED review on the base before
+// the replay. Both ride out in the result, and the one RECORDED is the most
+// recent JUDGED map that HAS ENTRIES — which is not always the one the cycle
+// carries out, and is what `reviewedMapOf` below answers.
+// It always runs before the worktree is given back, because every exit that
+// reclaims one is below the call that records for it — so the tips it cites are
+// read where the work happened.
+let dispositionRecord = null;
+async function leaveDispositionRecord(why, map, facts) {
+  const held = Array.isArray(map) ? map : [];
+  if (!why || !held.length) return {};
+  phase("Record");
+  // The tip this run started from. The gather reads it in the working location
+  // after the one fast-forward it may perform, so EVERY run has one — including
+  // `no-rebase`, which has no rebase report to take it from. A rebase point's
+  // `before` is the same commit and stands in where a gather reported none;
+  // absent both, the brief says it was not recorded rather than inventing one.
+  const startingHead =
+    (typeof packet.pr.startingHead === "string" ? packet.pr.startingHead.trim() : "") ||
+    (rebaseRecord.points[0] || {}).before ||
+    "";
+  const written = await agent(recordPrompt(packet, held, { ...facts, why, startingHead }), {
+    label: "record",
+    schema: RECORD_SCHEMA,
+  });
+  dispositionRecord = written || { posted: false, detail: "the record phase returned nothing, so this run's disposition map survives only in this result." };
+  return { dispositionRecord };
+}
+// And the mirror of it on the ONE path that leaves no record: a full
+// publication, which has just put on the PR everything a prior record was
+// holding. `spendRecordPrompt` above says why that record cannot simply be left
+// standing. Nothing is written where the gather found no record — the loop it
+// ends needs one to exist — so this is a no-op on the ordinary first run.
+async function spendPriorRecord(summaryUrl) {
+  const priorUrl = packet.priorRecord && typeof packet.priorRecord.url === "string" ? packet.priorRecord.url.trim() : "";
+  if (!priorUrl) return {};
+  phase("Record");
+  const spent = await agent(spendRecordPrompt(packet, { summaryUrl, priorUrl }), {
+    label: "spend-record",
+    schema: RECORD_SCHEMA,
+  });
+  return {
+    spentRecord: spent || { posted: false, detail: "the record-spending phase returned nothing, so whether the prior record still holds this run's now-published map is unknown." },
+  };
+}
+// WHICH map a stopped cycle records, in one place because two exits ask it. Both
+// halves of the test earn their keep. A map with NO ENTRIES records nothing
+// (`leaveDispositionRecord`'s rule above), so selecting on "was it reviewed"
+// alone let a passed-but-empty map suppress the record outright — and where a
+// second, older reviewed map stood behind it, take that one down with it, which
+// is the loss this whole mechanism exists against. And the map a reviewer judged
+// is not always the map leaving the cycle: a later pass can REPLACE it and then
+// stop the cycle, so the cycle reports the judged map separately
+// (`reviewedWorkReport`) and it is recorded while the unjudged map it carries out
+// rides out under `dispositions` — without which that judged map, drafted replies
+// and all, reached no PR comment and no result key at all.
+// `replaced` names ONE branch over TWO shapes, which is why the record's wording
+// names both rather than a third `which`: `wf-review-cycle` reports
+// `workReportReviewed: false` both for a later pass that returned DIFFERENT
+// entries and for one that committed a new `finalSha` while returning the
+// identical entries (`test-review-cycle-retirement` drives that same-map/new-tip
+// shape on both of its workflow legs). Nothing was replaced in the second, yet the
+// consequence is the one that matters here and is the same in both: the verdict
+// this map carries was not rendered over the tree leaving the cycle, so the tip
+// the record cites is not the tree the reviewer judged. Telling them apart would
+// buy a third rendering to say what one honest sentence already says.
+// It also carries the TIP that map was judged on, because the record's `final
+// HEAD` is not provenance alone: a replay probes it (`priorRecordSection` step
+// 1 makes it the `F` of `git rev-list --right-only --cherry-pick B...F`), so
+// citing the tip standing in the working location for a map judged on an
+// earlier one hands that probe a tree no reviewer ever passed — and since the
+// later pass committed OVER the judged tip, the probe prints nothing and the
+// record reads as replaying "as written". BOTH cases need it, from the same
+// mechanism read in two places: the cycle's `finalSha` moves only when a pass
+// packet is ADOPTED, while the working location's HEAD moves the moment that
+// pass commits. A pass that commits and is then rejected before adoption —
+// returning nothing, blocking, coming back unclean — leaves `carried` true over
+// a tip the working location has already advanced past. So each case cites the
+// tip the cycle reported for the round that judged it: `finalSha` for `carried`
+// (which `workReportReviewed` makes exactly that round's tip) and
+// `reviewedFinalSha` for `replaced`. A cycle that reported neither yields an
+// empty one and the record falls back to reading the tip rather than inventing
+// one.
+function reviewedMapOf(cycle) {
+  const carried = Array.isArray(cycle.workReport) ? cycle.workReport : [];
+  if (cycle.workReportReviewed && carried.length) return { which: "carried", map: carried, sha: typeof cycle.finalSha === "string" ? cycle.finalSha.trim() : "" };
+  const judged = Array.isArray(cycle.reviewedWorkReport) ? cycle.reviewedWorkReport : [];
+  if (judged.length) return { which: "replaced", map: judged, sha: typeof cycle.reviewedFinalSha === "string" ? cycle.reviewedFinalSha.trim() : "" };
+  return { which: "none", map: [], sha: "" };
+}
+// The one sentence a JUDGED map's reason owes about its tip, in one place
+// because four cycle-error exits state it and they must not drift. "May have
+// moved past" rather than "has": the tip is cited because the working location's
+// HEAD is not KNOWN to be the judged one, and both cases reach here with it
+// unmoved just as ordinarily as with it moved — a `replaced` pass that returned
+// different entries without committing, and a `carried` pass that was rejected
+// having committed nothing.
+const judgedTipClause = (judged) =>
+  judged.sha
+    ? ` The \`final HEAD\` below is \`${judged.sha}\` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass may have moved past.`
+    : " The `final HEAD` below is the tip standing in the working location, which is therefore NOT necessarily the tree that verdict was rendered over: the cycle reported no tip for the round that judged this map.";
+// The same fact in the one line a maintainer reads first. A record that failed
+// to post is the more important half: it means the map is in this result and
+// nowhere else, which is exactly the loss the record exists to prevent.
+function recordNoteText() {
+  if (!dispositionRecord) return "";
+  return dispositionRecord.posted
+    ? `This run's disposition map is on the PR as its disposition record${dispositionRecord.url ? ` (${dispositionRecord.url})` : ""} — the one PR write a run that does not publish in full makes.`
+    : `This run's disposition map could NOT be recorded on the PR (${dispositionRecord.detail}), so it survives only in this result.`;
+}
+// For the exits whose `note` is composed elsewhere (a rebase stop's is built by
+// `rebasePoint`, the published exit's by the ping accounting), so the record
+// still reaches the line a maintainer reads first.
+const withRecordNote = (note) => `${note || ""}${recordNoteText() ? ` ${recordNoteText()}` : ""}`.trim();
+
+// The FIRST cycle-error exit, and the first one to read the reviewed fact rather
+// than the verdict. It sits below the helper only because it calls it (the
+// helper's `dispositionRecord` is a `let` in this scope, so calling it from
+// above would hit the temporal dead zone); nothing between them has an effect.
 if (cycle.verdict === "error") {
-  return { error: `Review cycle failed: ${cycle.detail}`, pr: packet.pr, rebase: rebaseRecord, rounds: cycle.rounds, dispositions: cycle.workReport, openQuestions: cycle.openQuestions, deviations: cycle.deviations, peerRounds: cycle.peerRounds, artifactDir: cycle.artifactDir, ...carriedOf(cycle) };
+  const judged = reviewedMapOf(cycle);
+  const record = await leaveDispositionRecord(
+    judged.which === "carried"
+      ? `the review cycle errored AFTER a reviewer round had passed over the dispositions below — its final confirmation pass stopped the cycle — so publication was refused: ${cycle.detail || "no detail reported"}${judgedTipClause(judged)}`
+      : judged.which === "replaced"
+        ? `the review cycle errored after a later pass had SUPERSEDED the map a reviewer round passed over — replacing its entries, or committing a new tip under the same ones — so publication was refused: ${cycle.detail || "no detail reported"} The dispositions below are that judged map — the most recent one a reviewer actually passed over; the unjudged map the cycle carried out is in this run's result under \`dispositions\` and is deliberately not recorded, since a record is replayed rather than re-triaged.${judgedTipClause(judged)}`
+        : "",
+    judged.map,
+    judged.which === "carried"
+      ? { rounds: cycle.rounds, reviewerStatus: "passed a round, after which the cycle errored", deviations: cycle.deviations, judgedTip: judged.sha }
+      : { rounds: cycle.rounds, reviewerStatus: "passed a round, after which a later pass superseded the map it judged and the cycle errored", deviations: cycle.deviations, judgedTip: judged.sha },
+  );
+  return {
+    error: `Review cycle failed: ${cycle.detail}`,
+    ...record,
+    pr: packet.pr,
+    rebase: rebaseRecord,
+    rounds: cycle.rounds,
+    dispositions: cycle.workReport,
+    openQuestions: cycle.openQuestions,
+    deviations: cycle.deviations,
+    peerRounds: cycle.peerRounds,
+    artifactDir: cycle.artifactDir,
+    ...carriedOf(cycle),
+    ...(recordNoteText() ? { note: recordNoteText() } : {}),
+  };
 }
 
 // The SECOND rebase point: the fixes are committed and the next thing that
@@ -1480,8 +2041,18 @@ if (cycle.verdict === "error") {
 if (cycle.verdict === "pass" && !flags.noRebase) {
   const second = await rebasePoint("pre-push", rebaseTargetRef);
   if (second.stop) {
+    // A stop here is the first exit that HOLDS a triaged, reviewed map: the
+    // cycle passed, and the rebase aborted cleanly onto the tree that verdict
+    // describes. So it records like every other exit that publishes nothing,
+    // and the reason names the stop rather than a flag.
+    const record = await leaveDispositionRecord(
+      `the pre-push rebase stopped the run (${second.stop.status}), so publication was refused: ${second.stop.detail || "no detail reported"} The dispositions below passed review on the base the branch sat on before that point.`,
+      cycle.workReport,
+      { rounds: cycle.rounds, reviewerPassed: cycle.verdict === "pass", deviations: cycle.deviations },
+    );
     return {
       ...second.stop,
+      ...record,
       rounds: cycle.rounds,
       dispositions: cycle.workReport,
       // Oldest first, the order `mergedCycle` keeps every human-facing set in:
@@ -1492,6 +2063,7 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
       peerRounds: cycle.peerRounds,
       artifactDir: cycle.artifactDir,
       ...carriedOf(cycle),
+      note: withRecordNote(second.stop.note),
     };
   }
   if (!second.rebase.noop) {
@@ -1510,8 +2082,19 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
     // the same shape as every other stop this point can reach.
     const reverifyBudget = Math.min(REVERIFY_MAX_ROUNDS, Math.max(0, CYCLE_MAX_ROUNDS - (Number(preRebaseCycle.rounds) || 0)));
     if (reverifyBudget < 1) {
+      // The map here passed review too, on the base before the replay, and this
+      // exit is the one place a maintainer could otherwise lose it: the run
+      // spent its whole round budget and stops, so nothing downstream will ever
+      // post its drafted replies. The reason says the verdict is the pre-rebase
+      // tree's, which is the fact the record must not overstate.
+      const record = await leaveDispositionRecord(
+        `the pre-push rebase replayed commits and the run had no reviewer rounds left to re-verify the rebased tree, so publication was refused. The dispositions below passed review on the base the branch sat on before that replay.`,
+        preRebaseCycle.workReport,
+        { rounds: preRebaseCycle.rounds, reviewerPassed: preRebaseCycle.verdict === "pass", deviations: preRebaseCycle.deviations },
+      );
       return {
         status: "reverify-budget-exhausted",
+        ...record,
         pr: packet.pr,
         rebase: rebaseRecord,
         rounds: preRebaseCycle.rounds,
@@ -1525,7 +2108,7 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
         // Named unconditionally: `rebasePoint` adopts no successful report
         // without a `refs/pre-rebase/` ref, so by this line the branch's way
         // back is known rather than hoped for.
-        note: `Nothing was pushed. The branch is on the rebased base, and its pre-rebase tip is saved at \`${second.rebase.recoveryRef}\`. Re-run to review the rebased tree with a fresh round budget.`,
+        note: withRecordNote(`Nothing was pushed. The branch is on the rebased base, and its pre-rebase tip is saved at \`${second.rebase.recoveryRef}\`. Re-run to review the rebased tree with a fresh round budget.`),
       };
     }
     const reverified = await workflow("wf-review-cycle", {
@@ -1544,8 +2127,21 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
       },
     });
     if (!reverified) {
+      // `cycle` is still `preRebaseCycle` here — the reassignment is below — so
+      // this exit holds exactly the map the exhausted-budget exit above holds:
+      // one that PASSED review on the base the branch sat on before the replay.
+      // The cycle-error exits' exemption does not reach it, and nothing
+      // downstream will ever post its drafted replies, so it records for the
+      // same reason, with the same care not to claim the verdict describes the
+      // rebased tree.
+      const record = await leaveDispositionRecord(
+        `the pre-push rebase replayed commits and the re-verification cycle returned nothing, so no verdict describes the rebased tree and publication was refused. The dispositions below passed review on the base the branch sat on before that replay.`,
+        cycle.workReport,
+        { rounds: cycle.rounds, reviewerPassed: cycle.verdict === "pass", deviations: cycle.deviations },
+      );
       return {
         error: "The post-rebase re-verification cycle returned nothing, so no verdict describes the rebased tree; nothing was pushed.",
+        ...record,
         pr: packet.pr,
         rebase: rebaseRecord,
         rounds: cycle.rounds,
@@ -1555,6 +2151,7 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
         peerRounds: cycle.peerRounds,
         artifactDir: cycle.artifactDir,
         ...carriedOf(cycle),
+        note: withRecordNote(`Nothing was pushed. The branch is on the rebased base, and its pre-rebase tip is saved at \`${second.rebase.recoveryRef}\`.`),
       };
     }
     second.rebase.reverified = {
@@ -1566,7 +2163,52 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
     };
     cycle = mergedCycle(preRebaseCycle, reverified);
     if (cycle.verdict === "error") {
-      return { error: `Post-rebase re-verification cycle failed: ${cycle.detail}`, pr: packet.pr, rebase: rebaseRecord, rounds: cycle.rounds, dispositions: cycle.workReport, openQuestions: cycle.openQuestions, deviations: cycle.deviations, peerRounds: cycle.peerRounds, artifactDir: cycle.artifactDir, ...carriedOf(cycle) };
+      // TWO maps stand here, and this exit used to record neither. The merged
+      // one is the failed re-verification's own (`mergedCycle` spreads `after`),
+      // and it may still have been judged — a confirmation pass that stopped
+      // that cycle leaves an error verdict over a map a round passed — while
+      // `preRebaseCycle`'s PASSED review on the base before the replay
+      // regardless, and used to be dropped on the floor here: recorded nowhere
+      // and carried under no result key, which is precisely the loss this record
+      // exists against. So both ride out, and the one RECORDED is the most
+      // recent JUDGED map that has entries — `reviewedMapOf`, whose two halves
+      // are why this is not simply `cycle.workReportReviewed`: a
+      // passed-but-EMPTY re-verification map suppressed the record and took this
+      // pre-rebase map with it, and a judged map a later pass REPLACED was lost
+      // to the pre-rebase one standing in for it.
+      const judged = reviewedMapOf(cycle);
+      const record = await leaveDispositionRecord(
+        judged.which === "carried"
+          ? `the post-rebase re-verification errored AFTER a reviewer round had passed over the dispositions below, so publication was refused: ${cycle.detail || "no detail reported"} They are the re-verification's own map, judged over the rebased tree.${judgedTipClause(judged)}`
+          : judged.which === "replaced"
+            ? `the post-rebase re-verification errored after a later pass had SUPERSEDED the map its reviewer round passed over — replacing its entries, or committing a new tip under the same ones — so publication was refused: ${cycle.detail || "no detail reported"} The dispositions below are that judged map, rendered over the rebased tree; the unjudged map the cycle carried out is in this run's result under \`dispositions\` and is deliberately not recorded, since a record is replayed rather than re-triaged.${judgedTipClause(judged)}`
+            : `the post-rebase re-verification errored with no judged map of its own to record — no reviewer round passed over a map with entries over the rebased tree — so publication was refused: ${cycle.detail || "no detail reported"} The dispositions below are the ones that PASSED review on the base the branch sat on before that replay; the re-verification's own map is in this run's result under \`dispositions\` and is deliberately not recorded, since a record is replayed rather than re-triaged.`,
+        judged.which === "none" ? preRebaseCycle.workReport : judged.map,
+        judged.which === "carried"
+          ? { rounds: cycle.rounds, reviewerStatus: "passed a round over the rebased tree, after which the cycle errored", deviations: cycle.deviations, judgedTip: judged.sha }
+          : judged.which === "replaced"
+            ? { rounds: cycle.rounds, reviewerStatus: "passed a round over the rebased tree, after which a later pass superseded the map it judged and the cycle errored", deviations: cycle.deviations, judgedTip: judged.sha }
+            : { rounds: preRebaseCycle.rounds, reviewerStatus: "Pass, on the base the branch sat on before the replay", deviations: preRebaseCycle.deviations },
+      );
+      return {
+        error: `Post-rebase re-verification cycle failed: ${cycle.detail}`,
+        ...record,
+        pr: packet.pr,
+        rebase: rebaseRecord,
+        rounds: cycle.rounds,
+        dispositions: cycle.workReport,
+        // The map that passed on the pre-replay base, under its own key on every
+        // one of these exits — including the one that recorded it, so a
+        // maintainer reading the result never has to work out which of the two
+        // the record holds.
+        preRebaseDispositions: preRebaseCycle.workReport || [],
+        openQuestions: cycle.openQuestions,
+        deviations: cycle.deviations,
+        peerRounds: cycle.peerRounds,
+        artifactDir: cycle.artifactDir,
+        ...carriedOf(cycle),
+        note: withRecordNote(`Nothing was pushed. The branch is on the rebased base, and its pre-rebase tip is saved at \`${second.rebase.recoveryRef}\`.`),
+      };
     }
   }
 }
@@ -1746,8 +2388,86 @@ const badDispDefect = dispDefects.length ? dispDefects[0].defect : "";
 const badDispRef = dispDefects.length ? dispDefects[0].ref : "";
 const moreDefects = dispDefects.length > 1 ? ` ${dispDefects.length - 1} further entr${dispDefects.length === 2 ? "y is" : "ies are"} unpublishable too — see malformedDispositions.` : "";
 
+// THE DISPOSITION RECORD for the exits BETWEEN here and publication. Which
+// exits those are is not a list to maintain: the reason below is computed from
+// the very conditions they branch on, in their order, so it is non-empty exactly
+// when one of them is about to be taken. The exits AHEAD of this line (the
+// pre-push rebase's stops, and a replay with no re-verification budget left) and
+// the one PAST it (a publication that did not complete) each state their own
+// reason where they are taken, and all of them finalize through
+// `leaveDispositionRecord`, so an exit added anywhere has exactly one thing to
+// decide: whether it records.
+// The zero-item exits upstream never reach here, so the empty-map case this
+// covers is a cycle that returned an empty report.
+const noPublishReason = !flags.push
+  ? passed
+    ? "`no-push` was given, so this was a local-only run: nothing was pushed and no thread was touched."
+    : "`no-push` was given AND the review cycle stopped at its round cap, so nothing was pushed."
+  : !passed
+    ? "the review cycle stopped at its round cap without a passing verdict, so publication was refused."
+    : uncoveredItems.length
+      ? `${uncoveredItems.length} gathered item(s) carry no disposition, so publication was aborted before any push.`
+      : duplicatedItems.length
+        ? `${duplicatedItems.length} gathered item(s) carry more than one disposition, so publication was aborted before any push.`
+        : badDispDefect
+          ? `a disposition is not publishable (${badDispRef}: ${badDispDefect}), so publication was aborted before any push.`
+          : "";
+// Whether THIS run's map is known not to account for the gathered items
+// one-for-one — the same three guards, read for a different question. It is
+// computed off the guards rather than off `noPublishReason`, which does not name
+// them on the `no-push` path, where the map is just as defective and the record
+// is written just the same.
+// What it decides is whether the record may SUPERSEDE an earlier one. Superseding
+// is a `PATCH` in place, so an entry a prior record holds for an item this map
+// omits, doubles, or cannot publish is destroyed by it, and the next run inherits
+// only the unusable replacement — the exact loss this whole mechanism exists
+// against, arriving through the mechanism itself. The replacement is still
+// written: its entries are a real triage of the items they do cover, and letting
+// them die with the session to protect the older record would trade one loss for
+// the other. So both survive — this one as a new comment, the earlier one
+// standing where it is. Standing is not preservation on its own, though: the
+// gather replays only the MOST RECENT record, so the record brief has the new
+// comment CARRY the displaced record's orphaned entries forward — an entry
+// living only in the older comment would otherwise never be replayed again,
+// and a standalone item only it names never even re-gathered.
+const mapIncomplete = uncoveredItems.length
+  ? `${uncoveredItems.length} gathered item(s) carry no disposition`
+  : duplicatedItems.length
+    ? `${duplicatedItems.length} gathered item(s) carry more than one disposition`
+    : badDispDefect
+      ? `a disposition is not publishable (${badDispRef}: ${badDispDefect})`
+      : "";
+// The identities those same guards found COMPROMISED — each carried by a
+// disposition that is itself part of the incompleteness: one of several
+// naming the same gathered item, or one publication rejected as
+// unpublishable. The record brief's carry step needs them by name, because
+// its predicate skips a prior-record entry whose identity a disposition of
+// this map carries — and for these identities the disposition carrying them
+// is exactly what this map cannot publish, so treating it as coverage would
+// strand the displaced record's entry for the item — the durable copy of a
+// judged reply the no-supersede rule above exists to keep, for the doubled
+// and unpublishable shapes as much as the omitted one — off the replay
+// surface the newest record becomes. An uncovered item needs no entry here:
+// no disposition carries its identity, so the base predicate already carries
+// its prior entry.
+const compromisedIdentities = [...new Set([
+  ...duplicatedItems.map((it) => (it.type === "review-thread" ? it.threadId : it.url)),
+  ...workReport.filter((d) => d && dispositionDefect(d)).flatMap((d) => [d.threadId, d.url]),
+].filter((v) => typeof v === "string" && v))];
+// Spread into every exit below that publishes nothing, so the result says where
+// the map went — or that it went nowhere.
+const recordResult = await leaveDispositionRecord(noPublishReason, workReport, {
+  rounds,
+  reviewerPassed: !!passed,
+  deviations: cycle.deviations,
+  mapIncomplete,
+  compromisedIdentities,
+});
+const recordNote = recordNoteText();
+
 if (!flags.push) {
-  // Local-only run: make NO PR mutations. The disposition map is the deliverable
+  // Local-only run: no push, no reply, no resolve, no Summary comment, no ping —
+  // the record above is the one documented PR write. The disposition map is the deliverable
   // so a later "push" turn can replay replies/resolves precisely — which is why
   // an uncovered item, a doubly-covered one, or a malformed covering entry
   // downgrades the verdict to `fixed-local-incomplete`: a replay from this map
@@ -1761,6 +2481,7 @@ if (!flags.push) {
   phase("Report (no-push)");
   return {
     status: passed ? (uncoveredItems.length || duplicatedItems.length || badDispDefect ? "fixed-local-incomplete" : "fixed-local") : "review-cap",
+    ...recordResult,
     ...(reclaimed ? { worktreeReclaim: reclaimed } : {}),
     pr: packet.pr,
     rebase: rebaseRecord,
@@ -1784,7 +2505,7 @@ if (!flags.push) {
     ...(badDispDefect
       ? { malformedDisposition: badDispRef, malformedDispositions: dispDefects, dispositionNote: `Disposition "${badDispRef}" is not publishable: ${badDispDefect}. A later publish replay would misroute or skip it.${moreDefects}` }
       : {}),
-    note: `Local-only run: no push, no replies/resolves, no comment. Re-run without \`no-push\` to publish with the default contributing-bot pings, or with \`push\` to publish quietly.${survivingWorktreeNote(reclaimed)}`,
+    note: `Local-only run: no push, no replies/resolves, no Summary comment, no ping.${recordNote ? ` ${recordNote}` : ""} Re-run without \`no-push\` to publish with the default contributing-bot pings, or with \`push\` to publish quietly.${survivingWorktreeNote(reclaimed)}`,
   };
 }
 
@@ -1793,6 +2514,7 @@ if (!passed) {
   phase("Report (cap hit, not published)");
   return {
     status: "review-cap-not-published",
+    ...recordResult,
     pr: packet.pr,
     rebase: rebaseRecord,
     rounds,
@@ -1803,7 +2525,7 @@ if (!passed) {
     artifactDir: cycle.artifactDir,
     ...carried,
     outstanding: cycle.outstanding || null,
-    note: "Hit the review cycle's round cap without a passing review; nothing was pushed.",
+    note: `Hit the review cycle's round cap without a passing review; nothing was pushed.${recordNote ? ` ${recordNote}` : ""}`,
   };
 }
 
@@ -1815,6 +2537,7 @@ if (!passed) {
 if (uncoveredItems.length) {
   return {
     status: "publish-aborted-incomplete-dispositions",
+    ...recordResult,
     pr: packet.pr,
     rebase: rebaseRecord,
     rounds,
@@ -1837,6 +2560,7 @@ if (uncoveredItems.length) {
 if (duplicatedItems.length) {
   return {
     status: "publish-aborted-conflicting-dispositions",
+    ...recordResult,
     pr: packet.pr,
     rebase: rebaseRecord,
     rounds,
@@ -1859,6 +2583,7 @@ if (duplicatedItems.length) {
 if (badDispDefect) {
   return {
     status: "publish-aborted-incomplete-dispositions",
+    ...recordResult,
     pr: packet.pr,
     rebase: rebaseRecord,
     rounds,
@@ -1930,11 +2655,356 @@ const publishReport = await agent(publishPrompt(packet, workReport, publishFlags
   schema: PUBLISH_SCHEMA,
 });
 
-const published = !!(publishReport && publishReport.published);
-// One record for both the result field and the note below, so the reason the
-// note quotes is the one the report shows — including where the publisher
-// returned nothing at all and there is no report to quote from.
-const publishRecord = publishReport || { published: false, aborted: "publisher returned nothing" };
+// What the publisher CLAIMED, which is not yet what this run reports: a
+// `published: true` claim is a claim about the whole of step 7 — every reply
+// posted, every resolve done, the Summary comment on the PR — and it is accepted
+// only over an account that can carry it (`published` below). Read as the answer
+// on its own, a report claiming completion while accounting for nothing exited
+// `fixed-published`, gave the worktree back, and wrote NO record — the same
+// silence four rounds hardened the not-published path against, waved through on
+// the path that reclaims the tree.
+const publishClaimed = !!(publishReport && publishReport.published);
+// A publication that did NOT complete still holds this run's map with replies
+// left to replay, so it records through the same helper as every exit above —
+// the last of the exits that publish nothing in full, and the one the computed
+// reason above cannot reach because the publisher had not run yet.
+// What it records differs in two lines, and what selects them is what of this
+// map the PR ALREADY CARRIES when the publisher stopped — end state, never a
+// diary of this run's own writes, so a reply a PRIOR run posted counts and a
+// replay whose push moved nothing over it still reads as "published in part".
+// `pushed` is not that selector either: it says a push command succeeded, which
+// an `Everything up-to-date` no-op also does, so `pushedNewCommits` — the flag
+// that says the remote MOVED — is the push half a record may name. What must
+// not read as "published in part" is the run NO part of whose map is on the PR:
+// a reader who believes it goes looking for replies and a Summary comment that
+// were never posted. Only three things can be on the PR, and the publisher
+// reports each one: a push that ADVANCED the remote, replies/resolves its
+// account confirms (a reply skipped as a duplicate of one already there
+// included), and a posted Summary.
+// And what the publisher's account cannot say, this run must not say either.
+// Absence of a report is not evidence of absence of mutations: the publisher
+// pushes at step 2 and replies at step 4, so "died after something landed" is the
+// ORDINARY shape of a part-way stop, and a report that names no outcome is a
+// report about a state this run has no information about. So every claim below is
+// derived from an account that KEYS ONE ENTRY PER DISPOSITION, and where the
+// account cannot carry that weight the record says the outcome is unknown.
+const outcomes = Array.isArray(publishReport && publishReport.threadOutcomes) ? publishReport.threadOutcomes : [];
+// The identity publication itself routes on, and the only thing that can key this
+// account: a `review-thread` by its `threadId`, a `standalone` by its `url`.
+// `ref` is file:line + author, which two threads a re-review left on one line
+// SHARE — keyed on it, one thread's landed reply and another's owed one are the
+// same entry. Every disposition reaching publication has one: `dispositionDefect`
+// above rejects a review-thread entry with no `threadId` and a standalone with no
+// `url` before any push.
+const dispKeyOf = (d) => String((d && (d.type === "review-thread" ? d.threadId : d.url)) || "").trim();
+const outcomeKeyOf = (o) => String((o && (o.threadId || o.url)) || "").trim();
+const dispKeys = workReport.map(dispKeyOf);
+const dispKeySet = new Set(dispKeys);
+const accountByKey = new Map();
+const duplicateKeys = [];
+const strayKeys = [];
+for (const o of outcomes) {
+  const k = outcomeKeyOf(o);
+  if (!k || !dispKeySet.has(k)) {
+    strayKeys.push(k || "(an entry carrying neither a threadId nor a url)");
+    continue;
+  }
+  if (accountByKey.has(k)) {
+    duplicateKeys.push(k);
+    continue;
+  }
+  accountByKey.set(k, o);
+}
+const unaccountedKeys = dispKeys.filter((k) => !accountByKey.has(k));
+const summaryReported = !!publishReport && typeof publishReport.summaryCommentUrl === "string";
+const summaryUrl = summaryReported ? publishReport.summaryCommentUrl.trim() : "";
+// Nothing the publisher reported puts any part of this map on the PR: no push,
+// no Summary, and no entry reporting a reply or a resolve there. Then an account
+// short of an entry per item is COMPLETE rather than missing — the push is step 2
+// and the replies and Summary are steps 4 and 5, so there is nothing an unnamed
+// item's entry could say — and this is the one shape in which `[]` is the whole
+// truth.
+// It is NOT "did this run mutate the PR". `replied`/`resolved` are END STATE, so
+// an entry reporting a reply a PRIOR run posted puts this shape out of reach too
+// — which is the right direction: the PR is then carrying part of this map, and
+// an item the account leaves unnamed beside it really is unstated.
+const claimsPRState =
+  !!(publishReport && (publishReport.pushed || publishReport.pushedNewCommits)) ||
+  !!summaryUrl ||
+  outcomes.some((o) => o && (o.replied || o.resolved));
+// Why the account cannot be used, in the words the record prints. EMPTY means it
+// keys one entry per disposition, so `landed` and `outstanding` below are two
+// halves of one keyed set rather than two lists built independently.
+// A report that broke its own REQUIRED-FIELD contract is distrusted WHOLE rather
+// than field by field, and the record says so: where only `summaryCommentUrl` is
+// missing, the per-thread account can be present, keyed and complete, and every
+// entry still carries the reservation. That is deliberate. The reservation does
+// not say "this entry is unaccounted for" — it says the outcome is UNKNOWN, which
+// is what an entry from a report this run cannot read as a whole is worth.
+// Scoping the reservation to the missing field would mean trusting the
+// per-thread half of a report whose author demonstrably did not follow the
+// contract that half is written under, and buying a second axis of record state
+// for a case an ordinary run reaches only once schema enforcement has failed.
+const accountDefect = !publishReport
+  ? "the publisher returned nothing at all, so no field of its report exists — neither the push flags, nor its per-thread account, nor whether a Summary comment was posted"
+  : !Array.isArray(publishReport.threadOutcomes)
+    ? "its report carries no `threadOutcomes` array, so it accounts for nothing it did to any thread"
+    : !summaryReported
+      ? "its report omits the REQUIRED `summaryCommentUrl`, so whether a Summary comment reached the PR is unstated — and a report that broke its own field contract is not read field by field, its per-thread half included"
+      : duplicateKeys.length
+        ? `its account names ${duplicateKeys.length === 1 ? "an item" : `${duplicateKeys.length} items`} more than once (${duplicateKeys.join(", ")}), so which entry is that item's outcome is undecidable`
+        : strayKeys.length
+          ? `its account names ${strayKeys.join(", ")}, which is no disposition this run holds, so it is an account of some other work`
+          : unaccountedKeys.length && claimsPRState
+            ? `its account leaves ${unaccountedKeys.length} of ${workReport.length} item(s) unnamed (${unaccountedKeys.join(", ")}) while reporting that the PR already carries part of this map, so whether those replies are on it is unstated`
+            : "";
+// WHAT PUBLICATION OWES each disposition, read off two fields of the disposition
+// itself (`type`/`kind` and `authorIsBot`) rather than out of a copy of the
+// publish brief's per-kind table. TWO consumers read it and must not drift
+// apart: the completion gate just below, which asks whether a report claiming
+// the publication complete AGREES with its own account, and the record's debt
+// count further down, which asks what is left to replay.
+// Two kinds publication never owes a REPLY, and counting them tells the
+// maintainer and the replay turn that a forbidden action is outstanding: step 4
+// of the publish brief posts no reply to a `standalone` item (it is addressed in
+// the Summary comment alone and is never resolved as a thread) and none to an
+// `ambiguous-skipped` thread (it is deliberately left without one and left
+// open), so both carry `replied: false` on a genuinely COMPLETE publication.
+const isReviewThreadOwed = (d) => !!d && d.type === "review-thread" && d.kind !== "ambiguous-skipped";
+// The RESOLVE is owed over a narrower set again, and for the same reason: step 4
+// resolves a `push-back` only when the thread's author is a bot and leaves a
+// human one open unless the maintainer explicitly authorized otherwise, and it
+// resolves a `deferred-to-task` on the same condition. So a human push-back or
+// deferral is unresolved BY POLICY on a complete publication. That authorization
+// is a fact no field here records — it rides in the disposition's `detail` prose,
+// which is where the fix step is told to say whether a deferral was
+// maintainer-directed — so this set is what publication is KNOWN to owe, and
+// under-counting is what each consumer can defend separately. The record's
+// per-entry standing tells the next turn the resolve turns on that authorization
+// rather than asking it for the one action step 4 forbids. The gate refuses a
+// completion claim only over a resolve publication is CERTAINLY owed, which
+// leaves one case to the publisher's own contract rather than to a standing line
+// — no record is written on the path that would carry one — and the gate below
+// names that residual where it names the other thing it cannot see.
+const isResolveOwed = (d) => isReviewThreadOwed(d) && !((d.kind === "push-back" || d.kind === "deferred-to-task") && d.authorIsBot === false);
+const owedKeys = workReport.filter(isReviewThreadOwed).map(dispKeyOf);
+const resolveKeys = workReport.filter(isResolveOwed).map(dispKeyOf);
+const owedReplies = owedKeys.filter((k) => !(accountByKey.get(k) || {}).replied).length;
+const owedResolves = resolveKeys.filter((k) => !(accountByKey.get(k) || {}).resolved).length;
+// And what a claim of COMPLETION additionally requires, which is more than an
+// account this run can read: the Summary comment is step 7's last write, so a
+// report claiming the publication complete while naming no `summaryCommentUrl`
+// is not "unstated" — it is a publication missing its final step, reported as
+// finished. Any defect below makes this run NOT published: the record is written
+// and the worktree kept, exactly as an aborted publication's, rather than the one
+// exit that reclaims the tree taking a detected silence for a finish.
+// `accountDefect` is reused rather than re-derived because it is the same
+// question — can this report's account be read at all — and a second copy of
+// that test would be unobservable while it agreed and silent when it stopped.
+// And the last thing a completion claim must survive: its own account AGREEING
+// with it. The two tests above ask whether that account can be READ; this one
+// asks what it SAYS. A report claiming the publication complete while its own
+// entries report no reply on a thread publication owes one is not a silence, it
+// is a contradiction — and the exit it would otherwise take is the ONE that
+// reclaims the worktree, writes no record, and SPENDS the prior record still
+// holding this map, so a contradiction waved through there destroys the durable
+// copy of work the report itself says never reached the PR. It gets the same
+// treatment as every silence above: not published, worktree kept, record written.
+// The PUSH is the first half of that agreement, before either per-thread half:
+// step 2's push is what every complete publication starts with, and `pushed`
+// reports whether a push command SUCCEEDED — an `Everything up-to-date` no-op
+// reports true, so no complete publication reports false there. A report
+// claiming completion over `pushed: false` therefore says the opposite of its
+// claim in one required field — its account can be keyed, complete, and carry a
+// Summary URL while the fixes it replied about never left the local branch, so
+// without this half the gate accepts exactly that report, spends the prior
+// record, and reclaims the tree with feedback marked addressed on origin's
+// behalf by a run that never reached origin.
+// It is not a second copy of the publish brief's per-kind table. It reads the
+// very predicates the record's debt count reads, defined once above, so the gate
+// and the count cannot disagree about what step 4 owes — and both carve out
+// exactly the kinds step 4 acts on conditionally or not at all, so a genuinely
+// COMPLETE publication passes it with nothing to spare.
+// What it still does not test is what nothing here can, and there are two such
+// shapes. An entry claiming `replied: true` that is not true on the PR: a report
+// LYING rather than contradicting itself, which no reading of the report catches.
+// And the resolve `isResolveOwed` carves out — the maintainer having authorized
+// resolving a human push-back, or directed a human deferral, and the resolve then
+// FAILING. Step 4 owes that resolve, and the publisher's own contract answers for
+// it (`published: true` only where every required resolve succeeded); what the
+// carve-out costs is the caller's ability to CHECK that answer, the authorization
+// living in `detail` prose rather than in a field. Buying that field was weighed
+// against what it would buy, and what it would buy is bounded: the thread is left
+// UNRESOLVED on the PR, so the next run's gather takes it as an item under its
+// unresolved-only rule, and the reply — the half whose drafted body lives only in
+// the record, and so the half a spend destroys — is already on the PR. That
+// asymmetry is the whole reason the reply half cannot afford an under-count here
+// and the resolve half can: a missed resolve degrades to the state policy
+// produces for a human thread anyway, which is the maintainer's to close.
+const unpushedClaim = !!publishReport && publishReport.pushed !== true;
+const contradictedByAccount = unpushedClaim || owedReplies || owedResolves
+  ? `its own account contradicts that claim — ${[
+      unpushedClaim ? "it reports that no push command succeeded (`pushed: false`), which no complete publication reports: step 2's push is where publication starts, and an `Everything up-to-date` no-op already reports true" : "",
+      owedReplies ? `${owedReplies} of ${owedKeys.length} thread(s) publication owes a reply report that none reached the PR` : "",
+      owedResolves ? `${owedResolves} of ${resolveKeys.length} it owes a resolve report the thread still unresolved` : "",
+    ].filter(Boolean).join(", and ")}`
+  : "";
+const publicationDefect = !publishClaimed
+  ? ""
+  : accountDefect ||
+    (summaryUrl
+      ? ""
+      : "it names no `summaryCommentUrl`, so the Summary comment step 7 ends with is not on the PR — or was not reported, which this run cannot tell from the other") ||
+    contradictedByAccount;
+const published = publishClaimed && !publicationDefect;
+// Why this run stopped short of a complete publication, in the words the record
+// prints. A report claiming completion has no `aborted` to quote — that field is
+// empty when published — so the claim it could not support is the reason.
+// The two ways it fails are not one, and the tests above already draw the line:
+// they ask whether the account can be READ, this one asks what it SAYS. A report
+// that cannot say the publication completed is SILENT about it; one whose own
+// entries report no reply on a thread publication owes one says the OPPOSITE.
+// Told "a report that cannot say so" over the second, the maintainer is told the
+// report was silent where it in fact contradicted the claim — so the one phrase
+// is picked here, once, and both readers of it (the record's `status:` line and
+// the run's `note`) take it from here rather than restating it.
+const claimRefusal = contradictedByAccount && publicationDefect === contradictedByAccount
+  ? "a report that says the OPPOSITE"
+  : "a report that cannot say so";
+const stopReason = publishClaimed
+  ? `the publisher reported the publication COMPLETE over ${claimRefusal} — ${publicationDefect}`
+  : (publishReport && publishReport.aborted) || "the publisher returned nothing";
+// What of this map the PR ALREADY CARRIES — which is what the next turn must not
+// do again — and NOT a diary of this run's own writes. `replied` and `resolved`
+// report each thread's state when the publisher's turn ended, a reply it skipped
+// under step 4's duplicate rule (an equivalent one of its own already being
+// there) included, so these counts take in a reply a PRIOR run posted and a
+// resolve that was already done. That reading is the one the record was
+// redefined for: a turn told a reply that is on the PR is still owed posts it
+// twice. So "reached origin" here means "is on origin", never "this run put it
+// there" — and a replay whose push moved nothing over replies already on the PR
+// renders as a publication published IN PART, which is exactly what it is: the
+// map is on the PR, whichever run posted it, and only the rest is left to replay.
+// The push is the one ACT in the list, and `pushed` is still not it: it says a
+// push command succeeded, which an `Everything up-to-date` no-op also does, so
+// `pushedNewCommits` — the flag that says the remote MOVED — is the push half a
+// record may name here. Nothing about the no-op is lost by that: `pushNoop` below
+// is what says it, over the runs where no part of the map is on the PR at all.
+const repliedKeys = dispKeys.filter((k) => (accountByKey.get(k) || {}).replied);
+const resolvedKeys = dispKeys.filter((k) => (accountByKey.get(k) || {}).resolved);
+const repliedCount = repliedKeys.length;
+const resolvedCount = resolvedKeys.length;
+// One place decides what an unusable account supersedes, and it is not here:
+// every consumer below reads `accountDefect` FIRST — the record's rendering, its
+// reason, the per-entry standing, and the result's note — so guarding these two
+// as well would be a second copy of that precedence, unobservable while it
+// agreed and silent when it stopped agreeing.
+const landed = published
+  ? ""
+  : [
+      publishReport && publishReport.pushedNewCommits ? "the push, which advanced the remote branch" : "",
+      repliedCount ? `${repliedCount} thread ${repliedCount === 1 ? "reply" : "replies"}` : "",
+      resolvedCount ? `${resolvedCount} thread resolve${resolvedCount === 1 ? "" : "s"}` : "",
+      summaryUrl ? `the Summary comment at ${summaryUrl}` : "",
+    ].filter(Boolean).join(", ");
+// A push that ran and moved nothing is neither case: the tips ARE on origin
+// (the remote already pointed at them), so the local-only line is false too.
+// One fact, one extra line in the record, rather than a rendering of its own. It
+// keys on `!landed`, which under the end-state reading above is the stronger
+// statement it needs — the PR carries no reply, resolve or Summary of this map at
+// all, so this run certainly posted none of them. The line it renders says no
+// reply, resolve or Summary reached the PR, which is a claim an
+// unusable account cannot support — and that is settled in the ONE place named
+// just above rather than a second time here: every consumer reads `accountDefect`
+// FIRST, so this flag is only ever read where there is none. Guarding it here as
+// well would be the second copy of that precedence this file has already refused
+// twice — unobservable while it agreed, silent when it stopped agreeing.
+const pushNoop = !published && !landed && !!(publishReport && publishReport.pushed);
+// What is left, as the COMPLEMENT of what landed over the same keyed set rather
+// than a second count of its own: every disposition is named exactly once in the
+// account, so an item is owed its reply precisely when the account does not
+// report one — over the items publication OWES one at all, which is the set
+// `isReviewThreadOwed`/`isResolveOwed` above define, once, for this count and
+// the completion gate both.
+const outstanding = published
+  ? ""
+  : [
+      owedReplies ? `${owedReplies} of ${owedKeys.length} thread(s) still owed their reply` : "",
+      owedResolves ? `${owedResolves} of ${resolveKeys.length} not resolved` : "",
+      summaryUrl ? "" : "the Summary comment",
+    ].filter(Boolean).join(", ") || "no reply, resolve or Summary comment — publication stopped past all of them, so its reason above is what is left to act on";
+// Where each entry stands, one line per disposition, matched to it by key. The
+// caller derives this rather than handing the record's author the raw account and
+// the rule: joining the two is exactly where a shared `ref` would put one
+// thread's landed reply on another thread's entry. Emitted on the two paths where
+// an entry's standing is not simply "owed" — a part-way publication, and an
+// unusable account, where every entry's standing is unknown.
+const standingLine = (d) => {
+  const key = dispKeyOf(d);
+  const label = `thread=${key || "(no threadId or url)"}  ${String((d && d.ref) || "").trim() || "(no ref)"}`;
+  if (accountDefect) return `${label} — UNKNOWN whether its reply is posted or its thread resolved: check it on the PR before replying, and before resolving.`;
+  const o = accountByKey.get(key);
+  // The same two kinds the debt counts above exclude, said per entry: a
+  // standing of "still owed" on one of them would have the replay turn post
+  // what the publish brief forbids — a thread reply an item has no thread for,
+  // or a reply on a thread the run deliberately left silent and open.
+  if (!isReviewThreadOwed(d)) {
+    const why = d && d.type === "standalone"
+      ? "a standalone item is addressed in the Summary comment alone, never by a thread reply, and is never resolved as a thread"
+      : "an ambiguous-skipped thread is deliberately left without a reply and left open";
+    return `${label} — NOTHING is owed on it: ${why}.${o && (o.replied || o.resolved) ? " Its account nevertheless reports one, so check the thread on the PR before acting." : ""}`;
+  }
+  // The reply is owed on every entry that reaches here; the RESOLVE is the half
+  // that turns on the thread rather than the kind, so an unresolved human
+  // push-back or deferral is told it is policy — the same fact the count above
+  // reads — rather than told a resolve is still owed, which is the line the next
+  // turn acts on entry by entry and the one thing step 4 forbids it to do.
+  const resolveStanding = o && o.resolved
+    ? "thread ALREADY RESOLVED — do not resolve it again"
+    : isResolveOwed(d)
+      ? "resolve still owed"
+      : "resolve NOT owed — a human push-back or deferral is left open unless the maintainer explicitly authorized resolving it; do not resolve it on this record's word";
+  return `${label} — ${o && o.replied ? "reply ALREADY POSTED — do not post it again" : "no reply reached the PR — the reply below is still owed"}; ${resolveStanding}.`;
+};
+const perThread = published || !(landed || accountDefect) ? [] : workReport.map(standingLine);
+const publishRecord = published
+  ? await spendPriorRecord(summaryUrl)
+  : await leaveDispositionRecord(
+      `publication did not complete: ${stopReason}${accountDefect
+        ? ` — and WHAT REACHED ORIGIN IS UNKNOWN: ${accountDefect}. Treat nothing below as posted and nothing as unposted until the PR itself says which.`
+        : landed
+          ? ` — what reached origin: ${landed}; what is left to replay: ${outstanding}.`
+          : pushNoop
+            ? ", and nothing reached origin: its push was an `Everything up-to-date` no-op that moved nothing, and its own account reports no reply, resolve or Summary comment after it."
+            : ", and nothing reached origin: its own account reports no push, no reply, no resolve and no Summary comment."}`,
+      workReport,
+      {
+        rounds,
+        reviewerPassed: true,
+        deviations: cycle.deviations,
+        landed,
+        outstanding,
+        pushNoop,
+        outcomes,
+        unknown: accountDefect,
+        perThread,
+        // The one half of "what reached origin" an unusable account does not put
+        // in doubt: the push flags are reported positively, so a run whose push
+        // ADVANCED the remote knows its tips are there even where it knows
+        // nothing about its replies. Saying "whether anything reached origin is
+        // unknown" over that would understate what the run does know — and the
+        // run holds THREE push states, not two: a push that succeeded while
+        // moving nothing also leaves the remote pointing at these tips, which is
+        // what `PUBLISH_SCHEMA.pushed` says of itself and what the non-unknown
+        // rendering says in the same breath, so reading it as "no push is known"
+        // understates the same fact in the same direction.
+        pushState: publishReport && publishReport.pushedNewCommits
+          ? "advanced"
+          : publishReport && publishReport.pushed
+            ? "noop"
+            : "unknown",
+      },
+    );
 // Published is the finish this whole pipeline exists for, so the worktree goes
 // back here. A publication that aborted keeps it: whatever the publisher
 // stopped on is still standing in that tree, and `pr.worktree` names it in the
@@ -1958,9 +3028,17 @@ const notes = [
   droppedForNoContribution.length
     ? `ping-contributing: did not re-ping ${droppedForNoContribution.join(", ")} — no new finding from ${droppedForNoContribution.length > 1 ? "them" : "it"} this round.`
     : null,
+  // Only ever present on the published path, and only where a prior record was
+  // there to spend. A record left standing over a map that is now published is
+  // replayed by the next run, so a failure to spend it is the maintainer's to
+  // see rather than a silent one.
+  publishRecord.spentRecord && !publishRecord.spentRecord.posted
+    ? `The prior disposition record was not spent (${publishRecord.spentRecord.detail}); one left standing over a published map is replayed by the next run.`
+    : null,
 ].filter(Boolean);
 return {
   status: published ? "fixed-published" : "fixed-publish-failed",
+  ...publishRecord,
   pr: packet.pr,
   rebase: rebaseRecord,
   rounds,
@@ -1975,9 +3053,15 @@ return {
   peerRounds: cycle.peerRounds,
   artifactDir: cycle.artifactDir,
   ...carried,
-  publishReport: publishRecord,
+  publishReport: publishReport || { published: false, aborted: "publisher returned nothing" },
   ...(reclaimed ? { worktreeReclaim: reclaimed } : {}),
   note: published
     ? (`${notes.join(" ")}${survivingWorktreeNote(reclaimed)}`.trim() || undefined)
-    : `Fixes passed review but publication did not fully complete: ${publishRecord.aborted || "no reason reported"}. Nothing may have been pushed.`,
+    : withRecordNote(`Fixes passed review but publication did not fully complete — ${publishClaimed ? `the publisher reported it COMPLETE over ${claimRefusal}: ${publicationDefect}` : "see publishReport.aborted"}; ${accountDefect
+        ? `what reached origin is UNKNOWN: ${accountDefect}`
+        : landed
+          ? `what reached origin: ${landed}; what is outstanding: ${outstanding}`
+          : pushNoop
+            ? "nothing reached origin — its push was an `Everything up-to-date` no-op that moved nothing"
+            : "nothing reached origin"}.`),
 };

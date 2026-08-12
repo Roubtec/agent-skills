@@ -1190,7 +1190,19 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //   each deviation still standing — at most ONE entry per deviation, only an
 //   entry the passing round could use, and only while no later pass adopted
 //   work that round never saw), deviationHistory (only once some
-//   pass reported one), workReport, proactive, finalSha, notes, reviewerNotes,
+//   pass reported one), workReport, workReportReviewed (whether a reviewer
+//     round actually passed over THAT map ON THAT TREE — true on an error or
+//     cap exit taken past a passing round, since the confirmation pass can stop
+//     the cycle over the very map that just passed, and false where no round
+//     ever judged the map being carried out, a later pass having replaced the
+//     map or committed a new `finalSha` under it),
+//   reviewedWorkReport and reviewedFinalSha (present once ANY round has passed:
+//     the most recent map a reviewer DID pass over and the tip it was judged
+//     on, reported SEPARATELY from the map being carried out, so a consumer that
+//     records a judged map has one to record even where a later pass replaced
+//     it — the boolean alone says only that the map leaving is not the judged
+//     one, which is the shape that used to lose the judged one outright),
+//   proactive, finalSha, notes, reviewerNotes,
 //   peerRounds, discardedPeerFindings, undisposed, outstanding, artifactDir,
 //   closeOut (present only when a trivial-round close-out ENDED the cycle:
 //     the pass, the range, and the non-semantic edits that shipped unreviewed),
@@ -1291,6 +1303,23 @@ async function runReviewCycle(cycle) {
   let fixerPasses = 0;
   let findings = null; // findings block for the next fixer pass; null on round 1
   let confirming = false; // next fixer pass is the final confirmation pass
+  // The map a reviewer round actually PASSED over, snapshotted as text BESIDE
+  // the tip it was judged on. It answers a question the verdict cannot:
+  // `confirming` is set only after a round passed, and the confirmation pass
+  // that follows can stop the cycle outright — returning nothing, blocking,
+  // coming back on an unclean worktree — leaving `verdict: "error"` over exactly
+  // the map that just passed. A consumer deciding what a stopped cycle's map is
+  // worth (wf-address-review withholds a disposition record from an UNREVIEWED
+  // map) must not read that as "no reviewer ever judged this". Text rather than
+  // a latched boolean because a later pass may REPLACE `workReport`, and only
+  // comparing the two answers "is the map LEAVING this cycle the one that was
+  // judged".
+  // The map is not the whole identity, though: a later pass can commit a new
+  // `finalSha` while returning the IDENTICAL map, so comparing text alone calls
+  // those dispositions reviewed while they now accompany a tree no reviewer
+  // read. So the snapshot carries the tip too, and both halves must match.
+  // `null` until a round passes, which no packet can match.
+  let reviewedPass = null;
   // Peer availability state: `preflighted` (the install/login preflight runs
   // once, never per round) and sticky `unavailable` (an unavailable peer is
   // not re-probed). A fan-out owner embedding many cycles passes ONE shared
@@ -1317,6 +1346,8 @@ async function runReviewCycle(cycle) {
     // exit, which ships it standing and unjudged rather than pretending a
     // pre-change judgment still holds.
     const standingAssessments = deviationAssessments.filter((a) => a && deviations.includes(a.deviation));
+    const carriedReport = (packet && packet.workReport) || [];
+    const carriedSha = (packet && packet.finalSha) || "";
     return {
       verdict,
       detail: detail || "",
@@ -1328,7 +1359,23 @@ async function runReviewCycle(cycle) {
       ...(deviationHistory.some((h) => h.deviations.length) ? { deviationHistory } : {}),
       ...(flakeHistory.length ? { flakeHistory } : {}),
       ...(packetChecks.length ? { packetChecks } : {}),
-      workReport: (packet && packet.workReport) || [],
+      workReport: carriedReport,
+      // Whether a reviewer round passed over THAT map on THAT tree, not over
+      // some earlier one: false before any round finished, false again once a
+      // pass replaced the map, false where a pass kept the map and committed a
+      // new tip under it, and true on an error/cap exit taken past a passing
+      // round. No snapshot at all is the first of those, so it needs no second
+      // condition beyond the one that says a round passed.
+      workReportReviewed:
+        !!reviewedPass && JSON.stringify(carriedReport) === reviewedPass.json && carriedSha === reviewedPass.finalSha,
+      // And the judged map ITSELF, beside the tip it was judged on — reported
+      // separately from the map the cycle is carrying out, since a later pass
+      // may have replaced it. A consumer whose job is to RECORD a judged map
+      // (wf-address-review's durable disposition record) otherwise has nothing
+      // to record in exactly that case: the boolean says only that the map
+      // leaving is not the judged one, so the judged one — with its drafted
+      // replies, the expensive half — died with the session that judged it.
+      ...(reviewedPass ? { reviewedWorkReport: reviewedPass.workReport, reviewedFinalSha: reviewedPass.finalSha } : {}),
       proactive: (packet && packet.proactive) || "",
       finalSha: (packet && packet.finalSha) || "",
       notes: (packet && packet.summary) || "",
@@ -1965,6 +2012,16 @@ async function runReviewCycle(cycle) {
       }
       continue;
     }
+
+    // The round PASSED, so the map this packet carries is one a fresh reviewer
+    // judged, and the tip it carries is the tree that judgment was rendered
+    // over. Snapshotted here — the one point in the loop where both are true —
+    // and read by `result()` on every exit, the stopped ones included.
+    reviewedPass = {
+      json: JSON.stringify((packet && packet.workReport) || []),
+      workReport: (packet && packet.workReport) || [],
+      finalSha: (packet && packet.finalSha) || "",
+    };
 
     // The round passed with every pending retirement in view, so the fresh
     // reviewer accepted each claim the same way it accepted this round's
