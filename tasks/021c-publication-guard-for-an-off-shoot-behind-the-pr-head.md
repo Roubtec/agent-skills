@@ -10,6 +10,8 @@ The lease case, read as written, fires only on an off-shoot run that also rewrot
 
 An UN-rebased off-shoot in that same shape matches no enumerated instruction at all: it is not a proper ancestor of the expected tip, the expected tip is not an ancestor of it, and its history was not rewritten. Step 2 says there are three cases and hands such a run none of them, which is a second and distinct gap — the run is left to choose at exactly the point where the wrong choice is the rewinding one.
 
+**Task 016 widened this while it sat queued, and in the destructive direction.** Rebasing onto the freshest base is now the DEFAULT rather than something the `rebase on top of <branch>` token asks for — two points in `wf-address-review.js`'s `rebasePoint`, either of which sets `pr.rebased` as soon as it replays anything. So on an off-shoot run the two gaps above swap places. The second one — neither a proper ancestor nor a descendant of the expected tip, history not rewritten, and so handed no instruction at all — used to be that run's ordinary outcome; now the ordinary outcome is the FIRST one, the exact `--force-with-lease` the unchanged recorded head satisfies, and an unattended run reaches it with no token given. Nothing about the fix below changes. What changes is that reaching it no longer takes an opt-in, which is why the deferral is worth re-reading rather than re-confirming. Raised again on PR #72 thread `PRRT_kwDOTNFS7M6Xtyoq` and left here rather than answered there, that PR's subject being the rebase policy rather than the publication guard.
+
 This is the same work-loss shape PR #29 closed for the skill's own branch, arriving by the one route reconciliation deliberately does not watch. The lease is doing exactly its job — it protects against the remote moving *since* the run started, not against a local tip that never contained what the remote already had.
 
 The same question is open for the singular skill, whose `PR#` argument names the off-shoot case explicitly and whose Step 7 "Push" has the same three-way shape; it must be checked rather than assumed unaffected. Task 018 changes where each flavor works but not what it pushes, so it neither fixes nor blocks this.
@@ -34,6 +36,7 @@ Out of scope:
 - `plugins/dev-skills/workflows/wf-address-review.js` — `publishPrompt`, step 2's push cases and the expected-tip OID they interpolate; `PACKET_SCHEMA`'s `pr.workingBranch` field, whose description states the off-shoot case; and the reconciliation gate whose comment names the same exemption.
 - `plugins/dev-skills/skills/address-review/SKILL.md` — the `PR#` argument row naming the off-shoot, "Step 1 — Resolve and verify the PR" (its "Reconcile the working location's branch with the PR head before triaging anything" paragraph), and "Step 7 — Publish after the review gate", items 1 "Re-check before publication" and 2 "Push". Item 1 belongs here as much as item 2 does: it tells the run to resolve *the current branch's* exact push remote/ref and match them against the PR head, which an off-shoot's own upstream never does — so the branch this skill promoted to a named working location (task 018) stops there after a full run, at the one step whose remit is to decide what may be pushed from it. Raised in 018's review and left to this task rather than answered twice.
 - Task 021b — the reconciliation this sits beside, and the settled decision that it skips entirely where the branch names differ.
+- Task 016 — the default rebase that made `pr.rebased` true on an ordinary off-shoot run; `rebasePoint` in `wf-address-review.js` is where it is latched, and the off-shoot prose beside it in the gather brief already says that skipping reconciliation is no licence to publish over the PR head.
 - PR #29 thread `PRRT_kwDOTNFS7M6VaOv1` — the maintainer's no-work-lost heuristic the reconciliation rule encodes; this task applies the same heuristic to the push rather than to the checkout.
 
 ## Target files or areas
@@ -51,6 +54,7 @@ Out of scope:
 ## Acceptance criteria
 
 - An off-shoot missing commits the recorded PR head carries never reaches a lease push; the run stops with `published: false` and a reason naming both tips.
+- That holds for a run that rebased by DEFAULT with no rebase token given, which is the ordinary shape since task 016, and not only for one the `rebase on top of <branch>` token sent through a rewrite.
 - An off-shoot that carries the recorded head still publishes exactly as it does today.
 - Every state step 2 enumerates carries an instruction: a run that is neither a proper ancestor nor a descendant of the expected tip is told what to do whether or not it rewrote history.
 - The proper-ancestor stop and the rejected-lease stop are unchanged.
