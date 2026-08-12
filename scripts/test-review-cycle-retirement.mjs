@@ -74,7 +74,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 177;
+const CHECKS_PER_LEG = 179;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -1602,6 +1602,36 @@ for (const name of WORKFLOWS) {
       "a clean peer pass keeps the round detail empty and the usual one-line outcome",
       cleanPass.result.verdict === "pass" && cleanPass.result.rounds === 1 && cleanPass.result.peerRounds.length === 1 && cleanPass.result.peerRounds[0].outcome === "passed" && cleanPass.result.peerRounds[0].detail === "",
       JSON.stringify(cleanPass.result.peerRounds),
+    );
+
+    const untrustedNotes = [
+      "- src/one.js:1 — First valid advisory note.",
+      "- src/bad.js:2 - Wrong separator is discarded.",
+      "- src/long.js:3 — one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen",
+      "- src/two.js:4 — Second valid advisory note.",
+      "- src/no-line.js — Missing line anchor is discarded.",
+      "- src/three.js:6 — Third valid advisory note.",
+      "- src/four.js:7 — Fourth valid note is surplus.",
+    ].join("\n");
+    const boundedPass = await summarizedPass(untrustedNotes);
+    const boundedNotes = [
+      "- src/one.js:1 — First valid advisory note.",
+      "- src/two.js:4 — Second valid advisory note.",
+      "- src/three.js:6 — Third valid advisory note.",
+    ].join("\n");
+    const boundedDetail = boundedPass.result.peerRounds[0].detail;
+    const summaryMatch = String(boundedDetail || "").match(/(?:^|\n)advisory notes:\n([\s\S]*)$/);
+    const humanSummary = String((summaryMatch && summaryMatch[1]) || "").split("\n").filter(Boolean);
+    check(
+      "consumer normalization discards malformed and over-budget notes, then caps the valid human summary at three",
+      boundedPass.result.verdict === "pass" && boundedPass.result.rounds === 1 && boundedDetail === `advisory notes:\n${boundedNotes}` && JSON.stringify(humanSummary) === JSON.stringify(boundedNotes.split("\n")) && boundedPass.fixPrompts.every((p) => !p.includes("First valid advisory note") && !p.includes("Wrong separator") && !p.includes("sixteen") && !p.includes("Fourth valid note")),
+      `${JSON.stringify(boundedPass.result.peerRounds)} / ${JSON.stringify(humanSummary)} / ${boundedPass.result.rounds} round(s)`,
+    );
+    const malformedOnly = await summarizedPass("NOTES (advisory; not necessarily fixes)\n- src/no-line.js — Missing line.\n- src/long.js:3 — one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen");
+    check(
+      "consumer normalization returns empty notes when no exact bounded bullet survives",
+      malformedOnly.result.verdict === "pass" && malformedOnly.result.rounds === 1 && malformedOnly.result.peerRounds[0].detail === "" && malformedOnly.fixPrompts.every((p) => !p.includes("Missing line") && !p.includes("sixteen")),
+      JSON.stringify(malformedOnly.result.peerRounds),
     );
 
     const issuesNoteMarker = "- src/example.js:8 — Advisory-only marker.";

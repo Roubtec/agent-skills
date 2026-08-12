@@ -1333,6 +1333,17 @@ ${CYCLE_DESTROY_BOUNDARY}
 If \`command -v codex\` fails, return \`{ "outcome": "unavailable", "detail": "missing binary" }\`. Otherwise run \`codex login status\`. If it succeeds, return \`{ "outcome": "available", "detail": "" }\`. If it fails and \`CODEX_API_KEY\` is unset, return unavailable with the exact login diagnostic in \`detail\`. If it fails while \`CODEX_API_KEY\` is set, return available because the environment key may authenticate the real invocation. Return only the schema; do not throw or launch codex exec.`;
 }
 
+function normalizeCyclePeerNotes(notes) {
+  const valid = [];
+  for (const line of String(notes || "").split(/\r?\n/)) {
+    const bullet = line.match(/^- (\S(?:.*\S)?):([1-9][0-9]*) — (\S(?:.*\S)?)$/);
+    if (!bullet || (bullet[3].match(/\S+/g) || []).length > 15) continue;
+    valid.push(line);
+    if (valid.length === 3) break;
+  }
+  return valid.join("\n");
+}
+
 // The peer stage NEVER fails the round: a dead subagent (null return /
 // schema-validation miss), a thrown stage, and every helper-vocabulary outcome
 // that is not passed/issues all normalize to a recorded non-blocking outcome.
@@ -1357,7 +1368,7 @@ function normalizeCyclePeerResult(res) {
   return {
     outcome,
     findings: outcome === "issues" && Array.isArray(res.findings) ? res.findings : [],
-    notes: typeof res.notes === "string" ? res.notes : "",
+    notes: normalizeCyclePeerNotes(res.notes),
     reason: typeof res.reason === "string" ? res.reason : "",
     teardownFailure: res.teardownFailure === true,
     detail: typeof res.detail === "string" && res.detail
