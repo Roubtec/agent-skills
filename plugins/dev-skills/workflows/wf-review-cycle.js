@@ -821,12 +821,12 @@ ${preflightStep}
    # Pin peer effort per invocation; never changes the container's saved config.
    nohup codex exec --sandbox read-only --cd "$worktree" -o "$outfile" \\
      -c mcp_servers={} -c model_reasoning_effort=medium "$(<"$prompt_file")" \\
-     < /dev/null 2> "$stderr_file" &
+     < /dev/null > /dev/null 2> "$stderr_file" &
    peer_pid=$!
    printf '%s\\n' "$peer_pid" > "$pid_file"
    \`\`\`
 
-   In later Bash calls read the positive decimal PID from \`$pid_file\` and use \`kill -0 "$peer_pid"\` as the liveness answer. On the loose roughly 12-minute timeout, signal that same PID directly, verify it is gone, and retry ONCE with fresh paths; never infer a process group from plain \`nohup … &\`, never signal a wait supervisor, never use \`pkill -f\`, and never replace this with a capped foreground call. If recovering by the unique \`-o\` path is unavoidable, disambiguate \`pgrep -f\` to the codex peer binary after excluding the probing shell and every ancestor: one survivor is alive, none dead, more than one indeterminate and signals nothing. The probe's resolved identifier is the only signal target. Auth/usage errors are \`unavailable\` without retry.
+   Ordinary stdout is detached to \`/dev/null\`, never merged into \`$outfile\` or \`$stderr_file\`; the \`-o\` artifact remains authoritative. In later Bash calls read the positive decimal PID from \`$pid_file\` and use \`kill -0 "$peer_pid"\` as the liveness answer. On the loose roughly 12-minute timeout, signal that same PID directly, verify it is gone, and retry ONCE with fresh paths; never infer a process group from plain \`nohup … &\`, never signal a wait supervisor, never use \`pkill -f\`, and never replace this with a capped foreground call. If recovering by the unique \`-o\` path is unavoidable, disambiguate \`pgrep -f\` to the codex peer binary after excluding the probing shell and every ancestor: one survivor is alive, none dead, more than one indeterminate and signals nothing. The probe's resolved identifier is the only signal target. Auth/usage errors are \`unavailable\` without retry.
 5. Read \`$outfile\` even when the liveness probe has just gone dead: a non-empty artifact with a \`VERDICT:\` line is authoritative. A \`VERDICT: PASS\` line → outcome \`passed\` (anything after it goes to \`notes\` verbatim). A \`VERDICT: ISSUES\` line → outcome \`issues\`, with every numbered finding mapped verbatim into \`findings\` (severity from its \`blocking\`/\`minor\` tag — default \`blocking\` when untagged — plus its \`file:line\` as \`location\` and the finding text as \`claim\`; do not summarize, merge, or rewrite). No verdict line, or empty/unintelligible output → \`forfeited\`, with \`reason\` exactly identifying \`empty output\` or \`garbled output\` where that is what happened. A timeout after retry is \`timeout\`; a provider crash or exhausted non-auth retry is \`failed\`.
 
 ## Peer prompt (write this text to the prompt file verbatim, filling only the placeholders)
@@ -892,7 +892,10 @@ async function acquireCyclePeerSlot(throttle) {
 function cyclePeerTrouble(result) {
   if (!result || result.synthesized) return false;
   if (result.outcome === "timeout" || result.outcome === "failed") return true;
-  return result.outcome === "forfeited" && /\b(?:empty|garbled|malformed|unparseable)\b/i.test(String(result.reason || ""));
+  if (result.outcome !== "forfeited") return false;
+  const reason = String(result.reason || "");
+  return /\b(?:empty|garbled)\s+(?:(?:peer|provider|final|result)\s+){0,2}(?:output|response|artifact)\b/i.test(reason)
+    || /\b(?:(?:peer|provider|final|result)\s+){0,2}(?:output|response|artifact)\s+(?:is|was|became|returned|looks?|appears?)\s+(?:empty|garbled)\b/i.test(reason);
 }
 
 function releaseCyclePeerSlot(throttle, launchGeneration, result) {
@@ -1274,7 +1277,8 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     it — the boolean alone says only that the map leaving is not the judged
 //     one, which is the shape that used to lose the judged one outright),
 //   proactive, finalSha, notes, reviewerNotes,
-//   peerRounds, discardedPeerFindings, undisposed, outstanding, artifactDir,
+//   peerRounds ({ round, outcome, detail, reason } entries), peerThrottle,
+//   discardedPeerFindings, undisposed, outstanding, artifactDir,
 //   closeOut (present only when a trivial-round close-out ENDED the cycle:
 //     the pass, the range, and the non-semantic edits that shipped unreviewed),
 //   recordOnly (present only when the cycle concluded over a delivery run that
