@@ -1027,10 +1027,13 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "and an OMITTED `rebaseTarget` stops the run rather than reading as `the request named none`",
     /status: "gather-contract"/.test(src) &&
       /if \(typeof packet\.rebaseTarget !== "string"\)/.test(src) &&
-      /Report the token on EVERY packet, empty string and not omitted/.test(src) &&
-      // Guarded HERE and not in the schema's `required`, which would take a
+      /Report the token on every packet you return with `ok: true` and items to address/.test(src) &&
+      // Guarded HERE and not in any schema's `required`, which would take a
       // blocker packet's `blocker` and `pr.worktree` down with the validation.
-      !/required: \["ok", "items", "rebaseTarget"\]/.test(src),
+      // Asserted on the field LISTS rather than one literal spelling: reordered
+      // or respaced, a literal match would let the reversed decision back in
+      // with the suite green.
+      !(src.match(/required: \[[^\]]*\]/g) || []).some((list) => list.includes("rebaseTarget")),
     "the omission is unguarded again, or it was pushed into the schema where a blocker packet pays for it",
   );
 
@@ -1891,14 +1894,19 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     const keepsTheStandingTarget = text.includes("A `rebase on top of <branch>` target still standing") &&
       text.includes("not discarded by `no-rebase`, which suppresses the rebase and not the target");
     const resolvesItWhereNamed = /resolves where it was named: locally, `git rev-parse --verify/.test(text);
-    const baseRefIsTheOtherArm = text.includes("Otherwise pin `baseRefName`");
+    const baseRefIsTheOtherArm = text.includes("pin `baseRefName`, resolved exactly as the rebasing path's default target is");
+    // ...and it is the arm for a request that named NONE, never the fallback
+    // for a named target that failed to resolve — the one silence that put
+    // `baseRefName` right beside the failure as the apparent next step.
+    const failureIsNotTheBaseRef = text.includes("stop and report what you tried rather than substituting anything") &&
+      text.includes("never the fallback for one that failed to resolve");
     // ...and the flag rule that an agent reads FIRST must not have told it the
     // token was simply ignored, or it arrives at step 6 with nothing standing.
     const flagRuleAgrees = text.includes("for the REBASE only: the token is not discarded");
     check(
       `${name}: a \`rebase on top of <branch>\` target survives \`no-rebase\` as the review base, and the flag rule says so too`,
-      keepsTheStandingTarget && resolvesItWhereNamed && baseRefIsTheOtherArm && flagRuleAgrees,
-      `keeps the standing target: ${keepsTheStandingTarget}; resolves where named: ${resolvesItWhereNamed}; base ref is the other arm: ${baseRefIsTheOtherArm}; flag rule agrees: ${flagRuleAgrees}`,
+      keepsTheStandingTarget && resolvesItWhereNamed && baseRefIsTheOtherArm && failureIsNotTheBaseRef && flagRuleAgrees,
+      `keeps the standing target: ${keepsTheStandingTarget}; resolves where named: ${resolvesItWhereNamed}; base ref is the other arm: ${baseRefIsTheOtherArm}; a failed resolution stops rather than falling back: ${failureIsNotTheBaseRef}; flag rule agrees: ${flagRuleAgrees}`,
     );
     check(
       `${name}: no prose equates the delegated rebase's halt with an aborted conflict`,

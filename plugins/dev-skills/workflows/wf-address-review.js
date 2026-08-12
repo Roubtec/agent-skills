@@ -136,7 +136,7 @@ const PACKET_SCHEMA = {
   type: "object",
   properties: {
     ok: { type: "boolean", description: "False if the run cannot proceed (blocker set)." },
-    blocker: { type: "string", description: "Why the run stopped: unidentifiable/unrelated PR, dirty tree, rebase in progress, a halted rebase, auth failure. Empty when ok." },
+    blocker: { type: "string", description: "Why the run stopped — e.g. an unidentifiable or unrelated PR, a dirty tree, a rebase in progress, a halted rebase, an auth failure, or an invocation-named rebase target that does not resolve where it was named. Not a closed list: report whatever stopped you. Empty when ok." },
     pr: {
       type: "object",
       description: "Required whenever ok is true — the downstream phases dereference these fields, so populate them all. Required IN FULL on a post-attach BLOCKER too, not in part: the working location is picked only after the PR is resolved, so an `ok: false` packet raised from the attach onwards already knows every field here — `locationMode` and `worktree` above all, because a halt is what KEEPS that worktree standing and this object is the only channel that reports its path. `worktree` names a tree that SURVIVES: the fork arm's rejected landing gives its own back, and reports the field empty. The one packet that omits `pr` is a blocker raised BEFORE the PR is resolved (auth failure, unidentifiable or unrelated PR): it created no worktree and has nothing to report, which is why `pr` is not required at the top level.",
@@ -156,7 +156,7 @@ const PACKET_SCHEMA = {
     },
     rebaseTarget: {
       type: "string",
-      description: "The target named by an explicit `rebase on top of <branch>` token in the request — a branch name or an exact commit, verbatim. EMPTY when the request named none, which is the ordinary case: the rebase phase then targets the PR's own `baseRefName` (this object's `base`). Report the token on EVERY packet, empty string and not omitted where the request named none: the caller reads this field alone and never infers the token from anything else, and on a `no-rebase` run it is what decides which target the `baseOid` above resolves. Acting on it is otherwise not yours — the rebase phase does that — with the single exception the `no-rebase` arm of your brief spells out, where resolving it IS the base you report.",
+      description: "The target named by an explicit `rebase on top of <branch>` token in the request — a branch name or an exact commit, verbatim. EMPTY when the request named none, which is the ordinary case: the rebase phase then targets the PR's own `baseRefName` (this object's `base`). Report the token on every packet you return with `ok: true` and items to address — empty string and not omitted where the request named none, since that is where the caller consumes it and it stops the run on an absent one: the caller reads this field alone and never infers the token from anything else, and on a `no-rebase` run it is what decides which target the `baseOid` above resolves. Acting on it is otherwise not yours — the rebase phase does that — with the single exception the `no-rebase` arm of your brief spells out, where resolving it IS the base you report.",
     },
     reconcile: {
       type: "object",
@@ -1003,7 +1003,9 @@ if (!packet.items || packet.items.length === 0) {
 // is a redundant-but-legal request whose two names are equal, and inferring
 // would hand it the default arm, sending a fetch at the base repository for a
 // ref the maintainer named here, in the working location.
-// The echo is owed on every packet, and its ABSENCE is a contract violation
+// The echo is owed wherever it is CONSUMED — an `ok: true` gather with items,
+// which is exactly where this sits, behind the blocker exit and the empty-gather
+// no-op — and there its ABSENCE is a contract violation
 // rather than "the request named none": the caller reads this field alone, and
 // since it also decides the review base on the `no-rebase` path, a silent
 // fallback is a wrong boundary for every range this run delegates and not only
@@ -1018,8 +1020,12 @@ if (typeof packet.rebaseTarget !== "string") {
   return {
     status: "gather-contract",
     pr: packet.pr,
+    // This stop sits AFTER the reconciliation gate, so it is reachable on
+    // `fast-forwarded` — a run that MOVED the local branch and would otherwise
+    // report only that nothing was addressed, hiding the move.
+    reconcile,
     detail: "The gather reported no `rebaseTarget` at all. That field is the run's only record of whether an explicit `rebase on top of <target>` token was given, and an absent one cannot be told apart from a target the caller must honor — on a `no-rebase` run it decides the review base too, so continuing would bound every delegated range at the PR's base ref on a request that may have named another target.",
-    note: "Nothing was addressed and nothing was pushed. Re-run: the gather must report `rebaseTarget` on every packet, as the empty string where the request named no target.",
+    note: `Nothing was addressed and nothing was pushed${reconcile && reconcile.outcome === "fast-forwarded" ? ", though this run did fast-forward the local branch to the PR head before stopping" : ""}. Re-run: the gather must report \`rebaseTarget\` whenever it returns items to address, as the empty string where the request named no target.`,
   };
 }
 const explicitRebaseTarget = packet.rebaseTarget.trim();
