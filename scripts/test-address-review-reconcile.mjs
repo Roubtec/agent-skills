@@ -113,7 +113,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 130;
+const EXPECTED_CHECKS = 131;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -977,6 +977,25 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "and resolves the base commit in the PR's OWN repository — named from the PR's URL, not from the directory `gh repo view` would answer for — freshly fetched, rather than through the branch's push remote or a remote-tracking ref",
     readsBaseRepo && notThePushRemote && namesItFromThePrUrl && refusesTheDirectoryDerivedRepo && fetchesIt && resolvesTheFetch && refusesTheTrackingRef,
     `base repository stated: ${readsBaseRepo}; push remote refused: ${notThePushRemote}; named from the PR url: ${namesItFromThePrUrl}; directory-derived repo refused: ${refusesTheDirectoryDerivedRepo}; fetches the ref: ${fetchesIt}; resolves the fetch: ${resolvesTheFetch}; refuses a tracking ref: ${refusesTheTrackingRef}`,
+  );
+
+  // ...but only where the request named no target of its own. `no-rebase`
+  // drops the REBASE, not the target the request named, and the caller reads
+  // this one value as the review base for the whole run — so a brief that
+  // resolves `baseRefName` unconditionally bounds a
+  // `rebase on top of <target> no-rebase` run at the underlying branch and
+  // hands the reviewer and the peer that branch's own commits as this PR's
+  // diff, the same harm the base-repository paragraph above exists to prevent,
+  // arriving by the other road. The gather is the only actor that can pick the
+  // arm, being what reports `rebaseTarget` in the first place.
+  const namedArmFirst = basePara.includes("where you are about to report a NON-EMPTY `rebaseTarget`, that token is the target");
+  const saysWhyTheTokenSurvives = basePara.includes("`no-rebase` suppresses the REBASE, not the target the request named");
+  const resolvesItWhereNamed = basePara.includes("Resolve THAT one where it was named — here, in this working location") && basePara.includes("fetch NOTHING for it");
+  const baseRefIsTheOtherArm = basePara.includes("Only where `rebaseTarget` is EMPTY is the target this PR's own `baseRefName`");
+  check(
+    "and takes a still-standing `rebase on top of <target>` as that base instead, resolved where it was named — `no-rebase` drops the rebase, not the target",
+    namedArmFirst && saysWhyTheTokenSurvives && resolvesItWhereNamed && baseRefIsTheOtherArm,
+    `named arm stated: ${namedArmFirst}; why the token survives: ${saysWhyTheTokenSurvives}; resolved where named without a fetch: ${resolvesItWhereNamed}; base ref is the other arm: ${baseRefIsTheOtherArm}`,
   );
 
   // And that paragraph renders ONLY where its value is consumed. The caller
@@ -1919,9 +1938,23 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         text.includes("that single OID serves every rebase-enabled entry at both of its points") &&
         // `no-rebase` suppresses the rebase, not the token — bounding a
         // named-target run's ranges at `baseRefName` would hand every reviewer
-        // the underlying branch's commits as this PR's diff.
-        text.includes("since `no-rebase` suppresses the rebase without discarding the token"),
-      "the named target is re-resolved per point, or `no-rebase` discards it and the ranges fall back to `baseRefName`",
+        // the underlying branch's commits as this PR's diff. Counted rather
+        // than merely found: the rule and the Phase B brief that consumes it
+        // are two sites, and a positive fragment anywhere in the file passed
+        // while the second one still said `baseRefName` unconditionally.
+        (text.match(/the invocation-named target's own pinned OID/g) || []).length >= 2 &&
+        // The exclusion is the statement that THAT branch stays on its own base,
+        // so a prose-excluded entry takes `baseRefName` even where a target was
+        // named — bounding it at a target it was deliberately not moved onto is
+        // the same wrong-boundary harm by the other road.
+        text.includes("excluding it is the statement that THAT branch stays on its own base") &&
+        text.includes("since `no-rebase` suppresses the rebase without discarding the token") &&
+        // A named target cannot drift, so the second point normally reports a
+        // no-op — but the canonical step still flattens a pure-join merge in
+        // range, so "guaranteed" would license skipping the point itself.
+        !/guaranteed no-op for a named target/.test(text) &&
+        text.includes("never a reason for you not to spawn it"),
+      "the named target is re-resolved per point, a site still falls back to `baseRefName` under `no-rebase`, or the second point is claimed to be a guaranteed no-op",
     );
   }
 }
