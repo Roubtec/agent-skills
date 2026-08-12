@@ -1,5 +1,7 @@
 # 015 — Adopt the peer-review-run contract in the review skills' peer steps
 
+Every line-number citation in this file is as of commit `b9ace66b` (the `main` tip when task 015b was implemented); re-derive it before editing if the named construct has moved since.
+
 ## Why this task exists
 
 The post-014 canonical peer step still documents a raw backgrounded launch (`codex exec --sandbox read-only --cd "$worktree" -o "$outfile" … &`, `plugins/dev-skills/skills/review-cycle/SKILL.md:101-103`), which `address-review`, `address-reviews`, `address-tasks`, `address-tasks-serialized`, and `resolve-open-questions` now consume by reference rather than copying. Months of field use across kalm2, jabko, Scribz, and powbox sessions show that pattern is a reliability tarpit every orchestrator re-hits:
@@ -32,8 +34,6 @@ Out of scope:
 - The GitHub-bot re-ping flows (unrelated to the CLI peer).
 
 ## Context and references
-
-Every line-number citation in this file, in this section and outside it alike, is as of commit `b9ace66b` (the `main` tip when task 015b was implemented); re-derive it before editing if the named construct has moved since.
 
 - **Sequencing**: 014 has landed and made `review-cycle` the canonical peer-step home. Implement the helper swap, fallback paragraph, no-network and executed-vs-static prompt guidance, and adaptive throttle in those canonical prose/workflow renderings; update consumer imports wholesale and sweep them only for raw-launch text that genuinely lingered through the extraction.
 - `plugins/dev-skills/skills/review-cycle/SKILL.md:101-103` and `plugins/dev-skills/skills/review-cycle/SKILL.md:108` — the current canonical raw launch and outcome vocabulary (the semantics to preserve).
