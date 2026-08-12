@@ -1,6 +1,6 @@
 ---
 name: rebase-stack
-description: Replay a chain of dependent local branches onto a target (typically main) after some predecessors have been merged, one branch at a time, dropping commits already present on the target and resolving conflicts with awareness of the chain's history. Trigger when the user asks to rebase a stack of stacked-PR branches, move a chain forward onto main after merges, or restack feature branches. Do not trigger for single-branch rebases.
+description: Replay a chain of dependent local branches onto a target (typically main) after some predecessors have been merged, using one replay for verified linear runs and a branch-at-a-time fallback, dropping commits already present on the target and resolving conflicts with awareness of the chain's history. Trigger when the user asks to rebase a stack of stacked-PR branches, move a chain forward onto main after merges, or restack feature branches. Do not trigger for single-branch rebases.
 ---
 
 Rebase a chain of stacked local branches onto a target branch.
@@ -10,7 +10,7 @@ Rebase a chain of stacked local branches onto a target branch.
 This skill is built for the "stacked PRs" workflow where each feature branch was originally based on its predecessor.
 After predecessors get merged into the target branch (typically `main`), the remaining branches need to be rebased so their unique commits land on top of the new target tip — and so each subsequent branch in the chain ends up cleanly stacked on the freshly rebased one above it.
 
-It works one branch at a time, with explicit user confirmation up front and intelligent conflict resolution along the way.
+It uses one deliberate replay for a verified linear run and otherwise works one branch at a time, with explicit user confirmation up front and intelligent conflict resolution along the way.
 
 ## When to use this
 
@@ -20,7 +20,7 @@ After `feature/01` and `feature/02` are merged into `main`, the remaining branch
 Use this skill from the topmost branch (or pass it explicitly) to bring the entire remaining stack forward, branch by branch, onto the new `main` tip.
 
 It also handles "leafy" stacks — branches in the middle that have grown their own fix commits not yet present in their descendants.
-The per-branch rebase naturally re-stacks them flatly: each rebased branch becomes the base for the next.
+The per-branch fallback naturally re-stacks them flatly: each rebased branch becomes the base for the next.
 
 ## Assumptions
 
@@ -65,10 +65,10 @@ In that mode:
 - Validate and print the proposed chain for the record, but treat the parent prompt as confirmation and do not wait for another `go`.
 - Never re-derive, reorder, or drop branches from the chain, and never push or fetch. (This bars dropping a *chain branch*; the `git rebase --skip` used for the "patch already represented in HEAD" trivial subtype is still expected.)
 - Resolve trivial conflicts as usual.
-- On the first non-trivial conflict, abort the current rebase and stop; do not leave conflict markers or an in-progress rebase for the parent agent.
-- If conflict resolution completes but validation cannot be repaired confidently, reset that disposable branch to its pre-rebase ref and stop.
+- On the first non-trivial conflict outside a combined replay, abort the current rebase and stop; during a combined replay, abort and restore the whole run, then use the per-branch fallback to establish and stop at the actual branch boundary. Do not leave conflict markers or an in-progress rebase for the parent agent.
+- If conflict resolution completes but validation cannot be repaired confidently, restore the whole run after a combined replay or reset the current disposable branch after a per-branch replay, then stop as Steps 4 and 6 prescribe.
 - Before returning, run `git clean -fd` to remove untracked leftovers (`git rebase --abort` and `git reset --hard` restore tracked files but leave `.orig`/build outputs) and confirm `git status --porcelain` is empty, so the parent can `git worktree remove` without `--force`.
-- **What these commands may reach.** Every `git reset --hard` and `git clean -fd` this mode runs — the restore after a stop, the pre-return clean, and the clean-stop that follows a restore — is scoped to the disposable chain branch currently being processed (the caller's guide branch) and to the worktree this invocation was pointed at: never a canonical task branch, never a remote ref, never a sibling worktree. `git clean -fd` is bounded to the tree it runs in; the ref-moving half is not — a worktree isolates the working tree, not the repository, so a `reset --hard` on the wrong branch reaches every sibling worktree through the shared `.git`.
+- **What these commands may reach.** Every `git reset --hard` and `git clean -fd` this mode runs — the restore after a stop, the pre-return clean, and the clean-stop that follows a restore — is scoped to the disposable chain branch currently being processed (the caller's guide branch) and to the worktree this invocation was pointed at: never a canonical task branch, never a remote ref, never a sibling worktree. The combined replay and combined-run restore are the only multi-ref writers: Step 4 gates the replay to exactly the disposable run branches, and its guarded `git update-ref --stdin` restore transaction reaches exactly those branches and their saved snapshot OIDs — never a canonical branch, remote ref, skipped branch, or branch outside that run. `git clean -fd` is bounded to the tree it runs in; ref-moving commands are not — a worktree isolates the working tree, not the repository, so a `reset --hard` on the wrong branch or an incorrectly scoped ref transaction reaches every sibling worktree through the shared `.git`.
 
 Do not infer this mode merely because the caller is a subagent.
 Without all three guarantees — explicit chain, explicit authorization, and disposable branches — use the normal interactive confirmation and stopping behavior.
@@ -134,7 +134,7 @@ Include `X` as a chain candidate if all of these hold:
 - `mb` is a descendant of `EF`: `git merge-base --is-ancestor <EF> mb` (and `mb != EF`)
 - `mb` is an ancestor of `<source>`: `git merge-base --is-ancestor mb <source>`
 - `X != <target>` and `X != <source>`
-- **`X` has at least one unique commit past `<source>`**: `git rev-list --count <source>..<X>` is greater than zero. All-ancestor tips are usually "snapshot" refs left behind from a prior workflow stage; excluding them keeps such refs out of the chain, at the cost of also skipping a real chain branch that has no commits of its own — to carry those refs along too, use the explicit `chain` form (which bypasses this filter — that list is authoritative) or plain `git rebase --update-refs`.
+- **`X` has at least one unique commit past `<source>`**: `git rev-list --count <source>..<X>` is greater than zero. All-ancestor tips are usually "snapshot" refs left behind from a prior workflow stage; excluding them keeps such refs out of the chain, at the cost of also skipping a real chain branch that has no commits of its own — to carry those refs along too, use the explicit `chain` form (which bypasses this filter — that list is authoritative) or a deliberate manual `git rebase --update-refs --no-rebase-merges` after explicitly enumerating and approving every ref the replay would move and applying Step 4's all-worktree checkout check.
 
 This is **heuristic, not metadata** — pure git topology with patch-id awareness.
 It correctly catches "leafy" branches whose tip has diverged from their descendants (e.g., `feature/03` with a `fixes 03` commit that `feature/04` doesn't have), because the merge-base of any such leafy branch with the source still lies on the chain spine.
@@ -160,6 +160,8 @@ Include for each branch in the proposed chain:
 - Short SHA of its tip and tip subject line.
 - Count of commits unique to this branch versus the next-up candidate (or versus the source for the topmost). Use this to highlight likely fix commits — small numbers are normal; large numbers on a branch with a name like `login-tests` are a red flag.
 - For any branch that looks suspicious (e.g., an outlier in commit count or whose name doesn't fit the apparent chain pattern), flag it with `[!]` and a one-line reason.
+
+Also state that any qualifying contiguous linear run may be replayed once with `--update-refs`, moving exactly that run's listed branch refs together, while every run that fails the exact-ref, topology, or worktree checks falls back to branch-at-a-time replay.
 
 Also report **target divergence info** as a non-blocking courtesy:
 - Local target SHA.
@@ -190,6 +192,8 @@ cached origin/main:       a02ee02  (1 commit behind local main, last fetched 4h 
 
 Pre-rebase refs will be saved at refs/pre-rebase/<branch>/<timestamp> so you can recover any branch if needed.
 
+Execution: each verified linear run may move exactly its listed branch refs together in one replay; all other branches will be replayed one at a time.
+
 Conflicts: trivial resolutions will be applied silently; non-trivial ones will be confirmed with you before continuing.
 Validation (build/test) will run only after a branch had conflicts to resolve. Clean rebases skip validation.
 
@@ -202,9 +206,38 @@ In delegated unattended mode, print the same listing for auditability and procee
 If the user provides branches to skip, remove them from the chain and re-display the updated listing for a final confirmation.
 Skipped branches are **left entirely untouched** — they stay on their current commits, are not rebased, are not modified.
 
-### Step 4 — Per-branch rebase loop
+### Step 4 — Linear-run fast path and per-branch rebase loop
 
-For each branch `X` in the confirmed chain (in order, with `<target>` as the new base for the first, and the just-rebased predecessor as the new base for each subsequent one):
+After the chain is confirmed and any skipped branches have been removed, freeze every confirmed branch's original tip and divide the chain at every consecutive pair `X → Y` for which `git merge-base --is-ancestor <X-original-tip> <Y-original-tip>` fails.
+Each maximal resulting sequence of at least two branches is a candidate run; single branches use the per-branch loop.
+Process candidate runs and single-branch segments strictly left to right under one base-selection invariant: before qualifying or executing any segment `<first> ...`, set its `<segment-base>` to `<target>` if and only if `<first>` is the first branch of the entire confirmed chain; otherwise set it to the freshly rebased tip of `<first>`'s immediately preceding confirmed branch. Never choose the base from whether this is the first fast-path run or the first run of a particular kind. If a candidate run falls back, its first branch keeps that same `<segment-base>` and each later branch advances onto its freshly rebased immediate predecessor; after any segment succeeds, apply the invariant anew to the next segment.
+For a candidate run `<first> ... <last>`, derive its replay boundary with `git merge-base --all <segment-base> <last-original-tip>` and qualify the run only if that command returns exactly one commit distinct from `<segment-base>`; call it `<fork>`. A run whose fork already is the segment base needs no combined replay and uses the per-branch loop, whose iterations safely no-op as appropriate.
+The replay command below passes `<segment-base>` as its upstream and `--no-fork-point`, so Git selects the single line after this ordinary merge-base and performs patch-equivalence dropping against `<segment-base>`, just as the first iteration of the branch-at-a-time loop does.
+Do **not** spell this as `--onto <segment-base> <fork>`: that makes `<fork>` the upstream used for cherry-pick dropping, so commits already represented on `<segment-base>` can be replayed instead of dropped.
+If a unique `<fork>` or the exact replay range cannot be proved by the checks below, use the per-branch loop; never guess a boundary.
+
+Use the linear-run fast path only when **all** of these checks pass:
+
+- Every run branch's original tip lies in `<fork>..<last-original-tip>` on the one ancestry line from `<fork>` through `<last-original-tip>`, in confirmed-chain order. The consecutive ancestry checks establish tip contiguity; also require `git rev-list --merges <fork>..<last-original-tip>` to be empty and require the OID sets from `git rev-list <fork>..<last-original-tip>` and `git rev-list --ancestry-path <fork>..<last-original-tip>` to be identical, so no branch can carry a merge or commits off that line.
+- Enumerate that same replay range with `git rev-list <fork>..<last-original-tip>`, then enumerate every local branch with `git for-each-ref --format='%(refname) %(objectname)' refs/heads/`. The local branches whose exact tip OIDs occur in that replay set must be **exactly** the run's branches: no omitted or skipped chain branch and no unrelated local branch may point into it. This exact-set check matters because `--update-refs` moves every un-checked-out local branch pointing at a replayed commit.
+- Prove that Git will actually replay every intermediate branch tip. Enumerate the right side with `git rev-list --right-only --cherry-mark --no-merges <segment-base>...<last-original-tip>` and require every run tip except `<last-original-tip>` to appear as `+<full-tip-OID>`; a `=<tip-OID>` is patch-equivalent to `<segment-base>` and disqualifies the whole run. The exact-tip check above is not enough: `--update-refs` does not move an intermediate ref whose tip Git omits as a clean cherry, so that ref would otherwise remain on the old line.
+- No run branch is checked out in any worktree. If this worktree currently has a run branch checked out, first detach it at `<segment-base>` with `git checkout --detach <segment-base>`, then inspect all `branch` entries from `git worktree list --porcelain`; if any run branch remains checked out, fall back. This avoids `--update-refs` silently skipping that ref and leaving a partially restacked run, while the per-branch loop's checkout would fail loudly.
+
+Any failed condition disqualifies the whole candidate run; process its branches with the per-branch loop below.
+In particular, a divergent leaf, or any later branch that does not belong to another independently qualifying contiguous run, remains branch-at-a-time.
+The fast path is permitted only when the refs the replay can move are exactly the run's own branch refs.
+
+Whenever the instructions below say to restore an entire run, first detach this worktree, verify each snapshot still resolves to its frozen original tip, and record every run branch's current OID. Restore all run branches in one `git update-ref --stdin` transaction: `start`, one `update refs/heads/<X> <snapshot-OID> <recorded-current-OID>` line per branch, `prepare`, then `commit`. The old-OID guards and transaction make the restore all-or-nothing; verify every run branch equals its snapshot afterwards. If a current OID changed before the restore or the transaction fails, stop and report the concurrent or unexpected ref movement; do not start the fallback from a state that was not restored exactly.
+
+For a qualifying run:
+
+1. **Save every pre-rebase ref before replaying anything.** For each branch `X` in the run, run `git update-ref refs/pre-rebase/<X>/<timestamp> <X>`, using the `YYYYMMDD-HHMMSS` timestamp captured once at the start of the whole stack run. These snapshots receive the same inspection and run-scoped cleanup treatment as the per-branch snapshots below.
+2. **Replay once from the last branch.** Run `git rebase --update-refs --no-rebase-merges --no-fork-point <segment-base> <last-branch>`. Both behavior axes are deliberate: `--update-refs` is the verified ref movement this fast path exists to perform, and `--no-rebase-merges` preserves the skill's flat replay instead of inheriting `rebase.rebaseMerges=true`. Explicit `--no-fork-point` keeps the selection boundary equal to the verified `<fork>`. The one replay moves every intermediate run ref to the same commit the per-branch loop would produce without repeatedly replaying shared commits.
+3. **Verify exact ref movement and topology before accepting the run.** Re-enumerate all local branch tips and require the set whose OIDs changed from the frozen pre-replay enumeration to be exactly the run's branches. Require every run branch's new tip to differ from its snapshot, descend from `<segment-base>`, and be an ancestor of the next run branch's new tip. Command success alone is not sufficient: these are the ref and topology postconditions that prove every intermediate boundary moved onto the new line. If only run refs changed but any run postcondition fails, restore the entire run and use the per-branch loop from the same `<segment-base>`; this catches an intermediate tip unexpectedly omitted despite the clean-cherry precheck. If any outside branch changed, stop and report it rather than hiding out-of-scope movement with a fallback.
+4. **Handle conflicts under Step 5.** Attribute a conflicted commit to `<first>` when it lies in `<fork>..<first-original-tip>`, or to the later branch `Y` whose original interval is `<previous-original-tip>..<Y-original-tip>`. Trivial conflicts and accepted resolutions continue within the combined replay. A non-trivial conflict that the agent cannot resolve confidently, or whose proposed resolution the user rejects, is the explicit exception to Step 5's normal interactive stop-in-place rule: record it, abort the combined replay, restore the entire run, and start the per-branch loop for the whole run from the same `<segment-base>`. If that loop reaches the same conflict, do not ask the user to reconsider the same rejected or indeterminate resolution: in normal interactive mode leave that branch's per-branch rebase in progress for inspection; in delegated unattended mode abort and restore that current disposable branch, clean it, and stop. This establishes the correct branch boundary without ever leaving the multi-ref replay half-finished.
+5. **Keep validation branch-gated.** After a successful single replay and its postcondition check, apply Step 6 separately to every run branch attributed at least one in-file conflict, checking out each such branch to validate it; clean and `--skip`-only branch intervals still skip validation. Do not make a repair commit on an intermediate run ref while its descendants already point past it. On the first failure, inspect enough to decide whether a focused repair is clear. If it is, restore the entire run and process it with the per-branch loop from the same `<segment-base>` so Step 6 applies the repair at the correct branch boundary and later branches inherit it; from that point Step 6 governs, including stopping at that branch if the attempted repair fails. If no confident repair is apparent, restore the entire run and stop immediately without starting the fallback or touching later branches; delegated unattended mode also performs its clean-stop. This is the fast-path exception to Step 6 and Step 7's usual rebased-but-failing interactive state. Finish a successful run with `<last-branch>` checked out.
+
+For every branch `X` not processed by the fast path, use this loop in confirmed-chain order. Apply the segment-base invariant above: set `<new-base>` for the first branch of a fallback or singleton segment to that segment's already selected `<segment-base>`, then set `<new-base>` for every later branch in the same fallback to the freshly rebased immediately preceding confirmed branch:
 
 1. **Save pre-rebase ref.**
    `git update-ref refs/pre-rebase/<X>/<timestamp> <X>` where `<timestamp>` is `YYYYMMDD-HHMMSS`, **captured once at the start of the run** so every ref this run creates shares the same timestamp.
@@ -213,8 +246,9 @@ For each branch `X` in the confirmed chain (in order, with `<target>` as the new
 2. **Checkout.**
    `git checkout <X>`.
 3. **Rebase.**
-   `git rebase <new-base>`.
+   `git rebase --no-update-refs --no-rebase-merges <new-base>`.
    Git's default patch-id detection drops commits already in the new base.
+   The flags state both behavior axes instead of inheriting configuration: `rebase.updateRefs=true` would move later chain branches before their own iterations, defeating this loop's per-branch conflict handling, validation, and snapshots, while `rebase.rebaseMerges=true` would reshape the replay instead of preserving the skill's flat topology.
 
    **Important caveat — patch-id cascades.** If the previous branch's rebase had to *resolve* a conflict (Step 5), that resolution mutated the resulting commit's content, so its patch-id no longer matches the original commit on the descendant's branch. When the descendant's rebase replays that same commit (still present in its history under the original SHA), git **will not** auto-skip it — it sees a different patch-id and tries to apply it as a new commit, which conflicts because the new base already represents the content (just with a different surface).
 
@@ -228,6 +262,9 @@ After the last branch in the chain, the source branch is checked out at its reba
 ### Step 5 — Conflict handling
 
 When `git rebase` halts on a conflict:
+
+**Combined-replay exception:** while the linear-run fast path is active, use Step 4.4 wherever the rules below would normally abort and stop in delegated unattended mode or leave an interactive rebase in progress.
+The combined replay must first be aborted and every run ref restored, then the per-branch fallback establishes the real stop branch; Step 5's normal stop-in-place behavior applies only after that fallback reaches the rejected or indeterminate conflict.
 
 1. **Inspect the conflict.**
    Read the conflicting files, the offending commit (`git show REBASE_HEAD`), and the recent history of the affected hunks.
@@ -247,12 +284,13 @@ When `git rebase` halts on a conflict:
    - **In-file resolution** (import collisions, whitespace, predecessor-traceable): apply the merge, `git add` the resolved files, `git rebase --continue`. Mention briefly in the running narration ("resolved trivial conflict in `<file>`: kept both imports") so the user can scan after the fact, but don't pause.
    - **Patch already represented in HEAD**: run `git rebase --skip` (do *not* edit files). Narrate one line: "skipped redundant commit `<short-sha>` — content already on rebased base". Do not `git add` or `git rebase --continue` for this subtype; `--skip` advances the rebase by itself.
 4. **Non-trivial → stop unattended, otherwise propose and confirm.**
-   In delegated unattended mode, record the conflicting files, offending commit, and why it is non-trivial; then run `git rebase --abort`, report the branch as the stop point, and return without touching subsequent branches.
+   In delegated unattended mode outside a combined replay, record the conflicting files, offending commit, and why it is non-trivial; then run `git rebase --abort`, report the branch as the stop point, and return without touching subsequent branches.
    The current disposable branch is restored to its pre-rebase tip; then apply the delegated-mode clean-stop (`git clean -fd`, empty `git status --porcelain`) before returning.
    In normal interactive mode, present the conflict, the proposed resolution (with reasoning, including any traceable precedent), and ask the user to confirm before applying.
    On user "go": apply, `git add`, `git rebase --continue` (or `git rebase --skip` if the proposed resolution is "skip this commit").
-   On user "no": stop the skill (see step 7 below).
+   On user "no": use the combined-replay exception when it applies; otherwise stop the skill (see Step 7 below).
 5. **Normal interactive mode only: if the agent cannot determine a confident resolution at all** — e.g., the conflict involves intent that isn't apparent from the code or history — **stop the skill without aborting the rebase**.
+   If this is a combined replay, use the exception above instead; the following stop-in-place behavior applies only to a per-branch replay.
    Leave the rebase in progress (working tree contains conflict markers and `git rev-parse --git-path rebase-merge` points to the active state).
    Tell the user clearly:
    - Which branch is mid-rebase (`<X>`).
@@ -274,6 +312,8 @@ Skip validation entirely for:
 Many repos take minutes to build and we don't want to waste time on rebases that didn't change anything semantically.
 
 When validation is required:
+
+During validation after a combined replay, use Step 4.5 in place of items 3–4 below: an intermediate repair must be applied through the per-branch fallback, and an ambiguous or failed repair restores the combined run and stops.
 
 1. **Discover commands.**
    In order of preference:
@@ -301,13 +341,16 @@ The skill can stop at three points:
 - On non-trivial conflict the user rejects, or one the agent cannot resolve.
 - On validation failure that cannot be auto-fixed.
 
+A combined fast-path replay is never left as the stopped state.
+On a rejected or indeterminate conflict it is aborted and restored before the per-branch fallback reaches the actual stop branch; on an ambiguous or failed validation repair the entire run is restored before the skill stops.
+
 In normal interactive mode:
 - Earlier branches that completed are left **rebased and checked-in locally**, not pushed.
-- The current branch is left in whatever state stopped progress (rebase in progress, or rebased-but-failing-validation).
+- A per-branch current branch is left in whatever state stopped progress (rebase in progress, or rebased-but-failing-validation); the restored fast-path validation case instead stops with every branch in that run at its snapshot.
 - Subsequent chain branches are completely untouched.
 - All pre-rebase refs created so far are preserved.
 
-In delegated unattended mode, the current disposable branch is instead restored to its pre-rebase ref and the worktree is left clean; only the completed prefix remains rebased.
+In delegated unattended mode, a stop after a combined-replay validation failure restores every branch in that run to its snapshot, while a stop after a per-branch replay restores only the current disposable branch to its pre-rebase ref. In either case the worktree is left clean, and only the completed prefix before the restored run or branch remains rebased.
 
 **Note on detached HEAD during in-progress rebase**: while a `git rebase` is paused mid-flight, the working tree is on a detached HEAD — `git branch --show-current` returns empty, which can be disorienting. Use `git status` (which reports the in-progress rebase, the branch being rebased, and the conflicted files) for orientation when resuming.
 
@@ -341,10 +384,11 @@ Output:
 
 ## Design notes
 
-### Why per-branch rebase instead of `git rebase --update-refs`
+### Why verified linear runs use `--update-refs` and other segments rebase per branch
 
-Git 2.38+'s `git rebase --update-refs <target> <source>` rebases a whole stack in one operation, and it remains the manual fast-path for a stack you are confident will rebase without conflicts.
-This skill deliberately works branch-by-branch instead: conflict resolution benefits from fresh shell state and per-branch reasoning, validation gates on "did this branch have a conflict?", and stopping cleanly mid-chain is simpler when each branch is its own atomic step.
+This skill deliberately uses `--update-refs` itself for each verified linear run whose intermediate tips will all be replayed: one replay preserves the run's ancestry, moves exactly its intermediate branch refs, avoids repeated shared-commit replays and their patch-id cascade, and retains snapshots, exact postconditions, and per-branch validation gates.
+It deliberately falls back to `--no-update-refs` branch-by-branch when the history is non-linear or the exact-ref and worktree checks fail: conflict resolution then benefits from per-branch reasoning, validation still gates on "did this branch have a conflict?", and stopping mid-chain leaves later branches untouched.
+Using `--update-refs` without the fast path's gates is unsafe for a non-linear stack because it can move later, skipped, or unrelated refs before their own controlled iteration; inheriting `rebase.updateRefs=true` would create the same hazard implicitly.
 
 ### Why no fetch
 
@@ -363,9 +407,13 @@ They are cheap (just refs, no extra blobs), the value if a rebase goes wrong is 
 - [ ] Effective frontier `EF` computed via patch-id (`--cherry-mark`) before chain detection.
 - [ ] Chain detected via `EF`-relative topology, or taken verbatim from explicit chain spec.
 - [ ] Confirmation listing produced (with `EF` shown) and approved.
-- [ ] Pre-rebase ref saved before each branch's rebase.
+- [ ] Every fast-path or fallback segment uses `<target>` as its base if and only if it begins with the first confirmed branch; every other segment uses its freshly rebased immediate predecessor.
+- [ ] Maximal contiguous linear runs classified by ancestry, single-line history, exact moved-ref set, replayable intermediate tips, and all-worktree checkout state; every failed run assigned to the per-branch fallback.
+- [ ] Pre-rebase ref saved for every branch before its per-branch replay or before a run's single fast-path replay.
+- [ ] Every replay start states ref movement and merge topology explicitly: `--update-refs --no-rebase-merges` for a qualifying run, `--no-update-refs --no-rebase-merges` for the per-branch loop.
+- [ ] Every fast-path success satisfies the exact changed-ref and ancestry postconditions; an unexpected run-only omission restores the whole run before per-branch fallback.
 - [ ] Conflicts classified trivial (in-file resolve OR `--skip` for "patch already represented") vs non-trivial; interactive non-trivial conflicts confirmed before applying, unattended ones recorded and aborted.
-- [ ] Validation only after branches that had conflicts.
+- [ ] Validation only after branches or fast-path branch intervals that had in-file conflicts.
 - [ ] Interactive stopping does not auto-abort in-progress rebases; delegated unattended stopping aborts/resets cleanly.
 - [ ] Delegated unattended mode used only for an explicit, preauthorized chain of disposable branches; non-trivial stops abort/reset cleanly without waiting.
 - [ ] No pushes, no fetches, no auto-deletion of branches.
