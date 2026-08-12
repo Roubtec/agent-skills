@@ -113,7 +113,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 131;
+const EXPECTED_CHECKS = 133;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -996,6 +996,33 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "and takes a still-standing `rebase on top of <target>` as that base instead, resolved where it was named — `no-rebase` drops the rebase, not the target",
     namedArmFirst && saysWhyTheTokenSurvives && resolvesItWhereNamed && baseRefIsTheOtherArm,
     `named arm stated: ${namedArmFirst}; why the token survives: ${saysWhyTheTokenSurvives}; resolved where named without a fetch: ${resolvesItWhereNamed}; base ref is the other arm: ${baseRefIsTheOtherArm}`,
+  );
+
+  // The brief is only half the contract the gather agent is handed: the SCHEMA
+  // goes with it and is where this field's MEANING is stated, in the same
+  // agent-facing imperative voice ("Report `false` here"). It described a
+  // base-repository fetch unconditionally while the brief above ordered the
+  // working-location arm — one field, two contracts, and the one the schema
+  // stated was the very substitution the rule exists to forbid. Read out of the
+  // shipped source, the schema object not being exported to this harness.
+  const baseOidDesc = (src.match(/baseOid: \{ type: "string", description: "([\s\S]*?)" \},/) || [])[1] || "";
+  const schemaNamesTheTarget = /THIS RUN'S TARGET/.test(baseOidDesc);
+  const schemaHasTheNamedArm = /resolved WHERE IT WAS NAMED, in the working location, and fetched from nowhere/.test(baseOidDesc);
+  const schemaScopesTheBaseArm = /only where the request named none is the target this PR's own base ref/.test(baseOidDesc);
+  check(
+    "and the schema's own `baseOid` contract names those same two arms, rather than a base-repository fetch alone",
+    schemaNamesTheTarget && schemaHasTheNamedArm && schemaScopesTheBaseArm,
+    `names the run's target: ${schemaNamesTheTarget}; carries the named arm: ${schemaHasTheNamedArm}; scopes the base arm: ${schemaScopesTheBaseArm}`,
+  );
+  // And the token that picks between the arms is owed structurally, not merely
+  // asked for: an omitted `rebaseTarget` reads as "the request named none" and
+  // takes the base-ref arm silently, which since this field became the review
+  // base is a wrong boundary rather than only a wrong rebase target.
+  check(
+    "and `rebaseTarget` is required of every packet, so an omission cannot read as `the request named none`",
+    /required: \["ok", "items", "rebaseTarget"\]/.test(src) &&
+      /Report the token on EVERY packet, empty string and not omitted/.test(src),
+    "the token is optional again, so a gather that forgets it silently selects the base-ref arm",
   );
 
   // And that paragraph renders ONLY where its value is consumed. The caller
@@ -1948,6 +1975,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         // named — bounding it at a target it was deliberately not moved onto is
         // the same wrong-boundary harm by the other road.
         text.includes("excluding it is the statement that THAT branch stays on its own base") &&
+        // The checklist states the same rule in its own words, so counting the
+        // rule's phrasing does not reach it: gutted back to an unconditional
+        // `baseRefName` it would audit a run as correct that bounded every
+        // range at the wrong commit.
+        text.includes("that named target's pinned OID on a `no-rebase` batch") &&
         text.includes("since `no-rebase` suppresses the rebase without discarding the token") &&
         // A named target cannot drift, so the second point normally reports a
         // no-op — but the canonical step still flattens a pure-join merge in

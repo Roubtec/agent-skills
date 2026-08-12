@@ -34,7 +34,8 @@
  * NAME as this run's review base, because every range delegated afterwards is
  * taken against it and a remote-tracking name moves under a sibling push. That
  * holds on the opt-out path too: a `no-rebase` run has no rebase report to pin
- * from, so it pins the commit the gather resolved the base ref to. The review
+ * from, so it pins the commit the gather resolved this run's target to — the
+ * target an explicit `rebase on top of <target>` named, else the PR's base ref. The review
  * base is a commit on every path this script dispatches from.
  * Where the pre-push point replays anything, the passing verdict no longer
  * describes the tree being pushed, so the cycle is re-run over the rebased tree
@@ -147,7 +148,7 @@ const PACKET_SCHEMA = {
         locationMode: { type: "string", description: "REQUIRED: exactly `inline` (the work happens in the current checkout) or `worktree` (a worktree was attached for it). There is no default — the caller stops the run on an absent or unrecognized value, because reading one as `inline` would point every later phase at the main checkout, which in worktree mode is not on the PR branch at all." },
         worktree: { type: "string", description: "ABSOLUTE path of the attached worktree in `worktree` mode — required there, since it is where every later phase works. Empty in `inline` mode. It rides in `pr` so that every result echoing the PR object reports a worktree a halted run left standing." },
         base: { type: "string", description: "The PR's `baseRefName`. It is a REF NAME at this stage and nothing more: the rebase phase resolves it (or the requested target) to a commit and the caller replaces this field with that pinned OID, which is what every later delegation names as its review base." },
-        baseOid: { type: "string", description: "The full OID that base ref resolves to right now IN THE BASE REPOSITORY — the repository the PR itself is in, freshly fetched, never read through the branch's push remote, which on a cross-repository PR is the head fork. A commit, never a name. REQUIRED on a `no-rebase` run whose gather returned items, and ONLY there — that run has no rebase report to pin from, so this is the OID it pins as its review base, and the caller rejects anything that is not a full hex OID on that path and stops the run. An empty gather reports the field EMPTY even there: the caller's no-op exit runs before the check. A rebasing run never reads it (its rebase pins the base itself), so its gather reports the field EMPTY and performs no base-repository fetch — the brief orders that fetch only where the value is consumed." },
+        baseOid: { type: "string", description: "The full OID THIS RUN'S TARGET resolves to right now — which of two things that is, the brief settles and this field follows: a branch or commit an explicit `rebase on top of <target>` named (the `rebaseTarget` you report) is resolved WHERE IT WAS NAMED, in the working location, and fetched from nowhere, since `no-rebase` drops the rebase and not the target; only where the request named none is the target this PR's own base ref, and only then is it resolved IN THE BASE REPOSITORY — the repository the PR itself is in, freshly fetched, never read through the branch's push remote, which on a cross-repository PR is the head fork. A commit, never a name. REQUIRED on a `no-rebase` run whose gather returned items, and ONLY there — that run has no rebase report to pin from, so this is the OID it pins as its review base, and the caller rejects anything that is not a full hex OID on that path and stops the run. An empty gather reports the field EMPTY even there: the caller's no-op exit runs before the check. A rebasing run never reads it (its rebase pins the base itself), so its gather reports the field EMPTY and resolves nothing for it — the brief orders that resolution, by whichever arm, only where the value is consumed." },
         headOid: { type: "string", description: "Expected remote head OID, for the publication lease. Populate from the PR's headRefOid." },
         rebased: { type: "boolean", description: "Whether the branch tip has been rewritten (publish must then use --force-with-lease). Report `false` here — this step performs no rebase; the caller sets it from the rebase phase's own report." },
       },
@@ -155,7 +156,7 @@ const PACKET_SCHEMA = {
     },
     rebaseTarget: {
       type: "string",
-      description: "The target named by an explicit `rebase on top of <branch>` token in the request — a branch name or an exact commit, verbatim. EMPTY when the request named none, which is the ordinary case: the rebase phase then targets the PR's own `baseRefName` (this object's `base`). Report the token; do NOT act on it here.",
+      description: "The target named by an explicit `rebase on top of <branch>` token in the request — a branch name or an exact commit, verbatim. EMPTY when the request named none, which is the ordinary case: the rebase phase then targets the PR's own `baseRefName` (this object's `base`). Report the token on EVERY packet, empty string and not omitted where the request named none: the caller reads this field alone and never infers the token from anything else, and on a `no-rebase` run it is what decides which target the `baseOid` above resolves. Acting on it is otherwise not yours — the rebase phase does that — with the single exception the `no-rebase` arm of your brief spells out, where resolving it IS the base you report.",
     },
     reconcile: {
       type: "object",
@@ -189,7 +190,7 @@ const PACKET_SCHEMA = {
       },
     },
   },
-  required: ["ok", "items"],
+  required: ["ok", "items", "rebaseTarget"],
 };
 
 // What one rebase point hands back. `effectiveBase` is the field the rest of
@@ -1007,7 +1008,7 @@ const rebaseRecord = {
   target: rebaseTargetRef,
   explicitTarget: Boolean(explicitRebaseTarget),
   points: [],
-  ...(flags.noRebase ? { suppressed: "`no-rebase` was given: neither point ran, and the branch is addressed and published on the base it already sits on. The review base is that base ref resolved to a commit, since nothing rebased to pin one." } : {}),
+  ...(flags.noRebase ? { suppressed: "`no-rebase` was given: neither point ran, and the branch is addressed and published on the base it already sits on. The review base is that target resolved to a commit, since nothing rebased to pin one." } : {}),
 };
 // Runs one point and returns either `{ rebase }` — the report, with `pr.base`
 // already replaced by the pinned OID — or `{ stop }`, a result the run returns
@@ -1184,7 +1185,7 @@ if (flags.noRebase) {
       status: "unpinned-base",
       pr: packet.pr,
       rebase: rebaseRecord,
-      detail: `\`no-rebase\` was given and the gather reported ${JSON.stringify(packet.pr.baseOid === undefined ? null : packet.pr.baseOid)} as the base ref's commit, which is not a full commit OID. With no rebase to pin one, that value IS this run's review base, and a movable name or an abbreviation cannot bound a delegated diff.`,
+      detail: `\`no-rebase\` was given and the gather reported ${JSON.stringify(packet.pr.baseOid === undefined ? null : packet.pr.baseOid)} as this run's target commit, which is not a full commit OID. With no rebase to pin one, that value IS this run's review base, and a movable name or an abbreviation cannot bound a delegated diff.`,
       note: "Nothing was addressed and nothing was pushed. Re-run so the gather resolves this run's target — the branch or commit an explicit `rebase on top of <target>` named, else the PR's own base ref — to a full commit OID, or drop `no-rebase` and let the rebase phase pin it.",
     };
   }
