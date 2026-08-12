@@ -74,7 +74,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 197;
+const CHECKS_PER_LEG = 199;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -1013,6 +1013,9 @@ for (const name of WORKFLOWS) {
     check("and names the independently checked flake suffix and carries the delivery note", withRecord.res.recordOnly && withRecord.res.recordOnly.range === RECORD_RANGE && withRecord.res.recordOnly.note === FLAKE_NOTE && /diagnosis-only record/.test(withRecord.res.recordOnly.verified || ""), JSON.stringify(withRecord.res.recordOnly));
     check("whose range is exactly the measured final commit's actual parent through its measured tip", withRecord.res.recordOnly && withRecord.res.recordOnly.range === `${withRecord.res.packetChecks.at(-1).headParentSha}..${withRecord.res.packetChecks.at(-1).headSha}`, `${JSON.stringify(withRecord.res.recordOnly)}/${JSON.stringify(withRecord.res.packetChecks.at(-1))}`);
     check("the one check is asked to split and judge all three claims without seeing the pass's flake note", withRecord.seen.closeOutPrompts.length === 1 && /answer THREE questions/.test(withRecord.seen.closeOutPrompts[0] || "") && /recordOnlySuffix/.test(withRecord.seen.closeOutPrompts[0] || "") && /FINAL commit/.test(withRecord.seen.closeOutPrompts[0] || "") && !(withRecord.seen.closeOutPrompts[0] || "").includes(FLAKE_NOTE), "close-out check prompt");
+    const offeringFixPrompt = withRecord.seen.fixPrompts[1] || "";
+    check("the rendered fixer brief lets a compliant producer offer the path while listing only pre-suffix edits", /list ONLY those non-semantic edits in `closeOutEdits`/.test(offeringFixPrompt) && /SOLE exception is an exact FINAL diagnosis-only record commit/.test(offeringFixPrompt) && /put that failure and its record in `flakeRecord`/.test(offeringFixPrompt) && /leave the record itself OUT of `closeOutEdits`/.test(offeringFixPrompt), "fixer prompt");
+    check("the rendered fixer brief makes the claimed record non-self-certifying and forbids every broader semantic change", /`flakeRecord` does not certify or broaden the exception/.test(offeringFixPrompt) && /independently reads the diff and measures the final commit and its actual parent/.test(offeringFixPrompt) && /any other executable, behavioral, or semantic change anywhere in the pass diff/.test(offeringFixPrompt) && /however it got there or how `flakeRecord` describes it, forfeits the close-out/.test(offeringFixPrompt), "fixer prompt");
 
     // Negative control for the new split: a valid record suffix cannot hide a
     // semantic hunk in the preceding fixes portion. It forfeits both records
