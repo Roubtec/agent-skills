@@ -1938,6 +1938,16 @@ const PEER_LIFECYCLE_CHECKS = 20;
   }
 
   const pluginsProse = readFileSync(join(here, "..", "plugins", "dev-skills", "skills", "review-cycle", "SKILL.md"), "utf8");
+  check(
+    "both prose mirrors send only fresh Reviewer remarks to confirmation and keep peer notes human-summary-only",
+    [prose, pluginsProse].every(
+      (text) =>
+        /hand the passing fresh Reviewer report/.test(text) &&
+        /The peer's advisory notes are excluded: they remain human-summary-only/.test(text) &&
+        /never enter a fixer or final-confirmation prompt/.test(text),
+    ),
+    "confirmation/pass-note boundary",
+  );
   check("the direct Codex provider gets bounded TERM, death verification, safe KILL, and a survivor stop", /send TERM[\s\S]*at most ten seconds[\s\S]*send KILL only if[\s\S]*ten more seconds[\s\S]*stop the cycle and escalate/.test(pluginsProse), "raw Codex lifecycle prose");
   check(
     "the future Codex helper gets a private session artifact root and a caller wait that covers retry plus reaping",
