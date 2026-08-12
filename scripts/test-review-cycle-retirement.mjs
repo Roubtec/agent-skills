@@ -74,7 +74,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 195;
+const CHECKS_PER_LEG = 197;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -132,11 +132,13 @@ function scriptedAgent(fixes, reviews, seen, closeOuts = [], records = [], packe
   const closeOutQueue = [...closeOuts];
   const recordQueue = [...records];
   const packetQueue = [...packets];
+  let lastFix = null;
   return async function agent(prompt, opts) {
     const label = (opts && opts.label) || "";
     if (label.startsWith("fix#")) {
       seen.fixPrompts.push(prompt);
       const p = fixQueue.shift();
+      lastFix = p || null;
       return p === undefined ? null : p;
     }
     // The packet measurement defaults PERMISSIVE for the diff checks' reason,
@@ -147,7 +149,16 @@ function scriptedAgent(fixes, reviews, seen, closeOuts = [], records = [], packe
     if (label.startsWith("packet#")) {
       seen.packetPrompts.push(prompt);
       const p = packetQueue.shift();
-      return p === undefined ? { measured: true, dirty: [], operation: "", detail: "scripted: clean and idle" } : p;
+      return p === undefined
+        ? {
+            measured: true,
+            dirty: [],
+            operation: "",
+            headSha: (lastFix && lastFix.finalSha) || "",
+            headParentSha: lastFix && lastFix.finalSha === RECORD_TIP ? RECORD_PARENT : ORDINARY_PARENT,
+            detail: "scripted: clean and idle with HEAD and its parent resolved",
+          }
+        : p;
     }
     if (label.startsWith("review#")) {
       seen.reviewPrompts.push(prompt);
@@ -349,6 +360,7 @@ const RECORD_PARENT = "a".repeat(40);
 const RECORD_TIP = "b".repeat(40);
 const RECORD_RANGE = `${RECORD_PARENT}..${RECORD_TIP}`;
 const WRONG_RECORD_RANGE = `${RECORD_PARENT}..${"c".repeat(40)}`;
+const ORDINARY_PARENT = "d".repeat(40);
 const confirmRecordOnly = { ...PASS_PACKET, dispositions: [], flakeRecord: FLAKE_NOTE };
 const closeOutRecordOnly = (findingId) => ({ ...closeOutFix(findingId), finalSha: RECORD_TIP, flakeRecord: FLAKE_NOTE });
 // The same pass with no record of its OWN: it committed the same range and says
@@ -363,13 +375,13 @@ const confirmCitingActiveTask = { ...idle, flakeRecord: CITED_NOTE };
 // The readings the packet measurement can come back with. `CLEAN_READING` is
 // the scripted default's explicit twin, needed wherever a scenario places a
 // specific reading on a LATER pass and so must fill the earlier slot itself.
-const CLEAN_READING = { measured: true, dirty: [], operation: "", detail: "clean and idle" };
-const DIRTY_READING = { measured: true, dirty: [" M src/app.ts", "?? notes.txt"], operation: "", detail: "two uncommitted paths" };
+const CLEAN_READING = { measured: true, dirty: [], operation: "", headSha: PASS_PACKET.finalSha, headParentSha: ORDINARY_PARENT, detail: "clean and idle" };
+const DIRTY_READING = { measured: true, dirty: [" M src/app.ts", "?? notes.txt"], operation: "", headSha: PASS_PACKET.finalSha, headParentSha: ORDINARY_PARENT, detail: "two uncommitted paths" };
 // The reading this whole measurement exists for: a tree left mid-cherry-pick
 // prints EMPTY porcelain, so `dirty` is empty and the operation marker is the
 // only thing that shows it. A porcelain-only check calls this worktree clean.
-const MID_OPERATION_READING = { measured: true, dirty: [], operation: "CHERRY_PICK_HEAD", detail: "a cherry-pick is still in progress; the porcelain is empty" };
-const UNMEASURED_READING = { measured: false, dirty: [], operation: "", detail: "git would not run in that path" };
+const MID_OPERATION_READING = { measured: true, dirty: [], operation: "CHERRY_PICK_HEAD", headSha: PASS_PACKET.finalSha, headParentSha: ORDINARY_PARENT, detail: "a cherry-pick is still in progress; the porcelain is empty" };
+const UNMEASURED_READING = { measured: false, dirty: [], operation: "", headSha: "", headParentSha: "", detail: "git would not run in that path" };
 
 // A deviation from a LOCKED maintainer decision, and a pass that reports one.
 // Every other packet above carries `deviations: []`, so any of them following
@@ -999,6 +1011,7 @@ for (const name of WORKFLOWS) {
     check("the conclusion detail names both kinds of unreviewed content", /non-semantic fixes plus the independently checked unrelated-flake record suffix/.test(withRecord.res.detail || ""), withRecord.res.detail);
     check("the conclusion names the whole unreviewed close-out range and its non-semantic edits", withRecord.res.closeOut && withRecord.res.closeOut.range === `sha..${RECORD_TIP}` && JSON.stringify(withRecord.res.closeOut.edits) === JSON.stringify(CLOSE_OUT_EDITS), JSON.stringify(withRecord.res.closeOut));
     check("and names the independently checked flake suffix and carries the delivery note", withRecord.res.recordOnly && withRecord.res.recordOnly.range === RECORD_RANGE && withRecord.res.recordOnly.note === FLAKE_NOTE && /diagnosis-only record/.test(withRecord.res.recordOnly.verified || ""), JSON.stringify(withRecord.res.recordOnly));
+    check("whose range is exactly the measured final commit's actual parent through its measured tip", withRecord.res.recordOnly && withRecord.res.recordOnly.range === `${withRecord.res.packetChecks.at(-1).headParentSha}..${withRecord.res.packetChecks.at(-1).headSha}`, `${JSON.stringify(withRecord.res.recordOnly)}/${JSON.stringify(withRecord.res.packetChecks.at(-1))}`);
     check("the one check is asked to split and judge all three claims without seeing the pass's flake note", withRecord.seen.closeOutPrompts.length === 1 && /answer THREE questions/.test(withRecord.seen.closeOutPrompts[0] || "") && /recordOnlySuffix/.test(withRecord.seen.closeOutPrompts[0] || "") && /FINAL commit/.test(withRecord.seen.closeOutPrompts[0] || "") && !(withRecord.seen.closeOutPrompts[0] || "").includes(FLAKE_NOTE), "close-out check prompt");
 
     // Negative control for the new split: a valid record suffix cannot hide a
@@ -1035,6 +1048,20 @@ for (const name of WORKFLOWS) {
       cycle: { closeOut: "on" },
     });
     check("a valid-looking suffix range that does not end at the pass tip cannot conclude", wrongTipRecord.seen.reviewPrompts.length === 2 && !wrongTipRecord.res.closeOut && !wrongTipRecord.res.recordOnly, `${wrongTipRecord.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(wrongTipRecord.res)}`);
+
+    // The left boundary is not merely another well-shaped OID. Use the
+    // previously reviewed tip as the checker's dynamic answer: it is exactly
+    // `passBase`, but it is NOT the final commit's parent. The old structural
+    // gate accepted this whole-pass range because only its right endpoint was
+    // compared; the independent packet reading now rejects it.
+    const reviewedTip = "c".repeat(40);
+    const wrongParentRecord = await run(src, {
+      fixes: [{ ...PASS_PACKET, finalSha: reviewedTip }, closeOutRecordOnly("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      closeOuts: [{ nonSemantic: true, editsPresent: true, recordOnlySuffix: true, recordOnlyRange: `${reviewedTip}..${RECORD_TIP}`, why: "the checker mislabeled the whole pass range as the final record commit" }],
+      cycle: { closeOut: "on" },
+    });
+    check("a checker returning the dynamic passBase..finalSha range cannot substitute the wrong parent for the final commit's actual parent", wrongParentRecord.seen.reviewPrompts.length === 2 && !wrongParentRecord.res.closeOut && !wrongParentRecord.res.recordOnly, `${wrongParentRecord.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(wrongParentRecord.res)}`);
 
     const declined = await run(src, {
       fixes: [PASS_PACKET, closeOutDecline("r1-1"), idle],
@@ -1400,7 +1427,7 @@ for (const name of WORKFLOWS) {
     const opaque = await run(src, { fixes: [{ ...PASS_PACKET, summary: SENTINEL }, idle], reviews: [OK] });
     const measurePrompt = opaque.seen.packetPrompts[0] || "";
     check("the measuring turn is given no account of the pass whose worktree it judges", !measurePrompt.includes(SENTINEL), "measurement prompt");
-    check("and is asked for BOTH readings, the operation state being the one porcelain hides", /--porcelain/.test(measurePrompt) && /CHERRY_PICK_HEAD/.test(measurePrompt) && /prints EMPTY porcelain/.test(measurePrompt), "measurement prompt");
+    check("and is asked for the state plus HEAD and its parent, the operation state being the one porcelain hides", /--porcelain/.test(measurePrompt) && /CHERRY_PICK_HEAD/.test(measurePrompt) && /prints EMPTY porcelain/.test(measurePrompt) && /rev-parse HEAD\^/.test(measurePrompt) && /actual parent/i.test(measurePrompt), "measurement prompt");
     check("and told to observe only — never to repair the tree it is measuring", /OBSERVE ONLY/.test(measurePrompt) && /do NOT stage, commit, reset, clean, stash, abort/.test(measurePrompt), "measurement prompt");
 
     // The brief must not FORBID the reading it is sent to take. Every other

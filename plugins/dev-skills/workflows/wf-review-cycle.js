@@ -286,16 +286,21 @@ const CYCLE_FIX_SCHEMA = {
 // fixer's own reading can be sincere and wrong, and nothing but the fixer ever
 // looked at it. Modelled on `wf-address-tasks.js`'s `MAIN_CHECKOUT_SCHEMA`,
 // its `measured: false` degradation included: a reading that could not be taken
-// is UNKNOWN, and the one thing it must never read as is clean.
+// is UNKNOWN, and the one thing it must never read as is clean. The same
+// independent turn resolves HEAD and its parent, so a later close-out check
+// cannot make an arbitrary valid-looking left OID the boundary of the final
+// record-only commit.
 const CYCLE_PACKET_CHECK_SCHEMA = {
   type: "object",
   properties: {
-    measured: { type: "boolean", description: "True only if BOTH readings ran and produced definitive answers — the porcelain status AND every operation-state marker. False when either could not be taken; `dirty` and `operation` are then best-effort and must NOT be read as clean." },
+    measured: { type: "boolean", description: "True only if ALL readings ran and produced definitive answers — the porcelain status, every operation-state marker, HEAD's full OID, and HEAD's parent's full OID. False when any could not be taken; the remaining fields are then best-effort and must NOT be read as clean or authoritative." },
     dirty: { type: "array", items: { type: "string" }, description: "One `git status --porcelain -z --untracked-files=all` record per changed path: the 2-character `XY` status field, a space, then the repo-relative path (the current path for a rename/copy). The `XY ` prefix is kept verbatim — its first column can be a space. Empty when the tree is clean." },
     operation: { type: "string", description: "The Git operation still in progress, named by the state marker that showed it — `rebase-merge`, `rebase-apply`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG` — or EMPTY when none is. Name the marker you actually found, never an inference: most of these leave the porcelain clean, which is the whole reason this reading is taken separately." },
+    headSha: { type: "string", description: "The exact full OID printed by `git rev-parse HEAD`, or empty when it could not be resolved." },
+    headParentSha: { type: "string", description: "The exact full OID printed by `git rev-parse HEAD^`, or empty when it could not be resolved. This is independent proof of the only left boundary a final one-commit record suffix may name." },
     detail: { type: "string", description: "One line: what the readings found, or — when `measured` is false — which reading could not be taken and why." },
   },
-  required: ["measured", "dirty", "operation", "detail"],
+  required: ["measured", "dirty", "operation", "headSha", "headParentSha", "detail"],
 };
 
 const CYCLE_REVIEW_SCHEMA = {
@@ -1151,7 +1156,8 @@ ${CYCLE_FINISH_IN_TURN} ${CYCLE_NO_SELF_PEER}
 Edit nothing.`;
 }
 
-// The packet measurement: porcelain status and the operation-state markers,
+// The packet measurement: porcelain status, operation-state markers, and the
+// committed HEAD and parent identities,
 // taken by a turn that did NOT produce the packet it judges. A READING, never a
 // repair — the posture `wf-address-tasks.js`'s `mainCheckoutStatusPrompt` takes
 // for the shared main checkout, and for a sharper reason here: a stage that
@@ -1173,11 +1179,13 @@ ${CYCLE_DESTROY_BOUNDARY}
 
 ${CYCLE_FINISH_IN_TURN} ${CYCLE_NO_SELF_PEER}
 
-Take BOTH readings in that worktree:
+Take the worktree-state readings and the independent commit-identity readings in that worktree:
 
 1. \`git status --porcelain -z --untracked-files=all\` (the \`-z\` form leaves paths unquoted, so parsing is unambiguous; \`--untracked-files=all\` lists every untracked FILE rather than collapsing it to its directory). Split the output on NUL and return one \`dirty\` entry per record: the record's 2-character \`XY\` status field, a space, then the repo-relative path — e.g. \` M src/app.ts\`, \`?? notes.txt\`. Keep the \`XY \` prefix verbatim; its first column can be a space. For a rename/copy record git emits the ORIGINAL path as a second NUL-separated field after the current one — keep only the current-path entry and drop that trailing original. An empty array means the tree is clean.
 
 2. The operation state, which the porcelain does NOT show. Check \`git rev-parse --git-path rebase-merge\` and \`rebase-apply\` — each PRINTS a path whether or not it exists, so test the path for existence rather than reading the exit status — plus \`MERGE_HEAD\`, \`CHERRY_PICK_HEAD\`, \`REVERT_HEAD\`, and \`BISECT_LOG\`. Return the marker that showed the operation in \`operation\`, or the empty string when none is in progress. A tree left mid-rebase or mid-cherry-pick prints EMPTY porcelain, so reading 1 alone would call it clean — that is the exact case this step exists for.
+
+3. Resolve \`git rev-parse HEAD\` and \`git rev-parse HEAD^\`, returning their exact full OIDs as \`headSha\` and \`headParentSha\`. Do not derive either from a packet or another agent's prose: this reading is the independent committed-repository proof used to ensure a claimed final one-commit suffix starts at the final commit's ACTUAL parent. If either command cannot resolve, return the fields you have and \`measured: false\`.
 
 Report only what YOU measured. You were given no account of what the pass did or claims, on purpose. If a reading cannot be taken at all — git will not run, the path is missing, it is not a checkout — return \`measured: false\` with whatever you have and say in \`detail\` which reading failed and why. Do not fail, and do not guess a clean answer: unknown is a usable result here and a wrong "clean" is not. Edit nothing.`;
 }
@@ -1453,7 +1461,8 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     one. `recordOnly` above speaks FOR the conclusion, so it may carry only
 //     the concluding pass's record; this is where every other pass's survives),
 //   packetChecks (present once any packet was measured, and on every exit: one
-//     { pass, measured, dirty, operation, detail } entry per fixer pass whose
+//     { pass, measured, dirty, operation, headSha, headParentSha, detail }
+//     entry per fixer pass whose
 //     worktree the cycle MEASURED, in order. Every packet the cycle adopts has
 //     one — the final confirmation pass included, since the measurement runs
 //     when the packet RETURNS rather than riding a later reviewer round, and
@@ -1750,12 +1759,16 @@ async function runReviewCycle(cycle) {
     const measured = !!(measurement && measurement.measured === true);
     const measuredDirty = measurement && Array.isArray(measurement.dirty) ? measurement.dirty : [];
     const measuredOperation = measurement && typeof measurement.operation === "string" ? measurement.operation.trim() : "";
+    const measuredHeadSha = measurement && typeof measurement.headSha === "string" ? measurement.headSha.trim() : "";
+    const measuredHeadParentSha = measurement && typeof measurement.headParentSha === "string" ? measurement.headParentSha.trim() : "";
     const measuredDetail = measurement && typeof measurement.detail === "string" ? measurement.detail.trim() : "";
     packetChecks.push({
       pass: fixerPasses,
       measured,
       dirty: measuredDirty,
       operation: measuredOperation,
+      headSha: measuredHeadSha,
+      headParentSha: measuredHeadParentSha,
       // A refusal points the maintainer at this entry, so its one line of prose
       // never ships empty: the schema admits `detail: ""`, and a blank one
       // would leave a `measured: false` entry saying nothing about what could
@@ -1990,7 +2003,7 @@ async function runReviewCycle(cycle) {
       const suffixRange = closeOut && typeof closeOut.recordOnlyRange === "string" ? closeOut.recordOnlyRange.trim() : "";
       const suffixReported = !!closeOut && closeOut.recordOnlySuffix === true;
       const suffixMatch = suffixRange.match(/^([0-9a-f]{40}|[0-9a-f]{64})\.\.([0-9a-f]{40}|[0-9a-f]{64})$/);
-      const suffixShapeValid = !!closeOut && ((closeOut.recordOnlySuffix === false && suffixRange === "") || (suffixReported && suffixMatch && suffixMatch[1].length === suffixMatch[2].length && suffixMatch[2] === fix.finalSha));
+      const suffixShapeValid = !!closeOut && ((closeOut.recordOnlySuffix === false && suffixRange === "") || (suffixReported && suffixMatch && suffixMatch[1].length === suffixMatch[2].length && suffixMatch[1] === measuredHeadParentSha && suffixMatch[2] === measuredHeadSha && measuredHeadSha === fix.finalSha));
       const suffixPublishable = !suffixReported || !!flakeNote;
       if (closeOut && closeOut.nonSemantic === true && closeOut.editsPresent === true && suffixShapeValid && suffixPublishable) {
         const closeOutFlake = suffixReported
