@@ -383,7 +383,7 @@ Output:
 
 ## Design notes
 
-### Why per-branch rebase instead of `git rebase --update-refs`
+### Why verified linear runs use `--update-refs` and other segments rebase per branch
 
 This skill deliberately uses `--update-refs` itself for each verified linear run whose intermediate tips will all be replayed: one replay preserves the run's ancestry, moves exactly its intermediate branch refs, avoids repeated shared-commit replays and their patch-id cascade, and retains snapshots, exact postconditions, and per-branch validation gates.
 It deliberately falls back to `--no-update-refs` branch-by-branch when the history is non-linear or the exact-ref and worktree checks fail: conflict resolution then benefits from per-branch reasoning, validation still gates on "did this branch have a conflict?", and stopping mid-chain leaves later branches untouched.
