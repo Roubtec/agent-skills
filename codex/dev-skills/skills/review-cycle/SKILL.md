@@ -96,7 +96,7 @@ At the same moment the Reviewer starts, start the Peer role or stage concurrentl
 
 ```sh
 if peer-review-run --provider claude --worktree "$worktree" --prompt-file "$prompt_file" \
-  --artifact-root "$artifact_root" --timeout 540 --model opus --effort medium \
+  --artifact-root "$artifact_root" --timeout 260 --model opus --effort medium \
   > "$result_file" 2> "$helper_stderr_file" < /dev/null; then
   peer_helper_status=0
 else
@@ -104,7 +104,7 @@ else
 fi
 ```
 
-Set that tool invocation's caller-side wait to at least 570 seconds but strictly below the caller's roughly 600-second cap. Do not background, detach, poll, or externally signal the helper, and do not reproduce any helper supervision internals: `peer-review-run` owns timeout, transient-only retry, provider-tree reaping, and its one-line JSON result. After the foreground call returns, read only the final stdout line, require schema `powbox.peer-review-run/v1`, and parse it; the helper exits 0 for every produced outcome. Copy a valid result's `reason` exactly, including an empty or absent value, and never replace it with an inferred cause. A nonzero helper exit or absence of a valid final result is `failed`, with the separately captured stderr copied exactly as its reason.
+Set that tool invocation's caller-side wait to at least 570 seconds but strictly below the caller's roughly 600-second cap. The helper's `--timeout` is per attempt and it may make at most two attempts; its installed reap bounds are roughly three seconds after TERM plus two after KILL per attempt, so `2 × 260 + 2 × 5 = 530` seconds leaves at least 40 seconds inside that caller wait for launch/probe setup, polling ticks, parsing, and result emission. Do not background, detach, poll, or externally signal the helper, and do not reproduce any helper supervision internals: `peer-review-run` owns timeout, transient-only retry, provider-tree reaping, and its one-line JSON result. After the foreground call returns, read only the final stdout line, require schema `powbox.peer-review-run/v1`, and parse it; the helper exits 0 for every produced outcome. Copy a valid result's `reason` exactly, including an empty or absent value, and never replace it with an inferred cause. A nonzero helper exit or absence of a valid final result is `failed`, with the separately captured stderr copied exactly as its reason.
 
 Verify a valid result's reported `model` is `opus` and `effort` is `medium`. Before accepting a `passed` verdict, require the full review prose to repeat the exact embedded `effective_base_oid` and `review_tip_oid` on its `EVIDENCE_BASE_OID:` and `EVIDENCE_TIP_OID:` lines, require one `EVIDENCE_TOKEN: <token>` line, and mechanically confirm that exact non-whitespace token occurs exactly once on an added or removed line between the `BEGIN EMBEDDED GIT EVIDENCE` and `END EMBEDDED GIT EVIDENCE` markers in `prompt_file`. The separate `diff_evidence_file` is retained for audit but is not verdict proof and is never a provider read dependency. Missing or mismatched proof changes `passed` to `forfeited` with reason exactly `embedded diff evidence or proof absent`. For `issues`, preserve the `issues` outcome and relay every finding from that same full review prose verbatim even when proof is missing; attach the same exact evidence-failure reason and note so the audit gap stays visible without dropping grounded findings. Otherwise `passed` and `issues` feed the gate; `unavailable`, `timeout`, `forfeited`, `failed`, and any unrecognized outcome are explicit non-blocking results.
 
@@ -157,19 +157,68 @@ peer_stop_pid() {
   ! peer_pid_alive
 }
 
+# Cleanup before a valid identity file exists. With a start token, every probe
+# and signal verifies it. Without one, TERM and KILL are consecutive operations
+# on the freshly captured direct child `$!`; after that immediate boundary this
+# function only probes and a reused PID can at worst force a survivor stop.
+peer_abort_unhanded() {
+  if [ -z "${peer_start:-}" ]; then
+    kill -TERM "$peer_pid" 2>/dev/null || :
+    kill -KILL "$peer_pid" 2>/dev/null || :
+    for _ in 1 2 3 4 5 6 7 8 9 10; do
+      kill -0 "$peer_pid" 2>/dev/null || return 0
+      sleep 1
+    done
+    return 1
+  fi
+  peer_signal_direct() {
+    direct_now=$(peer_start_time "$peer_pid") || return 1
+    [ "$direct_now" = "$peer_start" ] || return 1
+    kill "-$1" "$peer_pid" 2>/dev/null
+  }
+  peer_alive_direct() {
+    direct_now=$(peer_start_time "$peer_pid") || return 1
+    [ "$direct_now" = "$peer_start" ] || return 1
+    kill -0 "$peer_pid" 2>/dev/null
+  }
+  peer_signal_direct TERM || :
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    peer_alive_direct || break
+    sleep 1
+  done
+  if peer_alive_direct; then
+    peer_signal_direct KILL || :
+  fi
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    peer_alive_direct || break
+    sleep 1
+  done
+  ! peer_alive_direct
+}
+
 nohup claude -p --model opus --effort medium --safe-mode --tools "Read,Glob,Grep" \
   --disallowedTools "mcp__*" --add-dir "$invocation_dir" --output-format json \
   < "$prompt_file" > "$outfile" 2> "$errfile" &
 peer_pid=$!
+peer_launch_status=0
 peer_start=$(peer_start_time "$peer_pid") || peer_start=
 if [ -n "$peer_start" ]; then
   (umask 077 && printf '%s %s\n' "$peer_pid" "$peer_start" > "$peer_pid_file") || peer_launch_status=125
 else
   peer_launch_status=125
 fi
+if [ "${peer_launch_status:-0}" -ne 0 ]; then
+  if peer_abort_unhanded; then
+    exit 125
+  fi
+  printf '%s\n' 'peer handoff failed and the direct provider PID survived TERM/KILL' >&2
+  exit 126
+fi
 ```
 
-Every later probe or signal reloads the two-field identity and compares the current start time before touching the PID, so PID reuse is death of the original and never a target. Poll until the loose roughly 12-minute deadline. At timeout, send TERM to that identity-checked PID, poll for at most ten seconds, send KILL only if the identity still matches, then poll for at most ten more seconds. A surviving identity stops the entire cycle for operator intervention: do not retry, decide the round, advance another entry, or publish. Retry a timeout or transient failure once with entirely fresh paths only after death is proved; auth/usage errors are `unavailable` without retry. Never infer or signal a process group, target a supervisor, use `pkill -f`, or replace this fallback with a capped foreground call. This best-effort fallback proves only the direct provider PID dead and makes no descendant-group guarantee.
+The provider is already live once `$!` is captured, so a start-time read failure or identity-file write failure immediately calls `peer_abort_unhanded` in that same shell, before any handoff or return. When the start token exists, cleanup verifies it before every probe and signal and uses the normal bounded TERM/KILL sequence. When the first start-time read itself failed, the only safe ownership fact is the freshly launched direct child `$!`: TERM and KILL are issued consecutively to that positive PID at the immediate launch boundary, then later checks only probe it, so a recycled number is never signalled after a delay. The irreducible race between capturing `$!` and those next same-shell operations is the direct-launch boundary; no shell PID protocol can remove it. Failure to prove death sets a teardown failure. Either handoff failure stops the entire cycle even when cleanup succeeds: do not retry, decide the round, advance another entry, or publish.
+
+Every later probe or signal after a successful handoff reloads the two-field identity and compares the current start time before touching the PID, so PID reuse is death of the original and never a target. Poll until the loose roughly 12-minute deadline. At timeout, send TERM to that identity-checked PID, poll for at most ten seconds, send KILL only if the identity still matches, then poll for at most ten more seconds. A surviving identity stops the entire cycle for operator intervention: do not retry, decide the round, advance another entry, or publish. Retry a timeout or transient failure once with entirely fresh paths only after death is proved; auth/usage errors are `unavailable` without retry. Never infer or signal a process group, target a supervisor, use `pkill -f`, or replace this fallback with a capped foreground call. This best-effort fallback proves only the direct provider PID dead and makes no descendant-group guarantee.
 
 After the PID is dead, a non-empty result artifact containing a `VERDICT:` line is authoritative. Parse the captured JSON only far enough to extract the final message, proof lines, and verdict. Missing or mismatched OID/token proof changes `passed` to `forfeited` with reason exactly `diff evidence unreadable or proof absent`; for `issues`, keep the `issues` outcome and every finding verbatim, attaching that exact reason and an evidence-failure note instead of dropping grounded findings.
 

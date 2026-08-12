@@ -1668,7 +1668,7 @@ const BATCH_CONTRACT_CHECKS = 5;
 // constant — the reuse failure this guard exists for — without ever probing or
 // signalling a real process. The fake `kill` records every operand and can
 // model TERM resistance, KILL death, or a teardown survivor.
-const PEER_LIFECYCLE_CHECKS = 15;
+const PEER_LIFECYCLE_CHECKS = 17;
 {
   console.log("# codex review-cycle prose — peer lifecycle negative controls");
   const before = legOk + legFail;
@@ -1693,7 +1693,7 @@ const PEER_LIFECYCLE_CHECKS = 15;
       writeFileSync(signalLog, "");
       let status = 0;
       try {
-        execFileSync("sh", ["-c", `${runnableBlock}\npeer_proc_root=$1\npeer_pid_file=$2\nsignal_log=$3\nsurvivor=$4\nkill() { printf '%s\\n' "$*" >> "$signal_log"; if [ "$1" = -KILL ] && [ "$survivor" != yes ]; then rm -f "$peer_proc_root/$2/stat"; fi; return 0; }\nsleep() { :; }\n${actions}`, "peer-test", procRoot, identityFile, signalLog, survivor ? "yes" : "no"]);
+        execFileSync("sh", ["-c", `${runnableBlock}\npeer_proc_root=$1\npeer_pid_file=$2\nsignal_log=$3\nsurvivor=$4\nkill() { printf '%s\\n' "$*" >> "$signal_log"; if [ "$1" = -0 ]; then [ -f "$peer_proc_root/$2/stat" ]; return; fi; if [ "$1" = -KILL ] && [ "$survivor" != yes ]; then rm -f "$peer_proc_root/$2/stat"; fi; return 0; }\nsleep() { :; }\n${actions}`, "peer-test", procRoot, identityFile, signalLog, survivor ? "yes" : "no"]);
       } catch (err) {
         status = Number(err.status || 1);
       }
@@ -1719,6 +1719,26 @@ const PEER_LIFECYCLE_CHECKS = 15;
     const malformed = runFixture("peer_pid_alive || :; peer_signal_pid TERM || :");
     check("a malformed handoff with extra fields fails closed before every kill", malformed.signals.length === 0, JSON.stringify(malformed));
 
+    writeFileSync(join(pidDir, "stat"), statLine("424242"));
+    const startReadFailure = runFixture("peer_pid=731; peer_start=; peer_abort_unhanded");
+    check(
+      "a start-time read failure immediately TERM/KILLs the fresh direct child and leaves no survivor",
+      startReadFailure.status === 0 &&
+        startReadFailure.signals.slice(0, 2).join("|") === "-TERM 731|-KILL 731" &&
+        !startReadFailure.signals.some((s) => /^-(TERM|KILL) (?!731$)/.test(s)) &&
+        /peer_start=\$\(peer_start_time "\$peer_pid"\) \|\| peer_start=[\s\S]*peer_launch_status=125[\s\S]*peer_abort_unhanded[\s\S]*exit 125[\s\S]*exit 126/.test(prose),
+      JSON.stringify(startReadFailure),
+    );
+
+    writeFileSync(join(pidDir, "stat"), statLine("424242"));
+    const identityWriteFailure = runFixture("peer_pid=731; peer_start=424242; peer_abort_unhanded");
+    check(
+      "an identity-file write failure uses the acquired start token for bounded cleanup and leaves no survivor",
+      identityWriteFailure.status === 0 && identityWriteFailure.signals.includes("-TERM 731") && identityWriteFailure.signals.includes("-KILL 731") && /Either handoff failure stops the entire cycle even when cleanup succeeds/.test(prose),
+      JSON.stringify(identityWriteFailure),
+    );
+
+    writeFileSync(join(pidDir, "stat"), statLine("424242"));
     writeFileSync(identityFile, "731 424242\n");
     const killed = runFixture("peer_stop_pid");
     check("TERM resistance reaches KILL on the same positive PID and confirmed death succeeds", killed.status === 0 && killed.signals.includes("-TERM 731") && killed.signals.includes("-KILL 731"), JSON.stringify(killed));
@@ -1732,7 +1752,29 @@ const PEER_LIFECYCLE_CHECKS = 15;
 
   const pluginsProse = readFileSync(join(here, "..", "plugins", "dev-skills", "skills", "review-cycle", "SKILL.md"), "utf8");
   check("the direct Codex provider gets bounded TERM, death verification, safe KILL, and a survivor stop", /send TERM[\s\S]*at most ten seconds[\s\S]*send KILL only if[\s\S]*ten more seconds[\s\S]*stop the cycle and escalate/.test(pluginsProse), "raw Codex lifecycle prose");
-  check("the helper is one foreground call beneath the caller cap and delegates supervision", /if peer-review-run --provider claude[\s\S]*--timeout 540[\s\S]*peer_helper_status=0[\s\S]*peer_helper_status=\$\?[\s\S]*at least 570 seconds but strictly below[\s\S]*Do not background, detach, poll, or externally signal the helper/.test(prose), "foreground helper shape");
+  const helperLaunchStart = prose.indexOf('if peer-review-run --provider claude');
+  const helperLaunchEnd = prose.indexOf('< /dev/null; then', helperLaunchStart);
+  const helperLaunchWords = helperLaunchStart >= 0 && helperLaunchEnd > helperLaunchStart
+    ? prose.slice(helperLaunchStart, helperLaunchEnd).replaceAll('\\\n', ' ').split(/\s+/)
+    : [];
+  const timeoutFlag = helperLaunchWords.indexOf('--timeout');
+  const perAttemptTimeout = timeoutFlag >= 0 ? Number(helperLaunchWords[timeoutFlag + 1]) : Number.NaN;
+  const callerWait = 570;
+  const helperMaxAttempts = prose.includes('it may make at most two attempts') ? 2 : Number.NaN;
+  const helperReapPerAttempt = prose.includes('roughly three seconds after TERM plus two after KILL per attempt') ? 3 + 2 : Number.NaN;
+  const worstCaseSupervision = helperMaxAttempts * (perAttemptTimeout + helperReapPerAttempt);
+  check(
+    "the foreground helper's real two-attempt timeout and reap budget fits beneath the caller wait",
+    helperLaunchWords[0] === 'if' &&
+      perAttemptTimeout === 260 &&
+      helperMaxAttempts === 2 &&
+      helperReapPerAttempt === 5 &&
+      worstCaseSupervision === 530 &&
+      worstCaseSupervision < callerWait &&
+      /peer_helper_status=0[\s\S]*peer_helper_status=\$\?/.test(prose.slice(helperLaunchStart, prose.indexOf('```', helperLaunchStart))) &&
+      prose.includes("Do not background, detach, poll, or externally signal the helper"),
+    JSON.stringify({ perAttemptTimeout, helperMaxAttempts, helperReapPerAttempt, worstCaseSupervision, callerWait }),
+  );
   check("the Claude fallback is direct-PID only and stops on a survivor", /records `\$!` as the direct provider PID[\s\S]*peer_stop_pid[\s\S]*A surviving identity stops the entire cycle/.test(prose) && !/peer_group_alive|peer_signal_group|setsid --fork/.test(prose), "Claude direct-PID lifecycle prose");
   check(
     "the helper verdict is proved from literal embedded evidence and exact pinned OIDs without an external read grant",
@@ -1752,14 +1794,31 @@ const PEER_LIFECYCLE_CHECKS = 15;
       !/native read-only tools may read the one absolute out-of-worktree evidence path/.test(prose),
     "embedded evidence contract",
   );
-  const evidenceGate = (outcome, proof, findings) => proof || outcome !== "passed"
-    ? { outcome, findings, reason: proof ? "" : "embedded diff evidence or proof absent", note: proof ? "" : "evidence proof failed; findings retained" }
-    : { outcome: "forfeited", findings: [], reason: "embedded diff evidence or proof absent", note: "" };
-  const passedNegative = evidenceGate("passed", false, []);
-  check("a passed verdict with absent proof dynamically forfeits", passedNegative.outcome === "forfeited" && passedNegative.reason === "embedded diff evidence or proof absent", JSON.stringify(passedNegative));
+  const evidenceContractLine = prose.split("\n").find((line) => line.startsWith("Verify a valid result's reported `model`")) || "";
+  const passedContract = evidenceContractLine.match(/Missing or mismatched proof changes `([^`]+)` to `([^`]+)` with reason exactly `([^`]+)`/);
+  const issuesContract = evidenceContractLine.match(/For `([^`]+)`, preserve the `([^`]+)` outcome and relay every finding[\s\S]*attach the same exact evidence-failure reason and note/);
+  const parsedEvidenceContract = passedContract && issuesContract
+    ? {
+        proofFailureReason: passedContract[3],
+        [passedContract[1]]: { outcome: passedContract[2], preserveFindings: false, attachNote: false },
+        [issuesContract[1]]: { outcome: issuesContract[2], preserveFindings: true, attachNote: true },
+      }
+    : null;
+  const applyShippedEvidenceContract = (outcome, findings) => {
+    const rule = parsedEvidenceContract && parsedEvidenceContract[outcome];
+    if (!rule) return null;
+    return {
+      outcome: rule.outcome,
+      findings: rule.preserveFindings ? findings : [],
+      reason: parsedEvidenceContract.proofFailureReason,
+      note: rule.attachNote ? "evidence proof failed; findings retained" : "",
+    };
+  };
+  const passedNegative = applyShippedEvidenceContract("passed", []);
+  check("the shipped prose contract forfeits a passed verdict with absent proof", passedNegative && passedNegative.outcome === "forfeited" && passedNegative.reason === "embedded diff evidence or proof absent", JSON.stringify(passedNegative));
   const issueFindings = [{ severity: "blocking", claim: "grounded finding" }];
-  const issuesNegative = evidenceGate("issues", false, issueFindings);
-  check("an issues verdict with absent proof dynamically retains its findings and evidence reason", issuesNegative.outcome === "issues" && issuesNegative.findings === issueFindings && issuesNegative.reason === "embedded diff evidence or proof absent" && /findings retained/.test(issuesNegative.note), JSON.stringify(issuesNegative));
+  const issuesNegative = applyShippedEvidenceContract("issues", issueFindings);
+  check("the shipped prose contract retains issues findings and the evidence-failure reason", issuesNegative && issuesNegative.outcome === "issues" && issuesNegative.findings === issueFindings && issuesNegative.reason === "embedded diff evidence or proof absent" && /findings retained/.test(issuesNegative.note), JSON.stringify(issuesNegative));
 
   const workflowCores = WORKFLOWS.map((file) => {
     const src = readFileSync(join(here, "..", "plugins", "dev-skills", "workflows", file), "utf8");
