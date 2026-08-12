@@ -1733,6 +1733,8 @@ const PEER_LIFECYCLE_CHECKS = 10;
       /END EMBEDDED GIT EVIDENCE/.test(prose) &&
       /EVIDENCE_BASE_OID: <full OID>/.test(prose) &&
       /EVIDENCE_TIP_OID: <full OID>/.test(prose) &&
+      /`printf -- '%s\\n' "\$value"`/.test(prose) &&
+      !/`printf '%s\\n' -- "\$value"`/.test(prose) &&
       /The separate `diff_evidence_file` is retained for audit but is not verdict proof and is never a provider read dependency/.test(prose) &&
       /embedded diff evidence or proof absent/.test(prose) &&
       /never accept the verdict on the helper's outcome alone/.test(prose) &&
