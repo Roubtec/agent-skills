@@ -120,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 144;
+const EXPECTED_CHECKS = 153;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1020,11 +1020,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // The probe is looked for command-first, not by proximity to a name for the
     // recorded OID: `<headRefOid>`, `"$PR_HEAD"` and a bare `HEAD^{commit}` are
     // the same gate. But `rev-parse` is not one command: these four files run it
-    // in four spellings that query no object's existence at all
-    // (`--abbrev-ref HEAD`, `--show-toplevel`, `--git-path rebase-merge`,
-    // `origin/main`), so counting every `rev-parse` as an existence probe would
-    // fail an ordinary edit that mentions one of those inside the rule
-    // paragraph. `rev-parse` therefore counts only in its object-query
+    // in three spellings that query no object's existence at all
+    // (`--show-toplevel`, `--git-path rebase-merge`, `origin/main`), plus
+    // `--abbrev-ref HEAD`, which two of them still carry as the counter-example
+    // the publication re-check names — so counting every `rev-parse` as an
+    // existence probe would fail an ordinary edit that mentions one of those
+    // inside the rule paragraph. `rev-parse` therefore counts only in its object-query
     // spellings — `--verify`, or a peel suffix (`^{commit}`, `^{}`), which is
     // how an existence gate on a commit is written; `cat-file -e`/`-t` asks
     // nothing else and counts however it is spelled. Reading the fetch itself is
@@ -1305,6 +1306,299 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   const named = /PROPER ANCESTOR/.test(brief);
   check("the publish brief stops a proper-ancestor HEAD without pushing", stop > -1 && named, `stop@${stop} names-the-case@${named}`);
   check("and states that stop ahead of the lease it would otherwise match", stop > -1 && lease > -1 && stop < lease, `stop@${stop} lease@${lease}`);
+}
+
+// --- The off-shoot's publication gate ---------------------------------------
+// The hole the reconciliation deliberately leaves (task 021c). On the off-shoot
+// path reconciliation is skipped WHOLE, so nothing has compared the two tips by
+// the time the publisher runs — and an off-shoot cut BEFORE the recorded head,
+// advanced with its own commits, is neither an ancestor nor a descendant of it.
+// The lease is no protection there: the recorded OID is exactly what the remote
+// still points at, so it MATCHES, the push succeeds, and the PR branch is
+// rewound over every commit between the cut point and the head. Prose again, so
+// it is read out of the rendered brief — and the claim is about ORDER (before
+// the lease), about what the stop REPORTS (both tips, not a guess), and about
+// the gate being keyed on the two branch NAMES exactly as 021b's is.
+{
+  const off = publishPrompt(
+    gathered({ workingBranch: "local/side-work", reconcile: { outcome: "not-applicable" } }),
+    [],
+    { push: true },
+    [],
+    [],
+  );
+  const probe = off.indexOf("git rev-list --right-only --cherry-pick HEAD...");
+  const offStop = off.indexOf('aborted: "off-shoot does not carry the PR head"');
+  const offLease = off.indexOf("--force-with-lease=");
+  // The probe's POLARITY is read too, not only its presence: a gate that runs
+  // the probe and treats what it prints as information ("print it for the
+  // record and continue") keeps every other string this block reads. What no
+  // regex here can hold is a rule reversed while the phrasing survives — that
+  // is the reviewer's, exactly as in the fetched-head block above.
+  const requiresEmpty = /require it to print NOTHING/.test(off);
+  check(
+    "the publish brief makes an off-shoot establish the recorded head is represented in it, before any lease",
+    probe > -1 && offStop > -1 && offLease > -1 && probe < offLease && offStop < offLease && requiresEmpty,
+    `probe@${probe} stop@${offStop} lease@${offLease} requires-empty@${requiresEmpty}`,
+  );
+
+  // The stop must name what it SAW rather than reporting a classification, and
+  // it must not offer to make the push legal instead: fast-forwarding, merging
+  // or rebasing the off-shoot is the maintainer's call, exactly as the
+  // reconciliation's third outcome is.
+  const gate = off.split("\n").find((l) => l.includes('aborted: "off-shoot does not carry the PR head"')) || "";
+  const namesBothTips = /BOTH tips/.test(gate) && gate.includes("deadbeef") && /\bHEAD\b/.test(gate);
+  const namesTheCommits = /every commit the probe printed/.test(gate);
+  const refusesToReconcile = /Do NOT fast-forward, merge, rebase/.test(gate);
+  check(
+    "and that stop names both tips and the commits it saw, and reconciles nothing to make the push legal",
+    namesBothTips && namesTheCommits && refusesToReconcile,
+    `names both tips: ${namesBothTips}; names the commits: ${namesTheCommits}; refuses to reconcile: ${refusesToReconcile}`,
+  );
+
+  // Keyed on the two names, and RENDERED with both, so the publisher settles
+  // applicability from its own brief rather than probing the shape of the
+  // history — the one thing task 018 forbids. The PR's own branch is left to the
+  // reconciliation deliberately: re-asking there would stop an ordinary run
+  // whose default rebase flattened a merge commit the recorded head carries.
+  const keyedOnNames = gate.includes("local/side-work") && gate.includes("feature/x");
+  const leavesTheOwnBranch = /run no probe there/.test(gate) && /reconciliation established representation/.test(gate);
+  check(
+    "and keys that gate on the two branch names it renders, leaving a run on the PR's own branch to the reconciliation",
+    keyedOnNames && leavesTheOwnBranch,
+    `renders both names: ${keyedOnNames}; leaves the own branch to the reconciliation: ${leavesTheOwnBranch}`,
+  );
+
+  // The residual case, which is the same gap seen from the other side: the lease
+  // case used to trigger on "history was rewritten", so a tip that is neither a
+  // proper ancestor nor a descendant of the expected tip and rewrote nothing
+  // matched no enumerated instruction at all — the run was left to choose at
+  // exactly the point where the wrong choice is the rewinding one. The remainder
+  // must therefore be "everything else". `rebased:` stays rendered as context;
+  // what it may not be again is the trigger.
+  const seg = off.slice(off.indexOf("normal push (", offStop), offLease);
+  const remainder = /OTHERWISE/.test(seg) && /every remaining state, whether or not this run rewrote history/.test(seg);
+  const notGatedOnRewrite = !/If history was rewritten/.test(seg);
+  const rebasedStillReported = /rebased: no/.test(seg);
+  check(
+    "and hands the remaining state an instruction — the lease is what everything else gets, not what a rewritten history gets",
+    remainder && notGatedOnRewrite && rebasedStillReported,
+    `remainder stated: ${remainder}; not gated on a rewrite: ${notGatedOnRewrite}; rebased still reported: ${rebasedStillReported}`,
+  );
+
+  // Item 1 is the other half of the same exposure and reaches the run FIRST: it
+  // resolves a push target and stops on a mismatch, and an off-shoot's own
+  // upstream never matches the PR head — so read as the branch's own resolution
+  // it halts every off-shoot run after all its work, at the one step whose remit
+  // is to decide what may be pushed from it. Read from the item as a WHOLE: the
+  // exception is a bullet of its own, because it is the off-shoot's alone (the
+  // block below pins the other bullet, which the same-branch case keeps).
+  const item1 = off.slice(off.indexOf("1. Re-check before publication"), off.indexOf("2. Push."));
+  const targetIsThePr = /resolve the target from the PR instead/.test(item1) && /its head repository and/.test(item1);
+  const notTheOffShootsUpstream =
+    /off-shoot's own upstream is NOT the target/.test(item1) && /normal state rather than a stop/.test(item1);
+  check(
+    "and item 1 resolves the publication target from the PR, so an off-shoot's own upstream is not a stop before the gate is reached",
+    targetIsThePr && notTheOffShootsUpstream,
+    `target is the PR's: ${targetIsThePr}; off-shoot upstream not a stop: ${notTheOffShootsUpstream}`,
+  );
+
+  // The same decisions in the SKILL that states them to a reader rather than
+  // to a subagent, in both mirrors, which no generator keeps in step. Anchored to
+  // the sentence that carries each decision, so a rewrite that keeps the heading
+  // and drops the rule fails rather than passing on the file's other mentions.
+  {
+    const wanted = [
+      [
+        // The stop the workflow brief has always carried and the skill did not:
+        // a HEAD that is a proper ancestor of the expected tip has nothing to
+        // publish, and the lease MATCHES there, so the fallback rewinds the
+        // branch over the newer remote commits.
+        "the proper-ancestor stop",
+        "**First, a `HEAD` that is a proper ancestor of the expected tip is a stop, not a push.**",
+        [/nothing of yours to publish/, /the lease \*matches\*/, /Stop and report, exactly as for a rejected lease/],
+      ],
+      [
+        "the off-shoot representation gate",
+        "**Then, an off-shoot must carry the recorded head.**",
+        [
+          /`git rev-list --right-only --cherry-pick HEAD\.\.\.<expected-head-oid>`/,
+          /patch-id rather than raw ancestry/,
+          /naming both tips/,
+          /do not fast-forward, merge or rebase the off-shoot/,
+        ],
+      ],
+      [
+        "the off-shoot's publication target",
+        "**On a named off-shoot the target is the PR's head ref, never the branch's own upstream.**",
+        [/is never pushed to by this run/, /that mode's normal state/, /Mode 4 is the only mode this substitution covers/],
+      ],
+      [
+        "the check that substitution excepts",
+        "1. **Re-check before publication:**",
+        [
+          /Resolve the current branch's exact push remote\/ref, verify they match that PR head/,
+          /still standing on the branch this run has been working on/,
+          // The SPELLING, not only the requirement, and for the same reason the
+          // rendered brief is read for it below: `git rev-parse --abbrev-ref
+          // HEAD` is documented to produce a non-ambiguous name, so it prints
+          // `heads/<name>` wherever a tag shares the branch's name and aborts a
+          // valid publication. The span runs into "in that spelling" rather than
+          // stopping at the command, because both spellings appear on this line
+          // — the wrong one as the counter-example — so a bare mention of the
+          // right one would still pass a line that swapped which is asked for.
+          /`git branch --show-current`, in that spelling/,
+          // The CONSEQUENCE, not only the requirement. Everything above pins
+          // what the step must establish; none of it pins what happens when the
+          // establishing fails, and a line that resolves the target, finds it
+          // unmatched and then publishes anyway keeps every other span here.
+          // The span runs to "instead of guessing" rather than stopping at the
+          // verb, because "stop" alone also appears on this line as the
+          // moved-checkout case — so a bare mention would pass a line whose
+          // push-target failure had been softened to a note-and-continue.
+          /stop and report instead of guessing/,
+        ],
+      ],
+      [
+        "the normal push the stops precede",
+        "- Then, if the expected remote tip is an ancestor of `HEAD`",
+        [/`git push <remote> HEAD:refs\/heads\/<headRefName>`/],
+      ],
+      ["the lease as the remainder", "- **Otherwise** — every remaining state", [/whether or not this run rewrote history/]],
+      [
+        // The target rule above is only followable if the shipped commands
+        // actually supply what it reads. `headRepositoryOwner` alone does not
+        // name a fork whose repository NAME differs from the base's, so a run
+        // that follows the recipes verbatim reaches publication with the work
+        // done and no target it can verify. Both recipes are pinned because the
+        // publish step's own read is not where the fields first arrive: step 1
+        // is what a run follows to RECORD them, and a run that recorded nothing
+        // has nothing for the publish-time read to confirm.
+        "the fields its off-shoot target rule reads",
+        "**Read context:** `gh pr view NUMBER --json",
+        [/headRepository,/, /headRepositoryOwner,/, /isCrossRepository/],
+      ],
+      [
+        "the fields step 1 records them from",
+        "2. **Auto-detect** — `gh pr view --json",
+        [/headRepository,/, /headRepositoryOwner,/, /isCrossRepository/],
+      ],
+    ];
+    // Item 2's bullets are an ordered exclusion chain — "work these in order …
+    // each excludes the ones above it and the last is 'everything else'" — so
+    // presence is not enough: the lease MATCHES in exactly the states the two
+    // stops describe, so a stop stated below it is a stop no run reaches, and
+    // every bullet can be present and correctly phrased with the guard gone.
+    const anchorOf = (what) => wanted.find(([w]) => w === what)[1];
+    const orderedChain = [
+      "the proper-ancestor stop",
+      "the off-shoot representation gate",
+      "the normal push the stops precede",
+      "the lease as the remainder",
+    ];
+    const missing = [];
+    for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
+      const path = `${mirror}/address-review/SKILL.md`;
+      let text;
+      try {
+        text = readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8");
+      } catch (err) {
+        missing.push(`${path} cannot be read: ${err.message}`);
+        continue;
+      }
+      const lines = text.split("\n");
+      for (const [what, anchor, phrases] of wanted) {
+        const line = lines.find((l) => l.includes(anchor));
+        if (!line) {
+          missing.push(`${path} states nothing for ${what}`);
+          continue;
+        }
+        for (const phrase of phrases) if (!phrase.test(line)) missing.push(`${path}'s ${what} does not state ${phrase}`);
+      }
+      // An absent bullet is already reported above, so read the chain over the
+      // ones that are there: out of order is a separate failure from missing.
+      const placed = orderedChain
+        .map((what) => [what, lines.findIndex((l) => l.includes(anchorOf(what)))])
+        .filter(([, at]) => at !== -1);
+      for (let i = 1; i < placed.length; i += 1)
+        if (placed[i][1] < placed[i - 1][1]) missing.push(`${path} states ${placed[i][0]} before ${placed[i - 1][0]}`);
+    }
+    check(
+      "and the skill carries the same decisions in both mirrors, in the order that makes the stops reachable — the proper-ancestor stop and the off-shoot's gate ahead of both pushes, the PR's ref as the off-shoot's target with the fields both recipes resolve it from, and the check that substitution excepts",
+      missing.length === 0,
+      missing.join("; "),
+    );
+  }
+}
+
+// --- The check the off-shoot exception must not swallow ----------------------
+// The exception above substitutes a PR-DERIVED push target for the branch's own
+// resolution, and only the off-shoot needed that substitution. Item 1's "resolve
+// THIS branch's exact push remote/ref and verify they match the PR head" is a
+// check in its own right on every other path: it is what stops a run whose
+// checkout moved to some unrelated branch after the review, which would
+// otherwise trust the recorded equal names, skip the representation probe as a
+// same-branch run, and lease-push the wrong HEAD onto the PR. So the ordinary
+// path's resolution must survive, keyed on the two names exactly as its
+// exception is, and item 1 must re-verify that the checkout still STANDS on the
+// recorded working branch — the name both gates key on is otherwise a record
+// taken before the fixes landed rather than a present fact.
+{
+  const same = publishPrompt(gathered({ reconcile: { outcome: "work" } }), [], { push: true }, [], []);
+  const item1 = same.slice(same.indexOf("1. Re-check before publication"), same.indexOf("2. Push."));
+  const lines = item1.split("\n");
+  const ownTarget = lines.find((l) => /Where the two names are the SAME/.test(l)) || "";
+  const prDerived = lines.find((l) => /Where they DIFFER/.test(l)) || "";
+  // Presence of the resolution is not the claim — a bullet that resolves the
+  // branch's own target and then treats a mismatch as information keeps every
+  // other string here, so the STOP is read as well.
+  const resolvesOwn = /resolve THAT branch's exact push remote\/ref and verify they match the PR head/.test(ownTarget);
+  const stopsOnMismatch = /STOP rather than pushing to a target you resolved some other way/.test(ownTarget);
+  check(
+    "the publish brief still resolves the same-branch case's own push remote/ref, and stops where they do not match the PR head",
+    resolvesOwn && stopsOnMismatch,
+    `resolves the branch's own target: ${resolvesOwn}; stops on a mismatch: ${stopsOnMismatch}`,
+  );
+
+  // And the substitution stays in the bullet it belongs to: an exception written
+  // as the unconditional rule is exactly how this check was lost.
+  const scoped = /resolve the target from the PR instead/.test(prDerived) && !/resolve the target from the PR instead/.test(ownTarget);
+  check(
+    "and confines the PR-derived target to the differing-names case, so the exception does not swallow the check it excepts",
+    scoped && ownTarget !== "" && prDerived !== "",
+    `PR-derived resolution confined to the differing case: ${scoped}; same-names bullet found: ${ownTarget !== ""}; differing bullet found: ${prDerived !== ""}`,
+  );
+
+  // The checkout re-verification, read from the OFF-SHOOT render because only
+  // there do the two names differ: what item 1 must require HEAD to be on is the
+  // branch the run addressed, not the PR's head ref.
+  const off = publishPrompt(
+    gathered({ workingBranch: "local/side-work", reconcile: { outcome: "not-applicable" } }),
+    [],
+    { push: true },
+    [],
+    [],
+  );
+  const offItem1 = off.slice(off.indexOf("1. Re-check before publication"), off.indexOf("2. Push."));
+  // Read for the spelling too, not just the requirement: `git rev-parse
+  // --abbrev-ref HEAD` is documented to produce a NON-AMBIGUOUS name, so it
+  // prints `heads/<name>` wherever a tag shares the branch's name — a check
+  // asked that way aborts a valid publication, and the wrong spelling is the
+  // obvious one to write back in.
+  const readsTheCheckout =
+    /`git branch --show-current` must print `local\/side-work`/.test(offItem1) && !/--abbrev-ref HEAD` must print/.test(offItem1);
+  // The stop carries its own reason string, like every other stop in this step:
+  // one the schema's `aborted` examples list, so the publisher reports it rather
+  // than inventing a phrase of its own for a state nothing else names.
+  const stopsOnAnotherBranch =
+    /where it prints anything else, set `published: false`, `aborted: "working location moved off the branch"`, and STOP without pushing/.test(
+      offItem1,
+    );
+  check(
+    "and re-verifies the checkout still stands on the branch the run addressed — the working branch, not the head ref — stopping with a named reason when it does not",
+    readsTheCheckout && stopsOnAnotherBranch,
+    `requires HEAD on the working branch: ${readsTheCheckout}; stops with the named reason: ${stopsOnAnotherBranch}`,
+  );
 }
 
 // --- The delegated rebase points --------------------------------------------
