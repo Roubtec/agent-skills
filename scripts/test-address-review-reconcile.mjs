@@ -113,7 +113,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 123;
+const EXPECTED_CHECKS = 124;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -985,6 +985,13 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // rendering ordering the fetch anyway forces a base-repository fetch on every
   // checkout that cannot reach that repository (a private fork clone with only
   // a local explicit target) for a value nothing reads.
+  const pinsOnlyANonEmptyGather = /AFTER the gathering below/.test(basePara) && /NON-EMPTY/.test(basePara) && /terminal no-op the caller finishes before reading any base OID/.test(basePara);
+  check(
+    "and even the `no-rebase` rendering pins it only after a non-empty gather, since an empty-items run finishes before reading any base OID",
+    pinsOnlyANonEmptyGather,
+    `pins only a non-empty gather: ${pinsOnlyANonEmptyGather}`,
+  );
+
   const defaultBasePara = brief.split("\n\n").find((p) => p.includes("pr.baseOid")) || "";
   const reportsItEmpty = /report `pr\.baseOid` EMPTY and fetch NOTHING for it/.test(defaultBasePara);
   const ordersNoBaseFetch = !/rev-parse --verify FETCH_HEAD\^\{commit\}/.test(defaultBasePara) && !/git fetch <the remote whose URL is that repository/.test(defaultBasePara);
