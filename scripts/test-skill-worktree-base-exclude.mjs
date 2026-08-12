@@ -80,10 +80,18 @@ const SHARED = [
 const EXCLUDE_LITERAL = /`?\.git\/info\/exclude`?/g;
 
 // The two BOOTSTRAP steps state the full recipe, command and all. The recipe
-// probes and appends the one name `.worktrees/`, so the step may not offer a
-// differently named in-repo base the re-probe would wave through unignored.
+// probes and appends the one root-anchored name `/.worktrees/`, so the step may
+// not offer an in-repo base OUTSIDE that name, which the re-probe would wave
+// through unignored. Beneath it is a different matter and is pinned as its own
+// clause: the append is a directory rule that carries the whole subtree, and
+// `wt-bootstrap` — the helper both steps tell a run to prefer — reports
+// `<repo>/.worktrees/$CONTAINER_NAME` as its base (`wf-address-tasks.js`'s
+// BOOTSTRAP_SCHEMA), so a step that admitted only `.worktrees/` itself would
+// reject the very result it just asked for. Asserting the subtree admission
+// keeps a later round from re-tightening it back into that conflict.
 const FULL = [
-  ["constrains the in-repo base to `.worktrees/` and nothing else", /in-repo base is `\.worktrees\/` and nothing else/],
+  ["constrains the in-repo base to `.worktrees/` and its subtree, and nothing else", /in-repo base is `\.worktrees\/` or a path beneath it\b[^\n]*\band nothing else/],
+  ["admits the preferred helper's container-scoped base beneath it", /`<repo>\/\.worktrees\/\$CONTAINER_NAME`/],
   ["gives the probe command with the trailing slash", /git check-ignore -q "<repo>\/\.worktrees\/"/],
   ["re-probes and makes a still-no answer a blocker", /re-probe and make a still-no answer a blocker/],
   ["warns that a linked worktree has no `.git/info` directory", /`\.git\/info` is not a directory at all/],
