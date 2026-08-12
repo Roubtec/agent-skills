@@ -752,6 +752,9 @@ const cycleCases = {
     ["cyclePeerPrompt (standalone)", (f) => f.cyclePeerPrompt(cycleStandalone, peerState), NO_BUILD],
     ["cyclePeerPrompt (batch/overridden)", (f) => f.cyclePeerPrompt(cycleOverridden, peerState), NO_BUILD],
   ],
+  cyclePeerPreflightPrompt: [
+    ["cyclePeerPreflightPrompt", (f) => f.cyclePeerPreflightPrompt(), NO_BUILD],
+  ],
   cycleGroundingPrompt: [
     ["cycleGroundingPrompt (standalone)", (f) => f.cycleGroundingPrompt(cycleStandalone, [{ id: "p1", text: "y", severity: "minor" }]), NO_BUILD],
     ["cycleGroundingPrompt (batch/overridden)", (f) => f.cycleGroundingPrompt(cycleOverridden, [{ id: "p1", text: "y", severity: "minor" }]), NO_BUILD],

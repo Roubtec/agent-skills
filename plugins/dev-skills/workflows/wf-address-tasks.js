@@ -573,8 +573,9 @@ Scope every cleanup to WT (\`git -C "$WT" …\`) and commit checkpoints often. T
 // child cycle would hold its own state, where a throttle counts one peer,
 // never sees a sibling's, and caps nothing. The shared batchPeerState and
 // batchPeerThrottle below are the two cross-cycle states: one shares preflight
-// and availability, while the other enforces task 015's adaptive cap, floor,
-// and queue across every cycle. Task 015 alone defines that throttle policy.
+// ownership, completion, and availability, while the other enforces task 015's
+// adaptive cap, floor, and queue across every cycle. Task 015 alone defines
+// that throttle policy.
 // ============================================================================
 // ============================================================================
 // BEGIN EMBEDDABLE SECTION: review-cycle-core
@@ -844,6 +845,15 @@ const CYCLE_PEER_SCHEMA = {
     reason: { type: "string", description: "The provider/helper reason verbatim; distinguishes empty/garbled forfeitures for the adaptive throttle." },
   },
   required: ["outcome", "findings"],
+};
+
+const CYCLE_PEER_PREFLIGHT_SCHEMA = {
+  type: "object",
+  properties: {
+    outcome: { type: "string", description: "available | unavailable" },
+    detail: { type: "string", description: "Empty when available; exact missing-binary or logged-out diagnostic when unavailable." },
+  },
+  required: ["outcome", "detail"],
 };
 
 // Verdict of the trivial-round close-out's diff check — the orchestrator's own
@@ -1243,9 +1253,7 @@ function cyclePeerPrompt(cycle, state) {
   // narration the fixer is told not to ship. Gated on artifact type exactly as
   // `cycleReviewChecks` gates it: a prose review has no code comments to weigh.
   const commentWeighting = cycle.artifactType === "prose" ? "" : ` ${CYCLE_COMMENT_REVIEW}`;
-  const preflightStep = state.peerPreflighted
-    ? `1. Preflight: already done this run — an earlier round verified the \`codex\` binary and login, so skip the probes. An auth/usage error from the launch itself still returns \`unavailable\`.`
-    : `1. Preflight: if \`command -v codex\` fails, return outcome \`unavailable\` (detail: missing binary). If \`codex login status\` exits non-zero and \`CODEX_API_KEY\` is unset, return \`unavailable\` (detail: logged out). An auth/usage error from the launch itself is also \`unavailable\`.`;
+  const preflightStep = `1. Preflight: already done by the run-level shared preflight before this launch, so skip the probes. An auth/usage error from the launch itself still returns \`unavailable\`.`;
   return `You run the best-effort cross-harness PEER REVIEW stage for one review-cycle round. You launch a read-only \`codex\` review of the committed state, wait for it, and return its result structurally. You NEVER fail this stage: every problem becomes a non-blocking outcome in the schema (\`unavailable\`, \`timeout\`, \`forfeited\`, \`failed\`) with a one-line \`detail\` — never an error, never a refusal to answer.
 
 ## WORKTREE CONTRACT
@@ -1268,14 +1276,34 @@ ${preflightStep}
    \`\`\`bash
    worktree="<the worktree path from the contract above>"
    # Pin peer effort per invocation; never changes the container's saved config.
-   nohup codex exec --sandbox read-only --cd "$worktree" -o "$outfile" \\
-     -c mcp_servers={} -c model_reasoning_effort=medium "$(<"$prompt_file")" \\
+   nohup sh -c '
+     pid_file=$1
+     shift
+     proc_identity() {
+       stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+       rest=\${stat##*) }
+       [ "$rest" != "$stat" ] || return 1
+       set -- $rest
+       [ "$#" -ge 20 ] || return 1
+       pgrp=$3
+       session=$4
+       shift 19
+       start_time=$1
+       for value in "$start_time" "$pgrp" "$session"; do
+         case $value in ""|0|*[!0-9]*) return 1 ;; esac
+       done
+       printf "%s %s %s\\n" "$start_time" "$pgrp" "$session"
+     }
+     identity=$(proc_identity "$$") || exit 125
+     printf "%s %s\\n" "$$" "$identity" > "$pid_file" || exit 125
+     exec "$@"
+   ' peer-launch "$pid_file" \\
+     codex exec --sandbox read-only --cd "$worktree" -o "$outfile" \\
+       -c mcp_servers={} -c model_reasoning_effort=medium "$(<"$prompt_file")" \\
      < /dev/null > /dev/null 2> "$stderr_file" &
-   peer_pid=$!
-   printf '%s\\n' "$peer_pid" > "$pid_file"
    \`\`\`
 
-   Ordinary stdout is detached to \`/dev/null\`, never merged into \`$outfile\` or \`$stderr_file\`; the \`-o\` artifact remains authoritative. In later Bash calls read the positive decimal PID from \`$pid_file\` and use \`kill -0 "$peer_pid"\` as the liveness answer. On the loose roughly 12-minute timeout, signal that same PID directly, verify it is gone, and retry ONCE with fresh paths; never infer a process group from plain \`nohup … &\`, never signal a wait supervisor, never use \`pkill -f\`, and never replace this with a capped foreground call. If recovering by the unique \`-o\` path is unavoidable, disambiguate \`pgrep -f\` to the codex peer binary after excluding the probing shell and every ancestor: one survivor is alive, none dead, more than one indeterminate and signals nothing. The probe's resolved identifier is the only signal target. Auth/usage errors are \`unavailable\` without retry.
+   Ordinary stdout is detached to \`/dev/null\`, never merged into \`$outfile\` or \`$stderr_file\`; the \`-o\` artifact remains authoritative. The handoff records the peer PID plus Linux \`/proc/<pid>/stat\` fields 22 (start time), 5 (process group), and 6 (session). In every later Bash call, parse the stat record by stripping everything through its final closing parenthesis plus following space before counting fields (the comm field may contain spaces or \`)\`), require exactly those four positive-decimal handoff values, and compare all three current fields with the persisted values before every \`kill -0\`, TERM, or KILL. Missing or mismatched identity means the original peer is dead; never probe or signal the reused number. On the loose roughly 12-minute timeout, TERM the identity-checked direct provider PID, poll for at most ten seconds, KILL only if the identity still matches, then poll for at most ten more seconds. If it survives, stop and escalate the entire cycle: do not retry, advance, or publish. Retry ONCE with fresh paths only after confirmed death. Never infer a process group from plain \`nohup … &\`, signal a wait supervisor, use \`pkill -f\`, or replace this with a capped foreground call. If recovering by the unique \`-o\` path is unavoidable, disambiguate \`pgrep -f\` to the codex peer binary after excluding the probing shell and every ancestor: one survivor is alive, none dead, more than one indeterminate and signals nothing; persist that PID's complete identity before handing it to another shell. The identity-checked probe target is the only signal target. Auth/usage errors are \`unavailable\` without retry.
 5. Read \`$outfile\` even when the liveness probe has just gone dead: a non-empty artifact with a \`VERDICT:\` line is authoritative. A \`VERDICT: PASS\` line → outcome \`passed\` (anything after it goes to \`notes\` verbatim). A \`VERDICT: ISSUES\` line → outcome \`issues\`, with every numbered finding mapped verbatim into \`findings\` (severity from its \`blocking\`/\`minor\` tag — default \`blocking\` when untagged — plus its \`file:line\` as \`location\` and the finding text as \`claim\`; do not summarize, merge, or rewrite). No verdict line, or empty/unintelligible output → \`forfeited\`, with \`reason\` exactly identifying \`empty output\` or \`garbled output\` where that is what happened. A timeout after retry is \`timeout\`; a provider crash or exhausted non-auth retry is \`failed\`.
 
 ## Peer prompt (write this text to the prompt file verbatim, filling only the placeholders)
@@ -1289,6 +1317,14 @@ Reply with exactly \`VERDICT: PASS\` or \`VERDICT: ISSUES\`, then \`VERIFICATION
 ## Output
 
 Return the structured result: \`outcome\`, \`findings\` (verbatim, tagged), \`notes\`, \`detail\`, and \`reason\` copied exactly from the provider/helper reason when present.`;
+}
+
+function cyclePeerPreflightPrompt() {
+  return `Peer availability preflight for this orchestration run. Run only these read-only probes; launch no review.
+
+${CYCLE_DESTROY_BOUNDARY}
+
+If \`command -v codex\` fails, return \`{ "outcome": "unavailable", "detail": "missing binary" }\`. Otherwise run \`codex login status\`. If it succeeds, return \`{ "outcome": "available", "detail": "" }\`. If it fails and \`CODEX_API_KEY\` is unset, return unavailable with the exact login diagnostic in \`detail\`. If it fails while \`CODEX_API_KEY\` is set, return available because the environment key may authenticate the real invocation. Return only the schema; do not throw or launch codex exec.`;
 }
 
 // The peer stage NEVER fails the round: a dead subagent (null return /
@@ -1318,6 +1354,50 @@ function normalizeCyclePeerResult(res) {
     // result never sets it (the field is not in CYCLE_PEER_SCHEMA).
     synthesized: res.synthesized === true,
   };
+}
+
+// A shared fan-out state cannot coordinate preflight with its boolean alone.
+// The first caller owns one cheap preflight agent and every sibling awaits that
+// promise; once it settles available, all actual peer launches fan out together
+// under the independent adaptive throttle. A thrown/schema-invalid result
+// clears the latch without marking completion, so one waiter retries while the
+// failed owner records a synthesized non-blocking outcome.
+async function ensureCyclePeerPreflight(peerState) {
+  for (;;) {
+    if (peerState.preflighted || peerState.unavailable) {
+      return { outcome: peerState.unavailable ? "unavailable" : "available", detail: peerState.unavailableDetail || "" };
+    }
+    if (peerState.preflightInProgress) {
+      await peerState.preflightInProgress.promise;
+      continue;
+    }
+    const latch = {};
+    peerState.preflightInProgress = latch;
+    latch.promise = (async () => {
+      let result;
+      try {
+        const raw = await agent(cyclePeerPreflightPrompt(), {
+          label: "peer-preflight",
+          schema: CYCLE_PEER_PREFLIGHT_SCHEMA,
+          phase: CYCLE_PEER_PHASE,
+        });
+        result = raw && (raw.outcome === "available" || raw.outcome === "unavailable")
+          ? raw
+          : { outcome: "forfeited", detail: "peer preflight returned nothing or failed schema validation", synthesized: true };
+      } catch (e) {
+        result = { outcome: "forfeited", detail: `peer preflight threw (${e && e.message ? e.message : String(e)})`, synthesized: true };
+      }
+      if (result.outcome === "unavailable") {
+        peerState.unavailable = true;
+        if (result.detail && !peerState.unavailableDetail) peerState.unavailableDetail = result.detail;
+      } else if (result.outcome === "available") {
+        peerState.preflighted = true;
+      }
+      if (peerState.preflightInProgress === latch) peerState.preflightInProgress = null;
+      return result;
+    })();
+    return latch.promise;
+  }
 }
 
 // Optimistic session-local adaptive peer throttle. A fan-out owner passes one
@@ -1386,6 +1466,13 @@ function cyclePeerThrottleSummary(throttle) {
 async function runCyclePeerStage(cycle, state) {
   if (cycle.peer === "off") {
     return { outcome: "disabled", findings: [], notes: "", detail: "peer-opinions=off" };
+  }
+  const preflight = await ensureCyclePeerPreflight(state.peerState);
+  if (preflight.outcome === "unavailable") {
+    return { outcome: "unavailable", findings: [], notes: "", detail: preflight.detail || "peer marked unavailable earlier this run" };
+  }
+  if (preflight.synthesized) {
+    return { outcome: "forfeited", findings: [], notes: "", reason: "", detail: `${preflight.detail}; recorded non-blocking`, synthesized: true };
   }
   const launchGeneration = await acquireCyclePeerSlot(state.peerThrottle);
   let result;
@@ -1698,9 +1785,10 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //   labelPrefix — optional, prefixes agent labels for fan-out consumers,
 //   peerState — optional SHARED peer-availability state for a fan-out owner
 //     embedding many cycles: hand every cycle ONE object of the shape
-//     { preflighted: false, unavailable: false, unavailableDetail: "" } and
-//     the install/login preflight runs once for the whole batch, with an
-//     unavailable peer sticking batch-wide (the canonical batch rule).
+//     { preflighted: false, preflightInProgress: null, unavailable: false,
+//     unavailableDetail: "" } and the install/login preflight runs once for
+//     the whole batch, with concurrent first-wave callers sharing its in-flight
+//     latch and an unavailable peer sticking batch-wide (the canonical rule).
 //   peerThrottle — optional SHARED adaptive-throttle state created by
 //     createCyclePeerThrottle() for a fan-out owner. It starts unbounded,
 //     queues only after trouble steps it down, and records every step for the
@@ -1851,7 +1939,7 @@ async function runReviewCycle(cycle) {
   // unavailability sticks batch-wide; a standalone cycle gets its own. (The
   // runtime is single-threaded JS, so sibling cycles mutate a shared object
   // safely between awaits.)
-  const peerState = cycle.peerState || { preflighted: false, unavailable: false, unavailableDetail: "" };
+  const peerState = cycle.peerState || { preflighted: false, preflightInProgress: null, unavailable: false, unavailableDetail: "" };
   const peerThrottle = cycle.peerThrottle || createCyclePeerThrottle();
   let reviewerNotes = ""; // the latest reviewer's pass-notes (PR-body caveats for consumers)
   // The reviewer's half of report-don't-correct, as accepted by the last round
@@ -2400,7 +2488,7 @@ async function runReviewCycle(cycle) {
       // applies at it rather than unconditionally.
       tier: cycleValidationTier(cycle, { confirming }),
       proposedRetirements: pendingRetirements,
-      peerPreflighted: peerState.preflighted,
+      peerState,
       peerThrottle,
       // What still stands after the pass just made — the reviewer adds the
       // in-spec-route judgment and a ratify/conform recommendation to it — plus
@@ -2618,7 +2706,7 @@ async function runReviewCycle(cycle) {
 // fan-out owner's cross-cycle state the embedding mode exists for. The throttle
 // is a separate shared object because availability and launch pressure have
 // different lifecycles, though both reset with this orchestration session.
-const batchPeerState = { preflighted: false, unavailable: false, unavailableDetail: "" };
+const batchPeerState = { preflighted: false, preflightInProgress: null, unavailable: false, unavailableDetail: "" };
 const batchPeerThrottle = createCyclePeerThrottle();
 
 // Build one task's cycle config for the embedded runReviewCycle. The worktree

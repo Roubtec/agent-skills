@@ -43,9 +43,11 @@
 //
 // Run: node scripts/test-review-cycle-retirement.mjs
 
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const WORKFLOWS = ["wf-review-cycle.js", "wf-address-tasks.js"];
@@ -72,7 +74,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 158;
+const CHECKS_PER_LEG = 166;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -105,7 +107,7 @@ function loadCycle(src, agent) {
   // every renderer outside a cycle today, so driving the cycle can never
   // exercise the default and only a direct call can.
   // eslint-disable-next-line no-new-func
-  return new Function("agent", "parallel", "pipeline", "log", "phase", `${section}\nreturn { runReviewCycle, cycleReviewChecks };`)(
+  return new Function("agent", "parallel", "pipeline", "log", "phase", `${section}\nreturn { runReviewCycle, cycleReviewChecks, runCyclePeerStage, createCyclePeerThrottle };`)(
     agent,
     parallel,
     pipeline,
@@ -1471,6 +1473,77 @@ for (const name of WORKFLOWS) {
     );
   });
 
+  // 28. A batch's first wave enters several cycles concurrently. A boolean
+  //     records a completed preflight but cannot serialize one in progress:
+  //     every sibling can snapshot false before the first peer reports back.
+  //     Drive the shipped stage directly so the owner/waiter handoff, including
+  //     its reset after a synthesized throw, is observed under real Promise
+  //     concurrency rather than inferred from the state object's shape.
+  await scenario("28. shared peer preflight is exactly-once under first-wave concurrency and resets after synthesis", async () => {
+    let releaseOwner;
+    let ownerEnteredResolve;
+    const ownerEntered = new Promise((resolve) => { ownerEnteredResolve = resolve; });
+    const peerPrompts = [];
+    let preflightCalls = 0;
+    const agent = async (prompt, opts) => {
+      if (opts && opts.label === "peer-preflight") {
+        preflightCalls += 1;
+        ownerEnteredResolve();
+        await new Promise((resolve) => { releaseOwner = resolve; });
+        return { outcome: "available", detail: "" };
+      }
+      peerPrompts.push(prompt);
+      return { outcome: "passed", findings: [], notes: "", detail: "" };
+    };
+    const { runCyclePeerStage, createCyclePeerThrottle } = loadCycle(src, agent);
+    const peerState = { preflighted: false, preflightInProgress: null, unavailable: false, unavailableDetail: "" };
+    const peerThrottle = createCyclePeerThrottle();
+    const cycle = { ...CYCLE, peer: "on", contracts: {}, labelPrefix: "batch:" };
+    const state = (round) => ({
+      round,
+      artifactDir: "/tmp/review-cycle-preflight-test",
+      packet: { workReport: [] },
+      handedFindings: [],
+      peerPreflighted: false,
+      peerState,
+      peerThrottle,
+    });
+    const calls = Array.from({ length: 6 }, (_, i) => runCyclePeerStage(cycle, state(i + 1)));
+    await ownerEntered;
+    await Promise.resolve();
+    check("only one preflight agent runs and no peer launch enters before it settles", preflightCalls === 1 && peerPrompts.length === 0, `${preflightCalls} preflight/${peerPrompts.length} peer call(s)`);
+    releaseOwner();
+    const results = await Promise.all(calls);
+    check("every concurrent peer stage completes after the owner releases", results.length === 6 && results.every((r) => r.outcome === "passed"), JSON.stringify(results.map((r) => r.outcome)));
+    check("the parallel first wave executes exactly one real preflight", preflightCalls === 1, `${preflightCalls} preflight call(s)`);
+    check("all six peer launches fan out after it and skip duplicate probes", peerPrompts.length === 6 && peerPrompts.every((p) => /Preflight: already done by the run-level shared preflight/.test(p)), `${peerPrompts.length} peer prompt(s)`);
+    check("the shared state records completion and leaves no in-progress latch", peerState.preflighted === true && peerState.preflightInProgress === null, JSON.stringify(peerState));
+
+    let preflightAttempts = 0;
+    let peerAttempts = 0;
+    const resetAgent = async (_prompt, opts) => {
+      if (opts && opts.label === "peer-preflight") {
+        preflightAttempts += 1;
+        if (preflightAttempts === 1) throw new Error("synthetic preflight throw");
+        return { outcome: "available", detail: "" };
+      }
+      peerAttempts += 1;
+      return { outcome: "passed", findings: [], notes: "", detail: "" };
+    };
+    const resetLoaded = loadCycle(src, resetAgent);
+    const resetState = { preflighted: false, preflightInProgress: null, unavailable: false, unavailableDetail: "" };
+    const resetThrottle = resetLoaded.createCyclePeerThrottle();
+    const resetStage = (round) => resetLoaded.runCyclePeerStage(cycle, {
+      ...state(round),
+      peerState: resetState,
+      peerThrottle: resetThrottle,
+    });
+    const resetResults = await Promise.all([resetStage(1), resetStage(2)]);
+    check("a thrown owner releases the waiter instead of deadlocking it", resetResults.length === 2 && preflightAttempts === 2, `${preflightAttempts} preflight attempt(s)`);
+    check("the thrown stage stays a synthesized non-blocking forfeit while the waiter succeeds", resetResults.some((r) => r.outcome === "forfeited" && r.synthesized) && resetResults.some((r) => r.outcome === "passed"), JSON.stringify(resetResults));
+    check("synthesis resets ownership, so the successor preflights again and only it launches a peer", preflightAttempts === 2 && peerAttempts === 1 && resetState.preflighted === true && resetState.preflightInProgress === null, `${preflightAttempts} preflight/${peerAttempts} peer/${JSON.stringify(resetState)}`);
+  });
+
   const ran = legOk + legFail;
   check(`suite ran all ${CHECKS_PER_LEG} checks`, ran === CHECKS_PER_LEG, `ran ${ran}`);
   legOk = 0;
@@ -1560,6 +1633,74 @@ const BATCH_CONTRACT_CHECKS = 5;
 
   const n = legOk + legFail - before;
   check(`batch contract checks ran all ${BATCH_CONTRACT_CHECKS}`, n === BATCH_CONTRACT_CHECKS, `ran ${n}`);
+}
+
+// The Claude-provider rendering is prose rather than executable workflow code,
+// so exercise the exact identity helpers it ships by extracting their code
+// block. A fake proc root lets the test replace field 22 while keeping the PID
+// constant — the reuse failure this guard exists for — without ever probing or
+// signalling a real process. The fake `kill` records every operand, which also
+// proves the PID and deliberately-created PGID paths use the same identity.
+const PEER_LIFECYCLE_CHECKS = 10;
+{
+  console.log("# codex review-cycle prose — peer lifecycle negative controls");
+  const before = legOk + legFail;
+  const prose = readFileSync(join(here, "..", "codex", "dev-skills", "skills", "review-cycle", "SKILL.md"), "utf8");
+  const blockStart = prose.indexOf("peer_proc_identity() {");
+  const blockEnd = prose.indexOf("\n```", blockStart);
+  const helperBlock = blockStart >= 0 && blockEnd > blockStart ? prose.slice(blockStart, blockEnd) : "";
+  check("the canonical helper identity block is extractable", helperBlock.length > 0, `${blockStart}/${blockEnd}`);
+
+  const scratch = mkdtempSync(join(tmpdir(), "peer-incarnation-test-"));
+  try {
+    const procRoot = join(scratch, "proc");
+    const pidDir = join(procRoot, "731");
+    const identityFile = join(scratch, "peer.pid");
+    const signalLog = join(scratch, "signals.log");
+    // mkdir is kept inside the dynamic shell fixture because the test itself
+    // imports no recursive directory-writing helper just for this one path.
+    execFileSync("mkdir", ["-p", pidDir]);
+    const statLine = (start, pgrp = "731", session = "731") => `731 (peer ) name with spaces) S 1 ${pgrp} ${session} ${Array(15).fill("0").join(" ")} ${start} 0\n`;
+    const runnableBlock = helperBlock.replaceAll('"/proc/$1/stat"', '"$peer_proc_root/$1/stat"');
+    const runFixture = (actions) => {
+      writeFileSync(signalLog, "");
+      execFileSync("sh", ["-c", `${runnableBlock}\npeer_proc_root=$1\nhelper_pid_file=$2\nsignal_log=$3\nkill() { printf '%s\\n' "$*" >> "$signal_log"; return 0; }\n${actions}`, "peer-test", procRoot, identityFile, signalLog]);
+      return readFileSync(signalLog, "utf8").trim().split("\n").filter(Boolean);
+    };
+
+    writeFileSync(join(pidDir, "stat"), statLine("424242"));
+    writeFileSync(identityFile, "731 424242 731 731\n");
+    const liveSignals = runFixture("helper_pid_alive; helper_group_alive; helper_term_group");
+    check("the robust parser accepts field 22 after a comm containing spaces and a closing parenthesis", liveSignals.length === 3, JSON.stringify(liveSignals));
+    check("PID probe, PGID probe, and TERM target only the identity-checked handoff", JSON.stringify(liveSignals) === JSON.stringify(["-0 731", "-0 -731", "-TERM -731"]), JSON.stringify(liveSignals));
+
+    writeFileSync(join(pidDir, "stat"), statLine("999999"));
+    const reusedSignals = runFixture("helper_pid_alive || :; helper_group_alive || :; helper_term_group || :");
+    check("a reused PID/PGID with a different start time is never probed or signalled", reusedSignals.length === 0, JSON.stringify(reusedSignals));
+
+    writeFileSync(join(pidDir, "stat"), statLine("424242", "800", "800"));
+    const regroupedSignals = runFixture("helper_pid_alive || :; helper_group_alive || :; helper_term_group || :");
+    check("a matching PID/start time with changed process-group or session identity is never probed or signalled", regroupedSignals.length === 0, JSON.stringify(regroupedSignals));
+
+    rmSync(join(pidDir, "stat"));
+    const deadSignals = runFixture("helper_pid_alive || :; helper_group_alive || :; helper_term_group || :");
+    check("a missing proc identity is treated as original-process death without a signal", deadSignals.length === 0, JSON.stringify(deadSignals));
+
+    writeFileSync(join(pidDir, "stat"), statLine("424242"));
+    writeFileSync(identityFile, "731 424242 731 731 surplus\n");
+    const malformedSignals = runFixture("helper_pid_alive || :; helper_group_alive || :; helper_term_group || :");
+    check("a malformed handoff with extra fields fails closed before every kill", malformedSignals.length === 0, JSON.stringify(malformedSignals));
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+
+  const pluginsProse = readFileSync(join(here, "..", "plugins", "dev-skills", "skills", "review-cycle", "SKILL.md"), "utf8");
+  check("the direct Codex provider gets bounded TERM, death verification, safe KILL, and a survivor stop", /send TERM[\s\S]*at most ten seconds[\s\S]*send KILL only if[\s\S]*ten more seconds[\s\S]*stop the cycle and escalate/.test(pluginsProse), "raw Codex lifecycle prose");
+  check("the Claude helper and fallback both route every group signal through identity reload", /helper_term_group[\s\S]*identity is checked again immediately before that signal/.test(prose) && /peer_signal_group KILL/.test(prose) && /Every liveness probe and TERM\/KILL reloads the leader identity immediately before `kill`/.test(prose), "Claude PID/PGID lifecycle prose");
+  check("evidence denial or an absent exact token forfeits the verdict with the pinned reason", prose.includes("diff evidence unreadable or EVIDENCE_TOKEN absent") && /never accept the verdict on the helper's outcome alone/.test(prose) && /denial or missing proof forfeits it with the same exact reason/.test(prose), "evidence failure contract");
+
+  const n = legOk + legFail - before;
+  check(`peer lifecycle checks ran all ${PEER_LIFECYCLE_CHECKS}`, n === PEER_LIFECYCLE_CHECKS, `ran ${n}`);
 }
 
 if (failures) {

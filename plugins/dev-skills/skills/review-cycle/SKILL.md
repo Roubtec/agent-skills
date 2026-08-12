@@ -102,14 +102,34 @@ pid_file="${artifact_dir}/peer-review.pid"
 # Pin peer effort per invocation; this never changes the container's configuration.
 peer_args=(-c model_reasoning_effort=medium)
 
-nohup codex exec --sandbox read-only --cd "${worktree}" -o "${outfile}" \
-  -c mcp_servers={} "${peer_args[@]}" "$(<"${prompt_file}")" \
+nohup sh -c '
+  pid_file=$1
+  shift
+  proc_identity() {
+    stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+    rest=${stat##*) }
+    [ "$rest" != "$stat" ] || return 1
+    set -- $rest
+    [ "$#" -ge 20 ] || return 1
+    pgrp=$3
+    session=$4
+    shift 19
+    start_time=$1
+    for value in "$start_time" "$pgrp" "$session"; do
+      case $value in ""|0|*[!0-9]*) return 1 ;; esac
+    done
+    printf "%s %s %s\n" "$start_time" "$pgrp" "$session"
+  }
+  identity=$(proc_identity "$$") || exit 125
+  printf "%s %s\n" "$$" "$identity" > "$pid_file" || exit 125
+  exec "$@"
+' peer-launch "${pid_file}" \
+  codex exec --sandbox read-only --cd "${worktree}" -o "${outfile}" \
+    -c mcp_servers={} "${peer_args[@]}" "$(<"${prompt_file}")" \
   < /dev/null > /dev/null 2> "${stderr_file}" &
-peer_pid=$!
-printf '%s\n' "${peer_pid}" > "${pid_file}"
 ```
 
-Stdin is closed, ordinary stdout is detached from the launching tool without being merged into the result or stderr, the output paths are unique per attempt, and stderr is captured separately so progress stays inspectable; the `-o` result remains authoritative. Prefer the PID recorded at launch: later shells probe it with `kill -0`, and signal that same PID directly on timeout — never infer a process group from a plain `nohup … &` launch, never target a wait supervisor, and never use `pkill -f`. If a tree instead has to recover liveness from codex's unique `-o` path, resolve `pgrep -f` to the peer binary itself, excluding the probing shell and all its ancestors; exactly one survivor means alive, none means dead, and more than one is indeterminate and signals nothing. The disambiguated match is both the liveness answer and the only permitted signal target. Use a loose roughly 12-minute timeout, waiting longer when visible progress or review size justifies it; never substitute a capped foreground call. On timeout or transient failure retry once with wholly new paths. A non-empty result containing a `VERDICT:` line is authoritative even if the liveness probe has just gone dead.
+Stdin is closed, ordinary stdout is detached from the launching tool without being merged into the result or stderr, the output paths are unique per attempt, and stderr is captured separately so progress stays inspectable; the `-o` result remains authoritative. The handoff file records the peer PID plus Linux `/proc/<pid>/stat` fields 22 (start time), 5 (process group), and 6 (session). In every later shell, parse the stat record by removing everything through its final closing parenthesis plus following space before counting fields (the comm field may contain spaces or `)`), require exactly those four positive-decimal handoff values, and compare all three current stat fields with the persisted values **before every** `kill -0`, TERM, or KILL. A missing `/proc` record or mismatch means this peer incarnation is dead: never probe or signal that reused numeric PID. On timeout send TERM to the identity-checked PID, poll for at most ten seconds with the same identity check, then send KILL only if that check still identifies the original direct provider PID; poll for at most ten more seconds. A survivor is a teardown failure: stop the cycle and escalate for operator intervention, with no retry, next entry, or publication. Only confirmed death permits the one retry, using wholly new paths and a new identity handoff. Never infer a process group from a plain `nohup … &` launch, target a wait supervisor, or use `pkill -f`. If a tree instead has to recover liveness from codex's unique `-o` path, resolve `pgrep -f` to the peer binary itself, excluding the probing shell and all its ancestors; exactly one survivor means alive, none means dead, and more than one is indeterminate and signals nothing. Persist that resolved PID's complete identity before any later-shell handoff; the identity-checked match is both the liveness answer and the only permitted signal target. Use a loose roughly 12-minute timeout, waiting longer when visible progress or review size justifies it; never substitute a capped foreground call. A non-empty result containing a `VERDICT:` line is authoritative only after confirmed teardown.
 
 **Outcome vocabulary.** Whatever launches the peer, its result lands in one vocabulary: `passed` and `issues` feed the gate; `unavailable` (missing binary, logged out, auth/usage exhaustion), `timeout` (after the one retry), `forfeited` (empty or unintelligible output), and `failed` (provider crash or exhausted retry) are explicit non-blocking round outcomes. Carry the helper result's `reason` exactly once that path is enabled. On the current raw path, carry the exact provider diagnostic when it supplies the cause; use the literal reason `empty output` or `garbled output` only after observing that condition, and otherwise leave `reason` empty rather than inventing one. That exact carried value is what the batch throttle reads. Anything that is not `passed` or `issues` is non-blocking — normalize an unrecognized outcome the same way rather than letting it fall through.
 
