@@ -1752,32 +1752,17 @@ const PEER_LIFECYCLE_CHECKS = 17;
 
   const pluginsProse = readFileSync(join(here, "..", "plugins", "dev-skills", "skills", "review-cycle", "SKILL.md"), "utf8");
   check("the direct Codex provider gets bounded TERM, death verification, safe KILL, and a survivor stop", /send TERM[\s\S]*at most ten seconds[\s\S]*send KILL only if[\s\S]*ten more seconds[\s\S]*stop the cycle and escalate/.test(pluginsProse), "raw Codex lifecycle prose");
-  const helperLaunchStart = prose.indexOf('if peer-review-run --provider claude');
-  const helperLaunchEnd = prose.indexOf('< /dev/null; then', helperLaunchStart);
-  const helperLaunchWords = helperLaunchStart >= 0 && helperLaunchEnd > helperLaunchStart
-    ? prose.slice(helperLaunchStart, helperLaunchEnd).replaceAll('\\\n', ' ').split(/\s+/)
-    : [];
-  const timeoutFlag = helperLaunchWords.indexOf('--timeout');
-  const perAttemptTimeout = timeoutFlag >= 0 ? Number(helperLaunchWords[timeoutFlag + 1]) : Number.NaN;
-  const callerWait = 570;
-  const helperMaxAttempts = prose.includes('it may make at most two attempts') ? 2 : Number.NaN;
-  const helperReapPerAttempt = prose.includes('roughly three seconds after TERM plus two after KILL per attempt') ? 3 + 2 : Number.NaN;
-  const worstCaseSupervision = helperMaxAttempts * (perAttemptTimeout + helperReapPerAttempt);
   check(
-    "the foreground helper's real two-attempt timeout and reap budget fits beneath the caller wait",
-    helperLaunchWords[0] === 'if' &&
-      perAttemptTimeout === 260 &&
-      helperMaxAttempts === 2 &&
-      helperReapPerAttempt === 5 &&
-      worstCaseSupervision === 530 &&
-      worstCaseSupervision < callerWait &&
-      /peer_helper_status=0[\s\S]*peer_helper_status=\$\?/.test(prose.slice(helperLaunchStart, prose.indexOf('```', helperLaunchStart))) &&
-      prose.includes("Do not background, detach, poll, or externally signal the helper"),
-    JSON.stringify({ perAttemptTimeout, helperMaxAttempts, helperReapPerAttempt, worstCaseSupervision, callerWait }),
+    "the Claude-provider helper conversion stays deferred until its stable review payload is documented",
+    /schema `powbox\.peer-review-run\/v1` must expose the complete provider-neutral review through a documented field such as `reviewFile` or `reviewText`/.test(prose) &&
+      /`artifactDir` alone does not identify a stable file/.test(prose) &&
+      /Until both prerequisites land, use the direct launch below even when `peer-review-run` is installed/.test(prose) &&
+      !/peer-review-run --provider claude/.test(prose),
+    "provider-neutral review payload prerequisite",
   );
-  check("the Claude fallback is direct-PID only and stops on a survivor", /records `\$!` as the direct provider PID[\s\S]*peer_stop_pid[\s\S]*A surviving identity stops the entire cycle/.test(prose) && !/peer_group_alive|peer_signal_group|setsid --fork/.test(prose), "Claude direct-PID lifecycle prose");
+  check("the retained Claude launch is direct-PID only and stops on a survivor", /records `\$!` as the direct provider PID[\s\S]*peer_stop_pid[\s\S]*A surviving identity stops the entire cycle/.test(prose) && !/peer_group_alive|peer_signal_group|setsid --fork/.test(prose), "Claude direct-PID lifecycle prose");
   check(
-    "the helper verdict is proved from literal embedded evidence and exact pinned OIDs without an external read grant",
+    "the retained raw verdict is proved from literal embedded evidence and exact pinned OIDs",
     /BEGIN GENERATED REVIEW DATA/.test(prose) &&
       /END GENERATED REVIEW DATA/.test(prose) &&
       /BEGIN EMBEDDED GIT EVIDENCE/.test(prose) &&
@@ -1786,17 +1771,17 @@ const PEER_LIFECYCLE_CHECKS = 17;
       /EVIDENCE_TIP_OID: <full OID>/.test(prose) &&
       /`printf -- '%s\\n' "\$value"`/.test(prose) &&
       !/`printf '%s\\n' -- "\$value"`/.test(prose) &&
-      /The separate `diff_evidence_file` is retained for audit but is not verdict proof and is never a provider read dependency/.test(prose) &&
-      /embedded diff evidence or proof absent/.test(prose) &&
-      /Missing or mismatched proof changes `passed` to `forfeited`/.test(prose) &&
-      /For `issues`, preserve the `issues` outcome and relay every finding/.test(prose) &&
+      /The provider receives the evidence in `prompt_file` itself and never has to read `diff_evidence_file`/.test(prose) &&
+      /diff evidence unreadable or proof absent/.test(prose) &&
+      /Missing or mismatched OID\/token proof changes `passed` to `forfeited`/.test(prose) &&
+      /for `issues`, keep the `issues` outcome and every finding verbatim/.test(prose) &&
       !/Read the complete diff evidence at:/.test(prose) &&
       !/native read-only tools may read the one absolute out-of-worktree evidence path/.test(prose),
     "embedded evidence contract",
   );
-  const evidenceContractLine = prose.split("\n").find((line) => line.startsWith("Verify a valid result's reported `model`")) || "";
-  const passedContract = evidenceContractLine.match(/Missing or mismatched proof changes `([^`]+)` to `([^`]+)` with reason exactly `([^`]+)`/);
-  const issuesContract = evidenceContractLine.match(/For `([^`]+)`, preserve the `([^`]+)` outcome and relay every finding[\s\S]*attach the same exact evidence-failure reason and note/);
+  const evidenceContractLine = prose.split("\n").find((line) => line.startsWith("After the PID is dead")) || "";
+  const passedContract = evidenceContractLine.match(/Missing or mismatched OID\/token proof changes `([^`]+)` to `([^`]+)` with reason exactly `([^`]+)`/);
+  const issuesContract = evidenceContractLine.match(/for `([^`]+)`, keep the `([^`]+)` outcome and every finding verbatim[\s\S]*attaching that exact reason and an evidence-failure note/);
   const parsedEvidenceContract = passedContract && issuesContract
     ? {
         proofFailureReason: passedContract[3],
@@ -1815,10 +1800,10 @@ const PEER_LIFECYCLE_CHECKS = 17;
     };
   };
   const passedNegative = applyShippedEvidenceContract("passed", []);
-  check("the shipped prose contract forfeits a passed verdict with absent proof", passedNegative && passedNegative.outcome === "forfeited" && passedNegative.reason === "embedded diff evidence or proof absent", JSON.stringify(passedNegative));
+  check("the shipped prose contract forfeits a passed verdict with absent proof", passedNegative && passedNegative.outcome === "forfeited" && passedNegative.reason === "diff evidence unreadable or proof absent", JSON.stringify(passedNegative));
   const issueFindings = [{ severity: "blocking", claim: "grounded finding" }];
   const issuesNegative = applyShippedEvidenceContract("issues", issueFindings);
-  check("the shipped prose contract retains issues findings and the evidence-failure reason", issuesNegative && issuesNegative.outcome === "issues" && issuesNegative.findings === issueFindings && issuesNegative.reason === "embedded diff evidence or proof absent" && /findings retained/.test(issuesNegative.note), JSON.stringify(issuesNegative));
+  check("the shipped prose contract retains issues findings and the evidence-failure reason", issuesNegative && issuesNegative.outcome === "issues" && issuesNegative.findings === issueFindings && issuesNegative.reason === "diff evidence unreadable or proof absent" && /findings retained/.test(issuesNegative.note), JSON.stringify(issuesNegative));
 
   const workflowCores = WORKFLOWS.map((file) => {
     const src = readFileSync(join(here, "..", "plugins", "dev-skills", "workflows", file), "utf8");

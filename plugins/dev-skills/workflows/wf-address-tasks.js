@@ -1232,8 +1232,8 @@ Return \`pass: true\` only if everything holds and no material issue remains; el
 // script (a workflow cannot shell out). Baseline destination: the
 // `peer-review-run` helper (schema powbox.peer-review-run/v1) — retained
 // pinned raw launch until that helper can carry the codex peer's CONFIGURED
-// high-capability model, the one half of the review-strength passthrough still
-// outstanding; its effort passthrough and strength reporting have landed. See
+// high-capability model AND expose a documented provider-neutral full-review
+// payload (`reviewFile` or `reviewText`) rather than only `artifactDir`. See
 // the header comment. The launch pins review strength per invocation
 // (-c model_reasoning_effort=medium; the model stays the peer's configured
 // high-capability default from ~/.codex/config.toml) and never writes back to
@@ -1271,7 +1271,7 @@ ${CYCLE_FINISH_IN_TURN} The retained manual path therefore launches a supervised
 ${preflightStep}
 2. Prepare unique per-attempt paths under this cycle's artifact directory: \`round_dir=${cycleShq(`${state.artifactDir}/round-${state.round}`)}\`, \`mkdir -p "$round_dir"\`, with \`prompt_file\`, \`outfile\`, \`stderr_file\`, and \`pid_file\` inside it (suffix \`-attempt2\` on a retry; never reuse a path).
 3. Write the peer prompt below VERBATIM to \`$prompt_file\` with a quoted heredoc (\`<<'PEER_PROMPT'\`) — never assemble it through shell interpolation.
-4. The configured-model prerequisite for the helper's codex provider is still unmet ([powbox issue #145](https://github.com/Roubtec/powbox/issues/145)): its config isolation discards the configured high-capability model, so this task-015 rendering deliberately retains the pinned raw launch instead of silently downgrading the peer. Once that prerequisite lands, set \`artifact_root\` to this cycle's artifact directory (outside the worktree) and run \`peer-review-run --provider codex --worktree "$worktree" --prompt-file "$prompt_file" --artifact-root "$artifact_root" --timeout 260 --effort medium\` once in the foreground inside this Peer stage, with the Bash-tool wait set to at least 570 seconds but strictly below its roughly 600-second cap. The helper timeout is per attempt and it may make at most two attempts; its installed reap bounds are roughly three seconds after TERM plus two after KILL per attempt, so \`2 × 260 + 2 × 5 = 530\` seconds leaves at least 40 seconds for setup, polling ticks, parsing, and result emission; the helper owns timeout, retry, and reaping. After that prerequisite lands, keep the hardened manual launch below only as the fallback when \`command -v peer-review-run\` fails. Until it lands, this incomplete task-015 rendering uses that same hardened manual path even when the helper is installed; launch it with \`nohup\` and record the peer PID directly:
+4. Two powbox prerequisites remain: the helper's Codex provider still discards the configured high-capability model ([powbox issue #145](https://github.com/Roubtec/powbox/issues/145)), and schema v1 exposes only \`artifactDir\`, not a documented provider-neutral \`reviewFile\` or \`reviewText\` from which every finding can be relayed verbatim. This task-015 rendering therefore retains the pinned raw launch even when the helper is installed; never guess a private artifact filename or parse a provider-specific envelope. Once BOTH prerequisites land, set \`artifact_root\` outside the worktree, run \`peer-review-run --provider codex --worktree "$worktree" --prompt-file "$prompt_file" --artifact-root "$artifact_root" --timeout 260 --effort medium\` once in the foreground inside this Peer stage, and read the documented full-review payload before applying verdict logic. Then keep the hardened manual launch below only as the fallback when \`command -v peer-review-run\` fails. For now launch it with \`nohup\` and record the peer PID directly:
 
    \`\`\`bash
    worktree="<the worktree path from the contract above>"
