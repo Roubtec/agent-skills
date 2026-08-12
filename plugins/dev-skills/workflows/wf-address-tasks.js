@@ -571,10 +571,10 @@ Scope every cleanup to WT (\`git -C "$WT" …\`) and commit checkpoints often. T
 // the fan-out, every peer launch, and any cross-cycle policy (task 015's
 // session-local peer throttle) sit in this one flat script's state. A nested
 // child cycle would hold its own state, where a throttle counts one peer,
-// never sees a sibling's, and caps nothing. The shared batchPeerState below
-// the section is the first such cross-cycle state: one batch-wide peer
-// preflight/availability object handed to every per-task cycle. No peer cap,
-// floor, or chunked fan-out is introduced here; that policy is 015's alone.
+// never sees a sibling's, and caps nothing. The shared batchPeerState and
+// batchPeerThrottle below are the two cross-cycle states: one shares preflight
+// and availability, while the other enforces task 015's adaptive cap, floor,
+// and queue across every cycle. Task 015 alone defines that throttle policy.
 // ============================================================================
 // ============================================================================
 // BEGIN EMBEDDABLE SECTION: review-cycle-core
