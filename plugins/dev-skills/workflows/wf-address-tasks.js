@@ -194,7 +194,7 @@ const PLAN_SCHEMA = {
               paths: { type: "array", items: { type: "string" } },
               reason: { type: "string" },
             },
-            required: ["raw", "kind", "classification", "paths", "reason"],
+            required: ["raw", "kind", "paths", "reason"],
           },
         },
       },
@@ -553,7 +553,7 @@ Argument (a mixed list of task numbers, task-file paths, and globs; a \`peer-opi
 
 Do this:
 1. Follow the \`resolve-tasks\` skill's shared contract to produce its deduplicated provenance-tagged \`paths\`, per-full-number \`numbers\`, and per-input \`notFound\` collections. Do not invent a second filename parser here.
-2. Apply the workflow's HANDS-OFF consumer policy. Include as executable every explicit path/glob selection whatever its classification (explicit wins when a path also has number provenance), plus number-selected unambiguous \`active\` paths. Exclude every number-selected \`done\`, \`deferred\`, or \`ambiguous\` classification and every \`not-found\` input; never guess an ambiguous number. Record every exclusion with its raw input, classification, candidate paths, and reason in \`resolution.exclusions\` while preserving the complete resolver packet beside it.
+2. Apply the workflow's HANDS-OFF consumer policy. Include as executable every explicit path/glob selection whatever its classification (explicit wins when a path also has number provenance), plus number-selected unambiguous \`active\` paths. Exclude every number-selected \`done\`, \`deferred\`, or \`ambiguous\` classification and every \`not-found\` input; never guess an ambiguous number. Record every exclusion with its raw input, candidate paths, and reason in \`resolution.exclusions\`; include \`classification\` for a matched number state, but omit it for a \`not-found\` input, which has no full number to classify. Preserve the complete resolver packet beside the exclusions.
 3. Read each executable task file in full. Determine dependencies: an explicit "Depends on" field, shared infrastructure, or files/modules two tasks both create or migrate. When in doubt, treat tasks that touch the same files or migrations as dependent.
 4. Group executable tasks into WAVES: wave 1 is every task with no unmet dependency; wave 2 depends only on wave 1; and so on. Tasks within a wave are independent and will run concurrently. Return an empty \`waves\` array when resolution leaves no executable task; the exclusions still make that a successful, documented no-op.
 5. For each task set:

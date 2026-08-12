@@ -38,6 +38,7 @@ const resolverClauses = [
   ["classifies per full number", /Classify each matched \*\*full number\*\*, once across the entire subtree/],
   ["makes ambiguity precede folder status", /`ambiguous` takes precedence over folder classifications/],
   ["classifies glob matches individually", /Globs are never classified as a unit/],
+  ["limits classifications to the task subtree", /Only well-formed task specs inside the resolved task subtree are eligible:[\s\S]*rather than inventing a classification outside the inventory/],
   ["reports not-found per raw input", /For every raw number, path, or glob that selects no well-formed task file, emit one `not-found` diagnostic/],
   ["returns the three resolver collections", /`paths`:[\s\S]*`numbers`:[\s\S]*`notFound`:/],
   ["does not expand an explicit input to an unselected duplicate", /explicit path or glob does not pull an unselected same-number sibling into `paths`/],
@@ -87,11 +88,15 @@ const workflowClauses = [
   ["excludes all non-active number states", /Exclude every number-selected \\`done\\`, \\`deferred\\`, or \\`ambiguous\\` classification/],
   ["never guesses ambiguity", /never guess an ambiguous number/],
   ["records structured exclusions", /resolution\.exclusions/],
+  ["omits classification from not-found exclusions", /omit it for a \\`not-found\\` input, which has no full number to classify/],
   ["supports a documented empty batch", /Return an empty \\`waves\\` array when resolution leaves no executable task/],
   ["requires structured resolution in the plan", /required: \["defaultBase", "resolution", "waves"\]/],
   ["returns resolution in the normal summary", /collisions, resolution: plan\.resolution, mainCheckout/],
 ];
 for (const [name, pattern] of workflowClauses) check(`workflow ${name}`, pattern.test(workflow));
+
+const exclusionsSchema = section(workflow, "        exclusions: {", "      required: [\"paths\", \"numbers\", \"notFound\", \"exclusions\"]");
+check("workflow exclusion schema does not require classification", /required: \["raw", "kind", "paths", "reason"\]/.test(exclusionsSchema) && !/required: \[[^\]]*"classification"/.test(exclusionsSchema));
 
 if (failures) {
   console.error(`\n${failures} check(s) failed.`);

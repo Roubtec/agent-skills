@@ -19,7 +19,7 @@ In a hands-off run, verify only the number-selected unambiguous `active` paths p
 
 ## Primary objective
 
-For each task file in the input set, verify against the actual codebase that the task's acceptance criteria, scope, and intent have been met.
+For each task file admitted by the task-pointer preflight, verify against the actual codebase that the task's acceptance criteria, scope, and intent have been met.
 The goal is to close completed work cleanly and surface any remaining gaps as new, actionable follow-up tasks.
 Treat merged implementations as already covered by the project's normal code-review practices.
 Do not perform another general code review; inspect the implementation deeply enough to establish task acceptance and identify concrete gaps.
