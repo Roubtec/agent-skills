@@ -1910,14 +1910,18 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       "the exact-commit-only exemption is back, the token is undocumented, or a target that does not resolve no longer stops the batch",
     );
     check(
-      `${name}: a named ref is re-resolved at each point by its OWN resolution, and the paragraph that says so is not titled for the default alone`,
-      text.includes("Re-pin a movable target at each rebase point") &&
-        !text.includes("Re-pin a default target at each rebase point") &&
-        text.includes("a ref the invocation named, by the local `rev-parse` above") &&
-        // The two immovable kinds keep their exemption; losing this half would
-        // re-resolve a deliberately pinned commit out from under the batch.
-        text.includes("an exact commit the invocation itself named, which was pinned deliberately and cannot move"),
-      "the movable/frozen split lost a kind, or the paragraph governs a named ref while its lead-in still says 'default'",
+      `${name}: an invocation-named target is pinned ONCE for the batch, and survives no-rebase as the effective base`,
+      // The per-point re-pin rule governs the DEFAULT target alone: a target the
+      // request named is the batch's single base by construction, and
+      // re-resolving it per entry per point would land concurrent entries on
+      // whatever that ref carried when each of them got there.
+      text.includes("It is the DEFAULT target this governs, and only it") &&
+        text.includes("that single OID serves every rebase-enabled entry at both of its points") &&
+        // `no-rebase` suppresses the rebase, not the token — bounding a
+        // named-target run's ranges at `baseRefName` would hand every reviewer
+        // the underlying branch's commits as this PR's diff.
+        text.includes("since `no-rebase` suppresses the rebase without discarding the token"),
+      "the named target is re-resolved per point, or `no-rebase` discards it and the ranges fall back to `baseRefName`",
     );
   }
 }
