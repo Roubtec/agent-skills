@@ -37,6 +37,13 @@
 // the outcome strings, whose agreement with the strings the gate keys on
 // nothing else pins.
 //
+// That brief is one of three renderings of where the compared head comes from;
+// the other two are the two review-addressing SKILLs, in both mirrors (task
+// 021d). They are prose no scenario can execute, and the probe they replaced
+// (`git cat-file -e` on the OID `gh pr view` reported) is exactly the shape a
+// later edit re-imports as a "safety check", so their paragraphs are read here
+// beside the brief's.
+//
 // It also covers the publication guard that landed beside the gate, which is
 // prompt prose rather than script logic: a HEAD that is a proper ancestor of
 // the PR head must stop the publisher BEFORE the lease it would otherwise
@@ -113,7 +120,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 139;
+const EXPECTED_CHECKS = 144;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -938,12 +945,209 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // so testing that it exists locally passes just as well after the head moved
   // — and every probe then runs against a stale tip.
   const readsFetchedHead = brief.includes("git rev-parse FETCH_HEAD");
-  const testsObjectExistence = /cat-file -e/.test(brief);
+  // `cat-file` in its existence modes asks nothing but whether the object is
+  // there, so it counts however it is spelled: `-t` reports the type but fails
+  // identically on a missing object, and the spacing between the two words is
+  // free. One source for every read of it in this file — this brief's, the four
+  // SKILL paragraphs' and the file-wide ban below — because a second spelling of
+  // the same ban is one that silently narrows: a probe re-imported as
+  // `git cat-file  -e` or `git cat-file -t` would satisfy a literal
+  // `cat-file -e` read while the paragraph read caught it, or the reverse.
+  const catFileProbe = /cat-file\s+-[et]\b/;
+  const testsObjectExistence = catFileProbe.test(brief);
   check(
     "and takes their `R` from the fetched ref, not from an existence test on the recorded OID",
     readsFetchedHead && !testsObjectExistence,
     `reads FETCH_HEAD: ${readsFetchedHead}; tests object existence: ${testsObjectExistence}`,
   );
+
+  // The same rule, in the two SKILLs that state it to a reader rather than to a
+  // subagent — and in both mirrors, which no generator keeps in step. Each file
+  // is anchored to the PARAGRAPH that carries the rule, not to the file, so the
+  // read stays where the decision is made. Today every `FETCH_HEAD` mention in
+  // all four files already sits inside that paragraph (2 occurrences in
+  // `address-review`, 4 in `address-reviews`, one line each), so the anchoring
+  // is defensive rather than load-bearing: it keeps a rule paragraph reverted to
+  // an existence test from being excused by a mention some future edit adds
+  // elsewhere in the file, which a file-level search would accept.
+  //
+  // Reading the paragraph for the fetched-head command is not enough by itself.
+  // A gutted instruction — "do not use `git rev-parse FETCH_HEAD`; retain the
+  // recorded OID" — contains the command, and an existence gate re-spelled as
+  // `git rev-parse --verify <headRefOid>^{commit}` with the fetched head demoted
+  // to a fallback contains it too. So each paragraph is read for two more
+  // things: the PHRASE its own skill states the rule in (`address-review`'s
+  // "rather than the recorded `headRefOid`"; `address-reviews`' "adopt the
+  // fetched OID as this entry's head"), and the absence of any object-existence
+  // gate other than reading the fetched head itself — which commands count, and
+  // in which spellings, is enumerated below. `cat-file` in its existence modes
+  // is banned file-wide as well, because re-importing that probe anywhere in
+  // either skill is the regression — and it is banned there in exactly the
+  // spellings the paragraph read counts, off the one `catFileProbe` above, so
+  // the file-wide ban cannot narrow to a single spelling while the paragraph
+  // read stays wide.
+  //
+  // Both are pins on the PHRASING, not on the meaning, and the claim goes no
+  // further than that: a regex over prose cannot tell "adopt X" from "adopt X
+  // only where Y", so what these catch is an edit that drops the phrasing or
+  // re-imports a probe — the shape an ordinary rewrite takes. What they MISS,
+  // stated so nobody reads a pass as a semantic guarantee: a rule REVERSED
+  // while the pinned phrase survives ("never adopt the fetched OID as this
+  // entry's head" contains it), a demotion of the fetched head stated without
+  // naming any git command, a probe spelled outside the forms enumerated below
+  // — a `rev-parse` that neither asks `--verify` nor peels, `cat-file` in any
+  // other mode — and any of them written without backticks, since only
+  // backticked spans are read. Polarity is the reviewer's to hold; sharpening a
+  // regex at it only buys the next evasion.
+  //
+  // One limit runs the other way and is listed apart from those, because it is
+  // an OVER-report rather than a miss. The exemption below recognizes the
+  // fetched-head read only in its CANONICAL spelling — the whole span being
+  // `git rev-parse FETCH_HEAD`, with an optional `--verify`, an optional peel
+  // suffix, and nothing else — so a re-spelled read that ALSO asks `--verify`
+  // or peels is reported as a gate: `git -C <path> rev-parse --verify
+  // FETCH_HEAD^{commit}`, `git rev-parse --verify --quiet FETCH_HEAD`,
+  // `git rev-parse --verify FETCH_HEAD > <file>`. A re-spelling
+  // carrying neither marker never reaches the probe at all, so it passes
+  // regardless — which is why the four shipped paragraphs, all using the bare
+  // read, are unaffected. The remedy when it does fire is to normalize the
+  // spelling in the paragraph, or to widen the recognizer deliberately — never
+  // to relax it back to "the span mentions `FETCH_HEAD`", the evasion the
+  // whole-read anchor exists to close. It fails loudly and prints the offending
+  // span, so unlike the misses above it cannot be mistaken for a pass.
+  {
+    const mirrors = ["plugins/dev-skills/skills", "codex/dev-skills/skills"];
+    // The probe is looked for command-first, not by proximity to a name for the
+    // recorded OID: `<headRefOid>`, `"$PR_HEAD"` and a bare `HEAD^{commit}` are
+    // the same gate. But `rev-parse` is not one command: these four files run it
+    // in four spellings that query no object's existence at all
+    // (`--abbrev-ref HEAD`, `--show-toplevel`, `--git-path rebase-merge`,
+    // `origin/main`), so counting every `rev-parse` as an existence probe would
+    // fail an ordinary edit that mentions one of those inside the rule
+    // paragraph. `rev-parse` therefore counts only in its object-query
+    // spellings — `--verify`, or a peel suffix (`^{commit}`, `^{}`), which is
+    // how an existence gate on a commit is written; `cat-file -e`/`-t` asks
+    // nothing else and counts however it is spelled. Reading the fetch itself is
+    // benign, and that one span is exempted by being the fetched-head read
+    // WHOLE, not by mentioning `FETCH_HEAD` somewhere: a span that gates on the
+    // recorded OID and names `FETCH_HEAD` beside it — `… ^{commit} || git
+    // rev-parse FETCH_HEAD`, or the same gate with a trailing comment
+    // mentioning it — is the gate, not the read.
+    const existenceProbe = new RegExp(`${catFileProbe.source}|rev-parse\\b[^\`]*(?:--verify\\b|\\^\\{[a-z]*\\})`);
+    const fetchedHeadRead = /^`git rev-parse (?:--verify )?FETCH_HEAD(?:\^\{[a-z]*\})?`$/;
+    const gatingProbes = (para) =>
+      (para.match(/`[^`\n]+`/g) || []).filter((span) => existenceProbe.test(span) && !fetchedHeadRead.test(span));
+    // The discriminator is fixtured on synthetic spans, because it is the whole
+    // reason this read stays off ordinary prose: get it wrong in the loose
+    // direction and a reversed rule passes, wrong in the strict direction and an
+    // edit that merely mentions a branch-name query fails. Neither miss is
+    // visible from the shipped text, which contains none of these spans.
+    // Each PART of the discriminator is fixtured separately, so that no part
+    // rides on another: the shared span appears with the read on both sides
+    // (drop the exemption's trailing anchor and "starts with the read" is
+    // excused, which is the same evasion with its halves swapped), and one gate
+    // asks only `--verify` while another only peels (drop either branch of the
+    // probe and that gate goes unseen). What a fixture pins is the PART, not
+    // every character that spells it: the exemption's trailing backtick and its
+    // `$` are redundant with each other, since an extracted span always ends in
+    // a backtick and never contains one, so deleting `$` alone changes no
+    // verdict and the suite stays green. Deleting the backtick misjudges the
+    // peel-spelled read; deleting the trailing anchor entirely misjudges the
+    // shared span with the read first.
+    // The `cat-file` branch is fixtured in its spellings for the same reason,
+    // and those fixtures do double duty: `catFileProbe` is the file-wide ban
+    // as well, so narrowing it to one literal spelling — the shape that lets a
+    // re-imported probe back in unseen — misjudges a case here rather than
+    // quietly weakening a read no fixture exercises.
+    const probeFixtures = [
+      ["a non-query `rev-parse`", "Record the tip with `git rev-parse --abbrev-ref HEAD` first.", false],
+      ["the fetched-head read", "take the head from `git rev-parse FETCH_HEAD` instead", false],
+      ["the same read spelled with a peel", "resolve `git rev-parse --verify FETCH_HEAD^{commit}`", false],
+      ["a gate on the recorded OID", "confirm `git rev-parse --verify <headRefOid>^{commit}` first", true],
+      [
+        "a gate sharing its span with the read",
+        "prefer `git rev-parse --verify <headRefOid>^{commit} || git rev-parse FETCH_HEAD`",
+        true,
+      ],
+      [
+        "a gate sharing its span with the read, the read first",
+        "prefer `git rev-parse FETCH_HEAD || git rev-parse --verify <headRefOid>^{commit}`",
+        true,
+      ],
+      [
+        "a gate whose comment names the read",
+        "run `git rev-parse --verify <headRefOid>^{commit}  # cheaper than reading FETCH_HEAD`",
+        true,
+      ],
+      ["a gate that only asks `--verify`", "confirm `git rev-parse --verify <headRefOid>` first", true],
+      ["a gate that only peels", "confirm `git rev-parse <headRefOid>^{commit}` first", true],
+      ["a gate spelled `cat-file -e`", "confirm `git cat-file -e <headRefOid>^{commit}` first", true],
+      ["the same gate spelled `cat-file -t`", "confirm `git cat-file -t <headRefOid>^{commit}` first", true],
+      ["the same gate with the words spaced apart", "confirm `git cat-file  -e <headRefOid>^{commit}` first", true],
+    ];
+    const misjudged = probeFixtures
+      .filter(([, para, isGate]) => (gatingProbes(para).length > 0) !== isGate)
+      .map(([what]) => what);
+    check(
+      "and that read counts a gate on the recorded OID even beside the fetched-head read, in either order and whether it asks `--verify` or only peels, while leaving a non-query `rev-parse` alone",
+      misjudged.length === 0,
+      `misjudged: ${misjudged.join("; ")}`,
+    );
+    const rulePara = [
+      [
+        "address-review",
+        "**Reconcile the working location's branch with the PR head before triaging anything.**",
+        /rather than (?:from )?the recorded `headRefOid`/,
+      ],
+      ["address-reviews", "The canonical path.", /adopt(?:ing)? the fetched OID as (?:this|the) entry's head/],
+    ];
+    const unread = [];
+    const unphrased = [];
+    const gated = [];
+    const probed = [];
+    for (const mirror of mirrors) {
+      for (const [skill, anchor, phrase] of rulePara) {
+        const path = `${mirror}/${skill}/SKILL.md`;
+        let text;
+        try {
+          text = readFileSync(join(here, "..", mirror, skill, "SKILL.md"), "utf8");
+        } catch (err) {
+          unread.push(`${path} cannot be read: ${err.message}`);
+          continue;
+        }
+        const para = text.split("\n\n").find((p) => p.includes(anchor));
+        if (!para) {
+          unread.push(`${path} has no paragraph carrying ${JSON.stringify(anchor)}`);
+        } else {
+          if (!/git rev-parse (?:--verify )?FETCH_HEAD/.test(para)) unread.push(`${path}'s rule paragraph does not read the fetched head`);
+          if (!phrase.test(para)) unphrased.push(`${path} does not state ${phrase}`);
+          const probes = gatingProbes(para);
+          if (probes.length) gated.push(`${path} runs ${probes.join(", ")}`);
+        }
+        if (catFileProbe.test(text)) probed.push(path);
+      }
+    }
+    check(
+      "and both skills state that same rule, in both mirrors — the head comes from `git rev-parse FETCH_HEAD`",
+      unread.length === 0,
+      unread.join("; "),
+    );
+    check(
+      "and each carries the phrase its own skill states the rule in, so a rewrite that drops the phrasing fails",
+      unphrased.length === 0,
+      unphrased.join("; "),
+    );
+    check(
+      "and no rule paragraph gates on an object's existence — `cat-file -e`/`-t`, or a `rev-parse` that asks `--verify` or peels — except in reading the fetched head itself",
+      gated.length === 0,
+      gated.join("; "),
+    );
+    check(
+      "and no skill has re-imported the existence probe on the recorded OID",
+      probed.length === 0,
+      `tests \`cat-file -e\`/\`-t\`: ${probed.join(", ")}`,
+    );
+  }
 
   // The off-shoot exemption is stated to the agent as well as enforced by the
   // gate: where the names differ the step is skipped WHOLE, which is what makes
