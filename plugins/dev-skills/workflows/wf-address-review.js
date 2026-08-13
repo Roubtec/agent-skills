@@ -632,7 +632,20 @@ Which of those fields are structurally enforced: every field publication acts on
 // ordered to carry dispositions forward would have to reconstruct them from the
 // tree (the re-triage this round is not) and a reviewer told to catch a quiet
 // relabel would have no baseline to compare against.
-function rebaseReverifyInstructions(packet, rebase, priorReport, zeroItem) {
+//
+// `priorDeviations` is the FIRST cycle's standing deviation set, embedded in
+// both briefs for exactly that reason. The second cycle starts with an EMPTY
+// deviation set — nothing in the scope contract seeds one — so a deviation
+// raised before the replay is in front of neither role unless this puts it
+// there. `review-cycle` has every pass restate a standing deviation VERBATIM
+// and matches them by exact text, which is what lets `mergedCycle` fold the two
+// cycles' sets at all; a cycle never shown one has nothing to restate, so
+// without this the later cycle's assessment wins only where its fixer happens to
+// re-derive the same deviation byte-for-byte, and a deviation the replay
+// RESOLVED can never leave the set. `mergedCycle` reads the carry back out of
+// the second cycle's own per-pass record, so what these two blocks ask for is
+// what that merge is entitled to conclude from.
+function rebaseReverifyInstructions(packet, rebase, priorReport, priorDeviations, zeroItem) {
   return `## This branch was rebased AFTER these dispositions passed review
 
 Every work item below was already triaged, acted on, and reviewed to a pass — on the base the branch sat on before. The branch has since been rebased onto \`${rebase.effectiveBase}\` (${rebase.detail || "no detail reported"}), so this round exists to confirm each disposition still holds on the replayed tree and to fix what the replay broke. It is NOT a fresh triage.
@@ -644,18 +657,56 @@ Every work item below was already triaged, acted on, and reviewed to a pass — 
 ### The dispositions that passed on the previous base — carry these forward
 
 ${JSON.stringify(priorReport || [], null, 2)}
-
+${carriedDeviationsFixerBlock(priorDeviations)}
 ${fixInstructions(packet, undefined, zeroItem)}`;
 }
 
-function rebaseReverifyCriteria(rebase, priorReport) {
+// The fixer's half of the carry. Restating is a fixer's job and only a fixer's,
+// so this is where the carried set enters the second cycle's own machinery: once
+// this round's `deviations` states them, every later pass and every reviewer
+// round of that cycle sees them through the cycle's own blocks, and its result
+// carries them the way it carries any deviation of its own.
+function carriedDeviationsFixerBlock(deviations) {
+  const standing = Array.isArray(deviations) ? deviations : [];
+  if (!standing.length) return "";
+  return `
+### Deviations from LOCKED decisions standing when the rebase happened (verbatim)
+
+These were reported and assessed on the base the branch sat on before the replay, and this cycle knows nothing of them beyond this list. Restate in your \`deviations\`, VERBATIM — copy each text exactly, since the cycle matches these by exact text and a reworded restatement reads as a drop plus a brand-new deviation — every one that STILL stands over the rebased tree. Leave one out only where the replay genuinely closed it, and say in \`summary\` what closed it: the new base carrying the in-spec route the deviation says did not exist is the shape that does. That omission is a CLAIM the reviewer judges, not an effect. Do NOT conform one away to shorten this list — report, don't correct; the maintainer ratifies it or asks for conformance.
+
+${JSON.stringify(standing, null, 2)}
+`;
+}
+
+function rebaseReverifyCriteria(rebase, priorReport, priorDeviations) {
   return `${reviewCriteria()}
 
 This tree was REBASED onto \`${rebase.effectiveBase}\` after those dispositions passed a round on the previous base, so your verdict is the one that describes what gets pushed. Two things beyond the criteria above: confirm the replay preserved every fix (a hunk-level resolution can silently drop half of one, and a whole-file resolution can delete a sibling's already-shipped behavior with no conflict marker left behind), and confirm no disposition was quietly relabeled by the round after the rebase — a fix still visible in the tree, reported as \`already-addressed\`, publishes the wrong reply. The set that passed before the rebase is below verbatim; it is the baseline you compare this round's report against, entry by entry, and a changed \`kind\`, identifier, \`author\`/\`authorIsBot\` or \`newFinding\` that the replay does not account for is a blocking issue.
 
 ### The dispositions that passed on the previous base — the baseline
 
-${JSON.stringify(priorReport || [], null, 2)}`;
+${JSON.stringify(priorReport || [], null, 2)}
+${carriedDeviationsReviewerBlock(priorDeviations)}`;
+}
+
+// The reviewer's half. Two duties the cycle's own deviations block cannot state
+// from inside: this round is the one whose assessment is published, and a
+// carried deviation the fixer did not restate is invisible to the cycle. Its
+// drop machinery compares against the set IT is holding, which began empty and
+// holds only what this cycle's fixer stated — so an unrestated carry produces no
+// claimed-drop block, and only this baseline puts it in front of anyone.
+function carriedDeviationsReviewerBlock(deviations) {
+  const standing = Array.isArray(deviations) ? deviations : [];
+  if (!standing.length) return "";
+  return `
+### Deviations from LOCKED decisions standing when the rebase happened (verbatim) — the deviation baseline
+
+The fixer was handed this same list and told to restate every one that still stands over the rebased tree. It is your baseline for the deviations exactly as the report above is for the dispositions, and it carries two duties:
+
+- A deviation below that the fixer's \`deviations\` does not restate is a CLAIMED DROP. This cycle cannot show it to you as one — its own deviation set began empty and holds only what this cycle's fixer stated — so verify each such claim against the rebased tree yourself, exactly as you would a \`declined\` finding, and raise one you do not accept as a blocking issue. Passing this round is what drops it.
+- Return a \`deviationAssessments\` entry for every one that is still standing. Yours is the round judging the tree that gets pushed, so your in-spec-route judgment and RATIFY/CONFORM recommendation are the ones published beside the deviation, replacing the judgment the earlier round formed against the base the replay moved off.
+
+${JSON.stringify(standing, null, 2)}`;
 }
 
 function reviewCriteria() {
@@ -1932,7 +1983,31 @@ const carriedOf = (c) => ({
 // re-verification never assessed keeps the earlier round's half rather than
 // losing it. Nothing else is deduped — the other sets are per-pass history,
 // where two identical entries are two real events.
+//
+// The re-verification is HANDED the first cycle's standing set
+// (`rebaseReverifyInstructions`, `rebaseReverifyCriteria`), so that fold is a
+// judgment rather than a coincidence of wording, and the union is no longer the
+// whole rule: a deviation the replay RESOLVED must be able to leave. What
+// distinguishes a resolution from silence is the second cycle's own per-pass
+// record. `review-cycle` takes a deviation out of its standing set only once a
+// round PASSED with the drop claim in view — an unadjudicated drop stays in
+// `deviations` — so a deviation its `deviationHistory` shows a pass restating,
+// and its final `deviations` no longer carries, was dropped and the drop was
+// judged over the rebased tree. That one leaves the merged set, and the
+// now-stale earlier assessment leaves with it. A deviation that appears in that
+// history NOWHERE never entered the cycle's machinery at all — the carry did not
+// take, whatever the reason — so its absence is silence, not a judgment, and it
+// keeps standing with the earlier round's half. That is also why no verdict gate
+// is needed here: a cycle that stopped short still carries its unadjudicated
+// drops in `deviations`, so nothing it left open can be read as resolved.
 const deviationText = (entry) => (typeof entry === "string" ? entry : JSON.stringify(entry));
+const assessedDeviation = (a) => deviationText(a && a.deviation !== undefined ? a.deviation : a);
+const deviationsRestatedIn = (c) =>
+  new Set(
+    (Array.isArray(c.deviationHistory) ? c.deviationHistory : [])
+      .flatMap((h) => (h && Array.isArray(h.deviations) ? h.deviations : []))
+      .map(deviationText),
+  );
 function mergedCycle(before, after) {
   const both = (key) => {
     const list = [...(Array.isArray(before[key]) ? before[key] : []), ...(Array.isArray(after[key]) ? after[key] : [])];
@@ -1946,14 +2021,25 @@ function mergedCycle(before, after) {
     for (const entry of both(key)[key] || []) byIdentity.set(identity(entry), entry);
     return byIdentity.size ? { [key]: [...byIdentity.values()] } : {};
   };
+  // The carried deviations the re-verification took up and then dropped over a
+  // round that passed on the drop, per the rule above.
+  const restated = deviationsRestatedIn(after);
+  const stillStanding = new Set((Array.isArray(after.deviations) ? after.deviations : []).map(deviationText));
+  const resolvedByReplay = (text) => restated.has(text) && !stillStanding.has(text);
+  const deviations = (foldedBy("deviations", deviationText).deviations || []).filter((d) => !resolvedByReplay(deviationText(d)));
+  const merged = new Set(deviations.map(deviationText));
+  // An assessment travels only beside the deviation it judges — `review-cycle`'s
+  // own rule on its way out, and the reason a resolved deviation cannot leave a
+  // judgment of the pre-replay base behind it.
+  const deviationAssessments = (foldedBy("deviationAssessments", assessedDeviation).deviationAssessments || []).filter((a) => merged.has(assessedDeviation(a)));
   const proactive = [before.proactive, after.proactive].filter((s) => typeof s === "string" && s.trim()).join(" ");
   return {
     ...after,
     rounds: (Number(before.rounds) || 0) + (Number(after.rounds) || 0),
     roundsByCycle: { beforeRebase: before.rounds, reverification: after.rounds },
     ...both("openQuestions"),
-    ...foldedBy("deviations", deviationText),
-    ...foldedBy("deviationAssessments", (a) => deviationText(a && a.deviation !== undefined ? a.deviation : a)),
+    ...(deviations.length ? { deviations } : {}),
+    ...(deviationAssessments.length ? { deviationAssessments } : {}),
     ...both("deviationHistory"),
     ...both("findingDispositions"),
     ...both("peerRounds"),
@@ -2243,6 +2329,10 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
     // below rather than dropped with it.
     const preRebaseCycle = cycle;
     const priorReport = preRebaseCycle.workReport || [];
+    // Handed over for the same reason and to both roles: the second cycle's own
+    // deviation set starts empty, and `mergedCycle` reads what it does with these
+    // back out of its record.
+    const priorDeviations = preRebaseCycle.deviations || [];
     // What is left of the run's total round budget after the cycle that just
     // passed, capped at the re-verification's own lower ceiling. Exhausted, the
     // rebased tree cannot be reviewed inside the cap at all — and this run
@@ -2291,8 +2381,8 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
       maxRounds: reverifyBudget,
       scope: {
         title: `pr-${packet.pr.number}-post-rebase`,
-        instructions: rebaseReverifyInstructions(packet, second.rebase, priorReport, zeroItemRun),
-        reviewInstructions: rebaseReverifyCriteria(second.rebase, priorReport),
+        instructions: rebaseReverifyInstructions(packet, second.rebase, priorReport, priorDeviations, zeroItemRun),
+        reviewInstructions: rebaseReverifyCriteria(second.rebase, priorReport, priorDeviations),
         items: packet.items,
       },
     });
