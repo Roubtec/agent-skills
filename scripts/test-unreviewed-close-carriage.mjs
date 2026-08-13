@@ -77,7 +77,7 @@ function check(name, cond, detail) {
 // does not count. Bump it deliberately when adding or removing one — a check
 // that silently stops running is invisible to a suite that only gates on
 // failures.
-const EXPECTED_CHECKS = 48;
+const EXPECTED_CHECKS = 49;
 
 // Evaluate a workflow's declaration prefix up to its documented cut marker and
 // hand back the named ones. Each is returned by an explicit reference, so a
@@ -249,9 +249,10 @@ const cycleResult = (extra) => ({
     "repairs in the same breath": /repair it in the same breath/.test(step3),
     "names the API the read rides": /same eventually-consistent API the creation and the repair just wrote/.test(step3),
     "one disagreeing read proves no failed repair": /a base that disagrees once is not proof the repair failed/.test(step3),
+    "and licenses no repair by itself": /is not yet a mismatch to repair/.test(step3) && /On a mismatch that settled/.test(step3),
     "settles by re-reading to agreement or a repeated answer": /re-read until the answer reports `main` or repeats the same other base/.test(step3),
     "baseOk only from an agreeing read": /set `baseOk: true` only from a read that reported `main`/.test(step3),
-    "a failed repair keeps the wrong-base verdict": /delivered with the wrong base, not delivered/.test(step3),
+    "a failed repair keeps the wrong-base verdict, resting on the settled answer": /delivered with the wrong base, not delivered/.test(step3) && /naming the settled base it still carries/.test(step3),
     "an unsettled read is returned as unsettled, through `reason`": /naming the read that did not settle and the base it last reported/.test(step3) && /an unsettled read, not a proven wrong base/.test(step3),
   };
   const baseReadBackMissing = Object.entries(baseReadBack).filter(([, ok]) => !ok).map(([what]) => what);
@@ -269,7 +270,9 @@ const cycleResult = (extra) => ({
     "nothing-found is not proof": /a lookup that finds nothing is not proof no PR exists/.test(step4),
     "names the double-PR hazard the retry guards": /how one branch gets two PRs/.test(step4),
     "licenses the retry only on a trustworthy nothing-found": /Retry creation ONLY on a lookup that finds nothing where nothing-found is trustworthy/.test(step4),
-    "trustworthy means no existence claim and a held re-read": /the creation failure did not claim the PR exists, AND a re-run of the lookup still finds nothing/.test(step4),
+    "trustworthy means no existence claim and a held re-read": /the creation failure did not claim the PR exists, AND a re-run of the lookup, held briefly rather than immediate, still finds nothing/.test(step4),
+    "states the residual the held pair cannot close": /closes only the unconverged-lookup window/.test(step4) && /did not open a PR whose success report was lost/.test(step4),
+    "budgets one retry and routes its ending to step 3 or a report, never another attempt": /the license is for ONE retry/.test(step4) && /goes to step 3 like the first attempt's failure would/.test(step4) && /not at another attempt/.test(step4),
     "an untrusted nothing-found returns rather than retries": /Where those do not both hold, do not retry/.test(step4) && /`reason` naming the read that did not settle/.test(step4),
   };
   const lookupMissing = Object.entries(lookupRecipe).filter(([, ok]) => !ok).map(([what]) => what);
@@ -277,6 +280,17 @@ const cycleResult = (extra) => ({
     "and its recovery lookup retries creation only on a nothing-found answer it may trust, returning through `reason` where it may not",
     lookupMissing.length === 0,
     lookupMissing.join("; ") || `step 4 carries all ${Object.keys(lookupRecipe).length} clauses`,
+  );
+
+  // The closing paragraph renders the skill's no-URL-no-match rule too — the
+  // one shared clause outside steps 3/4 — so it takes the same both-sides pin:
+  // the mirror check below holds the skill's sentence, and this holds the
+  // brief's copy, so rewording either side alone fails.
+  const closing = creationBrief.slice(creationBrief.indexOf("Return `opened: true`"));
+  check(
+    "and the brief's closing paragraph still renders the skill's rule that no URL and no match is that failure, not a delivery",
+    /ending with neither a captured URL nor a lookup match is that failure, not a delivery/.test(closing),
+    "closing paragraph",
   );
 
   // The contract those steps fill: the unconverged case rides `reason`, and the
