@@ -31,7 +31,7 @@
 // The workflows are runtime scripts (top-level await/return, injected
 // `agent`/`parallel`/`log` globals), so they cannot be imported. Each subject is
 // extracted from the ACTUAL shipped source, by one of three methods:
-//   1. the declarations before the workflow's first executable statement,
+//   1. the declaration prefix before the workflow's documented cut marker,
 //      evaluated together — the prompt builders, and `collisionReviewedRecord`;
 //   2. the subject's own source text, matched out and evaluated in isolation —
 //      `wf-address-tasks.js`'s `cycleCarried` function and
@@ -71,7 +71,7 @@ function check(name, cond, detail) {
 // failures.
 const EXPECTED_CHECKS = 43;
 
-// Evaluate a workflow's declarations up to its first executable statement and
+// Evaluate a workflow's declaration prefix up to its documented cut marker and
 // hand back the named ones. Each is returned by an explicit reference, so a
 // renamed or removed subject is a ReferenceError here rather than a silent skip.
 function loadDeclarations(file, cut, wanted) {

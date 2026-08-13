@@ -23,7 +23,7 @@
 // The workflow is a runtime script (top-level await/return, injected
 // `agent`/`phase`/`log` globals), so it cannot be imported. This evaluates the
 // shipped file's DECLARATION PREFIX — everything up to the documented cut marker,
-// its first executable statement — with those globals stubbed, and drives
+// where its runtime body begins — with those globals stubbed, and drives
 // scripted resolver / re-scan / re-review packets through the ACTUAL shipped
 // `settleWaveCollisions`. No second copy of the dispatch exists here, which is
 // why the source checks at the end assert the batch body still calls it: a
