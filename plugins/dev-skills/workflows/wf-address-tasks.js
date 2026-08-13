@@ -542,25 +542,25 @@ function mainCheckoutSummary(baseline, final) {
   };
 }
 
-function resolvePrompt(input) {
+function resolvePrompt(pointers) {
   return `You are scoping a batch of pre-planned task pointers for implementation. Do NOT implement anything. This is the batch's own-context-window resolver; do all task-tree scavenging here so the orchestrator receives only your structured result.
 
 ${DESTROY_BOUNDARY}
 
 Read \`AGENTS.md\` / \`CLAUDE.md\` first for project conventions.
 
-Argument (a mixed list of task numbers, task-file paths, and globs): ${JSON.stringify(input)}
+Argument pointers (a deduplicated, first-seen-order mixed list of task numbers, task-file paths, and globs; JSON array, each element exactly ONE raw input): ${JSON.stringify(pointers)}
 
-Read that argument exactly the way the workflow does, because step 4's reconciliation compares your packet against the workflow's own derivation and fails the whole batch closed on any disagreement:
-- Every substring matching \`/${PEER_OPINIONS_FLAG.source}/i\` is a flag the loop already handled, not a task pointer. The workflow masks each one out of the argument before deriving anything; ignore it here and emit no \`paths\` entry and no \`notFound\` diagnostic for it or for any word inside it.
-- What remains is split on whitespace AND commas, and each resulting token has its surrounding quotes stripped. Every surviving token is exactly one raw input: \`039,041\` is two inputs, not one, and a raw pointer can therefore carry neither whitespace nor a comma (so a task-file path containing either cannot be named on this argument at all — report such a token as the tokens it splits into, do not reassemble it).
-- Every other token is a raw input you must account for, including one shaped like a flag the list above does not match: resolve it under the skill's contract and emit its \`not-found\` diagnostic when it selects nothing.
+That list is the workflow's own derivation of its argument, and step 4's reconciliation compares your packet against the same list, failing the whole batch closed on any disagreement:
+- The peer flag (any whole whitespace/comma-bounded token run matching \`/${PEER_OPINIONS_FLAG.source}/i\`) is a flag the loop already handled, not a task pointer. The workflow masks each one out of the argument before deriving the list, so no element here is one; emit no \`paths\` entry and no \`notFound\` diagnostic for a flag or for any word inside it.
+- A flat-string invocation was split on whitespace AND commas, with each token's surrounding quotes stripped AFTER the split: \`039,041\` arrives as two elements, not one, so a pointer derived from a flat string can therefore carry neither whitespace nor a comma, and quoting a spaced path in a flat string does not join it either — such fragments arrive as the elements they split into; do not reassemble them. A structured invocation (an array or object) instead contributes every non-collection leaf as exactly one element, boundaries intact, so a task-file path containing whitespace or a comma can be named only that way.
+- Treat each element as exactly one raw input even when it contains whitespace, a comma, or quotes: never split, merge, trim, or re-quote an element, and echo it verbatim as the \`raw\` value in \`selectedBy\`/\`notFound\`. Account for every element and for nothing outside the list: resolve each under the skill's contract and emit its \`not-found\` diagnostic when it selects nothing.
 
 Do this:
 1. Follow the \`resolve-tasks\` skill's shared contract to produce its deduplicated provenance-tagged \`paths\`, per-full-number \`numbers\`, and per-input \`notFound\` collections. Do not invent a second filename parser here.
 2. Apply the workflow's HANDS-OFF consumer policy. Include as executable every explicit path/glob selection whatever its classification, including an existing well-formed task file outside the resolved task subtree whose report status is \`outside-subtree\` (explicit wins when a path also has number provenance), plus number-selected unambiguous \`active\` paths. Exclude every number-selected \`done\`, \`deferred\`, or \`ambiguous\` classification and every \`not-found\` input; never guess an ambiguous number. Record exactly one exclusion per excluded deduplicated raw input in \`resolution.exclusions\`, with no unrelated entries: a matched number exclusion carries that raw number, \`kind: "number"\`, its full \`number\`, exact \`classification\`, every candidate path that raw input selected, and the exact reason \`number-selected <classification> task is excluded in hands-off mode\`; a \`not-found\` exclusion carries the diagnostic's exact \`raw\` and \`kind\`, \`paths: []\`, and the exact reason \`not-found input is excluded in hands-off mode\`, while omitting \`number\` and \`classification\`. Preserve the complete resolver packet beside the exclusions.
 3. Read each executable task file in full. Determine dependencies: an explicit "Depends on" field, shared infrastructure, or files/modules two tasks both create or migrate. When in doubt, treat tasks that touch the same files or migrations as dependent.
-4. Group executable tasks into WAVES: wave 1 is every task with no unmet dependency; wave 2 depends only on wave 1; and so on. Tasks within a wave are independent and will run concurrently. Put every executable resolved path in exactly one wave, and put no excluded, unknown, or unrelated path in any wave. Return an empty \`waves\` array only when resolution leaves no executable task and the exact structured exclusions above account for every excluded input; that is a successful, documented no-op. The workflow independently validates every wave path against the resolution hard list and re-derives both hands-off eligibility and exact exclusion accounting, so an exclusion or not-found diagnostic cannot explain away another executable path. It also re-derives the raw pointer list from the argument itself and requires your packet to account for every deduplicated pointer — in some path's \`selectedBy\` or as a \`not-found\` diagnostic — and for no pointer the argument never named, so an internally consistent packet that silently omits one input is rejected rather than run as a smaller batch. An omitted executable path, a duplicate or unknown wave path, an included non-executable path, or an unaccounted empty wave set is a resolution failure, not a no-op.
+4. Group executable tasks into WAVES: wave 1 is every task with no unmet dependency; wave 2 depends only on wave 1; and so on. Tasks within a wave are independent and will run concurrently. Put every executable resolved path in exactly one wave, and put no excluded, unknown, or unrelated path in any wave. Return an empty \`waves\` array only when resolution leaves no executable task and the exact structured exclusions above account for every excluded input; that is a successful, documented no-op. The workflow independently validates every wave path against the resolution hard list and re-derives both hands-off eligibility and exact exclusion accounting, so an exclusion or not-found diagnostic cannot explain away another executable path. It also holds the exact pointer list it handed you above and requires your packet to account for every element — in some path's \`selectedBy\` or as a \`not-found\` diagnostic — and for no pointer the list never named, so an internally consistent packet that silently omits one input is rejected rather than run as a smaller batch. An omitted executable path, a duplicate or unknown wave path, an included non-executable path, or an unaccounted empty wave set is a resolution failure, not a no-op.
 5. For each task set:
    - a ref-safe \`slug\` (task number + short name; also its worktree dir name),
    - a \`branch\` to implement on,
@@ -707,9 +707,12 @@ function exclusionsExactlyMatch(resolution, expected) {
 // inside it can show that the agent SAW every pointer: an input dropped before
 // resolution leaves a packet exactly as internally consistent as a correct one,
 // and the batch then completes without executing OR reporting that task. So the
-// raw pointers are re-derived from the argument here and reconciled with the
-// packet. This is not a second filename parser — it decides nothing about what
-// a token means, only that the packet accounts for each one exactly once.
+// raw pointers are derived from the argument here, ONCE — the resolve stage
+// renders this exact list into the resolver's prompt and reconciles the packet
+// against the same list, so the prompt and the reconciliation cannot disagree
+// about where a pointer begins and ends. This is not a second filename parser —
+// it decides nothing about what a token means, only that the packet accounts
+// for each one exactly once.
 // The peer flag is the documented invocation's one non-pointer argument, so it
 // is masked out below with THIS regex — the same one the flag parser near the
 // batch body tests, deliberately shared rather than approximated. An
@@ -719,13 +722,41 @@ function exclusionsExactlyMatch(resolution, expected) {
 // three of them, none of which any resolution can account for, hard-aborting
 // the batch on an invocation the flag parser accepts. The lookarounds bound
 // the flag to a whole token run between whitespace, commas, or the argument's
-// edges — the same boundaries the splitter below cuts on — because a word
-// boundary alone also matches the flag text INSIDE a filename, turning an
-// explicit pointer like `tasks/039-peer-opinions=off.md` into the invented
+// edges — the same boundaries the flat-string splitter below cuts on — because
+// a word boundary alone also matches the flag text INSIDE a filename, turning
+// an explicit pointer like `tasks/039-peer-opinions=off.md` into the invented
 // fragments `tasks/039-` and `.md` that no resolution can account for.
 const PEER_OPINIONS_FLAG = /(?<![^\s,])peer[\s-]*opinions?\s*=\s*(off|on)(?![^\s,])/gi;
-function requiredArgPointers(flatArgs) {
-  const tokens = String(flatArgs == null ? "" : flatArgs)
+// A structured leaf is a flag only when, trimmed, it IS one whole — built from
+// the same single definition above so the two spellings cannot drift. A leaf
+// that merely embeds the flag text beside other content stays one pointer,
+// never masked: its boundary came from the caller's structure, not from any
+// splitter, and fragmenting it is exactly what the leaf contract forbids.
+const PEER_OPINIONS_FLAG_LEAF = new RegExp(`^${PEER_OPINIONS_FLAG.source}$`, "i");
+// The leaf contract, stated once. A STRING argument carries no boundary
+// information, so it is tokenized: split on whitespace AND commas, each token's
+// surrounding quotes stripped AFTER the split (so quotes do not express
+// boundaries — a spaced path cannot be named in a flat string), the peer flag
+// masked out first. An ARRAY or OBJECT argument is recursed, and every
+// non-collection LEAF — stringified if a non-string primitive, trimmed of
+// surrounding whitespace, dropped when empty or when it is exactly the peer
+// flag — is exactly one raw pointer, NEVER split, whatever it contains: the
+// caller's structure already said where each pointer ends. Both shapes dedupe
+// in first-seen order.
+function requiredArgPointers(batchArgs) {
+  if (batchArgs != null && typeof batchArgs === "object") {
+    const leaves = [];
+    const collect = (node) => {
+      if (node == null) return;
+      if (Array.isArray(node)) return node.forEach(collect);
+      if (typeof node === "object") return Object.values(node).forEach(collect);
+      const leaf = String(node).trim();
+      if (leaf.length > 0 && !PEER_OPINIONS_FLAG_LEAF.test(leaf)) leaves.push(leaf);
+    };
+    collect(batchArgs);
+    return [...new Set(leaves)];
+  }
+  const tokens = String(batchArgs == null ? "" : batchArgs)
     .replace(PEER_OPINIONS_FLAG, " ")
     .split(/[\s,]+/)
     .map((token) => token.replace(/^["']+|["']+$/g, ""))
@@ -3963,19 +3994,24 @@ const collisions = [];
 
 try {
   phase("Resolve batch");
-  // The resolver, the flag parser, and the reconciliation below must all
-  // tokenize ONE representation of the argument. Raw `args` here would show a
-  // structured invocation (an array, an object) different token boundaries
-  // than requiredArgPointers derives from the flattened string, and the exact
-  // reconciliation would hard-abort a batch the flag parser accepted.
-  plan = await agent(resolvePrompt(flattenBatchArgs(args)), { label: "resolve", schema: PLAN_SCHEMA });
+  // ONE pointer list, derived from the argument once: the resolver's prompt
+  // renders exactly this list and the reconciliation below compares the packet
+  // against exactly this list, so the two sides agree by construction — two
+  // independent derivations that can disagree is precisely the failure the
+  // reconciliation exists to catch. requiredArgPointers keeps a structured
+  // invocation's leaf boundaries (a path may contain spaces or commas) and
+  // tokenizes only a flat string, which carries no boundaries to keep. The
+  // flag parser above still reads the flattened string: the flag is not a
+  // pointer, so it never appears in this list.
+  const batchPointers = requiredArgPointers(args);
+  plan = await agent(resolvePrompt(batchPointers), { label: "resolve", schema: PLAN_SCHEMA });
   if (!plan || !Array.isArray(plan.waves)) {
     // A batch that resolves no task is still a batch that terminated with the
     // baseline already taken, so it owes the same report as a delivering one.
     phase("Summary");
     return { error: "Could not resolve task pointers from the argument.", args, resolution: plan && plan.resolution ? plan.resolution : null, mainCheckout: await finalMainCheckoutReport() };
   }
-  if (!resolutionAccountsForInputs(plan.resolution, requiredArgPointers(flattenBatchArgs(args)))) {
+  if (!resolutionAccountsForInputs(plan.resolution, batchPointers)) {
     // The packet dropped or invented a raw pointer relative to the argument
     // itself; an internally consistent partial packet is still lost work.
     phase("Summary");
