@@ -74,7 +74,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 186;
+const CHECKS_PER_LEG = 203;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -132,11 +132,13 @@ function scriptedAgent(fixes, reviews, seen, closeOuts = [], records = [], packe
   const closeOutQueue = [...closeOuts];
   const recordQueue = [...records];
   const packetQueue = [...packets];
+  let lastFix = null;
   return async function agent(prompt, opts) {
     const label = (opts && opts.label) || "";
     if (label.startsWith("fix#")) {
       seen.fixPrompts.push(prompt);
       const p = fixQueue.shift();
+      lastFix = p || null;
       return p === undefined ? null : p;
     }
     // The packet measurement defaults PERMISSIVE for the diff checks' reason,
@@ -147,7 +149,16 @@ function scriptedAgent(fixes, reviews, seen, closeOuts = [], records = [], packe
     if (label.startsWith("packet#")) {
       seen.packetPrompts.push(prompt);
       const p = packetQueue.shift();
-      return p === undefined ? { measured: true, dirty: [], operation: "", detail: "scripted: clean and idle" } : p;
+      return p === undefined
+        ? {
+            measured: true,
+            dirty: [],
+            operation: "",
+            headSha: (lastFix && lastFix.finalSha) || "",
+            headParentSha: lastFix && lastFix.finalSha === RECORD_TIP ? RECORD_PARENT : ORDINARY_PARENT,
+            detail: "scripted: clean and idle with HEAD and its parent resolved",
+          }
+        : p;
     }
     if (label.startsWith("review#")) {
       seen.reviewPrompts.push(prompt);
@@ -157,7 +168,7 @@ function scriptedAgent(fixes, reviews, seen, closeOuts = [], records = [], packe
     if (label.startsWith("closeout#")) {
       seen.closeOutPrompts.push(prompt);
       const p = closeOutQueue.shift();
-      return p === undefined ? { nonSemantic: true, editsPresent: true, why: "scripted: every hunk non-semantic, every claimed edit present" } : p;
+      return p === undefined ? { nonSemantic: true, editsPresent: true, recordOnlySuffix: false, recordOnlyRange: "", why: "scripted: every hunk non-semantic, every claimed edit present, no record suffix" } : p;
     }
     if (label.startsWith("record#")) {
       seen.recordPrompts.push(prompt);
@@ -345,7 +356,13 @@ const closeOutRetire = (findingId) => ({ ...retireOn(findingId), closeOutEdits: 
 // consumer — which is why the note is a conjunct of the exit and not merely its
 // payload.
 const FLAKE_NOTE = "the delivery run's only failure was the payments suite, which reproduces on the base; queued as tasks/046-flaky-payments-suite.md";
+const RECORD_PARENT = "a".repeat(40);
+const RECORD_TIP = "b".repeat(40);
+const RECORD_RANGE = `${RECORD_PARENT}..${RECORD_TIP}`;
+const WRONG_RECORD_RANGE = `${RECORD_PARENT}..${"c".repeat(40)}`;
+const ORDINARY_PARENT = "d".repeat(40);
 const confirmRecordOnly = { ...PASS_PACKET, dispositions: [], flakeRecord: FLAKE_NOTE };
+const closeOutRecordOnly = (findingId) => ({ ...closeOutFix(findingId), finalSha: RECORD_TIP, flakeRecord: FLAKE_NOTE });
 // The same pass with no record of its OWN: it committed the same range and says
 // nothing about what failed, so there is nothing for the conclusion to publish.
 const confirmRecordOnlySilent = { ...PASS_PACKET, dispositions: [] };
@@ -358,13 +375,13 @@ const confirmCitingActiveTask = { ...idle, flakeRecord: CITED_NOTE };
 // The readings the packet measurement can come back with. `CLEAN_READING` is
 // the scripted default's explicit twin, needed wherever a scenario places a
 // specific reading on a LATER pass and so must fill the earlier slot itself.
-const CLEAN_READING = { measured: true, dirty: [], operation: "", detail: "clean and idle" };
-const DIRTY_READING = { measured: true, dirty: [" M src/app.ts", "?? notes.txt"], operation: "", detail: "two uncommitted paths" };
+const CLEAN_READING = { measured: true, dirty: [], operation: "", headSha: PASS_PACKET.finalSha, headParentSha: ORDINARY_PARENT, detail: "clean and idle" };
+const DIRTY_READING = { measured: true, dirty: [" M src/app.ts", "?? notes.txt"], operation: "", headSha: PASS_PACKET.finalSha, headParentSha: ORDINARY_PARENT, detail: "two uncommitted paths" };
 // The reading this whole measurement exists for: a tree left mid-cherry-pick
 // prints EMPTY porcelain, so `dirty` is empty and the operation marker is the
 // only thing that shows it. A porcelain-only check calls this worktree clean.
-const MID_OPERATION_READING = { measured: true, dirty: [], operation: "CHERRY_PICK_HEAD", detail: "a cherry-pick is still in progress; the porcelain is empty" };
-const UNMEASURED_READING = { measured: false, dirty: [], operation: "", detail: "git would not run in that path" };
+const MID_OPERATION_READING = { measured: true, dirty: [], operation: "CHERRY_PICK_HEAD", headSha: PASS_PACKET.finalSha, headParentSha: ORDINARY_PARENT, detail: "a cherry-pick is still in progress; the porcelain is empty" };
+const UNMEASURED_READING = { measured: false, dirty: [], operation: "", headSha: "", headParentSha: "", detail: "git would not run in that path" };
 
 // A deviation from a LOCKED maintainer decision, and a pass that reports one.
 // Every other packet above carries `deviations: []`, so any of them following
@@ -980,6 +997,75 @@ for (const name of WORKFLOWS) {
     check("a fix-only non-semantic pass concludes with no further round", concluded.res.verdict === "pass" && concluded.seen.reviewPrompts.length === 1 && !!concluded.res.closeOut, `${concluded.res.verdict}/${concluded.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(concluded.res.closeOut)}`);
     check("and the result records the pass, range and unreviewed edits", !!concluded.res.closeOut && concluded.res.closeOut.pass === 2 && concluded.res.closeOut.range === "sha..sha" && JSON.stringify(concluded.res.closeOut.edits) === JSON.stringify(CLOSE_OUT_EDITS), JSON.stringify(concluded.res.closeOut));
 
+    // Option (a): the delivery run follows the non-semantic fixes, then the
+    // flake policy appends its one diagnosis-only record commit. The same
+    // read-only close-out check splits that suffix itself; the packet's note is
+    // withheld from the check so it cannot self-certify the licence.
+    const withRecord = await run(src, {
+      fixes: [PASS_PACKET, closeOutRecordOnly("r1-1")],
+      reviews: [FAIL("a wording nit")],
+      closeOuts: [{ nonSemantic: true, editsPresent: true, recordOnlySuffix: true, recordOnlyRange: RECORD_RANGE, why: "non-semantic fixes followed by one diagnosis-only record commit" }],
+      cycle: { closeOut: "on" },
+    });
+    check("a non-confirming close-out pass survives its delivery run's record-only suffix", withRecord.res.verdict === "pass" && withRecord.seen.reviewPrompts.length === 1 && !!withRecord.res.closeOut && !!withRecord.res.recordOnly, `${withRecord.res.verdict}/${withRecord.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(withRecord.res)}`);
+    check("the conclusion detail names both kinds of unreviewed content", /non-semantic fixes plus the independently checked unrelated-flake record suffix/.test(withRecord.res.detail || ""), withRecord.res.detail);
+    check("the conclusion names the whole unreviewed close-out range and its non-semantic edits", withRecord.res.closeOut && withRecord.res.closeOut.range === `sha..${RECORD_TIP}` && JSON.stringify(withRecord.res.closeOut.edits) === JSON.stringify(CLOSE_OUT_EDITS), JSON.stringify(withRecord.res.closeOut));
+    check("and names the independently checked flake suffix and carries the delivery note", withRecord.res.recordOnly && withRecord.res.recordOnly.range === RECORD_RANGE && withRecord.res.recordOnly.note === FLAKE_NOTE && /diagnosis-only record/.test(withRecord.res.recordOnly.verified || ""), JSON.stringify(withRecord.res.recordOnly));
+    check("whose range is exactly the measured final commit's actual parent through its measured tip", withRecord.res.recordOnly && withRecord.res.recordOnly.range === `${withRecord.res.packetChecks.at(-1).headParentSha}..${withRecord.res.packetChecks.at(-1).headSha}`, `${JSON.stringify(withRecord.res.recordOnly)}/${JSON.stringify(withRecord.res.packetChecks.at(-1))}`);
+    check("the one check is asked to split and judge all three claims without seeing the pass's flake note", withRecord.seen.closeOutPrompts.length === 1 && /answer THREE questions/.test(withRecord.seen.closeOutPrompts[0] || "") && /recordOnlySuffix/.test(withRecord.seen.closeOutPrompts[0] || "") && /FINAL commit/.test(withRecord.seen.closeOutPrompts[0] || "") && !(withRecord.seen.closeOutPrompts[0] || "").includes(FLAKE_NOTE), "close-out check prompt");
+    const offeringFixPrompt = withRecord.seen.fixPrompts[1] || "";
+    check("the rendered fixer brief lets a compliant producer offer the path while listing only pre-suffix edits", /list ONLY those non-semantic edits in `closeOutEdits`/.test(offeringFixPrompt) && /SOLE exception is an exact FINAL diagnosis-only record commit/.test(offeringFixPrompt) && /put that failure and its record in `flakeRecord`/.test(offeringFixPrompt) && /leave the record itself OUT of `closeOutEdits`/.test(offeringFixPrompt), "fixer prompt");
+    check("the rendered fixer brief makes the claimed record non-self-certifying and forbids every broader semantic change", /`flakeRecord` does not certify or broaden the exception/.test(offeringFixPrompt) && /independently reads the diff and measures the final commit and its actual parent/.test(offeringFixPrompt) && /any other executable, behavioral, or semantic change anywhere in the pass diff/.test(offeringFixPrompt) && /however it got there or how `flakeRecord` describes it, forfeits the close-out/.test(offeringFixPrompt), "fixer prompt");
+
+    // Negative control for the new split: a valid record suffix cannot hide a
+    // semantic hunk in the preceding fixes portion. It forfeits both records
+    // for the normal round, just like the unsplit close-out veto below.
+    const semanticBeforeRecord = await run(src, {
+      fixes: [PASS_PACKET, closeOutRecordOnly("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      closeOuts: [{ nonSemantic: false, editsPresent: true, recordOnlySuffix: true, recordOnlyRange: RECORD_RANGE, why: "an executable hunk preceded the diagnosis-only suffix" }],
+      cycle: { closeOut: "on" },
+    });
+    check("a semantic hunk before a valid record suffix still buys the normal reviewer round", semanticBeforeRecord.res.verdict === "pass" && semanticBeforeRecord.seen.reviewPrompts.length === 2 && !semanticBeforeRecord.res.closeOut && !semanticBeforeRecord.res.recordOnly, `${semanticBeforeRecord.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(semanticBeforeRecord.res)}`);
+
+    const silentRecord = await run(src, {
+      fixes: [PASS_PACKET, closeOutFix("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      closeOuts: [{ nonSemantic: true, editsPresent: true, recordOnlySuffix: true, recordOnlyRange: RECORD_RANGE, why: "a diagnosis-only suffix" }],
+      cycle: { closeOut: "on" },
+    });
+    check("a verified suffix with no pass note to publish forfeits the close-out", silentRecord.seen.reviewPrompts.length === 2 && !silentRecord.res.closeOut && !silentRecord.res.recordOnly, `${silentRecord.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(silentRecord.res)}`);
+
+    const unnamedRecord = await run(src, {
+      fixes: [PASS_PACKET, closeOutRecordOnly("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      closeOuts: [{ nonSemantic: true, editsPresent: true, recordOnlySuffix: true, recordOnlyRange: "HEAD^..HEAD", why: "a diagnosis-only suffix without exact OIDs" }],
+      cycle: { closeOut: "on" },
+    });
+    check("a suffix not named by its exact OID range cannot conclude", unnamedRecord.seen.reviewPrompts.length === 2 && !unnamedRecord.res.closeOut && !unnamedRecord.res.recordOnly, `${unnamedRecord.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(unnamedRecord.res)}`);
+
+    const wrongTipRecord = await run(src, {
+      fixes: [PASS_PACKET, closeOutRecordOnly("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      closeOuts: [{ nonSemantic: true, editsPresent: true, recordOnlySuffix: true, recordOnlyRange: WRONG_RECORD_RANGE, why: "a valid-looking range ending at another commit" }],
+      cycle: { closeOut: "on" },
+    });
+    check("a valid-looking suffix range that does not end at the pass tip cannot conclude", wrongTipRecord.seen.reviewPrompts.length === 2 && !wrongTipRecord.res.closeOut && !wrongTipRecord.res.recordOnly, `${wrongTipRecord.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(wrongTipRecord.res)}`);
+
+    // The left boundary is not merely another well-shaped OID. Use the
+    // previously reviewed tip as the checker's dynamic answer: it is exactly
+    // `passBase`, but it is NOT the final commit's parent. The old structural
+    // gate accepted this whole-pass range because only its right endpoint was
+    // compared; the independent packet reading now rejects it.
+    const reviewedTip = "c".repeat(40);
+    const wrongParentRecord = await run(src, {
+      fixes: [{ ...PASS_PACKET, finalSha: reviewedTip }, closeOutRecordOnly("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      closeOuts: [{ nonSemantic: true, editsPresent: true, recordOnlySuffix: true, recordOnlyRange: `${reviewedTip}..${RECORD_TIP}`, why: "the checker mislabeled the whole pass range as the final record commit" }],
+      cycle: { closeOut: "on" },
+    });
+    check("a checker returning the dynamic passBase..finalSha range cannot substitute the wrong parent for the final commit's actual parent", wrongParentRecord.seen.reviewPrompts.length === 2 && !wrongParentRecord.res.closeOut && !wrongParentRecord.res.recordOnly, `${wrongParentRecord.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(wrongParentRecord.res)}`);
+
     const declined = await run(src, {
       fixes: [PASS_PACKET, closeOutDecline("r1-1"), idle],
       reviews: [FAIL("off-by-one in the cap check"), OK],
@@ -1332,6 +1418,27 @@ for (const name of WORKFLOWS) {
     const blank = await run(src, { fixes: [PASS_PACKET, idle], reviews: [OK], packets: [CLEAN_READING, { ...UNMEASURED_READING, detail: "   " }] });
     check("and a measurer that returned a BLANK detail still leaves the entry saying which silence it was", blank.res.verdict === "error" && (blank.res.packetChecks || []).at(-1).detail === "the measuring subagent reported no detail", JSON.stringify(blank.res.packetChecks));
 
+    // An EMPTY parent is not an unknown reading. A root commit and every
+    // shallow clone leave HEAD with no parent to name, and that is a definitive
+    // answer: the packet is measured and adopted like any other, since nothing
+    // but a one-commit record suffix ever needed the boundary.
+    const PARENTLESS_READING = { ...CLEAN_READING, headParentSha: "", detail: "clean and idle; HEAD has no parent in this repository" };
+    const parentless = await run(src, { fixes: [PASS_PACKET, idle], reviews: [OK], packets: [PARENTLESS_READING, PARENTLESS_READING] });
+    check("a HEAD with no parent is measured and adopted, never refused as unknown", parentless.res.verdict === "pass" && (parentless.res.packetChecks || []).length === 2 && (parentless.res.packetChecks || []).every((p) => p.measured === true && p.headParentSha === ""), `${parentless.res.verdict}/${JSON.stringify(parentless.res.packetChecks)}`);
+
+    // And the direction that loses: with no parent measured, no well-shaped
+    // range can equal it, so a record suffix is refused for want of the
+    // boundary it claims rather than accepted on the checker's word. That costs
+    // the normal reviewer round, which is the safe way to lose.
+    const parentlessSuffix = await run(src, {
+      fixes: [PASS_PACKET, closeOutRecordOnly("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      closeOuts: [{ nonSemantic: true, editsPresent: true, recordOnlySuffix: true, recordOnlyRange: RECORD_RANGE, why: "a diagnosis-only suffix whose parent nothing could measure" }],
+      packets: [CLEAN_READING, { ...PARENTLESS_READING, headSha: RECORD_TIP }],
+      cycle: { closeOut: "on" },
+    });
+    check("but a record suffix over that parentless HEAD is refused for want of the boundary it names", parentlessSuffix.seen.reviewPrompts.length === 2 && !parentlessSuffix.res.closeOut && !parentlessSuffix.res.recordOnly, `${parentlessSuffix.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(parentlessSuffix.res)}`);
+
     // The too-strict direction: a measured-clean cycle behaves exactly as it
     // did, and every pass it adopted has a reading behind it.
     const clean = await run(src, { fixes: [PASS_PACKET, fixOn("r1-1"), idle], reviews: [FAIL("r1"), OK] });
@@ -1344,7 +1451,18 @@ for (const name of WORKFLOWS) {
     const opaque = await run(src, { fixes: [{ ...PASS_PACKET, summary: SENTINEL }, idle], reviews: [OK] });
     const measurePrompt = opaque.seen.packetPrompts[0] || "";
     check("the measuring turn is given no account of the pass whose worktree it judges", !measurePrompt.includes(SENTINEL), "measurement prompt");
-    check("and is asked for BOTH readings, the operation state being the one porcelain hides", /--porcelain/.test(measurePrompt) && /CHERRY_PICK_HEAD/.test(measurePrompt) && /prints EMPTY porcelain/.test(measurePrompt), "measurement prompt");
+    check("and is asked for the state plus HEAD and its parent, the operation state being the one porcelain hides", /--porcelain/.test(measurePrompt) && /CHERRY_PICK_HEAD/.test(measurePrompt) && /prints EMPTY porcelain/.test(measurePrompt) && /git show -s --format=%P HEAD/.test(measurePrompt) && /actual parent/i.test(measurePrompt), "measurement prompt");
+
+    // Where the parent comes from is not a spelling preference. `git rev-parse
+    // HEAD^` exits non-zero wherever HEAD has no parent to name — a root
+    // commit, and every shallow clone, whose boundary commit git grafts
+    // parentless — so a brief asking for it turns an ordinary depth-1 checkout
+    // into `measured: false`, and the refusal above then rejects EVERY packet
+    // whether or not any close-out suffix needed a boundary. HEAD's own commit
+    // header answers without the parent object, and an absent parent is a
+    // definitive EMPTY rather than a reading nobody could take.
+    check("with the parent taken from HEAD's own header rather than by resolving `HEAD^`, which a root commit and every shallow clone make fail", /rather than from `git rev-parse HEAD\^`/.test(measurePrompt) && /EXITS NON-ZERO/.test(measurePrompt) && /shallow clone/.test(measurePrompt), "measurement prompt");
+    check("and an absent parent read as a DEFINITIVE empty, so a depth-1 checkout does not refuse every packet", /DEFINITIVE answer, not a failed reading/.test(measurePrompt) && /keep `measured: true`/.test(measurePrompt), "measurement prompt");
     check("and told to observe only — never to repair the tree it is measuring", /OBSERVE ONLY/.test(measurePrompt) && /do NOT stage, commit, reset, clean, stash, abort/.test(measurePrompt), "measurement prompt");
 
     // The brief must not FORBID the reading it is sent to take. Every other
