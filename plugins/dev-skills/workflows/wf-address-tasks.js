@@ -737,14 +737,22 @@ const CYCLE_FIX_SCHEMA = {
 // independent turn resolves HEAD and its parent, so a later close-out check
 // cannot make an arbitrary valid-looking left OID the boundary of the final
 // record-only commit.
+// That parent is read out of HEAD's OWN commit header rather than by resolving
+// `HEAD^`, which exits non-zero wherever HEAD has no parent to name — a root
+// commit, and every shallow clone, whose boundary commit git grafts parentless.
+// Asking for `HEAD^` would make an ordinary depth-1 checkout report
+// `measured: false` and refuse EVERY packet, close-out granted or not. So an
+// absent parent is a definitive reading — empty — and only what NEEDS the
+// parent loses: an empty value matches no well-shaped range, so a close-out
+// suffix claim is refused there rather than accepted on the checker's word.
 const CYCLE_PACKET_CHECK_SCHEMA = {
   type: "object",
   properties: {
-    measured: { type: "boolean", description: "True only if ALL readings ran and produced definitive answers — the porcelain status, every operation-state marker, HEAD's full OID, and HEAD's parent's full OID. False when any could not be taken; the remaining fields are then best-effort and must NOT be read as clean or authoritative." },
+    measured: { type: "boolean", description: "True only if ALL readings ran and produced definitive answers — the porcelain status, every operation-state marker, HEAD's full OID, and HEAD's parent, whose definitive answer is EMPTY where HEAD has no parent (a root commit, or a shallow clone's grafted boundary). False only when a reading could not be TAKEN; the remaining fields are then best-effort and must NOT be read as clean or authoritative." },
     dirty: { type: "array", items: { type: "string" }, description: "One `git status --porcelain -z --untracked-files=all` record per changed path: the 2-character `XY` status field, a space, then the repo-relative path (the current path for a rename/copy). The `XY ` prefix is kept verbatim — its first column can be a space. Empty when the tree is clean." },
     operation: { type: "string", description: "The Git operation still in progress, named by the state marker that showed it — `rebase-merge`, `rebase-apply`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG` — or EMPTY when none is. Name the marker you actually found, never an inference: most of these leave the porcelain clean, which is the whole reason this reading is taken separately." },
     headSha: { type: "string", description: "The exact full OID printed by `git rev-parse HEAD`, or empty when it could not be resolved." },
-    headParentSha: { type: "string", description: "The exact full OID printed by `git rev-parse HEAD^`, or empty when it could not be resolved. This is independent proof of the only left boundary a final one-commit record suffix may name." },
+    headParentSha: { type: "string", description: "The exact full OID of HEAD's first parent, read from HEAD's own commit header (`git show -s --format=%P HEAD`) rather than by resolving `HEAD^`, which errors where no parent is nameable. EMPTY where HEAD has no parent at all — a root commit, or a shallow clone's grafted boundary — which is a definitive reading rather than a failed one. This is independent proof of the only left boundary a final one-commit record suffix may name, so an empty value proves none and refuses every suffix claim." },
     detail: { type: "string", description: "One line: what the readings found, or — when `measured` is false — which reading could not be taken and why." },
   },
   required: ["measured", "dirty", "operation", "headSha", "headParentSha", "detail"],
@@ -1632,7 +1640,7 @@ Take the worktree-state readings and the independent commit-identity readings in
 
 2. The operation state, which the porcelain does NOT show. Check \`git rev-parse --git-path rebase-merge\` and \`rebase-apply\` — each PRINTS a path whether or not it exists, so test the path for existence rather than reading the exit status — plus \`MERGE_HEAD\`, \`CHERRY_PICK_HEAD\`, \`REVERT_HEAD\`, and \`BISECT_LOG\`. Return the marker that showed the operation in \`operation\`, or the empty string when none is in progress. A tree left mid-rebase or mid-cherry-pick prints EMPTY porcelain, so reading 1 alone would call it clean — that is the exact case this step exists for.
 
-3. Resolve \`git rev-parse HEAD\` and \`git rev-parse HEAD^\`, returning their exact full OIDs as \`headSha\` and \`headParentSha\`. Do not derive either from a packet or another agent's prose: this reading is the independent committed-repository proof used to ensure a claimed final one-commit suffix starts at the final commit's ACTUAL parent. If either command cannot resolve, return the fields you have and \`measured: false\`.
+3. Resolve \`git rev-parse HEAD\` as \`headSha\`, and HEAD's FIRST PARENT out of HEAD's own commit header — \`git show -s --format=%P HEAD\`, keeping only the first OID it prints — as \`headParentSha\`. Do not derive either from a packet or another agent's prose: this reading is the independent committed-repository proof used to ensure a claimed final one-commit suffix starts at the final commit's ACTUAL parent. Take the parent from that header rather than from \`git rev-parse HEAD^\`, which EXITS NON-ZERO wherever HEAD has no parent to name — a root commit, and every shallow clone, whose boundary commit git grafts parentless. A header that prints no parent is a DEFINITIVE answer, not a failed reading: return \`headParentSha: ""\`, keep \`measured: true\`, and say in \`detail\` that HEAD has no parent here — the packet is then measured and adopted as usual, and only a claim that needs the parent (a one-commit record suffix) is refused for want of proof. If \`git rev-parse HEAD\` itself cannot resolve, return the fields you have and \`measured: false\`.
 
 Report only what YOU measured. You were given no account of what the pass did or claims, on purpose. If a reading cannot be taken at all — git will not run, the path is missing, it is not a checkout — return \`measured: false\` with whatever you have and say in \`detail\` which reading failed and why. Do not fail, and do not guess a clean answer: unknown is a usable result here and a wrong "clean" is not. Edit nothing.`;
 }

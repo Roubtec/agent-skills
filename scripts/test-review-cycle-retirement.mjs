@@ -74,7 +74,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 199;
+const CHECKS_PER_LEG = 203;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -1418,6 +1418,27 @@ for (const name of WORKFLOWS) {
     const blank = await run(src, { fixes: [PASS_PACKET, idle], reviews: [OK], packets: [CLEAN_READING, { ...UNMEASURED_READING, detail: "   " }] });
     check("and a measurer that returned a BLANK detail still leaves the entry saying which silence it was", blank.res.verdict === "error" && (blank.res.packetChecks || []).at(-1).detail === "the measuring subagent reported no detail", JSON.stringify(blank.res.packetChecks));
 
+    // An EMPTY parent is not an unknown reading. A root commit and every
+    // shallow clone leave HEAD with no parent to name, and that is a definitive
+    // answer: the packet is measured and adopted like any other, since nothing
+    // but a one-commit record suffix ever needed the boundary.
+    const PARENTLESS_READING = { ...CLEAN_READING, headParentSha: "", detail: "clean and idle; HEAD has no parent in this repository" };
+    const parentless = await run(src, { fixes: [PASS_PACKET, idle], reviews: [OK], packets: [PARENTLESS_READING, PARENTLESS_READING] });
+    check("a HEAD with no parent is measured and adopted, never refused as unknown", parentless.res.verdict === "pass" && (parentless.res.packetChecks || []).length === 2 && (parentless.res.packetChecks || []).every((p) => p.measured === true && p.headParentSha === ""), `${parentless.res.verdict}/${JSON.stringify(parentless.res.packetChecks)}`);
+
+    // And the direction that loses: with no parent measured, no well-shaped
+    // range can equal it, so a record suffix is refused for want of the
+    // boundary it claims rather than accepted on the checker's word. That costs
+    // the normal reviewer round, which is the safe way to lose.
+    const parentlessSuffix = await run(src, {
+      fixes: [PASS_PACKET, closeOutRecordOnly("r1-1"), idle],
+      reviews: [FAIL("a wording nit"), OK],
+      closeOuts: [{ nonSemantic: true, editsPresent: true, recordOnlySuffix: true, recordOnlyRange: RECORD_RANGE, why: "a diagnosis-only suffix whose parent nothing could measure" }],
+      packets: [CLEAN_READING, { ...PARENTLESS_READING, headSha: RECORD_TIP }],
+      cycle: { closeOut: "on" },
+    });
+    check("but a record suffix over that parentless HEAD is refused for want of the boundary it names", parentlessSuffix.seen.reviewPrompts.length === 2 && !parentlessSuffix.res.closeOut && !parentlessSuffix.res.recordOnly, `${parentlessSuffix.seen.reviewPrompts.length} review prompt(s)/${JSON.stringify(parentlessSuffix.res)}`);
+
     // The too-strict direction: a measured-clean cycle behaves exactly as it
     // did, and every pass it adopted has a reading behind it.
     const clean = await run(src, { fixes: [PASS_PACKET, fixOn("r1-1"), idle], reviews: [FAIL("r1"), OK] });
@@ -1430,7 +1451,18 @@ for (const name of WORKFLOWS) {
     const opaque = await run(src, { fixes: [{ ...PASS_PACKET, summary: SENTINEL }, idle], reviews: [OK] });
     const measurePrompt = opaque.seen.packetPrompts[0] || "";
     check("the measuring turn is given no account of the pass whose worktree it judges", !measurePrompt.includes(SENTINEL), "measurement prompt");
-    check("and is asked for the state plus HEAD and its parent, the operation state being the one porcelain hides", /--porcelain/.test(measurePrompt) && /CHERRY_PICK_HEAD/.test(measurePrompt) && /prints EMPTY porcelain/.test(measurePrompt) && /rev-parse HEAD\^/.test(measurePrompt) && /actual parent/i.test(measurePrompt), "measurement prompt");
+    check("and is asked for the state plus HEAD and its parent, the operation state being the one porcelain hides", /--porcelain/.test(measurePrompt) && /CHERRY_PICK_HEAD/.test(measurePrompt) && /prints EMPTY porcelain/.test(measurePrompt) && /git show -s --format=%P HEAD/.test(measurePrompt) && /actual parent/i.test(measurePrompt), "measurement prompt");
+
+    // Where the parent comes from is not a spelling preference. `git rev-parse
+    // HEAD^` exits non-zero wherever HEAD has no parent to name — a root
+    // commit, and every shallow clone, whose boundary commit git grafts
+    // parentless — so a brief asking for it turns an ordinary depth-1 checkout
+    // into `measured: false`, and the refusal above then rejects EVERY packet
+    // whether or not any close-out suffix needed a boundary. HEAD's own commit
+    // header answers without the parent object, and an absent parent is a
+    // definitive EMPTY rather than a reading nobody could take.
+    check("with the parent taken from HEAD's own header rather than by resolving `HEAD^`, which a root commit and every shallow clone make fail", /rather than from `git rev-parse HEAD\^`/.test(measurePrompt) && /EXITS NON-ZERO/.test(measurePrompt) && /shallow clone/.test(measurePrompt), "measurement prompt");
+    check("and an absent parent read as a DEFINITIVE empty, so a depth-1 checkout does not refuse every packet", /DEFINITIVE answer, not a failed reading/.test(measurePrompt) && /keep `measured: true`/.test(measurePrompt), "measurement prompt");
     check("and told to observe only — never to repair the tree it is measuring", /OBSERVE ONLY/.test(measurePrompt) && /do NOT stage, commit, reset, clean, stash, abort/.test(measurePrompt), "measurement prompt");
 
     // The brief must not FORBID the reading it is sent to take. Every other
