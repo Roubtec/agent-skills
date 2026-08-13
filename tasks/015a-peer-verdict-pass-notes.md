@@ -4,7 +4,7 @@
 
 ## Why this task exists
 
-`peer-review-run` (powbox task 029) reduces a peer reviewer's output to a coarse helper-side `verdict` field (`pass | issues | none`, alongside the fuller `outcome`) plus an `artifactDir` pointer; the peer itself still emits only `VERDICT: PASS` or `VERDICT: ISSUES`, and nothing here changes that. The full review prose stays on disk and is not surfaced by default. Today's peer-prompt convention only asks for findings on `ISSUES`, so a `VERDICT: PASS` is a dead end — any nits the reviewer noticed are generated and then discarded. That wastes the tokens already spent and is mildly lossy: a "pass, but consider X" is more useful to a maintainer than a blunt pass.
+`peer-review-run` (powbox task 029) reduces a peer reviewer's output to a coarse helper-side `verdict` field (`pass | issues | none`, alongside the fuller `outcome`) plus an `artifactDir` pointer; the peer itself still emits only `VERDICT: PASS` or `VERDICT: ISSUES`, and nothing here changes that. On the actual task-015 parent, both providers deliberately retain raw launches because the helper exposes no documented provider-neutral full-review payload; those raw paths capture the provider's full result artifact directly. Today's peer-prompt convention only asks for findings on `ISSUES`, so a `VERDICT: PASS` is a dead end — any nits the reviewer noticed are generated and then discarded. That wastes the tokens already spent and is mildly lossy: a "pass, but consider X" is more useful to a maintainer than a blunt pass.
 
 The opportunity ("Lever 1" from the powbox PR #113 review discussion) is to shape the peer's OUTPUT so a pass can carry a few terse, optionally-actionable notes when justified, while keeping the orchestrator's context lean. This is a prompt-convention refinement, not new machinery: no second LLM to parse the first, and no change to the deterministic, hermetic helper.
 
@@ -26,7 +26,7 @@ Out of scope (explicitly do NOT do):
 
 - any change to powbox's `docker/shared/peer-review-run` itself — it stays prompt-neutral, deterministic, and hermetically testable (its offline unit suite, 198 checks at time of writing, must keep passing untouched). The `verdict` enum and the result schema do NOT change;
 - a second LLM invocation to parse the peer's output;
-- extracting or structuring findings INTO the result JSON — notes stay free text in `artifactDir`, read by the consumer only when it wants them;
+- extracting or structuring findings INTO the result JSON — notes stay compact free text copied from the current raw provider result; after the prerequisite-bound helper conversion, the consumer reads them only from the documented `reviewFile` or `reviewText`, never by guessing a path below `artifactDir`;
 - auto-acting on pass-notes — they are advisory because of where the bar sits (above), not because the gate was relaxed; a clean pass must not be turned into a fix round.
 
 ## Context and references
@@ -46,7 +46,7 @@ Out of scope (explicitly do NOT do):
 
 - Preserve the token contract: the `VERDICT:` line stays first and verbatim (`VERDICT: PASS` / `VERDICT: ISSUES`), so the helper's `detect_verdict` needs no change.
 - Conserve OUTPUT tokens, not reasoning: tell the peer to think freely, then report tersely. Do NOT instruct it to reason less — that would weaken adversarial-review depth, which is the whole point of a second opinion.
-- Guard context sprawl: bound the notes (a small cap), require `path:line` anchors and a hard per-note word budget, and instruct "omit the notes section when there is nothing material." The consumer surfaces pass-notes as a compact list and must not pull the full review prose into the orchestrator's main context on a pass.
+- Guard context sprawl: bound the notes (a small cap), require `path:line` anchors and a hard per-note word budget, and instruct "omit the notes section when there is nothing material." The current raw-path consumer copies only that bounded section from its captured provider result; the future helper-path consumer applies the same extraction to documented `reviewFile`/`reviewText` content. Neither path pulls the full review prose into the orchestrator's main context on a pass, and neither parses undocumented helper artifact filenames.
 - Frame pass-notes as advisory ("note, not necessarily fix") to avoid scope creep on an otherwise-clean pass.
 - Keep the Claude-side and Codex-side renderings in lockstep, and do not expand scope (no new result fields, no helper changes).
 
@@ -72,4 +72,4 @@ Out of scope (explicitly do NOT do):
 
 ## Deferred option (do not implement here)
 
-"Lever 2" — an out-of-context subagent that reads `artifactDir` and returns a distilled digest — remains available if peer output ever balloons enough that even the terse notes are heavy. It fits the architecture (map-reduce over the artifact) but is a heavier tool for a marginal gain, and Lever 1 (short output at the source) should make it unnecessary. Recorded as an option only; not scheduled.
+"Lever 2" — an out-of-context subagent that reads the provider's documented complete-review payload and returns a distilled digest — remains available if peer output ever balloons enough that even the terse notes are heavy. It fits the architecture (map-reduce over the artifact) but is a heavier tool for a marginal gain, and Lever 1 (short output at the source) should make it unnecessary. Recorded as an option only; not scheduled.

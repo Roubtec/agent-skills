@@ -74,7 +74,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 176;
+const CHECKS_PER_LEG = 186;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -107,7 +107,7 @@ function loadCycle(src, agent) {
   // every renderer outside a cycle today, so driving the cycle can never
   // exercise the default and only a direct call can.
   // eslint-disable-next-line no-new-func
-  return new Function("agent", "parallel", "pipeline", "log", "phase", `${section}\nreturn { runReviewCycle, cycleReviewChecks, runCyclePeerStage, createCyclePeerThrottle, cyclePeerTrouble, normalizeCyclePeerResult, CYCLE_PEER_SCHEMA };`)(
+  return new Function("agent", "parallel", "pipeline", "log", "phase", `${section}\nreturn { runReviewCycle, cycleReviewChecks, cyclePeerPrompt, runCyclePeerStage, createCyclePeerThrottle, cyclePeerTrouble, normalizeCyclePeerResult, CYCLE_PEER_SCHEMA };`)(
     agent,
     parallel,
     pipeline,
@@ -1493,9 +1493,9 @@ for (const name of WORKFLOWS) {
         return { outcome: "available", detail: "" };
       }
       peerPrompts.push(prompt);
-      return { outcome: "passed", findings: [], notes: "", detail: "" };
+      return { outcome: "passed", findings: [], notes: "- src/example.js:7 — Naming could be clearer.", detail: "" };
     };
-    const { runCyclePeerStage, createCyclePeerThrottle, cyclePeerTrouble } = loadCycle(src, agent);
+    const { cyclePeerPrompt, runCyclePeerStage, createCyclePeerThrottle, cyclePeerTrouble } = loadCycle(src, agent);
     check(
       "the helper's exact empty and malformed reasons are eligible forfeiture trouble",
       cyclePeerTrouble({ outcome: "forfeited", reason: "provider exited 0 with an empty final message" }) &&
@@ -1535,6 +1535,28 @@ for (const name of WORKFLOWS) {
       peerState,
       peerThrottle,
     });
+    const renderedPeer = cyclePeerPrompt(cycle, state(1));
+    check(
+      "the peer prompt preserves the first-line verdict and keeps advisory notes compact and optional",
+      /exactly `VERDICT: PASS` or `VERDICT: ISSUES` on the first line/.test(renderedPeer) &&
+        /NOTES \(advisory; not necessarily fixes\)/.test(renderedPeer) &&
+        /at most three one-line bullets/.test(renderedPeer) &&
+        /at most 15 words/.test(renderedPeer) &&
+        /Omit the section entirely/.test(renderedPeer),
+      "rendered peer convention",
+    );
+    check(
+      "the prompt keeps every fix-worthy minor under ISSUES rather than pass notes",
+      /Anything you believe ought to be fixed remains a finding under `VERDICT: ISSUES`, even when minor; never demote it to a pass-note/.test(renderedPeer),
+      "pass-note bar",
+    );
+    check(
+      "the consumer extracts notes from raw output now and only documented helper payloads later",
+      /copy into `notes` ONLY valid bullets/.test(renderedPeer) &&
+        /documented `reviewFile`\/`reviewText` payload only/.test(renderedPeer) &&
+        /never enumerate `artifactDir`, guess a filename/.test(renderedPeer),
+      "raw/future payload split",
+    );
     const calls = Array.from({ length: 6 }, (_, i) => runCyclePeerStage(cycle, state(i + 1)));
     await ownerEntered;
     await Promise.resolve();
@@ -1542,9 +1564,99 @@ for (const name of WORKFLOWS) {
     releaseOwner();
     const results = await Promise.all(calls);
     check("every concurrent peer stage completes after the owner releases", results.length === 6 && results.every((r) => r.outcome === "passed"), JSON.stringify(results.map((r) => r.outcome)));
+    check("a passing peer's bounded note survives structurally while clean notes may stay empty", results.every((r) => r.notes === "- src/example.js:7 — Naming could be clearer."), JSON.stringify(results.map((r) => r.notes)));
     check("the parallel first wave executes exactly one real preflight", preflightCalls === 1, `${preflightCalls} preflight call(s)`);
     check("all six peer launches fan out after it and skip duplicate probes", peerPrompts.length === 6 && peerPrompts.every((p) => /Preflight: already done by the run-level shared preflight/.test(p)), `${peerPrompts.length} peer prompt(s)`);
     check("the shared state records completion and leaves no in-progress latch", peerState.preflighted === true && peerState.preflightInProgress === null, JSON.stringify(peerState));
+
+    const summarizedPass = async (notes) => {
+      const fixPrompts = [];
+      const summaryAgent = async (prompt, opts) => {
+        const label = (opts && opts.label) || "";
+        if (label === "fix#1") {
+          fixPrompts.push(prompt);
+          return { ...PASS_PACKET, changed: true, dispositions: [] };
+        }
+        if (label === "fix#2") {
+          fixPrompts.push(prompt);
+          return { ...idle };
+        }
+        if (label.startsWith("packet#")) return { measured: true, dirty: [], operation: "", detail: "" };
+        if (label === "review#1") return { ...OK };
+        if (label === "peer-preflight") return { outcome: "available", detail: "" };
+        if (label === "peer#1") return { outcome: "passed", findings: [], notes, detail: "" };
+        return null;
+      };
+      const loaded = loadCycle(src, summaryAgent);
+      return { result: await loaded.runReviewCycle({ ...CYCLE, peer: "on" }), fixPrompts };
+    };
+    const noteMarker = "- src/example.js:7 — Naming could be clearer.";
+    const notedPass = await summarizedPass(noteMarker);
+    check(
+      "a passing peer note is surfaced compactly but never reaches a fixer or opens another reviewer round",
+      notedPass.result.verdict === "pass" && notedPass.result.rounds === 1 && notedPass.fixPrompts.length === 2 && notedPass.fixPrompts.every((p) => !p.includes(noteMarker)) && notedPass.result.peerRounds.length === 1 && notedPass.result.peerRounds[0].detail === `advisory notes:\n${noteMarker}`,
+      `${JSON.stringify(notedPass.result.peerRounds)} / ${notedPass.result.rounds} round(s) / ${notedPass.fixPrompts.filter((p) => p.includes(noteMarker)).length} fixer leak(s)`,
+    );
+    const cleanPass = await summarizedPass("");
+    check(
+      "a clean peer pass keeps the round detail empty and the usual one-line outcome",
+      cleanPass.result.verdict === "pass" && cleanPass.result.rounds === 1 && cleanPass.result.peerRounds.length === 1 && cleanPass.result.peerRounds[0].outcome === "passed" && cleanPass.result.peerRounds[0].detail === "",
+      JSON.stringify(cleanPass.result.peerRounds),
+    );
+
+    const untrustedNotes = [
+      "- src/one.js:1 — First valid advisory note.",
+      "- src/bad.js:2 - Wrong separator is discarded.",
+      "- src/long.js:3 — one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen",
+      "- src/two.js:4 — Second valid advisory note.",
+      "- src/no-line.js — Missing line anchor is discarded.",
+      "- src/three.js:6 — Third valid advisory note.",
+      "- src/four.js:7 — Fourth valid note is surplus.",
+    ].join("\n");
+    const boundedPass = await summarizedPass(untrustedNotes);
+    const boundedNotes = [
+      "- src/one.js:1 — First valid advisory note.",
+      "- src/two.js:4 — Second valid advisory note.",
+      "- src/three.js:6 — Third valid advisory note.",
+    ].join("\n");
+    const boundedDetail = boundedPass.result.peerRounds[0].detail;
+    const summaryMatch = String(boundedDetail || "").match(/(?:^|\n)advisory notes:\n([\s\S]*)$/);
+    const humanSummary = String((summaryMatch && summaryMatch[1]) || "").split("\n").filter(Boolean);
+    check(
+      "consumer normalization discards malformed and over-budget notes, then caps the valid human summary at three",
+      boundedPass.result.verdict === "pass" && boundedPass.result.rounds === 1 && boundedDetail === `advisory notes:\n${boundedNotes}` && JSON.stringify(humanSummary) === JSON.stringify(boundedNotes.split("\n")) && boundedPass.fixPrompts.every((p) => !p.includes("First valid advisory note") && !p.includes("Wrong separator") && !p.includes("sixteen") && !p.includes("Fourth valid note")),
+      `${JSON.stringify(boundedPass.result.peerRounds)} / ${JSON.stringify(humanSummary)} / ${boundedPass.result.rounds} round(s)`,
+    );
+    const malformedOnly = await summarizedPass("NOTES (advisory; not necessarily fixes)\n- src/no-line.js — Missing line.\n- src/long.js:3 — one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen sixteen");
+    check(
+      "consumer normalization returns empty notes when no exact bounded bullet survives",
+      malformedOnly.result.verdict === "pass" && malformedOnly.result.rounds === 1 && malformedOnly.result.peerRounds[0].detail === "" && malformedOnly.fixPrompts.every((p) => !p.includes("Missing line") && !p.includes("sixteen")),
+      JSON.stringify(malformedOnly.result.peerRounds),
+    );
+
+    const issuesNoteMarker = "- src/example.js:8 — Advisory-only marker.";
+    const issuesFixPrompts = [];
+    const issuesAgent = async (prompt, opts) => {
+      const label = (opts && opts.label) || "";
+      if (label.startsWith("fix#")) issuesFixPrompts.push(prompt);
+      if (label === "fix#1") return { ...PASS_PACKET, changed: true, dispositions: [] };
+      if (label === "fix#2") return { ...PASS_PACKET, changed: false, dispositions: [{ findingId: "p1-1", finding: "fix the defect", origin: "peer", disposition: "declined", detail: "reviewed and declined" }] };
+      if (label === "fix#3") return { ...idle };
+      if (label.startsWith("packet#")) return { measured: true, dirty: [], operation: "", detail: "" };
+      if (label.startsWith("review#")) return { ...OK };
+      if (label === "peer-preflight") return { outcome: "available", detail: "" };
+      if (label === "peer#1") return { outcome: "issues", findings: [{ claim: "fix the defect" }], notes: issuesNoteMarker, detail: "" };
+      if (label === "peer#2") return { outcome: "passed", findings: [], notes: "", detail: "" };
+      if (label === "ground#1") return { verdicts: [] };
+      return null;
+    };
+    const issuesLoaded = loadCycle(src, issuesAgent);
+    const issuesResult = await issuesLoaded.runReviewCycle({ ...CYCLE, peer: "on" });
+    check(
+      "advisory notes beside an issues verdict stay in peerRounds and out of every later fixer input",
+      issuesResult.verdict === "pass" && issuesResult.rounds === 2 && issuesResult.peerRounds[0].detail === `advisory notes:\n${issuesNoteMarker}` && issuesFixPrompts.length === 3 && issuesFixPrompts.every((p) => !p.includes(issuesNoteMarker)),
+      `${JSON.stringify(issuesResult.peerRounds)} / ${issuesResult.rounds} round(s) / ${issuesFixPrompts.filter((p) => p.includes(issuesNoteMarker)).length} fixer leak(s)`,
+    );
 
     let preflightAttempts = 0;
     let peerAttempts = 0;
@@ -1625,6 +1737,19 @@ for (const name of WORKFLOWS) {
       "normalization carries the flag through while still recording the outcome non-blocking",
       normalizeCyclePeerResult(survivor).teardownFailure === true && normalizeCyclePeerResult(survivor).outcome === "failed",
       JSON.stringify(normalizeCyclePeerResult(survivor)),
+    );
+    // Notes exist only below a verdict, so one arriving beside a non-verdict
+    // outcome — including an unrecognized outcome, which lands on `forfeited`
+    // carrying whatever came with it — is a misparse, not advice.
+    const strayNote = "- src/stray.js:9 — Bullet beside no verdict at all.";
+    const verdictNotes = normalizeCyclePeerResult({ outcome: "passed", findings: [], notes: strayNote, reason: "", teardownFailure: false });
+    const strayNotes = ["unavailable", "timeout", "failed", "forfeited", "not-a-real-outcome"].map((outcome) =>
+      normalizeCyclePeerResult({ outcome, findings: [], notes: strayNote, reason: "", teardownFailure: false }),
+    );
+    check(
+      "notes survive a verdict but are dropped for every outcome that reached none",
+      verdictNotes.notes === strayNote && strayNotes.every((r) => r.notes === ""),
+      `${JSON.stringify(verdictNotes.notes)} / ${JSON.stringify(strayNotes.map((r) => [r.outcome, r.notes]))}`,
     );
     // A stage that died observed no survivor, so it may not manufacture the
     // stop: the flag has to come from a stage that watched the process.
@@ -1743,7 +1868,7 @@ const BATCH_CONTRACT_CHECKS = 5;
 // constant — the reuse failure this guard exists for — without ever probing or
 // signalling a real process. The fake `kill` records every operand and can
 // model TERM resistance, KILL death, or a teardown survivor.
-const PEER_LIFECYCLE_CHECKS = 20;
+const PEER_LIFECYCLE_CHECKS = 21;
 {
   console.log("# codex review-cycle prose — peer lifecycle negative controls");
   const before = legOk + legFail;
@@ -1826,6 +1951,16 @@ const PEER_LIFECYCLE_CHECKS = 20;
   }
 
   const pluginsProse = readFileSync(join(here, "..", "plugins", "dev-skills", "skills", "review-cycle", "SKILL.md"), "utf8");
+  check(
+    "both prose mirrors send only fresh Reviewer remarks to confirmation and keep peer notes human-summary-only",
+    [prose, pluginsProse].every(
+      (text) =>
+        /hand the passing fresh Reviewer report/.test(text) &&
+        /The peer's advisory notes are excluded: they remain human-summary-only/.test(text) &&
+        /never enter a fixer or final-confirmation prompt/.test(text),
+    ),
+    "confirmation/pass-note boundary",
+  );
   check("the direct Codex provider gets bounded TERM, death verification, safe KILL, and a survivor stop", /send TERM[\s\S]*at most ten seconds[\s\S]*send KILL only if[\s\S]*ten more seconds[\s\S]*stop the cycle and escalate/.test(pluginsProse), "raw Codex lifecycle prose");
   check(
     "the future Codex helper gets a private session artifact root and a caller wait that covers retry plus reaping",

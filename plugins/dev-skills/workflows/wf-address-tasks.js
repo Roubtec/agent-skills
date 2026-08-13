@@ -848,7 +848,7 @@ const CYCLE_PEER_SCHEMA = {
         required: ["severity", "claim"],
       },
     },
-    notes: { type: "string", description: "Anything after the verdict worth carrying (pass-notes), verbatim." },
+    notes: { type: "string", description: "Only valid bullets from the optional bounded NOTES section, preserved verbatim; empty when no valid advisory bullets survive (including a clean pass) and for every outcome that is not passed/issues, which reaches no verdict and so has no NOTES section to copy." },
     detail: { type: "string", description: "For a non-passed/issues outcome: why (logged out, timed out after retry, empty output, provider crash...)." },
     reason: { type: "string", description: "The provider/helper reason verbatim; distinguishes empty/garbled forfeitures for the adaptive throttle. Always emit it: an empty string where the outcome carries no reason, never an omitted field." },
     teardownFailure: { type: "boolean", description: "The ONE result that is not non-blocking: true ONLY when a provider process this stage launched could not be proven dead after the bounded TERM/KILL sequence. The cycle stops on it for operator intervention. False on every ordinary path, including this stage's own failures." },
@@ -1062,9 +1062,6 @@ function cycleFindingsBlock(findings) {
   }
   if (Array.isArray(findings.peer) && findings.peer.length) {
     parts.push(`### Peer (codex) findings\n\n${JSON.stringify(findings.peer, null, 2)}`);
-  }
-  if (findings.peerNotes) {
-    parts.push(`### Peer (codex) notes\n\n${findings.peerNotes}`);
   }
   return parts.length ? `\n## Findings to dispose (each given VERBATIM — reconcile overlap or conflict yourself)\n\nWhere the reviewer and the peer name the SAME fact and differ only in whether it gates, the two channels agree on the substance and split on severity: dispose it on the merits and say which way, rather than re-litigating a fact neither disputes. Framing only — the gate is unchanged, and a grounded finding keeps its full force.\n\n${parts.join("\n\n")}\n` : "";
 }
@@ -1313,7 +1310,7 @@ ${preflightStep}
    \`\`\`
 
    Ordinary stdout is detached to \`/dev/null\`, never merged into \`$outfile\` or \`$stderr_file\`; the \`-o\` artifact remains authoritative. The handoff records the peer PID plus Linux \`/proc/<pid>/stat\` fields 22 (start time), 5 (process group), and 6 (session). In every later Bash call, parse the stat record by stripping everything through its final closing parenthesis plus following space before counting fields (the comm field may contain spaces or \`)\`), require exactly those four positive-decimal handoff values, and compare all three current fields with the persisted values before every \`kill -0\`, TERM, or KILL. Missing or mismatched identity means the original peer is dead; never probe or signal the reused number. On the loose roughly 12-minute timeout, TERM the identity-checked direct provider PID, poll for at most ten seconds, KILL only if the identity still matches, then poll for at most ten more seconds. If it survives, do not retry, do not decide the round, and do not advance: return immediately with \`teardownFailure\` true, outcome \`failed\`, and a \`detail\` naming the surviving PID and the probe that still answered. The cycle stops on that flag for operator intervention; a non-blocking outcome alone would let it keep fixing and publishing while the provider is still alive. Retry ONCE with fresh paths only after confirmed death. Never infer a process group from plain \`nohup … &\`, signal a wait supervisor, use \`pkill -f\`, or replace this with a capped foreground call. If recovering by the unique \`-o\` path is unavoidable, disambiguate \`pgrep -f\` to the codex peer binary after excluding the probing shell and every ancestor: one survivor is alive, none dead, more than one indeterminate and signals nothing; persist that PID's complete identity before handing it to another shell. The identity-checked probe target is the only signal target. Auth/usage errors are \`unavailable\` without retry.
-5. Read \`$outfile\` even when the liveness probe has just gone dead: a non-empty artifact with a \`VERDICT:\` line is authoritative. A \`VERDICT: PASS\` line → outcome \`passed\` (anything after it goes to \`notes\` verbatim). A \`VERDICT: ISSUES\` line → outcome \`issues\`, with every numbered finding mapped verbatim into \`findings\` (severity from its \`blocking\`/\`minor\` tag — default \`blocking\` when untagged — plus its \`file:line\` as \`location\` and the finding text as \`claim\`; do not summarize, merge, or rewrite). No verdict line, or empty/unintelligible output → \`forfeited\`, with \`reason\` exactly identifying \`empty output\` or \`garbled output\` where that is what happened. A timeout after retry is \`timeout\`; a provider crash or exhausted non-auth retry is \`failed\`. Every outcome carries \`reason\`: the provider diagnostic verbatim where one exists, otherwise the empty string — never omitted, and never invented.
+5. Read \`$outfile\` even when the liveness probe has just gone dead: a non-empty artifact with a \`VERDICT:\` line is authoritative. A \`VERDICT: PASS\` line → outcome \`passed\`. A \`VERDICT: ISSUES\` line → outcome \`issues\`, with every numbered finding mapped verbatim into \`findings\` (severity from its \`blocking\`/\`minor\` tag — default \`blocking\` when untagged — plus its \`file:line\` as \`location\` and the finding text as \`claim\`; do not summarize, merge, or rewrite). For either verdict, copy into \`notes\` ONLY valid bullets immediately below the exact \`NOTES (advisory; not necessarily fixes)\` heading: at most three \`- path:line — note\` lines whose note is at most 15 words. Preserve those bullets verbatim; ignore malformed, surplus, or over-budget entries and all other prose, including the verification line and findings. With no valid bullets, return empty \`notes\`. Once the prerequisite-bound helper path is active, apply the same extraction to its documented \`reviewFile\`/\`reviewText\` payload only; never enumerate \`artifactDir\`, guess a filename, or parse a provider-specific envelope. No verdict line, or empty/unintelligible output → \`forfeited\`, with \`reason\` exactly identifying \`empty output\` or \`garbled output\` where that is what happened. A timeout after retry is \`timeout\`; a provider crash or exhausted non-auth retry is \`failed\`. Every outcome carries \`reason\`: the provider diagnostic verbatim where one exists, otherwise the empty string — never omitted, and never invented.
 
 ## Peer prompt (write this text to the prompt file verbatim, filling only the placeholders)
 
@@ -1321,7 +1318,7 @@ You are an independent read-only peer reviewer. Review the committed state of br
 
 ${JSON.stringify(evidence, null, 2)}
 
-Reply with exactly \`VERDICT: PASS\` or \`VERDICT: ISSUES\`, then \`VERIFICATION: STATIC (executed no tests)\`, followed for issues by numbered findings each tagged \`blocking\` or \`minor\`, with \`file:line\` and a one-line rationale.
+Reason as deeply as needed, then keep the final output compact. Put exactly \`VERDICT: PASS\` or \`VERDICT: ISSUES\` on the first line, then \`VERIFICATION: STATIC (executed no tests)\`. For issues, follow with numbered findings each tagged \`blocking\` or \`minor\`, with \`file:line\` and a one-line rationale. Anything you believe ought to be fixed remains a finding under \`VERDICT: ISSUES\`, even when minor; never demote it to a pass-note. After either verdict, when justified, you may add the exact heading \`NOTES (advisory; not necessarily fixes)\` followed by at most three one-line bullets shaped \`- path:line — note\`, with at most 15 words in each note. These notes are below the fix bar. Omit the section entirely when nothing material falls below that bar.
 
 ## Output
 
@@ -1334,6 +1331,17 @@ function cyclePeerPreflightPrompt() {
 ${CYCLE_DESTROY_BOUNDARY}
 
 If \`command -v codex\` fails, return \`{ "outcome": "unavailable", "detail": "missing binary" }\`. Otherwise run \`codex login status\`. If it succeeds, return \`{ "outcome": "available", "detail": "" }\`. If it fails and \`CODEX_API_KEY\` is unset, return unavailable with the exact login diagnostic in \`detail\`. If it fails while \`CODEX_API_KEY\` is set, return available because the environment key may authenticate the real invocation. Return only the schema; do not throw or launch codex exec.`;
+}
+
+function normalizeCyclePeerNotes(notes) {
+  const valid = [];
+  for (const line of String(notes || "").split(/\r?\n/)) {
+    const bullet = line.match(/^- (\S(?:.*\S)?):([1-9][0-9]*) — (\S(?:.*\S)?)$/);
+    if (!bullet || (bullet[3].match(/\S+/g) || []).length > 15) continue;
+    valid.push(line);
+    if (valid.length === 3) break;
+  }
+  return valid.join("\n");
 }
 
 // The peer stage NEVER fails the round: a dead subagent (null return /
@@ -1350,6 +1358,13 @@ If \`command -v codex\` fails, return \`{ "outcome": "unavailable", "detail": "m
 // contract silently discards. A script-synthesized result never sets it — a
 // stage that died proves nothing about a provider — so the flag only ever comes
 // from a stage that observed the survivor itself.
+//
+// `findings` and `notes` are gated on a verdict for one shared reason: each is
+// copied out of a section the peer prompt writes only under `VERDICT: PASS` or
+// `VERDICT: ISSUES`, so a non-verdict outcome arriving with either holds a
+// misparse of output the stage itself judged unusable — an unknown outcome
+// normalized to `forfeited` keeps whatever came with it — and surfacing those
+// bullets would attribute advice to a peer that reached no verdict.
 function normalizeCyclePeerResult(res) {
   if (!res || typeof res !== "object") {
     return { outcome: "forfeited", findings: [], notes: "", reason: "", teardownFailure: false, detail: "peer subagent returned nothing (died or failed schema validation); recorded non-blocking", synthesized: true };
@@ -1360,7 +1375,7 @@ function normalizeCyclePeerResult(res) {
   return {
     outcome,
     findings: outcome === "issues" && Array.isArray(res.findings) ? res.findings : [],
-    notes: typeof res.notes === "string" ? res.notes : "",
+    notes: gating ? normalizeCyclePeerNotes(res.notes) : "",
     reason: typeof res.reason === "string" ? res.reason : "",
     teardownFailure: res.teardownFailure === true,
     detail: typeof res.detail === "string" && res.detail
@@ -1841,10 +1856,11 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     it — the boolean alone says only that the map leaving is not the judged
 //     one, which is the shape that used to lose the judged one outright),
 //   proactive, finalSha, notes, reviewerNotes,
-//   peerRounds ({ round, outcome, detail, reason } entries, plus teardownFailure
-//     on the one round that carried it — a provider the peer stage could not
-//     prove dead, which ends the cycle as an `error` rather than degrading to a
-//     non-blocking outcome), peerThrottle,
+//   peerRounds ({ round, outcome, detail, reason } entries, where `detail`
+//     appends only the peer prompt's bounded advisory bullets when present,
+//     plus teardownFailure on the one round that carried it — a provider the
+//     peer stage could not prove dead, which ends the cycle as an `error`
+//     rather than degrading to a non-blocking outcome), peerThrottle,
 //   discardedPeerFindings, undisposed, outstanding, artifactDir,
 //   closeOut (present only when a trivial-round close-out ENDED the cycle:
 //     the pass, the range, and the non-semantic edits that shipped unreviewed),
@@ -2552,7 +2568,8 @@ async function runReviewCycle(cycle) {
     // one path it cannot: a runtime that hands back a null parallel slot. The
     // cycle's `disabled` outcome is not helper vocabulary, so carry it as-is.
     const peer = rawPeer && rawPeer.outcome === "disabled" ? rawPeer : normalizeCyclePeerResult(rawPeer);
-    peerRounds.push({ round: rounds, outcome: peer.outcome, detail: peer.detail, reason: peer.reason || "", ...(peer.teardownFailure ? { teardownFailure: true } : {}) });
+    const peerRoundDetail = [peer.detail, peer.notes ? `advisory notes:\n${peer.notes}` : ""].filter(Boolean).join("\n");
+    peerRounds.push({ round: rounds, outcome: peer.outcome, detail: peerRoundDetail, reason: peer.reason || "", ...(peer.teardownFailure ? { teardownFailure: true } : {}) });
     // The one peer condition that is not non-blocking, checked before anything
     // else this round produced. A provider nobody could prove dead may still be
     // reading the worktree the next fixer would write to, so the cycle stops for
@@ -2660,7 +2677,6 @@ async function runReviewCycle(cycle) {
         reviewer: [...(review.issues || []), ...assessmentIssues].map((f, i) => ({ ...f, id: `r${rounds}-${i + 1}` })),
         reviewerNotes: review.notes || "",
         peer: peerGating.map((f, i) => ({ ...f, id: `p${rounds}-${i + 1}` })),
-        peerNotes: peer.notes || "",
       };
       // A failed round at the cap stops HERE — no further fixer pass may run,
       // or its changes would land committed but never reviewed.
@@ -2717,13 +2733,14 @@ async function runReviewCycle(cycle) {
     if (cycle.mode === "light") {
       return result("pass", "reviewer passed (light mode: final confirmation pass skipped)", {
         ...flakeCarried,
-        undisposed: [review.notes, peer.notes].filter(Boolean),
+        undisposed: [review.notes].filter(Boolean),
       });
     }
 
-    // Full mode: one final fixer confirmation pass over the passing reports, so
-    // pass-notes get considered by an agent with full context, never dropped by
-    // the orchestrator. If it disposes nothing new, the loop terminates above;
+    // Full mode: one final fixer confirmation pass over the passing reviewer's
+    // remarks. Peer pass-notes remain advisory output in `peerRounds`: they are
+    // never fixer input and therefore cannot cause edits or another round. If
+    // the confirmation disposes nothing new, the loop terminates above;
     // anything it fixes or disputes goes through another reviewer round.
     confirming = true;
     findings = {
@@ -2731,7 +2748,6 @@ async function runReviewCycle(cycle) {
       reviewer: [],
       reviewerNotes: review.notes || "(no notes — confirm nothing in the passing reports needs acting on)",
       peer: [],
-      peerNotes: peer.notes || "",
     };
   }
 }
