@@ -22,8 +22,9 @@
  * no-op only where `HEAD`, the tip the run started from, and the PR's recorded
  * `headRefOid` all name one commit; any other zero-item run takes the
  * ZERO-ITEM PATH — it continues through the rebase points, the nested cycle,
- * and (unless `no-push`) publication, since its tip carries work the PR head
- * does not. A zero-item run makes no synthetic commit and posts no per-thread
+ * and (unless `no-push`) publication, since its tip either carries work the PR
+ * head does not or moved under the run — neither is a no-op to report. A
+ * zero-item run makes no synthetic commit and posts no per-thread
  * reply or resolve; its publication still posts the Summary comment — the
  * completion gate requires one on every published run — with pings under the
  * unchanged rules.
@@ -592,12 +593,12 @@ ${body}
 ${fence}`;
 }
 
-function fixInstructions(packet, priorRecord) {
+function fixInstructions(packet, priorRecord, zeroItem) {
   return `You are addressing review feedback on PR #${packet.pr.number} (base \`${packet.pr.base}\`). The PR's remote head ref is \`${packet.pr.branch}\`; that is the push target, which may be a different name for a local off-shoot — edit only the checked-out branch named in the contract above, never the remote ref name.
 
 This run is unattended (hands-off): decide low-stakes ambiguity best-effort and record it; for high-stakes ambiguity that needs an authoritative decision, do NOT guess — mark the item \`ambiguous-skipped\` and leave it open.
 ${packet.items && packet.items.length ? "" : `
-This run gathered ZERO work items — the ZERO-ITEM PATH: no unresolved thread and no included standalone item, while the branch tip is not the recorded PR head, so the committed work the PR does not carry is what this cycle exists to review. There is nothing to triage and nothing to fix: make NO commit of any kind — a zero-item run makes no synthetic commit — leave the tree exactly as it stands, and return an EMPTY \`workReport\`. The per-item contract below then has no entries to produce; everything else about this pass is the reviewer's fresh look at the branch against its base.
+This run gathered ZERO work items — the ZERO-ITEM PATH: ${zeroItem.why}. There is nothing to triage and nothing to fix: make NO commit of any kind in this pass — a zero-item run makes no synthetic commit; a finding a later round of this cycle hands you is fixed normally — leave the tree exactly as it stands, and return an EMPTY \`workReport\`. The per-item contract below then has no entries to produce; everything else about this pass is the reviewer's fresh look at the branch against its base.
 `}
 Triage each work item into exactly one kind and act:
 - \`actionable-fixed\` — implement the fix. Commit at logical milestones; keep commits buildable where practical.
@@ -631,7 +632,7 @@ Which of those fields are structurally enforced: every field publication acts on
 // ordered to carry dispositions forward would have to reconstruct them from the
 // tree (the re-triage this round is not) and a reviewer told to catch a quiet
 // relabel would have no baseline to compare against.
-function rebaseReverifyInstructions(packet, rebase, priorReport) {
+function rebaseReverifyInstructions(packet, rebase, priorReport, zeroItem) {
   return `## This branch was rebased AFTER these dispositions passed review
 
 Every work item below was already triaged, acted on, and reviewed to a pass — on the base the branch sat on before. The branch has since been rebased onto \`${rebase.effectiveBase}\` (${rebase.detail || "no detail reported"}), so this round exists to confirm each disposition still holds on the replayed tree and to fix what the replay broke. It is NOT a fresh triage.
@@ -644,7 +645,7 @@ Every work item below was already triaged, acted on, and reviewed to a pass — 
 
 ${JSON.stringify(priorReport || [], null, 2)}
 
-${fixInstructions(packet)}`;
+${fixInstructions(packet, undefined, zeroItem)}`;
 }
 
 function rebaseReverifyCriteria(rebase, priorReport) {
@@ -730,6 +731,15 @@ You may reclassify any item.`;
 // 390156a declined, and items 3 and 4 are pre-merge check polling and
 // `gh pr merge --delete-branch`, which nothing in this pipeline performs.
 function publishPrompt(packet, dispositions, flags, deviations, deviationAssessments, recordOnly, preRebaseRecordOnly) {
+  // The zero-item arm below states WHICH tip disagreement continued the run,
+  // read from the tips the gather reported and trimmed exactly as the caller's
+  // zero-item decision reads them: the unconditional "a tip the recorded PR
+  // head did not carry" is false on the moved-under branch (`startingHead !=
+  // finalHead == headOid`), where the reviewed tip IS the recorded head and
+  // the push above moves nothing.
+  const startTip = typeof packet.pr.startingHead === "string" ? packet.pr.startingHead.trim() : "";
+  const finalTip = typeof packet.pr.finalHead === "string" ? packet.pr.finalHead.trim() : "";
+  const recordedTip = typeof packet.pr.headOid === "string" ? packet.pr.headOid.trim() : "";
   const dev = Array.isArray(deviations) ? deviations : [];
   const assessments = Array.isArray(deviationAssessments) ? deviationAssessments : [];
   const deviationLead = dev.length
@@ -801,7 +811,7 @@ Report a STRUCTURED result: set \`published: true\` ONLY if the push and every r
      - ambiguous-skipped → leave open.
    - \`standalone\` items (no thread to resolve): address them only in the Summary comment below; do NOT call \`resolveReviewThread\`. Record their outcome by \`url\`.
    Avoid duplicate replies (check for an equivalent prior reply by the authed user); resolve only after the reply succeeds.
-5. Summary comment: post a top-level "Summary of Review Fixes" (\`gh pr comment\`) — ${dev.length ? "opening with the locked-decision deviation section defined below, then " : ""}what was fixed (with proactive same-pattern fixes), a prominent "Pushed back — please re-examine" section, a "Deferred to follow-up tasks" section listing each deferral with its committed task file (agent-proposed deferrals flagged for confirmation), and any ambiguous/skipped or newly-arrived items${recordOnly || preRebaseRecordOnly ? ", plus the delivery-run failure section defined below" : ""}. Write "codex"/"claude"/"copilot" plain (no bare @-mentions) so only the dedicated pings below trigger a re-review. Put its URL in \`summaryCommentUrl\`.${dispositions.length ? "" : ` This is a ZERO-ITEM publication — the run gathered no unresolved thread and no standalone item, and what the push above publishes is a reviewed local tip the recorded PR head did not carry — so the Summary comment STILL POSTS (it is what makes that push legible on the PR) and says exactly that in place of the per-item sections. Step 4 above has NOTHING to act on: post no reply and resolve no thread — there is no item to serve — and report \`threadOutcomes: []\`, the complete account of a zero-item publication.`}
+5. Summary comment: post a top-level "Summary of Review Fixes" (\`gh pr comment\`) — ${dev.length ? "opening with the locked-decision deviation section defined below, then " : ""}what was fixed (with proactive same-pattern fixes), a prominent "Pushed back — please re-examine" section, a "Deferred to follow-up tasks" section listing each deferral with its committed task file (agent-proposed deferrals flagged for confirmation), and any ambiguous/skipped or newly-arrived items${recordOnly || preRebaseRecordOnly ? ", plus the delivery-run failure section defined below" : ""}. Write "codex"/"claude"/"copilot" plain (no bare @-mentions) so only the dedicated pings below trigger a re-review. Put its URL in \`summaryCommentUrl\`.${dispositions.length ? "" : ` This is a ZERO-ITEM publication — the run gathered no unresolved thread and no standalone item, and continued because ${finalTip === recordedTip ? `the tip moved under the run: it started on \`${startTip}\` and the gather ended on the recorded PR head \`${recordedTip}\`, so the reviewed tip is one the PR already records and the push above had nothing new to move` : `the reviewed local tip \`${finalTip}\` is not the recorded PR head \`${recordedTip}\` — work the PR did not carry, which is what the push above publishes`} — so the Summary comment STILL POSTS (it is what makes this zero-item run legible on the PR) and says exactly that in place of the per-item sections. Step 4 above has NOTHING to act on: post no reply and resolve no thread — there is no item to serve — and report \`threadOutcomes: []\`, the complete account of a zero-item publication.`}
 6. Pings (only after push + summary succeeded, AND only when the push ACTUALLY advanced the remote branch with new commits or rewritten history — never on an \`Everything up-to-date\` no-op push): ${flags.pingCodex ? "post a dedicated comment \`@codex review\`. " : ""}${flags.pingClaude ? "post a dedicated comment \`@claude review\`. " : ""}${flags.pingCopilot ? "request a fresh Copilot review with \`gh pr edit <PR#> --add-reviewer @copilot\` (the canonical CLI request; needs gh >= 2.88.0). Do NOT post an \`@copilot review\` comment — a bare \`@copilot\` mention drives Copilot's coding agent (it can start editing the branch), not its reviewer. The add-reviewer request re-triggers Copilot's review even on a PR it already reviewed (tested working — not a silent no-op), and never misfires into the coding agent. GUARD: before issuing it, confirm the installed \`gh\` supports the \`@copilot\` reviewer value (gh >= 2.88.0 — e.g. check \`gh --version\`); on an older powbox base image where \`gh pr edit --add-reviewer @copilot\` errors, SKIP the Copilot request WITHOUT failing publication — the push and summary already succeeded, so this is non-fatal: keep \`published: true\`, record it in \`pings\` as 'copilot: skipped (gh too old)', and note that the base image needs refreshing (\`agent-update\`) or a one-off manual re-request from the PR's web reviewer menu. CONFIRM the request you issued from the TIMELINE, never from \`gh pr view --json reviewRequests\`: that GraphQL-backed field reads back empty on a request that succeeded, and REST \`gh api repos/{owner}/{repo}/pulls/<PR#>/requested_reviewers\` lists one only while it is still pending, so it can confirm a request but never refute one — the durable evidence is a \`review_requested\` event in \`gh api --paginate repos/{owner}/{repo}/issues/<PR#>/timeline\`. Snapshot the \`id\`s of the events naming that reviewer BEFORE issuing the request and afterwards require one that is NOT in that snapshot, matching by event id rather than against your own clock, and paginate BOTH reads. Where no unseen event appears, record it in \`pings\` as 'copilot: requested, unconfirmed' and carry on with whatever pings remain: do not fail publication, and do NOT issue the request again." : ""}${!flags.pingCodex && !flags.pingClaude && !flags.pingCopilot ? "none requested. " : "If more than one ping was requested, perform each as its own dedicated action (never one comment mentioning several bots). "}If nothing new was pushed this run (the remote ref already pointed at your HEAD — e.g. every disposition was already-addressed/push-back, or the branch was up to date), SKIP all pings even if requested above: re-requesting a review with nothing new to look at would spin the review->address->review loop forever. Set \`pushedNewCommits\` to whether the push advanced the branch, and record which pings (if any) you posted in \`pings\`.${deviationLead}${flakeRecord}
 
 ## Dispositions to publish
@@ -1447,9 +1457,13 @@ if (
 // already ahead of the recorded head (an unpublished commit an earlier run
 // left), or a tip that moved under this run — takes the ZERO-ITEM PATH: it
 // continues through the rebase points, the nested cycle, and, on a push run,
-// publication, because that tip carries work the PR does not, and "nothing to
-// address — nothing was pushed" would leave it unreviewed and unpushed while
-// reading exactly like a genuinely clean PR.
+// publication, because a tip ahead of the recorded head carries work the PR
+// does not, a tip that moved under the run leaves no attested no-op to report,
+// and "nothing to address — nothing was pushed" would cover either while
+// reading exactly like a genuinely clean PR. Which disagreement continued the
+// run is `zeroItem.why`'s to state; the fix brief embeds it, and the publish
+// brief re-reads the same reported tips, so neither asserts the ahead-of-PR
+// claim unconditionally.
 // The comparison is the skill's three-way one — `address-reviews`' terminal
 // zero-feedback shortcut states the same rule for the batch — taken on the
 // tips the GATHER REPORTED rather than on inference, and the tips are compared
@@ -1817,7 +1831,7 @@ let cycle = await workflow("wf-review-cycle", {
     title: `pr-${packet.pr.number}`,
     // The prior record goes to the ROUND-1 fixer only, which is the one round
     // that triages: this is where replaying it saves the judgment it holds.
-    instructions: fixInstructions(packet, packet.priorRecord),
+    instructions: fixInstructions(packet, packet.priorRecord, zeroItemRun),
     reviewInstructions: reviewCriteria(),
     items: packet.items,
   },
@@ -2270,7 +2284,7 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
       maxRounds: reverifyBudget,
       scope: {
         title: `pr-${packet.pr.number}-post-rebase`,
-        instructions: rebaseReverifyInstructions(packet, second.rebase, priorReport),
+        instructions: rebaseReverifyInstructions(packet, second.rebase, priorReport, zeroItemRun),
         reviewInstructions: rebaseReverifyCriteria(second.rebase, priorReport),
         items: packet.items,
       },

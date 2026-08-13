@@ -141,7 +141,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 230;
+const EXPECTED_CHECKS = 234;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1027,7 +1027,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
 // alone cannot pick between them: a TERMINAL no-op only where `HEAD`, the tip
 // the run started from, and the recorded `headRefOid` are all one commit, and
 // the ZERO-ITEM PATH — the normal review and, unless `no-push`, publication —
-// everywhere else, because that tip carries work the PR head does not. The
+// everywhere else, because that tip either carries work the PR head does not
+// or moved under the run, and neither is a no-op to report. The
 // scenarios here drive the DISCRIMINATING COMPARISON (one packet per tip moved,
 // so a pairwise or item-count-only rewrite fails by name), the fail-closed stop
 // on missing evidence, and the zero-item path through the pipeline it already
@@ -1123,6 +1124,46 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /no synthetic commit/.test(ziPublished.seen.cycleOpts.opts.scope.instructions || "") &&
       /EMPTY `workReport`/.test(ziPublished.seen.cycleOpts.opts.scope.instructions || ""),
     ((ziPublished.seen.cycleOpts || {}).opts || { scope: {} }).scope.instructions ? "rendered without the zero-item paragraph" : "no cycle dispatched",
+  );
+  // The premise each zero-item brief states is the DISAGREEMENT that actually
+  // continued the run, never an unconditional ahead-of-PR claim: the three-way
+  // gate also routes `startingHead != finalHead == headOid` here, where the
+  // reviewed tip IS the recorded head and a push moves nothing — so "a tip the
+  // PR head did not carry" would be false on that branch. The fix brief embeds
+  // `zeroItem.why` and the publish brief re-reads the same reported tips; the
+  // AHEAD case names the tip the PR head lacks.
+  const ziAheadInstructions = ((ziPublished.seen.cycleOpts || {}).opts || { scope: {} }).scope.instructions || "";
+  check(
+    "the zero-item briefs state the AHEAD disagreement: fix premise and Summary arm name the tip the PR head lacks",
+    /local tip `beefed11` is not the recorded PR head `deadbeef`/.test(ziAheadInstructions) &&
+      /reviewed local tip `beefed11` is not the recorded PR head `deadbeef`/.test(ziPublishBrief) &&
+      /which is what the push above publishes/.test(ziPublishBrief),
+    JSON.stringify({ fixPremiseNamesTips: /local tip `beefed11` is not the recorded PR head `deadbeef`/.test(ziAheadInstructions), summaryArm: (ziPublishBrief.match(/ZERO-ITEM publication[^]{0,220}/) || [])[0] }),
+  );
+  check(
+    "and the fix brief scopes its no-commit order to the pass — a later round's finding is fixed normally",
+    /make NO commit of any kind in this pass/.test(ziAheadInstructions) &&
+      /a finding a later round of this cycle hands you is fixed normally/.test(ziAheadInstructions),
+    (ziAheadInstructions.match(/make NO commit[^—]*(—[^—]*)?/) || ["no no-commit order rendered"])[0],
+  );
+  // The MOVED-UNDER case, driven whole: `startingHead != finalHead == headOid`
+  // continues — only a fresh review can vouch for a tip that moved under the
+  // run — but the reviewed tip is one the PR already records, so the push has
+  // nothing new to move and neither brief may claim the PR head lacks it.
+  const ziMoved = await run(gathered({ reconcile: { outcome: "work" }, startingHead: "beefed11" }), { args: "push", cycles: [{ ...CYCLE_PASS_EMPTY, finalSha: "deadbeef" }] });
+  const ziMovedInstructions = ((ziMoved.seen.cycleOpts || {}).opts || { scope: {} }).scope.instructions || "";
+  const ziMovedPublish = ziMoved.seen.publishPrompts[0] || "";
+  check(
+    "a moved-under zero-item run's fix brief premise is the moved tip, not a PR-head-lacks-it claim",
+    ziMoved.status === "fixed-published" && /tip moved under this run/.test(ziMovedInstructions) &&
+      !/is not the recorded PR head/.test(ziMovedInstructions),
+    JSON.stringify({ status: ziMoved.status, premise: (ziMovedInstructions.match(/ZERO-ITEM PATH[^.]*/) || ["no zero-item paragraph rendered"])[0] }),
+  );
+  check(
+    "and its Summary arm says the reviewed tip is one the PR already records — nothing new to move — while the Summary still posts",
+    /gather ended on the recorded PR head `deadbeef`/.test(ziMovedPublish) && /nothing new to move/.test(ziMovedPublish) &&
+      !/did not carry/.test(ziMovedPublish) && /Summary comment STILL POSTS/.test(ziMovedPublish),
+    JSON.stringify({ summaryArm: (ziMovedPublish.match(/ZERO-ITEM publication[^]{0,260}/) || ["no zero-item arm rendered"])[0] }),
   );
   // The same path local-only: `no-push` reviews the tip and stops, and the
   // empty map records NOTHING — `leaveDispositionRecord`'s no-entries rule is
