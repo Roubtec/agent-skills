@@ -60,7 +60,7 @@ function check(name, cond, detail) {
 // it — an edit that drops one, or a guard that swallows a throw, would pass.
 // Counting the oks too lets the run assert it executed the whole suite. Bump
 // this deliberately when adding or removing a check; the number is the assertion.
-const EXPECTED_CHECKS = 199;
+const EXPECTED_CHECKS = 203;
 
 async function scenario(name, fn) {
   try {
@@ -394,17 +394,23 @@ await scenario("re-scan entry names one held branch", async () => {
 //     OWN name and another held branch's SLUG (task `a` on branch `b`, task `b`
 //     on branch `task/b`). That one string matches two held task entries, but
 //     it is still only one reported branch — `collisionIsAttributable` must
-//     count distinct normalized names, not just matched tasks, or this shape
-//     clears both sides on a scan that never named a second branch at all.
+//     count distinct normalized names, not just matched tasks. A third held
+//     branch `c`, which the singleton entry names neither by branch nor by
+//     slug, makes the stakes concrete: a task-count-only predicate would read
+//     the entry as attributable (it still matches two of the three held
+//     tasks), clear `c`'s empty still-colliding set, spend a re-review on it,
+//     and deliver it — the very inversion 027's 3+ branch rule exists to stop.
+//     Requiring 2+ distinct names voids the whole packet instead, so all three
+//     stay held on "established nothing."
 await scenario("re-scan entry is a cross-task branch/slug alias", async () => {
   const out = await run({
-    held: [mkHeldWithBranch("a", "b"), mkHeldWithBranch("b", "task/b")],
-    collisions: [clash(["b", "task/b"])],
+    held: [mkHeldWithBranch("a", "b"), mkHeldWithBranch("b", "task/b"), mkHeldWithBranch("c", "task/c")],
+    collisions: [clash(["b", "task/b", "task/c"])],
     packets: { resolution: renamed(["b"]), rescan: { collisions: [clash(["b"])] } },
   });
   check("cross-task alias re-scan → nothing delivers", out.deliverable.length === 0, JSON.stringify(slugs(out.deliverable)));
-  check("cross-task alias re-scan → both branches held", JSON.stringify(slugs(out.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(out.held)));
-  check("cross-task alias re-scan → every hold says the re-scan established nothing", out.held.length === 2 && out.held.every((h) => /established nothing/.test(h.detail) && /by hand/.test(h.detail)), JSON.stringify(out.held.map((h) => h.detail)));
+  check("cross-task alias re-scan → all three branches held, including the one the entry never named", JSON.stringify(slugs(out.held)) === JSON.stringify(["a", "b", "c"]), JSON.stringify(slugs(out.held)));
+  check("cross-task alias re-scan → every hold says the re-scan established nothing", out.held.length === 3 && out.held.every((h) => /established nothing/.test(h.detail) && /by hand/.test(h.detail)), JSON.stringify(out.held.map((h) => h.detail)));
   check("cross-task alias re-scan → no re-review is paid for", !labels(out.calls).some((l) => l.startsWith("re-review:")), JSON.stringify(labels(out.calls)));
 });
 
@@ -423,6 +429,27 @@ await scenario("re-scan entry duplicates one branch under two spellings", async 
   check("duplicate-normalized re-scan → both branches held", JSON.stringify(slugs(out.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(out.held)));
   check("duplicate-normalized re-scan → every hold says the re-scan established nothing", out.held.length === 2 && out.held.every((h) => /established nothing/.test(h.detail) && /by hand/.test(h.detail)), JSON.stringify(out.held.map((h) => h.detail)));
   check("duplicate-normalized re-scan → no re-review is paid for", !labels(out.calls).some((l) => l.startsWith("re-review:")), JSON.stringify(labels(out.calls)));
+});
+
+// 5h. Mirrors 5f's shape but the OTHER way around: the re-scan reports TWO
+//     distinct known names that both belong to ONE held task alone (`task/a`
+//     is task a's branch, `a` is task a's own slug), matching only task a and
+//     leaving task b unmatched. The distinct-name conjunct is satisfied (two
+//     distinct normalized names) but the distinct-task conjunct is not, so
+//     the packet must still void the re-scan on that existing check — the
+//     same malformed singleton-alias-shaped packet the discovery suite pins
+//     in `test-collision-discovery.mjs`, exercised here at the post-resolution
+//     re-scan the task notes call out by name.
+await scenario("re-scan entry names two known branches but only one held task", async () => {
+  const out = await run({
+    held: [mkHeld("a"), mkHeld("b")],
+    collisions: [clash(["task/a", "task/b"])],
+    packets: { resolution: renamed(["task/a"]), rescan: { collisions: [clash(["task/a", "a"])] } },
+  });
+  check("two-names-one-task re-scan → nothing delivers", out.deliverable.length === 0, JSON.stringify(slugs(out.deliverable)));
+  check("two-names-one-task re-scan → both branches held", JSON.stringify(slugs(out.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(out.held)));
+  check("two-names-one-task re-scan → every hold says the re-scan established nothing", out.held.length === 2 && out.held.every((h) => /established nothing/.test(h.detail) && /by hand/.test(h.detail)), JSON.stringify(out.held.map((h) => h.detail)));
+  check("two-names-one-task re-scan → no re-review is paid for", !labels(out.calls).some((l) => l.startsWith("re-review:")), JSON.stringify(labels(out.calls)));
 });
 
 // 6. Fewer than two of a clash's branches in hand. A scan over ONE branch has no
