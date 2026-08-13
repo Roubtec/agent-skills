@@ -213,6 +213,10 @@ check("workflow hands the resolver the shared flag pattern rather than a restate
 check("workflow states its argument tokenization to the resolver", /What remains is split on whitespace AND commas, and each resulting token has its surrounding quotes stripped\. Every surviving token is exactly one raw input/.test(workflow));
 check("workflow states that a pointer can carry neither whitespace nor a comma", /a raw pointer can therefore carry neither whitespace nor a comma/.test(workflow));
 check("workflow reconciles the resolver packet with the raw argument before dispatch", /if \(!resolutionAccountsForInputs\(plan\.resolution, requiredArgPointers\(flattenBatchArgs\(args\)\)\)\)[\s\S]*error: "Could not resolve task pointers from the argument\."/.test(workflow));
+// The resolver must read the SAME flattened string the flag parser and the
+// reconciliation tokenize: raw structured `args` would JSON.stringify to
+// different token boundaries and hard-abort a legitimate invocation.
+check("workflow hands the resolver the flattened argument the other sides tokenize", /plan = await agent\(resolvePrompt\(flattenBatchArgs\(args\)\), \{ label: "resolve"/.test(workflow));
 check("workflow tells the resolver its packet is reconciled with the argument", /re-derives the raw pointer list from the argument itself and requires your packet to account for every deduplicated pointer/.test(workflow));
 check("workflow validates every plan before dispatch", /if \(!planResolutionIsExact\(plan\)\)[\s\S]*error: "Could not resolve task pointers from the argument\."/.test(workflow));
 check("workflow retains resolution on malformed plan errors", /!plan \|\| !Array\.isArray\(plan\.waves\)[\s\S]*resolution: plan && plan\.resolution \? plan\.resolution : null/.test(workflow));

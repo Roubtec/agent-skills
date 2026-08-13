@@ -3946,7 +3946,12 @@ const collisions = [];
 
 try {
   phase("Resolve batch");
-  plan = await agent(resolvePrompt(args), { label: "resolve", schema: PLAN_SCHEMA });
+  // The resolver, the flag parser, and the reconciliation below must all
+  // tokenize ONE representation of the argument. Raw `args` here would show a
+  // structured invocation (an array, an object) different token boundaries
+  // than requiredArgPointers derives from the flattened string, and the exact
+  // reconciliation would hard-abort a batch the flag parser accepted.
+  plan = await agent(resolvePrompt(flattenBatchArgs(args)), { label: "resolve", schema: PLAN_SCHEMA });
   if (!plan || !Array.isArray(plan.waves)) {
     // A batch that resolves no task is still a batch that terminated with the
     // baseline already taken, so it owes the same report as a delivering one.
