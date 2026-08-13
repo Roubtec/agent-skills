@@ -77,7 +77,7 @@ function check(name, cond, detail) {
 // does not count. Bump it deliberately when adding or removing one — a check
 // that silently stops running is invisible to a suite that only gates on
 // failures.
-const EXPECTED_CHECKS = 49;
+const EXPECTED_CHECKS = 50;
 
 // Evaluate a workflow's declaration prefix up to its documented cut marker and
 // hand back the named ones. Each is returned by an explicit reference, so a
@@ -252,7 +252,7 @@ const cycleResult = (extra) => ({
     "and licenses no repair by itself": /is not yet a mismatch to repair/.test(step3) && /On a mismatch that settled/.test(step3),
     "settles by re-reading to agreement or a repeated answer": /re-read until the answer reports `main` or repeats the same other base/.test(step3),
     "baseOk only from an agreeing read": /set `baseOk: true` only from a read that reported `main`/.test(step3),
-    "a failed repair keeps the wrong-base verdict, resting on the settled answer": /delivered with the wrong base, not delivered/.test(step3) && /naming the settled base it still carries/.test(step3),
+    "the wrong-base verdict rests on a settled answer, named in `reason`": /delivered with the wrong base, not delivered/.test(step3) && /naming the settled base it still carries/.test(step3),
     "an unsettled read is returned as unsettled, through `reason`": /naming the read that did not settle and the base it last reported/.test(step3) && /an unsettled read, not a proven wrong base/.test(step3),
   };
   const baseReadBackMissing = Object.entries(baseReadBack).filter(([, ok]) => !ok).map(([what]) => what);
@@ -260,6 +260,20 @@ const cycleResult = (extra) => ({
     "the PR brief's base assertion carries what settles its read-back, and returns an unsettled read as unsettled rather than as a proven wrong base",
     baseReadBackMissing.length === 0,
     baseReadBackMissing.join("; ") || `step 3 carries all ${Object.keys(baseReadBack).length} clauses`,
+  );
+
+  // A failed `gh pr edit` is ambiguous about whether the server applied the
+  // change, so the verdict after one must rest on evidence from AFTER that last
+  // write — a settled post-failure read — not on the pre-repair settled answer;
+  // and only after a repair the server confirmed does a repeated old-base
+  // answer stop counting as settleable evidence at all.
+  check(
+    "a failed repair's verdict rests on a read settled after the failure, not on the pre-repair answer",
+    /rest the verdict on a read settled AFTER the failure/.test(step3) &&
+      /can arrive after the server applied the change/.test(step3) &&
+      /a settled `main` means the repair landed, so return `baseOk: true`/.test(step3) &&
+      /a repair the server confirmed makes even a repeated old-base answer that unsettled read, never the wrong-base verdict/.test(step3),
+    "step 3 failed-repair clause",
   );
 
   const step4 = creationBrief.slice(creationBrief.indexOf("4. If `gh pr create` fails"), creationBrief.indexOf("Return `opened: true`"));
