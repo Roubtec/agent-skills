@@ -1668,7 +1668,7 @@ const BATCH_CONTRACT_CHECKS = 5;
 // constant — the reuse failure this guard exists for — without ever probing or
 // signalling a real process. The fake `kill` records every operand and can
 // model TERM resistance, KILL death, or a teardown survivor.
-const PEER_LIFECYCLE_CHECKS = 19;
+const PEER_LIFECYCLE_CHECKS = 20;
 {
   console.log("# codex review-cycle prose — peer lifecycle negative controls");
   const before = legOk + legFail;
@@ -1777,6 +1777,18 @@ const PEER_LIFECYCLE_CHECKS = 19;
     "provider-neutral review payload prerequisite",
   );
   check("the retained Claude launch is direct-PID only and stops on a survivor", /records `\$!` as the direct provider PID[\s\S]*peer_stop_pid[\s\S]*A surviving identity stops the entire cycle/.test(prose) && !/peer_group_alive|peer_signal_group|setsid --fork/.test(prose), "Claude direct-PID lifecycle prose");
+  // Dropping the wrapper took its guarded `cd` with it, and `claude -p` has no
+  // working-directory flag of its own: without this the peer inspects whichever
+  // checkout the launching shell stood in while the embedded evidence describes
+  // the reviewed worktree — a verdict over the wrong files rather than a
+  // missing one. Both halves are asserted because either alone is satisfiable
+  // by prose that does not run, or by a `cd` nothing explains.
+  check(
+    "and it runs from the reviewed worktree, guarded, before the provider starts",
+    /\ncd -- "\$\{worktree:\?[^"\n]*\}" \|\| exit 125\n[\s\S]*\nnohup claude -p /.test(prose) &&
+      /The launching shell changes into the reviewed worktree before starting the provider, and forfeits the launch if that fails/.test(prose),
+    "peer launch working directory",
+  );
   check(
     "the retained raw verdict is proved from literal embedded evidence and exact pinned OIDs",
     /BEGIN GENERATED REVIEW DATA/.test(prose) &&
