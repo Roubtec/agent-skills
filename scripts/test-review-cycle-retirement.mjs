@@ -74,7 +74,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 185;
+const CHECKS_PER_LEG = 186;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -1737,6 +1737,19 @@ for (const name of WORKFLOWS) {
       "normalization carries the flag through while still recording the outcome non-blocking",
       normalizeCyclePeerResult(survivor).teardownFailure === true && normalizeCyclePeerResult(survivor).outcome === "failed",
       JSON.stringify(normalizeCyclePeerResult(survivor)),
+    );
+    // Notes exist only below a verdict, so one arriving beside a non-verdict
+    // outcome — including an unrecognized outcome, which lands on `forfeited`
+    // carrying whatever came with it — is a misparse, not advice.
+    const strayNote = "- src/stray.js:9 — Bullet beside no verdict at all.";
+    const verdictNotes = normalizeCyclePeerResult({ outcome: "passed", findings: [], notes: strayNote, reason: "", teardownFailure: false });
+    const strayNotes = ["unavailable", "timeout", "failed", "forfeited", "not-a-real-outcome"].map((outcome) =>
+      normalizeCyclePeerResult({ outcome, findings: [], notes: strayNote, reason: "", teardownFailure: false }),
+    );
+    check(
+      "notes survive a verdict but are dropped for every outcome that reached none",
+      verdictNotes.notes === strayNote && strayNotes.every((r) => r.notes === ""),
+      `${JSON.stringify(verdictNotes.notes)} / ${JSON.stringify(strayNotes.map((r) => [r.outcome, r.notes]))}`,
     );
     // A stage that died observed no survivor, so it may not manufacture the
     // stop: the flag has to come from a stage that watched the process.

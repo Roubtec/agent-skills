@@ -848,7 +848,7 @@ const CYCLE_PEER_SCHEMA = {
         required: ["severity", "claim"],
       },
     },
-    notes: { type: "string", description: "Only valid bullets from the optional bounded NOTES section, preserved verbatim; empty when no valid advisory bullets survive (including a clean pass)." },
+    notes: { type: "string", description: "Only valid bullets from the optional bounded NOTES section, preserved verbatim; empty when no valid advisory bullets survive (including a clean pass) and for every outcome that is not passed/issues, which reaches no verdict and so has no NOTES section to copy." },
     detail: { type: "string", description: "For a non-passed/issues outcome: why (logged out, timed out after retry, empty output, provider crash...)." },
     reason: { type: "string", description: "The provider/helper reason verbatim; distinguishes empty/garbled forfeitures for the adaptive throttle. Always emit it: an empty string where the outcome carries no reason, never an omitted field." },
     teardownFailure: { type: "boolean", description: "The ONE result that is not non-blocking: true ONLY when a provider process this stage launched could not be proven dead after the bounded TERM/KILL sequence. The cycle stops on it for operator intervention. False on every ordinary path, including this stage's own failures." },
@@ -1358,6 +1358,13 @@ function normalizeCyclePeerNotes(notes) {
 // contract silently discards. A script-synthesized result never sets it — a
 // stage that died proves nothing about a provider — so the flag only ever comes
 // from a stage that observed the survivor itself.
+//
+// `findings` and `notes` are gated on a verdict for one shared reason: each is
+// copied out of a section the peer prompt writes only under `VERDICT: PASS` or
+// `VERDICT: ISSUES`, so a non-verdict outcome arriving with either holds a
+// misparse of output the stage itself judged unusable — an unknown outcome
+// normalized to `forfeited` keeps whatever came with it — and surfacing those
+// bullets would attribute advice to a peer that reached no verdict.
 function normalizeCyclePeerResult(res) {
   if (!res || typeof res !== "object") {
     return { outcome: "forfeited", findings: [], notes: "", reason: "", teardownFailure: false, detail: "peer subagent returned nothing (died or failed schema validation); recorded non-blocking", synthesized: true };
@@ -1368,7 +1375,7 @@ function normalizeCyclePeerResult(res) {
   return {
     outcome,
     findings: outcome === "issues" && Array.isArray(res.findings) ? res.findings : [],
-    notes: normalizeCyclePeerNotes(res.notes),
+    notes: gating ? normalizeCyclePeerNotes(res.notes) : "",
     reason: typeof res.reason === "string" ? res.reason : "",
     teardownFailure: res.teardownFailure === true,
     detail: typeof res.detail === "string" && res.detail
