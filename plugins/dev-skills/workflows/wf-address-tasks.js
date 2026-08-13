@@ -555,7 +555,7 @@ Do this:
 1. Follow the \`resolve-tasks\` skill's shared contract to produce its deduplicated provenance-tagged \`paths\`, per-full-number \`numbers\`, and per-input \`notFound\` collections. Do not invent a second filename parser here.
 2. Apply the workflow's HANDS-OFF consumer policy. Include as executable every explicit path/glob selection whatever its classification, including an existing well-formed task file outside the resolved task subtree whose report status is \`outside-subtree\` (explicit wins when a path also has number provenance), plus number-selected unambiguous \`active\` paths. Exclude every number-selected \`done\`, \`deferred\`, or \`ambiguous\` classification and every \`not-found\` input; never guess an ambiguous number. Record exactly one exclusion per excluded deduplicated raw input in \`resolution.exclusions\`, with no unrelated entries: a matched number exclusion carries that raw number, \`kind: "number"\`, its full \`number\`, exact \`classification\`, every candidate path that raw input selected, and the exact reason \`number-selected <classification> task is excluded in hands-off mode\`; a \`not-found\` exclusion carries the diagnostic's exact \`raw\` and \`kind\`, \`paths: []\`, and the exact reason \`not-found input is excluded in hands-off mode\`, while omitting \`number\` and \`classification\`. Preserve the complete resolver packet beside the exclusions.
 3. Read each executable task file in full. Determine dependencies: an explicit "Depends on" field, shared infrastructure, or files/modules two tasks both create or migrate. When in doubt, treat tasks that touch the same files or migrations as dependent.
-4. Group executable tasks into WAVES: wave 1 is every task with no unmet dependency; wave 2 depends only on wave 1; and so on. Tasks within a wave are independent and will run concurrently. Put every executable resolved path in exactly one wave, and put no excluded, unknown, or unrelated path in any wave. Return an empty \`waves\` array only when resolution leaves no executable task and the exact structured exclusions above account for every excluded input; that is a successful, documented no-op. The workflow independently validates every wave path against the resolution hard list and re-derives both hands-off eligibility and exact exclusion accounting, so an exclusion or not-found diagnostic cannot explain away another executable path. An omitted executable path, a duplicate or unknown wave path, an included non-executable path, or an unaccounted empty wave set is a resolution failure, not a no-op.
+4. Group executable tasks into WAVES: wave 1 is every task with no unmet dependency; wave 2 depends only on wave 1; and so on. Tasks within a wave are independent and will run concurrently. Put every executable resolved path in exactly one wave, and put no excluded, unknown, or unrelated path in any wave. Return an empty \`waves\` array only when resolution leaves no executable task and the exact structured exclusions above account for every excluded input; that is a successful, documented no-op. The workflow independently validates every wave path against the resolution hard list and re-derives both hands-off eligibility and exact exclusion accounting, so an exclusion or not-found diagnostic cannot explain away another executable path. It also re-derives the raw pointer list from the argument itself and requires your packet to account for every deduplicated pointer — in some path's \`selectedBy\` or as a \`not-found\` diagnostic — and for no pointer the argument never named, so an internally consistent packet that silently omits one input is rejected rather than run as a smaller batch. An omitted executable path, a duplicate or unknown wave path, an included non-executable path, or an unaccounted empty wave set is a resolution failure, not a no-op.
 5. For each task set:
    - a ref-safe \`slug\` (task number + short name; also its worktree dir name),
    - a \`branch\` to implement on,
@@ -696,6 +696,44 @@ function exclusionsExactlyMatch(resolution, expected) {
     used.add(match);
   }
   return true;
+}
+
+// The packet is the resolver agent's own account of the argument, so nothing
+// inside it can show that the agent SAW every pointer: an input dropped before
+// resolution leaves a packet exactly as internally consistent as a correct one,
+// and the batch then completes without executing OR reporting that task. So the
+// raw pointers are re-derived from the argument here and reconciled with the
+// packet. This is not a second filename parser — it decides nothing about what
+// a token means, only that the packet accounts for each one exactly once.
+// `=`-bearing tokens are dropped because the documented invocation's only
+// non-pointer argument is the `peer-opinions=off` flag form; a task number,
+// path, or glob never carries one.
+function requiredArgPointers(flatArgs) {
+  const tokens = String(flatArgs == null ? "" : flatArgs)
+    .split(/[\s,]+/)
+    .map((token) => token.replace(/^["']+|["']+$/g, ""))
+    .filter((token) => token.length > 0 && !token.includes("="));
+  return [...new Set(tokens)];
+}
+
+// Exact both ways: an argument pointer the packet never mentions is dropped
+// work, and a packet raw the argument never named is invented work.
+function resolutionAccountsForInputs(resolution, required) {
+  if (!resolution || typeof resolution !== "object") return false;
+  if (!Array.isArray(resolution.paths) || !Array.isArray(resolution.notFound)) return false;
+  const accounted = new Set();
+  for (const entry of resolution.paths) {
+    if (!entry || typeof entry !== "object" || !Array.isArray(entry.selectedBy)) return false;
+    for (const selection of entry.selectedBy) {
+      if (!selection || typeof selection !== "object" || !nonEmptyString(selection.raw)) return false;
+      accounted.add(selection.raw);
+    }
+  }
+  for (const diagnostic of resolution.notFound) {
+    if (!diagnostic || typeof diagnostic !== "object" || !nonEmptyString(diagnostic.raw)) return false;
+    accounted.add(diagnostic.raw);
+  }
+  return sameUniqueStrings([...accounted], required);
 }
 
 // Every executable hard-list path must occur exactly once in the waves, and no
@@ -3896,6 +3934,12 @@ try {
     // baseline already taken, so it owes the same report as a delivering one.
     phase("Summary");
     return { error: "Could not resolve task pointers from the argument.", args, resolution: plan && plan.resolution ? plan.resolution : null, mainCheckout: await finalMainCheckoutReport() };
+  }
+  if (!resolutionAccountsForInputs(plan.resolution, requiredArgPointers(flattenBatchArgs(args)))) {
+    // The packet dropped or invented a raw pointer relative to the argument
+    // itself; an internally consistent partial packet is still lost work.
+    phase("Summary");
+    return { error: "Could not resolve task pointers from the argument.", args, resolution: plan.resolution, mainCheckout: await finalMainCheckoutReport() };
   }
   if (!planResolutionIsExact(plan)) {
     phase("Summary");
