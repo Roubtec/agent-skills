@@ -60,7 +60,7 @@ function check(name, cond, detail) {
 // it — an edit that drops one, or a guard that swallows a throw, would pass.
 // Counting the oks too lets the run assert it executed the whole suite. Bump
 // this deliberately when adding or removing a check; the number is the assertion.
-const EXPECTED_CHECKS = 191;
+const EXPECTED_CHECKS = 199;
 
 async function scenario(name, fn) {
   try {
@@ -118,6 +118,11 @@ const mkTask = (slug) => ({ slug, branch: `task/${slug}`, base: "main", path: `t
 const mkHeld = (slug, extra) => ({
   task: mkTask(slug),
   result: { slug, branch: `task/${slug}`, status: "ready", notes: "cycle notes", rounds: 2, openQuestions: [], deviations: [], peerRounds: 1, artifactDir: "/tmp/art", ...extra },
+});
+const mkTaskWithBranch = (slug, branch) => ({ slug, branch, base: "main", path: `tasks/${slug}.md`, content: `# ${slug}\n` });
+const mkHeldWithBranch = (slug, branch, extra) => ({
+  task: mkTaskWithBranch(slug, branch),
+  result: { slug, branch, status: "ready", notes: "cycle notes", rounds: 2, openQuestions: [], deviations: [], peerRounds: 1, artifactDir: "/tmp/art", ...extra },
 });
 
 const NAME = "src/shared.ts";
@@ -383,6 +388,41 @@ await scenario("re-scan entry names one held branch", async () => {
   check("one-branch re-scan entry → all three branches held", JSON.stringify(slugs(out.held)) === JSON.stringify(["a", "b", "c"]), JSON.stringify(slugs(out.held)));
   check("one-branch re-scan entry → every hold says the re-scan established nothing", out.held.length === 3 && out.held.every((h) => /established nothing/.test(h.detail) && /by hand/.test(h.detail)), JSON.stringify(out.held.map((h) => h.detail)));
   check("one-branch re-scan entry → no re-review is paid for", !labels(out.calls).some((l) => l.startsWith("re-review:")), JSON.stringify(labels(out.calls)));
+});
+
+// 5f. The re-scan reports a single name that happens to equal one held branch's
+//     OWN name and another held branch's SLUG (task `a` on branch `b`, task `b`
+//     on branch `task/b`). That one string matches two held task entries, but
+//     it is still only one reported branch — `collisionIsAttributable` must
+//     count distinct normalized names, not just matched tasks, or this shape
+//     clears both sides on a scan that never named a second branch at all.
+await scenario("re-scan entry is a cross-task branch/slug alias", async () => {
+  const out = await run({
+    held: [mkHeldWithBranch("a", "b"), mkHeldWithBranch("b", "task/b")],
+    collisions: [clash(["b", "task/b"])],
+    packets: { resolution: renamed(["b"]), rescan: { collisions: [clash(["b"])] } },
+  });
+  check("cross-task alias re-scan → nothing delivers", out.deliverable.length === 0, JSON.stringify(slugs(out.deliverable)));
+  check("cross-task alias re-scan → both branches held", JSON.stringify(slugs(out.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(out.held)));
+  check("cross-task alias re-scan → every hold says the re-scan established nothing", out.held.length === 2 && out.held.every((h) => /established nothing/.test(h.detail) && /by hand/.test(h.detail)), JSON.stringify(out.held.map((h) => h.detail)));
+  check("cross-task alias re-scan → no re-review is paid for", !labels(out.calls).some((l) => l.startsWith("re-review:")), JSON.stringify(labels(out.calls)));
+});
+
+// 5g. The same alias shape, but the re-scan names the branch TWICE with
+//     different raw spellings (`b` and `refs/heads/b`) that both normalize to
+//     one value. Two raw entries still collapse to one distinct reported
+//     branch, so this must be rejected the same way as 5f even though the
+//     entry's `branches` array has length 2.
+await scenario("re-scan entry duplicates one branch under two spellings", async () => {
+  const out = await run({
+    held: [mkHeldWithBranch("a", "b"), mkHeldWithBranch("b", "task/b")],
+    collisions: [clash(["b", "task/b"])],
+    packets: { resolution: renamed(["b"]), rescan: { collisions: [clash(["b", "refs/heads/b"])] } },
+  });
+  check("duplicate-normalized re-scan → nothing delivers", out.deliverable.length === 0, JSON.stringify(slugs(out.deliverable)));
+  check("duplicate-normalized re-scan → both branches held", JSON.stringify(slugs(out.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(out.held)));
+  check("duplicate-normalized re-scan → every hold says the re-scan established nothing", out.held.length === 2 && out.held.every((h) => /established nothing/.test(h.detail) && /by hand/.test(h.detail)), JSON.stringify(out.held.map((h) => h.detail)));
+  check("duplicate-normalized re-scan → no re-review is paid for", !labels(out.calls).some((l) => l.startsWith("re-review:")), JSON.stringify(labels(out.calls)));
 });
 
 // 6. Fewer than two of a clash's branches in hand. A scan over ONE branch has no
