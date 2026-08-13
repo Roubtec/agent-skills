@@ -31,6 +31,8 @@ const resolverClauses = [
   ["resolves the repository task folder", /Resolve the repository root and its task folder from repository guidance first/],
   ["infers another repository's convention", /Infer a documented or de-facto convention[\s\S]*do not force another repository/],
   ["uses Task 027's full-number definition", /full-number parsing definition owned by Task 027/],
+  ["admits only well-formed task specs", /well-formed task spec follows the repository's resolved task-filename convention and its task-document form[\s\S]*arbitrary file is not a task spec/],
+  ["recognizes inferred nonnumeric task schemes", /conventions inferred from the repository's real specs, such as `A-01-/],
   ["normalizes unpadded numbers", /`27` as `027`/],
   ["keeps primaries separate from suffix families", /`015b` selects only `015b`[\s\S]*`015` selects only `015`/],
   ["recurses through done and deferred", /recursively through the whole task subtree, including `done\/`, `deferred\/`, and future nested folders/],
@@ -39,7 +41,10 @@ const resolverClauses = [
   ["makes ambiguity precede folder status", /`ambiguous` takes precedence over folder classifications/],
   ["classifies glob matches individually", /Globs are never classified as a unit/],
   ["keeps number resolution in the task subtree", /Number inputs select only well-formed task specs in the resolved task subtree/],
-  ["preserves external explicit path and glob matches", /Explicit paths and globs retain the consumer's existing reach:[\s\S]*including one outside the resolved task subtree/],
+  ["preserves external explicit path and glob matches", /Explicit paths and globs retain the consumer's existing reach[\s\S]*including one outside the resolved task subtree/],
+  ["defines direct literal-path resolution", /invoked directly[\s\S]*resolve a literal path relative to the repository root/],
+  ["defines direct glob resolution without shell evaluation", /expand shell-style glob metacharacters relative to that root without shell evaluation/],
+  ["reports absent literals and unmatched globs", /absent literal or unmatched glob selects nothing/],
   ["reports external paths without inventing subtree state", /outside the resolved task subtree is not `not-found`[\s\S]*`classification` as `outside-subtree`[\s\S]*omit that number from `numbers`/],
   ["reports not-found per raw input", /For every raw number, path, or glob that selects no well-formed task file, emit one `not-found` diagnostic/],
   ["returns the three resolver collections", /`paths`:[\s\S]*`numbers`:[\s\S]*`notFound`:/],
@@ -71,7 +76,8 @@ for (const skill of ["address-tasks", "address-tasks-serialized", "reap-tasks"])
   check(`${skill} pins interactive as the available-session default`, /direct skill invocation defaults to interactive whenever the maintainer can answer in the current session/.test(pluginPreflight));
   check(`${skill} selects hands-off only explicitly or for a non-pausing runtime`, /hands-off only when the maintainer explicitly requests it or the invoking runtime cannot accept mid-run input/.test(pluginPreflight));
   check(`${skill} surfaces not-found for every input form`, /Unmatched number, path, or glob never executes[\s\S]*`not-found` diagnostic is always surfaced/i.test(pluginPreflight));
-  check(`${skill} shows bare-number mappings interactively`, /show the resolved mapping before (executing|verifying) a bare-numbers invocation/.test(pluginPreflight));
+  check(`${skill} shows mappings for every invocation containing a number`, /show the resolved mapping whenever the invocation contains any number input/.test(pluginPreflight));
+  check(`${skill} shows mappings for anomalies from every input form`, /show the mapping whenever any input form produces a non-`active` classification or `not-found` anomaly/.test(pluginPreflight));
   check(`${skill} requires per-number ambiguous selection`, /for each `ambiguous` number[\s\S]*select exactly one candidate or exclude that number/i.test(pluginPreflight));
   check(`${skill} never blanket-runs ambiguity`, /blanket continue must never (include|verify) every candidate/.test(pluginPreflight));
   check(`${skill} hands-off policy keeps active numbers and explicit inputs`, /hands-off run[\s\S]*(execute|verify) only the number-selected unambiguous `active` paths plus every explicit path\/glob selection/.test(pluginPreflight));
@@ -81,8 +87,9 @@ for (const skill of ["address-tasks", "address-tasks-serialized", "reap-tasks"])
 
 const reap = read("plugins", "dev-skills", "skills", "reap-tasks", "SKILL.md");
 const reapPreflight = section(reap, "## Task-pointer preflight", "\n## ");
-check("reap-tasks reads number-selected done as already reaped", /resolves only to `done` means already reaped: report it and never re-verify it/.test(reapPreflight));
+check("reap-tasks reads number-selected done as already reaped", /resolves only to `done` means already reaped: report it and never re-verify it, even after confirmation/.test(reapPreflight));
 check("reap-tasks never offers to reverify number-selected done", /confirmation asks only whether to proceed with the remaining selected work; it must never offer to re-verify that done entry/.test(reapPreflight));
+check("reap-tasks makes deferred eligibility confirmation-only", /number-selected unambiguous `deferred` path becomes eligible only after the maintainer explicitly includes it in an interactive run and is excluded hands-off/.test(reapPreflight));
 check("reap-tasks defines no-argument sweep input", /ordinary no-argument sweep retains its existing inventory flow:[\s\S]*pass those discovered candidate paths through this same resolver packet boundary/.test(reapPreflight));
 
 const workflow = read("plugins", "dev-skills", "workflows", "wf-address-tasks.js");
@@ -95,9 +102,12 @@ const workflowClauses = [
   ["excludes all non-active number states", /Exclude every number-selected \\`done\\`, \\`deferred\\`, or \\`ambiguous\\` classification/],
   ["never guesses ambiguity", /never guess an ambiguous number/],
   ["records structured exclusions", /resolution\.exclusions/],
-  ["omits classification from not-found exclusions", /omit it[\s\S]*for a \\`not-found\\` input, which has no matched task file or full number to classify/],
-  ["supports only an explained empty batch", /Return an empty \\`waves\\` array only when resolution leaves no executable task[\s\S]*resolution\.exclusions[\s\S]*resolution\.notFound[\s\S]*resolution failure, not a no-op/],
-  ["independently verifies an empty batch has no executable path", /independently re-derives that no-executable-task condition from every path's \\`selectedBy\\` provenance and \\`classification\\`[\s\S]*cannot explain away another executable path/],
+  ["pins exact matched-number exclusion reasons", /exact reason \\`number-selected <classification> task is excluded in hands-off mode\\`/],
+  ["pins exact not-found exclusion reasons", /exact reason \\`not-found input is excluded in hands-off mode\\`/],
+  ["omits classification from not-found exclusions", /while omitting \\`number\\` and \\`classification\\`/],
+  ["supports only an exactly accounted empty batch", /Return an empty \\`waves\\` array only when resolution leaves no executable task and the exact structured exclusions above account for every excluded input/],
+  ["independently verifies the resolver hard list", /independently validates every wave path against the resolution hard list and re-derives both hands-off eligibility and exact exclusion accounting/],
+  ["requires exact wave coverage", /Put every executable resolved path in exactly one wave, and put no excluded, unknown, or unrelated path in any wave/],
   ["requires structured resolution in the plan", /required: \["defaultBase", "resolution", "waves"\]/],
   ["returns resolution in the normal summary", /collisions, resolution: plan\.resolution, mainCheckout/],
 ];
@@ -105,27 +115,60 @@ for (const [name, pattern] of workflowClauses) check(`workflow ${name}`, pattern
 
 const exclusionsSchema = section(workflow, "        exclusions: {", "      required: [\"paths\", \"numbers\", \"notFound\", \"exclusions\"]");
 check("workflow exclusion schema does not require classification", /required: \["raw", "kind", "paths", "reason"\]/.test(exclusionsSchema) && !/required: \[[^\]]*"classification"/.test(exclusionsSchema));
-check("workflow not-found exclusions require an empty path list", /set \\`paths: \[\]\\` for a \\`not-found\\` input/.test(workflow));
+check("workflow not-found exclusions require an empty path list", /a \\`not-found\\` exclusion carries[\s\S]*\\`paths: \[\]\\`/.test(workflow));
 
-const emptyPlanMatch = workflow.match(/function handsOffPathEligibility\(entry\) \{[\s\S]*?\n\}\n[\s\S]*?function emptyPlanIsExplained\(plan\) \{[\s\S]*?\n\}/);
-check("workflow defines a shared hands-off eligibility and empty-plan explanation gate", !!emptyPlanMatch);
-if (emptyPlanMatch) {
+const planValidationMatch = workflow.match(/function handsOffPathEligibility\(entry\) \{[\s\S]*?function emptyPlanIsExplained\(plan\) \{[\s\S]*?\n\}/);
+check("workflow defines shared hands-off eligibility and exact plan validation gates", !!planValidationMatch);
+if (planValidationMatch) {
   // eslint-disable-next-line no-new-func
-  const emptyPlanIsExplained = new Function(`${emptyPlanMatch[0]}; return emptyPlanIsExplained;`)();
-  const packet = (overrides = {}) => ({ resolution: { paths: [], numbers: [], notFound: [], exclusions: [], ...overrides }, waves: [] });
-  const path = (classification, kinds) => ({ path: "tasks/001-example.md", number: "001", classification, selectedBy: kinds.map((kind) => ({ raw: "001", kind })) });
-  check("empty workflow plan with an excluded done number is a documented no-op", emptyPlanIsExplained(packet({ paths: [path("done", ["number"])], exclusions: [{ reason: "done number" }] })) === true);
-  check("empty workflow plan with an excluded ambiguous number is a documented no-op", emptyPlanIsExplained(packet({ paths: [path("ambiguous", ["number"])], exclusions: [{ reason: "ambiguous number" }] })) === true);
-  check("empty workflow plan with not-found is a documented no-op", emptyPlanIsExplained(packet({ notFound: [{ raw: "999" }] })) === true);
-  check("not-found cannot mask an active explicit path omitted from waves", emptyPlanIsExplained(packet({ paths: [path("active", ["path"])], notFound: [{ raw: "tasks/missing-*.md" }] })) === false);
-  check("an exclusion cannot mask an active number path omitted from waves", emptyPlanIsExplained(packet({ paths: [path("active", ["number"])], exclusions: [{ reason: "another input excluded" }] })) === false);
-  check("explicit provenance wins over an ambiguous number classification", emptyPlanIsExplained(packet({ paths: [path("ambiguous", ["number", "path"])], exclusions: [{ reason: "ambiguous number" }] })) === false);
-  check("an explicit outside-subtree path is executable", emptyPlanIsExplained(packet({ paths: [path("outside-subtree", ["glob"])], notFound: [{ raw: "999" }] })) === false);
-  check("unknown path provenance fails closed", emptyPlanIsExplained(packet({ paths: [path("done", ["mystery"])], exclusions: [{ reason: "unknown" }] })) === false);
+  const validators = new Function(`${planValidationMatch[0]}; return { emptyPlanIsExplained, planResolutionIsExact };`)();
+  const { emptyPlanIsExplained, planResolutionIsExact } = validators;
+  const path = (classification, kinds, name = "tasks/001-example.md", raw = "001") => ({ path: name, number: "001", classification, selectedBy: kinds.map((kind) => ({ raw: kind === "number" ? raw : name, kind })) });
+  const numberView = (classification, paths) => ({ number: "001", classification, paths });
+  const numberExclusion = (classification, paths, raw = "001") => ({ raw, kind: "number", number: "001", classification, paths, reason: `number-selected ${classification} task is excluded in hands-off mode` });
+  const missing = (raw = "999", kind = "number") => ({ raw, kind, diagnostic: `${raw} matched no task` });
+  const missingExclusion = (raw = "999", kind = "number") => ({ raw, kind, paths: [], reason: "not-found input is excluded in hands-off mode" });
+  const packet = ({ paths = [], numbers = [], notFound = [], exclusions = [], waves = [] } = {}) => ({ resolution: { paths, numbers, notFound, exclusions }, waves });
+
+  const donePath = path("done", ["number"]);
+  const doneNoOp = packet({ paths: [donePath], numbers: [numberView("done", [donePath.path])], exclusions: [numberExclusion("done", [donePath.path])] });
+  check("valid excluded done number is a documented no-op", emptyPlanIsExplained(doneNoOp) === true);
+  const ambiguousA = path("ambiguous", ["number"], "tasks/001-a.md");
+  const ambiguousB = path("ambiguous", ["number"], "tasks/done/001-b.md");
+  const ambiguousPaths = [ambiguousA.path, ambiguousB.path];
+  check("valid excluded ambiguity is a documented no-op", emptyPlanIsExplained(packet({ paths: [ambiguousA, ambiguousB], numbers: [numberView("ambiguous", ambiguousPaths)], exclusions: [numberExclusion("ambiguous", ambiguousPaths)] })) === true);
+  check("an ambiguous number cannot omit a candidate from the hard path list", emptyPlanIsExplained(packet({ paths: [ambiguousA], numbers: [numberView("ambiguous", ambiguousPaths)], exclusions: [numberExclusion("ambiguous", [ambiguousA.path])] })) === false);
+  check("valid not-found-only resolution is a documented no-op", emptyPlanIsExplained(packet({ notFound: [missing()], exclusions: [missingExclusion()] })) === true);
+  check("unrelated not-found cannot mask a done path missing its exclusion", emptyPlanIsExplained(packet({ paths: [donePath], numbers: [numberView("done", [donePath.path])], notFound: [missing()], exclusions: [missingExclusion()] })) === false);
+  check("a missing matched-number exclusion fails closed", emptyPlanIsExplained(packet({ paths: [donePath], numbers: [numberView("done", [donePath.path])] })) === false);
+  check("an orphan exclusion fails closed", emptyPlanIsExplained(packet({ paths: [donePath], numbers: [numberView("done", [donePath.path])], exclusions: [numberExclusion("done", [donePath.path]), missingExclusion("888")] })) === false);
+  check("a mismatched exclusion classification fails closed", emptyPlanIsExplained(packet({ paths: [donePath], numbers: [numberView("done", [donePath.path])], exclusions: [numberExclusion("deferred", [donePath.path])] })) === false);
+  check("a mismatched exclusion full number fails closed", emptyPlanIsExplained(packet({ paths: [donePath], numbers: [numberView("done", [donePath.path])], exclusions: [{ ...numberExclusion("done", [donePath.path]), number: "002" }] })) === false);
+  check("a mismatched exclusion path set fails closed", emptyPlanIsExplained(packet({ paths: [donePath], numbers: [numberView("done", [donePath.path])], exclusions: [numberExclusion("done", ["tasks/002-other.md"])] })) === false);
+  check("a duplicate exclusion fails closed", emptyPlanIsExplained(packet({ paths: [donePath], numbers: [numberView("done", [donePath.path])], exclusions: [numberExclusion("done", [donePath.path]), numberExclusion("done", [donePath.path])] })) === false);
+  check("one raw input cannot be both selected and not-found under another kind", emptyPlanIsExplained(packet({ paths: [donePath], numbers: [numberView("done", [donePath.path])], notFound: [missing("001", "path")], exclusions: [numberExclusion("done", [donePath.path]), missingExclusion("001", "path")] })) === false);
+
+  const active = path("active", ["number"]);
+  const activePacket = (waves) => packet({ paths: [active], numbers: [numberView("active", [active.path])], waves });
+  check("valid nonempty plan covers its executable hard path", planResolutionIsExact(activePacket([[{ path: active.path, dependsOn: [] }]])) === true);
+  check("nonempty plan cannot omit an executable hard path", planResolutionIsExact(activePacket([])) === false);
+  check("nonempty plan cannot include an excluded hard path", planResolutionIsExact({ ...doneNoOp, waves: [[{ path: donePath.path, dependsOn: [] }]] }) === false);
+  check("nonempty plan cannot duplicate an executable hard path", planResolutionIsExact(activePacket([[{ path: active.path, dependsOn: [] }], [{ path: active.path, dependsOn: [] }]])) === false);
+  check("nonempty plan cannot include an unknown path", planResolutionIsExact(activePacket([[{ path: "tasks/999-unknown.md", dependsOn: [] }]])) === false);
+  check("wave validation preserves dependency metadata", planResolutionIsExact(activePacket([[{ path: active.path, dependsOn: ["upstream"] }]])) === true);
+
+  const mixed = path("done", ["number", "path"]);
+  check("explicit provenance wins while the number selection remains accounted", planResolutionIsExact(packet({ paths: [mixed], numbers: [numberView("done", [mixed.path])], exclusions: [numberExclusion("done", [mixed.path])], waves: [[{ path: mixed.path, dependsOn: [] }]] })) === true);
+  const outside = path("outside-subtree", ["glob"], "plans/A-01-example.md");
+  check("an explicit outside-subtree task is executable", planResolutionIsExact(packet({ paths: [outside], waves: [[{ path: outside.path, dependsOn: [] }]] })) === true);
+  check("not-found cannot mask an active explicit path omitted from waves", emptyPlanIsExplained(packet({ paths: [path("active", ["path"])], notFound: [missing("tasks/missing-*.md", "glob")], exclusions: [missingExclusion("tasks/missing-*.md", "glob")] })) === false);
+  check("unknown path provenance fails closed", emptyPlanIsExplained(packet({ paths: [path("done", ["mystery"])], exclusions: [numberExclusion("done", [donePath.path])] })) === false);
   check("empty workflow plan without diagnostics is unexplained", emptyPlanIsExplained(packet()) === false);
   check("empty workflow plan without a resolution packet is unexplained", emptyPlanIsExplained({ waves: [] }) === false);
 }
-check("workflow returns the prior resolution error for unexplained empty waves", /if \(!emptyPlanIsExplained\(plan\)\)[\s\S]*error: "Could not resolve task pointers from the argument\."/.test(workflow));
+check("workflow validates every plan before dispatch", /if \(!planResolutionIsExact\(plan\)\)[\s\S]*error: "Could not resolve task pointers from the argument\."/.test(workflow));
+check("workflow retains resolution on malformed plan errors", /!plan \|\| !Array\.isArray\(plan\.waves\)[\s\S]*resolution: plan && plan\.resolution \? plan\.resolution : null/.test(workflow));
+check("workflow retains resolution on inconsistent plan errors", /!planResolutionIsExact\(plan\)[\s\S]*resolution: plan\.resolution/.test(workflow));
 const emptyNoOp = workflow.match(/return \{ batch: args, defaultBase: plan\.defaultBase, remote, peer: peerMode, peerThrottle:[^\n]+waves: 0,[^\n]+results: \[\] \};/);
 check("workflow explained-empty summary retains the normal summary fields", !!emptyNoOp && /throttled: \[\]/.test(emptyNoOp[0]) && /collisions: \[\]/.test(emptyNoOp[0]) && /openQuestions: \[\]/.test(emptyNoOp[0]) && /deviations: \[\]/.test(emptyNoOp[0]) && /deviationAssessments: \[\]/.test(emptyNoOp[0]));
 
