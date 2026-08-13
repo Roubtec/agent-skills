@@ -549,7 +549,12 @@ ${DESTROY_BOUNDARY}
 
 Read \`AGENTS.md\` / \`CLAUDE.md\` first for project conventions.
 
-Argument (a mixed list of task numbers, task-file paths, and globs; a \`peer-opinions=off\` token is a flag the loop already handled, not a task pointer — ignore it here): ${JSON.stringify(input)}
+Argument (a mixed list of task numbers, task-file paths, and globs): ${JSON.stringify(input)}
+
+Read that argument exactly the way the workflow does, because step 4's reconciliation compares your packet against the workflow's own derivation and fails the whole batch closed on any disagreement:
+- Every substring matching \`/${PEER_OPINIONS_FLAG.source}/i\` is a flag the loop already handled, not a task pointer. The workflow masks each one out of the argument before deriving anything; ignore it here and emit no \`paths\` entry and no \`notFound\` diagnostic for it or for any word inside it.
+- What remains is split on whitespace AND commas, and each resulting token has its surrounding quotes stripped. Every surviving token is exactly one raw input: \`039,041\` is two inputs, not one, and a raw pointer can therefore carry neither whitespace nor a comma (so a task-file path containing either cannot be named on this argument at all — report such a token as the tokens it splits into, do not reassemble it).
+- Every other token is a raw input you must account for, including one shaped like a flag the list above does not match: resolve it under the skill's contract and emit its \`not-found\` diagnostic when it selects nothing.
 
 Do this:
 1. Follow the \`resolve-tasks\` skill's shared contract to produce its deduplicated provenance-tagged \`paths\`, per-full-number \`numbers\`, and per-input \`notFound\` collections. Do not invent a second filename parser here.
@@ -705,14 +710,21 @@ function exclusionsExactlyMatch(resolution, expected) {
 // raw pointers are re-derived from the argument here and reconciled with the
 // packet. This is not a second filename parser — it decides nothing about what
 // a token means, only that the packet accounts for each one exactly once.
-// `=`-bearing tokens are dropped because the documented invocation's only
-// non-pointer argument is the `peer-opinions=off` flag form; a task number,
-// path, or glob never carries one.
+// The peer flag is the documented invocation's one non-pointer argument, so it
+// is masked out below with THIS regex — the same one the flag parser near the
+// batch body tests, deliberately shared rather than approximated. An
+// approximation (dropping every `=`-bearing token, say) makes the two sides
+// disagree on the spellings the flag parser tolerates on purpose: `peer
+// opinions=off` would leave a stray `peer` pointer and `peer-opinions = off`
+// three of them, none of which any resolution can account for, hard-aborting
+// the batch on an invocation the flag parser accepts.
+const PEER_OPINIONS_FLAG = /\bpeer[\s-]*opinions?\s*=\s*(off|on)\b/gi;
 function requiredArgPointers(flatArgs) {
   const tokens = String(flatArgs == null ? "" : flatArgs)
+    .replace(PEER_OPINIONS_FLAG, " ")
     .split(/[\s,]+/)
     .map((token) => token.replace(/^["']+|["']+$/g, ""))
-    .filter((token) => token.length > 0 && !token.includes("="));
+    .filter((token) => token.length > 0);
   return [...new Set(tokens)];
 }
 
@@ -3830,7 +3842,12 @@ async function settleWaveCollisions({ heldTasks, waveCollisions, wave, defaultBa
 // --- Flag parsing: `peer-opinions=off` must arrive through args (a workflow
 // cannot read prose elsewhere) and suppresses the embedded cycle's peer stage
 // for every task in the batch. Flatten any args shape first — structured
-// delivery would otherwise stringify to "[object Object]".
+// delivery would otherwise stringify to "[object Object]". The flag's spelling
+// has ONE definition, `PEER_OPINIONS_FLAG` above, shared with the pointer gate
+// that masks it out of the argument; the mode is then read from the values that
+// one regex captured, so the two sides can never disagree about where the flag
+// begins and ends. A second, approximate spelling here would turn a flag this
+// parser accepted into a task pointer the gate cannot account for.
 function flattenBatchArgs(a) {
   if (a == null) return "";
   if (typeof a === "string") return a;
@@ -3838,7 +3855,8 @@ function flattenBatchArgs(a) {
   if (typeof a === "object") return Object.values(a).map(flattenBatchArgs).join(" ");
   return String(a);
 }
-const peerMode = /\bpeer[\s-]*opinions?\s*=\s*off\b/.test(flattenBatchArgs(args).toLowerCase()) ? "off" : "on";
+const peerFlagValues = [...flattenBatchArgs(args).matchAll(PEER_OPINIONS_FLAG)].map((m) => m[1]);
+const peerMode = /\boff\b/i.test(peerFlagValues.join(" ")) ? "off" : "on";
 
 phase("Bootstrap");
 const boot = await agent(bootstrapPrompt(), { label: "bootstrap", schema: BOOTSTRAP_SCHEMA });
