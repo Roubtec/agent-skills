@@ -181,6 +181,11 @@ if (planValidationMatch) {
     check(`argument pointers mask the peer flag spelling ${JSON.stringify(spelling)}`, same(requiredArgPointers(`039 ${spelling}`), ["039"]));
   }
   check("argument pointers keep a non-flag token that merely carries '='", same(requiredArgPointers("039 base=main"), ["039", "base=main"]));
+  // The flag matches only as a whole whitespace/comma-bounded token run, so a
+  // filename that merely embeds the flag text stays one intact pointer instead
+  // of being masked into fragments no resolution can account for.
+  check("argument pointers keep a filename that embeds the flag text", same(requiredArgPointers("tasks/039-peer-opinions=off.md"), ["tasks/039-peer-opinions=off.md"]));
+  check("argument pointers still drop a flag beside such a filename", same(requiredArgPointers("tasks/039-peer-opinions=off.md peer-opinions=off"), ["tasks/039-peer-opinions=off.md"]));
   check("argument pointers of an empty argument are empty", same(requiredArgPointers(""), []) && same(requiredArgPointers(null), []));
 
   const twoInputs = [
@@ -198,11 +203,12 @@ if (planValidationMatch) {
   // two sides cannot drift into disagreeing about what the flag looks like.
   const handedToResolver = new RegExp(PEER_OPINIONS_FLAG.source, "i");
   check("the pattern handed to the resolver covers every masked spelling", ["peer-opinions=off", "peer opinions=off", "peer-opinions = off", "peer-opinion=off", "peer-opinions=on"].every((spelling) => handedToResolver.test(spelling)));
-  check("the pattern handed to the resolver matches no ordinary pointer", ["039", "tasks/050-x.md", "tasks/*.md", "base=main"].every((pointer) => !handedToResolver.test(pointer)));
+  check("the pattern handed to the resolver matches no ordinary pointer", ["039", "tasks/050-x.md", "tasks/*.md", "base=main", "tasks/039-peer-opinions=off.md"].every((pointer) => !handedToResolver.test(pointer)));
 }
 // One regex literal for the peer flag, referenced by both the flag parser and
 // the pointer gate: an approximation on either side re-opens the divergence.
-check("the peer flag has exactly one regex definition in the workflow", workflow.split("\\bpeer[\\s-]*opinions?").length - 1 === 1);
+check("the peer flag has exactly one regex definition in the workflow", workflow.split("peer[\\s-]*opinions?").length - 1 === 1);
+check("the one peer-flag definition is token-anchored, not word-bounded", workflow.split("(?<![^\\s,])peer[\\s-]*opinions?\\s*=\\s*(off|on)(?![^\\s,])").length - 1 === 1);
 check("the flag parser reads its mode out of that one definition's matches", /const peerFlagValues = \[\.\.\.flattenBatchArgs\(args\)\.matchAll\(PEER_OPINIONS_FLAG\)\]\.map\(\(m\) => m\[1\]\);\nconst peerMode = \/\\boff\\b\/i\.test\(peerFlagValues\.join\(" "\)\)/.test(workflow));
 // Five suites slice the workflow's pure region at this exact marker, so keeping
 // a regex literal on the flag-parsing line is a constraint, not an accident.

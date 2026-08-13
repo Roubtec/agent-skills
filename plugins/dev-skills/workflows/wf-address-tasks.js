@@ -717,8 +717,13 @@ function exclusionsExactlyMatch(resolution, expected) {
 // disagree on the spellings the flag parser tolerates on purpose: `peer
 // opinions=off` would leave a stray `peer` pointer and `peer-opinions = off`
 // three of them, none of which any resolution can account for, hard-aborting
-// the batch on an invocation the flag parser accepts.
-const PEER_OPINIONS_FLAG = /\bpeer[\s-]*opinions?\s*=\s*(off|on)\b/gi;
+// the batch on an invocation the flag parser accepts. The lookarounds bound
+// the flag to a whole token run between whitespace, commas, or the argument's
+// edges — the same boundaries the splitter below cuts on — because a word
+// boundary alone also matches the flag text INSIDE a filename, turning an
+// explicit pointer like `tasks/039-peer-opinions=off.md` into the invented
+// fragments `tasks/039-` and `.md` that no resolution can account for.
+const PEER_OPINIONS_FLAG = /(?<![^\s,])peer[\s-]*opinions?\s*=\s*(off|on)(?![^\s,])/gi;
 function requiredArgPointers(flatArgs) {
   const tokens = String(flatArgs == null ? "" : flatArgs)
     .replace(PEER_OPINIONS_FLAG, " ")
