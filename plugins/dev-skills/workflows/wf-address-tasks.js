@@ -738,11 +738,11 @@ const PEER_OPINIONS_FLAG_LEAF = new RegExp(`^${PEER_OPINIONS_FLAG.source}$`, "i"
 // surrounding quotes stripped AFTER the split (so quotes do not express
 // boundaries — a spaced path cannot be named in a flat string), the peer flag
 // masked out first. An ARRAY or OBJECT argument is recursed, and every
-// non-collection LEAF — stringified if a non-string primitive, trimmed of
-// surrounding whitespace, dropped when empty or when it is exactly the peer
-// flag — is exactly one raw pointer, NEVER split, whatever it contains: the
-// caller's structure already said where each pointer ends. Both shapes dedupe
-// in first-seen order.
+// non-collection LEAF — null/undefined dropped outright, otherwise
+// stringified if a non-string primitive, trimmed of surrounding whitespace,
+// dropped when empty or when it is exactly the peer flag — is exactly one raw
+// pointer, NEVER split, whatever it contains: the caller's structure already
+// said where each pointer ends. Both shapes dedupe in first-seen order.
 // The trim is deliberate, not a breach of the never-split promise: the same
 // reading that drops a whitespace-only leaf treats edge whitespace as
 // packaging rather than pointer content, a trimmed leaf is still one leaf, and
