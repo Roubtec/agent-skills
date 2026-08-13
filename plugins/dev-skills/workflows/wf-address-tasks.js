@@ -1,7 +1,7 @@
 /**
  * wf-address-tasks — dynamic-workflow form of the `address-tasks` skill.
  *
- * Resolve a batch of pre-planned task files into dependency waves, then run
+ * Resolve a batch of pre-planned task pointers into dependency waves, then run
  * each task through the shared review cycle — implement -> fresh-eyes review
  * plus a best-effort cross-harness codex peer review -> fix, bounded by the
  * cycle's canonical round cap — scan reviewed sibling branches for add/add
@@ -10,7 +10,7 @@
  * which sides may deliver, and every branch a cleared clash covered is
  * re-reviewed first) — or hold a name that must stay identical — then open PRs
  * for the delivered tasks and report. Invoke as
- * `/dev-skills:wf-address-tasks <glob-or-file-list> [peer-opinions=off]`.
+ * `/dev-skills:wf-address-tasks <task-numbers-paths-or-globs> [peer-opinions=off]`.
  *
  * Why a workflow rather than a skill
  * ----------------------------------
@@ -78,8 +78,8 @@
 // mismatch silently splits the progress display into an extra group.
 export const meta = {
   name: "wf-address-tasks",
-  description: "Implement a batch of pre-planned task files: dependency waves, per-task worktree, and the shared review cycle per task — implement -> fresh-eyes review plus a best-effort cross-harness codex peer review -> fix (review is cross-harness; peer outcomes never block; bounded round cap) — with a pre-PR collision guard that deconflicts add/add clashes (rename one side + re-review) or holds an imperative name, one PR per delivered task.",
-  whenToUse: "Execute a folder/glob of pre-planned task files end to end with per-task worktree isolation and cross-harness review (a best-effort codex peer beside each task's fresh reviewer). Not for one-off coding requests or planning new tasks.",
+  description: "Implement a batch selected by task numbers, paths, or globs: dependency waves, per-task worktree, and the shared review cycle per task — implement -> fresh-eyes review plus a best-effort cross-harness codex peer review -> fix (review is cross-harness; peer outcomes never block; bounded round cap) — with a pre-PR collision guard that deconflicts add/add clashes (rename one side + re-review) or holds an imperative name, one PR per delivered task.",
+  whenToUse: "Execute numbers, paths, or globs for pre-planned task files end to end with per-task worktree isolation and cross-harness review (a best-effort codex peer beside each task's fresh reviewer). Not for one-off coding requests or planning new tasks.",
   phases: [
     { title: "Bootstrap", detail: "wt-bootstrap: root-safety checks, orphan prune, remote probe" },
     { title: "Resolve batch", detail: "read task files, derive dependency waves and branches" },
@@ -136,6 +136,70 @@ const PLAN_SCHEMA = {
   type: "object",
   properties: {
     defaultBase: { type: "string", description: "PR base branch for independent tasks (the user's override, else the current branch, else main)." },
+    resolution: {
+      type: "object",
+      description: "The resolve-tasks packet plus the hands-off exclusions applied before planning. It is report context even when no task remains executable.",
+      properties: {
+        paths: {
+          type: "array",
+          description: "Every deduplicated resolved path, including excluded ambiguous/non-active number candidates and explicit selections.",
+          items: {
+            type: "object",
+            properties: {
+              path: { type: "string" },
+              number: { type: "string" },
+              classification: { type: "string", description: "active | done | deferred | ambiguous | outside-subtree (the last is explicit path/glob report context only)" },
+              selectedBy: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: { raw: { type: "string" }, kind: { type: "string", description: "number | path | glob" } },
+                  required: ["raw", "kind"],
+                },
+              },
+            },
+            required: ["path", "number", "classification", "selectedBy"],
+          },
+        },
+        numbers: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: {
+              number: { type: "string" },
+              classification: { type: "string", description: "active | done | deferred | ambiguous" },
+              paths: { type: "array", items: { type: "string" } },
+            },
+            required: ["number", "classification", "paths"],
+          },
+        },
+        notFound: {
+          type: "array",
+          items: {
+            type: "object",
+            properties: { raw: { type: "string" }, kind: { type: "string", description: "number | path | glob" }, diagnostic: { type: "string" } },
+            required: ["raw", "kind", "diagnostic"],
+          },
+        },
+        exclusions: {
+          type: "array",
+          description: "Every non-active number selection and not-found input excluded by the workflow's hands-off policy.",
+          items: {
+            type: "object",
+            properties: {
+              raw: { type: "string" },
+              kind: { type: "string" },
+              number: { type: "string" },
+              classification: { type: "string" },
+              paths: { type: "array", items: { type: "string" } },
+              reason: { type: "string" },
+            },
+            required: ["raw", "kind", "paths", "reason"],
+          },
+        },
+      },
+      required: ["paths", "numbers", "notFound", "exclusions"],
+    },
     waves: {
       type: "array",
       description: "Tasks grouped into dependency waves; wave N runs only after wave N-1 has finished.",
@@ -157,7 +221,7 @@ const PLAN_SCHEMA = {
       },
     },
   },
-  required: ["defaultBase", "waves"],
+  required: ["defaultBase", "resolution", "waves"],
 };
 
 const PR_SCHEMA = {
@@ -479,27 +543,251 @@ function mainCheckoutSummary(baseline, final) {
 }
 
 function resolvePrompt(input) {
-  return `You are scoping a batch of pre-planned task files for implementation. Do NOT implement anything.
+  return `You are scoping a batch of pre-planned task pointers for implementation. Do NOT implement anything. This is the batch's own-context-window resolver; do all task-tree scavenging here so the orchestrator receives only your structured result.
 
 ${DESTROY_BOUNDARY}
 
 Read \`AGENTS.md\` / \`CLAUDE.md\` first for project conventions.
 
-Argument (a glob or file list; a \`peer-opinions=off\` token is a flag the loop already handled, not a task file — ignore it here): ${JSON.stringify(input)}
+Argument (a mixed list of task numbers, task-file paths, and globs): ${JSON.stringify(input)}
+
+Read that argument exactly the way the workflow does, because step 4's reconciliation compares your packet against the workflow's own derivation and fails the whole batch closed on any disagreement:
+- Every substring matching \`/${PEER_OPINIONS_FLAG.source}/i\` is a flag the loop already handled, not a task pointer. The workflow masks each one out of the argument before deriving anything; ignore it here and emit no \`paths\` entry and no \`notFound\` diagnostic for it or for any word inside it.
+- What remains is split on whitespace AND commas, and each resulting token has its surrounding quotes stripped. Every surviving token is exactly one raw input: \`039,041\` is two inputs, not one, and a raw pointer can therefore carry neither whitespace nor a comma (so a task-file path containing either cannot be named on this argument at all — report such a token as the tokens it splits into, do not reassemble it).
+- Every other token is a raw input you must account for, including one shaped like a flag the list above does not match: resolve it under the skill's contract and emit its \`not-found\` diagnostic when it selects nothing.
 
 Do this:
-1. Resolve the argument to the concrete set of task files and read each one in full.
-2. Determine dependencies: an explicit "Depends on" field, shared infrastructure, or files/modules two tasks both create or migrate. When in doubt, treat tasks that touch the same files or migrations as dependent.
-3. Group tasks into WAVES: wave 1 is every task with no unmet dependency; wave 2 depends only on wave 1; and so on. Tasks within a wave are independent and will run concurrently.
-4. For each task set:
+1. Follow the \`resolve-tasks\` skill's shared contract to produce its deduplicated provenance-tagged \`paths\`, per-full-number \`numbers\`, and per-input \`notFound\` collections. Do not invent a second filename parser here.
+2. Apply the workflow's HANDS-OFF consumer policy. Include as executable every explicit path/glob selection whatever its classification, including an existing well-formed task file outside the resolved task subtree whose report status is \`outside-subtree\` (explicit wins when a path also has number provenance), plus number-selected unambiguous \`active\` paths. Exclude every number-selected \`done\`, \`deferred\`, or \`ambiguous\` classification and every \`not-found\` input; never guess an ambiguous number. Record exactly one exclusion per excluded deduplicated raw input in \`resolution.exclusions\`, with no unrelated entries: a matched number exclusion carries that raw number, \`kind: "number"\`, its full \`number\`, exact \`classification\`, every candidate path that raw input selected, and the exact reason \`number-selected <classification> task is excluded in hands-off mode\`; a \`not-found\` exclusion carries the diagnostic's exact \`raw\` and \`kind\`, \`paths: []\`, and the exact reason \`not-found input is excluded in hands-off mode\`, while omitting \`number\` and \`classification\`. Preserve the complete resolver packet beside the exclusions.
+3. Read each executable task file in full. Determine dependencies: an explicit "Depends on" field, shared infrastructure, or files/modules two tasks both create or migrate. When in doubt, treat tasks that touch the same files or migrations as dependent.
+4. Group executable tasks into WAVES: wave 1 is every task with no unmet dependency; wave 2 depends only on wave 1; and so on. Tasks within a wave are independent and will run concurrently. Put every executable resolved path in exactly one wave, and put no excluded, unknown, or unrelated path in any wave. Return an empty \`waves\` array only when resolution leaves no executable task and the exact structured exclusions above account for every excluded input; that is a successful, documented no-op. The workflow independently validates every wave path against the resolution hard list and re-derives both hands-off eligibility and exact exclusion accounting, so an exclusion or not-found diagnostic cannot explain away another executable path. It also re-derives the raw pointer list from the argument itself and requires your packet to account for every deduplicated pointer — in some path's \`selectedBy\` or as a \`not-found\` diagnostic — and for no pointer the argument never named, so an internally consistent packet that silently omits one input is rejected rather than run as a smaller batch. An omitted executable path, a duplicate or unknown wave path, an included non-executable path, or an unaccounted empty wave set is a resolution failure, not a no-op.
+5. For each task set:
    - a ref-safe \`slug\` (task number + short name; also its worktree dir name),
    - a \`branch\` to implement on,
    - a \`base\`: the user's explicit base (if given) else the current branch for independent tasks; for a dependent task, the \`branch\` of the dependency it most directly extends (stacked PRs),
    - \`dependsOn\`: the slugs of in-batch tasks it depends on (the task(s) whose branch is its base), or empty,
    - \`upstream\`: a one-line note on what an in-batch dependency introduced, if any.
-5. Set \`defaultBase\` to the user's explicit base override, else the current checked-out branch, else \`main\`.
+6. Set \`defaultBase\` to the user's explicit base override, else the current checked-out branch, else \`main\`.
 
 Return the structured plan. Paste each task file's FULL content verbatim into \`content\` — downstream agents have no other access to it.`;
+}
+
+// Keep this one classification gate aligned with resolvePrompt's hands-off
+// policy: explicit provenance wins regardless of lifecycle, while number-only
+// provenance executes only an unambiguous active task. An unknown/malformed
+// packet is not evidence that a path was safely excluded.
+function handsOffPathEligibility(entry) {
+  if (!entry || typeof entry !== "object" || !Array.isArray(entry.selectedBy) || entry.selectedBy.length === 0) return "unknown";
+  const kinds = entry.selectedBy.map((selection) => selection && selection.kind);
+  if (kinds.some((kind) => kind === "path" || kind === "glob")) return "executable";
+  if (!kinds.every((kind) => kind === "number")) return "unknown";
+  if (entry.classification === "active") return "executable";
+  if (["done", "deferred", "ambiguous"].includes(entry.classification)) return "excluded";
+  return "unknown";
+}
+
+const HANDS_OFF_NUMBER_REASON = (classification) => `number-selected ${classification} task is excluded in hands-off mode`;
+const HANDS_OFF_NOT_FOUND_REASON = "not-found input is excluded in hands-off mode";
+
+function nonEmptyString(value) {
+  return typeof value === "string" && value.length > 0;
+}
+
+function sameUniqueStrings(actual, expected) {
+  if (!Array.isArray(actual) || actual.some((value) => !nonEmptyString(value))) return false;
+  if (new Set(actual).size !== actual.length || new Set(expected).size !== expected.length) return false;
+  if (actual.length !== expected.length) return false;
+  const expectedSet = new Set(expected);
+  return actual.every((value) => expectedSet.has(value));
+}
+
+// Validate the resolver packet as an internally consistent hard list and derive
+// the one allowed exclusion record for every non-active number input and every
+// not-found input. Derivation keeps the plan agent's prose from deciding what
+// evidence is enough to turn an empty batch green.
+function expectedHandsOffExclusions(resolution) {
+  if (!resolution || typeof resolution !== "object") return null;
+  if (!Array.isArray(resolution.paths) || !Array.isArray(resolution.numbers) || !Array.isArray(resolution.notFound) || !Array.isArray(resolution.exclusions)) return null;
+
+  const validInside = new Set(["active", "done", "deferred", "ambiguous"]);
+  const pathNames = new Set();
+  const insidePaths = [];
+  const selectedInputs = new Set();
+  const inputKinds = new Map();
+  const numberSelections = new Map();
+
+  for (const entry of resolution.paths) {
+    if (!entry || typeof entry !== "object" || !nonEmptyString(entry.path) || !nonEmptyString(entry.number) || pathNames.has(entry.path)) return null;
+    if (!validInside.has(entry.classification) && entry.classification !== "outside-subtree") return null;
+    pathNames.add(entry.path);
+    if (!Array.isArray(entry.selectedBy) || entry.selectedBy.length === 0) return null;
+    const entrySelections = new Set();
+    for (const selection of entry.selectedBy) {
+      if (!selection || typeof selection !== "object" || !nonEmptyString(selection.raw) || !["number", "path", "glob"].includes(selection.kind)) return null;
+      const selectionKey = `${selection.kind}\u0000${selection.raw}`;
+      if (entrySelections.has(selectionKey)) return null;
+      if (inputKinds.has(selection.raw) && inputKinds.get(selection.raw) !== selection.kind) return null;
+      inputKinds.set(selection.raw, selection.kind);
+      entrySelections.add(selectionKey);
+      selectedInputs.add(selectionKey);
+      if (selection.kind !== "number") continue;
+      if (!validInside.has(entry.classification)) return null;
+      const prior = numberSelections.get(selection.raw);
+      if (prior && (prior.number !== entry.number || prior.classification !== entry.classification)) return null;
+      const group = prior || { raw: selection.raw, kind: "number", number: entry.number, classification: entry.classification, paths: [] };
+      if (!group.paths.includes(entry.path)) group.paths.push(entry.path);
+      numberSelections.set(selection.raw, group);
+    }
+    if (entry.classification !== "outside-subtree") insidePaths.push(entry);
+    if (handsOffPathEligibility(entry) === "unknown") return null;
+  }
+
+  const numbers = new Map();
+  for (const entry of resolution.numbers) {
+    if (!entry || typeof entry !== "object" || !nonEmptyString(entry.number) || numbers.has(entry.number) || !validInside.has(entry.classification)) return null;
+    if (!Array.isArray(entry.paths) || entry.paths.length === 0 || entry.paths.some((path) => !nonEmptyString(path)) || new Set(entry.paths).size !== entry.paths.length) return null;
+    if (entry.classification === "ambiguous" ? entry.paths.length < 2 : entry.paths.length !== 1) return null;
+    numbers.set(entry.number, entry);
+  }
+  for (const entry of insidePaths) {
+    const number = numbers.get(entry.number);
+    if (!number || number.classification !== entry.classification || !number.paths.includes(entry.path)) return null;
+  }
+  for (const [number, entry] of numbers) {
+    if (!insidePaths.some((path) => path.number === number && path.classification === entry.classification)) return null;
+  }
+  for (const selection of numberSelections.values()) {
+    const number = numbers.get(selection.number);
+    if (!number || number.classification !== selection.classification || !sameUniqueStrings(selection.paths, number.paths)) return null;
+  }
+
+  const expected = [];
+  for (const selection of numberSelections.values()) {
+    if (selection.classification === "active") continue;
+    expected.push({ ...selection, reason: HANDS_OFF_NUMBER_REASON(selection.classification) });
+  }
+
+  const notFoundInputs = new Set();
+  for (const diagnostic of resolution.notFound) {
+    if (!diagnostic || typeof diagnostic !== "object" || !nonEmptyString(diagnostic.raw) || !["number", "path", "glob"].includes(diagnostic.kind) || !nonEmptyString(diagnostic.diagnostic)) return null;
+    const key = `${diagnostic.kind}\u0000${diagnostic.raw}`;
+    if (notFoundInputs.has(key) || selectedInputs.has(key) || inputKinds.has(diagnostic.raw)) return null;
+    inputKinds.set(diagnostic.raw, diagnostic.kind);
+    notFoundInputs.add(key);
+    expected.push({ raw: diagnostic.raw, kind: diagnostic.kind, paths: [], reason: HANDS_OFF_NOT_FOUND_REASON });
+  }
+  return expected;
+}
+
+function exclusionsExactlyMatch(resolution, expected) {
+  if (!expected || resolution.exclusions.length !== expected.length) return false;
+  const used = new Set();
+  for (const wanted of expected) {
+    let match = -1;
+    for (let index = 0; index < resolution.exclusions.length; index++) {
+      if (used.has(index)) continue;
+      const actual = resolution.exclusions[index];
+      if (!actual || typeof actual !== "object" || actual.raw !== wanted.raw || actual.kind !== wanted.kind || actual.reason !== wanted.reason) continue;
+      if (!sameUniqueStrings(actual.paths, wanted.paths)) continue;
+      if (wanted.kind === "number") {
+        if (actual.number !== wanted.number || actual.classification !== wanted.classification) continue;
+      } else if (Object.prototype.hasOwnProperty.call(actual, "number") || Object.prototype.hasOwnProperty.call(actual, "classification")) {
+        continue;
+      }
+      match = index;
+      break;
+    }
+    if (match < 0) return false;
+    used.add(match);
+  }
+  return true;
+}
+
+// The packet is the resolver agent's own account of the argument, so nothing
+// inside it can show that the agent SAW every pointer: an input dropped before
+// resolution leaves a packet exactly as internally consistent as a correct one,
+// and the batch then completes without executing OR reporting that task. So the
+// raw pointers are re-derived from the argument here and reconciled with the
+// packet. This is not a second filename parser — it decides nothing about what
+// a token means, only that the packet accounts for each one exactly once.
+// The peer flag is the documented invocation's one non-pointer argument, so it
+// is masked out below with THIS regex — the same one the flag parser near the
+// batch body tests, deliberately shared rather than approximated. An
+// approximation (dropping every `=`-bearing token, say) makes the two sides
+// disagree on the spellings the flag parser tolerates on purpose: `peer
+// opinions=off` would leave a stray `peer` pointer and `peer-opinions = off`
+// three of them, none of which any resolution can account for, hard-aborting
+// the batch on an invocation the flag parser accepts. The lookarounds bound
+// the flag to a whole token run between whitespace, commas, or the argument's
+// edges — the same boundaries the splitter below cuts on — because a word
+// boundary alone also matches the flag text INSIDE a filename, turning an
+// explicit pointer like `tasks/039-peer-opinions=off.md` into the invented
+// fragments `tasks/039-` and `.md` that no resolution can account for.
+const PEER_OPINIONS_FLAG = /(?<![^\s,])peer[\s-]*opinions?\s*=\s*(off|on)(?![^\s,])/gi;
+function requiredArgPointers(flatArgs) {
+  const tokens = String(flatArgs == null ? "" : flatArgs)
+    .replace(PEER_OPINIONS_FLAG, " ")
+    .split(/[\s,]+/)
+    .map((token) => token.replace(/^["']+|["']+$/g, ""))
+    .filter((token) => token.length > 0);
+  return [...new Set(tokens)];
+}
+
+// Exact both ways: an argument pointer the packet never mentions is dropped
+// work, and a packet raw the argument never named is invented work.
+function resolutionAccountsForInputs(resolution, required) {
+  if (!resolution || typeof resolution !== "object") return false;
+  if (!Array.isArray(resolution.paths) || !Array.isArray(resolution.notFound)) return false;
+  const accounted = new Set();
+  for (const entry of resolution.paths) {
+    if (!entry || typeof entry !== "object" || !Array.isArray(entry.selectedBy)) return false;
+    for (const selection of entry.selectedBy) {
+      if (!selection || typeof selection !== "object" || !nonEmptyString(selection.raw)) return false;
+      accounted.add(selection.raw);
+    }
+  }
+  for (const diagnostic of resolution.notFound) {
+    if (!diagnostic || typeof diagnostic !== "object" || !nonEmptyString(diagnostic.raw)) return false;
+    accounted.add(diagnostic.raw);
+  }
+  return sameUniqueStrings([...accounted], required);
+}
+
+// Every executable hard-list path must occur exactly once in the waves, and no
+// other path may occur. This applies to non-empty plans too: the executor never
+// trusts a structurally valid plan that silently dropped or invented work.
+function planResolutionIsExact(plan) {
+  if (!plan || typeof plan !== "object" || !Array.isArray(plan.waves)) return false;
+  const resolution = plan.resolution;
+  const expectedExclusions = expectedHandsOffExclusions(resolution);
+  if (!exclusionsExactlyMatch(resolution || {}, expectedExclusions)) return false;
+
+  const executable = new Set();
+  for (const entry of resolution.paths) {
+    const eligibility = handsOffPathEligibility(entry);
+    if (eligibility === "unknown") return false;
+    if (eligibility === "executable") executable.add(entry.path);
+  }
+
+  const planned = new Set();
+  for (const wave of plan.waves) {
+    if (!Array.isArray(wave) || wave.length === 0) return false;
+    for (const task of wave) {
+      if (!task || typeof task !== "object" || !nonEmptyString(task.path) || !executable.has(task.path) || planned.has(task.path)) return false;
+      planned.add(task.path);
+    }
+  }
+  if (planned.size !== executable.size) return false;
+  return [...executable].every((path) => planned.has(path));
+}
+
+// An empty executable plan is valid only after the same exact validator used
+// for non-empty waves proves there is no executable path and every exclusion is
+// accounted for. A truly empty argument remains a resolution failure/no-result.
+function emptyPlanIsExplained(plan) {
+  if (!planResolutionIsExact(plan) || plan.waves.length !== 0) return false;
+  const expected = expectedHandsOffExclusions(plan.resolution);
+  return Array.isArray(expected) && expected.length > 0;
 }
 
 // Shell-quote a ref/slug/path before embedding it in a copy-paste command
@@ -3559,7 +3847,12 @@ async function settleWaveCollisions({ heldTasks, waveCollisions, wave, defaultBa
 // --- Flag parsing: `peer-opinions=off` must arrive through args (a workflow
 // cannot read prose elsewhere) and suppresses the embedded cycle's peer stage
 // for every task in the batch. Flatten any args shape first — structured
-// delivery would otherwise stringify to "[object Object]".
+// delivery would otherwise stringify to "[object Object]". The flag's spelling
+// has ONE definition, `PEER_OPINIONS_FLAG` above, shared with the pointer gate
+// that masks it out of the argument; the mode is then read from the values that
+// one regex captured, so the two sides can never disagree about where the flag
+// begins and ends. A second, approximate spelling here would turn a flag this
+// parser accepted into a task pointer the gate cannot account for.
 function flattenBatchArgs(a) {
   if (a == null) return "";
   if (typeof a === "string") return a;
@@ -3567,7 +3860,8 @@ function flattenBatchArgs(a) {
   if (typeof a === "object") return Object.values(a).map(flattenBatchArgs).join(" ");
   return String(a);
 }
-const peerMode = /\bpeer[\s-]*opinions?\s*=\s*off\b/.test(flattenBatchArgs(args).toLowerCase()) ? "off" : "on";
+const peerFlagValues = [...flattenBatchArgs(args).matchAll(PEER_OPINIONS_FLAG)].map((m) => m[1]);
+const peerMode = /\boff\b/i.test(peerFlagValues.join(" ")) ? "off" : "on";
 
 phase("Bootstrap");
 const boot = await agent(bootstrapPrompt(), { label: "bootstrap", schema: BOOTSTRAP_SCHEMA });
@@ -3657,12 +3951,34 @@ const collisions = [];
 
 try {
   phase("Resolve batch");
-  plan = await agent(resolvePrompt(args), { label: "resolve", schema: PLAN_SCHEMA });
-  if (!plan || !Array.isArray(plan.waves) || plan.waves.length === 0) {
+  // The resolver, the flag parser, and the reconciliation below must all
+  // tokenize ONE representation of the argument. Raw `args` here would show a
+  // structured invocation (an array, an object) different token boundaries
+  // than requiredArgPointers derives from the flattened string, and the exact
+  // reconciliation would hard-abort a batch the flag parser accepted.
+  plan = await agent(resolvePrompt(flattenBatchArgs(args)), { label: "resolve", schema: PLAN_SCHEMA });
+  if (!plan || !Array.isArray(plan.waves)) {
     // A batch that resolves no task is still a batch that terminated with the
     // baseline already taken, so it owes the same report as a delivering one.
     phase("Summary");
-    return { error: "Could not resolve any task files from the argument.", args, mainCheckout: await finalMainCheckoutReport() };
+    return { error: "Could not resolve task pointers from the argument.", args, resolution: plan && plan.resolution ? plan.resolution : null, mainCheckout: await finalMainCheckoutReport() };
+  }
+  if (!resolutionAccountsForInputs(plan.resolution, requiredArgPointers(flattenBatchArgs(args)))) {
+    // The packet dropped or invented a raw pointer relative to the argument
+    // itself; an internally consistent partial packet is still lost work.
+    phase("Summary");
+    return { error: "Could not resolve task pointers from the argument.", args, resolution: plan.resolution, mainCheckout: await finalMainCheckoutReport() };
+  }
+  if (!planResolutionIsExact(plan)) {
+    phase("Summary");
+    return { error: "Could not resolve task pointers from the argument.", args, resolution: plan.resolution, mainCheckout: await finalMainCheckoutReport() };
+  }
+  if (plan.waves.length === 0) {
+    phase("Summary");
+    if (!emptyPlanIsExplained(plan)) {
+      return { error: "Could not resolve task pointers from the argument.", args, resolution: plan.resolution, mainCheckout: await finalMainCheckoutReport() };
+    }
+    return { batch: args, defaultBase: plan.defaultBase, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), waves: 0, throttled: [], collisions: [], resolution: plan.resolution, mainCheckout: await finalMainCheckoutReport(), openQuestions: [], deviations: [], deviationAssessments: [], results: [] };
   }
 
   // Map every in-batch branch to the slug that produces it. A dependent task's
@@ -3833,7 +4149,7 @@ try {
   // reader than an unwound stack. `finalMainCheckoutReport` cannot throw, so
   // this exit always carries a report — an unmeasured one if the reading failed.
   phase("Summary");
-  return { error: `Batch aborted: ${e && e.message ? e.message : String(e)}`, batch: args, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), throttled, collisions, results, mainCheckout: await finalMainCheckoutReport() };
+  return { error: `Batch aborted: ${e && e.message ? e.message : String(e)}`, batch: args, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), throttled, collisions, resolution: plan && plan.resolution ? plan.resolution : null, results, mainCheckout: await finalMainCheckoutReport() };
 }
 
 phase("Summary");
@@ -3856,4 +4172,4 @@ const deviations = results.flatMap((r) => (Array.isArray(r.deviations) ? r.devia
 // read here without it is one the maintainer would rule on knowing only what
 // the implementer said.
 const deviationAssessments = results.flatMap((r) => (Array.isArray(r.deviationAssessments) ? r.deviationAssessments : []));
-return { batch: args, defaultBase: plan.defaultBase, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), waves: plan.waves.length, throttled, collisions, mainCheckout, openQuestions, deviations, deviationAssessments, results };
+return { batch: args, defaultBase: plan.defaultBase, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), waves: plan.waves.length, throttled, collisions, resolution: plan.resolution, mainCheckout, openQuestions, deviations, deviationAssessments, results };

@@ -140,7 +140,7 @@
 // A workflow is a runtime script, not a module: it opens with `export const
 // meta` and ends in top-level `await agent(...)`. So this suite evaluates the
 // DECLARATION PREFIX of each shipped file — everything up to the documented cut
-// marker below, which is the file's first executable statement — inside a
+// marker below, where the file's runtime body begins — inside a
 // `new Function` wrapper, and calls the prompt builders out of it. That is the
 // same technique `test-checkout-cleanliness-report.mjs` uses on a single
 // function, widened to the whole prefix so each builder gets the helpers it
@@ -352,10 +352,10 @@ import { dirname, join } from "node:path";
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const workflows = join(root, "plugins/dev-skills/workflows");
 
-// The first executable statement of each shipped workflow. Everything before it
-// is declarations (plus `export const meta`, neutralized below). Kept as exact
-// strings rather than line numbers so an edit above them cannot silently shift
-// the cut; a marker that stops matching fails the suite loudly.
+// Where each shipped workflow's runtime body begins: the prefix above it is
+// what this suite evaluates, with `export const meta` neutralized below. Kept as
+// exact strings rather than line numbers so an edit above them cannot silently
+// shift the cut; a marker that stops matching fails the suite loudly.
 const CUT = {
   "wf-review-cycle.js": "\nconst structured = args &&",
   "wf-address-tasks.js": "\nconst peerMode = /",

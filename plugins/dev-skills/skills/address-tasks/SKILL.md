@@ -5,9 +5,21 @@ description: Execute a batch of pre-planned task files in parallel using one git
 
 Implement a set of pre-planned task files using a **parallel, worktree-isolated** delegated subagent workflow.
 
-**Arguments:** `<glob-or-file-list of task files to implement> [peer-opinions=off]`
+**Arguments:** `<mixed-list of task numbers, task-file paths, and globs to implement> [peer-opinions=off]`
 
 `peer-opinions=off` is the only accepted explicit peer-opinion setting. Omit it to use the default, which enables best-effort peer opinions.
+
+## Task-pointer preflight
+
+Before reading task dependencies, run `resolve-tasks` in a fresh resolution subagent with its own context window. Hand it the complete raw task-pointer list, have it follow the shared resolver contract, and consume its task-resolution packet; do not scavenge or re-resolve task filenames in the orchestrator's context. Reconcile the returned packet against the list you handed it: every deduplicated raw pointer must appear either in some path's `selectedBy` or as a `not-found` diagnostic, and a pointer the packet accounts for nowhere is a resolution failure to report, never a silently smaller batch; and no `selectedBy` or `not-found` raw value may name a pointer you never handed it — a packet that invents an input is the same resolution failure to report, never extra work to admit.
+
+Use the packet's `selectedBy` provenance to apply policy. A path selected by an explicit path or glob executes exactly as it did before this additive preflight, whether its report context is `active`, `done`, `deferred`, `ambiguous`, or `outside-subtree`; if both explicit and number provenance selected it, explicit selection wins. A number-selected unambiguous `active` path executes normally. An unmatched number, path, or glob never executes and its `not-found` diagnostic is always surfaced.
+
+Mode selection is part of the invocation, not an inference from the task mapping: a direct skill invocation defaults to interactive whenever the maintainer can answer in the current session. Use hands-off only when the maintainer explicitly requests it or the invoking runtime cannot accept mid-run input; the `wf-address-tasks` dynamic workflow is always hands-off because it cannot pause for a decision.
+
+In an interactive run, show the resolved mapping whenever the invocation contains any number input, including a number mixed with otherwise clean explicit pointers. Also show the mapping whenever any input form produces a non-`active` classification or `not-found` anomaly. Require an explicit continue decision when any number-selected full number is `done`, `deferred`, or `ambiguous`, or when any input is `not-found`: `done` means already delivered and is skipped unless the maintainer explicitly includes it; `deferred` means deliberately unscheduled and needs explicit inclusion; for each `ambiguous` number, ask the maintainer to select exactly one candidate or exclude that number — a blanket continue must never include every candidate. Explicit path/glob selections remain executable while this decision is made.
+
+In a hands-off run, execute only the number-selected unambiguous `active` paths plus every explicit path/glob selection. Exclude and document every number-selected `done`, `deferred`, or `ambiguous` classification and every `not-found` input; never guess an ambiguous number. Carry the complete mapping and exclusions into the run summary.
 
 This skill is the parallel sibling of `address-tasks-serialized`. The roles (orchestrator / implementer / reviewer), the implementer and reviewer prompt contracts, and the code-quality review checklist are inherited from that skill, and the peer second-opinion protocol is the `review-cycle` skill's — read those for the contracts and their rationale. **What changes here is the execution model:** instead of one branch on one shared working tree processed strictly sequentially, each task gets its **own git worktree** so independent tasks can run **concurrently**, while each individual task still runs its implement→review→fix loop **sequentially**, bounded by the `review-cycle` round cap.
 
@@ -51,7 +63,7 @@ If a `wt-bootstrap` helper is on PATH, prefer it for steps 1–4 — it performs
 
 You are the orchestrator. You MUST NOT do implementation work yourself (except the trivial-task escape hatch below). Your responsibilities:
 
-1. Resolve the input arguments to a list of task files.
+1. Consume the **Task-pointer preflight** packet as the hard list of task files and the resolution context to report.
 2. Run the **Session Bootstrap** above.
 3. Build a **dependency graph** across the tasks and group them into **waves** (see Scheduling).
 4. For each wave, create one worktree per task on the right base branch, then drive each task's implement→review→fix loop — fanning the loop's same-phase agents out **concurrently** across the wave's tasks.

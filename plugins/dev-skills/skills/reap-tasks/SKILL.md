@@ -5,11 +5,23 @@ description: Reap completed task files by verifying their acceptance criteria ag
 
 Reap the specified task files by checking them against the current state of the codebase and determining whether each task has been delivered satisfactorily.
 
-**Arguments:** `<glob-or-file-list of task files to reap>`
+**Arguments:** `<mixed-list of task numbers, task-file paths, and globs to reap>`
+
+## Task-pointer preflight
+
+When the caller supplies task pointers, run `resolve-tasks` before verification in a fresh resolution subagent with its own context window. Hand it the complete raw task-pointer list, have it follow the shared resolver contract, and consume its task-resolution packet; do not scavenge or re-resolve task filenames in the reaping orchestrator's context. An ordinary no-argument sweep retains its existing inventory flow: discover candidate active task paths under the resolved task subtree as described below, report deferred and already-done entries separately, then pass those discovered candidate paths through this same resolver packet boundary. No arguments never means a glob over `done/` or permission to re-verify it. Reconcile the returned packet against the list you handed it: every deduplicated raw pointer must appear either in some path's `selectedBy` or as a `not-found` diagnostic, and a pointer the packet accounts for nowhere is a resolution failure to report, never a silently smaller batch; and no `selectedBy` or `not-found` raw value may name a pointer you never handed it — a packet that invents an input is the same resolution failure to report, never extra work to admit.
+
+Use the packet's `selectedBy` provenance to apply policy. A path selected by an explicit path or glob is reaped exactly as it was before this additive preflight, whether its report context is `active`, `done`, `deferred`, `ambiguous`, or `outside-subtree`; if both explicit and number provenance selected it, explicit selection wins. A number-selected unambiguous `active` path is eligible for verification immediately; a number-selected unambiguous `deferred` path becomes eligible only after the maintainer explicitly includes it in an interactive run and is excluded hands-off. A number that resolves only to `done` means already reaped: report it and never re-verify it, even after confirmation. An unmatched number, path, or glob never executes and its `not-found` diagnostic is always surfaced.
+
+Mode selection is part of the invocation, not an inference from the task mapping: a direct skill invocation defaults to interactive whenever the maintainer can answer in the current session. Use hands-off only when the maintainer explicitly requests it or the invoking runtime cannot accept mid-run input; a dynamic workflow that cannot pause for a decision uses the same hands-off policy.
+
+In an interactive run, show the resolved mapping whenever the invocation contains any number input, including a number mixed with otherwise clean explicit pointers. Also show the mapping whenever any input form produces a non-`active` classification or `not-found` anomaly. Require an explicit continue decision when any number-selected full number is `done`, `deferred`, or `ambiguous`, or when any input is `not-found`: a `done` entry remains skipped as already reaped, and its confirmation asks only whether to proceed with the remaining selected work; it must never offer to re-verify that done entry. A `deferred` entry needs explicit inclusion. For each `ambiguous` number, ask the maintainer to select exactly one candidate or exclude that number — a blanket continue must never verify every candidate. Explicit path/glob selections remain executable while this decision is made.
+
+In a hands-off run, verify only the number-selected unambiguous `active` paths plus every explicit path/glob selection. Exclude and document every number-selected `done` (already reaped), `deferred`, or `ambiguous` classification and every `not-found` input; never guess an ambiguous number. Carry the complete mapping and exclusions into the run summary.
 
 ## Primary objective
 
-For each task file in the input set, verify against the actual codebase that the task's acceptance criteria, scope, and intent have been met.
+For each task file admitted by the task-pointer preflight, verify against the actual codebase that the task's acceptance criteria, scope, and intent have been met.
 The goal is to close completed work cleanly and surface any remaining gaps as new, actionable follow-up tasks.
 Treat merged implementations as already covered by the project's normal code-review practices.
 Do not perform another general code review; inspect the implementation deeply enough to establish task acceptance and identify concrete gaps.
