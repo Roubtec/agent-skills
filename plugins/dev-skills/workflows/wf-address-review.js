@@ -666,13 +666,22 @@ ${fixInstructions(packet, undefined, zeroItem)}`;
 // this round's `deviations` states them, every later pass and every reviewer
 // round of that cycle sees them through the cycle's own blocks, and its result
 // carries them the way it carries any deviation of its own.
+// Restating is ordered for EVERY carry on the first pass — the believed-resolved
+// ones included — because entering the machinery is the only way OUT of it:
+// `mergedCycle` below reads a resolution from the cycle's per-pass record, and
+// an omission leaves no record, so a resolution claimed by leaving the deviation
+// out on the first pass would be unreadable there and the merge would fold the
+// deviation forward still standing, under its stale pre-rebase assessment.
+// Restated and then dropped on a later pass, the same claim rides the cycle's
+// own drop protocol — a round passes with the claim in view, over the rebased
+// tree — at the cost of the one extra round any deviation-set move earns.
 function carriedDeviationsFixerBlock(deviations) {
   const standing = Array.isArray(deviations) ? deviations : [];
   if (!standing.length) return "";
   return `
 ### Deviations from LOCKED decisions standing when the rebase happened (verbatim)
 
-These were reported and assessed on the base the branch sat on before the replay, and this cycle knows nothing of them beyond this list. Restate in your \`deviations\`, VERBATIM — copy each text exactly, since the cycle matches these by exact text and a reworded restatement reads as a drop plus a brand-new deviation — every one that STILL stands over the rebased tree. Leave one out only where the replay genuinely closed it, and say in \`summary\` what closed it: the new base carrying the in-spec route the deviation says did not exist is the shape that does. That omission is a CLAIM the reviewer judges, not an effect. Do NOT conform one away to shorten this list — report, don't correct; the maintainer ratifies it or asks for conformance.
+These were reported and assessed on the base the branch sat on before the replay, and this cycle knows nothing of them beyond this list. Restate EVERY one of them in your \`deviations\` on your FIRST pass, VERBATIM — copy each text exactly, since the cycle matches these by exact text and a reworded restatement reads as a drop plus a brand-new deviation — including any you believe the replay resolved. Do NOT claim a resolution by leaving one out: an omitted entry never enters this cycle's machinery, so the run cannot record the resolution and publishes the deviation as still standing under its stale pre-rebase assessment. Claim it the way this cycle claims any drop — restate first, then stop restating it on a later pass and say in \`summary\` what closed it (the new base carrying the in-spec route the deviation says did not exist is the shape that does); a round passing with that claim in view is what takes it off the maintainer's list. Do NOT conform one away to shorten this list — report, don't correct; the maintainer ratifies it or asks for conformance.
 
 ${JSON.stringify(standing, null, 2)}
 `;
@@ -695,15 +704,20 @@ ${carriedDeviationsReviewerBlock(priorDeviations)}`;
 // drop machinery compares against the set IT is holding, which began empty and
 // holds only what this cycle's fixer stated — so an unrestated carry produces no
 // claimed-drop block, and only this baseline puts it in front of anyone.
+// The duty on an unrestated carry is refusal, not adjudication: the merge reads
+// resolutions out of the cycle's per-pass record, an omission is in no record,
+// so a verdict accepting the omission would settle nothing — the deviation
+// folds forward regardless — and the one move that makes the claim recordable
+// is sending it back for the restate-then-drop the fixer was ordered to do.
 function carriedDeviationsReviewerBlock(deviations) {
   const standing = Array.isArray(deviations) ? deviations : [];
   if (!standing.length) return "";
   return `
 ### Deviations from LOCKED decisions standing when the rebase happened (verbatim) — the deviation baseline
 
-The fixer was handed this same list and told to restate every one that still stands over the rebased tree. It is your baseline for the deviations exactly as the report above is for the dispositions, and it carries two duties:
+The fixer was handed this same list and told to restate every one on its first pass, the ones it believes the replay resolved included, claiming any resolution by dropping the deviation on a later pass. It is your baseline for the deviations exactly as the report above is for the dispositions, and it carries two duties:
 
-- A deviation below that the fixer's \`deviations\` does not restate is a CLAIMED DROP. This cycle cannot show it to you as one — its own deviation set began empty and holds only what this cycle's fixer stated — so verify each such claim against the rebased tree yourself, exactly as you would a \`declined\` finding, and raise one you do not accept as a blocking issue. Passing this round is what drops it.
+- A deviation below that the fixer's \`deviations\` does not restate is a CLAIMED DROP this cycle has no channel to record: it never entered the cycle's machinery — its own deviation set began empty and holds only what this cycle's fixer stated — so no verdict of yours can drop it, and the run's merge folds it forward as still standing under the stale pre-rebase assessment however right the claim is. Require the restatement as a blocking issue whatever you make of the claim's merits, and judge the drop when the cycle's own claimed-drop protocol shows it to you on a later round.
 - Return a \`deviationAssessments\` entry for every one that is still standing. Yours is the round judging the tree that gets pushed, so your in-spec-route judgment and RATIFY/CONFORM recommendation are the ones published beside the deviation, replacing the judgment the earlier round formed against the base the replay moved off.
 
 ${JSON.stringify(standing, null, 2)}`;
@@ -1997,9 +2011,15 @@ const carriedOf = (c) => ({
 // now-stale earlier assessment leaves with it. A deviation that appears in that
 // history NOWHERE never entered the cycle's machinery at all — the carry did not
 // take, whatever the reason — so its absence is silence, not a judgment, and it
-// keeps standing with the earlier round's half. That is also why no verdict gate
-// is needed here: a cycle that stopped short still carries its unadjudicated
-// drops in `deviations`, so nothing it left open can be read as resolved.
+// keeps standing with the earlier round's half. The fixer brief orders every
+// carry restated on the FIRST pass — the believed-resolved ones included, a
+// resolution being claimed by a later pass's drop — precisely so a genuine
+// replay-resolution never arrives here as silence: the silent path is a brief
+// violation or a cycle stopped short, and folding it forward costs noise (a
+// resolved deviation reported once more, stale assessment beside it), never
+// loss. That is also why no verdict gate is needed here: a cycle that stopped
+// short still carries its unadjudicated drops in `deviations`, so nothing it
+// left open can be read as resolved.
 const deviationText = (entry) => (typeof entry === "string" ? entry : JSON.stringify(entry));
 const assessedDeviation = (a) => deviationText(a && a.deviation !== undefined ? a.deviation : a);
 const deviationsRestatedIn = (c) =>
