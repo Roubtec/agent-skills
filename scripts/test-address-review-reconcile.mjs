@@ -1208,7 +1208,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "the gather brief's zero-item paragraph states the three-way comparison and both outcomes",
     /pr\.finalHead/.test(zeroPara) && /pr\.startingHead/.test(zeroPara) && /pr\.headOid/.test(zeroPara) &&
       /all three the same commit/.test(zeroPara) && /TERMINAL no-op/.test(zeroPara) && /ZERO-ITEM PATH/.test(zeroPara) &&
-      /unreviewed and unpushed/.test(zeroPara),
+      /leaves no attested no-op to report/.test(zeroPara) && /cover either/.test(zeroPara),
     zeroPara ? zeroPara.slice(0, 200) : "the gather brief has no zero-item paragraph",
   );
   const finalPara = brief.split("\n").find((l) => l.includes("pr.finalHead") && l.includes("once more")) || "";
