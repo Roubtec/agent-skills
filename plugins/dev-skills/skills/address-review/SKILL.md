@@ -107,7 +107,7 @@ Three top-level subagent roles — all spawned via the `Agent` tool with `subage
 
 - **Fixer** (optional) — handles a large, multi-file, or exploratory fix for one or more related comments. Skip it for small surgical fixes you can do directly.
 - **Reviewer** (default before any push) — a fresh-eyes agent that receives every unresolved thread and explicitly included standalone item verbatim, plus the proposed disposition labels, but **not** your implementation reasoning; it independently confirms that each disposition is sound in the committed code and performs a quality pass on the changed files. This is the `review-cycle` skill's Reviewer role.
-- **Peer (`codex`, best-effort)** — the `review-cycle` skill's cross-harness peer step: a read-only CLI review launched beside the Reviewer with the same disposition context but no implementation reasoning. Its preflight, pinned-strength launch, outcome vocabulary, and gating are defined in that skill; a coherent, grounded finding is first-class.
+- **Peer (`codex`, best-effort)** — the `review-cycle` skill's cross-harness peer step: a read-only CLI review launched beside the Reviewer with the same disposition context but no implementation reasoning. Every rule that skill states under *The peer step* binds here whole, later additions included; a coherent, grounded finding is first-class.
 - **Rebaser** (default, once per rebase point) — a fresh subagent that performs one of step 2's rebase points under `review-cycle` → "The delegated rebase step", and hands back the pinned effective base, the before/after tips, and any halt. It is the only role here that rewrites history, and it is never also the fixer. In `delegated-fix` the role belongs to the batch orchestrator rather than to this run, for the reasons "Delegated modes for the worktree orchestrator" gives.
 
 > **Critical — one checkout-dependent agent at a time; subagents share your working tree.**
@@ -236,7 +236,7 @@ Perform the fixes directly, leave the worktree clean with all intended changes c
 
 ### Step 6 — Verify with a fresh reviewer
 
-Once fixes are committed and the worktree is clean, run the `review-cycle` skill's verification loop on this branch (artifact type `code`). Its roles — the fresh Reviewer spawn and the best-effort `codex` peer launched beside it — plus the peer's pinned-strength launch and outcome vocabulary, the gates (grounding spot-check, blocking and minor peer findings, verbatim finding relay), the disposition rule, and the round cap are all defined there and are not restated here. Beyond those named pieces, every rule that skill states under *The loop and its gates* binds this loop whole, later additions included — the no-latched-flags rule among them, for whatever this run carries into step 8's report and the Summary comment. The peer preflight outcome from step 0 and `peer-opinions=off` carry into the cycle.
+Once fixes are committed and the worktree is clean, run the `review-cycle` skill's verification loop on this branch (artifact type `code`). Its roles — the fresh Reviewer spawn and the best-effort `codex` peer launched beside it — are defined there and are not restated here. Every rule that skill states under *The peer step* and *The loop and its gates* binds this run whole, later additions included; the no-latched-flags rule applies to whatever this run carries into step 8's report and the Summary comment. The peer preflight outcome from step 0 and `peer-opinions=off` carry into the cycle.
 
 This skill's deltas on the cycle:
 

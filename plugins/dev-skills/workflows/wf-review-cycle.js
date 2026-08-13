@@ -77,8 +77,8 @@
  * round outcome. The peer is never required for the cycle to conclude.
  *
  * The peer's baseline interface is powbox's `peer-review-run` helper (result
- * schema powbox.peer-review-run/v1) — but NOT YET, and only for the MODEL
- * dimension. The effort half already works: the helper takes `--model` and
+ * schema powbox.peer-review-run/v1) — but NOT YET, for TWO prerequisites. On
+ * strength, the effort half already works: the helper takes `--model` and
  * `--effort`, defaults effort to `high` for BOTH providers, re-injects
  * `-c model_reasoning_effort=<effort>` in its codex adapter specifically to
  * survive that adapter's own `--ignore-user-config`, and reports the strength
@@ -89,10 +89,13 @@
  * `--model` default (`opus`) applies to claude only, so a codex peer launched
  * through it runs on the CLI's bare default; naming a concrete codex ID instead
  * is barred by the never-dated-model-IDs rule. Until powbox carries that
- * configured model through, the stage's subagent runs the PINNED RAW LAUNCH
+ * configured model through (https://github.com/Roubtec/powbox/issues/145), AND
+ * until the schema exposes the full provider-neutral review through a
+ * documented `reviewFile` or `reviewText` field rather than only an
+ * `artifactDir`, the stage's subagent runs the PINNED RAW LAUNCH
  * (codex exec with `-c model_reasoning_effort=medium`; the model stays the
  * peer's configured high-capability default from ~/.codex/config.toml). When it
- * lands, the swap to `peer-review-run --provider codex --worktree ...
+ * BOTH land, the swap to `peer-review-run --provider codex --worktree ...
  * --prompt-file ... --artifact-root ... --timeout N --effort medium` (flag
  * spelling transcribed from the shipped helper, with --timeout sized under the
  * subagent's own Bash-tool limit, and --effort stated explicitly because the
@@ -100,8 +103,10 @@
  * already matches the helper's, so the swap is a prompt change, not a
  * control-flow change.
  *
- * Peer concurrency policy is task 015's, singly stated there; this script sets
- * no cap, floor, or fan-out shape of its own.
+ * Peer concurrency follows the canonical optimistic session-local adaptive
+ * throttle below: unbounded until a qualifying trouble outcome, then queued
+ * behind the exact capped generations task 015 defines. A fan-out embedding
+ * shares one throttle object across every child cycle.
  *
  * Runtime notes:
  *  - The script cannot run git/shell/file IO; agents do all of it.
@@ -371,6 +376,14 @@ function cycleDeviationVerdict(recommendation) {
 // Peer-stage result. `outcome` uses the peer-review-run vocabulary
 // (powbox.peer-review-run/v1) so the eventual helper swap changes the prompt,
 // not this contract.
+//
+// `reason` and `teardownFailure` are REQUIRED rather than optional because both
+// drive control flow rather than diagnostics. `cyclePeerTrouble` classifies the
+// EXACT reason string, so an omitted one normalizes to `""`, matches no entry in
+// that mapping, and spends a qualifying empty/garbled forfeiture without ever
+// stepping the throttle down. `teardownFailure` is the stage's only channel for
+// a provider process it could not prove dead — the one condition the
+// non-blocking normalization below must NOT absorb.
 const CYCLE_PEER_SCHEMA = {
   type: "object",
   properties: {
@@ -390,8 +403,19 @@ const CYCLE_PEER_SCHEMA = {
     },
     notes: { type: "string", description: "Anything after the verdict worth carrying (pass-notes), verbatim." },
     detail: { type: "string", description: "For a non-passed/issues outcome: why (logged out, timed out after retry, empty output, provider crash...)." },
+    reason: { type: "string", description: "The provider/helper reason verbatim; distinguishes empty/garbled forfeitures for the adaptive throttle. Always emit it: an empty string where the outcome carries no reason, never an omitted field." },
+    teardownFailure: { type: "boolean", description: "The ONE result that is not non-blocking: true ONLY when a provider process this stage launched could not be proven dead after the bounded TERM/KILL sequence. The cycle stops on it for operator intervention. False on every ordinary path, including this stage's own failures." },
   },
-  required: ["outcome", "findings"],
+  required: ["outcome", "findings", "reason", "teardownFailure"],
+};
+
+const CYCLE_PEER_PREFLIGHT_SCHEMA = {
+  type: "object",
+  properties: {
+    outcome: { type: "string", description: "available | unavailable" },
+    detail: { type: "string", description: "Empty when available; exact missing-binary or logged-out diagnostic when unavailable." },
+  },
+  required: ["outcome", "detail"],
 };
 
 // Verdict of the trivial-round close-out's diff check — the orchestrator's own
@@ -770,8 +794,8 @@ Return \`pass: true\` only if everything holds and no material issue remains; el
 // script (a workflow cannot shell out). Baseline destination: the
 // `peer-review-run` helper (schema powbox.peer-review-run/v1) — retained
 // pinned raw launch until that helper can carry the codex peer's CONFIGURED
-// high-capability model, the one half of the review-strength passthrough still
-// outstanding; its effort passthrough and strength reporting have landed. See
+// high-capability model AND expose a documented provider-neutral full-review
+// payload (`reviewFile` or `reviewText`) rather than only `artifactDir`. See
 // the header comment. The launch pins review strength per invocation
 // (-c model_reasoning_effort=medium; the model stays the peer's configured
 // high-capability default from ~/.codex/config.toml) and never writes back to
@@ -791,10 +815,8 @@ function cyclePeerPrompt(cycle, state) {
   // narration the fixer is told not to ship. Gated on artifact type exactly as
   // `cycleReviewChecks` gates it: a prose review has no code comments to weigh.
   const commentWeighting = cycle.artifactType === "prose" ? "" : ` ${CYCLE_COMMENT_REVIEW}`;
-  const preflightStep = state.peerPreflighted
-    ? `1. Preflight: already done this run — an earlier round verified the \`codex\` binary and login, so skip the probes. An auth/usage error from the launch itself still returns \`unavailable\`.`
-    : `1. Preflight: if \`command -v codex\` fails, return outcome \`unavailable\` (detail: missing binary). If \`codex login status\` exits non-zero and \`CODEX_API_KEY\` is unset, return \`unavailable\` (detail: logged out). An auth/usage error from the launch itself is also \`unavailable\`.`;
-  return `You run the best-effort cross-harness PEER REVIEW stage for one review-cycle round. You launch a read-only \`codex\` review of the committed state, wait for it, and return its result structurally. You NEVER fail this stage: every problem becomes a non-blocking outcome in the schema (\`unavailable\`, \`timeout\`, \`forfeited\`, \`failed\`) with a one-line \`detail\` — never an error, never a refusal to answer.
+  const preflightStep = `1. Preflight: already done by the run-level shared preflight before this launch, so skip the probes. An auth/usage error from the launch itself still returns \`unavailable\`.`;
+  return `You run the best-effort cross-harness PEER REVIEW stage for one review-cycle round. You launch a read-only \`codex\` review of the committed state, wait for it, and return its result structurally. You NEVER fail this stage: every problem becomes a non-blocking outcome in the schema (\`unavailable\`, \`timeout\`, \`forfeited\`, \`failed\`) with a one-line \`detail\` — never an error, never a refusal to answer. Exactly one condition is not non-blocking, and it travels as a FIELD rather than as an error: a provider process you could not prove dead sets \`teardownFailure\` true, and the cycle stops on it.
 
 ## WORKTREE CONTRACT
 
@@ -804,37 +826,67 @@ ${CYCLE_DESTROY_BOUNDARY}
 
 The peer examines this worktree READ-ONLY; you edit nothing either. The cycle's fresh reviewer is examining the same committed state concurrently — two readers are safe, and the reviewer alone owns builds/execution.
 
-${CYCLE_FINISH_IN_TURN} That is why the launch below is one supervised foreground call: you return its outcome, never a promise to report the peer's result later.
+${CYCLE_FINISH_IN_TURN} The retained manual path therefore launches a supervised background peer, waits or times it out, and reaps it inside this turn: you return its outcome, never a promise to report the peer's result later.
 
 ## Steps
 
 ${preflightStep}
-2. Prepare unique per-attempt paths under this cycle's artifact directory: \`round_dir=${cycleShq(`${state.artifactDir}/round-${state.round}`)}\`, \`mkdir -p "$round_dir"\`, with \`prompt_file\`, \`outfile\`, \`stderr_file\` inside it (suffix \`-attempt2\` on a retry; never reuse a path).
+2. Prepare unique per-attempt paths under this cycle's artifact directory: \`round_dir=${cycleShq(`${state.artifactDir}/round-${state.round}`)}\`, \`mkdir -p "$round_dir"\`, with \`prompt_file\`, \`outfile\`, \`stderr_file\`, and \`pid_file\` inside it (suffix \`-attempt2\` on a retry; never reuse a path).
 3. Write the peer prompt below VERBATIM to \`$prompt_file\` with a quoted heredoc (\`<<'PEER_PROMPT'\`) — never assemble it through shell interpolation.
-4. Launch the peer as ONE supervised foreground call, bounded UNDER your own Bash tool limit so the tool can never kill it mid-run unaccounted (set the Bash tool timeout to 600000 ms and bound the peer tighter with \`timeout\` — including its hard-kill escalation, because expiry alone sends only TERM, which a hung provider can catch or block and so outlive you into the tool's own kill):
+4. Two powbox prerequisites remain: the helper's Codex provider still discards the configured high-capability model ([powbox issue #145](https://github.com/Roubtec/powbox/issues/145)), and schema v1 exposes only \`artifactDir\`, not a documented provider-neutral \`reviewFile\` or \`reviewText\` from which every finding can be relayed verbatim. This task-015 rendering therefore retains the pinned raw launch even when the helper is installed; never guess a private artifact filename or parse a provider-specific envelope. Once BOTH prerequisites land, first establish \`artifact_root\` as a unique, private, session-scoped directory outside the reviewed worktree, then run \`peer-review-run --provider codex --worktree "$worktree" --prompt-file "$prompt_file" --artifact-root "$artifact_root" --timeout 260 --effort medium\` once in the foreground inside this Peer stage. Set the caller-side Bash/tool wait to at least 570 seconds but strictly below its roughly 600-second cap: the helper may make two 260-second attempts and spend roughly five seconds reaping each one, leaving at least 40 seconds for setup, parsing, and result emission. Read the documented full-review payload before applying verdict logic. Then keep the hardened manual launch below only as the fallback when \`command -v peer-review-run\` fails. For now launch it with \`nohup\` and record the peer PID directly:
 
    \`\`\`bash
    worktree="<the worktree path from the contract above>"
    # Pin peer effort per invocation; never changes the container's saved config.
-   timeout --kill-after=30 540 codex exec --sandbox read-only --cd "$worktree" -o "$outfile" \\
-     -c mcp_servers={} -c model_reasoning_effort=medium "$(<"$prompt_file")" \\
-     < /dev/null 2> "$stderr_file"
+   nohup sh -c '
+     pid_file=$1
+     shift
+     proc_identity() {
+       stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
+       rest=\${stat##*) }
+       [ "$rest" != "$stat" ] || return 1
+       set -- $rest
+       [ "$#" -ge 20 ] || return 1
+       pgrp=$3
+       session=$4
+       shift 19
+       start_time=$1
+       for value in "$start_time" "$pgrp" "$session"; do
+         case $value in ""|0|*[!0-9]*) return 1 ;; esac
+       done
+       printf "%s %s %s\\n" "$start_time" "$pgrp" "$session"
+     }
+     identity=$(proc_identity "$$") || exit 125
+     printf "%s %s\\n" "$$" "$identity" > "$pid_file" || exit 125
+     exec "$@"
+   ' peer-launch "$pid_file" \\
+     codex exec --sandbox read-only --cd "$worktree" -o "$outfile" \\
+       -c mcp_servers={} -c model_reasoning_effort=medium "$(<"$prompt_file")" \\
+     < /dev/null > /dev/null 2> "$stderr_file" &
    \`\`\`
 
-   Exit 124 means the bounded timeout fired — as does 137, when the peer rode out TERM and the \`--kill-after\` grace ended in an uncatchable KILL (540 s + 30 s still lands under the 600 s tool limit): retry ONCE with fresh attempt paths, then return outcome \`timeout\`. Any other failure (crash, non-zero exit with no usable output): retry once, then return \`failed\`. Auth/usage errors: \`unavailable\` without retry.
-5. Read \`$outfile\`. A \`VERDICT: PASS\` line → outcome \`passed\` (anything after it goes to \`notes\` verbatim). A \`VERDICT: ISSUES\` line → outcome \`issues\`, with every numbered finding mapped verbatim into \`findings\` (severity from its \`blocking\`/\`minor\` tag — default \`blocking\` when untagged — plus its \`file:line\` as \`location\` and the finding text as \`claim\`; do not summarize, merge, or rewrite). No verdict line, or empty/unintelligible output → \`forfeited\`.
+   Ordinary stdout is detached to \`/dev/null\`, never merged into \`$outfile\` or \`$stderr_file\`; the \`-o\` artifact remains authoritative. The handoff records the peer PID plus Linux \`/proc/<pid>/stat\` fields 22 (start time), 5 (process group), and 6 (session). In every later Bash call, parse the stat record by stripping everything through its final closing parenthesis plus following space before counting fields (the comm field may contain spaces or \`)\`), require exactly those four positive-decimal handoff values, and compare all three current fields with the persisted values before every \`kill -0\`, TERM, or KILL. Missing or mismatched identity means the original peer is dead; never probe or signal the reused number. On the loose roughly 12-minute timeout, TERM the identity-checked direct provider PID, poll for at most ten seconds, KILL only if the identity still matches, then poll for at most ten more seconds. If it survives, do not retry, do not decide the round, and do not advance: return immediately with \`teardownFailure\` true, outcome \`failed\`, and a \`detail\` naming the surviving PID and the probe that still answered. The cycle stops on that flag for operator intervention; a non-blocking outcome alone would let it keep fixing and publishing while the provider is still alive. Retry ONCE with fresh paths only after confirmed death. Never infer a process group from plain \`nohup … &\`, signal a wait supervisor, use \`pkill -f\`, or replace this with a capped foreground call. If recovering by the unique \`-o\` path is unavoidable, disambiguate \`pgrep -f\` to the codex peer binary after excluding the probing shell and every ancestor: one survivor is alive, none dead, more than one indeterminate and signals nothing; persist that PID's complete identity before handing it to another shell. The identity-checked probe target is the only signal target. Auth/usage errors are \`unavailable\` without retry.
+5. Read \`$outfile\` even when the liveness probe has just gone dead: a non-empty artifact with a \`VERDICT:\` line is authoritative. A \`VERDICT: PASS\` line → outcome \`passed\` (anything after it goes to \`notes\` verbatim). A \`VERDICT: ISSUES\` line → outcome \`issues\`, with every numbered finding mapped verbatim into \`findings\` (severity from its \`blocking\`/\`minor\` tag — default \`blocking\` when untagged — plus its \`file:line\` as \`location\` and the finding text as \`claim\`; do not summarize, merge, or rewrite). No verdict line, or empty/unintelligible output → \`forfeited\`, with \`reason\` exactly identifying \`empty output\` or \`garbled output\` where that is what happened. A timeout after retry is \`timeout\`; a provider crash or exhausted non-auth retry is \`failed\`. Every outcome carries \`reason\`: the provider diagnostic verbatim where one exists, otherwise the empty string — never omitted, and never invented.
 
 ## Peer prompt (write this text to the prompt file verbatim, filling only the placeholders)
 
-You are an independent read-only peer reviewer. Review the committed state of branch ${JSON.stringify(cycle.branch)} against base ${JSON.stringify(cycle.base)} in the current directory (artifact type: ${cycle.artifactType}). Read the actual files; edit nothing; run no builds or tests. Verify the work items and any proposed dispositions below in the committed code; a declined finding must be technically justified.${commentWeighting} ${CYCLE_CARRIED_CLAIMS} Evidence (verbatim):
+You are an independent read-only peer reviewer. Review the committed state of branch ${JSON.stringify(cycle.branch)} against base ${JSON.stringify(cycle.base)} in the current directory (artifact type: ${cycle.artifactType}). Read the actual files; edit nothing; use no network access — all GitHub thread text and diffs needed for the review are embedded here verbatim — and run no builds or tests. Verify the work items and any proposed dispositions below in the committed code; a declined finding must be technically justified.${commentWeighting} ${CYCLE_CARRIED_CLAIMS} Evidence (verbatim):
 
 ${JSON.stringify(evidence, null, 2)}
 
-Reply with exactly \`VERDICT: PASS\` or \`VERDICT: ISSUES\`, followed for issues by numbered findings each tagged \`blocking\` or \`minor\`, with \`file:line\` and a one-line rationale.
+Reply with exactly \`VERDICT: PASS\` or \`VERDICT: ISSUES\`, then \`VERIFICATION: STATIC (executed no tests)\`, followed for issues by numbered findings each tagged \`blocking\` or \`minor\`, with \`file:line\` and a one-line rationale.
 
 ## Output
 
-Return the structured result: \`outcome\`, \`findings\` (verbatim, tagged), \`notes\`, \`detail\`.`;
+Return the structured result: \`outcome\`, \`findings\` (verbatim, tagged), \`notes\`, \`detail\`, \`reason\` copied exactly from the provider/helper reason (the empty string when there is none — never an omitted field), and \`teardownFailure\` (\`false\` on every ordinary path, \`true\` only for the surviving-provider stop above).`;
+}
+
+function cyclePeerPreflightPrompt() {
+  return `Peer availability preflight for this orchestration run. Run only these read-only probes; launch no review.
+
+${CYCLE_DESTROY_BOUNDARY}
+
+If \`command -v codex\` fails, return \`{ "outcome": "unavailable", "detail": "missing binary" }\`. Otherwise run \`codex login status\`. If it succeeds, return \`{ "outcome": "available", "detail": "" }\`. If it fails and \`CODEX_API_KEY\` is unset, return unavailable with the exact login diagnostic in \`detail\`. If it fails while \`CODEX_API_KEY\` is set, return available because the environment key may authenticate the real invocation. Return only the schema; do not throw or launch codex exec.`;
 }
 
 // The peer stage NEVER fails the round: a dead subagent (null return /
@@ -843,9 +895,17 @@ Return the structured result: \`outcome\`, \`findings\` (verbatim, tagged), \`no
 // The normalization is written as a complement (anything not passed/issues is
 // non-blocking), so `failed` — and any future outcome — cannot fall through a
 // switch over the named ones.
+//
+// `teardownFailure` is the single field this carries THROUGH rather than
+// absorbing. The outcome beside it still lands non-blocking; the round loop
+// reads the flag and stops the cycle, which is what makes the peer prompt's
+// surviving-provider stop reachable at all rather than an instruction the
+// contract silently discards. A script-synthesized result never sets it — a
+// stage that died proves nothing about a provider — so the flag only ever comes
+// from a stage that observed the survivor itself.
 function normalizeCyclePeerResult(res) {
   if (!res || typeof res !== "object") {
-    return { outcome: "forfeited", findings: [], notes: "", detail: "peer subagent returned nothing (died or failed schema validation); recorded non-blocking", synthesized: true };
+    return { outcome: "forfeited", findings: [], notes: "", reason: "", teardownFailure: false, detail: "peer subagent returned nothing (died or failed schema validation); recorded non-blocking", synthesized: true };
   }
   const gating = res.outcome === "passed" || res.outcome === "issues";
   const known = ["passed", "issues", "unavailable", "timeout", "forfeited", "failed"];
@@ -854,6 +914,8 @@ function normalizeCyclePeerResult(res) {
     outcome,
     findings: outcome === "issues" && Array.isArray(res.findings) ? res.findings : [],
     notes: typeof res.notes === "string" ? res.notes : "",
+    reason: typeof res.reason === "string" ? res.reason : "",
+    teardownFailure: res.teardownFailure === true,
     detail: typeof res.detail === "string" && res.detail
       ? res.detail
       : (gating ? "" : `peer outcome ${JSON.stringify(res.outcome)} recorded non-blocking`),
@@ -865,21 +927,148 @@ function normalizeCyclePeerResult(res) {
   };
 }
 
+// A shared fan-out state cannot coordinate preflight with its boolean alone.
+// The first caller owns one cheap preflight agent and every sibling awaits that
+// promise; once it settles available, all actual peer launches fan out together
+// under the independent adaptive throttle. A thrown/schema-invalid result
+// clears the latch without marking completion, so one waiter retries while the
+// failed owner records a synthesized non-blocking outcome.
+async function ensureCyclePeerPreflight(peerState) {
+  for (;;) {
+    if (peerState.preflighted || peerState.unavailable) {
+      return { outcome: peerState.unavailable ? "unavailable" : "available", detail: peerState.unavailableDetail || "" };
+    }
+    if (peerState.preflightInProgress) {
+      await peerState.preflightInProgress.promise;
+      continue;
+    }
+    const latch = {};
+    peerState.preflightInProgress = latch;
+    latch.promise = (async () => {
+      let result;
+      try {
+        const raw = await agent(cyclePeerPreflightPrompt(), {
+          label: "peer-preflight",
+          schema: CYCLE_PEER_PREFLIGHT_SCHEMA,
+          phase: CYCLE_PEER_PHASE,
+        });
+        result = raw && (raw.outcome === "available" || raw.outcome === "unavailable")
+          ? raw
+          : { outcome: "forfeited", detail: "peer preflight returned nothing or failed schema validation", synthesized: true };
+      } catch (e) {
+        result = { outcome: "forfeited", detail: `peer preflight threw (${e && e.message ? e.message : String(e)})`, synthesized: true };
+      }
+      if (result.outcome === "unavailable") {
+        peerState.unavailable = true;
+        if (result.detail && !peerState.unavailableDetail) peerState.unavailableDetail = result.detail;
+      } else if (result.outcome === "available") {
+        peerState.preflighted = true;
+      }
+      if (peerState.preflightInProgress === latch) peerState.preflightInProgress = null;
+      return result;
+    })();
+    return latch.promise;
+  }
+}
+
+// Optimistic session-local adaptive peer throttle. A fan-out owner passes one
+// shared object to every embedded cycle; a standalone cycle gets one whose
+// unbounded start is observationally a no-op. Calls already in flight are never
+// killed, and queued calls wake when completions leave room under the current
+// cap. One generation identifies one trouble cluster: a result from a call
+// launched before the latest step-down cannot collapse the cap again.
+function createCyclePeerThrottle() {
+  return { cap: null, generation: 0, inFlight: 0, waiters: [], steps: [] };
+}
+
+async function acquireCyclePeerSlot(throttle) {
+  while (throttle.cap != null && throttle.inFlight >= throttle.cap) {
+    await new Promise((resolve) => throttle.waiters.push(resolve));
+  }
+  throttle.inFlight += 1;
+  return throttle.generation;
+}
+
+function cyclePeerTrouble(result) {
+  if (!result || result.synthesized) return false;
+  if (result.outcome === "timeout" || result.outcome === "failed") return true;
+  if (result.outcome !== "forfeited") return false;
+  // Reasons are retained verbatim in the result and summary. Classification is
+  // deliberately a separate exact mapping: helper diagnostics are a documented
+  // wire contract, while broad matches on words such as "empty" or "garbled"
+  // can throttle on unrelated forfeitures. The two short forms are emitted only
+  // by the retained raw path after it observes the corresponding condition.
+  const reasonClass = new Map([
+    ["empty output", "empty"],
+    ["garbled output", "garbled"],
+    ["provider exited 0 with an empty final message", "empty"],
+    ["provider exited 0 but produced a malformed/unparseable response", "garbled"],
+  ]).get(String(result.reason || ""));
+  return reasonClass === "empty" || reasonClass === "garbled";
+}
+
+function releaseCyclePeerSlot(throttle, launchGeneration, result) {
+  throttle.inFlight = Math.max(0, throttle.inFlight - 1);
+  if (cyclePeerTrouble(result) && (throttle.cap == null || launchGeneration === throttle.generation)) {
+    const from = throttle.cap;
+    const to = from == null
+      ? Math.max(2, Math.min(8, throttle.inFlight))
+      : Math.max(2, Math.floor(from / 2));
+    throttle.cap = to;
+    throttle.generation += 1;
+    if (from == null || to < from) {
+      const step = {
+        generation: throttle.generation,
+        from: from == null ? "unbounded" : from,
+        to,
+        inFlight: throttle.inFlight,
+        outcome: result.outcome,
+        reason: result.reason || result.detail || "",
+      };
+      throttle.steps.push(step);
+      log(`Peer launch throttle stepped from ${step.from} to ${to} after ${result.outcome}${step.reason ? ` (${step.reason})` : ""}; ${throttle.inFlight} call(s) remain in flight.`);
+    }
+  }
+  const waiters = throttle.waiters.splice(0);
+  waiters.forEach((resolve) => resolve());
+}
+
+function cyclePeerThrottleSummary(throttle) {
+  return {
+    cap: throttle.cap == null ? "unbounded" : throttle.cap,
+    inFlight: throttle.inFlight,
+    steps: throttle.steps.slice(),
+    sessionLocal: true,
+    crossContainerCoordination: false,
+  };
+}
+
 async function runCyclePeerStage(cycle, state) {
   if (cycle.peer === "off") {
     return { outcome: "disabled", findings: [], notes: "", detail: "peer-opinions=off" };
   }
+  const preflight = await ensureCyclePeerPreflight(state.peerState);
+  if (preflight.outcome === "unavailable") {
+    return { outcome: "unavailable", findings: [], notes: "", detail: preflight.detail || "peer marked unavailable earlier this run" };
+  }
+  if (preflight.synthesized) {
+    return { outcome: "forfeited", findings: [], notes: "", reason: "", detail: `${preflight.detail}; recorded non-blocking`, synthesized: true };
+  }
+  const launchGeneration = await acquireCyclePeerSlot(state.peerThrottle);
+  let result;
   try {
     const res = await agent(cyclePeerPrompt(cycle, state), {
       label: `${cycle.labelPrefix || ""}peer#${state.round}`,
       schema: CYCLE_PEER_SCHEMA,
       phase: CYCLE_PEER_PHASE,
     });
-    return normalizeCyclePeerResult(res);
+    result = normalizeCyclePeerResult(res);
   } catch (e) {
     // A thrown stage must not drop the round (or, under pipeline(), the item).
-    return { outcome: "forfeited", findings: [], notes: "", detail: `peer stage threw (${e && e.message ? e.message : String(e)}); recorded non-blocking`, synthesized: true };
+    result = { outcome: "forfeited", findings: [], notes: "", reason: "", detail: `peer stage threw (${e && e.message ? e.message : String(e)}); recorded non-blocking`, synthesized: true };
   }
+  releaseCyclePeerSlot(state.peerThrottle, launchGeneration, result);
+  return result;
 }
 
 // The close-out's diff check. Cheap and read-only like the grounding
@@ -1176,12 +1365,14 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //   labelPrefix — optional, prefixes agent labels for fan-out consumers,
 //   peerState — optional SHARED peer-availability state for a fan-out owner
 //     embedding many cycles: hand every cycle ONE object of the shape
-//     { preflighted: false, unavailable: false, unavailableDetail: "" } and
-//     the install/login preflight runs once for the whole batch, with an
-//     unavailable peer sticking batch-wide (the canonical batch rule).
-//     Availability state ONLY — no peer cap, queue, or fan-out shape lives
-//     here (that policy is task 015's). Omitted, each cycle keeps its own
-//     (the standalone behavior).
+//     { preflighted: false, preflightInProgress: null, unavailable: false,
+//     unavailableDetail: "" } and the install/login preflight runs once for
+//     the whole batch, with concurrent first-wave callers sharing its in-flight
+//     latch and an unavailable peer sticking batch-wide (the canonical rule).
+//   peerThrottle — optional SHARED adaptive-throttle state created by
+//     createCyclePeerThrottle() for a fan-out owner. It starts unbounded,
+//     queues only after trouble steps it down, and records every step for the
+//     run summary. Omitted, each cycle keeps its own (standalone behavior).
 // }
 //
 // Returns the cycle result contract (lean; bulk prose stays behind artifactDir):
@@ -1203,7 +1394,11 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     it — the boolean alone says only that the map leaving is not the judged
 //     one, which is the shape that used to lose the judged one outright),
 //   proactive, finalSha, notes, reviewerNotes,
-//   peerRounds, discardedPeerFindings, undisposed, outstanding, artifactDir,
+//   peerRounds ({ round, outcome, detail, reason } entries, plus teardownFailure
+//     on the one round that carried it — a provider the peer stage could not
+//     prove dead, which ends the cycle as an `error` rather than degrading to a
+//     non-blocking outcome), peerThrottle,
+//   discardedPeerFindings, undisposed, outstanding, artifactDir,
 //   closeOut (present only when a trivial-round close-out ENDED the cycle:
 //     the pass, the range, and the non-semantic edits that shipped unreviewed),
 //   recordOnly (present only when the cycle concluded over a delivery run that
@@ -1327,7 +1522,8 @@ async function runReviewCycle(cycle) {
   // unavailability sticks batch-wide; a standalone cycle gets its own. (The
   // runtime is single-threaded JS, so sibling cycles mutate a shared object
   // safely between awaits.)
-  const peerState = cycle.peerState || { preflighted: false, unavailable: false, unavailableDetail: "" };
+  const peerState = cycle.peerState || { preflighted: false, preflightInProgress: null, unavailable: false, unavailableDetail: "" };
+  const peerThrottle = cycle.peerThrottle || createCyclePeerThrottle();
   let reviewerNotes = ""; // the latest reviewer's pass-notes (PR-body caveats for consumers)
   // The reviewer's half of report-don't-correct, as accepted by the last round
   // that PASSED. Replaced rather than accumulated, for the reason `deviations`
@@ -1381,6 +1577,7 @@ async function runReviewCycle(cycle) {
       notes: (packet && packet.summary) || "",
       reviewerNotes,
       peerRounds,
+      peerThrottle: cyclePeerThrottleSummary(peerThrottle),
       discardedPeerFindings,
       artifactDir,
       ...(artifactDirAnomalies.length ? { artifactDirAnomalies } : {}),
@@ -1874,7 +2071,8 @@ async function runReviewCycle(cycle) {
       // applies at it rather than unconditionally.
       tier: cycleValidationTier(cycle, { confirming }),
       proposedRetirements: pendingRetirements,
-      peerPreflighted: peerState.preflighted,
+      peerState,
+      peerThrottle,
       // What still stands after the pass just made — the reviewer adds the
       // in-spec-route judgment and a ratify/conform recommendation to it — plus
       // the ones this pass claims no longer stand, which the same reviewer
@@ -1887,7 +2085,9 @@ async function runReviewCycle(cycle) {
     // concurrency exception: the reviewer alone owns builds/execution, and two
     // readers are safe). runCyclePeerStage can neither throw nor block the
     // round, so on any peer problem this degrades to the reviewer's verdict
-    // exactly as a sequential launch would.
+    // exactly as a sequential launch would — with the one exception it REPORTS
+    // rather than throws: a provider it could not prove dead comes back with
+    // `teardownFailure`, which stops the cycle below.
     const [review, rawPeer] = await parallel([
       () =>
         agent(cycleReviewPrompt(cycle, state), {
@@ -1905,7 +2105,17 @@ async function runReviewCycle(cycle) {
     // one path it cannot: a runtime that hands back a null parallel slot. The
     // cycle's `disabled` outcome is not helper vocabulary, so carry it as-is.
     const peer = rawPeer && rawPeer.outcome === "disabled" ? rawPeer : normalizeCyclePeerResult(rawPeer);
-    peerRounds.push({ round: rounds, outcome: peer.outcome, detail: peer.detail });
+    peerRounds.push({ round: rounds, outcome: peer.outcome, detail: peer.detail, reason: peer.reason || "", ...(peer.teardownFailure ? { teardownFailure: true } : {}) });
+    // The one peer condition that is not non-blocking, checked before anything
+    // else this round produced. A provider nobody could prove dead may still be
+    // reading the worktree the next fixer would write to, so the cycle stops for
+    // operator intervention rather than fixing, concluding, or handing a
+    // consumer a state to publish. A peer outcome being best-effort never
+    // licenses leaving a process alive — which is why the flag rides beside the
+    // outcome rather than being one.
+    if (peer.teardownFailure) {
+      return result("error", `peer teardown failed on round ${rounds}: ${peer.detail || "a provider process could not be proven dead"} — operator intervention required before this cycle runs again`);
+    }
     if (peer.outcome === "unavailable") {
       peerState.unavailable = true;
       if (peer.detail && !peerState.unavailableDetail) peerState.unavailableDetail = peer.detail;

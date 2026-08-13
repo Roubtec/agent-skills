@@ -43,9 +43,11 @@
 //
 // Run: node scripts/test-review-cycle-retirement.mjs
 
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { tmpdir } from "node:os";
+import { execFileSync } from "node:child_process";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const WORKFLOWS = ["wf-review-cycle.js", "wf-address-tasks.js"];
@@ -72,7 +74,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 158;
+const CHECKS_PER_LEG = 176;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -105,7 +107,7 @@ function loadCycle(src, agent) {
   // every renderer outside a cycle today, so driving the cycle can never
   // exercise the default and only a direct call can.
   // eslint-disable-next-line no-new-func
-  return new Function("agent", "parallel", "pipeline", "log", "phase", `${section}\nreturn { runReviewCycle, cycleReviewChecks };`)(
+  return new Function("agent", "parallel", "pipeline", "log", "phase", `${section}\nreturn { runReviewCycle, cycleReviewChecks, runCyclePeerStage, createCyclePeerThrottle, cyclePeerTrouble, normalizeCyclePeerResult, CYCLE_PEER_SCHEMA };`)(
     agent,
     parallel,
     pipeline,
@@ -1471,6 +1473,179 @@ for (const name of WORKFLOWS) {
     );
   });
 
+  // 28. A batch's first wave enters several cycles concurrently. A boolean
+  //     records a completed preflight but cannot serialize one in progress:
+  //     every sibling can snapshot false before the first peer reports back.
+  //     Drive the shipped stage directly so the owner/waiter handoff, including
+  //     its reset after a synthesized throw, is observed under real Promise
+  //     concurrency rather than inferred from the state object's shape.
+  await scenario("28. shared peer preflight is exactly-once under first-wave concurrency and resets after synthesis", async () => {
+    let releaseOwner;
+    let ownerEnteredResolve;
+    const ownerEntered = new Promise((resolve) => { ownerEnteredResolve = resolve; });
+    const peerPrompts = [];
+    let preflightCalls = 0;
+    const agent = async (prompt, opts) => {
+      if (opts && opts.label === "peer-preflight") {
+        preflightCalls += 1;
+        ownerEnteredResolve();
+        await new Promise((resolve) => { releaseOwner = resolve; });
+        return { outcome: "available", detail: "" };
+      }
+      peerPrompts.push(prompt);
+      return { outcome: "passed", findings: [], notes: "", detail: "" };
+    };
+    const { runCyclePeerStage, createCyclePeerThrottle, cyclePeerTrouble } = loadCycle(src, agent);
+    check(
+      "the helper's exact empty and malformed reasons are eligible forfeiture trouble",
+      cyclePeerTrouble({ outcome: "forfeited", reason: "provider exited 0 with an empty final message" }) &&
+        cyclePeerTrouble({ outcome: "forfeited", reason: "provider exited 0 but produced a malformed/unparseable response" }),
+      "documented helper reason mapping",
+    );
+    check(
+      "the retained raw path's exact empty and garbled reasons remain eligible",
+      cyclePeerTrouble({ outcome: "forfeited", reason: "empty output" }) &&
+        cyclePeerTrouble({ outcome: "forfeited", reason: "garbled output" }),
+      "documented raw reason mapping",
+    );
+    check(
+      "the helper's no-verdict forfeiture is intentionally excluded from throttle trouble",
+      !cyclePeerTrouble({ outcome: "forfeited", reason: "provider exited 0 but emitted no recognizable VERDICT token" }),
+      "no-verdict helper reason",
+    );
+    check(
+      "near-match and decorated empty/garbled reasons do not trigger the exact mapping",
+      [
+        "provider exited 0 with an empty final messages",
+        "provider exited 0 but produced a malformed response",
+        "prefix: provider exited 0 with an empty final message",
+        "garbled output from an unrelated parser",
+        "EMPTY OUTPUT",
+      ].every((reason) => !cyclePeerTrouble({ outcome: "forfeited", reason })),
+      "negative exact-match cases",
+    );
+    const peerState = { preflighted: false, preflightInProgress: null, unavailable: false, unavailableDetail: "" };
+    const peerThrottle = createCyclePeerThrottle();
+    const cycle = { ...CYCLE, peer: "on", contracts: {}, labelPrefix: "batch:" };
+    const state = (round) => ({
+      round,
+      artifactDir: "/tmp/review-cycle-preflight-test",
+      packet: { workReport: [] },
+      handedFindings: [],
+      peerState,
+      peerThrottle,
+    });
+    const calls = Array.from({ length: 6 }, (_, i) => runCyclePeerStage(cycle, state(i + 1)));
+    await ownerEntered;
+    await Promise.resolve();
+    check("only one preflight agent runs and no peer launch enters before it settles", preflightCalls === 1 && peerPrompts.length === 0, `${preflightCalls} preflight/${peerPrompts.length} peer call(s)`);
+    releaseOwner();
+    const results = await Promise.all(calls);
+    check("every concurrent peer stage completes after the owner releases", results.length === 6 && results.every((r) => r.outcome === "passed"), JSON.stringify(results.map((r) => r.outcome)));
+    check("the parallel first wave executes exactly one real preflight", preflightCalls === 1, `${preflightCalls} preflight call(s)`);
+    check("all six peer launches fan out after it and skip duplicate probes", peerPrompts.length === 6 && peerPrompts.every((p) => /Preflight: already done by the run-level shared preflight/.test(p)), `${peerPrompts.length} peer prompt(s)`);
+    check("the shared state records completion and leaves no in-progress latch", peerState.preflighted === true && peerState.preflightInProgress === null, JSON.stringify(peerState));
+
+    let preflightAttempts = 0;
+    let peerAttempts = 0;
+    const resetAgent = async (_prompt, opts) => {
+      if (opts && opts.label === "peer-preflight") {
+        preflightAttempts += 1;
+        if (preflightAttempts === 1) throw new Error("synthetic preflight throw");
+        return { outcome: "available", detail: "" };
+      }
+      peerAttempts += 1;
+      return { outcome: "passed", findings: [], notes: "", detail: "" };
+    };
+    const resetLoaded = loadCycle(src, resetAgent);
+    const resetState = { preflighted: false, preflightInProgress: null, unavailable: false, unavailableDetail: "" };
+    const resetThrottle = resetLoaded.createCyclePeerThrottle();
+    const resetStage = (round) => resetLoaded.runCyclePeerStage(cycle, {
+      ...state(round),
+      peerState: resetState,
+      peerThrottle: resetThrottle,
+    });
+    const resetResults = await Promise.all([resetStage(1), resetStage(2)]);
+    check("a thrown owner releases the waiter instead of deadlocking it", resetResults.length === 2 && preflightAttempts === 2, `${preflightAttempts} preflight attempt(s)`);
+    check("the thrown stage stays a synthesized non-blocking forfeit while the waiter succeeds", resetResults.some((r) => r.outcome === "forfeited" && r.synthesized) && resetResults.some((r) => r.outcome === "passed"), JSON.stringify(resetResults));
+    check("synthesis resets ownership, so the successor preflights again and only it launches a peer", preflightAttempts === 2 && peerAttempts === 1 && resetState.preflighted === true && resetState.preflightInProgress === null, `${preflightAttempts} preflight/${peerAttempts} peer/${JSON.stringify(resetState)}`);
+  });
+
+  // 29. The peer stage's ONE non-blocking exception. Every OUTCOME normalizes
+  //     non-blocking by design, so a provider the stage could not prove dead
+  //     has nowhere to go in that vocabulary: `failed` reads exactly like a
+  //     provider that crashed and died. The prompt's surviving-provider stop is
+  //     therefore an instruction the contract can only honour through a field
+  //     beside the outcome — without one the cycle keeps fixing, concludes, and
+  //     hands a consumer a state to publish while the process is still alive.
+  //     The negative control is the point of the pair: the SAME `failed`
+  //     outcome without the flag must conclude normally, or the check would
+  //     pass just as happily against a stage that blocked on `failed` itself.
+  await scenario("29. a provider that could not be proven dead stops the cycle, and only the flag stops it", async () => {
+    const drive = async (peerResult) => {
+      const seen = { fixPrompts: [], reviewPrompts: [], closeOutPrompts: [], recordPrompts: [], packetPrompts: [] };
+      const base = scriptedAgent([JSON.parse(JSON.stringify(PASS_PACKET)), JSON.parse(JSON.stringify(idle))], [OK, OK], seen);
+      const agent = async (prompt, opts) => {
+        const label = (opts && opts.label) || "";
+        if (label === "peer-preflight") return { outcome: "available", detail: "" };
+        if (label.startsWith("peer#")) return JSON.parse(JSON.stringify(peerResult));
+        return base(prompt, opts);
+      };
+      const { runReviewCycle } = loadCycle(src, agent);
+      return runReviewCycle({ ...CYCLE, peer: "on" });
+    };
+    const survivor = { outcome: "failed", findings: [], notes: "", detail: "PID 4711 still answered kill -0 after KILL", reason: "", teardownFailure: true };
+    const stopped = await drive(survivor);
+    check(
+      "a teardown failure ends the cycle as an error instead of a non-blocking round",
+      stopped.verdict === "error" && /teardown/i.test(stopped.detail || "") && /4711/.test(stopped.detail || ""),
+      `${stopped.verdict}/${stopped.detail}`,
+    );
+    check(
+      "and the stopping round is still recorded with its outcome and the flag",
+      (stopped.peerRounds || []).length === 1 && stopped.peerRounds[0].outcome === "failed" && stopped.peerRounds[0].teardownFailure === true,
+      JSON.stringify(stopped.peerRounds),
+    );
+    const cleared = await drive({ ...survivor, teardownFailure: false });
+    check(
+      "while the same `failed` outcome without the flag stays non-blocking and the cycle concludes",
+      cleared.verdict === "pass" && (cleared.peerRounds || []).every((p) => p.outcome === "failed" && p.teardownFailure === undefined),
+      `${cleared.verdict}/${JSON.stringify(cleared.peerRounds)}`,
+    );
+
+    const { normalizeCyclePeerResult, CYCLE_PEER_SCHEMA, runCyclePeerStage, createCyclePeerThrottle } = loadCycle(src, async () => {
+      throw new Error("synthetic peer stage throw");
+    });
+    check(
+      "the two fields control flow reads are required rather than optional in the peer schema",
+      (CYCLE_PEER_SCHEMA.required || []).includes("reason") && (CYCLE_PEER_SCHEMA.required || []).includes("teardownFailure"),
+      JSON.stringify(CYCLE_PEER_SCHEMA.required),
+    );
+    check(
+      "normalization carries the flag through while still recording the outcome non-blocking",
+      normalizeCyclePeerResult(survivor).teardownFailure === true && normalizeCyclePeerResult(survivor).outcome === "failed",
+      JSON.stringify(normalizeCyclePeerResult(survivor)),
+    );
+    // A stage that died observed no survivor, so it may not manufacture the
+    // stop: the flag has to come from a stage that watched the process.
+    const thrown = await runCyclePeerStage(
+      { ...CYCLE, peer: "on", contracts: {} },
+      {
+        round: 1,
+        artifactDir: "/tmp/review-cycle-teardown-test",
+        packet: { workReport: [] },
+        handedFindings: [],
+        peerState: { preflighted: true, preflightInProgress: null, unavailable: false, unavailableDetail: "" },
+        peerThrottle: createCyclePeerThrottle(),
+      },
+    );
+    check(
+      "but a thrown stage synthesizes no teardown failure of its own",
+      thrown.outcome === "forfeited" && thrown.synthesized === true && !thrown.teardownFailure,
+      JSON.stringify(thrown),
+    );
+  });
+
   const ran = legOk + legFail;
   check(`suite ran all ${CHECKS_PER_LEG} checks`, ran === CHECKS_PER_LEG, `ran ${ran}`);
   legOk = 0;
@@ -1560,6 +1735,194 @@ const BATCH_CONTRACT_CHECKS = 5;
 
   const n = legOk + legFail - before;
   check(`batch contract checks ran all ${BATCH_CONTRACT_CHECKS}`, n === BATCH_CONTRACT_CHECKS, `ran ${n}`);
+}
+
+// The Claude-provider rendering is prose rather than executable workflow code,
+// so exercise the exact direct-PID helpers it ships by extracting their code.
+// A fake proc root lets the test replace field 22 while keeping the PID
+// constant — the reuse failure this guard exists for — without ever probing or
+// signalling a real process. The fake `kill` records every operand and can
+// model TERM resistance, KILL death, or a teardown survivor.
+const PEER_LIFECYCLE_CHECKS = 20;
+{
+  console.log("# codex review-cycle prose — peer lifecycle negative controls");
+  const before = legOk + legFail;
+  const prose = readFileSync(join(here, "..", "codex", "dev-skills", "skills", "review-cycle", "SKILL.md"), "utf8");
+  const blockStart = prose.indexOf("peer_start_time() {");
+  const blockEnd = prose.indexOf("\nnohup claude", blockStart);
+  const helperBlock = blockStart >= 0 && blockEnd > blockStart ? prose.slice(blockStart, blockEnd) : "";
+  check("the canonical direct-provider identity block is extractable", helperBlock.length > 0, `${blockStart}/${blockEnd}`);
+
+  const scratch = mkdtempSync(join(tmpdir(), "peer-incarnation-test-"));
+  try {
+    const procRoot = join(scratch, "proc");
+    const pidDir = join(procRoot, "731");
+    const identityFile = join(scratch, "peer.pid");
+    const signalLog = join(scratch, "signals.log");
+    // mkdir is kept inside the dynamic shell fixture because the test itself
+    // imports no recursive directory-writing helper just for this one path.
+    execFileSync("mkdir", ["-p", pidDir]);
+    const statLine = (start) => `731 (peer ) name with spaces) S 1 731 731 ${Array(15).fill("0").join(" ")} ${start} 0\n`;
+    const runnableBlock = helperBlock.replaceAll('"/proc/$1/stat"', '"$peer_proc_root/$1/stat"');
+    const runFixture = (actions, survivor = false) => {
+      writeFileSync(signalLog, "");
+      let status = 0;
+      try {
+        execFileSync("sh", ["-c", `${runnableBlock}\npeer_proc_root=$1\npeer_pid_file=$2\nsignal_log=$3\nsurvivor=$4\nkill() { printf '%s\\n' "$*" >> "$signal_log"; if [ "$1" = -0 ]; then [ -f "$peer_proc_root/$2/stat" ]; return; fi; if [ "$1" = -KILL ] && [ "$survivor" != yes ]; then rm -f "$peer_proc_root/$2/stat"; fi; return 0; }\nsleep() { :; }\n${actions}`, "peer-test", procRoot, identityFile, signalLog, survivor ? "yes" : "no"]);
+      } catch (err) {
+        status = Number(err.status || 1);
+      }
+      return { signals: readFileSync(signalLog, "utf8").trim().split("\n").filter(Boolean), status };
+    };
+
+    writeFileSync(join(pidDir, "stat"), statLine("424242"));
+    writeFileSync(identityFile, "731 424242\n");
+    const live = runFixture("peer_pid_alive; peer_signal_pid TERM");
+    check("the robust parser accepts field 22 after a comm containing spaces and a closing parenthesis", live.signals.length === 2, JSON.stringify(live));
+    check("probe and TERM target only the identity-checked positive provider PID", JSON.stringify(live.signals) === JSON.stringify(["-0 731", "-TERM 731"]), JSON.stringify(live));
+
+    writeFileSync(join(pidDir, "stat"), statLine("999999"));
+    const reused = runFixture("peer_pid_alive || :; peer_signal_pid TERM || :");
+    check("a reused PID with a different start time is never probed or signalled", reused.signals.length === 0, JSON.stringify(reused));
+
+    rmSync(join(pidDir, "stat"));
+    const dead = runFixture("peer_pid_alive || :; peer_signal_pid TERM || :");
+    check("a missing proc identity is treated as original-process death without a signal", dead.signals.length === 0, JSON.stringify(dead));
+
+    writeFileSync(join(pidDir, "stat"), statLine("424242"));
+    writeFileSync(identityFile, "731 424242 surplus\n");
+    const malformed = runFixture("peer_pid_alive || :; peer_signal_pid TERM || :");
+    check("a malformed handoff with extra fields fails closed before every kill", malformed.signals.length === 0, JSON.stringify(malformed));
+
+    writeFileSync(join(pidDir, "stat"), statLine("424242"));
+    const startReadFailure = runFixture("peer_pid=731; peer_start=; peer_abort_unhanded");
+    check(
+      "a start-time read failure immediately TERM/KILLs the fresh direct child and leaves no survivor",
+      startReadFailure.status === 0 &&
+        startReadFailure.signals.slice(0, 2).join("|") === "-TERM 731|-KILL 731" &&
+        !startReadFailure.signals.some((s) => /^-(TERM|KILL) (?!731$)/.test(s)) &&
+        /peer_start=\$\(peer_start_time "\$peer_pid"\) \|\| peer_start=[\s\S]*peer_launch_status=125[\s\S]*peer_abort_unhanded[\s\S]*exit 125[\s\S]*exit 126/.test(prose),
+      JSON.stringify(startReadFailure),
+    );
+
+    writeFileSync(join(pidDir, "stat"), statLine("424242"));
+    const identityWriteFailure = runFixture("peer_pid=731; peer_start=424242; peer_abort_unhanded");
+    check(
+      "an identity-file write failure uses the acquired start token for bounded cleanup and leaves no survivor",
+      identityWriteFailure.status === 0 && identityWriteFailure.signals.includes("-TERM 731") && identityWriteFailure.signals.includes("-KILL 731") && /Either handoff failure stops the entire cycle even when cleanup succeeds/.test(prose),
+      JSON.stringify(identityWriteFailure),
+    );
+
+    writeFileSync(join(pidDir, "stat"), statLine("424242"));
+    writeFileSync(identityFile, "731 424242\n");
+    const killed = runFixture("peer_stop_pid");
+    check("TERM resistance reaches KILL on the same positive PID and confirmed death succeeds", killed.status === 0 && killed.signals.includes("-TERM 731") && killed.signals.includes("-KILL 731"), JSON.stringify(killed));
+
+    writeFileSync(join(pidDir, "stat"), statLine("424242"));
+    const survivor = runFixture("peer_stop_pid", true);
+    check("an identity that survives TERM and KILL makes teardown fail", survivor.status !== 0 && survivor.signals.includes("-TERM 731") && survivor.signals.includes("-KILL 731"), JSON.stringify(survivor));
+  } finally {
+    rmSync(scratch, { recursive: true, force: true });
+  }
+
+  const pluginsProse = readFileSync(join(here, "..", "plugins", "dev-skills", "skills", "review-cycle", "SKILL.md"), "utf8");
+  check("the direct Codex provider gets bounded TERM, death verification, safe KILL, and a survivor stop", /send TERM[\s\S]*at most ten seconds[\s\S]*send KILL only if[\s\S]*ten more seconds[\s\S]*stop the cycle and escalate/.test(pluginsProse), "raw Codex lifecycle prose");
+  check(
+    "the future Codex helper gets a private session artifact root and a caller wait that covers retry plus reaping",
+    /first establish `artifact_root` as a unique, private, session-scoped directory outside the reviewed worktree[\s\S]*peer-review-run --provider codex[\s\S]*caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(pluginsProse),
+    "future Codex helper envelope",
+  );
+  const futureHelperStart = prose.indexOf("**Future helper conversion, only after both powbox prerequisites land.**");
+  const retainedRawStart = prose.indexOf("**Retained raw launch until both powbox prerequisites land.**");
+  const futureHelperProse = futureHelperStart >= 0 && retainedRawStart > futureHelperStart ? prose.slice(futureHelperStart, retainedRawStart) : "";
+  check(
+    "the Claude-provider helper conversion is exact, prerequisite-bound, and still leaves raw as the current primary",
+    /schema `powbox\.peer-review-run\/v1` must expose the complete provider-neutral review through a documented field such as `reviewFile` or `reviewText`/.test(prose) &&
+      /`artifactDir` alone does not identify a stable file/.test(prose) &&
+      /Until both prerequisites land, use the direct launch below even when `peer-review-run` is installed/.test(prose) &&
+      /The direct launch below remains the current primary path/.test(futureHelperProse) &&
+      /peer-review-run --provider claude --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --model opus --effort medium/.test(futureHelperProse) &&
+      /caller-side tool wait to at least 570 seconds[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(futureHelperProse) &&
+      /require schema `powbox\.peer-review-run\/v1`[\s\S]*reported `model` is `opus` and `effort` is `medium`/.test(futureHelperProse) &&
+      /when the contract supplies `reviewFile`, read that file in full and relay every finding from it verbatim/.test(futureHelperProse) &&
+      /Never infer the review from `artifactDir`/.test(futureHelperProse) &&
+      (prose.match(/peer-review-run --provider claude/g) || []).length === 1 &&
+      retainedRawStart > futureHelperStart &&
+      /nohup claude -p --model opus --effort medium/.test(prose.slice(retainedRawStart)),
+    "provider-neutral review payload prerequisite",
+  );
+  check("the retained Claude launch is direct-PID only and stops on a survivor", /records `\$!` as the direct provider PID[\s\S]*peer_stop_pid[\s\S]*A surviving identity stops the entire cycle/.test(prose) && !/peer_group_alive|peer_signal_group|setsid --fork/.test(prose), "Claude direct-PID lifecycle prose");
+  // Dropping the wrapper took its guarded `cd` with it, and `claude -p` has no
+  // working-directory flag of its own: without this the peer inspects whichever
+  // checkout the launching shell stood in while the embedded evidence describes
+  // the reviewed worktree — a verdict over the wrong files rather than a
+  // missing one. Both halves are asserted because either alone is satisfiable
+  // by prose that does not run, or by a `cd` nothing explains.
+  check(
+    "and it runs from the reviewed worktree, guarded, before the provider starts",
+    /\ncd -- "\$\{worktree:\?[^"\n]*\}" \|\| exit 125\n[\s\S]*\nnohup claude -p /.test(prose) &&
+      /The launching shell changes into the reviewed worktree before starting the provider, and forfeits the launch if that fails/.test(prose),
+    "peer launch working directory",
+  );
+  check(
+    "the retained raw verdict is proved from literal embedded evidence and exact pinned OIDs",
+    /BEGIN GENERATED REVIEW DATA/.test(prose) &&
+      /END GENERATED REVIEW DATA/.test(prose) &&
+      /BEGIN EMBEDDED GIT EVIDENCE/.test(prose) &&
+      /END EMBEDDED GIT EVIDENCE/.test(prose) &&
+      /EVIDENCE_BASE_OID: <full OID>/.test(prose) &&
+      /EVIDENCE_TIP_OID: <full OID>/.test(prose) &&
+      /`printf -- '%s\\n' "\$value"`/.test(prose) &&
+      !/`printf '%s\\n' -- "\$value"`/.test(prose) &&
+      /The provider receives the evidence in `prompt_file` itself and never has to read `diff_evidence_file`/.test(prose) &&
+      /diff evidence unreadable or proof absent/.test(prose) &&
+      /Missing or mismatched OID\/token proof changes `passed` to `forfeited`/.test(prose) &&
+      /for `issues`, keep the `issues` outcome and every finding verbatim/.test(prose) &&
+      !/Read the complete diff evidence at:/.test(prose) &&
+      !/native read-only tools may read the one absolute out-of-worktree evidence path/.test(prose),
+    "embedded evidence contract",
+  );
+  const evidenceContractLine = prose.split("\n").find((line) => line.startsWith("After the PID is dead")) || "";
+  const passedContract = evidenceContractLine.match(/Missing or mismatched OID\/token proof changes `([^`]+)` to `([^`]+)` with reason exactly `([^`]+)`/);
+  const issuesContract = evidenceContractLine.match(/for `([^`]+)`, keep the `([^`]+)` outcome and every finding verbatim[\s\S]*attaching that exact reason and an evidence-failure note/);
+  const parsedEvidenceContract = passedContract && issuesContract
+    ? {
+        proofFailureReason: passedContract[3],
+        [passedContract[1]]: { outcome: passedContract[2], preserveFindings: false, attachNote: false },
+        [issuesContract[1]]: { outcome: issuesContract[2], preserveFindings: true, attachNote: true },
+      }
+    : null;
+  const applyShippedEvidenceContract = (outcome, findings) => {
+    const rule = parsedEvidenceContract && parsedEvidenceContract[outcome];
+    if (!rule) return null;
+    return {
+      outcome: rule.outcome,
+      findings: rule.preserveFindings ? findings : [],
+      reason: parsedEvidenceContract.proofFailureReason,
+      note: rule.attachNote ? "evidence proof failed; findings retained" : "",
+    };
+  };
+  const passedNegative = applyShippedEvidenceContract("passed", []);
+  check("the shipped prose contract forfeits a passed verdict with absent proof", passedNegative && passedNegative.outcome === "forfeited" && passedNegative.reason === "diff evidence unreadable or proof absent", JSON.stringify(passedNegative));
+  const issueFindings = [{ severity: "blocking", claim: "grounded finding" }];
+  const issuesNegative = applyShippedEvidenceContract("issues", issueFindings);
+  check("the shipped prose contract retains issues findings and the evidence-failure reason", issuesNegative && issuesNegative.outcome === "issues" && issuesNegative.findings === issueFindings && issuesNegative.reason === "diff evidence unreadable or proof absent" && /findings retained/.test(issuesNegative.note), JSON.stringify(issuesNegative));
+
+  const workflowCores = WORKFLOWS.map((file) => {
+    const src = readFileSync(join(here, "..", "plugins", "dev-skills", "workflows", file), "utf8");
+    const b = src.indexOf("BEGIN EMBEDDABLE SECTION: review-cycle-core");
+    const e = src.indexOf("END EMBEDDABLE SECTION: review-cycle-core");
+    return src.slice(src.indexOf("\n", b) + 1, src.lastIndexOf("\n", e));
+  });
+  check("the two executable review-cycle cores remain byte-identical", workflowCores[0] === workflowCores[1], `${workflowCores[0].length}/${workflowCores[1].length}`);
+  check(
+    "both workflow cores pin the future helper's private artifact root and caller wait budget",
+    workflowCores.every((core) => /first establish \\`artifact_root\\` as a unique, private, session-scoped directory outside the reviewed worktree[\s\S]*peer-review-run --provider codex[\s\S]*caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(core)),
+    "future helper envelope in workflow cores",
+  );
+
+  const n = legOk + legFail - before;
+  check(`peer lifecycle checks ran all ${PEER_LIFECYCLE_CHECKS}`, n === PEER_LIFECYCLE_CHECKS, `ran ${n}`);
 }
 
 if (failures) {

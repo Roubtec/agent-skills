@@ -277,7 +277,7 @@ This is a bounded snapshot, not a total guarantee. It establishes that no collis
 
 ## Peer second opinion (best-effort)
 
-Unless `peer-opinions=off`, run the `review-cycle` skill's peer step beside every review round: its preflight-once probe, pinned-strength launch, loose timeout with one retry, examination-only contract and `VERDICT: PASS | ISSUES` format, outcome vocabulary, grounding spot-check, blocking-and-minor gating, verbatim finding relay, and next-reviewer adjudication of disputes are all defined there and are not restated here.
+Unless `peer-opinions=off`, run the `review-cycle` skill's peer step beside every review round. Every rule that skill states under *The peer step* binds here whole, later additions included.
 
 Deltas for this serialized skill:
 

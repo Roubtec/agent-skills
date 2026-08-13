@@ -752,6 +752,9 @@ const cycleCases = {
     ["cyclePeerPrompt (standalone)", (f) => f.cyclePeerPrompt(cycleStandalone, peerState), NO_BUILD],
     ["cyclePeerPrompt (batch/overridden)", (f) => f.cyclePeerPrompt(cycleOverridden, peerState), NO_BUILD],
   ],
+  cyclePeerPreflightPrompt: [
+    ["cyclePeerPreflightPrompt", (f) => f.cyclePeerPreflightPrompt(), NO_BUILD],
+  ],
   cycleGroundingPrompt: [
     ["cycleGroundingPrompt (standalone)", (f) => f.cycleGroundingPrompt(cycleStandalone, [{ id: "p1", text: "y", severity: "minor" }]), NO_BUILD],
     ["cycleGroundingPrompt (batch/overridden)", (f) => f.cycleGroundingPrompt(cycleOverridden, [{ id: "p1", text: "y", severity: "minor" }]), NO_BUILD],
@@ -1228,12 +1231,12 @@ const PROSE_MIRRORS = ["plugins/dev-skills/skills", "codex/dev-skills/skills"];
 // bounds what the census DISCOVERS in a file it already guards. Widen this
 // alternation when a clause arrives spelling it differently.
 //
-// The alternation stays narrow on purpose. `address-tasks`' peer step says
-// "never a shared filename, never inside a task worktree" of the peer's
-// prompt/output/stderr paths — a destination rule for a different artifact kind,
-// which task 045 leaves out of scope — so matching a bare "shared filename"
-// would count a clause this table deliberately does not anchor and fail the
-// shipped tree.
+// The alternation stays narrow on purpose. The live canonical destination rules
+// use the warning forms above: `review-cycle`'s Reviewer and Artifacts and
+// hygiene rules say "fixed shared scratchpad name" and "fixed shared filename",
+// while consumer-specific validation rules say "shared scratchpad filename".
+// Matching generic shared-name vocabulary would also count `address-tasks`'
+// unrelated filename/symbol collision rules, which task 045 leaves out of scope.
 const PROSE_WARNING = /shared scratchpad (?:name|filename)|fixed shared filename/g;
 // The second census key, for category 2, and it exists for the reason the
 // category does: those clauses spell no warning, so `PROSE_WARNING` can never
