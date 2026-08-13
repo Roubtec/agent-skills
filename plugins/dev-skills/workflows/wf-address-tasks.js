@@ -552,8 +552,8 @@ Read \`AGENTS.md\` / \`CLAUDE.md\` first for project conventions.
 Argument pointers (a deduplicated, first-seen-order mixed list of task numbers, task-file paths, and globs; JSON array, each element exactly ONE raw input): ${JSON.stringify(pointers)}
 
 That list is the workflow's own derivation of its argument, and step 4's reconciliation compares your packet against the same list, failing the whole batch closed on any disagreement:
-- The peer flag (any whole whitespace/comma-bounded token run matching \`/${PEER_OPINIONS_FLAG.source}/i\`) is a flag the loop already handled, not a task pointer. The workflow masks each one out of the argument before deriving the list, so no element here is one; emit no \`paths\` entry and no \`notFound\` diagnostic for a flag or for any word inside it.
-- A flat-string invocation was split on whitespace AND commas, with each token's surrounding quotes stripped AFTER the split: \`039,041\` arrives as two elements, not one, so a pointer derived from a flat string can therefore carry neither whitespace nor a comma, and quoting a spaced path in a flat string does not join it either — such fragments arrive as the elements they split into; do not reassemble them. A structured invocation (an array or object) instead contributes every non-collection leaf as exactly one element, boundaries intact, so a task-file path containing whitespace or a comma can be named only that way.
+- The peer flag (any whole whitespace/comma-bounded token run matching \`/${PEER_OPINIONS_FLAG.source}/i\`) is a flag the loop already handled, not a task pointer. The workflow masks each one out of the argument before deriving the list, so no element here is one; emit no \`paths\` entry and no \`notFound\` diagnostic for a flag or for any word inside it — though an element that DOES appear in the list is by that fact not a flag, whatever flag text it embeds: account for it like any other pointer.
+- A flat-string invocation was split on whitespace AND commas, with each token's surrounding quotes stripped AFTER the split: \`039,041\` arrives as two elements, not one, so a pointer derived from a flat string can therefore carry neither whitespace nor a comma, and quoting a spaced path in a flat string does not join it either — such fragments arrive as the elements they split into; do not reassemble them. A structured invocation (an array or object) instead contributes every non-collection leaf as exactly one element, boundaries intact — trimmed of surrounding whitespace but never split or otherwise altered — so a task-file path containing whitespace or a comma can be named only that way.
 - Treat each element as exactly one raw input even when it contains whitespace, a comma, or quotes: never split, merge, trim, or re-quote an element, and echo it verbatim as the \`raw\` value in \`selectedBy\`/\`notFound\`. Account for every element and for nothing outside the list: resolve each under the skill's contract and emit its \`not-found\` diagnostic when it selects nothing.
 
 Do this:
@@ -743,18 +743,33 @@ const PEER_OPINIONS_FLAG_LEAF = new RegExp(`^${PEER_OPINIONS_FLAG.source}$`, "i"
 // flag — is exactly one raw pointer, NEVER split, whatever it contains: the
 // caller's structure already said where each pointer ends. Both shapes dedupe
 // in first-seen order.
+// The trim is deliberate, not a breach of the never-split promise: the same
+// reading that drops a whitespace-only leaf treats edge whitespace as
+// packaging rather than pointer content, a trimmed leaf is still one leaf, and
+// the prompt and the reconciliation both consume this same trimmed list, so
+// the two sides cannot drift over it. The cost is confined to a path whose
+// name genuinely begins or ends with whitespace, which then surfaces as a
+// not-found exclusion rather than vanishing.
+// The traversal is a named function because the flag parser at the batch body
+// consumes it too: the pointer gate below keeps every leaf that is NOT exactly
+// the peer flag, and the mode read consumes exactly the whole-flag leaves this
+// gate masks, so the two sides split the same leaves the same way by
+// construction.
+function structuredArgLeaves(batchArgs) {
+  const leaves = [];
+  const collect = (node) => {
+    if (node == null) return;
+    if (Array.isArray(node)) return node.forEach(collect);
+    if (typeof node === "object") return Object.values(node).forEach(collect);
+    const leaf = String(node).trim();
+    if (leaf.length > 0) leaves.push(leaf);
+  };
+  collect(batchArgs);
+  return leaves;
+}
 function requiredArgPointers(batchArgs) {
   if (batchArgs != null && typeof batchArgs === "object") {
-    const leaves = [];
-    const collect = (node) => {
-      if (node == null) return;
-      if (Array.isArray(node)) return node.forEach(collect);
-      if (typeof node === "object") return Object.values(node).forEach(collect);
-      const leaf = String(node).trim();
-      if (leaf.length > 0 && !PEER_OPINIONS_FLAG_LEAF.test(leaf)) leaves.push(leaf);
-    };
-    collect(batchArgs);
-    return [...new Set(leaves)];
+    return [...new Set(structuredArgLeaves(batchArgs).filter((leaf) => !PEER_OPINIONS_FLAG_LEAF.test(leaf)))];
   }
   const tokens = String(batchArgs == null ? "" : batchArgs)
     .replace(PEER_OPINIONS_FLAG, " ")
@@ -3889,21 +3904,25 @@ async function settleWaveCollisions({ heldTasks, waveCollisions, wave, defaultBa
 
 // --- Flag parsing: `peer-opinions=off` must arrive through args (a workflow
 // cannot read prose elsewhere) and suppresses the embedded cycle's peer stage
-// for every task in the batch. Flatten any args shape first — structured
-// delivery would otherwise stringify to "[object Object]". The flag's spelling
-// has ONE definition, `PEER_OPINIONS_FLAG` above, shared with the pointer gate
-// that masks it out of the argument; the mode is then read from the values that
-// one regex captured, so the two sides can never disagree about where the flag
-// begins and ends. A second, approximate spelling here would turn a flag this
-// parser accepted into a task pointer the gate cannot account for.
-function flattenBatchArgs(a) {
-  if (a == null) return "";
-  if (typeof a === "string") return a;
-  if (Array.isArray(a)) return a.map(flattenBatchArgs).join(" ");
-  if (typeof a === "object") return Object.values(a).map(flattenBatchArgs).join(" ");
-  return String(a);
-}
-const peerFlagValues = [...flattenBatchArgs(args).matchAll(PEER_OPINIONS_FLAG)].map((m) => m[1]);
+// for every task in the batch. The flag's spelling has ONE definition,
+// `PEER_OPINIONS_FLAG` above, shared with the pointer gate that masks it out
+// of the argument; the mode is then read from the values that one regex
+// captured, so the two sides can never disagree about where the flag begins
+// and ends. A second, approximate spelling here would turn a flag this parser
+// accepted into a task pointer the gate cannot account for.
+// The mode read also follows the pointer gate's boundary reading, shape by
+// shape: a flat string or scalar carries no boundaries and is scanned whole,
+// while a structured argument toggles the mode only through a leaf that IS
+// exactly the flag — the same whole-leaf test, over the same
+// `structuredArgLeaves` traversal, that masks that leaf out of the pointer
+// list. Flag text embedded in a pointer leaf, or spread across adjacent
+// leaves, is pointer content there and stays pointer content here; joining
+// the leaves before matching would flip the mode on an invocation whose every
+// leaf the pointer side still accounts for as a pointer.
+const peerFlagText = args != null && typeof args === "object"
+  ? structuredArgLeaves(args).filter((leaf) => PEER_OPINIONS_FLAG_LEAF.test(leaf)).join(" ")
+  : String(args == null ? "" : args);
+const peerFlagValues = [...peerFlagText.matchAll(PEER_OPINIONS_FLAG)].map((m) => m[1]);
 const peerMode = /\boff\b/i.test(peerFlagValues.join(" ")) ? "off" : "on";
 
 phase("Bootstrap");
@@ -4001,8 +4020,9 @@ try {
   // reconciliation exists to catch. requiredArgPointers keeps a structured
   // invocation's leaf boundaries (a path may contain spaces or commas) and
   // tokenizes only a flat string, which carries no boundaries to keep. The
-  // flag parser above still reads the flattened string: the flag is not a
-  // pointer, so it never appears in this list.
+  // flag parser above reads the same boundaries: only a leaf that IS the flag
+  // — exactly what this derivation masks — toggles the peer mode, so flag
+  // text embedded in a pointer leaf is pointer content on both sides.
   const batchPointers = requiredArgPointers(args);
   plan = await agent(resolvePrompt(batchPointers), { label: "resolve", schema: PLAN_SCHEMA });
   if (!plan || !Array.isArray(plan.waves)) {
