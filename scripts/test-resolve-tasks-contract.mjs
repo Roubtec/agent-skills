@@ -71,6 +71,7 @@ for (const skill of ["address-tasks", "address-tasks-serialized", "reap-tasks"])
   check(`${skill} preflight exists in both mirrors`, pluginPreflight.length > 0 && codexPreflight.length > 0);
   check(`${skill} preflight is byte-identical across mirrors`, pluginPreflight === codexPreflight);
   check(`${skill} delegates resolution to a fresh own-context subagent`, /run `resolve-tasks`[\s\S]{0,80}fresh resolution subagent with its own context window/.test(pluginPreflight));
+  check(`${skill} reconciles the packet with the raw pointer list`, /Reconcile the returned packet against the list you handed it[\s\S]*a pointer the packet accounts for nowhere is a resolution failure to report/.test(pluginPreflight));
   check(`${skill} keys policy from provenance`, /packet's `selectedBy` provenance/.test(pluginPreflight));
   check(`${skill} preserves explicit path and glob execution`, /explicit path or glob[\s\S]*`outside-subtree`/.test(pluginPreflight));
   check(`${skill} pins interactive as the available-session default`, /direct skill invocation defaults to interactive whenever the maintainer can answer in the current session/.test(pluginPreflight));
@@ -121,8 +122,8 @@ const planValidationMatch = workflow.match(/function handsOffPathEligibility\(en
 check("workflow defines shared hands-off eligibility and exact plan validation gates", !!planValidationMatch);
 if (planValidationMatch) {
   // eslint-disable-next-line no-new-func
-  const validators = new Function(`${planValidationMatch[0]}; return { emptyPlanIsExplained, planResolutionIsExact };`)();
-  const { emptyPlanIsExplained, planResolutionIsExact } = validators;
+  const validators = new Function(`${planValidationMatch[0]}; return { emptyPlanIsExplained, planResolutionIsExact, requiredArgPointers, resolutionAccountsForInputs };`)();
+  const { emptyPlanIsExplained, planResolutionIsExact, requiredArgPointers, resolutionAccountsForInputs } = validators;
   const path = (classification, kinds, name = "tasks/001-example.md", raw = "001") => ({ path: name, number: "001", classification, selectedBy: kinds.map((kind) => ({ raw: kind === "number" ? raw : name, kind })) });
   const numberView = (classification, paths) => ({ number: "001", classification, paths });
   const numberExclusion = (classification, paths, raw = "001") => ({ raw, kind: "number", number: "001", classification, paths, reason: `number-selected ${classification} task is excluded in hands-off mode` });
@@ -161,11 +162,33 @@ if (planValidationMatch) {
   check("explicit provenance wins while the number selection remains accounted", planResolutionIsExact(packet({ paths: [mixed], numbers: [numberView("done", [mixed.path])], exclusions: [numberExclusion("done", [mixed.path])], waves: [[{ path: mixed.path, dependsOn: [] }]] })) === true);
   const outside = path("outside-subtree", ["glob"], "plans/A-01-example.md");
   check("an explicit outside-subtree task is executable", planResolutionIsExact(packet({ paths: [outside], waves: [[{ path: outside.path, dependsOn: [] }]] })) === true);
-  check("not-found cannot mask an active explicit path omitted from waves", emptyPlanIsExplained(packet({ paths: [path("active", ["path"])], notFound: [missing("tasks/missing-*.md", "glob")], exclusions: [missingExclusion("tasks/missing-*.md", "glob")] })) === false);
+  // Well-formed on purpose: without the `numbers` entry this inside-subtree
+  // path makes the packet malformed, and the assertion below would pass on
+  // that branch instead of the wave-coverage one it exists to exercise.
+  check("not-found cannot mask an active explicit path omitted from waves", emptyPlanIsExplained(packet({ paths: [path("active", ["path"])], numbers: [numberView("active", ["tasks/001-example.md"])], notFound: [missing("tasks/missing-*.md", "glob")], exclusions: [missingExclusion("tasks/missing-*.md", "glob")] })) === false);
   check("unknown path provenance fails closed", emptyPlanIsExplained(packet({ paths: [path("done", ["mystery"])], exclusions: [numberExclusion("done", [donePath.path])] })) === false);
   check("empty workflow plan without diagnostics is unexplained", emptyPlanIsExplained(packet()) === false);
   check("empty workflow plan without a resolution packet is unexplained", emptyPlanIsExplained({ waves: [] }) === false);
+
+  const same = (actual, expected) => Array.isArray(actual) && actual.length === expected.length && actual.every((value, index) => value === expected[index]);
+  check("argument pointers keep first-seen order and deduplicate", same(requiredArgPointers("039 041 039"), ["039", "041"]));
+  check("argument pointers split commas as well as whitespace", same(requiredArgPointers("039,041 tasks/050-x.md"), ["039", "041", "tasks/050-x.md"]));
+  check("argument pointers drop flag-shaped tokens", same(requiredArgPointers("039 peer-opinions=off"), ["039"]));
+  check("argument pointers of an empty argument are empty", same(requiredArgPointers(""), []) && same(requiredArgPointers(null), []));
+
+  const twoInputs = [
+    { path: "tasks/039-a.md", number: "039", classification: "active", selectedBy: [{ raw: "039", kind: "number" }] },
+    { path: "tasks/041-b.md", number: "041", classification: "active", selectedBy: [{ raw: "041", kind: "number" }] },
+  ];
+  const covering = { paths: twoInputs, numbers: [], notFound: [], exclusions: [] };
+  check("a packet covering every argument pointer is accepted", resolutionAccountsForInputs(covering, ["039", "041"]) === true);
+  check("a silently dropped argument pointer fails closed", resolutionAccountsForInputs({ ...covering, paths: [twoInputs[0]] }, ["039", "041"]) === false);
+  check("a not-found diagnostic accounts for its argument pointer", resolutionAccountsForInputs({ ...covering, paths: [twoInputs[0]], notFound: [missing("041")] }, ["039", "041"]) === true);
+  check("a packet raw the argument never named fails closed", resolutionAccountsForInputs(covering, ["039"]) === false);
+  check("a packet without the resolver collections fails closed", resolutionAccountsForInputs({ paths: twoInputs }, ["039", "041"]) === false && resolutionAccountsForInputs(null, []) === false);
 }
+check("workflow reconciles the resolver packet with the raw argument before dispatch", /if \(!resolutionAccountsForInputs\(plan\.resolution, requiredArgPointers\(flattenBatchArgs\(args\)\)\)\)[\s\S]*error: "Could not resolve task pointers from the argument\."/.test(workflow));
+check("workflow tells the resolver its packet is reconciled with the argument", /re-derives the raw pointer list from the argument itself and requires your packet to account for every deduplicated pointer/.test(workflow));
 check("workflow validates every plan before dispatch", /if \(!planResolutionIsExact\(plan\)\)[\s\S]*error: "Could not resolve task pointers from the argument\."/.test(workflow));
 check("workflow retains resolution on malformed plan errors", /!plan \|\| !Array\.isArray\(plan\.waves\)[\s\S]*resolution: plan && plan\.resolution \? plan\.resolution : null/.test(workflow));
 check("workflow retains resolution on inconsistent plan errors", /!planResolutionIsExact\(plan\)[\s\S]*resolution: plan\.resolution/.test(workflow));
