@@ -97,6 +97,7 @@ const workflowClauses = [
   ["records structured exclusions", /resolution\.exclusions/],
   ["omits classification from not-found exclusions", /omit it[\s\S]*for a \\`not-found\\` input, which has no matched task file or full number to classify/],
   ["supports only an explained empty batch", /Return an empty \\`waves\\` array only when resolution leaves no executable task[\s\S]*resolution\.exclusions[\s\S]*resolution\.notFound[\s\S]*resolution failure, not a no-op/],
+  ["independently verifies an empty batch has no executable path", /independently re-derives that no-executable-task condition from every path's \\`selectedBy\\` provenance and \\`classification\\`[\s\S]*cannot explain away another executable path/],
   ["requires structured resolution in the plan", /required: \["defaultBase", "resolution", "waves"\]/],
   ["returns resolution in the normal summary", /collisions, resolution: plan\.resolution, mainCheckout/],
 ];
@@ -106,14 +107,21 @@ const exclusionsSchema = section(workflow, "        exclusions: {", "      requi
 check("workflow exclusion schema does not require classification", /required: \["raw", "kind", "paths", "reason"\]/.test(exclusionsSchema) && !/required: \[[^\]]*"classification"/.test(exclusionsSchema));
 check("workflow not-found exclusions require an empty path list", /set \\`paths: \[\]\\` for a \\`not-found\\` input/.test(workflow));
 
-const emptyPlanMatch = workflow.match(/function emptyPlanIsExplained\(plan\) \{[\s\S]*?\n\}/);
-check("workflow defines an empty-plan explanation gate", !!emptyPlanMatch);
+const emptyPlanMatch = workflow.match(/function handsOffPathEligibility\(entry\) \{[\s\S]*?\n\}\n[\s\S]*?function emptyPlanIsExplained\(plan\) \{[\s\S]*?\n\}/);
+check("workflow defines a shared hands-off eligibility and empty-plan explanation gate", !!emptyPlanMatch);
 if (emptyPlanMatch) {
   // eslint-disable-next-line no-new-func
-  const emptyPlanIsExplained = new Function(`return (${emptyPlanMatch[0]});`)();
+  const emptyPlanIsExplained = new Function(`${emptyPlanMatch[0]}; return emptyPlanIsExplained;`)();
   const packet = (overrides = {}) => ({ resolution: { paths: [], numbers: [], notFound: [], exclusions: [], ...overrides }, waves: [] });
-  check("empty workflow plan with an exclusion is a documented no-op", emptyPlanIsExplained(packet({ exclusions: [{ reason: "done number" }] })) === true);
+  const path = (classification, kinds) => ({ path: "tasks/001-example.md", number: "001", classification, selectedBy: kinds.map((kind) => ({ raw: "001", kind })) });
+  check("empty workflow plan with an excluded done number is a documented no-op", emptyPlanIsExplained(packet({ paths: [path("done", ["number"])], exclusions: [{ reason: "done number" }] })) === true);
+  check("empty workflow plan with an excluded ambiguous number is a documented no-op", emptyPlanIsExplained(packet({ paths: [path("ambiguous", ["number"])], exclusions: [{ reason: "ambiguous number" }] })) === true);
   check("empty workflow plan with not-found is a documented no-op", emptyPlanIsExplained(packet({ notFound: [{ raw: "999" }] })) === true);
+  check("not-found cannot mask an active explicit path omitted from waves", emptyPlanIsExplained(packet({ paths: [path("active", ["path"])], notFound: [{ raw: "tasks/missing-*.md" }] })) === false);
+  check("an exclusion cannot mask an active number path omitted from waves", emptyPlanIsExplained(packet({ paths: [path("active", ["number"])], exclusions: [{ reason: "another input excluded" }] })) === false);
+  check("explicit provenance wins over an ambiguous number classification", emptyPlanIsExplained(packet({ paths: [path("ambiguous", ["number", "path"])], exclusions: [{ reason: "ambiguous number" }] })) === false);
+  check("an explicit outside-subtree path is executable", emptyPlanIsExplained(packet({ paths: [path("outside-subtree", ["glob"])], notFound: [{ raw: "999" }] })) === false);
+  check("unknown path provenance fails closed", emptyPlanIsExplained(packet({ paths: [path("done", ["mystery"])], exclusions: [{ reason: "unknown" }] })) === false);
   check("empty workflow plan without diagnostics is unexplained", emptyPlanIsExplained(packet()) === false);
   check("empty workflow plan without a resolution packet is unexplained", emptyPlanIsExplained({ waves: [] }) === false);
 }

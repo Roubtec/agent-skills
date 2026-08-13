@@ -555,7 +555,7 @@ Do this:
 1. Follow the \`resolve-tasks\` skill's shared contract to produce its deduplicated provenance-tagged \`paths\`, per-full-number \`numbers\`, and per-input \`notFound\` collections. Do not invent a second filename parser here.
 2. Apply the workflow's HANDS-OFF consumer policy. Include as executable every explicit path/glob selection whatever its classification, including an existing well-formed task file outside the resolved task subtree whose report status is \`outside-subtree\` (explicit wins when a path also has number provenance), plus number-selected unambiguous \`active\` paths. Exclude every number-selected \`done\`, \`deferred\`, or \`ambiguous\` classification and every \`not-found\` input; never guess an ambiguous number. Record every exclusion with its raw input, candidate paths, and reason in \`resolution.exclusions\`; include \`classification\` for a matched number state, but omit it and set \`paths: []\` for a \`not-found\` input, which has no matched task file or full number to classify. Preserve the complete resolver packet beside the exclusions.
 3. Read each executable task file in full. Determine dependencies: an explicit "Depends on" field, shared infrastructure, or files/modules two tasks both create or migrate. When in doubt, treat tasks that touch the same files or migrations as dependent.
-4. Group executable tasks into WAVES: wave 1 is every task with no unmet dependency; wave 2 depends only on wave 1; and so on. Tasks within a wave are independent and will run concurrently. Return an empty \`waves\` array only when resolution leaves no executable task and \`resolution.exclusions\` or \`resolution.notFound\` explains why; that is a successful, documented no-op. An empty wave set with neither collection explaining the selection is a resolution failure, not a no-op.
+4. Group executable tasks into WAVES: wave 1 is every task with no unmet dependency; wave 2 depends only on wave 1; and so on. Tasks within a wave are independent and will run concurrently. Return an empty \`waves\` array only when resolution leaves no executable task and \`resolution.exclusions\` or \`resolution.notFound\` explains why; that is a successful, documented no-op. The workflow independently re-derives that no-executable-task condition from every path's \`selectedBy\` provenance and \`classification\`, so an exclusion or not-found diagnostic cannot explain away another executable path. An empty wave set with neither collection explaining the selection is a resolution failure, not a no-op.
 5. For each task set:
    - a ref-safe \`slug\` (task number + short name; also its worktree dir name),
    - a \`branch\` to implement on,
@@ -567,13 +567,29 @@ Do this:
 Return the structured plan. Paste each task file's FULL content verbatim into \`content\` — downstream agents have no other access to it.`;
 }
 
+// Keep this one classification gate aligned with resolvePrompt's hands-off
+// policy: explicit provenance wins regardless of lifecycle, while number-only
+// provenance executes only an unambiguous active task. An unknown/malformed
+// packet is not evidence that a path was safely excluded.
+function handsOffPathEligibility(entry) {
+  if (!entry || typeof entry !== "object" || !Array.isArray(entry.selectedBy) || entry.selectedBy.length === 0) return "unknown";
+  const kinds = entry.selectedBy.map((selection) => selection && selection.kind);
+  if (kinds.some((kind) => kind === "path" || kind === "glob")) return "executable";
+  if (!kinds.every((kind) => kind === "number")) return "unknown";
+  if (entry.classification === "active") return "executable";
+  if (["done", "deferred", "ambiguous"].includes(entry.classification)) return "excluded";
+  return "unknown";
+}
+
 // An empty executable plan is a valid hands-off result only when the resolution
-// packet accounts for it. Without an exclusion or not-found diagnostic, an
-// empty `waves` array is indistinguishable from a resolver that silently lost
-// the argument, so preserve the pre-resolver error instead of reporting green.
+// packet both accounts for it and proves every resolved path non-executable.
+// A diagnostic for one input cannot mask an executable path selected by another
+// input, and an unknown packet shape fails closed rather than reporting green.
 function emptyPlanIsExplained(plan) {
   const resolution = plan && plan.resolution;
   if (!resolution || typeof resolution !== "object") return false;
+  if (!Array.isArray(resolution.paths)) return false;
+  if (!resolution.paths.every((entry) => handsOffPathEligibility(entry) === "excluded")) return false;
   const exclusions = Array.isArray(resolution.exclusions) ? resolution.exclusions : [];
   const notFound = Array.isArray(resolution.notFound) ? resolution.notFound : [];
   return exclusions.length > 0 || notFound.length > 0;
