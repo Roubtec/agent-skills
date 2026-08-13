@@ -74,7 +74,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 170;
+const CHECKS_PER_LEG = 176;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -107,7 +107,7 @@ function loadCycle(src, agent) {
   // every renderer outside a cycle today, so driving the cycle can never
   // exercise the default and only a direct call can.
   // eslint-disable-next-line no-new-func
-  return new Function("agent", "parallel", "pipeline", "log", "phase", `${section}\nreturn { runReviewCycle, cycleReviewChecks, runCyclePeerStage, createCyclePeerThrottle, cyclePeerTrouble };`)(
+  return new Function("agent", "parallel", "pipeline", "log", "phase", `${section}\nreturn { runReviewCycle, cycleReviewChecks, runCyclePeerStage, createCyclePeerThrottle, cyclePeerTrouble, normalizeCyclePeerResult, CYCLE_PEER_SCHEMA };`)(
     agent,
     parallel,
     pipeline,
@@ -1569,6 +1569,81 @@ for (const name of WORKFLOWS) {
     check("a thrown owner releases the waiter instead of deadlocking it", resetResults.length === 2 && preflightAttempts === 2, `${preflightAttempts} preflight attempt(s)`);
     check("the thrown stage stays a synthesized non-blocking forfeit while the waiter succeeds", resetResults.some((r) => r.outcome === "forfeited" && r.synthesized) && resetResults.some((r) => r.outcome === "passed"), JSON.stringify(resetResults));
     check("synthesis resets ownership, so the successor preflights again and only it launches a peer", preflightAttempts === 2 && peerAttempts === 1 && resetState.preflighted === true && resetState.preflightInProgress === null, `${preflightAttempts} preflight/${peerAttempts} peer/${JSON.stringify(resetState)}`);
+  });
+
+  // 29. The peer stage's ONE non-blocking exception. Every OUTCOME normalizes
+  //     non-blocking by design, so a provider the stage could not prove dead
+  //     has nowhere to go in that vocabulary: `failed` reads exactly like a
+  //     provider that crashed and died. The prompt's surviving-provider stop is
+  //     therefore an instruction the contract can only honour through a field
+  //     beside the outcome — without one the cycle keeps fixing, concludes, and
+  //     hands a consumer a state to publish while the process is still alive.
+  //     The negative control is the point of the pair: the SAME `failed`
+  //     outcome without the flag must conclude normally, or the check would
+  //     pass just as happily against a stage that blocked on `failed` itself.
+  await scenario("29. a provider that could not be proven dead stops the cycle, and only the flag stops it", async () => {
+    const drive = async (peerResult) => {
+      const seen = { fixPrompts: [], reviewPrompts: [], closeOutPrompts: [], recordPrompts: [], packetPrompts: [] };
+      const base = scriptedAgent([JSON.parse(JSON.stringify(PASS_PACKET)), JSON.parse(JSON.stringify(idle))], [OK, OK], seen);
+      const agent = async (prompt, opts) => {
+        const label = (opts && opts.label) || "";
+        if (label === "peer-preflight") return { outcome: "available", detail: "" };
+        if (label.startsWith("peer#")) return JSON.parse(JSON.stringify(peerResult));
+        return base(prompt, opts);
+      };
+      const { runReviewCycle } = loadCycle(src, agent);
+      return runReviewCycle({ ...CYCLE, peer: "on" });
+    };
+    const survivor = { outcome: "failed", findings: [], notes: "", detail: "PID 4711 still answered kill -0 after KILL", reason: "", teardownFailure: true };
+    const stopped = await drive(survivor);
+    check(
+      "a teardown failure ends the cycle as an error instead of a non-blocking round",
+      stopped.verdict === "error" && /teardown/i.test(stopped.detail || "") && /4711/.test(stopped.detail || ""),
+      `${stopped.verdict}/${stopped.detail}`,
+    );
+    check(
+      "and the stopping round is still recorded with its outcome and the flag",
+      (stopped.peerRounds || []).length === 1 && stopped.peerRounds[0].outcome === "failed" && stopped.peerRounds[0].teardownFailure === true,
+      JSON.stringify(stopped.peerRounds),
+    );
+    const cleared = await drive({ ...survivor, teardownFailure: false });
+    check(
+      "while the same `failed` outcome without the flag stays non-blocking and the cycle concludes",
+      cleared.verdict === "pass" && (cleared.peerRounds || []).every((p) => p.outcome === "failed" && p.teardownFailure === undefined),
+      `${cleared.verdict}/${JSON.stringify(cleared.peerRounds)}`,
+    );
+
+    const { normalizeCyclePeerResult, CYCLE_PEER_SCHEMA, runCyclePeerStage, createCyclePeerThrottle } = loadCycle(src, async () => {
+      throw new Error("synthetic peer stage throw");
+    });
+    check(
+      "the two fields control flow reads are required rather than optional in the peer schema",
+      (CYCLE_PEER_SCHEMA.required || []).includes("reason") && (CYCLE_PEER_SCHEMA.required || []).includes("teardownFailure"),
+      JSON.stringify(CYCLE_PEER_SCHEMA.required),
+    );
+    check(
+      "normalization carries the flag through while still recording the outcome non-blocking",
+      normalizeCyclePeerResult(survivor).teardownFailure === true && normalizeCyclePeerResult(survivor).outcome === "failed",
+      JSON.stringify(normalizeCyclePeerResult(survivor)),
+    );
+    // A stage that died observed no survivor, so it may not manufacture the
+    // stop: the flag has to come from a stage that watched the process.
+    const thrown = await runCyclePeerStage(
+      { ...CYCLE, peer: "on", contracts: {} },
+      {
+        round: 1,
+        artifactDir: "/tmp/review-cycle-teardown-test",
+        packet: { workReport: [] },
+        handedFindings: [],
+        peerState: { preflighted: true, preflightInProgress: null, unavailable: false, unavailableDetail: "" },
+        peerThrottle: createCyclePeerThrottle(),
+      },
+    );
+    check(
+      "but a thrown stage synthesizes no teardown failure of its own",
+      thrown.outcome === "forfeited" && thrown.synthesized === true && !thrown.teardownFailure,
+      JSON.stringify(thrown),
+    );
   });
 
   const ran = legOk + legFail;

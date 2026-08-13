@@ -376,6 +376,14 @@ function cycleDeviationVerdict(recommendation) {
 // Peer-stage result. `outcome` uses the peer-review-run vocabulary
 // (powbox.peer-review-run/v1) so the eventual helper swap changes the prompt,
 // not this contract.
+//
+// `reason` and `teardownFailure` are REQUIRED rather than optional because both
+// drive control flow rather than diagnostics. `cyclePeerTrouble` classifies the
+// EXACT reason string, so an omitted one normalizes to `""`, matches no entry in
+// that mapping, and spends a qualifying empty/garbled forfeiture without ever
+// stepping the throttle down. `teardownFailure` is the stage's only channel for
+// a provider process it could not prove dead — the one condition the
+// non-blocking normalization below must NOT absorb.
 const CYCLE_PEER_SCHEMA = {
   type: "object",
   properties: {
@@ -395,9 +403,10 @@ const CYCLE_PEER_SCHEMA = {
     },
     notes: { type: "string", description: "Anything after the verdict worth carrying (pass-notes), verbatim." },
     detail: { type: "string", description: "For a non-passed/issues outcome: why (logged out, timed out after retry, empty output, provider crash...)." },
-    reason: { type: "string", description: "The provider/helper reason verbatim; distinguishes empty/garbled forfeitures for the adaptive throttle." },
+    reason: { type: "string", description: "The provider/helper reason verbatim; distinguishes empty/garbled forfeitures for the adaptive throttle. Always emit it: an empty string where the outcome carries no reason, never an omitted field." },
+    teardownFailure: { type: "boolean", description: "The ONE result that is not non-blocking: true ONLY when a provider process this stage launched could not be proven dead after the bounded TERM/KILL sequence. The cycle stops on it for operator intervention. False on every ordinary path, including this stage's own failures." },
   },
-  required: ["outcome", "findings"],
+  required: ["outcome", "findings", "reason", "teardownFailure"],
 };
 
 const CYCLE_PEER_PREFLIGHT_SCHEMA = {
@@ -807,7 +816,7 @@ function cyclePeerPrompt(cycle, state) {
   // `cycleReviewChecks` gates it: a prose review has no code comments to weigh.
   const commentWeighting = cycle.artifactType === "prose" ? "" : ` ${CYCLE_COMMENT_REVIEW}`;
   const preflightStep = `1. Preflight: already done by the run-level shared preflight before this launch, so skip the probes. An auth/usage error from the launch itself still returns \`unavailable\`.`;
-  return `You run the best-effort cross-harness PEER REVIEW stage for one review-cycle round. You launch a read-only \`codex\` review of the committed state, wait for it, and return its result structurally. You NEVER fail this stage: every problem becomes a non-blocking outcome in the schema (\`unavailable\`, \`timeout\`, \`forfeited\`, \`failed\`) with a one-line \`detail\` — never an error, never a refusal to answer.
+  return `You run the best-effort cross-harness PEER REVIEW stage for one review-cycle round. You launch a read-only \`codex\` review of the committed state, wait for it, and return its result structurally. You NEVER fail this stage: every problem becomes a non-blocking outcome in the schema (\`unavailable\`, \`timeout\`, \`forfeited\`, \`failed\`) with a one-line \`detail\` — never an error, never a refusal to answer. Exactly one condition is not non-blocking, and it travels as a FIELD rather than as an error: a provider process you could not prove dead sets \`teardownFailure\` true, and the cycle stops on it.
 
 ## WORKTREE CONTRACT
 
@@ -856,8 +865,8 @@ ${preflightStep}
      < /dev/null > /dev/null 2> "$stderr_file" &
    \`\`\`
 
-   Ordinary stdout is detached to \`/dev/null\`, never merged into \`$outfile\` or \`$stderr_file\`; the \`-o\` artifact remains authoritative. The handoff records the peer PID plus Linux \`/proc/<pid>/stat\` fields 22 (start time), 5 (process group), and 6 (session). In every later Bash call, parse the stat record by stripping everything through its final closing parenthesis plus following space before counting fields (the comm field may contain spaces or \`)\`), require exactly those four positive-decimal handoff values, and compare all three current fields with the persisted values before every \`kill -0\`, TERM, or KILL. Missing or mismatched identity means the original peer is dead; never probe or signal the reused number. On the loose roughly 12-minute timeout, TERM the identity-checked direct provider PID, poll for at most ten seconds, KILL only if the identity still matches, then poll for at most ten more seconds. If it survives, stop and escalate the entire cycle: do not retry, advance, or publish. Retry ONCE with fresh paths only after confirmed death. Never infer a process group from plain \`nohup … &\`, signal a wait supervisor, use \`pkill -f\`, or replace this with a capped foreground call. If recovering by the unique \`-o\` path is unavoidable, disambiguate \`pgrep -f\` to the codex peer binary after excluding the probing shell and every ancestor: one survivor is alive, none dead, more than one indeterminate and signals nothing; persist that PID's complete identity before handing it to another shell. The identity-checked probe target is the only signal target. Auth/usage errors are \`unavailable\` without retry.
-5. Read \`$outfile\` even when the liveness probe has just gone dead: a non-empty artifact with a \`VERDICT:\` line is authoritative. A \`VERDICT: PASS\` line → outcome \`passed\` (anything after it goes to \`notes\` verbatim). A \`VERDICT: ISSUES\` line → outcome \`issues\`, with every numbered finding mapped verbatim into \`findings\` (severity from its \`blocking\`/\`minor\` tag — default \`blocking\` when untagged — plus its \`file:line\` as \`location\` and the finding text as \`claim\`; do not summarize, merge, or rewrite). No verdict line, or empty/unintelligible output → \`forfeited\`, with \`reason\` exactly identifying \`empty output\` or \`garbled output\` where that is what happened. A timeout after retry is \`timeout\`; a provider crash or exhausted non-auth retry is \`failed\`.
+   Ordinary stdout is detached to \`/dev/null\`, never merged into \`$outfile\` or \`$stderr_file\`; the \`-o\` artifact remains authoritative. The handoff records the peer PID plus Linux \`/proc/<pid>/stat\` fields 22 (start time), 5 (process group), and 6 (session). In every later Bash call, parse the stat record by stripping everything through its final closing parenthesis plus following space before counting fields (the comm field may contain spaces or \`)\`), require exactly those four positive-decimal handoff values, and compare all three current fields with the persisted values before every \`kill -0\`, TERM, or KILL. Missing or mismatched identity means the original peer is dead; never probe or signal the reused number. On the loose roughly 12-minute timeout, TERM the identity-checked direct provider PID, poll for at most ten seconds, KILL only if the identity still matches, then poll for at most ten more seconds. If it survives, do not retry, do not decide the round, and do not advance: return immediately with \`teardownFailure\` true, outcome \`failed\`, and a \`detail\` naming the surviving PID and the probe that still answered. The cycle stops on that flag for operator intervention; a non-blocking outcome alone would let it keep fixing and publishing while the provider is still alive. Retry ONCE with fresh paths only after confirmed death. Never infer a process group from plain \`nohup … &\`, signal a wait supervisor, use \`pkill -f\`, or replace this with a capped foreground call. If recovering by the unique \`-o\` path is unavoidable, disambiguate \`pgrep -f\` to the codex peer binary after excluding the probing shell and every ancestor: one survivor is alive, none dead, more than one indeterminate and signals nothing; persist that PID's complete identity before handing it to another shell. The identity-checked probe target is the only signal target. Auth/usage errors are \`unavailable\` without retry.
+5. Read \`$outfile\` even when the liveness probe has just gone dead: a non-empty artifact with a \`VERDICT:\` line is authoritative. A \`VERDICT: PASS\` line → outcome \`passed\` (anything after it goes to \`notes\` verbatim). A \`VERDICT: ISSUES\` line → outcome \`issues\`, with every numbered finding mapped verbatim into \`findings\` (severity from its \`blocking\`/\`minor\` tag — default \`blocking\` when untagged — plus its \`file:line\` as \`location\` and the finding text as \`claim\`; do not summarize, merge, or rewrite). No verdict line, or empty/unintelligible output → \`forfeited\`, with \`reason\` exactly identifying \`empty output\` or \`garbled output\` where that is what happened. A timeout after retry is \`timeout\`; a provider crash or exhausted non-auth retry is \`failed\`. Every outcome carries \`reason\`: the provider diagnostic verbatim where one exists, otherwise the empty string — never omitted, and never invented.
 
 ## Peer prompt (write this text to the prompt file verbatim, filling only the placeholders)
 
@@ -869,7 +878,7 @@ Reply with exactly \`VERDICT: PASS\` or \`VERDICT: ISSUES\`, then \`VERIFICATION
 
 ## Output
 
-Return the structured result: \`outcome\`, \`findings\` (verbatim, tagged), \`notes\`, \`detail\`, and \`reason\` copied exactly from the provider/helper reason when present.`;
+Return the structured result: \`outcome\`, \`findings\` (verbatim, tagged), \`notes\`, \`detail\`, \`reason\` copied exactly from the provider/helper reason (the empty string when there is none — never an omitted field), and \`teardownFailure\` (\`false\` on every ordinary path, \`true\` only for the surviving-provider stop above).`;
 }
 
 function cyclePeerPreflightPrompt() {
@@ -886,9 +895,17 @@ If \`command -v codex\` fails, return \`{ "outcome": "unavailable", "detail": "m
 // The normalization is written as a complement (anything not passed/issues is
 // non-blocking), so `failed` — and any future outcome — cannot fall through a
 // switch over the named ones.
+//
+// `teardownFailure` is the single field this carries THROUGH rather than
+// absorbing. The outcome beside it still lands non-blocking; the round loop
+// reads the flag and stops the cycle, which is what makes the peer prompt's
+// surviving-provider stop reachable at all rather than an instruction the
+// contract silently discards. A script-synthesized result never sets it — a
+// stage that died proves nothing about a provider — so the flag only ever comes
+// from a stage that observed the survivor itself.
 function normalizeCyclePeerResult(res) {
   if (!res || typeof res !== "object") {
-    return { outcome: "forfeited", findings: [], notes: "", detail: "peer subagent returned nothing (died or failed schema validation); recorded non-blocking", synthesized: true };
+    return { outcome: "forfeited", findings: [], notes: "", reason: "", teardownFailure: false, detail: "peer subagent returned nothing (died or failed schema validation); recorded non-blocking", synthesized: true };
   }
   const gating = res.outcome === "passed" || res.outcome === "issues";
   const known = ["passed", "issues", "unavailable", "timeout", "forfeited", "failed"];
@@ -898,6 +915,7 @@ function normalizeCyclePeerResult(res) {
     findings: outcome === "issues" && Array.isArray(res.findings) ? res.findings : [],
     notes: typeof res.notes === "string" ? res.notes : "",
     reason: typeof res.reason === "string" ? res.reason : "",
+    teardownFailure: res.teardownFailure === true,
     detail: typeof res.detail === "string" && res.detail
       ? res.detail
       : (gating ? "" : `peer outcome ${JSON.stringify(res.outcome)} recorded non-blocking`),
@@ -1376,7 +1394,10 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     it — the boolean alone says only that the map leaving is not the judged
 //     one, which is the shape that used to lose the judged one outright),
 //   proactive, finalSha, notes, reviewerNotes,
-//   peerRounds ({ round, outcome, detail, reason } entries), peerThrottle,
+//   peerRounds ({ round, outcome, detail, reason } entries, plus teardownFailure
+//     on the one round that carried it — a provider the peer stage could not
+//     prove dead, which ends the cycle as an `error` rather than degrading to a
+//     non-blocking outcome), peerThrottle,
 //   discardedPeerFindings, undisposed, outstanding, artifactDir,
 //   closeOut (present only when a trivial-round close-out ENDED the cycle:
 //     the pass, the range, and the non-semantic edits that shipped unreviewed),
@@ -2064,7 +2085,9 @@ async function runReviewCycle(cycle) {
     // concurrency exception: the reviewer alone owns builds/execution, and two
     // readers are safe). runCyclePeerStage can neither throw nor block the
     // round, so on any peer problem this degrades to the reviewer's verdict
-    // exactly as a sequential launch would.
+    // exactly as a sequential launch would — with the one exception it REPORTS
+    // rather than throws: a provider it could not prove dead comes back with
+    // `teardownFailure`, which stops the cycle below.
     const [review, rawPeer] = await parallel([
       () =>
         agent(cycleReviewPrompt(cycle, state), {
@@ -2082,7 +2105,17 @@ async function runReviewCycle(cycle) {
     // one path it cannot: a runtime that hands back a null parallel slot. The
     // cycle's `disabled` outcome is not helper vocabulary, so carry it as-is.
     const peer = rawPeer && rawPeer.outcome === "disabled" ? rawPeer : normalizeCyclePeerResult(rawPeer);
-    peerRounds.push({ round: rounds, outcome: peer.outcome, detail: peer.detail, reason: peer.reason || "" });
+    peerRounds.push({ round: rounds, outcome: peer.outcome, detail: peer.detail, reason: peer.reason || "", ...(peer.teardownFailure ? { teardownFailure: true } : {}) });
+    // The one peer condition that is not non-blocking, checked before anything
+    // else this round produced. A provider nobody could prove dead may still be
+    // reading the worktree the next fixer would write to, so the cycle stops for
+    // operator intervention rather than fixing, concluding, or handing a
+    // consumer a state to publish. A peer outcome being best-effort never
+    // licenses leaving a process alive — which is why the flag rides beside the
+    // outcome rather than being one.
+    if (peer.teardownFailure) {
+      return result("error", `peer teardown failed on round ${rounds}: ${peer.detail || "a provider process could not be proven dead"} — operator intervention required before this cycle runs again`);
+    }
     if (peer.outcome === "unavailable") {
       peerState.unavailable = true;
       if (peer.detail && !peerState.unavailableDetail) peerState.unavailableDetail = peer.detail;
