@@ -72,6 +72,7 @@ for (const skill of ["address-tasks", "address-tasks-serialized", "reap-tasks"])
   check(`${skill} preflight is byte-identical across mirrors`, pluginPreflight === codexPreflight);
   check(`${skill} delegates resolution to a fresh own-context subagent`, /run `resolve-tasks`[\s\S]{0,80}fresh resolution subagent with its own context window/.test(pluginPreflight));
   check(`${skill} reconciles the packet with the raw pointer list`, /Reconcile the returned packet against the list you handed it[\s\S]*a pointer the packet accounts for nowhere is a resolution failure to report/.test(pluginPreflight));
+  check(`${skill} rejects packet raw values the caller never supplied`, /no `selectedBy` or `not-found` raw value may name a pointer you never handed it[\s\S]*the same resolution failure to report/.test(pluginPreflight));
   check(`${skill} keys policy from provenance`, /packet's `selectedBy` provenance/.test(pluginPreflight));
   check(`${skill} preserves explicit path and glob execution`, /explicit path or glob[\s\S]*`outside-subtree`/.test(pluginPreflight));
   check(`${skill} pins interactive as the available-session default`, /direct skill invocation defaults to interactive whenever the maintainer can answer in the current session/.test(pluginPreflight));
