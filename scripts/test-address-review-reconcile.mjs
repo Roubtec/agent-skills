@@ -1109,7 +1109,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "and its result says which zero-item outcome it took and why — the tips beside the reason",
     ziPublished.result && ziPublished.result.zeroItem && ziPublished.result.zeroItem.outcome === "zero-item path" &&
       ziPublished.result.zeroItem.startingHead === "beefed11" && ziPublished.result.zeroItem.headOid === "deadbeef" &&
-      /not the recorded PR head/.test(ziPublished.result.zeroItem.why || ""),
+      /at gather time the tip stood at `beefed11` while the PR recorded `deadbeef`/.test(ziPublished.result.zeroItem.why || ""),
     JSON.stringify(ziPublished.result && ziPublished.result.zeroItem),
   );
   check(
@@ -1126,19 +1126,23 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     ((ziPublished.seen.cycleOpts || {}).opts || { scope: {} }).scope.instructions ? "rendered without the zero-item paragraph" : "no cycle dispatched",
   );
   // The premise each zero-item brief states is the DISAGREEMENT that actually
-  // continued the run, never an unconditional ahead-of-PR claim: the three-way
-  // gate also routes `startingHead != finalHead == headOid` here, where the
-  // reviewed tip IS the recorded head and a push moves nothing — so "a tip the
-  // PR head did not carry" would be false on that branch. The fix brief embeds
-  // `zeroItem.why` and the publish brief re-reads the same reported tips; the
-  // AHEAD case names the tip the PR head lacks.
+  // continued the run, stated as the GATHER-TIME reading it is — never a claim
+  // about what the push moved or which tip was reviewed. Those tips are read
+  // before the rebase points, and a replaying rebase moves `HEAD` after them,
+  // so any such claim derived from them can be false at publication time; two
+  // review rounds punctured two differently-worded such sentences, so the pin
+  // here is on the claim shape's ABSENCE beside the gather-time facts. The fix
+  // brief embeds `zeroItem.why` and the publish brief re-reads the same
+  // reported tips; the AHEAD case names both gather-time tips.
   const ziAheadInstructions = ((ziPublished.seen.cycleOpts || {}).opts || { scope: {} }).scope.instructions || "";
   check(
-    "the zero-item briefs state the AHEAD disagreement: fix premise and Summary arm name the tip the PR head lacks",
-    /local tip `beefed11` is not the recorded PR head `deadbeef`/.test(ziAheadInstructions) &&
-      /reviewed local tip `beefed11` is not the recorded PR head `deadbeef`/.test(ziPublishBrief) &&
-      /which is what the push above publishes/.test(ziPublishBrief),
-    JSON.stringify({ fixPremiseNamesTips: /local tip `beefed11` is not the recorded PR head `deadbeef`/.test(ziAheadInstructions), summaryArm: (ziPublishBrief.match(/ZERO-ITEM publication[^]{0,220}/) || [])[0] }),
+    "the zero-item briefs state the AHEAD disagreement as gather-time readings: both tips named, no push-motion or reviewed-tip claim",
+    /at gather time the tip stood at `beefed11` while the PR recorded `deadbeef`/.test(ziAheadInstructions) &&
+      /the local tip stood at `beefed11` while the PR recorded `deadbeef`/.test(ziPublishBrief) &&
+      /naming those tips as the gather-time readings they are/.test(ziPublishBrief) &&
+      /Do NOT assert from them what the push above moved or which tip was reviewed/.test(ziPublishBrief) &&
+      !/push above publishes/.test(ziPublishBrief) && !/reviewed local tip/.test(ziPublishBrief),
+    JSON.stringify({ fixPremiseNamesTips: /at gather time the tip stood at `beefed11` while the PR recorded `deadbeef`/.test(ziAheadInstructions), summaryArm: (ziPublishBrief.match(/ZERO-ITEM publication[^]{0,260}/) || [])[0] }),
   );
   check(
     "and the fix brief scopes its no-commit order to the pass — a later round's finding is fixed normally",
@@ -1148,22 +1152,27 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   );
   // The MOVED-UNDER case, driven whole: `startingHead != finalHead == headOid`
   // continues — only a fresh review can vouch for a tip that moved under the
-  // run — but the reviewed tip is one the PR already records, so the push has
-  // nothing new to move and neither brief may claim the PR head lacks it.
+  // run — and both briefs state that gather-time move and nothing more: the
+  // old "the push above had nothing new to move" was a push-motion claim a
+  // replaying pre-push rebase falsifies, so its absence is pinned here beside
+  // the ahead-claim's.
   const ziMoved = await run(gathered({ reconcile: { outcome: "work" }, startingHead: "beefed11" }), { args: "push", cycles: [{ ...CYCLE_PASS_EMPTY, finalSha: "deadbeef" }] });
   const ziMovedInstructions = ((ziMoved.seen.cycleOpts || {}).opts || { scope: {} }).scope.instructions || "";
   const ziMovedPublish = ziMoved.seen.publishPrompts[0] || "";
   check(
-    "a moved-under zero-item run's fix brief premise is the moved tip, not a PR-head-lacks-it claim",
+    "a moved-under zero-item run's fix brief premise is the moved tip, not the ahead case's tip-disagreement claim",
     ziMoved.status === "fixed-published" && /tip moved under this run/.test(ziMovedInstructions) &&
-      !/is not the recorded PR head/.test(ziMovedInstructions),
+      !/while the PR recorded/.test(ziMovedInstructions),
     JSON.stringify({ status: ziMoved.status, premise: (ziMovedInstructions.match(/ZERO-ITEM PATH[^.]*/) || ["no zero-item paragraph rendered"])[0] }),
   );
   check(
-    "and its Summary arm says the reviewed tip is one the PR already records — nothing new to move — while the Summary still posts",
-    /gather ended on the recorded PR head `deadbeef`/.test(ziMovedPublish) && /nothing new to move/.test(ziMovedPublish) &&
-      !/did not carry/.test(ziMovedPublish) && /Summary comment STILL POSTS/.test(ziMovedPublish),
-    JSON.stringify({ summaryArm: (ziMovedPublish.match(/ZERO-ITEM publication[^]{0,260}/) || ["no zero-item arm rendered"])[0] }),
+    "and its Summary arm states the gather-time move — started elsewhere, gather ended on the recorded head — with no claim of what the push moved, while the Summary still posts",
+    /at gather time the tip had moved under the run/.test(ziMovedPublish) &&
+      /gather ended on the recorded PR head `deadbeef`/.test(ziMovedPublish) &&
+      !/nothing new to move/.test(ziMovedPublish) && !/did not carry/.test(ziMovedPublish) &&
+      /Do NOT assert from them what the push above moved or which tip was reviewed/.test(ziMovedPublish) &&
+      /Summary comment STILL POSTS/.test(ziMovedPublish),
+    JSON.stringify({ summaryArm: (ziMovedPublish.match(/ZERO-ITEM publication[^]{0,300}/) || ["no zero-item arm rendered"])[0] }),
   );
   // The same path local-only: `no-push` reviews the tip and stops, and the
   // empty map records NOTHING — `leaveDispositionRecord`'s no-entries rule is
