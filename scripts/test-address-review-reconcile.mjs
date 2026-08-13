@@ -151,7 +151,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 241;
+const EXPECTED_CHECKS = 242;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1300,6 +1300,28 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "and takes their `R` from the fetched ref, not from an existence test on the recorded OID",
     readsFetchedHead && !testsObjectExistence,
     `reads FETCH_HEAD: ${readsFetchedHead}; tests object existence: ${testsObjectExistence}`,
+  );
+
+  // That fetch is the reconciliation's own, and it has to be. The location step
+  // above fetches too, but it fetches in whatever tree the run STARTS in — the
+  // worktree it may go on to attach does not exist yet. `FETCH_HEAD` does not
+  // cross that boundary: Git keeps it in the per-worktree git dir, so
+  // `git rev-parse --git-path FETCH_HEAD` in a linked worktree answers with
+  // `.git/worktrees/<name>/FETCH_HEAD` and a freshly attached one has no such
+  // file, where the read fails outright. So a brief offering the location step's
+  // fetch as serving the reconciliation too supplies a reason to skip the fetch
+  // the check above pins, at the gate that decides whether the branch may be
+  // acted on at all. Pinned as the phrase's absence plus the fact's presence:
+  // the first catches the clause returning in the words it was written in, the
+  // second keeps the reason stated where the next reader meets it instead of
+  // re-derived. Both are phrasing pins and claim no more — a fresh way of saying
+  // "one fetch is enough" passes them, and polarity stays the reviewer's to hold.
+  const servesBoth = /one fetch serves both/.test(brief);
+  const statesPerWorktree = brief.includes("git rev-parse --git-path FETCH_HEAD");
+  check(
+    "and the location step's fetch is not offered as serving it too, the per-worktree `FETCH_HEAD` fact being stated instead",
+    !servesBoth && statesPerWorktree,
+    `offers one fetch for both: ${servesBoth}; states the per-worktree fact: ${statesPerWorktree}`,
   );
 
   // The same rule, in the two SKILLs that state it to a reader rather than to a
