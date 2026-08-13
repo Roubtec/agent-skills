@@ -74,7 +74,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 179;
+const CHECKS_PER_LEG = 185;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -1855,7 +1855,7 @@ const BATCH_CONTRACT_CHECKS = 5;
 // constant — the reuse failure this guard exists for — without ever probing or
 // signalling a real process. The fake `kill` records every operand and can
 // model TERM resistance, KILL death, or a teardown survivor.
-const PEER_LIFECYCLE_CHECKS = 20;
+const PEER_LIFECYCLE_CHECKS = 21;
 {
   console.log("# codex review-cycle prose — peer lifecycle negative controls");
   const before = legOk + legFail;
