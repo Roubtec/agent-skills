@@ -1890,7 +1890,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         // is what a run follows to RECORD them, and a run that recorded nothing
         // has nothing for the publish-time read to confirm.
         "the fields its off-shoot target rule reads",
-        "**Read context:** `gh pr view NUMBER --json",
+        "**Read context:** `gh pr view NUMBER --repo <owner>/<repo> --json",
         [/headRepository,/, /headRepositoryOwner,/, /isCrossRepository/],
       ],
       [

@@ -257,7 +257,7 @@ In `publish-reviewed` mode, first require the supplied review packet, a fresh ex
 
 Publication runs in the working location: the re-check, the resolved push remote/ref, and the push itself all read and write that tree and its `HEAD`, never the main checkout.
 
-**Which repository every `gh` call below addresses: the one the PR is in**, whose `<owner>/<repo>` is the PR's own `url`, written out literally (`--repo <owner>/<repo>`, `repos/<owner>/<repo>/…`) rather than left to default. "GitHub API recipes" states this once for every call in this skill; it is restated here because these are the writes that *mutate* the PR — on a cross-repository PR handled from a fork clone the working location is the head fork, so an unqualified read, reply, Summary comment or reviewer request addresses a same-numbered PR there instead of this one. Not from a bare `gh repo view --json nameWithOwner` either, which with no repository argument answers for the directory: the fork again. The `git` push above is the deliberate exception — its target is the head repository, resolved from the remote in item 1.
+**Which repository every `gh` call below addresses: the one the PR is in**, whose `<owner>/<repo>` is the PR's own `url`, written out literally (`--repo <owner>/<repo>`, `repos/<owner>/<repo>/…`) rather than left to default. "GitHub API recipes" states this once for every call in this skill; it is restated here because these are the writes that *mutate* the PR — on a cross-repository PR handled from a fork clone the working location is the head fork, so an unqualified read, reply, Summary comment or reviewer request addresses a same-numbered PR there instead of this one. Not from a bare `gh repo view --json nameWithOwner` either, which with no repository argument answers for the directory: the fork again. The `git` push of item 2 below is the deliberate exception — its target is the head repository, resolved from the remote in item 1.
 
 1. **Re-check before publication:** require the working location clean and idle, by step 0.1's two checks, and still standing on the branch this run has been working on (`git branch --show-current`, in that spelling: `git rev-parse --abbrev-ref HEAD` is documented to produce a non-ambiguous name, so where a tag shares the branch's name it prints `heads/<name>` and would stop a publication that was valid) — the mode picked that branch and everything below is keyed on its name, so a location that has moved to some other branch since the review is a stop rather than something to publish from; re-fetch the PR and confirm it is still open, still points to the recorded head repository/ref, and its current `headRefOid` is the expected remote tip you are prepared to replace. Resolve the current branch's exact push remote/ref, verify they match that PR head, and fetch that exact head ref without moving the local branch so the expected commit object is available for the ancestry test — never assume `origin`, especially for fork PRs. If the PR head moved, the push target cannot be matched, or the branch has no usable push permission, stop and report instead of guessing.
 
@@ -372,7 +372,7 @@ Purpose: run inside a parallelized agent that has no direct line to the user (e.
 
 ## GitHub API recipes
 
-`gh api` expands `{owner}`/`{repo}` to the current repo. For GraphQL, pass real values (`gh repo view --json owner,name`).
+`gh api` expands `{owner}`/`{repo}` to the current repo. For GraphQL, pass real values — the `<owner>`/`<repo>` of the PR's own URL.
 On a **cross-repository PR handled from a fork clone** the current repo is the head fork, while the PR and its comments live in the base repository — and a bare `gh pr comment` resolves the same way — so qualify every PR-scoped call there with the `<owner>/<repo>` of the PR's own URL (`repos/<owner>/<repo>/…`, `--repo <owner>/<repo>`) rather than letting it default. Not from a bare `gh repo view --json nameWithOwner` either, which with no repository argument answers for the directory: the fork again.
 
 **List unresolved review threads** (id for resolve, comment `databaseId` for replies).
@@ -444,7 +444,7 @@ gh pr comment NUMBER --repo <owner>/<repo> --body-file -                        
 gh pr edit NUMBER --repo <owner>/<repo> --add-reviewer @copilot
 ```
 
-**Read context:** `gh pr view NUMBER --json reviews,comments,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,baseRefName,url,state` and `gh api --paginate repos/{owner}/{repo}/issues/NUMBER/comments`.
+**Read context:** `gh pr view NUMBER --repo <owner>/<repo> --json reviews,comments,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,baseRefName,url,state` and `gh api --paginate repos/<owner>/<repo>/issues/NUMBER/comments`.
 
 ## Checklist
 
