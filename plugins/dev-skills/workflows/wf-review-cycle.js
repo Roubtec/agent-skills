@@ -1449,9 +1449,8 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     `range` names it and `verified` is what the diff check found in it; both
 //     are EMPTY where this field names no commit of its OWN. So the
 //     discriminator a consumer rendering the record reads is exactly that, and
-//     no more:
-//     whether `recordOnly` names an unreviewed post-run commit, never why it
-//     does not),
+//     no more: whether `recordOnly` names an unreviewed post-run commit, never
+//     why it does not),
 //   flakeHistory (present once ANY pass reported a `flakeRecord`, and on every
 //     exit including the stopped ones, since it is a log rather than a claim
 //     about the conclusion: one { pass, note } entry per pass that reported
@@ -1463,11 +1462,10 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     worktree the cycle MEASURED, in order. Every packet the cycle adopts has
 //     one — the final confirmation pass included, since the measurement runs
 //     when the packet RETURNS rather than riding a later reviewer round. A
-//     `measured: false`
-//     entry is this shape's whole residual: the reading could not be taken, so
-//     the packet was REFUSED rather than adopted, and that entry sits under an
-//     `error` verdict saying the cycle stopped on an unverified worktree
-//     instead of finishing over one),
+//     `measured: false` entry is this shape's whole residual: the reading could
+//     not be taken, so the packet was REFUSED rather than adopted, and that
+//     entry sits under an `error` verdict saying the cycle stopped on an
+//     unverified worktree instead of finishing over one),
 //   artifactDirAnomalies (present only when a later pass tried
 //   to move the artifact directory) }
 // NO per-round condition latches into that result: `deviations` is the LAST
@@ -1697,11 +1695,11 @@ async function runReviewCycle(cycle) {
     // ride an existing turn: a conclusion need have no reviewer round after the
     // pass it concludes on, so a reviewer-borne reading would leave those
     // unmeasured — the final confirmation pass, the cycle's last word, most of
-    // all. And on the rounds it did cover
-    // it would arrive only after the reviewer and the peer had already been
-    // spent on the tree it turns out nobody could trust. One low-effort
-    // read-only turn per pass covers every pass through one mechanism, with no
-    // exit special-cased and no round spent ahead of the refusal.
+    // all. And on the rounds it did cover it would arrive only after the
+    // reviewer and the peer had already been spent on the tree it turns out
+    // nobody could trust. One low-effort read-only turn per pass covers every
+    // pass through one mechanism, with no exit special-cased and no round spent
+    // ahead of the refusal.
     //
     // A reading that cannot be TAKEN is unknown, and unknown refuses the packet
     // exactly as a dirty one does — the one thing it must never do is read as
@@ -1959,11 +1957,10 @@ async function runReviewCycle(cycle) {
     // after it owes that tier again — three runs of the suite the tolerance
     // exists to spare, plus a reviewer-and-peer round, bought by a commit that
     // adds a queue entry and a note. The pass neither offers this nor is asked
-    // about it
-    // — a tolerance a fixer could claim would be the evasion route item 2's own
-    // evidence requirement exists to close, so a cheap read-only check judges
-    // the range, and anything beyond the record forfeits the exit for the
-    // normal round.
+    // about it — a tolerance a fixer could claim would be the evasion route
+    // item 2's own evidence requirement exists to close, so a cheap read-only
+    // check judges the range, and anything beyond the record forfeits the exit
+    // for the normal round.
     //
     // The pass's own note of what the run surfaced rides IN the record, from
     // the same `flakeRecord` the terminal check above carries — one field, one
