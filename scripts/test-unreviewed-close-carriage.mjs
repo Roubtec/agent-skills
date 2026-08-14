@@ -28,6 +28,14 @@
 // covered here too, on both halves: what it must correct, and what it must
 // leave alone.
 //
+// This file is also where `prPrompt`'s PR-creation read-backs are pinned
+// (task 023b), because it already renders that brief on both of its paths: the
+// convergence recipe step 3's base assertion and step 4's recovery lookup
+// carry, the retry decision that recipe exists to change, the `reason`-borne
+// unconverged case in `PR_SCHEMA`, and the second copies steps 3/4 share with
+// the `address-tasks` skill, read against the sentences that author them in
+// both hand-edited mirrors.
+//
 // The workflows are runtime scripts (top-level await/return, injected
 // `agent`/`parallel`/`log` globals), so they cannot be imported. Each subject is
 // extracted from the ACTUAL shipped source, by one of three methods:
@@ -69,7 +77,7 @@ function check(name, cond, detail) {
 // does not count. Bump it deliberately when adding or removing one — a check
 // that silently stops running is invisible to a suite that only gates on
 // failures.
-const EXPECTED_CHECKS = 43;
+const EXPECTED_CHECKS = 50;
 
 // Evaluate a workflow's declaration prefix up to its documented cut marker and
 // hand back the named ones. Each is returned by an explicit reference, so a
@@ -188,7 +196,7 @@ const cycleResult = (extra) => ({
   const delivered = cycleCarried(ready);
   check("the record survives the carrier's second application, on the derived task result", JSON.stringify(delivered.recordOnly) === JSON.stringify(RECORD) && JSON.stringify(delivered.closeOut) === JSON.stringify(CLOSE_OUT), JSON.stringify(delivered));
 
-  const { prPrompt } = loadDeclarations("wf-address-tasks.js", "\nconst peerMode = /", ["prPrompt"]);
+  const { prPrompt, PR_SCHEMA } = loadDeclarations("wf-address-tasks.js", "\nconst peerMode = /", ["prPrompt", "PR_SCHEMA"]);
   const task = { slug: "t035", branch: "task/035-x", base: "main", path: "tasks/035-x.md" };
   const withRecord = prPrompt(task, { notes: "reviewer caveat", deviations: [], recordOnly: RECORD }, true);
   check("the PR body brief carries the recorded-not-reviewed section", /Delivery-run failure — recorded, not reviewed/.test(withRecord), "pr prompt");
@@ -212,6 +220,164 @@ const cycleResult = (extra) => ({
   // it has nowhere to put.
   const noRemote = prPrompt(task, { notes: "", deviations: [], recordOnly: RECORD }, false);
   check("the no-remote brief, which opens no PR, carries no record", !noRemote.includes(NOTE) && !/recorded, not reviewed/.test(noRemote), "pr prompt");
+
+  // --- The PR-creation read-backs the same brief performs (task 023b) --------
+  // `prPrompt`'s step 3 asserts a just-created PR's base and its step 4 recovers
+  // a creation that failed before printing a URL by a by-head lookup — both
+  // reads of the same eventually-consistent API the creation just wrote, so
+  // each must carry what settles it: a lookup that finds nothing is not proof
+  // no PR exists, and a base that disagrees once is not proof the repair
+  // failed. The load-bearing half is step 4's retry decision — a retry on an
+  // unconverged nothing-found answer is how one branch gets two PRs.
+  //
+  // An unconverged read has NO value of its own in `PR_SCHEMA`: it is one more
+  // way `opened`/`baseOk` are unestablished, the caller has no third branch to
+  // act on, and `reason` is the field that already names why a delivery is not
+  // one — so the case rides `reason`, and the schema check below pins that the
+  // contract gained no field for it.
+  //
+  // Step 3/4 also restate the skill's own PR-open bullets, so those shared
+  // clauses are second copies: the brief's phrases and the sentences that
+  // author them in BOTH hand-edited skill mirrors are read together, the way
+  // the reconcile suite reads 023a's two, so a side reworded alone fails. These
+  // are PHRASE pins — a rewrite that keeps every phrase while reversing what it
+  // says passes, and the polarity stays the reviewer's to hold.
+  const creationBrief = prPrompt(task, { notes: "", deviations: [] }, true);
+  const step3 = creationBrief.slice(creationBrief.indexOf("3. Capture the URL"), creationBrief.indexOf("\n4. If `gh pr create` fails"));
+  const baseReadBack = {
+    "asserts by URL through the shared read": /`gh pr view <pr-url> --json baseRefName` must report `main`/.test(step3),
+    "repairs in the same breath": /repair it in the same breath/.test(step3),
+    "names the API the read rides": /same eventually-consistent API the creation and the repair just wrote/.test(step3),
+    "one disagreeing read proves no failed repair": /a base that disagrees once is not proof the repair failed/.test(step3),
+    "and licenses no repair by itself": /is not yet a mismatch to repair/.test(step3) && /On a mismatch that settled/.test(step3),
+    "settles by re-reading to agreement or a repeated answer": /re-read until the answer reports `main` or repeats the same other base/.test(step3),
+    "bounds every settle attempt, an errored read spending the same budget": /a bounded budget of a few re-reads, held briefly apart, an errored read spending it like a stale one/.test(step3),
+    "a read unsettled before any repair returns unsettled too, keeping the URL": /A read still unsettled when that budget is spent, before any repair as much as after one, returns `opened: false` WITH the `url` and `baseOk: false`/.test(step3) && /naming the read that did not settle and what it last returned/.test(step3),
+    "baseOk only from an agreeing read": /set `baseOk: true` only from a read that reported `main`/.test(step3),
+    "the wrong-base verdict rests on a settled answer, named in `reason`": /delivered with the wrong base, not delivered/.test(step3) && /naming the settled base it still carries/.test(step3),
+    "an unsettled read is returned as unsettled, through `reason`": /naming the read that did not settle and the base it last reported/.test(step3) && /an unsettled read, not a proven wrong base/.test(step3),
+  };
+  const baseReadBackMissing = Object.entries(baseReadBack).filter(([, ok]) => !ok).map(([what]) => what);
+  check(
+    "the PR brief's base assertion carries what settles its read-back, and returns an unsettled read as unsettled rather than as a proven wrong base",
+    baseReadBackMissing.length === 0,
+    baseReadBackMissing.join("; ") || `step 3 carries all ${Object.keys(baseReadBack).length} clauses`,
+  );
+
+  // A failed `gh pr edit` is ambiguous about whether the server applied the
+  // change, so the verdict after one must rest on evidence from AFTER that last
+  // write — a settled post-failure read — not on the pre-repair settled answer;
+  // and only after a repair the server confirmed does a repeated old-base
+  // answer stop counting as settleable evidence at all.
+  check(
+    "a failed repair's verdict rests on a read settled after the failure, not on the pre-repair answer",
+    /rest the verdict on a read settled AFTER the failure/.test(step3) &&
+      /can arrive after the server applied the change/.test(step3) &&
+      /a settled `main` means the repair landed, so return `baseOk: true`/.test(step3) &&
+      /a repair the server confirmed makes even a repeated old-base answer that unsettled read, never the wrong-base verdict/.test(step3),
+    "step 3 failed-repair clause",
+  );
+
+  const step4 = creationBrief.slice(creationBrief.indexOf("4. If `gh pr create` fails"), creationBrief.indexOf("Return `opened: true`"));
+  const lookupRecipe = {
+    "an already-exists failure hands over its URL instead of a lookup": /names an existing PR's URL/.test(step4) && /take that URL to step 3/.test(step4),
+    "looks up in the base repository": /the base repository the creation targeted, never the head repository, where a fork's PR does not live/.test(step4),
+    "requires the head owner to match, the instruction itself and not only its why": /`--head` cannot carry an `<owner>:<branch>` form/.test(step4) && /require the returned PR's head repository owner to match the head you pushed before trusting the match/.test(step4),
+    "nothing-found is not proof": /a lookup that finds nothing is not proof no PR exists/.test(step4),
+    "names the double-PR hazard the retry guards": /how one branch gets two PRs/.test(step4),
+    "licenses the retry only on a trustworthy nothing-found": /Retry creation ONLY on a lookup that finds nothing where nothing-found is trustworthy/.test(step4),
+    "trustworthy means no existence claim and a held re-read": /the creation failure did not claim the PR exists, AND a re-run of the lookup, held briefly rather than immediate, still finds nothing/.test(step4),
+    "states the residual the held pair cannot close": /closes only the unconverged-lookup window/.test(step4) && /did not open a PR whose success report was lost/.test(step4),
+    "budgets one retry and routes its ending to step 3 or a report, never another attempt": /the license is for ONE retry/.test(step4) && /goes to step 3 like the first attempt's failure would/.test(step4) && /not at another attempt/.test(step4),
+    "an untrusted nothing-found returns rather than retries": /Where those do not both hold, do not retry/.test(step4) && /`reason` naming the read that did not settle/.test(step4),
+  };
+  const lookupMissing = Object.entries(lookupRecipe).filter(([, ok]) => !ok).map(([what]) => what);
+  check(
+    "and its recovery lookup retries creation only on a nothing-found answer it may trust, returning through `reason` where it may not",
+    lookupMissing.length === 0,
+    lookupMissing.join("; ") || `step 4 carries all ${Object.keys(lookupRecipe).length} clauses`,
+  );
+
+  // The closing paragraph renders the skill's no-URL-no-match rule too — the
+  // one shared clause outside steps 3/4 — so it takes the same both-sides pin:
+  // the mirror check below holds the skill's sentence, and this holds the
+  // brief's copy, so rewording either side alone fails.
+  const closing = creationBrief.slice(creationBrief.indexOf("Return `opened: true`"));
+  check(
+    "and the brief's closing paragraph still renders the skill's rule that no URL and no match is that failure, not a delivery",
+    /ending with neither a captured URL nor a lookup match is that failure, not a delivery/.test(closing),
+    "closing paragraph",
+  );
+
+  // The contract those steps fill: the unconverged case rides `reason`, and the
+  // schema gained no field or value for it — pinned as the exact property set
+  // and required list, so a field added for it fails here and gets decided
+  // rather than drifted into.
+  check(
+    "the PR schema reports an unconverged read through `reason`, growing no field for it",
+    /a read that did not settle is named with the answer it last returned/.test(PR_SCHEMA.properties.reason.description) &&
+      /name the operation that failed and what it reported/.test(PR_SCHEMA.properties.reason.description) &&
+      JSON.stringify(Object.keys(PR_SCHEMA.properties)) === JSON.stringify(["opened", "url", "pushed", "baseOk", "baseRepaired", "reason"]) &&
+      JSON.stringify(PR_SCHEMA.required) === JSON.stringify(["opened", "pushed"]),
+    `properties: ${Object.keys(PR_SCHEMA.properties).join(",")}; required: ${JSON.stringify(PR_SCHEMA.required)}; reason: ${PR_SCHEMA.properties.reason.description}`,
+  );
+
+  // The no-remote brief performs neither read — it opens no PR — so the recipe
+  // must not reach it and hand its agent steps it has no operation for.
+  check(
+    "the no-remote brief, which creates no PR, carries none of the read-back recipe",
+    !/eventually-consistent/.test(noRemote) && !/Retry creation/.test(noRemote) && !/baseRefName/.test(noRemote),
+    "no-remote brief",
+  );
+
+  // And the sentences that AUTHOR the shared clauses, in both mirrors of the
+  // skill: the brief's step 3/4 render them for a subagent that has read no
+  // skill, so a rule reworded only in the skill leaves the brief stating
+  // superseded wording, and one reworded only in the brief contradicts the
+  // skill's next reader. Anchored to the bullet that carries each rule, so a
+  // rewrite keeping the file's other mentions of these strings fails.
+  const wanted = [
+    [
+      "the by-URL base assertion",
+      "**Assert the base on the PR you just created:**",
+      [/`gh pr view <pr-url> --json baseRefName`/, /repair it in the same breath/, /\*\*delivered with the wrong base\*\*/],
+    ],
+    [
+      "the by-head recovery lookup",
+      "**If a creation attempt fails before printing a URL, the PR may exist server-side anyway.**",
+      [
+        /the base repository the creation targeted, never the head repository, where a fork's PR does not live/,
+        /`--head` cannot carry an `<owner>:<branch>` form/,
+        /require the returned PR's head repository owner to match the recorded head before trusting the match/,
+        /Only a lookup that finds nothing licenses the retry/,
+        /neither a captured URL nor a lookup match/,
+      ],
+    ],
+  ];
+  const mirrorMissing = [];
+  for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
+    const path = `${mirror}/address-tasks/SKILL.md`;
+    let text;
+    try {
+      text = readFileSync(join(here, "..", mirror, "address-tasks", "SKILL.md"), "utf8");
+    } catch (err) {
+      mirrorMissing.push(`${path} cannot be read: ${err.message}`);
+      continue;
+    }
+    for (const [what, anchor, phrases] of wanted) {
+      const line = text.split("\n").find((l) => l.includes(anchor));
+      if (!line) {
+        mirrorMissing.push(`${path} states nothing for ${what}`);
+        continue;
+      }
+      for (const phrase of phrases) if (!phrase.test(line)) mirrorMissing.push(`${path}'s ${what} does not state ${phrase}`);
+    }
+  }
+  check(
+    "and both mirrors of the address-tasks skill still author the PR-open rules the brief's steps 3 and 4 render",
+    mirrorMissing.length === 0,
+    mirrorMissing.join("; "),
+  );
 
   // The one stage that can FALSIFY the record between the cycle and the PR.
   // A branch the pre-PR collision guard's resolver renamed gets a fresh
