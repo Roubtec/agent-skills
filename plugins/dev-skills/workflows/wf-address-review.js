@@ -1943,12 +1943,8 @@ if (!cycle) {
 // account of what failed.
 // This run pushes to a PR and reports back to the maintainer who started it, so
 // the carrier is where that fact reaches them, and every return of this run's
-// RESULT spreads it — enumerated rather than swept, since they are not the only
-// returns below: the failed-cycle error, the no-push report, the
-// cap-not-published report, the three publish-abort guards (an uncovered item, a
-// doubly-covered one, a malformed covering entry), and the published report.
-// Seven. The many other returns below sit inside `dispositionDefect` and hand
-// back a diagnostic string rather than a result, so they spread nothing.
+// RESULT spreads it — spread at each return rather than swept up in one place,
+// since not every return below is one of this run's results.
 // The nested cycle is granted no close-out above, so `closeOut` cannot arise
 // here today — it rides in the same conditional because the two records are one
 // rule, and granting the close-out later then needs no second edit HERE; the

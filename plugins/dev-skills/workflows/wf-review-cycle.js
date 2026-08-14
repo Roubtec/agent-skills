@@ -1447,15 +1447,9 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     the record-only exit is refused for the normal reviewer round. Where the
 //     record was a post-run COMMIT — the delivery gate's one tolerated one —
 //     `range` names it and `verified` is what the diff check found in it; both
-//     are EMPTY on conclusions where this field names no commit of its OWN —
-//     the terminal check's pass committed nothing (the flake rule's
-//     cited-active-task outcome), the light conclusion's commits were seen by
-//     the round that just passed, and an ordinary close-out's record rides in
-//     the `closeOut.range` this same result carries. A close-out whose delivery
-//     run appended the tolerated diagnosis-only record instead names that
-//     independently checked suffix here while `closeOut.range` names the whole
-//     range. So the discriminator a
-//     consumer rendering the record reads is exactly that, and no more:
+//     are EMPTY where this field names no commit of its OWN. So the
+//     discriminator a consumer rendering the record reads is exactly that, and
+//     no more:
 //     whether `recordOnly` names an unreviewed post-run commit, never why it
 //     does not),
 //   flakeHistory (present once ANY pass reported a `flakeRecord`, and on every
@@ -1468,8 +1462,8 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     entry per fixer pass whose
 //     worktree the cycle MEASURED, in order. Every packet the cycle adopts has
 //     one — the final confirmation pass included, since the measurement runs
-//     when the packet RETURNS rather than riding a later reviewer round, and
-//     three of the four conclusions have no such round. A `measured: false`
+//     when the packet RETURNS rather than riding a later reviewer round. A
+//     `measured: false`
 //     entry is this shape's whole residual: the reading could not be taken, so
 //     the packet was REFUSED rather than adopted, and that entry sits under an
 //     `error` verdict saying the cycle stopped on an unverified worktree
@@ -1638,54 +1632,16 @@ async function runReviewCycle(cycle) {
     // Read and LOGGED here — above every error return below, and above the
     // conclusions further down — because `flakeHistory` promises one entry per
     // reporting pass on EVERY exit, and the stopped exits are not the exception
-    // to that: a packet that reports a failed validation run and THEN blocks,
-    // or comes back from a worktree that is not clean and idle, or names an
-    // artifact directory the cycle refuses, is precisely the run whose failure
-    // the maintainer is owed, and reading the field after those returns would
-    // drop it. Only a pass that returned NOTHING has no record to read; every
-    // return from here on carries this pass's.
+    // to that, and reading the field after those returns would drop it. Only a
+    // pass that returned NOTHING has no record to read; every return from here
+    // on carries this pass's.
     //
-    // It buys no exit — no conclusion below is licensed by anything this field
-    // says. It can WITHHOLD one, though: the record-only close skips a round
-    // for the sole purpose of carrying this record, so a pass that reported
-    // none takes the normal round instead. And the gate that admits a FAILED
-    // delivery run admits it only on the promise that the failure reaches the
-    // maintainer, with these conclusions the ones no later reviewer round
-    // follows. So `flakeCarried` rides on all FOUR of them — the terminal
-    // check, the trivial-round close-out, the record-only close (where it rides
-    // inside that exit's own richer record), and the light-mode exit — and on
-    // those only: an `error` or `review-cap` exit publishes nothing on the
-    // strength of that admission and hands the maintainer the stopped run
-    // itself (which still carries `flakeHistory`, a log rather than a published
-    // claim).
-    // The terminal check is not the exotic case there but the common one: the
-    // flake rule tells a pass whose evidence matches an ALREADY-ACTIVE task to
-    // cite that task rather than edit it, which leaves nothing to commit, so
-    // the pass returns `changed: false` with nothing disposed — by following
-    // the contract exactly — and would otherwise conclude the cycle carrying
-    // no record at all.
-    //
-    // The self-report is taken UNVERIFIED in both places; what differs is what
-    // it is allowed to buy. On the record-only exit below it never buys the
-    // skip — the diff check decides that, and is never shown the note — it only
-    // rides in the record that exit exists to carry, which is why its ABSENCE
-    // withholds the exit rather than its presence granting one. Where it rides
-    // in `flakeCarried` instead it buys nothing either way, licensing no exit
-    // and adding a caveat to the maintainer's copy. Read from `fix`, never
-    // accumulated: every pass
-    // that can CONCLUDE the cycle is a delivery-tier pass, which is what makes
-    // the consumers' heading about a failed delivery run true of the concluding
-    // pass's record and of no other — an earlier pass's is a wrong answer under
-    // it where an absent one is merely no answer.
-    //
-    // That is a rule about what may be PUBLISHED as this conclusion's, not a
-    // licence to lose the earlier record. Every pass's rides in `flakeHistory`,
-    // on every exit, so an intermediate pass's failure still reaches the
-    // maintainer once a later pass concludes clean — which it otherwise would
-    // not, the flake rule's cited-active-task outcome having committed nothing
-    // for the diff to show either. The two carriers answer different questions
-    // and neither substitutes for the other; nor does either reach the reviewer,
-    // whose brief renders no flake record at all.
+    // The self-report is taken UNVERIFIED, and it buys no exit — no conclusion
+    // below is licensed by anything this field says. It can WITHHOLD one: the
+    // record-only close skips a round for the sole purpose of carrying this
+    // record, so a pass that reported none takes the normal round instead.
+    // Read from `fix`, never accumulated — it speaks for the concluding pass,
+    // and `flakeHistory` is where every pass's record survives.
     const flakeNote = typeof fix.flakeRecord === "string" ? fix.flakeRecord.trim() : "";
     if (flakeNote) flakeHistory.push({ pass: fixerPasses, note: flakeNote });
     const flakeCarried = flakeNote ? { recordOnly: { pass: fixerPasses, range: "", verified: "", note: flakeNote } } : {};
@@ -1738,11 +1694,10 @@ async function runReviewCycle(cycle) {
     // unmeasured worktree would poison.
     //
     // Measured HERE rather than folded into the reviewer's round, which would
-    // ride an existing turn: three of the four conclusions have no reviewer
-    // round after the pass they conclude on (the terminal check, the
-    // trivial-round close-out, the record-only close), so a reviewer-borne
-    // reading would leave every one of them unmeasured — the final confirmation
-    // pass, the cycle's last word, most of all. And on the rounds it did cover
+    // ride an existing turn: a conclusion need have no reviewer round after the
+    // pass it concludes on, so a reviewer-borne reading would leave those
+    // unmeasured — the final confirmation pass, the cycle's last word, most of
+    // all. And on the rounds it did cover
     // it would arrive only after the reviewer and the peer had already been
     // spent on the tree it turns out nobody could trust. One low-effort
     // read-only turn per pass covers every pass through one mechanism, with no
@@ -1967,34 +1922,6 @@ async function runReviewCycle(cycle) {
     // that moved the deviation set or claimed a retirement still owes the
     // round that adjudicates it, so those claims hold the cycle open exactly
     // as they do at the terminal check above.
-    //
-    // The check's first TWO questions exist because a diff read for triviality
-    // alone is blind in the other direction: an EMPTY range is vacuously
-    // non-semantic, so a pass reporting its findings `fixed` while committing
-    // nothing — or fixing something else instead — would conclude the cycle
-    // over fixes that never landed, adjudicated by nobody, since the round
-    // that catches exactly that is the round this exit skips. `editsPresent`
-    // is that second question, and `fix.changed` is its structural half: a
-    // pass that says it changed nothing has nothing to close out over, and
-    // saying so while listing `closeOutEdits` is a contradiction the gate
-    // settles here rather than spending an agent call on.
-    //
-    // Its THIRD answer identifies one narrow suffix the first answer may set
-    // aside: the final diagnosis-only record committed after the delivery run.
-    // That exception is checked from the commit diff, not the packet's account,
-    // and the preceding range still has to clear both original questions. The
-    // check returns the suffix's exact range so the result can name the flake
-    // commit separately from the non-semantic edits in `closeOut.range`.
-    //
-    // The `fixed` dispositions go to the second question BESIDE the edit list, and
-    // that pairing is what makes it answer the case it is named for. The list
-    // is the pass's account of what it shipped; the dispositions are its
-    // account of what it was ASKED for, and only the second names a fix that
-    // never landed. Checked against the list alone, a pass that forgot one
-    // requested fix while shipping and listing an unrelated comment tidy-up
-    // clears every question here — non-empty range, every listed edit present,
-    // nothing semantic — and concludes the cycle with the omission adjudicated
-    // by nobody.
     const closeOutOnlyFixes = (fix.dispositions || []).every((d) => d && d.disposition === "fixed");
     const closeOutFixes = (fix.dispositions || []).filter((d) => d && d.disposition === "fixed").map((d) => ({ finding: (d && d.finding) || "", detail: (d && d.detail) || "" }));
     if (cycle.closeOut === "on" && passBase && fix.changed && (fix.closeOutEdits || []).length && undisposed.length === 0 && closeOutOnlyFixes && deviationSetChanges === 0 && pendingRetirements.length === 0) {
@@ -2031,15 +1958,8 @@ async function runReviewCycle(cycle) {
     // tier, whose reviewer runs the whole suite, and the confirmation pass
     // after it owes that tier again — three runs of the suite the tolerance
     // exists to spare, plus a reviewer-and-peer round, bought by a commit that
-    // adds a queue entry and a note. Besides `changed`, just accounted for, the
-    // three conjuncts it shares with the terminal check — `confirming`, an
-    // empty `dispositions`, an unmoved deviation set — are unchanged: a
-    // disposition, a deviation-set move, or a retirement claim (which rides in
-    // `dispositions`) still earns its round here exactly as it does there. The
-    // two it does not share are `passBase` — the diff check needs a range to
-    // read — and, beyond the `if` itself, `flakeNote`: the record the exit
-    // exists to carry, which gates the check and is taken up below. And the
-    // pass neither offers this nor is asked about it
+    // adds a queue entry and a note. The pass neither offers this nor is asked
+    // about it
     // — a tolerance a fixer could claim would be the evasion route item 2's own
     // evidence requirement exists to close, so a cheap read-only check judges
     // the range, and anything beyond the record forfeits the exit for the
