@@ -151,7 +151,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 243;
+const EXPECTED_CHECKS = 244;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1743,7 +1743,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     [],
   );
   const probe = off.indexOf("git rev-list --right-only --cherry-pick HEAD...");
-  const offStop = off.indexOf('aborted: "off-shoot does not carry the PR head"');
+  const offStop = off.indexOf(`aborted: "off-shoot does not carry the PR head: <both tips and the probe's commits>"`);
   const offLease = off.indexOf("--force-with-lease=");
   // The probe's POLARITY is read too, not only its presence: a gate that runs
   // the probe and treats what it prints as information ("print it for the
@@ -1761,7 +1761,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // it must not offer to make the push legal instead: fast-forwarding, merging
   // or rebasing the off-shoot is the maintainer's call, exactly as the
   // reconciliation's third outcome is.
-  const gate = off.split("\n").find((l) => l.includes('aborted: "off-shoot does not carry the PR head"')) || "";
+  const gate = off.split("\n").find((l) => l.includes(`aborted: "off-shoot does not carry the PR head: <both tips and the probe's commits>"`)) || "";
   const namesBothTips = /BOTH tips/.test(gate) && gate.includes("deadbeef") && /\bHEAD\b/.test(gate);
   const namesTheCommits = /every commit the probe printed/.test(gate);
   const refusesToReconcile = /Do NOT fast-forward, merge, rebase/.test(gate);
@@ -1769,6 +1769,19 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "and that stop names both tips and the commits it saw, and reconciles nothing to make the push legal",
     namesBothTips && namesTheCommits && refusesToReconcile,
     `names both tips: ${namesBothTips}; names the commits: ${namesTheCommits}; refuses to reconcile: ${refusesToReconcile}`,
+  );
+
+  // The schema the publisher fills that field FROM, exactly as for the push
+  // read-back's stop: an example list offering the bare literal offers
+  // precisely the value the gate forbids for this stop, and a publisher that
+  // takes it satisfies the abort while the tips and the probe's commits land
+  // nowhere the caller can read.
+  const offAbortedExample = PUBLISH_SCHEMA.properties.aborted.description;
+  check(
+    "and the schema it fills that field from offers this stop's appended form rather than its bare literal",
+    /`off-shoot does not carry the PR head: <both tips and the probe's commits>`/.test(offAbortedExample) &&
+      !/`off-shoot does not carry the PR head`/.test(offAbortedExample),
+    (offAbortedExample.match(/`off-shoot does not carry[^`]*`/) || ["no example for this stop"])[0],
   );
 
   // Keyed on the two names, and RENDERED with both, so the publisher settles
