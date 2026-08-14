@@ -2083,9 +2083,6 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
     if (d.disposition !== "fixed" && d.disposition !== "declined") continue;
     for (const qid of cycleRetiredQuestionIds(d)) if (retirableQuestionIds.has(qid)) retiring.add(qid);
   }
-  // The one liveness test both question guards below use: known to the cycle
-  // (this pass's own new questions included) and not being retired out from
-  // under the escalation by this very packet.
   const liveQuestion = (qid) => knownQuestionIds.has(qid) && !retiring.has(qid);
   for (const d of dispositions) {
     const retires = cycleRetiredQuestionIds(d);
@@ -2164,8 +2161,6 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
       (d.disposition === "escalated" && d.questionId && liveQuestion(d.questionId));
     if (valid) covered.add(d.findingId);
   }
-  // Exactly one disposition per id: duplicates — conflicting or not — collapse
-  // to "not validly disposed", carrying the finding forward.
   for (const [id, n] of counts) if (n > 1) covered.delete(id);
   return [...handed.filter((f) => !covered.has(f.id)), ...stray.values()];
 }
@@ -2922,16 +2917,10 @@ async function runReviewCycle(cycle) {
       packet: { ...packet, dispositions: fix.dispositions || [] },
       artifactDir,
       handedFindings: findings,
-      // The tier the pass just run owed, so the reviewer's build-first rule
-      // applies at it rather than unconditionally.
       tier: cycleValidationTier(cycle, { confirming }),
       proposedRetirements: pendingRetirements,
       peerState,
       peerThrottle,
-      // What still stands after the pass just made — the reviewer adds the
-      // in-spec-route judgment and a ratify/conform recommendation to it — plus
-      // the ones this pass claims no longer stand, which the same reviewer
-      // accepts by passing the round or rejects by raising an issue.
       deviations,
       deviationDrops: pendingDeviationDrops,
     };
@@ -2988,8 +2977,6 @@ async function runReviewCycle(cycle) {
     if (review.emptyDiffFlag) return result("error", `reviewer saw an empty diff on round ${rounds} (likely wrong worktree/branch)`);
     reviewerNotes = review.notes || "";
 
-    // Gate: reviewer must pass, and BOTH blocking and minor grounded peer
-    // findings gate. Every non-passed/issues peer outcome is non-blocking.
     let peerGating = peer.outcome === "issues" ? peer.findings : [];
     if (review.pass && peerGating.length) {
       // Grounding spot-check — only when the reviewer passed and peer findings
@@ -3052,11 +3039,6 @@ async function runReviewCycle(cycle) {
       fix: "Do NOT conform, reword, or drop the deviation to clear this — report, don't correct: restate it VERBATIM as before. Decline this finding on that ground; the next fresh reviewer is asked for the missing assessment.",
     }));
 
-    // The round passes only when the reviewer passes, no grounded peer finding
-    // gates, every finding handed to this round's fixer was validly disposed —
-    // an uncovered finding fails the round and is carried forward, so the
-    // terminal pass can never leave a finding without a disposition — AND every
-    // standing deviation was assessed.
     const roundPassed = wouldPass && unassessedDeviations.length === 0;
     if (!roundPassed) {
       confirming = false;
@@ -3129,11 +3111,8 @@ async function runReviewCycle(cycle) {
       });
     }
 
-    // Full mode: one final fixer confirmation pass over the passing reviewer's
-    // remarks. Peer pass-notes remain advisory output in `peerRounds`: they are
-    // never fixer input and therefore cannot cause edits or another round. If
-    // the confirmation disposes nothing new, the loop terminates above;
-    // anything it fixes or disputes goes through another reviewer round.
+    // Peer pass-notes remain advisory output in `peerRounds`: they are never
+    // fixer input and therefore cannot cause edits or another round.
     confirming = true;
     findings = {
       carried: [],
@@ -3658,13 +3637,8 @@ async function deliverTask(task, ready, remote) {
     schema: PR_SCHEMA,
   });
 
-  // Best-effort cleanup once the work is durable (pushed/committed).
   await agent(cleanupNote(task), { label: `cleanup:${task.slug}` });
 
-  // Open questions, deviations, the artifact pointer (with any anomaly record
-  // beside it), and any record of a conclusion no fresh reviewer saw bubble up
-  // with the delivery result — they exist for the human and must survive to
-  // Summary.
   const carried = cycleCarried(ready);
   // A PR that exists but whose base was neither verified nor repaired to the
   // recorded one is its own outcome, not a landed delivery: the diff it shows
@@ -4014,7 +3988,6 @@ async function finalMainCheckoutReport() {
 // than rethrows. What the report needs from the body is declared out here: a
 // crash mid-batch still has terminal statuses worth returning.
 let plan = null;
-// Track each task's terminal status so dependent waves can be gated.
 const statusBySlug = new Map();
 const results = [];
 const throttled = [];
@@ -4240,9 +4213,6 @@ const landed = results.filter((r) => r.status === "done").length;
 // worth reading, and the count of landed PRs would otherwise hide that.
 const wrongBase = results.filter((r) => r.status === "pr-wrong-base").length;
 log(`Batch complete: ${landed}/${results.length} tasks landed a PR.${wrongBase ? ` ${wrongBase} opened against an unverified/wrong base — retarget before reviewing.` : ""}`);
-// Open questions and locked-decision deviations bubble up structurally — they
-// exist for the human; each task's full round history stays behind its
-// artifactDir pointer.
 const openQuestions = results.flatMap((r) => (Array.isArray(r.openQuestions) ? r.openQuestions : []));
 const deviations = results.flatMap((r) => (Array.isArray(r.deviations) ? r.deviations : []));
 // The reviewer's half bubbles up with them, never apart from them: a deviation

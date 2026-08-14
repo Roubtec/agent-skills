@@ -1353,13 +1353,8 @@ const pingClaudeTok = /\bping[\s-]*claude\b/.test(flagText);
 const pingCopilotTok = /\bping[\s-]*copilot\b/.test(flagText);
 const pingContribTok = /\bping[\s-]*contributing\b/.test(flagText);
 const anyNamedPing = pingCodexTok || pingClaudeTok || pingCopilotTok;
-// A positive `push` token — only meaningful when not negated (a negation set noPush
-// above). Spelling out `push` means "publish, but ping nobody".
 const explicitPushToken = /\bpush\b/.test(pushWords);
 const wantPush = !noPush;
-// Effective ping-contributing: the bare default and an explicit `ping-contributing`
-// both ping the contributing set; a spelled-out `push` (with no contributing token)
-// pings nobody; a named ping handles its own bots. Forced false on a no-push run.
 const pingContributing =
   wantPush && (pingContribTok || (!anyNamedPing && !explicitPushToken));
 // `no-rebase` opts out of BOTH rebase points. Rebasing is otherwise the default
@@ -2620,8 +2615,6 @@ const standaloneItemByUrl = new Map(
   packet.items.filter((it) => it.type !== "review-thread" && it.url).map((it) => [it.url, it])
 );
 const sameLogin = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
-// Returns why this entry cannot be published, or "" when it carries the full
-// per-item contract.
 function dispositionDefect(d) {
   if (!d) return "the entry is empty";
   // The gathered item this entry speaks for, once identity checks out — the
@@ -2879,11 +2872,6 @@ if (duplicatedItems.length) {
   };
 }
 
-// Third: a covering entry that cannot be published — mistyped, naming a
-// never-gathered thread, missing/mismatching its identifiers, or missing or
-// contradicting a publish-critical field (the `badDispDefect` check above the
-// no-push branch, judged against the gathered items and the per-item report
-// contract).
 if (badDispDefect) {
   return {
     status: "publish-aborted-incomplete-dispositions",
@@ -2930,18 +2918,12 @@ for (const d of workReport) {
   reviewingBots.add(bot);
   if (d.newFinding) contributingBots.add(bot);
 }
-// Candidate set. Without the modifier it is exactly the bots the user named.
-// With the modifier AND at least one name, it is that named set (then filtered
-// to contributors below); with the modifier supplied ALONE, it falls back to the
-// known bots that reviewed this round.
 const anyExplicitPing = flags.pingCodex || flags.pingClaude || flags.pingCopilot;
 const candidate = {
   codex: flags.pingContributing ? (anyExplicitPing ? flags.pingCodex : reviewingBots.has("codex")) : flags.pingCodex,
   claude: flags.pingContributing ? (anyExplicitPing ? flags.pingClaude : reviewingBots.has("claude")) : flags.pingClaude,
   copilot: flags.pingContributing ? (anyExplicitPing ? flags.pingCopilot : reviewingBots.has("copilot")) : flags.pingCopilot,
 };
-// When the modifier is off, `contributes` is always true, so the per-bot ping
-// reduces exactly to the prior `named && !knownNoNewCommits` behavior.
 const contributes = (bot) => !flags.pingContributing || contributingBots.has(bot);
 const publishFlags = {
   ...flags,

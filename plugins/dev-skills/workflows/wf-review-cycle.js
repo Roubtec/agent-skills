@@ -1293,9 +1293,6 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
     if (d.disposition !== "fixed" && d.disposition !== "declined") continue;
     for (const qid of cycleRetiredQuestionIds(d)) if (retirableQuestionIds.has(qid)) retiring.add(qid);
   }
-  // The one liveness test both question guards below use: known to the cycle
-  // (this pass's own new questions included) and not being retired out from
-  // under the escalation by this very packet.
   const liveQuestion = (qid) => knownQuestionIds.has(qid) && !retiring.has(qid);
   for (const d of dispositions) {
     const retires = cycleRetiredQuestionIds(d);
@@ -1374,8 +1371,6 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
       (d.disposition === "escalated" && d.questionId && liveQuestion(d.questionId));
     if (valid) covered.add(d.findingId);
   }
-  // Exactly one disposition per id: duplicates — conflicting or not — collapse
-  // to "not validly disposed", carrying the finding forward.
   for (const [id, n] of counts) if (n > 1) covered.delete(id);
   return [...handed.filter((f) => !covered.has(f.id)), ...stray.values()];
 }
@@ -2132,16 +2127,10 @@ async function runReviewCycle(cycle) {
       packet: { ...packet, dispositions: fix.dispositions || [] },
       artifactDir,
       handedFindings: findings,
-      // The tier the pass just run owed, so the reviewer's build-first rule
-      // applies at it rather than unconditionally.
       tier: cycleValidationTier(cycle, { confirming }),
       proposedRetirements: pendingRetirements,
       peerState,
       peerThrottle,
-      // What still stands after the pass just made — the reviewer adds the
-      // in-spec-route judgment and a ratify/conform recommendation to it — plus
-      // the ones this pass claims no longer stand, which the same reviewer
-      // accepts by passing the round or rejects by raising an issue.
       deviations,
       deviationDrops: pendingDeviationDrops,
     };
@@ -2198,8 +2187,6 @@ async function runReviewCycle(cycle) {
     if (review.emptyDiffFlag) return result("error", `reviewer saw an empty diff on round ${rounds} (likely wrong worktree/branch)`);
     reviewerNotes = review.notes || "";
 
-    // Gate: reviewer must pass, and BOTH blocking and minor grounded peer
-    // findings gate. Every non-passed/issues peer outcome is non-blocking.
     let peerGating = peer.outcome === "issues" ? peer.findings : [];
     if (review.pass && peerGating.length) {
       // Grounding spot-check — only when the reviewer passed and peer findings
@@ -2262,11 +2249,6 @@ async function runReviewCycle(cycle) {
       fix: "Do NOT conform, reword, or drop the deviation to clear this — report, don't correct: restate it VERBATIM as before. Decline this finding on that ground; the next fresh reviewer is asked for the missing assessment.",
     }));
 
-    // The round passes only when the reviewer passes, no grounded peer finding
-    // gates, every finding handed to this round's fixer was validly disposed —
-    // an uncovered finding fails the round and is carried forward, so the
-    // terminal pass can never leave a finding without a disposition — AND every
-    // standing deviation was assessed.
     const roundPassed = wouldPass && unassessedDeviations.length === 0;
     if (!roundPassed) {
       confirming = false;
@@ -2339,11 +2321,8 @@ async function runReviewCycle(cycle) {
       });
     }
 
-    // Full mode: one final fixer confirmation pass over the passing reviewer's
-    // remarks. Peer pass-notes remain advisory output in `peerRounds`: they are
-    // never fixer input and therefore cannot cause edits or another round. If
-    // the confirmation disposes nothing new, the loop terminates above;
-    // anything it fixes or disputes goes through another reviewer round.
+    // Peer pass-notes remain advisory output in `peerRounds`: they are never
+    // fixer input and therefore cannot cause edits or another round.
     confirming = true;
     findings = {
       carried: [],
@@ -2446,8 +2425,6 @@ const peerOff = structured
 // exit.
 const argTokens = new Set(lowerArgs.split(/\s+/).map((t) => t.replace(/^[^a-z0-9]+|[^a-z0-9]+$/g, "")).filter(Boolean));
 const lightMode = structured ? args.mode === "light" : argTokens.has("light");
-// The trivial-round close-out is granted, never assumed: absent this flag the
-// cycle re-reviews every fix, exactly as before.
 const closeOutMode = structured ? args.closeOut === "on" : argTokens.has("close-out");
 let requestedRounds = structured ? args.maxRounds : null;
 if (!structured) {
@@ -2462,8 +2439,6 @@ if (!structured) {
   artifactTypeToken = t ? t[1] : ["prose", "decision"].find((x) => argTokens.has(x)) || null;
 }
 
-// Validate the cap up front — an invalid value is a caller contract violation,
-// rejected before any agent runs (cycleRoundCap throws with a clear message).
 const roundCap = cycleRoundCap(requestedRounds);
 
 phase("Scope");
