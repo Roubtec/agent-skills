@@ -2822,7 +2822,7 @@ if (!passed) {
 
 // Guards before any publication side effect (nothing has been pushed yet on a
 // push run — the publisher does the push — so aborting here leaves the remote
-// clean). First: every gathered item must be covered by a workReport entry, or
+// clean). Every gathered item must be covered by a workReport entry, or
 // publication would push and post a summary while silently skipping the
 // uncovered thread(s).
 if (uncoveredItems.length) {
@@ -2844,11 +2844,11 @@ if (uncoveredItems.length) {
   };
 }
 
-// Second: an item covered MORE than once. The entries disagree by construction
-// (one item, several dispositions), so publication would reply once per entry
-// and resolve the thread on whichever it routed first — a wrong reply left
-// standing beside a right one. There is no safe way to pick between them here;
-// only the cycle that produced them can say which disposition it meant.
+// An item covered MORE than once. The entries disagree by construction (one
+// item, several dispositions), so publication would reply once per entry and
+// resolve the thread on whichever it routed first — a wrong reply left standing
+// beside a right one. There is no safe way to pick between them here; only the
+// cycle that produced them can say which disposition it meant.
 if (duplicatedItems.length) {
   return {
     status: "publish-aborted-conflicting-dispositions",
