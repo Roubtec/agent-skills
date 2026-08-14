@@ -151,7 +151,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 242;
+const EXPECTED_CHECKS = 243;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1890,7 +1890,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         // is what a run follows to RECORD them, and a run that recorded nothing
         // has nothing for the publish-time read to confirm.
         "the fields its off-shoot target rule reads",
-        "**Read context:** `gh pr view NUMBER --json",
+        "**Read context:** `gh pr view NUMBER --repo <owner>/<repo> --json",
         [/headRepository,/, /headRepositoryOwner,/, /isCrossRepository/],
       ],
       [
@@ -5293,6 +5293,57 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "and the record brief carries what a later run replays from, and refuses what it must not replay",
     absent.length === 0,
     `missing: ${absent.join("; ")}`,
+  );
+
+  // The PUBLISH brief's own PR-scoped calls, qualified the same way and for the
+  // same reason — and this is the brief that MUTATES the PR. It is handed to a
+  // subagent told to read `AGENTS.md`/`CLAUDE.md` and nothing else, so it never
+  // receives the skill's "GitHub API recipes" section where the rule is
+  // otherwise stated once: a rule stated only there is no coverage for the
+  // agent that reads THIS text. Both halves are asserted, and the negative one
+  // is the point — a re-introduced `{owner}`/`{repo}` placeholder or a bare
+  // `gh pr comment` fails here rather than passing on the recipes' prose.
+  // Every ping flag is set so the arms that carry three of these calls render.
+  const qualifiedPub = publishPrompt(
+    gathered({ reconcile: { outcome: "work" } }),
+    [],
+    { push: true, pingCodex: true, pingClaude: true, pingCopilot: true },
+    [],
+    [],
+  );
+  // The calls it ORDERS are the ones carrying a PR argument. The bare spellings
+  // it also names are not calls to qualify: the WHICH REPOSITORY paragraph
+  // quotes them as the defaults it is warning against, and steps 2 and 6 name
+  // `gh pr view --json …` as an evidence channel they forbid outright.
+  const orderedPrCalls = qualifiedPub.match(/gh pr (?:view|comment|edit) (?:\d+|<PR#>)[^`]*/g) || [];
+  const publishClauses = {
+    "the WHICH REPOSITORY paragraph, naming the repository from the PR's own URL":
+      qualifiedPub.includes("the PR's own URL `https://example.invalid/pr/42`") &&
+      /never the repository your working location resolves to/.test(qualifiedPub) &&
+      /Do not re-derive it from a bare `gh repo view --json nameWithOwner`/.test(qualifiedPub),
+    "step 1's head-repository read": /gh pr view 42 --repo <owner>\/<repo> --json headRepository,headRepositoryOwner,isCrossRepository/.test(qualifiedPub),
+    "step 4's reply POST": /gh api --method POST repos\/<owner>\/<repo>\/pulls\/42\/comments\/<commentId>\/replies/.test(qualifiedPub),
+    // The resolve mutation has no repository argument to carry, so the brief
+    // says what stands in for one rather than leaving it implied.
+    "step 4's resolve, qualified by the thread id's provenance rather than by an argument it has none of":
+      /has no repository argument to qualify, so what qualifies it is the id's PROVENANCE/.test(qualifiedPub) &&
+      /never re-fetch or re-derive a thread id in your own turn/.test(qualifiedPub),
+    "step 5's Summary comment": /gh pr comment 42 --repo <owner>\/<repo>/.test(qualifiedPub),
+    "step 6's codex and claude pings, each naming the command it posts with":
+      (qualifiedPub.match(/gh pr comment <PR#> --repo <owner>\/<repo>/g) || []).length === 2,
+    "step 6's Copilot request and both of its timeline reads":
+      /gh pr edit <PR#> --repo <owner>\/<repo> --add-reviewer @copilot/.test(qualifiedPub) &&
+      /repos\/<owner>\/<repo>\/pulls\/<PR#>\/requested_reviewers/.test(qualifiedPub) &&
+      /repos\/<owner>\/<repo>\/issues\/<PR#>\/timeline/.test(qualifiedPub),
+    "no `{owner}`/`{repo}` placeholder left anywhere in it": !/\{owner\}\/\{repo\}/.test(qualifiedPub),
+    "and no ordered `gh pr` call left bare":
+      orderedPrCalls.length >= 5 && orderedPrCalls.every((call) => call.includes("--repo <owner>/<repo>")),
+  };
+  const publishAbsent = Object.entries(publishClauses).filter(([, present]) => !present).map(([name]) => name);
+  check(
+    "and the publish brief qualifies every PR-scoped call it orders at the repository the PR is in, named from its own URL",
+    publishAbsent.length === 0,
+    publishAbsent.length ? `missing: ${publishAbsent.join("; ")}` : `all ${orderedPrCalls.length} ordered \`gh pr\` calls carry --repo, and no placeholder survives`,
   );
 
   // `starting HEAD` is part of the record's single canonical content, so it
