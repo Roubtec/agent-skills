@@ -188,6 +188,42 @@ if (planValidationMatch) {
   check("argument pointers keep a filename that embeds the flag text", same(requiredArgPointers("tasks/039-peer-opinions=off.md"), ["tasks/039-peer-opinions=off.md"]));
   check("argument pointers still drop a flag beside such a filename", same(requiredArgPointers("tasks/039-peer-opinions=off.md peer-opinions=off"), ["tasks/039-peer-opinions=off.md"]));
   check("argument pointers of an empty argument are empty", same(requiredArgPointers(""), []) && same(requiredArgPointers(null), []));
+  // Surrounding-quote stripping on the flat-string path, pinned executably
+  // rather than only as prompt prose: quotes around a whole token vanish.
+  check("flat-string tokens have their surrounding quotes stripped", same(requiredArgPointers("\"039\" 'tasks/050-x.md'"), ["039", "tasks/050-x.md"]));
+  // The partial-restoration boundary a flat string keeps: stripping happens
+  // AFTER the split, so quotes do not express boundaries — a spaced path in a
+  // flat string still fragments, and only a structured argument can carry it.
+  check("flat-string quoting does not join a spaced path", same(requiredArgPointers("\"tasks/my task.md\""), ["tasks/my", "task.md"]));
+
+  // A structured argument (array/object) preserves the caller's pointer
+  // boundaries: every non-collection leaf is exactly one raw pointer, never
+  // split, whatever it contains.
+  check("a structured spaced element stays one pointer", same(requiredArgPointers(["tasks/my task.md"]), ["tasks/my task.md"]));
+  check("a structured comma-bearing element stays one pointer", same(requiredArgPointers(["tasks/a,b.md"]), ["tasks/a,b.md"]));
+  check("nested arrays and objects contribute their leaves in order", same(requiredArgPointers([["039"], { later: ["tasks/my task.md", "041"] }]), ["039", "tasks/my task.md", "041"]));
+  check("a non-string primitive leaf is stringified", same(requiredArgPointers([39, true]), ["39", "true"]));
+  check("empty and whitespace-only leaves are dropped", same(requiredArgPointers(["", "   ", "039"]), ["039"]));
+  check("a structured leaf is trimmed but never split", same(requiredArgPointers([" tasks/my task.md "]), ["tasks/my task.md"]));
+  check("a structured leaf keeps surrounding quotes as content", same(requiredArgPointers(["\"tasks/my task.md\""]), ["\"tasks/my task.md\""]));
+  check("a mixed structured argument keeps numbers beside a spaced path", same(requiredArgPointers(["039", "tasks/my task.md", "041"]), ["039", "tasks/my task.md", "041"]));
+  check("structured pointers deduplicate in first-seen order", same(requiredArgPointers(["039", "tasks/my task.md", "039"]), ["039", "tasks/my task.md"]));
+  check("structured dedupe happens after the trim", same(requiredArgPointers([" 039", "039 "]), ["039"]));
+  // Only an array or a plain object counts as caller structure. Any other
+  // object is one stringified leaf: recursing a boxed String's enumerable
+  // values would fragment the pointer into its characters, and recursing a
+  // valueless object like a Date would drop the pointer silently.
+  check("a boxed-string leaf stays one pointer rather than fragmenting", same(requiredArgPointers([new String("tasks/my task.md")]), ["tasks/my task.md"]));
+  check("a non-plain-object leaf is stringified rather than dropped", same(requiredArgPointers([new Number(39)]), ["39"]));
+  check("a null-prototype object still recurses as a collection", same(requiredArgPointers([Object.assign(Object.create(null), { later: "039" })]), ["039"]));
+  // The peer flag, pinned in BOTH directions: a flag standing as its own leaf
+  // is the loop's argument and is masked, while a leaf that merely embeds the
+  // flag text beside a pointer is one intact pointer — the negative direction
+  // is the one a refactor that masks inside leaves breaks silently.
+  check("a peer flag standing as its own leaf is masked", same(requiredArgPointers(["039", "peer-opinions=off"]), ["039"]));
+  check("a spelled-out peer flag leaf is masked too", same(requiredArgPointers(["peer opinions = off", "039"]), ["039"]));
+  check("a leaf embedding the flag text beside a pointer stays one intact pointer", same(requiredArgPointers(["peer-opinions=off tasks/050-x.md"]), ["peer-opinions=off tasks/050-x.md"]));
+  check("a filename leaf embedding the flag text survives intact", same(requiredArgPointers(["tasks/039-peer-opinions=off.md"]), ["tasks/039-peer-opinions=off.md"]));
 
   const twoInputs = [
     { path: "tasks/039-a.md", number: "039", classification: "active", selectedBy: [{ raw: "039", kind: "number" }] },
@@ -210,21 +246,66 @@ if (planValidationMatch) {
 // the pointer gate: an approximation on either side re-opens the divergence.
 check("the peer flag has exactly one regex definition in the workflow", workflow.split("peer[\\s-]*opinions?").length - 1 === 1);
 check("the one peer-flag definition is token-anchored, not word-bounded", workflow.split("(?<![^\\s,])peer[\\s-]*opinions?\\s*=\\s*(off|on)(?![^\\s,])").length - 1 === 1);
-check("the flag parser reads its mode out of that one definition's matches", /const peerFlagValues = \[\.\.\.flattenBatchArgs\(args\)\.matchAll\(PEER_OPINIONS_FLAG\)\]\.map\(\(m\) => m\[1\]\);\nconst peerMode = \/\\boff\\b\/i\.test\(peerFlagValues\.join\(" "\)\)/.test(workflow));
+check("the flag parser reads its mode out of that one definition's matches", /const peerFlagValues = \[\.\.\.peerFlagText\.matchAll\(PEER_OPINIONS_FLAG\)\]\.map\(\(m\) => m\[1\]\);\nconst peerMode = \/\\boff\\b\/i\.test\(peerFlagValues\.join\(" "\)\)/.test(workflow));
+// The mode read follows the pointer gate's leaf boundary: a structured
+// argument toggles the mode only through a leaf that IS exactly the flag —
+// the same whole-leaf test, over the same traversal, that masks that leaf out
+// of the pointer list — while a flat string is scanned whole as before.
+check("the structured mode read consumes exactly the whole-flag leaves the pointer gate masks", /const peerFlagText = args != null && typeof args === "object"\n\s*\? structuredArgLeaves\(args\)\.filter\(\(leaf\) => PEER_OPINIONS_FLAG_LEAF\.test\(leaf\)\)\.join\(" "\)\n\s*: String\(args == null \? "" : args\);/.test(workflow));
+check("the pointer gate keeps exactly the complement of those leaves", /return \[\.\.\.new Set\(structuredArgLeaves\(batchArgs\)\.filter\(\(leaf\) => !PEER_OPINIONS_FLAG_LEAF\.test\(leaf\)\)\)\];/.test(workflow));
+// Executable, in both directions: the flag as its own leaf (or in a flat
+// string) still flips the mode, while flag text embedded in a pointer leaf or
+// spread across adjacent leaves stays pointer content — the pointer side keeps
+// those leaves intact as pointers, so a joined-leaf rematch here is the drift
+// that silently disables peer review on an invocation whose every leaf the
+// pointer side still accounts for.
+const modeRegion = workflow.match(/const peerFlagText = [\s\S]*?\nconst peerMode = [^\n]+/);
+check("the workflow's mode read is extractable for direct exercise", !!planValidationMatch && !!modeRegion);
+if (planValidationMatch && modeRegion) {
+  // eslint-disable-next-line no-new-func
+  const peerModeOf = (value) => new Function("args", `${planValidationMatch[0]}; ${modeRegion[0]}; return peerMode;`)(value);
+  check("a flat-string flag still flips the mode off", peerModeOf("039 peer-opinions=off") === "off");
+  check("a structured flag leaf still flips the mode off", peerModeOf(["039", "peer-opinions=off"]) === "off");
+  check("a spelled-out flag leaf flips the mode off", peerModeOf(["peer opinions = off"]) === "off");
+  check("a padded flag leaf flips the mode off", peerModeOf([" peer-opinions=off "]) === "off");
+  check("a nested flag leaf flips the mode off", peerModeOf({ later: ["peer-opinions=off"] }) === "off");
+  check("flag text embedded in a pointer leaf does not flip the mode", peerModeOf(["peer-opinions=off tasks/050-x.md"]) === "on");
+  check("flag text spread across adjacent leaves does not flip the mode", peerModeOf(["peer-opinions=", "off"]) === "on");
+  check("a filename leaf embedding the flag text does not flip the mode", peerModeOf(["tasks/039-peer-opinions=off.md"]) === "on");
+  check("a null argument leaves the mode on", peerModeOf(null) === "on");
+}
 // Five suites slice the workflow's pure region at this exact marker, so keeping
 // a regex literal on the flag-parsing line is a constraint, not an accident.
 check("the flag-parsing line keeps the source cut marker other suites slice on", workflow.includes("\nconst peerMode = /"));
 check("the pointer gate masks that same definition before splitting", /\.replace\(PEER_OPINIONS_FLAG, " "\)\s*\n\s*\.split\(\/\[\\s,\]\+\/\)/.test(workflow));
-check("workflow states its peer-flag mask to the resolver", /The workflow masks each one out of the argument before deriving anything/.test(workflow));
+check("workflow states its peer-flag mask to the resolver", /The workflow masks each one out of the argument before deriving the list, so no element here is one/.test(workflow));
+// The no-notFound-for-a-flag instruction cannot be read as covering a listed
+// element that embeds flag text: whatever appears in the list is a pointer the
+// packet must account for, or the reconciliation rejects the packet.
+check("workflow tells the resolver a listed element is never a flag", /an element that DOES appear in the list is by that fact not a flag, whatever flag text it embeds: account for it like any other pointer/.test(workflow));
 check("workflow hands the resolver the shared flag pattern rather than a restatement", /\$\{PEER_OPINIONS_FLAG\.source\}/.test(workflow));
-check("workflow states its argument tokenization to the resolver", /What remains is split on whitespace AND commas, and each resulting token has its surrounding quotes stripped\. Every surviving token is exactly one raw input/.test(workflow));
-check("workflow states that a pointer can carry neither whitespace nor a comma", /a raw pointer can therefore carry neither whitespace nor a comma/.test(workflow));
-check("workflow reconciles the resolver packet with the raw argument before dispatch", /if \(!resolutionAccountsForInputs\(plan\.resolution, requiredArgPointers\(flattenBatchArgs\(args\)\)\)\)[\s\S]*error: "Could not resolve task pointers from the argument\."/.test(workflow));
-// The resolver must read the SAME flattened string the flag parser and the
-// reconciliation tokenize: raw structured `args` would JSON.stringify to
-// different token boundaries and hard-abort a legitimate invocation.
-check("workflow hands the resolver the flattened argument the other sides tokenize", /plan = await agent\(resolvePrompt\(flattenBatchArgs\(args\)\), \{ label: "resolve"/.test(workflow));
-check("workflow tells the resolver its packet is reconciled with the argument", /re-derives the raw pointer list from the argument itself and requires your packet to account for every deduplicated pointer/.test(workflow));
+check("workflow states its flat-string tokenization to the resolver", /A flat-string invocation was split on whitespace AND commas, with each token's surrounding quotes stripped AFTER the split/.test(workflow));
+// 039's flat-string reading still holds — a flat string carries no boundary
+// information, so its pointers can carry neither whitespace nor a comma and
+// quotes do not join a spaced path — while a structured argument's leaves now
+// arrive as single elements with their boundaries intact.
+check("workflow states that a flat-string pointer can carry neither whitespace nor a comma", /a pointer derived from a flat string can therefore carry neither whitespace nor a comma/.test(workflow));
+check("workflow states that flat-string quoting cannot join a spaced path", /quoting a spaced path in a flat string does not join it either/.test(workflow));
+check("workflow states that a structured leaf arrives boundaries intact", /contributes every non-collection leaf as exactly one element, boundaries intact/.test(workflow));
+// The trim is the one edge the leaf contract deliberately normalizes, and the
+// prompt says so — the derivation comment, this sentence, and the executable
+// trim checks above must keep telling one story.
+check("workflow states the structured leaf trim to the resolver", /trimmed of surrounding whitespace but never split or otherwise altered/.test(workflow));
+check("workflow forbids the resolver to split or merge an element", /never split, merge, trim, or re-quote an element/.test(workflow));
+check("workflow reconciles the resolver packet with the derived pointer list before dispatch", /if \(!resolutionAccountsForInputs\(plan\.resolution, batchPointers\)\)[\s\S]*error: "Could not resolve task pointers from the argument\."/.test(workflow));
+// The prompt and the reconciliation must consume ONE pointer list, derived
+// from the argument once — two independent derivations that can disagree is
+// the failure the reconciliation exists to catch. The list preserves a
+// structured invocation's leaf boundaries and is rendered into the prompt as
+// JSON, so a pointer containing spaces, quotes, or a newline stays one element.
+check("workflow derives one pointer list and hands that same list to the resolver", /const batchPointers = requiredArgPointers\(args\);\n\s*plan = await agent\(resolvePrompt\(batchPointers\), \{ label: "resolve"/.test(workflow));
+check("resolver prompt renders the bounded pointer list as JSON", /each element exactly ONE raw input\): \$\{JSON\.stringify\(pointers\)\}/.test(workflow));
+check("workflow tells the resolver its packet is reconciled with that exact list", /holds the exact pointer list it handed you above and requires your packet to account for every element/.test(workflow));
 check("workflow validates every plan before dispatch", /if \(!planResolutionIsExact\(plan\)\)[\s\S]*error: "Could not resolve task pointers from the argument\."/.test(workflow));
 check("workflow retains resolution on malformed plan errors", /!plan \|\| !Array\.isArray\(plan\.waves\)[\s\S]*resolution: plan && plan\.resolution \? plan\.resolution : null/.test(workflow));
 check("workflow retains resolution on inconsistent plan errors", /!planResolutionIsExact\(plan\)[\s\S]*resolution: plan\.resolution/.test(workflow));
