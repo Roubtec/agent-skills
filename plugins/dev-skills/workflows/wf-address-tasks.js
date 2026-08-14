@@ -3263,7 +3263,19 @@ function collisionIsAttributable(collision, taskEntries) {
   const names = collisionBranchNames(collision);
   const reportedNameCount = Array.isArray(collision.branches) ? collision.branches.length : 0;
   const knownNames = new Set(taskEntries.flatMap(({ task }) => [normalizeBranchName(task.branch), normalizeBranchName(task.slug)]));
-  return names.length === reportedNameCount && names.every((name) => knownNames.has(name)) && taskEntries.filter(({ task }) => collisionInvolvesTask(collision, task)).length >= 2;
+  // COLLISION_SCHEMA defines a clash as "the two or more branches that each
+  // independently added it" — that is a constraint on distinct reported names,
+  // not merely on how many task entries happen to match. A single normalized
+  // name can equal one task's branch AND a different task's slug, satisfying
+  // a two-distinct-task count from one reported string; count distinct names
+  // separately so that alias coincidence can't stand in for a second branch.
+  const distinctNameCount = new Set(names).size;
+  return (
+    names.length === reportedNameCount &&
+    names.every((name) => knownNames.has(name)) &&
+    distinctNameCount >= 2 &&
+    taskEntries.filter(({ task }) => collisionInvolvesTask(collision, task)).length >= 2
+  );
 }
 
 // A non-empty discovery packet is usable only when every reported name belongs

@@ -24,7 +24,7 @@ function check(name, cond, detail) {
   }
 }
 
-const EXPECTED_CHECKS = 40;
+const EXPECTED_CHECKS = 55;
 
 function loadDiscovery(agent, events) {
   const at = src.indexOf(CUT);
@@ -45,6 +45,11 @@ const mkTask = (slug) => ({ slug, branch: `task/${slug}`, base: "main", path: `t
 const mkReady = (slug) => ({
   task: mkTask(slug),
   result: { slug, branch: `task/${slug}`, status: "ready", notes: "cycle notes", rounds: 2, openQuestions: [], deviations: [], peerRounds: 1, artifactDir: "/tmp/art" },
+});
+const mkTaskWithBranch = (slug, branch) => ({ slug, branch, base: "main", path: `tasks/${slug}.md`, content: `# ${slug}\n` });
+const mkReadyWithBranch = (slug, branch) => ({
+  task: mkTaskWithBranch(slug, branch),
+  result: { slug, branch, status: "ready", notes: "cycle notes", rounds: 2, openQuestions: [], deviations: [], peerRounds: 1, artifactDir: "/tmp/art" },
 });
 const clash = (branches, name = "src/shared.ts") => ({ kind: "path", name, branches, detail: `both add ${name} — rename one side` });
 const slugs = (entries) => entries.map((entry) => (entry.task ? entry.task.slug : entry.slug)).sort();
@@ -116,6 +121,52 @@ check("one-branch clash → nothing routes to resolution", oneBranch.heldTasks.l
 check("one-branch clash → every reviewed branch is held", JSON.stringify(slugs(oneBranch.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(oneBranch.held)));
 check("one-branch clash → detail names the attribution failure", oneBranch.held.every((held) => /fewer than two reviewed branches/.test(held.detail)), JSON.stringify(oneBranch.held.map((held) => held.detail)));
 check("one-branch clash → no extra agent call is added", oneBranch.calls.length === 1, JSON.stringify(oneBranch.calls.map((call) => call.label)));
+
+// Task `a` is on branch `b`; task `b` is on branch `task/b`. A malformed
+// entry naming only `b` matches TWO task entries (task a via its branch,
+// task b via its slug) from a SINGLE reported branch name — the two-task
+// count must not stand in for a second distinct reported branch.
+const crossTaskAlias = await run(
+  [mkReadyWithBranch("a", "b"), mkReadyWithBranch("b", "task/b")],
+  { collisions: [clash(["b"])] },
+);
+check("cross-task branch/slug alias → nothing is deliverable", crossTaskAlias.deliverable.length === 0, JSON.stringify(slugs(crossTaskAlias.deliverable)));
+check("cross-task branch/slug alias → nothing routes to resolution", crossTaskAlias.heldTasks.length === 0, JSON.stringify(slugs(crossTaskAlias.heldTasks)));
+check("cross-task branch/slug alias → the whole reviewed wave is held", JSON.stringify(slugs(crossTaskAlias.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(crossTaskAlias.held)));
+check("cross-task branch/slug alias → detail names the attribution failure", crossTaskAlias.held.every((held) => /fewer than two reviewed branches/.test(held.detail)), JSON.stringify(crossTaskAlias.held.map((held) => held.detail)));
+check("cross-task branch/slug alias → no extra agent call is added", crossTaskAlias.calls.length === 1, JSON.stringify(crossTaskAlias.calls.map((call) => call.label)));
+
+// Same alias shape, but the malformed entry names `b` twice with different
+// raw spellings (`b` and `refs/heads/b`) that both normalize to `b`. Two
+// raw entries still normalize to one distinct branch name, so this must be
+// rejected the same way even though `names.length` equals the reported count.
+const duplicateNormalized = await run(
+  [mkReadyWithBranch("a", "b"), mkReadyWithBranch("b", "task/b")],
+  { collisions: [clash(["b", "refs/heads/b"])] },
+);
+check("duplicate-normalized clash → nothing is deliverable", duplicateNormalized.deliverable.length === 0, JSON.stringify(slugs(duplicateNormalized.deliverable)));
+check("duplicate-normalized clash → nothing routes to resolution", duplicateNormalized.heldTasks.length === 0, JSON.stringify(slugs(duplicateNormalized.heldTasks)));
+check("duplicate-normalized clash → the whole reviewed wave is held", JSON.stringify(slugs(duplicateNormalized.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(duplicateNormalized.held)));
+check("duplicate-normalized clash → detail names the attribution failure", duplicateNormalized.held.every((held) => /fewer than two reviewed branches/.test(held.detail)), JSON.stringify(duplicateNormalized.held.map((held) => held.detail)));
+check("duplicate-normalized clash → no extra agent call is added", duplicateNormalized.calls.length === 1, JSON.stringify(duplicateNormalized.calls.map((call) => call.label)));
+
+// A malformed entry can name two distinct KNOWN branches yet still match only
+// ONE task: `task/a` is task a's own branch and `a` is task a's own slug, so
+// both aliases point at task a alone; task b is named by neither. The
+// distinct-name clause this task added is satisfied (two distinct normalized
+// names), but the pre-existing distinct-task clause is not — acceptance
+// criterion 3 requires this stays rejected, and specifically by that existing
+// check, not by the new one. Without `taskEntries.filter(...).length >= 2`
+// this packet would pass attribution.
+const twoNamesOneTask = await run(
+  [mkReady("a"), mkReady("b")],
+  { collisions: [clash(["task/a", "a"])] },
+);
+check("two distinct names but one matching task → nothing is deliverable", twoNamesOneTask.deliverable.length === 0, JSON.stringify(slugs(twoNamesOneTask.deliverable)));
+check("two distinct names but one matching task → nothing routes to resolution", twoNamesOneTask.heldTasks.length === 0, JSON.stringify(slugs(twoNamesOneTask.heldTasks)));
+check("two distinct names but one matching task → every reviewed branch is held", JSON.stringify(slugs(twoNamesOneTask.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(twoNamesOneTask.held)));
+check("two distinct names but one matching task → detail names the attribution failure", twoNamesOneTask.held.every((held) => /fewer than two reviewed branches/.test(held.detail)), JSON.stringify(twoNamesOneTask.held.map((held) => held.detail)));
+check("two distinct names but one matching task → no extra agent call is added", twoNamesOneTask.calls.length === 1, JSON.stringify(twoNamesOneTask.calls.map((call) => call.label)));
 
 const failedScan = await run([mkReady("a"), mkReady("b")], null);
 check("failed scan → nothing is deliverable", failedScan.deliverable.length === 0, JSON.stringify(slugs(failedScan.deliverable)));
