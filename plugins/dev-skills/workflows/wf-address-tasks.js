@@ -1413,7 +1413,7 @@ function cycleFindingsBlock(findings) {
   if (!findings) return "";
   const parts = [];
   if (Array.isArray(findings.carried) && findings.carried.length) {
-    parts.push(`### Findings carried forward — the previous pass gave these NO single valid disposition (missing \`findingId\`, duplicate dispositions for one id, an unrecognized disposition value, an \`escalated\` naming no live open question — including one that same pass retired, which settles a decision rather than escalating to it — or, for a \`disposition-error\` entry, a disposition naming a finding id never handed, a retirement that settled nothing, or a spontaneous \`escalated\` disposition whose \`questionId\` names no live question). Dispose EVERY one now, exactly one disposition each, echoing its \`id\` as \`findingId\`.\n\n${JSON.stringify(findings.carried, null, 2)}`);
+    parts.push(`### Findings carried forward — the previous pass gave these NO single valid disposition. Dispose EVERY one now, exactly one disposition each, echoing its \`id\` as \`findingId\`.\n\n${JSON.stringify(findings.carried, null, 2)}`);
   }
   if (Array.isArray(findings.reviewer) && findings.reviewer.length) {
     parts.push(`### Reviewer findings\n\n${JSON.stringify(findings.reviewer, null, 2)}`);
@@ -2094,7 +2094,7 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
           id: `retire:${qid}`,
           category: "disposition-error",
           problem: settles
-            ? `A ${d.disposition} disposition claimed to retire open question ${JSON.stringify(qid)}, which this cycle does not carry as a live open question from an EARLIER pass — it was never raised, this same pass raised it (one pass cannot both raise and settle a question: report whichever of the two is true, never both), or an earlier pass already retired it, or claimed to (a claim still awaiting the reviewer round that decides it has already spoken for the question) — so the retirement settled nothing. Re-issue it against the correct live question id as needed, and dispose this entry (e.g. declined) explaining the stray.`
+            ? `A ${d.disposition} disposition claimed to retire open question ${JSON.stringify(qid)}, which this cycle does not carry as a live open question from an EARLIER pass, so the retirement settled nothing. Only a question an earlier pass raised and no retirement has claimed is retirable; one pass cannot both raise and settle a question. Re-issue it against the correct live question id as needed, and dispose this entry (e.g. declined) explaining the stray.`
             : `A disposition claimed to retire open question ${JSON.stringify(qid)}, but its \`disposition\` is ${JSON.stringify(d.disposition || "")} — only a \`fixed\` or \`declined\` disposition retires a question (an \`escalated\` one raises a question rather than settling it) — so the retirement was not applied. Re-issue it on the disposition that actually settles the question, and dispose this entry (e.g. declined) explaining the stray.`,
         });
       }
@@ -2140,7 +2140,7 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
           stray.set(`question:${qid}`, {
             id: `question:${qid}`,
             category: "disposition-error",
-            problem: `An \`escalated\` disposition named questionId ${JSON.stringify(qid)}, which this cycle does not carry as a LIVE open question — no pass raised it (an absent or empty id names nothing), or a retirement has already settled it, or claimed to (a claim still awaiting the reviewer round that decides it has already spoken for the question), or this same pass retires it (settling a decision rather than escalating to it) — so the back-reference points at no decision the maintainer will be asked to make. Re-issue the escalation with an \`openQuestions\` entry under an id no earlier pass used and name THAT id, or dispose what you escalated some other way, and dispose this entry (e.g. declined) explaining the stray.`,
+            problem: `An \`escalated\` disposition named questionId ${JSON.stringify(qid)}, which this cycle does not carry as a LIVE open question, so the back-reference points at no decision the maintainer will be asked to make. Re-issue the escalation with an \`openQuestions\` entry under an id no earlier pass used and name THAT id, or dispose what you escalated some other way, and dispose this entry (e.g. declined) explaining the stray.`,
           });
         }
       }

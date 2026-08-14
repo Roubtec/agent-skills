@@ -817,7 +817,7 @@ function publishPrompt(packet, dispositions, flags, deviations, deviationAssessm
     ? `\n\n## Locked-decision deviations — LEAD the summary comment with these\n\nOpen the comment with a "Deviation from a locked decision" section carrying these verbatim, above everything else. Each is the maintainer's to ratify or ask conformance on; publication neither corrects nor softens one.\n\n${JSON.stringify(dev, null, 2)}${
         assessments.length
           ? `\n\nThe reviewing round's assessment of each — carry \`inSpecRoute\` and \`recommendation\` into that same section, beside the deviation they name, so the maintainer reads both halves at once. Relay them; do not re-argue or soften one.\n\n${JSON.stringify(assessments, null, 2)}`
-          : `\n\nThe review cycle recorded no assessment for these (it stopped before a round passed over them), so the section carries the implementer's half only — say so plainly rather than supplying a judgment of your own.`
+          : `\n\nThe review cycle recorded no assessment for these, so the section carries the implementer's half only — say so plainly rather than supplying a judgment of your own.`
       }`
     : "";
   // The cycle concluded over a FAILED delivery run (the flake rule's
