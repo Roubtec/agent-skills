@@ -251,6 +251,8 @@ const cycleResult = (extra) => ({
     "one disagreeing read proves no failed repair": /a base that disagrees once is not proof the repair failed/.test(step3),
     "and licenses no repair by itself": /is not yet a mismatch to repair/.test(step3) && /On a mismatch that settled/.test(step3),
     "settles by re-reading to agreement or a repeated answer": /re-read until the answer reports `main` or repeats the same other base/.test(step3),
+    "bounds every settle attempt, an errored read spending the same budget": /a bounded budget of a few re-reads, held briefly apart, an errored read spending it like a stale one/.test(step3),
+    "a read unsettled before any repair returns unsettled too, keeping the URL": /A read still unsettled when that budget is spent, before any repair as much as after one, returns `opened: false` WITH the `url` and `baseOk: false`/.test(step3) && /naming the read that did not settle and what it last returned/.test(step3),
     "baseOk only from an agreeing read": /set `baseOk: true` only from a read that reported `main`/.test(step3),
     "the wrong-base verdict rests on a settled answer, named in `reason`": /delivered with the wrong base, not delivered/.test(step3) && /naming the settled base it still carries/.test(step3),
     "an unsettled read is returned as unsettled, through `reason`": /naming the read that did not settle and the base it last reported/.test(step3) && /an unsettled read, not a proven wrong base/.test(step3),
@@ -280,7 +282,7 @@ const cycleResult = (extra) => ({
   const lookupRecipe = {
     "an already-exists failure hands over its URL instead of a lookup": /names an existing PR's URL/.test(step4) && /take that URL to step 3/.test(step4),
     "looks up in the base repository": /the base repository the creation targeted, never the head repository, where a fork's PR does not live/.test(step4),
-    "requires the head owner to match": /`--head` cannot carry an `<owner>:<branch>` form/.test(step4),
+    "requires the head owner to match, the instruction itself and not only its why": /`--head` cannot carry an `<owner>:<branch>` form/.test(step4) && /require the returned PR's head repository owner to match the head you pushed before trusting the match/.test(step4),
     "nothing-found is not proof": /a lookup that finds nothing is not proof no PR exists/.test(step4),
     "names the double-PR hazard the retry guards": /how one branch gets two PRs/.test(step4),
     "licenses the retry only on a trustworthy nothing-found": /Retry creation ONLY on a lookup that finds nothing where nothing-found is trustworthy/.test(step4),
@@ -313,7 +315,8 @@ const cycleResult = (extra) => ({
   // rather than drifted into.
   check(
     "the PR schema reports an unconverged read through `reason`, growing no field for it",
-    /a read that did not settle/.test(PR_SCHEMA.properties.reason.description) &&
+    /a read that did not settle is named with the answer it last returned/.test(PR_SCHEMA.properties.reason.description) &&
+      /name the operation that failed and what it reported/.test(PR_SCHEMA.properties.reason.description) &&
       JSON.stringify(Object.keys(PR_SCHEMA.properties)) === JSON.stringify(["opened", "url", "pushed", "baseOk", "baseRepaired", "reason"]) &&
       JSON.stringify(PR_SCHEMA.required) === JSON.stringify(["opened", "pushed"]),
     `properties: ${Object.keys(PR_SCHEMA.properties).join(",")}; required: ${JSON.stringify(PR_SCHEMA.required)}; reason: ${PR_SCHEMA.properties.reason.description}`,
@@ -345,6 +348,7 @@ const cycleResult = (extra) => ({
       [
         /the base repository the creation targeted, never the head repository, where a fork's PR does not live/,
         /`--head` cannot carry an `<owner>:<branch>` form/,
+        /require the returned PR's head repository owner to match the recorded head before trusting the match/,
         /Only a lookup that finds nothing licenses the retry/,
         /neither a captured URL nor a lookup match/,
       ],
