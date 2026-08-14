@@ -3129,7 +3129,7 @@ ${DESTROY_BOUNDARY}`;
   const flakeRecord = rec
     ? `\n\nThe cycle concluded over a FAILED delivery run, on the flake rule's evidenced-unrelated disposition${rec.range ? `, and over a final commit (\`${rec.range}\`) no fresh reviewer saw — the diagnosis-only follow-up task that failure earned` : ", and over no post-run commit this record points you at, so cite none"}. Carry a "Delivery-run failure — recorded, not reviewed" section in the body with these verbatim, so the maintainer sees the gap here and decides how to absorb it; do not re-diagnose, soften, or omit it:\n${JSON.stringify({ note: rec.note || "", ...(rec.range ? { rangeCheck: rec.verified || "" } : {}) }, null, 2)}`
     : "";
-  return `Open a pull request for branch \`${task.branch}\` against base \`${task.base}\`. Work from this task's worktree: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && cd "$WT"\` (rerun-safe resolve of the existing worktree; if it errors, STOP and report).
+  return `Open a pull request for branch \`${task.branch}\` against base \`${task.base}\`. Work from this task's worktree: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && cd -- "\${WT:?wt-enter returned no path}"\` (rerun-safe resolve of the existing worktree; if it errors, STOP and report).
 
 ${DEPUTY_FINISH_IN_TURN}
 

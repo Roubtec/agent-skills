@@ -77,7 +77,7 @@ function check(name, cond, detail) {
 // does not count. Bump it deliberately when adding or removing one — a check
 // that silently stops running is invisible to a suite that only gates on
 // failures.
-const EXPECTED_CHECKS = 50;
+const EXPECTED_CHECKS = 51;
 
 // Evaluate a workflow's declaration prefix up to its documented cut marker and
 // hand back the named ones. Each is returned by an explicit reference, so a
@@ -220,6 +220,20 @@ const cycleResult = (extra) => ({
   // it has nowhere to put.
   const noRemote = prPrompt(task, { notes: "", deviations: [], recordOnly: RECORD }, false);
   check("the no-remote brief, which opens no PR, carries no record", !noRemote.includes(NOTE) && !/recorded, not reviewed/.test(noRemote), "pr prompt");
+
+  // Task 046a. This is the one `wt-enter` brief with no `git rev-parse
+  // --show-toplevel` comparison behind its resolve — the other two renderings
+  // carry one, which is their guard — so the guard has to live in the command
+  // the deputy copies. `cd ""` returns 0 and moves nowhere, and step 1 here is
+  // a `git push`, so a `wt-enter` that printed nothing would push from the
+  // shared main checkout. Both briefs are read: the no-remote arm resolves the
+  // same worktree and must not reintroduce the bare form either.
+  const resolveGuard = /WT="\$\(wt-enter [^\n]*\)" && cd -- "\$\{WT:\?wt-enter returned no path\}"/;
+  check(
+    "the PR brief's worktree resolve fails on an empty `wt-enter` result, naming the step that should have produced the path, and neither arm keeps the bare form",
+    resolveGuard.test(withoutRecord) && !/cd "\$WT"/.test(withoutRecord) && !/cd "\$WT"/.test(noRemote),
+    "pr prompt",
+  );
 
   // --- The PR-creation read-backs the same brief performs (task 023b) --------
   // `prPrompt`'s step 3 asserts a just-created PR's base and its step 4 recovers
