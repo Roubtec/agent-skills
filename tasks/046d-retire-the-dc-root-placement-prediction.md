@@ -2,7 +2,7 @@
 
 ## Why
 
-`plugins/dev-skills/bin/dc-enter`'s header comment predicts what another repository will do with `DC_ROOT`, in the last three sentences of the `CLONE ROOT` comment block — the ones beginning "`DC_ROOT` is the placement interface". It says powbox will express its "outside /workspace" placement by setting the variable, and that "until it does, a clone in a powbox container lands under `$TMPDIR` like anywhere else." Both halves are now measured wrong.
+`plugins/dev-skills/bin/dc-enter`'s header comment predicts what another repository will do with `DC_ROOT`, in the `CLONE ROOT` comment block's sentence beginning "`DC_ROOT` is the placement interface". It says powbox will express its "outside /workspace" placement by setting the variable, and that "until it does, a clone in a powbox container lands under `$TMPDIR` like anywhere else." Both halves are now measured wrong.
 
 The first half is contradicted by the counterpart's own measurement. Powbox task 061, in the `Roubtec/powbox` repository, records under "Placement and scope decisions" that `TMPDIR` is unset in a current agent container and `/tmp` is the disk-backed overlay filesystem, so clones already land container-local and outside `/workspace` — which is the placement powbox would have set the variable to express. Its conclusion there is that the honest default is not to set it at all, and that the reason to set it anyway "would be to relocate clones onto a persistent volume or to make the intent explicit rather than incidental". That task's status there is "Not started", so this is a measured recommendation rather than a shipped decision; what it settles either way is that the header cannot keep asserting powbox *will* set the variable.
 
