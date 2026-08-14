@@ -788,9 +788,10 @@ You may reclassify any item.`;
 // `test-address-review-reconcile.mjs`. That pin is on the PHRASES the two sides
 // share and claims no more: it fails a rewording that drops one on either side,
 // and it MISSES a rewrite that keeps every pinned phrase while reversing what
-// they say — the same hole README states of its own `FETCH_HEAD` pins, and for
-// the same reason, so polarity here is the reviewer's to hold rather than the
-// pin's. The other three recipes get no text: item 5 is
+// they say — the same hole that suite's `FETCH_HEAD` pin comments state of
+// their own reads, and for the same reason, so polarity here is the
+// reviewer's to hold rather than the pin's. The other three recipes get no
+// text: item 5 is
 // already satisfied by steps 1 and 3 re-fetching the PR before the push and
 // re-reading the threads after, so restating it would be the copy commit
 // 390156a declined, and items 3 and 4 are pre-merge check polling and
