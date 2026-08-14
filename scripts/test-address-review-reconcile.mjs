@@ -59,7 +59,7 @@
 // both mirrors are read together — the drift the rendering buys back. Both reads
 // are PHRASE pins and hold only as far as the phrases they select: a rewrite that
 // keeps every one of them while reversing what they say passes, as it does for
-// README's `FETCH_HEAD` pins, so the polarity is the reviewer's to hold.
+// the `FETCH_HEAD` pins further down, so the polarity is the reviewer's to hold.
 //
 // It covers the DELEGATED REBASE POINTS that run just after the gate (task
 // 016), for the same reason and through the same harness: the base each one
@@ -2051,7 +2051,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
 // every pinned phrase — "…is ordinarily fine and only ever is a stop where you
 // already had reason to doubt the push" — passes every check here. A regex over
 // prose cannot separate an instruction from its negation, which is the same hole
-// README states of its own `FETCH_HEAD` pins; what these catch is a side
+// the `FETCH_HEAD` pin comments below state of their own reads; what these catch is a side
 // reworded, moved out of its step, or dropped, and the polarity stays the
 // reviewer's to hold.
 //
