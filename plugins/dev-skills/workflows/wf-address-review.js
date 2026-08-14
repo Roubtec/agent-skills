@@ -817,7 +817,7 @@ function publishPrompt(packet, dispositions, flags, deviations, deviationAssessm
     ? `\n\n## Locked-decision deviations — LEAD the summary comment with these\n\nOpen the comment with a "Deviation from a locked decision" section carrying these verbatim, above everything else. Each is the maintainer's to ratify or ask conformance on; publication neither corrects nor softens one.\n\n${JSON.stringify(dev, null, 2)}${
         assessments.length
           ? `\n\nThe reviewing round's assessment of each — carry \`inSpecRoute\` and \`recommendation\` into that same section, beside the deviation they name, so the maintainer reads both halves at once. Relay them; do not re-argue or soften one.\n\n${JSON.stringify(assessments, null, 2)}`
-          : `\n\nThe review cycle recorded no assessment for these (it stopped before a round passed over them), so the section carries the implementer's half only — say so plainly rather than supplying a judgment of your own.`
+          : `\n\nThe review cycle recorded no assessment for these, so the section carries the implementer's half only — say so plainly rather than supplying a judgment of your own.`
       }`
     : "";
   // The cycle concluded over a FAILED delivery run (the flake rule's
@@ -1353,13 +1353,8 @@ const pingClaudeTok = /\bping[\s-]*claude\b/.test(flagText);
 const pingCopilotTok = /\bping[\s-]*copilot\b/.test(flagText);
 const pingContribTok = /\bping[\s-]*contributing\b/.test(flagText);
 const anyNamedPing = pingCodexTok || pingClaudeTok || pingCopilotTok;
-// A positive `push` token — only meaningful when not negated (a negation set noPush
-// above). Spelling out `push` means "publish, but ping nobody".
 const explicitPushToken = /\bpush\b/.test(pushWords);
 const wantPush = !noPush;
-// Effective ping-contributing: the bare default and an explicit `ping-contributing`
-// both ping the contributing set; a spelled-out `push` (with no contributing token)
-// pings nobody; a named ping handles its own bots. Forced false on a no-push run.
 const pingContributing =
   wantPush && (pingContribTok || (!anyNamedPing && !explicitPushToken));
 // `no-rebase` opts out of BOTH rebase points. Rebasing is otherwise the default
@@ -1948,12 +1943,8 @@ if (!cycle) {
 // account of what failed.
 // This run pushes to a PR and reports back to the maintainer who started it, so
 // the carrier is where that fact reaches them, and every return of this run's
-// RESULT spreads it — enumerated rather than swept, since they are not the only
-// returns below: the failed-cycle error, the no-push report, the
-// cap-not-published report, the three publish-abort guards (an uncovered item, a
-// doubly-covered one, a malformed covering entry), and the published report.
-// Seven. The many other returns below sit inside `dispositionDefect` and hand
-// back a diagnostic string rather than a result, so they spread nothing.
+// RESULT spreads it — spread at each return rather than swept up in one place,
+// since not every return below is one of this run's results.
 // The nested cycle is granted no close-out above, so `closeOut` cannot arise
 // here today — it rides in the same conditional because the two records are one
 // rule, and granting the close-out later then needs no second edit HERE; the
@@ -2620,8 +2611,6 @@ const standaloneItemByUrl = new Map(
   packet.items.filter((it) => it.type !== "review-thread" && it.url).map((it) => [it.url, it])
 );
 const sameLogin = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
-// Returns why this entry cannot be published, or "" when it carries the full
-// per-item contract.
 function dispositionDefect(d) {
   if (!d) return "the entry is empty";
   // The gathered item this entry speaks for, once identity checks out — the
@@ -2833,7 +2822,7 @@ if (!passed) {
 
 // Guards before any publication side effect (nothing has been pushed yet on a
 // push run — the publisher does the push — so aborting here leaves the remote
-// clean). First: every gathered item must be covered by a workReport entry, or
+// clean). Every gathered item must be covered by a workReport entry, or
 // publication would push and post a summary while silently skipping the
 // uncovered thread(s).
 if (uncoveredItems.length) {
@@ -2855,11 +2844,11 @@ if (uncoveredItems.length) {
   };
 }
 
-// Second: an item covered MORE than once. The entries disagree by construction
-// (one item, several dispositions), so publication would reply once per entry
-// and resolve the thread on whichever it routed first — a wrong reply left
-// standing beside a right one. There is no safe way to pick between them here;
-// only the cycle that produced them can say which disposition it meant.
+// An item covered MORE than once. The entries disagree by construction (one
+// item, several dispositions), so publication would reply once per entry and
+// resolve the thread on whichever it routed first — a wrong reply left standing
+// beside a right one. There is no safe way to pick between them here; only the
+// cycle that produced them can say which disposition it meant.
 if (duplicatedItems.length) {
   return {
     status: "publish-aborted-conflicting-dispositions",
@@ -2879,11 +2868,6 @@ if (duplicatedItems.length) {
   };
 }
 
-// Third: a covering entry that cannot be published — mistyped, naming a
-// never-gathered thread, missing/mismatching its identifiers, or missing or
-// contradicting a publish-critical field (the `badDispDefect` check above the
-// no-push branch, judged against the gathered items and the per-item report
-// contract).
 if (badDispDefect) {
   return {
     status: "publish-aborted-incomplete-dispositions",
@@ -2930,18 +2914,12 @@ for (const d of workReport) {
   reviewingBots.add(bot);
   if (d.newFinding) contributingBots.add(bot);
 }
-// Candidate set. Without the modifier it is exactly the bots the user named.
-// With the modifier AND at least one name, it is that named set (then filtered
-// to contributors below); with the modifier supplied ALONE, it falls back to the
-// known bots that reviewed this round.
 const anyExplicitPing = flags.pingCodex || flags.pingClaude || flags.pingCopilot;
 const candidate = {
   codex: flags.pingContributing ? (anyExplicitPing ? flags.pingCodex : reviewingBots.has("codex")) : flags.pingCodex,
   claude: flags.pingContributing ? (anyExplicitPing ? flags.pingClaude : reviewingBots.has("claude")) : flags.pingClaude,
   copilot: flags.pingContributing ? (anyExplicitPing ? flags.pingCopilot : reviewingBots.has("copilot")) : flags.pingCopilot,
 };
-// When the modifier is off, `contributes` is always true, so the per-bot ping
-// reduces exactly to the prior `named && !knownNoNewCommits` behavior.
 const contributes = (bot) => !flags.pingContributing || contributingBots.has(bot);
 const publishFlags = {
   ...flags,
