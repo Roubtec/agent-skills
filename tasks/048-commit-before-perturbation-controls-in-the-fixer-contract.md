@@ -23,7 +23,7 @@ Out of scope:
 
 - `plugins/dev-skills/skills/review-cycle/SKILL.md` and `codex/dev-skills/skills/review-cycle/SKILL.md` — the Fixer bullet under "Roles", whose clause "commit/validation instructions" is the anchor; both mirrors are hand-edited in lockstep, and there is no generator.
 - Task 039a's delivery (PR #93, this branch) — one of the three incidents happened in that task's own round-2 fix pass, which is why this task file rides this branch.
-- The repo memory note `commit-before-perturbation-controls` records the incident details; this task exists so the rule outlives that memory.
+- The orchestrating agent's project memory note `commit-before-perturbation-controls` (session-scoped, not a repository file) records the incident details; this task exists so the rule outlives that memory.
 
 ## Target files or areas
 
@@ -33,7 +33,7 @@ Out of scope:
 ## Implementation notes
 
 - Place the sentence inside the Fixer bullet where the commit/validation instructions are named, so every brief composed from the contract carries it — a wording of the shape: any perturbation-style control (gutting a check, perturbing a predicate for a negative control) runs only after the implementation is committed, and `git restore` never targets a file holding uncommitted implementation edits.
-- Edit both mirrors identically; measure the mirror divergence before and after (diff line count or hash of the diff hunks) and confirm it is unchanged.
+- Edit both mirrors identically; measure the mirror divergence before and after by its line count and confirm it is unchanged — the Fixer bullet is itself one of the mirrors' deliberately divergent lines, so a hash of the diff hunks changes even under identical insertions and is not a usable measure here.
 - `scripts/test-skill-worktree-base-exclude.mjs` and the other suites do not read this bullet today; add no pin unless one already covers the Fixer bullet's wording, in which case extend it deliberately.
 
 ## Acceptance criteria
