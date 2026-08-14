@@ -16,11 +16,12 @@
 //      one, an absent report, and `not-applicable` (which on THIS branch is a
 //      contradiction, not an exemption: keying the gate on the outcome instead
 //      of the names would let a misreporting agent bypass reconciliation).
-//   3. The ORDER relative to the empty-`items` no-op. The rule's third outcome
-//      returns NO items by contract, so a gate placed after the no-op would
-//      report an unreconciled branch as "nothing to address" — the silent
-//      wrong answer, and the one a reader of the result cannot tell from a
-//      genuinely clean PR.
+//   3. The ORDER relative to the empty-`items` exit — since its split (task
+//      016a, below) two zero-item outcomes rather than one no-op. The rule's
+//      third outcome returns NO items by contract, so a gate placed after that
+//      exit would hand an unreconciled branch to one of them: "nothing to
+//      address" or a published zero-item run — silent wrong answers a reader
+//      of the result cannot tell from a genuinely clean PR.
 //
 // The workflows are runtime scripts (top-level await/return, injected
 // `agent`/`workflow`/`phase`/`log` globals), so they cannot be imported. This
