@@ -59,7 +59,7 @@
 // both mirrors are read together — the drift the rendering buys back. Both reads
 // are PHRASE pins and hold only as far as the phrases they select: a rewrite that
 // keeps every one of them while reversing what they say passes, as it does for
-// README's `FETCH_HEAD` pins, so the polarity is the reviewer's to hold.
+// the `FETCH_HEAD` pins further down, so the polarity is the reviewer's to hold.
 //
 // It covers the DELEGATED REBASE POINTS that run just after the gate (task
 // 016), for the same reason and through the same harness: the base each one
@@ -88,13 +88,22 @@
 // dispositions that already passed rather than re-triaging them, its reviewer
 // compares against them, and the cycle it replaces still owns open questions and
 // deviations that are the maintainer's — so the harness scripts cycle results in
-// order instead of stopping at the first call. Three properties of that merge
+// order instead of stopping at the first call. Four properties of that merge
 // are pinned beside the verdict: the second cycle is bounded by what the first
 // LEFT of the run's 12-round total rather than by a fixed ceiling (and a run
 // with none left stops unpublished), a deviation both cycles state is folded to
-// one with one assessment, and the superseded cycle's `preRebase*` records reach
+// one with one assessment, the superseded cycle's `preRebase*` records reach
 // the PR comment rather than only the run's result — which is why the publisher
-// is stubbed here at all.
+// is stubbed here at all — and the standing deviations are HANDED to that second
+// cycle's two roles (task 016b), which is what makes the fold a judgment of the
+// pushed tree rather than a coincidence of identical wording. That carry is what
+// the merge then reads back: a deviation the second cycle's own per-pass record
+// shows it taking up and dropping is resolved and leaves, while one it never
+// restated is silence and keeps standing with the earlier assessment, so the two
+// absences are driven separately — the silent one twice, once as a cycle that
+// never took the carry up and once with the story that makes the fixer brief's
+// restate-first order load-bearing: a carry the replay genuinely resolved,
+// claimed by omission, which the merge cannot read as anything but silence.
 //
 // And it covers the sibling gate that runs just ahead of this one (task 018):
 // the WORKING LOCATION, which decides not whether the run may act on the branch
@@ -142,7 +151,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 234;
+const EXPECTED_CHECKS = 241;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -279,10 +288,30 @@ const CYCLE_REVERIFIED = {
 // they name" two assessments for one deviation; its own assessment is the later
 // round's judgment of it, and disagrees with the first, so which one survives
 // the fold is observable.
+// `deviationHistory` is part of that shape rather than decoration: it is the
+// second cycle's own per-pass record of what its fixer restated, and it is what
+// the merge reads to tell a deviation the re-verification TOOK UP from one it
+// never saw. A fixture that restates a deviation without recording the pass that
+// did would be a cycle result `wf-review-cycle` cannot produce.
 const CYCLE_REVERIFIED_RESTATING = {
   ...CYCLE_REVERIFIED,
   deviations: [DEVIATION],
+  deviationHistory: [{ pass: 1, deviations: [DEVIATION] }],
   deviationAssessments: [{ deviation: DEVIATION, inSpecRoute: "the replay brought the flag with it", recommendation: "CONFORM — the in-spec route exists on this base" }],
+};
+// The re-verification RESOLVING the carried deviation, through the protocol the
+// fixer brief orders: its fixer restated it on pass 1 (restate-first, the
+// believed-resolved ones included), a later pass stopped — the new base carries
+// the flag the locked decision names, so the deviation no longer stands — and a
+// round PASSED over that claim, which is the only way `wf-review-cycle` takes
+// one out of its standing set. So its final `deviations` is empty over a history
+// that shows the deviation, which is exactly the pair "resolved" is, and "never
+// shown it" is not.
+const CYCLE_REVERIFIED_RESOLVED = {
+  ...CYCLE_REVERIFIED,
+  deviations: [],
+  deviationAssessments: [],
+  deviationHistory: [{ pass: 1, deviations: [DEVIATION] }, { pass: 2, deviations: [] }],
 };
 // The other shape a two-cycle deviation set comes in: the re-verification states
 // a deviation of its OWN, so the merged result must carry BOTH, each beside the
@@ -294,10 +323,14 @@ const CYCLE_REVERIFIED_RESTATING = {
 // exactly what `review-cycle` forbids, since none may vanish with the loop's
 // last turn and no deviation may reach the maintainer carrying only the
 // implementer's half.
+// Its history states its OWN deviation and not the carried one, which makes this
+// fixture the other half of the resolved/silent pair too: a re-verification that
+// kept a per-pass record and never took the carried deviation up at all.
 const SECOND_DEVIATION = "put the retry loop in the request path where the locked decision names the queue; that queue does not exist on this base";
 const CYCLE_REVERIFIED_OWN_DEVIATION = {
   ...CYCLE_REVERIFIED,
   deviations: [SECOND_DEVIATION],
+  deviationHistory: [{ pass: 1, deviations: [SECOND_DEVIATION] }],
   deviationAssessments: [{ deviation: SECOND_DEVIATION, inSpecRoute: "the queue lands with the follow-up", recommendation: "RATIFY — no in-spec route exists on this base either" }],
 };
 // A first cycle that CONCLUDED over a failed delivery run, on the flake rule's
@@ -315,6 +348,20 @@ const CYCLE_PASS_RECORD_ONLY = {
   recordOnly: FLAKE_RECORD,
   closeOut: { pass: 4, range: "abc1234..def5678", edits: ["reworded a comment"], verified: "every hunk non-semantic" },
 };
+// The OTHER shape a `recordOnly` comes in, and the one the re-verification's
+// correction has nothing to correct: a record naming no post-run commit at all.
+// This is `wf-review-cycle`'s `flakeCarried`, the record its ordinary
+// conclusions carry — an empty `range`/`verified` pair beside the failure the
+// maintainer is owed — so the correction's output for it is byte-identical to
+// its input, and the only thing that tells "returned untouched" from "corrected
+// unconditionally" is whether the SAME OBJECT comes back.
+const NO_COMMIT_FLAKE_RECORD = {
+  pass: 2,
+  range: "",
+  verified: "",
+  note: "the delivery run's only failure was the payments suite; it reproduces on the base and tasks/041-flaky-payments-suite.md is already open on it",
+};
+const CYCLE_PASS_NO_COMMIT_RECORD = { ...CYCLE_PASS, recordOnly: NO_COMMIT_FLAKE_RECORD };
 
 // Run the shipped script with one scripted gather packet. `no-push` keeps the
 // run local-only by default: the gate is flag-independent, and most of what is
@@ -2004,7 +2051,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
 // every pinned phrase — "…is ordinarily fine and only ever is a stop where you
 // already had reason to doubt the push" — passes every check here. A regex over
 // prose cannot separate an instruction from its negation, which is the same hole
-// README states of its own `FETCH_HEAD` pins; what these catch is a side
+// the `FETCH_HEAD` pin comments below state of their own reads; what these catch is a side
 // reworded, moved out of its step, or dropped, and the polarity stays the
 // reviewer's to hold.
 //
@@ -2800,6 +2847,68 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       reviewerCarriesThem: !!second && second.reviewInstructions.includes(passedDisposition.detail),
     }),
   );
+  // The deviations standing when the rebase happened travel the same way, and to
+  // the same two roles. The second cycle's own deviation set starts EMPTY, so a
+  // deviation this list does not carry is in front of nobody: the fixer
+  // `review-cycle` orders to restate every standing one has nothing to restate,
+  // and the reviewer whose round owns the in-spec-route judgment and the
+  // RATIFY/CONFORM verdict for the tree being pushed never sees the deviation it
+  // is judging. Each role is checked for the duty only it has — restating
+  // verbatim, and refusing an unrestated carry — since a block that reached one
+  // of them alone leaves the other unable to do its half.
+  check(
+    "and hands both roles the deviations standing when the rebase happened — the fixer to restate verbatim, the reviewer as its drop baseline",
+    !!second &&
+      second.instructions.includes(DEVIATION) &&
+      second.reviewInstructions.includes(DEVIATION) &&
+      /VERBATIM/.test(second.instructions) &&
+      /CLAIMED DROP/.test(second.reviewInstructions),
+    JSON.stringify({
+      fixerShown: !!second && second.instructions.includes(DEVIATION),
+      fixerToldToRestate: !!second && /VERBATIM/.test(second.instructions),
+      reviewerShown: !!second && second.reviewInstructions.includes(DEVIATION),
+      reviewerToldItIsADropClaim: !!second && /CLAIMED DROP/.test(second.reviewInstructions),
+    }),
+  );
+  // The protocol those blocks order, pinned as the clauses that close the hole a
+  // brief telling the fixer to LEAVE OUT a resolved carry would reopen: the
+  // merge below reads a resolution out of the second cycle's per-pass record,
+  // and an omitted carry is in no record, so the only readable resolution is
+  // restate-first-then-drop. The fixer's side orders exactly that; a wording
+  // that reverts to "leave one out where the replay closed it" fails here by
+  // name, because that instruction produces the unreadable shape.
+  check(
+    "and the fixer's carry brief orders restate-first: every carry restated on the FIRST pass, a replay-resolution claimed by a later pass's drop, never by omission",
+    !!second &&
+      /Restate EVERY one of them in your `deviations` on your FIRST pass/.test(second.instructions) &&
+      /including any you believe the replay resolved/.test(second.instructions) &&
+      /Do NOT claim a resolution by leaving one out/.test(second.instructions) &&
+      /stop restating it on a later pass/.test(second.instructions),
+    JSON.stringify({
+      restateFirst: !!second && /Restate EVERY one of them in your `deviations` on your FIRST pass/.test(second.instructions),
+      resolvedIncluded: !!second && /including any you believe the replay resolved/.test(second.instructions),
+      omissionForbidden: !!second && /Do NOT claim a resolution by leaving one out/.test(second.instructions),
+      dropOnALaterPass: !!second && /stop restating it on a later pass/.test(second.instructions),
+    }),
+  );
+  // And the reviewer's side of the same protocol: an unrestated carry is a claim
+  // the cycle has no channel to record — no verdict can drop it, the merge folds
+  // it forward regardless — so the duty is refusal (require the restatement),
+  // never adjudicating an omission whose acceptance would settle nothing. The
+  // round-1 wording, "passing this round is what drops it", was FALSE for
+  // exactly this path, which is what these clauses replace.
+  check(
+    "and the reviewer's carry brief calls an unrestated carry a claim the cycle has no channel to record, requiring the restatement rather than adjudicating the omission",
+    !!second &&
+      /no channel to record/.test(second.reviewInstructions) &&
+      /no verdict of yours can drop it/.test(second.reviewInstructions) &&
+      /Require the restatement as a blocking issue/.test(second.reviewInstructions),
+    JSON.stringify({
+      noChannel: !!second && /no channel to record/.test(second.reviewInstructions),
+      noVerdictDrops: !!second && /no verdict of yours can drop it/.test(second.reviewInstructions),
+      restatementRequired: !!second && /Require the restatement as a blocking issue/.test(second.reviewInstructions),
+    }),
+  );
   const cap = replayed.seen.cycleCalls[1] ? replayed.seen.cycleCalls[1].opts.maxRounds : undefined;
   check(
     "and bounds it with a lowered round cap, so two cycles cannot double the run's worst case",
@@ -2887,6 +2996,65 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         ]),
     JSON.stringify({ deviations: dr.deviations, assessments: dr.deviationAssessments }),
   );
+  // Now that the carried set reaches the re-verification, the union is no longer
+  // the whole rule: a deviation the replay RESOLVED has to be able to leave,
+  // rather than being folded forward forever under a judgment formed against the
+  // base the replay moved off. What licenses that is the second cycle's own
+  // per-pass record — `wf-review-cycle` drops a deviation only once a round
+  // PASSED with the claim in view — so a deviation its history shows it taking up
+  // and its final set no longer carrying was resolved over the rebased tree, and
+  // the stale earlier assessment goes with it rather than being published beside
+  // a deviation that no longer stands.
+  const resolvedRun = await run(gathered(withWork), {
+    cycles: [CYCLE_PASS, CYCLE_REVERIFIED_RESOLVED],
+    rebases: { "pre-fix": REBASE_NOOP, "pre-push": REBASE_REPLAY },
+  });
+  const res = resolvedRun.result || {};
+  check(
+    "a carried deviation the re-verification took up and then dropped leaves the merged set, taking its stale assessment with it",
+    resolvedRun.status === "fixed-local" &&
+      JSON.stringify(res.deviations || []) === "[]" &&
+      (res.deviationAssessments || []).length === 0,
+    JSON.stringify({ status: resolvedRun.status, deviations: res.deviations, assessments: res.deviationAssessments }),
+  );
+  // And the half that keeps the merge conservative, which is the same absence
+  // read against a different record: a re-verification that kept a per-pass
+  // record and never restated the carried deviation at all never took it up, so
+  // its absence is SILENCE and not a judgment. `review-cycle` forbids a deviation
+  // vanishing with a loop's last turn and forbids one reaching the maintainer
+  // carrying only the implementer's half, so it keeps standing WITH the
+  // pre-rebase round's assessment. Without this pair, "the second cycle's set
+  // wins" would drop every deviation a re-verification simply failed to mention.
+  const dev = (dr.deviations || []).indexOf(DEVIATION);
+  const keptAssessment = (dr.deviationAssessments || []).find((a) => a && a.deviation === DEVIATION);
+  check(
+    "while one it never restated is silence, not a drop: it keeps standing, still carrying the pre-rebase round's assessment",
+    dev === 0 && !!keptAssessment && keptAssessment.recommendation === CYCLE_PASS.deviationAssessments[0].recommendation,
+    JSON.stringify({ index: dev, assessment: keptAssessment, history: (dr.deviationHistory || []).map((h) => h && h.deviations) }),
+  );
+  // The same silence with the story that makes the fixer brief's restate-first
+  // order load-bearing rather than pedantry: the replay GENUINELY resolved the
+  // carried deviation, and the fixer claimed that by omission — never restating
+  // it — instead of through the ordered restate-then-drop. `wf-review-cycle`
+  // sets `deviationHistory` only once some pass reported a deviation, so a fixer
+  // that omitted the carry and stated nothing of its own returns a result with
+  // no history at all — the `replayed` run's second cycle is exactly that shape —
+  // and the merge cannot tell this story from a cycle that never saw the
+  // deviation. It reads silence, and the deviation folds forward still standing
+  // under the stale pre-rebase assessment: conservative in the direction that
+  // matters (noise — one more report with a stale judgment beside it — never
+  // loss), and the cost the brief's restate-first order exists to keep an
+  // ordinary run from paying.
+  const or = replayed.result || {};
+  const omittedAssessment = (or.deviationAssessments || []).find((a) => a && a.deviation === DEVIATION);
+  check(
+    "a carry the replay resolved but the fixer omitted outright never enters the record, so it folds forward still standing with the stale assessment — the shape the restate-first order exists to prevent",
+    !(or.deviationHistory || []).some((h) => h && Array.isArray(h.deviations) && h.deviations.includes(DEVIATION)) &&
+      JSON.stringify(or.deviations) === JSON.stringify([DEVIATION]) &&
+      !!omittedAssessment &&
+      omittedAssessment.recommendation === CYCLE_PASS.deviationAssessments[0].recommendation,
+    JSON.stringify({ deviations: or.deviations, assessment: omittedAssessment, history: (or.deviationHistory || []).map((h) => h && h.deviations) }),
+  );
   // The superseded cycle's three `preRebase*` records. Each speaks for something
   // the re-verification did not undo — a delivery run that FAILED, a close-out's
   // unreviewed non-semantic edits, and a round history under another directory —
@@ -2912,6 +3080,23 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       sr.preRebaseRecordOnly.note === FLAKE_RECORD.note &&
       sr.preRebaseRecordOnly.pass === FLAKE_RECORD.pass,
     JSON.stringify(sr.preRebaseRecordOnly),
+  );
+  // The correction's OTHER branch: a record that already names no post-run commit
+  // is returned untouched, since there is nothing about it the re-verification
+  // falsified. Its output is byte-identical either way — correcting an empty
+  // `range`/`verified` pair to empty changes no value — so a value comparison
+  // cannot see the difference and the pin is object IDENTITY: the untouched
+  // branch hands back the record it was given, and a correction that ran
+  // unconditionally hands back a copy. The record travels by reference from the
+  // merge to the result, so that is observable here.
+  const noCommit = await run(gathered(withWork), {
+    cycles: [CYCLE_PASS_NO_COMMIT_RECORD, CYCLE_REVERIFIED],
+    rebases: { "pre-fix": REBASE_NOOP, "pre-push": REBASE_REPLAY },
+  });
+  check(
+    "a superseded record that already names no post-run commit is carried through untouched rather than re-corrected",
+    (noCommit.result || {}).preRebaseRecordOnly === NO_COMMIT_FLAKE_RECORD,
+    JSON.stringify({ record: (noCommit.result || {}).preRebaseRecordOnly, sameObject: (noCommit.result || {}).preRebaseRecordOnly === NO_COMMIT_FLAKE_RECORD }),
   );
   // And the record reaches the PR, which is the whole point of keeping it: the
   // publish brief is this run's ONLY PR-facing surface, so a record that rides
