@@ -17,6 +17,18 @@
  * new commits/rewritten history; a no-op push (nothing new to review) skips them
  * so an automated review -> address -> review loop can terminate.
  *
+ * An EMPTY gather is not one exit but two, per the skill's step 3. A run with
+ * no unresolved thread and no included standalone item ends as a TERMINAL
+ * no-op only where `HEAD`, the tip the run started from, and the PR's recorded
+ * `headRefOid` all name one commit; any other zero-item run takes the
+ * ZERO-ITEM PATH — it continues through the rebase points, the nested cycle,
+ * and (unless `no-push`) publication, since its tip either carries work the PR
+ * head does not or moved under the run — neither is a no-op to report. A
+ * zero-item run makes no synthetic commit and posts no per-thread
+ * reply or resolve; its publication still posts the Summary comment — the
+ * completion gate requires one on every published run — with pings under the
+ * unchanged rules.
+ *
  * The `ping-contributing` modifier prunes that re-review set further to the
  * bots that brought a NEW finding this round — the disposition schema and the
  * prompts below carry the operative definition — so a multi-bot loop winds
@@ -155,16 +167,17 @@ const PACKET_SCHEMA = {
         locationMode: { type: "string", description: "REQUIRED: exactly `inline` (the work happens in the current checkout) or `worktree` (a worktree was attached for it). There is no default — the caller stops the run on an absent or unrecognized value, because reading one as `inline` would point every later phase at the main checkout, which in worktree mode is not on the PR branch at all." },
         worktree: { type: "string", description: "ABSOLUTE path of the attached worktree in `worktree` mode — required there, since it is where every later phase works. Empty in `inline` mode. It rides in `pr` so that every result echoing the PR object reports a worktree a halted run left standing." },
         base: { type: "string", description: "The PR's `baseRefName`. It is a REF NAME at this stage and nothing more: the rebase phase resolves it (or the requested target) to a commit and the caller replaces this field with that pinned OID, which is what every later delegation names as its review base." },
-        baseOid: { type: "string", description: "The full OID THIS RUN'S TARGET resolves to right now — which of two things that is, the brief settles and this field follows: a branch or commit an explicit `rebase on top of <target>` named (the `rebaseTarget` you report) is resolved WHERE IT WAS NAMED, in the working location, and fetched from nowhere, since `no-rebase` drops the rebase and not the target; only where the request named none is the target this PR's own base ref, and only then is it resolved IN THE BASE REPOSITORY — the repository the PR itself is in, freshly fetched, never read through the branch's push remote, which on a cross-repository PR is the head fork. A commit, never a name. REQUIRED on a `no-rebase` run whose gather returned items, and ONLY there — that run has no rebase report to pin from, so this is the OID it pins as its review base, and the caller rejects anything that is not a full hex OID on that path and stops the run. An empty gather reports the field EMPTY even there: the caller's no-op exit runs before the check. A rebasing run never reads it (its rebase pins the base itself), so its gather reports the field EMPTY and resolves nothing for it — the brief orders that resolution, by whichever arm, only where the value is consumed." },
+        baseOid: { type: "string", description: "The full OID THIS RUN'S TARGET resolves to right now — which of two things that is, the brief settles and this field follows: a branch or commit an explicit `rebase on top of <target>` named (the `rebaseTarget` you report) is resolved WHERE IT WAS NAMED, in the working location, and fetched from nowhere, since `no-rebase` drops the rebase and not the target; only where the request named none is the target this PR's own base ref, and only then is it resolved IN THE BASE REPOSITORY — the repository the PR itself is in, freshly fetched, never read through the branch's push remote, which on a cross-repository PR is the head fork. A commit, never a name. REQUIRED on a `no-rebase` run the caller CONTINUES — one whose gather returned items, or a zero-item packet whose three tips disagree (the zero-item path) — and ONLY there: that run has no rebase report to pin from, so this is the OID it pins as its review base, and the caller rejects anything that is not a full hex OID on that path and stops the run. A zero-item gather whose three tips agree reports the field EMPTY even there: the caller's terminal no-op exit runs before the check. A rebasing run never reads it (its rebase pins the base itself), so its gather reports the field EMPTY and resolves nothing for it — the brief orders that resolution, by whichever arm, only where the value is consumed." },
         headOid: { type: "string", description: "Expected remote head OID, for the publication lease. Populate from the PR's headRefOid." },
-        startingHead: { type: "string", description: "The tip this run STARTS from: `git rev-parse HEAD` in the working location, read after the reconciliation's one authorized fast-forward and before anything is fixed or rebased. Populate it on every successful gather — it is the `starting HEAD` of the disposition record a run that does not publish leaves, and the only place it can be read is here, since a `no-rebase` run has no rebase report to take it from. Absent, the record falls back to the first rebase point's `before` and then to saying it was not recorded, so a missing value costs a provenance field rather than the run." },
+        startingHead: { type: "string", description: "The tip this run STARTS from: `git rev-parse HEAD` in the working location, read after the reconciliation's one authorized fast-forward and before anything is fixed or rebased. Populate it on every successful gather — it is the `starting HEAD` of the disposition record a run that does not publish leaves, and the only place it can be read is here, since a `no-rebase` run has no rebase report to take it from. On a ZERO-ITEM packet it is also one of the three tips the caller's terminal/zero-item decision compares (see `finalHead`), and there an absent value stops the run. On a packet with items, absent, the record falls back to the first rebase point's `before` and then to saying it was not recorded, so a missing value costs a provenance field rather than the run." },
+        finalHead: { type: "string", description: "The tip this gather ENDS on: `git rev-parse HEAD` in the working location, read once more as the LAST read before this packet is returned, and reported on every successful gather. This step commits nothing, so it ordinarily equals `startingHead` — reporting both anyway is what lets the caller adopt a terminal no-op on tips it was SHOWN rather than on the item count alone. On a ZERO-ITEM packet the caller compares it with `startingHead` and the recorded `headOid`, exactly as `address-review` step 3 orders: all three the same commit is the terminal no-op; anything else takes the zero-item path, which continues through the normal fresh review and, unless `no-push`, publication. There an absent value stops the run; on a packet with items it is provenance." },
         rebased: { type: "boolean", description: "Whether the branch tip has been rewritten (publish must then use --force-with-lease). Report `false` here — this step performs no rebase; the caller sets it from the rebase phase's own report." },
       },
       required: ["number", "url", "branch", "workingBranch", "locationMode", "base", "headOid"],
     },
     rebaseTarget: {
       type: "string",
-      description: "The target named by an explicit `rebase on top of <target>` token in the request — a branch name or an exact commit, verbatim. EMPTY when the request named none, which is the ordinary case: the rebase phase then targets the PR's own `baseRefName` (this object's `base`). Report the token on every packet you return with `ok: true` and items to address — empty string and not omitted where the request named none, since that is what the caller consumes, and it stops the run on an absent one: the caller reads this field alone and never infers the token from anything else, and on a `no-rebase` run it is what decides which target the `baseOid` above resolves. Acting on it is otherwise not yours — the rebase phase does that — with the single exception the `no-rebase` arm of your brief spells out, where resolving it IS the base you report.",
+      description: "The target named by an explicit `rebase on top of <target>` token in the request — a branch name or an exact commit, verbatim. EMPTY when the request named none, which is the ordinary case: the rebase phase then targets the PR's own `baseRefName` (this object's `base`). Report the token on every packet you return with `ok: true` that the caller can CONTINUE on — one with items to address, and a zero-item packet alike, since the zero-item path consumes it at both rebase points; only a terminal no-op (a zero-item packet whose three tips agree) finishes before the caller reads it — empty string and not omitted where the request named none, since that is what the caller consumes, and it stops the run on an absent one: the caller reads this field alone and never infers the token from anything else, and on a `no-rebase` run it is what decides which target the `baseOid` above resolves. Acting on it is otherwise not yours — the rebase phase does that — with the single exception the `no-rebase` arm of your brief spells out, where resolving it IS the base you report.",
     },
     reconcile: {
       type: "object",
@@ -426,16 +439,18 @@ Where the names match: fetch the PR's exact head ref WITHOUT moving the local br
 
 Those two probes are the whole rule; do not grow them into a classifier of branch states, which is exactly what the third outcome exists to make unnecessary. The first is patch-id based on purpose: \`--cherry-pick\` drops commits with a patch-id twin on the other side, so a branch rebased onto a newer base reads as carrying the PR head's content though it shares no SHAs with it, where a raw-ancestry test would call that ordinary state divergent. Do NOT filter merge commits out of that probe: patch-id cannot speak for a merge, so an unrepresented merge on the remote head lands in outcome 3 deliberately — one extra ask when a UI "Update branch" merge advanced the head, in exchange for never silently dropping a conflict resolution such a merge carried.
 
-Read the tip this run STARTS from and report it as \`pr.startingHead\` — \`git rev-parse HEAD\` in the working location, after the reconciliation above (whether it fast-forwarded, found nothing to do, or was skipped whole as not-applicable) and before anything is fixed or rebased. EVERY run has one, the off-shoot and \`no-rebase\` paths included, which is why it is read here rather than taken from a rebase report a \`no-rebase\` run never produces: it is the \`starting HEAD\` of the disposition record a run that does not publish leaves, where it says which tree that run's verdict was rendered over.
+Read the tip this run STARTS from and report it as \`pr.startingHead\` — \`git rev-parse HEAD\` in the working location, after the reconciliation above (whether it fast-forwarded, found nothing to do, or was skipped whole as not-applicable) and before anything is fixed or rebased. EVERY run has one, the off-shoot and \`no-rebase\` paths included, which is why it is read here rather than taken from a rebase report a \`no-rebase\` run never produces: it is the \`starting HEAD\` of the disposition record a run that does not publish leaves, where it says which tree that run's verdict was rendered over — and on a zero-item packet it is one of the three tips the caller's terminal/zero-item decision below compares, \`pr.finalHead\` and the recorded \`pr.headOid\` being the other two.
 
-Rebase NOTHING here, whatever the request asked for. Report \`pr.base = baseRefName\` and \`pr.rebased = false\`. ${noRebase ? `This run's review base is the gather's to pin (\`no-rebase\`), but pin it ONLY where there is a run to bound: resolve it AFTER the gathering below, and only where \`items\` came back NON-EMPTY — an empty gather is a terminal no-op the caller finishes before reading any base OID, so there report \`pr.baseOid\` EMPTY and fetch nothing for it. Where items were gathered, resolve the run's target to a commit ONCE and report the full OID as \`pr.baseOid\`. WHICH target that is, is the one thing to settle first, and you are the one holding the answer: where you are about to report a NON-EMPTY \`rebaseTarget\`, that token is the target — \`no-rebase\` suppresses the REBASE, not the target the request named, and bounding this run at \`baseRefName\` instead would hand the reviewer and the peer the underlying branch's own commits as this PR's diff. Resolve THAT one where it was named — here, in this working location, \`git rev-parse --verify '<the token>^{commit}'\` with the operand quoted as ONE argument, taking a local branch, a remote-tracking ref or a commit — and fetch NOTHING for it; where it does not resolve, report \`ok: false\` naming what you tried and substitute nothing. Only where \`rebaseTarget\` is EMPTY is the target this PR's own \`baseRefName\`, and only then does the rest of this paragraph apply: resolve it in the BASE repository and not through this branch's push remote. Those are two different repositories whenever the PR is cross-repository: the push remote is the HEAD repository, so \`<push-remote>/<baseRefName>\` there names a same-named branch in the fork — a different branch's tip, or nothing at all — and the push remote stays what it is for, the publication target. There is no base-repository field to ask for and none is needed: a PR's base always lives in the repository the PR itself is in, so the base repository is the \`<owner>/<repo>\` this PR's OWN URL names — the \`https://<host>/<owner>/<repo>/pull/<number>\` you report as \`pr.url\`, an explicit repository-qualified value you already resolved. Do not ask a bare \`gh repo view --json nameWithOwner\` for it: with no repository argument that command answers for the repository the DIRECTORY it runs in resolves to, which in a fork clone is the head fork — the one repository this paragraph exists to keep the fetch away from. \`isCrossRepository\` is no substitute for matching that repository against a remote's URL: it compares the PR's OWN head and base and says nothing about which repository this clone's remotes point at — a fork clone working a PR whose head and base both live upstream reads \`false\` while \`origin\` is still the fork. Where the URL match does land on this branch's push remote, one remote serves both. Fetch that repository's exact base ref WITHOUT moving any branch — \`git fetch <the remote whose URL is that repository, or that repository's URL where a fork clone has no remote for it> refs/heads/<baseRefName>\` — and resolve what the fetch brought: \`git rev-parse --verify FETCH_HEAD^{commit}\`, reporting the full unabbreviated OID git prints. Read no \`<remote>/<baseRefName>\` in its place: a remote-tracking ref is only as fresh as whatever last fetched it, so it can pin a commit the base has since moved past, and nothing else here fetches the base at all. That fetch OVERWRITES \`FETCH_HEAD\`, so run it only after every read of \`R\` above — the location step's, and the reconciliation's where it ran. A \`no-rebase\` run pins its review base to that OID, because every range this run delegates is taken against a commit rather than a name — a name moves under the next fetch or a sibling push.` : `This run rebases, so the delegated rebase step pins the review base itself and the caller reads a gather-time \`pr.baseOid\` only on a \`no-rebase\` run: report \`pr.baseOid\` EMPTY and fetch NOTHING for it — the base repository is not touched from here, so a checkout that can inspect the PR through \`gh\` but cannot Git-fetch that repository still gathers.`} Then put an explicit \`rebase on top of <target>\` token's target — a branch name or an exact commit, verbatim — into \`rebaseTarget\` (empty when none was named). A delegated rebase step runs immediately after you and again before publication; it resolves that target to a commit, pins it, and reports back what it landed on, and the caller replaces \`pr.base\`/\`pr.rebased\` from that report. Two agents both rebasing would replay the same commits twice, which is precisely why this one does not.
+Rebase NOTHING here, whatever the request asked for. Report \`pr.base = baseRefName\` and \`pr.rebased = false\`. ${noRebase ? `This run's review base is the gather's to pin (\`no-rebase\`), but pin it ONLY where there is a run to bound: resolve it AFTER the gathering below, and only where the caller will CONSUME it — where \`items\` came back NON-EMPTY, or where a zero-item packet's three tips (the zero-item paragraph below) DISAGREE, since the zero-item path continues to review and publication and pins this value as its review base. A zero-item gather whose three tips agree is a terminal no-op the caller finishes before reading any base OID, so there report \`pr.baseOid\` EMPTY and fetch nothing for it. Where items were gathered, resolve the run's target to a commit ONCE and report the full OID as \`pr.baseOid\`. WHICH target that is, is the one thing to settle first, and you are the one holding the answer: where you are about to report a NON-EMPTY \`rebaseTarget\`, that token is the target — \`no-rebase\` suppresses the REBASE, not the target the request named, and bounding this run at \`baseRefName\` instead would hand the reviewer and the peer the underlying branch's own commits as this PR's diff. Resolve THAT one where it was named — here, in this working location, \`git rev-parse --verify '<the token>^{commit}'\` with the operand quoted as ONE argument, taking a local branch, a remote-tracking ref or a commit — and fetch NOTHING for it; where it does not resolve, report \`ok: false\` naming what you tried and substitute nothing. Only where \`rebaseTarget\` is EMPTY is the target this PR's own \`baseRefName\`, and only then does the rest of this paragraph apply: resolve it in the BASE repository and not through this branch's push remote. Those are two different repositories whenever the PR is cross-repository: the push remote is the HEAD repository, so \`<push-remote>/<baseRefName>\` there names a same-named branch in the fork — a different branch's tip, or nothing at all — and the push remote stays what it is for, the publication target. There is no base-repository field to ask for and none is needed: a PR's base always lives in the repository the PR itself is in, so the base repository is the \`<owner>/<repo>\` this PR's OWN URL names — the \`https://<host>/<owner>/<repo>/pull/<number>\` you report as \`pr.url\`, an explicit repository-qualified value you already resolved. Do not ask a bare \`gh repo view --json nameWithOwner\` for it: with no repository argument that command answers for the repository the DIRECTORY it runs in resolves to, which in a fork clone is the head fork — the one repository this paragraph exists to keep the fetch away from. \`isCrossRepository\` is no substitute for matching that repository against a remote's URL: it compares the PR's OWN head and base and says nothing about which repository this clone's remotes point at — a fork clone working a PR whose head and base both live upstream reads \`false\` while \`origin\` is still the fork. Where the URL match does land on this branch's push remote, one remote serves both. Fetch that repository's exact base ref WITHOUT moving any branch — \`git fetch <the remote whose URL is that repository, or that repository's URL where a fork clone has no remote for it> refs/heads/<baseRefName>\` — and resolve what the fetch brought: \`git rev-parse --verify FETCH_HEAD^{commit}\`, reporting the full unabbreviated OID git prints. Read no \`<remote>/<baseRefName>\` in its place: a remote-tracking ref is only as fresh as whatever last fetched it, so it can pin a commit the base has since moved past, and nothing else here fetches the base at all. That fetch OVERWRITES \`FETCH_HEAD\`, so run it only after every read of \`R\` above — the location step's, and the reconciliation's where it ran. A \`no-rebase\` run pins its review base to that OID, because every range this run delegates is taken against a commit rather than a name — a name moves under the next fetch or a sibling push.` : `This run rebases, so the delegated rebase step pins the review base itself and the caller reads a gather-time \`pr.baseOid\` only on a \`no-rebase\` run: report \`pr.baseOid\` EMPTY and fetch NOTHING for it — the base repository is not touched from here, so a checkout that can inspect the PR through \`gh\` but cannot Git-fetch that repository still gathers.`} Then put an explicit \`rebase on top of <target>\` token's target — a branch name or an exact commit, verbatim — into \`rebaseTarget\` (empty when none was named). A delegated rebase step runs immediately after you and again before publication; it resolves that target to a commit, pins it, and reports back what it landed on, and the caller replaces \`pr.base\`/\`pr.rebased\` from that report. Two agents both rebasing would replay the same commits twice, which is precisely why this one does not.
 
 Gather feedback into \`items\` (each verbatim):
 - UNRESOLVED review threads — PRIMARY: use the baked \`gh-review-threads\` helper. \`gh-review-threads <PR#>\` prints the unresolved threads as a JSON array (each thread \`id isResolved isOutdated path line\` and \`comments[]\` with \`databaseId author{ login __typename } body diffHunk url\`); it already pages with fresh SINGLE-SHOT queries (never \`gh api graphql --paginate\`), does the nested comment fetch-up, and applies the scope check below, failing closed with exit 3 and no stdout on a contaminated response. FALLBACK, only when \`command -v gh-review-threads\` fails (a container built from an older image — the same graceful-degradation used for the gh-version-gated Copilot ping): run the GraphQL \`reviewThreads\` query by hand as SINGLE-SHOT queries, never \`gh api graphql --paginate\` (run concurrently with other gh GraphQL calls it has returned ANOTHER PR's threads); include \`totalCount\` + \`pageInfo{ hasNextPage endCursor }\` and page past 100 threads by passing the returned cursor to a fresh call. Either way SCOPE-CHECK the result (the helper does this for you): every comment \`url\` must match the exact repo-qualified PR path for this PR (\`https://github.com/<owner>/<repo>/pull/<number>\` followed by \`#\`, \`/\`, \`?\`, or end); do not use a plain substring check such as \`/pull/<number>\`. On any mismatch, discard the entire response, retry once with a fresh single-shot query, and if it repeats fail closed; never emit an item whose \`url\` points at a different PR. Keep only \`isResolved == false\`. Emit each as \`type: "review-thread"\` with \`threadId\` (the thread node \`id\`), \`commentId\` (the top comment's \`databaseId\`), \`path\`, \`line\`, \`author\` (the top comment's \`author.login\`), \`authorIsBot\` (true when that comment's \`author.__typename\` is \`Bot\` — from the helper's output or the GraphQL \`author{ login __typename }\`; do not guess from the login), \`body\`, \`url\`. \`threadId\` and \`commentId\` are mandatory for these — they are how publication resolves and replies.
 - Top-level context — ALWAYS fetch every review summary (\`gh pr view --json reviews\`) and every issue comment (\`gh api --paginate repos/<owner>/<repo>/issues/<PR>/comments\`, repository-qualified from the PR's OWN URL exactly as the base fetch above is: \`{owner}\`/\`{repo}\` expand to the repository of the current directory, which on a cross-repository PR is the head fork, where this PR's comments — and any prior record below — are not), even when the request names no standalone item: this sweep is how maintainer replies and decision comments are discovered. A maintainer reply on an unresolved thread is authoritative — fold it into that thread's context. So is a top-level maintainer comment recording per-item verdicts (often titled "Maintainer Decisions" or similar) — fold each decision into the relevant thread's context as its binding disposition (including "defer to a follow-up task" and "keep as-is"). One kind of issue comment is NEITHER of those: a DISPOSITION RECORD left by an earlier run of this workflow, recognized by the marker \`<!-- address-review:disposition-record -->\` as its FIRST LINE, byte for byte, rather than by its prose (a comment that merely quotes the marker is an ordinary comment). It is this workflow's own output, so it is never an item and carries no maintainer authority — do not fold its drafted replies into a thread as a decision. Report the most recent one as \`priorRecord\`: its permalink, and its body VERBATIM and WHOLE, since the drafted replies and the ready-to-post Summary body in it are the parts no later run can re-derive. The fix step below is handed exactly that text and told to re-judge every disposition it names against the branch as it now stands (its SHAs are provenance, not a promise: the recorded tip is local-only and a rebase since then may have rewritten every one of them), so an excerpt or a summary of it costs precisely the judgment the record exists to carry. Leave the comment itself alone — the record phase below is what supersedes it.
 - A standalone issue comment or review summary becomes its own item if the request explicitly identifies it as outstanding — OR if the prior record above already holds a \`standalone\` disposition for it, which is an earlier run's request having identified it and is why this is not a second way in. Without that, the record's account of such an item cannot be replayed AT ALL: the fix step must emit exactly one disposition per gathered item, and publication rejects a \`standalone\` disposition whose url was never gathered, so the recorded judgment and the Summary text drafted for it are dropped in silence by the very run that read the record. So for each \`standalone\` entry the record names, re-fetch that url and emit the comment as an item where it is still there — the fix step then re-judges it against the branch exactly as it re-judges a thread's disposition, rather than replaying it on the record's word. Where the comment is gone (deleted, or the url no longer resolves), emit no item and say so in \`detail\`: an item that no longer exists is not outstanding work. Emit each as \`type: "standalone"\` with \`author\`, \`authorIsBot\`, \`body\`, and \`url\` (its permalink is the stable reference; it has no threadId and is never resolved as a thread).
 
-If there are no unresolved threads and no included standalone item, return \`ok: true\` with an empty \`items\` array — the caller will exit as a successful no-op.
+If there are no unresolved threads and no included standalone item, return \`ok: true\` with an empty \`items\` array — plus everything a CONTINUING run consumes: \`rebaseTarget\` as above, the three tips, and (on the \`no-rebase\` arm above) \`pr.baseOid\` where the tips disagree. The caller decides between the two zero-item outcomes exactly as \`address-review\` step 3 does, by comparing \`pr.finalHead\`, \`pr.startingHead\`, and the recorded \`pr.headOid\`: all three the same commit and the run finishes as a successful TERMINAL no-op; anything else takes the ZERO-ITEM PATH, continuing through the normal fresh review and, unless \`no-push\`, publication — a tip ahead of the recorded head carries work the PR head does not (an unpublished commit an earlier run left), a tip that moved under this one leaves no attested no-op to report, and "nothing to address — nothing was pushed" would cover either while reading exactly like a genuinely clean PR.
+
+Last, AFTER all gathering, read \`git rev-parse HEAD\` in the working location once more and report it as \`pr.finalHead\` — on every packet you return with \`ok: true\`. It is ordinarily the same commit as \`pr.startingHead\`, since this step commits nothing; reporting both anyway is what lets the caller adopt a terminal no-op on tips it was shown rather than on the item count alone.
 
 Edit NO project files here; this is gather-only. The working-location setup and the one authorized fast-forward are the whole of the state this step is allowed to change.`;
 }
@@ -578,11 +593,13 @@ ${body}
 ${fence}`;
 }
 
-function fixInstructions(packet, priorRecord) {
+function fixInstructions(packet, priorRecord, zeroItem) {
   return `You are addressing review feedback on PR #${packet.pr.number} (base \`${packet.pr.base}\`). The PR's remote head ref is \`${packet.pr.branch}\`; that is the push target, which may be a different name for a local off-shoot — edit only the checked-out branch named in the contract above, never the remote ref name.
 
 This run is unattended (hands-off): decide low-stakes ambiguity best-effort and record it; for high-stakes ambiguity that needs an authoritative decision, do NOT guess — mark the item \`ambiguous-skipped\` and leave it open.
-
+${packet.items && packet.items.length ? "" : `
+This run gathered ZERO work items — the ZERO-ITEM PATH: ${zeroItem.why}. There is nothing to triage and nothing to fix: make NO commit of any kind in this pass — a zero-item run makes no synthetic commit; a finding a later round of this cycle hands you is fixed normally — leave the tree exactly as it stands, and return an EMPTY \`workReport\`. The per-item contract below then has no entries to produce; everything else about this pass is the reviewer's fresh look at the branch against its base.
+`}
 Triage each work item into exactly one kind and act:
 - \`actionable-fixed\` — implement the fix. Commit at logical milestones; keep commits buildable where practical.
 - \`already-addressed\` — current code already satisfies it; note where.
@@ -615,7 +632,7 @@ Which of those fields are structurally enforced: every field publication acts on
 // ordered to carry dispositions forward would have to reconstruct them from the
 // tree (the re-triage this round is not) and a reviewer told to catch a quiet
 // relabel would have no baseline to compare against.
-function rebaseReverifyInstructions(packet, rebase, priorReport) {
+function rebaseReverifyInstructions(packet, rebase, priorReport, zeroItem) {
   return `## This branch was rebased AFTER these dispositions passed review
 
 Every work item below was already triaged, acted on, and reviewed to a pass — on the base the branch sat on before. The branch has since been rebased onto \`${rebase.effectiveBase}\` (${rebase.detail || "no detail reported"}), so this round exists to confirm each disposition still holds on the replayed tree and to fix what the replay broke. It is NOT a fresh triage.
@@ -628,7 +645,7 @@ Every work item below was already triaged, acted on, and reviewed to a pass — 
 
 ${JSON.stringify(priorReport || [], null, 2)}
 
-${fixInstructions(packet)}`;
+${fixInstructions(packet, undefined, zeroItem)}`;
 }
 
 function rebaseReverifyCriteria(rebase, priorReport) {
@@ -714,6 +731,20 @@ You may reclassify any item.`;
 // 390156a declined, and items 3 and 4 are pre-merge check polling and
 // `gh pr merge --delete-branch`, which nothing in this pipeline performs.
 function publishPrompt(packet, dispositions, flags, deviations, deviationAssessments, recordOnly, preRebaseRecordOnly) {
+  // The zero-item arm below states WHICH tip disagreement continued the run,
+  // read from the tips the gather reported and trimmed exactly as the caller's
+  // zero-item decision reads them — and states it as the GATHER-TIME reading
+  // it is, asserting nothing about what the push moved or which tip was
+  // reviewed. Those tips were read before the rebase points, and a replaying
+  // rebase moves `HEAD` after them, so ANY push-motion or reviewed-tip claim
+  // derived from them can be false by the time the publisher acts; two review
+  // rounds punctured two differently-worded such sentences here, which marks
+  // the claim shape, not the wording, as the defect. What the push actually
+  // did is the publisher's own step 2 to establish and `pushedNewCommits` to
+  // report — never this brief's to predict.
+  const startTip = typeof packet.pr.startingHead === "string" ? packet.pr.startingHead.trim() : "";
+  const finalTip = typeof packet.pr.finalHead === "string" ? packet.pr.finalHead.trim() : "";
+  const recordedTip = typeof packet.pr.headOid === "string" ? packet.pr.headOid.trim() : "";
   const dev = Array.isArray(deviations) ? deviations : [];
   const assessments = Array.isArray(deviationAssessments) ? deviationAssessments : [];
   const deviationLead = dev.length
@@ -785,7 +816,7 @@ Report a STRUCTURED result: set \`published: true\` ONLY if the push and every r
      - ambiguous-skipped → leave open.
    - \`standalone\` items (no thread to resolve): address them only in the Summary comment below; do NOT call \`resolveReviewThread\`. Record their outcome by \`url\`.
    Avoid duplicate replies (check for an equivalent prior reply by the authed user); resolve only after the reply succeeds.
-5. Summary comment: post a top-level "Summary of Review Fixes" (\`gh pr comment\`) — ${dev.length ? "opening with the locked-decision deviation section defined below, then " : ""}what was fixed (with proactive same-pattern fixes), a prominent "Pushed back — please re-examine" section, a "Deferred to follow-up tasks" section listing each deferral with its committed task file (agent-proposed deferrals flagged for confirmation), and any ambiguous/skipped or newly-arrived items${recordOnly || preRebaseRecordOnly ? ", plus the delivery-run failure section defined below" : ""}. Write "codex"/"claude"/"copilot" plain (no bare @-mentions) so only the dedicated pings below trigger a re-review. Put its URL in \`summaryCommentUrl\`.
+5. Summary comment: post a top-level "Summary of Review Fixes" (\`gh pr comment\`) — ${dev.length ? "opening with the locked-decision deviation section defined below, then " : ""}what was fixed (with proactive same-pattern fixes), a prominent "Pushed back — please re-examine" section, a "Deferred to follow-up tasks" section listing each deferral with its committed task file (agent-proposed deferrals flagged for confirmation), and any ambiguous/skipped or newly-arrived items${recordOnly || preRebaseRecordOnly ? ", plus the delivery-run failure section defined below" : ""}. Write "codex"/"claude"/"copilot" plain (no bare @-mentions) so only the dedicated pings below trigger a re-review. Put its URL in \`summaryCommentUrl\`.${dispositions.length ? "" : ` This is a ZERO-ITEM publication — the run gathered no unresolved thread and no standalone item, and continued because at gather time ${finalTip === recordedTip ? `the tip had moved under the run: it started on \`${startTip}\` and the gather ended on the recorded PR head \`${recordedTip}\`` : `the local tip stood at \`${finalTip}\` while the PR recorded \`${recordedTip}\``} — so the Summary comment STILL POSTS (it is what makes this zero-item run legible on the PR) and says exactly that in place of the per-item sections, naming those tips as the gather-time readings they are. Do NOT assert from them what the push above moved or which tip was reviewed — this run's rebase points may have rewritten the tip after the gather read those OIDs, and what actually landed is already stated by your own step-2 read-back and \`pushedNewCommits\`. Step 4 above has NOTHING to act on: post no reply and resolve no thread — there is no item to serve — and report \`threadOutcomes: []\`, the complete account of a zero-item publication.`}
 6. Pings (only after push + summary succeeded, AND only when the push ACTUALLY advanced the remote branch with new commits or rewritten history — never on an \`Everything up-to-date\` no-op push): ${flags.pingCodex ? "post a dedicated comment \`@codex review\`. " : ""}${flags.pingClaude ? "post a dedicated comment \`@claude review\`. " : ""}${flags.pingCopilot ? "request a fresh Copilot review with \`gh pr edit <PR#> --add-reviewer @copilot\` (the canonical CLI request; needs gh >= 2.88.0). Do NOT post an \`@copilot review\` comment — a bare \`@copilot\` mention drives Copilot's coding agent (it can start editing the branch), not its reviewer. The add-reviewer request re-triggers Copilot's review even on a PR it already reviewed (tested working — not a silent no-op), and never misfires into the coding agent. GUARD: before issuing it, confirm the installed \`gh\` supports the \`@copilot\` reviewer value (gh >= 2.88.0 — e.g. check \`gh --version\`); on an older powbox base image where \`gh pr edit --add-reviewer @copilot\` errors, SKIP the Copilot request WITHOUT failing publication — the push and summary already succeeded, so this is non-fatal: keep \`published: true\`, record it in \`pings\` as 'copilot: skipped (gh too old)', and note that the base image needs refreshing (\`agent-update\`) or a one-off manual re-request from the PR's web reviewer menu. CONFIRM the request you issued from the TIMELINE, never from \`gh pr view --json reviewRequests\`: that GraphQL-backed field reads back empty on a request that succeeded, and REST \`gh api repos/{owner}/{repo}/pulls/<PR#>/requested_reviewers\` lists one only while it is still pending, so it can confirm a request but never refute one — the durable evidence is a \`review_requested\` event in \`gh api --paginate repos/{owner}/{repo}/issues/<PR#>/timeline\`. Snapshot the \`id\`s of the events naming that reviewer BEFORE issuing the request and afterwards require one that is NOT in that snapshot, matching by event id rather than against your own clock, and paginate BOTH reads. Where no unseen event appears, record it in \`pings\` as 'copilot: requested, unconfirmed' and carry on with whatever pings remain: do not fail publication, and do NOT issue the request again." : ""}${!flags.pingCodex && !flags.pingClaude && !flags.pingCopilot ? "none requested. " : "If more than one ping was requested, perform each as its own dedicated action (never one comment mentioning several bots). "}If nothing new was pushed this run (the remote ref already pointed at your HEAD — e.g. every disposition was already-addressed/push-back, or the branch was up to date), SKIP all pings even if requested above: re-requesting a review with nothing new to look at would spin the review->address->review loop forever. Set \`pushedNewCommits\` to whether the push advanced the branch, and record which pings (if any) you posted in \`pings\`.${deviationLead}${flakeRecord}
 
 ## Dispositions to publish
@@ -1421,19 +1452,88 @@ if (
     note: "Nothing was addressed and nothing was pushed. Put the branch into a state the reconciliation recognises — every commit on the PR head represented in it by patch-id, or strictly behind it — and re-run.",
   };
 }
+// --- The empty-`items` exit: the skill's TWO zero-item outcomes -------------
+// `address-review` step 3 does not end every zero-item run the same way, and
+// the item count alone cannot pick between its two outcomes. A run with no
+// unresolved threads and no included standalone item is a TERMINAL no-op only
+// where `HEAD`, the tip the run started from, and the PR's recorded
+// `headRefOid` are all the same commit — nothing to address AND nothing local
+// the PR does not already carry. Every other zero-item case — a local tip
+// already ahead of the recorded head (an unpublished commit an earlier run
+// left), or a tip that moved under this run — takes the ZERO-ITEM PATH: it
+// continues through the rebase points, the nested cycle, and, on a push run,
+// publication, because a tip ahead of the recorded head carries work the PR
+// does not, a tip that moved under the run leaves no attested no-op to report,
+// and "nothing to address — nothing was pushed" would cover either while
+// reading exactly like a genuinely clean PR. Which disagreement continued the
+// run is `zeroItem.why`'s to state, as the gather-time reading it is: the
+// rebase points downstream can move `HEAD` after these tips are read, so
+// neither the fix brief that embeds it nor the publish brief that re-reads
+// the same reported tips asserts from them what a later push moves or which
+// tip gets reviewed.
+// The comparison is the skill's three-way one — `address-reviews`' terminal
+// zero-feedback shortcut states the same rule for the batch — taken on the
+// tips the GATHER REPORTED rather than on inference, and the tips are compared
+// only with each other, so like a rebase report's no-op evidence they are not
+// held to the full-OID rule: nothing downstream is dispatched on the pair the
+// decision reads. A zero-item packet that cannot show all three stops instead:
+// the terminal exit is the one that reports "nothing to address" and reclaims
+// the worktree, and it is not taken on missing evidence.
+// The skill's step-3 note — a HEAD strictly BEHIND the recorded head enters
+// neither outcome — is enforced downstream rather than here, since this script
+// runs no git: on the PR's own branch the reconciliation gate above has
+// already fast-forwarded or stopped that state, and on an off-shoot the
+// publisher's step-2 "local behind PR head" abort is the gate.
+// What the zero-item path does downstream is pinned where it happens rather
+// than switched here: it makes no synthetic commit (its fix brief orders
+// exactly that), posts no per-thread reply or resolve (there is no item to
+// serve), and its publication DOES post the Summary comment — the completion
+// gate requires a `summaryCommentUrl` on every published run, zero-item
+// included, and the publish brief's zero-item arm says what that comment
+// carries — with pings under the unchanged rules. A TERMINAL no-op still
+// makes no PR write at all, exactly as before.
+let zeroItemRun = null;
 if (!packet.items || packet.items.length === 0) {
-  // Carry the reconciliation record here too: on the `fast-forwarded` outcome
-  // this run MOVED the local branch, which a bare "nothing to address" hides.
-  // A no-op is a finish, so a worktree attached for it is given straight back.
-  const reclaimed = await reclaimWorktree("nothing to address; the run is a no-op");
-  return {
-    status: "no-op",
-    detail: `No unresolved threads and no included standalone item — nothing to address (branch reconciliation: ${reconcileOutcome || "none reported"}).${survivingWorktreeNote(reclaimed)}`,
-    pr: packet.pr,
-    reconcile,
-    ...(reclaimed ? { worktreeReclaim: reclaimed } : {}),
+  const startTip = typeof packet.pr.startingHead === "string" ? packet.pr.startingHead.trim() : "";
+  const finalTip = typeof packet.pr.finalHead === "string" ? packet.pr.finalHead.trim() : "";
+  const recordedTip = typeof packet.pr.headOid === "string" ? packet.pr.headOid.trim() : "";
+  if (!startTip || !finalTip || !recordedTip) {
+    return {
+      status: "gather-contract",
+      pr: packet.pr,
+      reconcile,
+      detail: `The gather returned no items without reporting all three tips the zero-item decision compares — startingHead ${JSON.stringify(packet.pr.startingHead === undefined ? null : packet.pr.startingHead)}, finalHead ${JSON.stringify(packet.pr.finalHead === undefined ? null : packet.pr.finalHead)}, recorded headRefOid ${JSON.stringify(packet.pr.headOid === undefined ? null : packet.pr.headOid)}. The terminal no-op is the one exit that reports "nothing to address" and reclaims the worktree, so it is taken only on the three-way agreement the skill orders shown, never on the item count alone.`,
+      note: "Nothing was addressed and nothing was pushed. Re-run: a zero-item gather must report `pr.startingHead`, `pr.finalHead`, and `pr.headOid`, so the caller can tell a terminal no-op (all three the same commit) from the zero-item path (a gather-time tip disagreement, which continues through review and, unless `no-push`, publication).",
+    };
+  }
+  if (startTip === finalTip && startTip === recordedTip) {
+    // Terminal no-op: nothing to address and nothing unpublished. Carry the
+    // reconciliation record here too: on the `fast-forwarded` outcome this run
+    // MOVED the local branch, which a bare "nothing to address" hides.
+    // A finish, so a worktree attached for it is given straight back.
+    const reclaimed = await reclaimWorktree("nothing to address; the run is a terminal no-op");
+    return {
+      status: "no-op",
+      detail: `No unresolved threads and no included standalone item, and \`HEAD\`, the tip this run started from, and the recorded PR head are all \`${recordedTip}\` — the terminal no-op: nothing to address and nothing local the PR does not carry (branch reconciliation: ${reconcileOutcome || "none reported"}).${survivingWorktreeNote(reclaimed)}`,
+      pr: packet.pr,
+      reconcile,
+      ...(reclaimed ? { worktreeReclaim: reclaimed } : {}),
+    };
+  }
+  zeroItemRun = {
+    outcome: "zero-item path",
+    startingHead: startTip,
+    finalHead: finalTip,
+    headOid: recordedTip,
+    why: finalTip !== recordedTip
+      ? `no review item is outstanding, but at gather time the tip stood at \`${finalTip}\` while the PR recorded \`${recordedTip}\` — a disagreement this run continues through review and, unless \`no-push\`, publication rather than reporting "nothing to address" over it`
+      : `no review item is outstanding, but the tip moved under this run — it started at \`${startTip}\` and the gather ended on \`${finalTip}\` — so this run reviews what stands rather than reporting a no-op over a moved tip`,
   };
 }
+// Spread into every result a continuing run can reach, so a zero-item run's
+// result says WHICH of the skill's two zero-item outcomes it took and why —
+// the terminal no-op says it in its own detail above.
+const zeroItemCarrier = zeroItemRun ? { zeroItem: zeroItemRun } : {};
 
 // --- The two rebase points -------------------------------------------------
 // Rebasing onto the freshest base is the DEFAULT here, at two points: now,
@@ -1446,17 +1546,25 @@ if (!packet.items || packet.items.length === 0) {
 // "Reaches them" is load-bearing, and it is where this pipeline's ordering
 // differs from the skill's step 2 (which rebases before it has even gathered the
 // threads): here one agent resolves the PR and gathers them together, so a run
-// with nothing to address is already known to be a no-op by this line, and it
-// rebases nothing. Rewriting the branch on a path that will neither review nor
-// push it would leave the maintainer's branch rewritten, diverged from the PR
-// head, with no verdict and no push behind it. A run stopped at the
-// reconciliation gate above rebases nothing for the same reason.
-// The alternative — rebase first, and send a zero-item change through review and
-// publication as the prose skill's zero-item path does — was considered and
-// deferred rather than rejected: what makes it correct is a zero-item path that
-// reviews and publishes at all, and this script's empty-`items` exit predates
-// task 016 and returns a no-op even where the local tip is ahead of the PR head.
-// Task 016a carries that, and re-decides this position once it lands.
+// with nothing to address and nothing unpublished is already known to be a
+// terminal no-op by this line, and it rebases nothing. Rewriting the branch on
+// a path that will neither review nor push it would leave the maintainer's
+// branch rewritten, diverged from the PR head, with no verdict and no push
+// behind it. A run stopped at the reconciliation gate above rebases nothing
+// for the same reason.
+// Task 016a split the empty-`items` exit into the skill's two outcomes and
+// re-decided the position 016 deferred: the points STAY behind the exit
+// decision. Everything that continues past it — the zero-item path included —
+// is reviewed and, on a push run, published, so both points now sit on a path
+// that reviews and publishes what they rewrite, which was the whole objection
+// to rebasing ahead of the old exit. Moving the first point ahead of the
+// decision would buy a rebase only for the TERMINAL case — three tips
+// agreeing, the one zero-item run with nothing local to publish — and
+// `address-reviews`' terminal zero-feedback shortcut already settles that
+// trade the other way: it ends such an entry without its rebasers, leaving
+// drift on the base as the next run's to catch, rather than rewriting (and
+// then force-pushing) a branch nobody asked anything of for base freshness
+// alone.
 // `no-rebase` is the only opt-out.
 //
 // Each point pins its base to a COMMIT and rebases onto that, which is what
@@ -1471,10 +1579,11 @@ if (!packet.items || packet.items.length === 0) {
 // is a redundant-but-legal request whose two names are equal, and inferring
 // would hand it the default arm, sending a fetch at the base repository for a
 // ref the maintainer named here, in the working location.
-// The echo is owed wherever it is CONSUMED — an `ok: true` gather with items,
-// which is where this sits: behind EVERY preceding exit, the blocker exit and
-// the metadata and location validations, the working-branch and reconciliation
-// gates, and the empty-gather no-op. There its ABSENCE is a contract violation
+// The echo is owed wherever it is CONSUMED — an `ok: true` gather the run
+// continues on, items or the zero-item path alike, which is where this sits:
+// behind EVERY preceding exit, the blocker exit and the metadata and location
+// validations, the working-branch and reconciliation gates, and the terminal
+// no-op. There its ABSENCE is a contract violation
 // rather than "the request named none": the caller reads this field alone, and
 // since it also decides the review base on the `no-rebase` path, a silent
 // fallback is a wrong boundary for every range this run delegates and not only
@@ -1493,8 +1602,9 @@ if (typeof packet.rebaseTarget !== "string") {
     // `fast-forwarded` — a run that MOVED the local branch and would otherwise
     // report only that nothing was addressed, hiding the move.
     reconcile,
+    ...zeroItemCarrier,
     detail: "The gather reported no `rebaseTarget` at all. That field is the run's only record of whether an explicit `rebase on top of <target>` token was given, and an absent one cannot be told apart from a target the caller must honor — on a `no-rebase` run it decides the review base too, so continuing would bound every delegated range at the PR's base ref on a request that may have named another target.",
-    note: `Nothing was addressed and nothing was pushed${reconcile && reconcile.outcome === "fast-forwarded" ? ", though this run did fast-forward the local branch to the PR head before stopping" : ""}. Re-run: the gather must report \`rebaseTarget\` whenever it returns items to address, as the empty string where the request named no target.`,
+    note: `Nothing was addressed and nothing was pushed${reconcile && reconcile.outcome === "fast-forwarded" ? ", though this run did fast-forward the local branch to the PR head before stopping" : ""}. Re-run: the gather must report \`rebaseTarget\` whenever the caller can continue on its packet — items to address, and a zero-item packet alike — as the empty string where the request named no target.`,
   };
 }
 const explicitRebaseTarget = packet.rebaseTarget.trim();
@@ -1554,6 +1664,7 @@ async function rebasePoint(point, target) {
       status,
       pr: packet.pr,
       rebase: { ...rebaseRecord, stoppedAt: { point, target, ...(report || {}) } },
+      ...zeroItemCarrier,
       detail,
       note: recoverySaved
         ? `Nothing was pushed. The branch is where the rebase left it, and its pre-rebase tip is saved at \`${recoveryRef}\`.`
@@ -1680,6 +1791,7 @@ if (flags.noRebase) {
       status: "unpinned-base",
       pr: packet.pr,
       rebase: rebaseRecord,
+      ...zeroItemCarrier,
       detail: `\`no-rebase\` was given and the gather reported ${JSON.stringify(packet.pr.baseOid === undefined ? null : packet.pr.baseOid)} as this run's target commit, which is not a full commit OID. With no rebase to pin one, that value IS this run's review base, and a movable name or an abbreviation cannot bound a delegated diff.`,
       note: "Nothing was addressed and nothing was pushed. Re-run so the gather resolves this run's target — the branch or commit an explicit `rebase on top of <target>` named, else the PR's own base ref — to a full commit OID, or drop `no-rebase` and let the rebase phase pin it.",
     };
@@ -1707,6 +1819,7 @@ if (typeof workflow !== "function") {
   return {
     error: "This workflow runtime does not support nested workflows (`workflow()` is unavailable), and wf-address-review consumes the shared review cycle by nesting. Update the runtime, or use the `address-review` skill.",
     pr: packet.pr,
+    ...zeroItemCarrier,
   };
 }
 // `let`, because a pre-push rebase that replays anything makes THIS verdict
@@ -1725,13 +1838,13 @@ let cycle = await workflow("wf-review-cycle", {
     title: `pr-${packet.pr.number}`,
     // The prior record goes to the ROUND-1 fixer only, which is the one round
     // that triages: this is where replaying it saves the judgment it holds.
-    instructions: fixInstructions(packet, packet.priorRecord),
+    instructions: fixInstructions(packet, packet.priorRecord, zeroItemRun),
     reviewInstructions: reviewCriteria(),
     items: packet.items,
   },
 });
 if (!cycle) {
-  return { error: "Nested review cycle returned nothing.", pr: packet.pr };
+  return { error: "Nested review cycle returned nothing.", pr: packet.pr, ...zeroItemCarrier };
 }
 // The cycle sets `artifactDirAnomalies` only when a later pass tried to move
 // the artifact directory — a warning that the round history may not ALL sit
@@ -2054,6 +2167,7 @@ if (cycle.verdict === "error") {
     ...record,
     pr: packet.pr,
     rebase: rebaseRecord,
+    ...zeroItemCarrier,
     rounds: cycle.rounds,
     dispositions: cycle.workReport,
     openQuestions: cycle.openQuestions,
@@ -2152,6 +2266,7 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
         ...record,
         pr: packet.pr,
         rebase: rebaseRecord,
+        ...zeroItemCarrier,
         rounds: preRebaseCycle.rounds,
         dispositions: preRebaseCycle.workReport,
         openQuestions: preRebaseCycle.openQuestions,
@@ -2176,7 +2291,7 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
       maxRounds: reverifyBudget,
       scope: {
         title: `pr-${packet.pr.number}-post-rebase`,
-        instructions: rebaseReverifyInstructions(packet, second.rebase, priorReport),
+        instructions: rebaseReverifyInstructions(packet, second.rebase, priorReport, zeroItemRun),
         reviewInstructions: rebaseReverifyCriteria(second.rebase, priorReport),
         items: packet.items,
       },
@@ -2199,6 +2314,7 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
         ...record,
         pr: packet.pr,
         rebase: rebaseRecord,
+        ...zeroItemCarrier,
         rounds: cycle.rounds,
         dispositions: cycle.workReport,
         openQuestions: cycle.openQuestions,
@@ -2250,6 +2366,7 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
         ...record,
         pr: packet.pr,
         rebase: rebaseRecord,
+        ...zeroItemCarrier,
         rounds: cycle.rounds,
         dispositions: cycle.workReport,
         // The map that passed on the pre-replay base, under its own key on every
@@ -2452,8 +2569,11 @@ const moreDefects = dispDefects.length > 1 ? ` ${dispDefects.length - 1} further
 // reason where they are taken, and all of them finalize through
 // `leaveDispositionRecord`, so an exit added anywhere has exactly one thing to
 // decide: whether it records.
-// The zero-item exits upstream never reach here, so the empty-map case this
-// covers is a cycle that returned an empty report.
+// The terminal no-op upstream never reaches here, but the ZERO-ITEM PATH does,
+// with an empty map by construction — `leaveDispositionRecord`'s no-entries
+// rule then records nothing, which is the skill's rule that a run with nothing
+// triaged says so in its report rather than posting an empty record. The other
+// empty-map case this covers is a cycle that returned an empty report.
 const noPublishReason = !flags.push
   ? passed
     ? "`no-push` was given, so this was a local-only run: nothing was pushed and no thread was touched."
@@ -2540,6 +2660,7 @@ if (!flags.push) {
     ...(reclaimed ? { worktreeReclaim: reclaimed } : {}),
     pr: packet.pr,
     rebase: rebaseRecord,
+    ...zeroItemCarrier,
     rounds,
     reviewerPassed: !!passed,
     dispositions: workReport,
@@ -2572,6 +2693,7 @@ if (!passed) {
     ...recordResult,
     pr: packet.pr,
     rebase: rebaseRecord,
+    ...zeroItemCarrier,
     rounds,
     dispositions: workReport,
     openQuestions: cycle.openQuestions,
@@ -2595,6 +2717,7 @@ if (uncoveredItems.length) {
     ...recordResult,
     pr: packet.pr,
     rebase: rebaseRecord,
+    ...zeroItemCarrier,
     rounds,
     dispositions: workReport,
     openQuestions: cycle.openQuestions,
@@ -2618,6 +2741,7 @@ if (duplicatedItems.length) {
     ...recordResult,
     pr: packet.pr,
     rebase: rebaseRecord,
+    ...zeroItemCarrier,
     rounds,
     dispositions: workReport,
     openQuestions: cycle.openQuestions,
@@ -2641,6 +2765,7 @@ if (badDispDefect) {
     ...recordResult,
     pr: packet.pr,
     rebase: rebaseRecord,
+    ...zeroItemCarrier,
     rounds,
     dispositions: workReport,
     openQuestions: cycle.openQuestions,
@@ -3127,6 +3252,7 @@ return {
   ...publishRecord,
   pr: packet.pr,
   rebase: rebaseRecord,
+  ...zeroItemCarrier,
   rounds,
   flags: publishFlags,
   reviewingBots: [...reviewingBots],

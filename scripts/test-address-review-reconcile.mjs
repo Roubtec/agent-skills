@@ -16,11 +16,12 @@
 //      one, an absent report, and `not-applicable` (which on THIS branch is a
 //      contradiction, not an exemption: keying the gate on the outcome instead
 //      of the names would let a misreporting agent bypass reconciliation).
-//   3. The ORDER relative to the empty-`items` no-op. The rule's third outcome
-//      returns NO items by contract, so a gate placed after the no-op would
-//      report an unreconciled branch as "nothing to address" — the silent
-//      wrong answer, and the one a reader of the result cannot tell from a
-//      genuinely clean PR.
+//   3. The ORDER relative to the empty-`items` exit — since its split (task
+//      016a, below) two zero-item outcomes rather than one no-op. The rule's
+//      third outcome returns NO items by contract, so a gate placed after that
+//      exit would hand an unreconciled branch to one of them: "nothing to
+//      address" or a published zero-item run — silent wrong answers a reader
+//      of the result cannot tell from a genuinely clean PR.
 //
 // The workflows are runtime scripts (top-level await/return, injected
 // `agent`/`workflow`/`phase`/`log` globals), so they cannot be imported. This
@@ -69,6 +70,16 @@
 // all — is read out of the rendered text like the gather brief's, and read
 // against the canonical nugget's clauses, which this rendering exists to carry
 // to an agent that has read no skill and so must not drift from.
+//
+// It covers the EMPTY-`items` exit's split into the skill's two zero-item
+// outcomes (task 016a): the terminal no-op taken only on the three-way tip
+// agreement the gather is ordered to show (`HEAD`, the starting tip, and the
+// recorded `headRefOid` one commit), the zero-item path everywhere else —
+// through the same rebase points, an empty-item cycle, and a publication that
+// posts its Summary while having no item to reply to or resolve — and the
+// fail-closed stop where a zero-item packet cannot show its tips. The
+// discriminating comparison is driven one moved tip at a time, so an
+// item-count-only or pairwise rewrite fails by name.
 //
 // The PRE-PUSH point is driven too, which needs the nested cycle to RETURN
 // rather than end the scenario: it runs only after a cycle passes, and where it
@@ -131,7 +142,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 214;
+const EXPECTED_CHECKS = 234;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -432,16 +443,17 @@ const ITEM = {
 // location pair is written the same way: `locationMode` defaults to the inline
 // mode every reconciliation scenario runs in, and passing `null` omits the
 // field, which the working-location gate below rejects.
-function gathered({ workingBranch = "feature/x", items = [], reconcile, locationMode = "inline", worktree, baseOid = GATHERED_BASE_OID, priorRecord, startingHead, rebased = false }) {
+function gathered({ workingBranch = "feature/x", items = [], reconcile, locationMode = "inline", worktree, baseOid = GATHERED_BASE_OID, priorRecord, startingHead = "deadbeef", finalHead = "deadbeef", rebased = false }) {
   const packet = {
     ok: true,
-    // Every `ok: true` gather WITH ITEMS owes this echo — empty where the
-    // request named no target — and the caller stops a run that omits it, since
-    // an absent token cannot be told apart from one it must honor. An empty
-    // gather owes nothing: its no-op exit runs ahead of the guard, and the
-    // scenario below pins that, since with every fixture carrying the field a
-    // guard moved ahead of the no-op would leave this suite green. Scenarios
-    // that exercise a named target override it; the default is "none named".
+    // Every `ok: true` gather the caller can CONTINUE on owes this echo —
+    // empty where the request named no target — and the caller stops a run
+    // that omits it, since an absent token cannot be told apart from one it
+    // must honor. A TERMINAL no-op owes nothing: its exit runs ahead of the
+    // guard, and the scenario below pins that, since with every fixture
+    // carrying the field a guard moved ahead of the no-op would leave this
+    // suite green. Scenarios that exercise a named target override it; the
+    // default is "none named".
     rebaseTarget: "",
     pr: {
       number: 42,
@@ -466,9 +478,13 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // PR without one omits the field entirely, which is what the schema says and
   // what the no-replay-section case needs.
   if (priorRecord !== undefined) packet.priorRecord = priorRecord;
-  // The tip the run starts from, likewise spread in only when a scenario supplies
-  // one, so the fallback path stays reachable.
-  if (startingHead !== undefined) packet.pr.startingHead = startingHead;
+  // The two tips the zero-item decision compares beside `headOid`, defaulted to
+  // that same commit so a zero-item fixture is the TERMINAL no-op unless a
+  // scenario moves one — every no-op scenario written before the split keeps
+  // meaning what it meant. `null` omits a field, which is what keeps the
+  // record's not-recorded fallback and the split's fail-closed stop reachable.
+  if (startingHead !== null) packet.pr.startingHead = startingHead;
+  if (finalHead !== null) packet.pr.finalHead = finalHead;
   return packet;
 }
 
@@ -1007,6 +1023,204 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   );
 }
 
+// --- The empty-`items` exit: the skill's two zero-item outcomes (task 016a) --
+// `address-review` step 3 ends a zero-item run two ways, and the item count
+// alone cannot pick between them: a TERMINAL no-op only where `HEAD`, the tip
+// the run started from, and the recorded `headRefOid` are all one commit, and
+// the ZERO-ITEM PATH — the normal review and, unless `no-push`, publication —
+// everywhere else, because that tip either carries work the PR head does not
+// or moved under the run, and neither is a no-op to report. The
+// scenarios here drive the DISCRIMINATING COMPARISON (one packet per tip moved,
+// so a pairwise or item-count-only rewrite fails by name), the fail-closed stop
+// on missing evidence, and the zero-item path through the pipeline it already
+// has: rebase points, an empty-item cycle, and a publication that posts its
+// Summary while having no item to reply to or resolve.
+{
+  const zi = { reconcile: { outcome: "work" }, startingHead: "beefed11", finalHead: "beefed11" };
+  const CYCLE_PASS_EMPTY = {
+    verdict: "pass",
+    rounds: 1,
+    workReport: [],
+    openQuestions: [],
+    deviations: [],
+    proactive: "",
+    finalSha: "beefed11",
+    artifactDir: "/artifacts/pr-42-zero",
+  };
+  // The discriminating comparison, one moved tip at a time. All three agreeing
+  // is the terminal no-op (pinned again above); each single disagreement must
+  // continue, so a rewrite comparing only one pair — or none — fails here.
+  const agreeing = await run(gathered({ reconcile: { outcome: "work" } }));
+  check(
+    "zero items with all three tips one commit is the terminal no-op, and its detail says so",
+    agreeing.status === "no-op" && /terminal no-op/.test((agreeing.result || {}).detail || "") && /`deadbeef`/.test((agreeing.result || {}).detail || ""),
+    JSON.stringify(agreeing.result),
+  );
+  const localAhead = await run(gathered(zi));
+  check(
+    "a zero-item run whose unchanged local tip is not the recorded PR head takes the zero-item path into the cycle",
+    localAhead.status === "reached-cycle" && localAhead.seen.agentLabels.join(",") === "gather,rebase-pre-fix",
+    `status: ${localAhead.status}; labels: ${localAhead.seen.agentLabels.join(",")}`,
+  );
+  check(
+    "and hands that cycle an EMPTY item set rather than inventing work",
+    localAhead.seen.cycleOpts && Array.isArray(localAhead.seen.cycleOpts.opts.scope.items) && localAhead.seen.cycleOpts.opts.scope.items.length === 0,
+    JSON.stringify(localAhead.seen.cycleOpts && localAhead.seen.cycleOpts.opts.scope.items),
+  );
+  const movedUnder = await run(gathered({ reconcile: { outcome: "work" }, finalHead: "beefed11" }));
+  const startedElsewhere = await run(gathered({ reconcile: { outcome: "work" }, startingHead: "beefed11" }));
+  check(
+    "the comparison is three-way: a run continues on EITHER local tip disagreeing alone, not only on final-vs-recorded",
+    movedUnder.status === "reached-cycle" && startedElsewhere.status === "reached-cycle",
+    `finalHead moved alone: ${movedUnder.status}; startingHead differing alone: ${startedElsewhere.status}`,
+  );
+  // Fail closed: the terminal exit is the one that says "nothing to address"
+  // and reclaims the worktree, so it is never taken on tips nobody reported.
+  const noFinal = await run(gathered({ reconcile: { outcome: "work" }, finalHead: null }));
+  const noStart = await run(gathered({ reconcile: { outcome: "work" }, startingHead: null }));
+  check(
+    "a zero-item gather missing either local tip stops as a contract violation instead of exiting no-op on the item count",
+    noFinal.status === "gather-contract" && noStart.status === "gather-contract" &&
+      noFinal.seen.agentLabels.join(",") === "gather" && noStart.seen.agentLabels.join(",") === "gather",
+    JSON.stringify({ noFinal: noFinal.status, noStart: noStart.status }),
+  );
+  // The terminal no-op still reclaims its worktree exactly as before the split,
+  // and carries no zero-item record — its own detail is the account.
+  const terminalWt = await run(gathered({ reconcile: { outcome: "work" }, locationMode: "worktree", worktree: WORKTREE_PATH }));
+  check(
+    "a terminal no-op in worktree mode still gives the worktree straight back",
+    terminalWt.status === "no-op" && terminalWt.seen.reclaimPrompts.length === 1 &&
+      terminalWt.result && terminalWt.result.worktreeReclaim && terminalWt.result.worktreeReclaim.removed === true &&
+      terminalWt.result.zeroItem === undefined,
+    JSON.stringify({ status: terminalWt.status, reclaims: terminalWt.seen.reclaimPrompts.length, zeroItem: terminalWt.result && terminalWt.result.zeroItem }),
+  );
+  // The zero-item path through the whole pipeline on a push run: both rebase
+  // points, one empty-item cycle, and a publication whose brief has no item to
+  // serve — so no reply and no resolve CAN be posted — while the Summary
+  // comment still posts, which is the recorded answer to whether a zero-item
+  // publication posts one at all (the completion gate requires its URL).
+  const ziPublished = await run(gathered(zi), { args: "push", cycles: [CYCLE_PASS_EMPTY] });
+  const ziPublishBrief = ziPublished.seen.publishPrompts[0] || "";
+  check(
+    "a zero-item push run runs both rebase points, one empty cycle, and publication, and publishes",
+    ziPublished.status === "fixed-published" && ziPublished.seen.agentLabels.join(",") === "gather,rebase-pre-fix,rebase-pre-push,publish" && ziPublished.seen.cycleCalls.length === 1,
+    JSON.stringify({ status: ziPublished.status, labels: ziPublished.seen.agentLabels }),
+  );
+  check(
+    "and its result says which zero-item outcome it took and why — the tips beside the reason",
+    ziPublished.result && ziPublished.result.zeroItem && ziPublished.result.zeroItem.outcome === "zero-item path" &&
+      ziPublished.result.zeroItem.startingHead === "beefed11" && ziPublished.result.zeroItem.headOid === "deadbeef" &&
+      /at gather time the tip stood at `beefed11` while the PR recorded `deadbeef`/.test(ziPublished.result.zeroItem.why || ""),
+    JSON.stringify(ziPublished.result && ziPublished.result.zeroItem),
+  );
+  check(
+    "its publish brief carries an EMPTY disposition list and the zero-item arm: Summary posts, no reply, no resolve, `threadOutcomes: []`",
+    /## Dispositions to publish\n\n\[\]/.test(ziPublishBrief) && /ZERO-ITEM publication/.test(ziPublishBrief) &&
+      /Summary comment STILL POSTS/.test(ziPublishBrief) && /post no reply and resolve no thread/.test(ziPublishBrief),
+    ziPublishBrief ? `zero-item arm rendered: ${/ZERO-ITEM publication/.test(ziPublishBrief)}; empty dispositions: ${/## Dispositions to publish\n\n\[\]/.test(ziPublishBrief)}` : "no publish brief dispatched",
+  );
+  check(
+    "and its fix brief orders the zero-item pass: nothing to triage, NO synthetic commit, an empty workReport",
+    ziPublished.seen.cycleOpts && /ZERO work items/.test(ziPublished.seen.cycleOpts.opts.scope.instructions || "") &&
+      /no synthetic commit/.test(ziPublished.seen.cycleOpts.opts.scope.instructions || "") &&
+      /EMPTY `workReport`/.test(ziPublished.seen.cycleOpts.opts.scope.instructions || ""),
+    ((ziPublished.seen.cycleOpts || {}).opts || { scope: {} }).scope.instructions ? "rendered without the zero-item paragraph" : "no cycle dispatched",
+  );
+  // The premise each zero-item brief states is the DISAGREEMENT that actually
+  // continued the run, stated as the GATHER-TIME reading it is — never a claim
+  // about what the push moved or which tip was reviewed. Those tips are read
+  // before the rebase points, and a replaying rebase moves `HEAD` after them,
+  // so any such claim derived from them can be false at publication time; two
+  // review rounds punctured two differently-worded such sentences, so the pin
+  // here is on the claim shape's ABSENCE beside the gather-time facts. The fix
+  // brief embeds `zeroItem.why` and the publish brief re-reads the same
+  // reported tips; the AHEAD case names both gather-time tips.
+  const ziAheadInstructions = ((ziPublished.seen.cycleOpts || {}).opts || { scope: {} }).scope.instructions || "";
+  check(
+    "the zero-item briefs state the AHEAD disagreement as gather-time readings: both tips named, no push-motion or reviewed-tip claim",
+    /at gather time the tip stood at `beefed11` while the PR recorded `deadbeef`/.test(ziAheadInstructions) &&
+      /the local tip stood at `beefed11` while the PR recorded `deadbeef`/.test(ziPublishBrief) &&
+      /naming those tips as the gather-time readings they are/.test(ziPublishBrief) &&
+      /Do NOT assert from them what the push above moved or which tip was reviewed/.test(ziPublishBrief) &&
+      !/push above publishes/.test(ziPublishBrief) && !/reviewed local tip/.test(ziPublishBrief),
+    JSON.stringify({ fixPremiseNamesTips: /at gather time the tip stood at `beefed11` while the PR recorded `deadbeef`/.test(ziAheadInstructions), summaryArm: (ziPublishBrief.match(/ZERO-ITEM publication[^]{0,260}/) || [])[0] }),
+  );
+  check(
+    "and the fix brief scopes its no-commit order to the pass — a later round's finding is fixed normally",
+    /make NO commit of any kind in this pass/.test(ziAheadInstructions) &&
+      /a finding a later round of this cycle hands you is fixed normally/.test(ziAheadInstructions),
+    (ziAheadInstructions.match(/make NO commit[^—]*(—[^—]*)?/) || ["no no-commit order rendered"])[0],
+  );
+  // The MOVED-UNDER case, driven whole: `startingHead != finalHead == headOid`
+  // continues — only a fresh review can vouch for a tip that moved under the
+  // run — and both briefs state that gather-time move and nothing more: the
+  // old "the push above had nothing new to move" was a push-motion claim a
+  // replaying pre-push rebase falsifies, so its absence is pinned here beside
+  // the ahead-claim's.
+  const ziMoved = await run(gathered({ reconcile: { outcome: "work" }, startingHead: "beefed11" }), { args: "push", cycles: [{ ...CYCLE_PASS_EMPTY, finalSha: "deadbeef" }] });
+  const ziMovedInstructions = ((ziMoved.seen.cycleOpts || {}).opts || { scope: {} }).scope.instructions || "";
+  const ziMovedPublish = ziMoved.seen.publishPrompts[0] || "";
+  check(
+    "a moved-under zero-item run's fix brief premise is the moved tip, not the ahead case's tip-disagreement claim",
+    ziMoved.status === "fixed-published" && /tip moved under this run/.test(ziMovedInstructions) &&
+      !/while the PR recorded/.test(ziMovedInstructions),
+    JSON.stringify({ status: ziMoved.status, premise: (ziMovedInstructions.match(/ZERO-ITEM PATH[^.]*/) || ["no zero-item paragraph rendered"])[0] }),
+  );
+  check(
+    "and its Summary arm states the gather-time move — started elsewhere, gather ended on the recorded head — with no claim of what the push moved, while the Summary still posts",
+    /at gather time the tip had moved under the run/.test(ziMovedPublish) &&
+      /gather ended on the recorded PR head `deadbeef`/.test(ziMovedPublish) &&
+      !/nothing new to move/.test(ziMovedPublish) && !/did not carry/.test(ziMovedPublish) &&
+      /Do NOT assert from them what the push above moved or which tip was reviewed/.test(ziMovedPublish) &&
+      /Summary comment STILL POSTS/.test(ziMovedPublish),
+    JSON.stringify({ summaryArm: (ziMovedPublish.match(/ZERO-ITEM publication[^]{0,300}/) || ["no zero-item arm rendered"])[0] }),
+  );
+  // The same path local-only: `no-push` reviews the tip and stops, and the
+  // empty map records NOTHING — `leaveDispositionRecord`'s no-entries rule is
+  // the skill's "say so in the report rather than posting an empty record".
+  const ziLocal = await run(gathered(zi), { args: "no-push", cycles: [CYCLE_PASS_EMPTY] });
+  check(
+    "a zero-item `no-push` run reviews the tip, finishes local-only, says which outcome it took, and posts no empty record",
+    ziLocal.status === "fixed-local" && ziLocal.result && ziLocal.result.zeroItem && /zero-item path/.test(ziLocal.result.zeroItem.outcome) &&
+      ziLocal.seen.recordPrompts.length === 0,
+    JSON.stringify({ status: ziLocal.status, zeroItem: ziLocal.result && ziLocal.result.zeroItem, records: ziLocal.seen.recordPrompts.length }),
+  );
+  // `no-rebase` on the zero-item path: no rebase report will ever pin the
+  // review base, so the gather's own resolved OID is consumed here exactly as
+  // on an itemful `no-rebase` run — and its absence stops the run.
+  const ziNoRebase = await run(gathered(zi), { args: "no-push no-rebase", cycles: [CYCLE_PASS_EMPTY] });
+  check(
+    "a `no-rebase` zero-item run pins the gather-resolved base OID as the cycle's review base",
+    ziNoRebase.status === "fixed-local" && ziNoRebase.seen.cycleOpts && ziNoRebase.seen.cycleOpts.opts.base === GATHERED_BASE_OID,
+    JSON.stringify({ status: ziNoRebase.status, base: ziNoRebase.seen.cycleOpts && ziNoRebase.seen.cycleOpts.opts.base }),
+  );
+  const ziNoRebaseUnpinned = await run(gathered({ ...zi, baseOid: null }), { args: "no-push no-rebase" });
+  check(
+    "and one whose gather resolved no base OID stops unpinned rather than delegating a movable name",
+    ziNoRebaseUnpinned.status === "unpinned-base" && ziNoRebaseUnpinned.seen.cycleOpts === null,
+    ziNoRebaseUnpinned.status,
+  );
+  // The producer half, which no scenario reaches: the gather brief must order
+  // the three tips reported and state the two outcomes, or every check above
+  // rides on fields no compliant gather ever populates.
+  const brief = gatherPrompt("#42");
+  const zeroPara = brief.split("\n").find((l) => l.includes("no unresolved threads and no included standalone item")) || "";
+  check(
+    "the gather brief's zero-item paragraph states the three-way comparison and both outcomes",
+    /pr\.finalHead/.test(zeroPara) && /pr\.startingHead/.test(zeroPara) && /pr\.headOid/.test(zeroPara) &&
+      /all three the same commit/.test(zeroPara) && /TERMINAL no-op/.test(zeroPara) && /ZERO-ITEM PATH/.test(zeroPara) &&
+      /leaves no attested no-op to report/.test(zeroPara) && /cover either/.test(zeroPara),
+    zeroPara ? zeroPara.slice(0, 200) : "the gather brief has no zero-item paragraph",
+  );
+  const finalPara = brief.split("\n").find((l) => l.includes("pr.finalHead") && l.includes("once more")) || "";
+  check(
+    "and orders `pr.finalHead` read in the working location as the gather's last read, on every ok packet",
+    finalPara.includes("read \`git rev-parse HEAD\` in the working location once more") &&
+      /report it as `pr\.finalHead`/.test(finalPara) && /on every packet you return with `ok: true`/.test(finalPara),
+    finalPara ? finalPara.slice(0, 200) : "the gather brief never orders a final-HEAD read",
+  );
+}
+
 // --- The producer half: the rule the gather brief states ---------------------
 // Everything above exercises the CONSUMER of `packet.reconcile`. What makes
 // that field exist is a paragraph of the gather brief that no scenario reaches,
@@ -1367,7 +1581,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "and an OMITTED `rebaseTarget` stops the run rather than reading as `the request named none`",
     /status: "gather-contract"/.test(src) &&
       /if \(typeof packet\.rebaseTarget !== "string"\)/.test(src) &&
-      /Report the token on every packet you return with `ok: true` and items to address/.test(src) &&
+      /Report the token on every packet you return with `ok: true` that the caller can CONTINUE on/.test(src) &&
       // Guarded HERE and not in any schema's `required`, which would take a
       // blocker packet's `blocker` and `pr.worktree` down with the validation.
       // Asserted on the field LISTS rather than one literal spelling: reordered
@@ -1383,11 +1597,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // rendering ordering the fetch anyway forces a base-repository fetch on every
   // checkout that cannot reach that repository (a private fork clone with only
   // a local explicit target) for a value nothing reads.
-  const pinsOnlyANonEmptyGather = /AFTER the gathering below/.test(basePara) && /NON-EMPTY/.test(basePara) && /terminal no-op the caller finishes before reading any base OID/.test(basePara);
+  const pinsOnlyAConsumedGather = /AFTER the gathering below/.test(basePara) && /NON-EMPTY/.test(basePara) && /terminal no-op the caller finishes before reading any base OID/.test(basePara) && /three tips[\s\S]*DISAGREE/.test(basePara);
   check(
-    "and even the `no-rebase` rendering pins it only after a non-empty gather, since an empty-items run finishes before reading any base OID",
-    pinsOnlyANonEmptyGather,
-    `pins only a non-empty gather: ${pinsOnlyANonEmptyGather}`,
+    "and even the `no-rebase` rendering pins it only where the caller consumes it — a non-empty gather, or the zero-item path whose tips disagree — since a terminal no-op finishes before reading any base OID",
+    pinsOnlyAConsumedGather,
+    `pins only a consumed gather: ${pinsOnlyAConsumedGather}`,
   );
 
   const defaultBasePara = brief.split("\n\n").find((p) => p.includes("pr.baseOid")) || "";
@@ -2153,17 +2367,26 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       ? `the dispatched brief takes the ${/named outright/.test(explicitBriefDispatched) ? "explicit" : "default"} arm and ${/git fetch /.test(explicitBriefDispatched) ? "still fetches" : "fetches nothing"}`
       : "no rebase brief was dispatched at all",
   );
-  // The other side of that guard, and the reason it sits where it does: an
-  // EMPTY successful gather owes no echo, because the terminal no-op exit runs
-  // ahead of the guard and finishes the run before anything reads the field.
-  // Driven, because every other fixture carries `rebaseTarget` and so a guard
-  // hoisted ahead of that exit would turn this legitimate no-op into a stop
-  // with the whole suite still green.
+  // The other side of that guard, and the reason it sits where it does: a
+  // TERMINAL no-op — a zero-item gather whose three tips agree — owes no echo,
+  // because that exit runs ahead of the guard and finishes the run before
+  // anything reads the field. Driven, because every other fixture carries
+  // `rebaseTarget` and so a guard hoisted ahead of that exit would turn this
+  // legitimate no-op into a stop with the whole suite still green.
   const emptyWithoutEcho = await run({ ...gathered({ reconcile: { outcome: "work" } }), rebaseTarget: undefined });
   check(
-    "but an EMPTY gather owes no echo — the terminal no-op finishes ahead of the guard rather than stopping on it",
+    "but a terminal-no-op gather owes no echo — that exit finishes ahead of the guard rather than stopping on it",
     emptyWithoutEcho.result && emptyWithoutEcho.result.status === "no-op",
     `status: ${emptyWithoutEcho.result && emptyWithoutEcho.result.status}`,
+  );
+  // The ZERO-ITEM PATH is the other zero-item outcome, and it does owe the
+  // echo: it continues to both rebase points, so an omitted token there is the
+  // same silent wrong boundary an itemful run's is.
+  const zeroItemWithoutEcho = await run({ ...gathered({ reconcile: { outcome: "work" }, startingHead: "beefed11", finalHead: "beefed11" }), rebaseTarget: undefined });
+  check(
+    "while a zero-item packet the run CONTINUES on owes it — an omitted echo stops the zero-item path exactly as it stops an itemful run",
+    zeroItemWithoutEcho.result && zeroItemWithoutEcho.result.status === "gather-contract" && zeroItemWithoutEcho.seen.rebasePrompts.length === 0,
+    `status: ${zeroItemWithoutEcho.result && zeroItemWithoutEcho.result.status}; rebase briefs dispatched: ${zeroItemWithoutEcho.seen.rebasePrompts.length}`,
   );
 
   // And the same wiring's failure mode, driven rather than read: a gather that
@@ -4880,7 +5103,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // And where neither the gather nor a rebase reported one, the brief says so
   // instead of inventing a tip — the fallback that keeps a missing provenance
   // field from costing the record.
-  const noTip = await run(gathered(withWork), { args: "no-push no-rebase", cycles: [CYCLE_PASS] });
+  const noTip = await run(gathered({ ...withWork, startingHead: null }), { args: "no-push no-rebase", cycles: [CYCLE_PASS] });
   const noTipBrief = noTip.seen.recordPrompts[0] || "";
   check(
     "and says it was not recorded where nothing reported one, rather than inventing a tip",
