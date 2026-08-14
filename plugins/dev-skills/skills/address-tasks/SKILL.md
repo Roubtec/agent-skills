@@ -57,7 +57,7 @@ Do this in the **main working tree** before creating worktrees. The worktree che
 
 6. **Baseline the shared main checkout** — read its working-tree state now, before any worktree exists, as the reading the closing cleanliness report compares against (see "Main-checkout cleanliness report"). Observe only; never "fix" a checkout that is already dirty.
 
-If a `wt-bootstrap` helper is on PATH, prefer it for steps 1–4 — it performs those worktree checks, prunes orphans, and prints the base dir (`wtBase`) and free space (`availBytes`) as JSON. It covers those and nothing else: run every remaining step above yourself.
+If a `wt-bootstrap` helper is on PATH, prefer it for steps 1–4 — it performs those worktree checks, prunes orphans, and prints the base dir (`wtBase`) and free space (`availBytes`) as JSON. It covers those and nothing else — and not the whole of step 1: it establishes no ignore rule, so an in-repo `wtBase` is still yours to make ignored by step 1's recipe; the helper reports `ok` whether or not that rule exists. Run every remaining step above yourself.
 
 ## Orchestrator Responsibilities
 

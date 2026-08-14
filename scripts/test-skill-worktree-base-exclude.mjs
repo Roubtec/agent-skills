@@ -166,6 +166,49 @@ for (const { skill, anchor, clauses, absent = [] } of STEPS) {
   }
 }
 
+// Both BOOTSTRAP steps tell a run to PREFER the baked `wt-bootstrap` helper
+// over doing the checks by hand. The helper establishes no ignore rule — it
+// names neither `check-ignore` nor an exclude file anywhere — and in
+// self-hosted mode, where the worktree roots are ordinary subdirectories rather
+// than mounts, it reports `ok` for a repository that ignores nothing. So a run
+// that reads "prefer it", takes the reported `wtBase`, and skips the by-hand
+// branch never establishes the rule and never reaches the blocker inside the
+// branch it skipped. The obligation therefore has to be stated on the
+// PREFERENCE statement itself, which in `address-tasks` is a paragraph away
+// from the step it defers to — out of reach of the step pins above, hence its
+// own anchor here. Pinned so a later round cannot restore an unqualified "it
+// covers those and nothing else" over the ignore half.
+const PREFERENCE_ANCHOR = "If a `wt-bootstrap` helper is on PATH";
+const PREFERENCE = [
+  ["says the preferred helper establishes no ignore rule", /establishes no ignore rule/],
+  ["leaves making an in-repo base ignored with the run", /still yours to make ignored/],
+];
+
+for (const skill of ["address-tasks", "address-reviews"]) {
+  const plugins = stepLine("plugins", skill, PREFERENCE_ANCHOR);
+  const codex = stepLine("codex", skill, PREFERENCE_ANCHOR);
+
+  check(`${skill}: the \`wt-bootstrap\` preference is byte-identical across the two mirrors`, plugins === codex);
+
+  for (const [name, re] of PREFERENCE) {
+    check(`${skill}: ${name}`, re.test(plugins) && re.test(codex));
+  }
+
+  // The preference statement must POINT AT the recipe, not restate it: a second
+  // spelling beside the first is the drift this whole file exists to stop, and
+  // the pins above would not notice one added outside the step line. Counted
+  // file-wide, so it does not matter which line the copy would land on.
+  for (const tree of ["plugins", "codex"]) {
+    const path = join(repo, tree, "dev-skills", "skills", skill, "SKILL.md");
+    const probes = readFileSync(path, "utf8").match(/git check-ignore/g) ?? [];
+    check(
+      `${tree}/${skill}: states the ignore recipe's probe exactly once`,
+      probes.length === 1,
+      `${probes.length} occurrence(s)`,
+    );
+  }
+}
+
 // One recipe, one spelling: the shared clauses are the workflow's own words, so
 // a later round cannot "reconcile" the skills into a second phrasing of it.
 for (const [name, re] of SHARED) {
