@@ -737,12 +737,18 @@ const PEER_OPINIONS_FLAG_LEAF = new RegExp(`^${PEER_OPINIONS_FLAG.source}$`, "i"
 // information, so it is tokenized: split on whitespace AND commas, each token's
 // surrounding quotes stripped AFTER the split (so quotes do not express
 // boundaries — a spaced path cannot be named in a flat string), the peer flag
-// masked out first. An ARRAY or OBJECT argument is recursed, and every
+// masked out first. An ARRAY or PLAIN-OBJECT argument is recursed, and every
 // non-collection LEAF — null/undefined dropped outright, otherwise
-// stringified if a non-string primitive, trimmed of surrounding whitespace,
+// stringified if not a string, trimmed of surrounding whitespace,
 // dropped when empty or when it is exactly the peer flag — is exactly one raw
 // pointer, NEVER split, whatever it contains: the caller's structure already
-// said where each pointer ends. Both shapes dedupe in first-seen order.
+// said where each pointer ends. Only an array or a plain object (own
+// prototype Object.prototype or null — the only object shapes a JSON argument
+// can carry) counts as caller structure; any other object is a LEAF,
+// stringified like a primitive, because recursing its enumerable values reads
+// boundaries the caller never expressed — Object.values over a boxed String
+// fragments the pointer into its characters, and over a Date yields nothing,
+// dropping the pointer silently. Both shapes dedupe in first-seen order.
 // The trim is deliberate, not a breach of the never-split promise: the same
 // reading that drops a whitespace-only leaf treats edge whitespace as
 // packaging rather than pointer content, a trimmed leaf is still one leaf, and
@@ -760,7 +766,10 @@ function structuredArgLeaves(batchArgs) {
   const collect = (node) => {
     if (node == null) return;
     if (Array.isArray(node)) return node.forEach(collect);
-    if (typeof node === "object") return Object.values(node).forEach(collect);
+    if (typeof node === "object") {
+      const proto = Object.getPrototypeOf(node);
+      if (proto === Object.prototype || proto === null) return Object.values(node).forEach(collect);
+    }
     const leaf = String(node).trim();
     if (leaf.length > 0) leaves.push(leaf);
   };

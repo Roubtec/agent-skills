@@ -209,6 +209,13 @@ if (planValidationMatch) {
   check("a mixed structured argument keeps numbers beside a spaced path", same(requiredArgPointers(["039", "tasks/my task.md", "041"]), ["039", "tasks/my task.md", "041"]));
   check("structured pointers deduplicate in first-seen order", same(requiredArgPointers(["039", "tasks/my task.md", "039"]), ["039", "tasks/my task.md"]));
   check("structured dedupe happens after the trim", same(requiredArgPointers([" 039", "039 "]), ["039"]));
+  // Only an array or a plain object counts as caller structure. Any other
+  // object is one stringified leaf: recursing a boxed String's enumerable
+  // values would fragment the pointer into its characters, and recursing a
+  // valueless object like a Date would drop the pointer silently.
+  check("a boxed-string leaf stays one pointer rather than fragmenting", same(requiredArgPointers([new String("tasks/my task.md")]), ["tasks/my task.md"]));
+  check("a non-plain-object leaf is stringified rather than dropped", same(requiredArgPointers([new Number(39)]), ["39"]));
+  check("a null-prototype object still recurses as a collection", same(requiredArgPointers([Object.assign(Object.create(null), { later: "039" })]), ["039"]));
   // The peer flag, pinned in BOTH directions: a flag standing as its own leaf
   // is the loop's argument and is masked, while a leaf that merely embeds the
   // flag text beside a pointer is one intact pointer — the negative direction
