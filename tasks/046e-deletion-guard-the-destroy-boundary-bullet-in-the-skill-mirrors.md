@@ -17,6 +17,16 @@ It was left out of 046b deliberately, because closing it is a design change rath
 - Keep the vacuum guards the other categories carry: an empty anchor list, an empty anchor string, and a key present-but-empty must all fail, for the reasons stated beside them.
 - Extend the script header's enumeration of prose categories and its inventory of collections whose emptiness switches a check off, and update the paragraph in `plugins/dev-skills/workflows/README.md` that describes the prose half — today it states the guard as covering the destination clauses alone.
 
+## Two residuals measured on the workflow-side pin, for whoever picks this up
+
+Task 046b's review rounds measured two residuals on the entry this task's prose category is modelled after, `guarded \`cd\`, naming the install step`. Both were judged dormant and deliberately left alone there; they are recorded here because this task is the next change to touch that surface, and each bears on a decision it has to make.
+
+**The message's em dash degrades under `zsh` at a non-UTF-8 locale.** Measured across three shells: `bash` and `dash` print `dc-enter returned no path — install it from the dev-skills plugin bin/` correctly even with `LANG` and `LC_ALL` unset, while `zsh` renders the separator as `\M-b\M-^@\M-^T`. The container's default has `LANG` unset, so the degradation is reachable in principle — but it needs the helper to be missing on an image that bakes it, a subagent shell that is `zsh` where the harness supplies `bash` and neither tree invokes `zsh`, and the non-UTF-8 locale, all at once; and the actionable half of the message survives regardless. The bearing on this task: its anchors are to span the guarded `cd` with the install pointer its message carries, so anyone who does swap the separator for an ASCII one changes those anchors in the same edit. Swapping it for its own sake was declined as churn across nineteen shipped sites plus the pin.
+
+**A negation prefixed to the pinned span passes.** The span begins at its imperative verb, so rewriting the five boundary constants to `Never Write \`cd -- …\`` leaves the suite at exit 0, demonstrated in a disposable clone with the replacement count asserted at five. This is the generic residual of any literal span that opens on a verb, and the neighbouring `clone-only verification and its named destination` entry has the identical shape, so it is pre-existing rather than something 046b introduced. It bears on this task's criterion that an anchor span the instruction rather than the vocabulary: a span that opens on the verb pins the vocabulary against deletion but not the polarity, and whether the prose category should anchor from the clause's subject instead is a choice this task gets to make once, for a category being written from scratch.
+
+Neither residual is a defect this task must close. They are stated so the choice is made knowingly rather than re-derived, and so the second one is not mistaken for a regression this task introduced.
+
 ## Acceptance criteria
 
 - Deleting the destroy-boundary bullet from both mirrors of any one skill fails `node scripts/test-subagent-destroy-boundary.mjs`, demonstrated in a disposable clone rather than argued.
