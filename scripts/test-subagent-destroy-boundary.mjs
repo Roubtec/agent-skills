@@ -24,8 +24,8 @@
 //
 //   CONTENT, checked per boundary constant, against the clause list below.
 //   Task 017's criterion is about what the constants SAY, and they say it once
-//   each; asserting eleven clauses against all sixty renders re-derived the
-//   same five answers sixty times over. The constants are evaluated out of the
+//   each; asserting nine clauses against all sixty-six renders re-derived the
+//   same five answers sixty-six times over. The constants are evaluated out of the
 //   same declaration prefix the builders come from, so this is the value the
 //   briefs actually interpolate rather than the source text of the literal.
 //
@@ -383,10 +383,16 @@ function shippedWorkflows() {
 // pass. Each entry is one semantic clause the boundary states, matched by the
 // phrase that carries it rather than by a byte comparison of the whole
 // constant. This must fail when a clause is LOST. What that buys is narrow, and
-// measured rather than hoped for: the phrases now pin just over two thirds of
-// each constant in contiguous literal runs, so it is the unpinned remainder —
-// the mechanics, the reasons, the tails — that may be reworded freely, and the
-// pinned spans that may not. Inside a pinned span even an obviously benign edit
+// measured rather than hoped for: summing each phrase's match length over each
+// evaluated constant, the phrases pin three fifths of it in contiguous literal
+// runs (60.0% overall, 58.7% of a `CYCLE_DESTROY_BOUNDARY` and 60.8% of a
+// `DESTROY_BOUNDARY`, up from 58.5% before task 046b retired the no-helper
+// fallback clause and folded its neighbour into one longer span). So it is the
+// unpinned two fifths — the mechanics, the reasons, the tails — that may be
+// reworded freely, and the pinned spans that may not. State the fraction as
+// measured rather than as remembered: the figure this replaced said "just over
+// two thirds" and no arrangement of these phrases has reached that.
+// Inside a pinned span even an obviously benign edit
 // fails: dropping an Oxford comma does, lowercasing `NOT in a clone` does, and
 // so does ADDING a command to the forbidden list, i.e. hardening the boundary
 // breaks this suite. That is the deal these patterns make, and it is why
@@ -395,7 +401,7 @@ function shippedWorkflows() {
 //
 // Each phrase spans the words that make its clause OPERATIVE — its polarity,
 // its qualifier, its enumeration — and never merely a tail that an INVERTED or
-// NARROWED boundary satisfies just as well, WITH TWO DELIBERATE EXCEPTIONS
+// NARROWED boundary satisfies just as well, WITH ONE DELIBERATE EXCEPTION
 // named below. That rule is written down because every phrase which broke it
 // was measured green against a boundary saying something else: a wildcard
 // spanning the directive's verb passed "never belongs ONLY in a disposable
@@ -407,41 +413,52 @@ function shippedWorkflows() {
 // can reach every sibling worktree" and a halved enumeration; a carve-out
 // matched from "whether as an exact command" passed a boundary with the scope it
 // bounds — "beyond what this assignment itself spells out" — deleted outright;
-// and the fallback phrase, holding no wildcard at all but starting one word past
-// its directive's verb, passed both "NEVER use an absolute path outside the
-// repository" and "you may ignore the rule that you use an absolute path outside
-// the repository" — a boundary that has kept "clone-only" while naming no
-// destination to fall back to, which is the live checkout again. So these
+// and the retired no-helper fallback's phrase, holding no wildcard at all but
+// starting one word past its directive's verb, passed both "NEVER use an
+// absolute path outside the repository" and "you may ignore the rule that you
+// use an absolute path outside the repository". That clause no longer ships —
+// task 046b retired it once the helpers became a precondition rather than a
+// branch — but the measurement is what the surviving destination span is built
+// on, so it is kept rather than deleted with the clause: a span that starts past
+// its directive's verb passes a boundary saying the opposite. So these
 // phrases run long, and none of them holds a wildcard any more: every matched
 // span is contiguous literal text, and the one place two shipped spellings
 // differ inside a span is enumerated ("and", which only the section's copy has)
 // rather than skipped over.
 //
-// THE TWO EXCEPTIONS, stated here rather than left to be rediscovered as a bug.
-// A rule with unrecorded exceptions is worse than a bounded one: a reader who
-// takes the rule at face value trusts these two entries for something they do
-// not do, and each round that rediscovers one spends itself re-measuring what
-// was already known. Both are measured green against boundaries saying
-// something else, and both are kept anyway, for the reason given:
+// WHY THE DESTINATION CLAUSE IS PINNED WHERE IT IS. Until task 046b this rule
+// was stated over two entries: a bare existence check on `command -v dc-enter`,
+// which asserted only that a destination was named at all, and the no-helper
+// fallback's phrase beside it, which carried "in full" for both. Retiring the
+// fallback took one leg out from under the other — a bare existence check whose
+// stated safety rested on a neighbouring clause that no longer ships guards
+// nothing — so the pair is now one span that runs from the directive's polarity
+// straight into the destination it names: `belongs ONLY in a disposable clone:
+// work in `DC="$(dc-enter <slug>)"``. Nothing shorter would do, and the shape of
+// the failure is the one measured above: a span starting past the verb is green
+// against a boundary saying the opposite, and a span stopping before the
+// destination is green against a boundary that names none — which is the live
+// checkout again, since a clone-only rule with no way to get a clone is a rule
+// with no destination.
 //
-//   "disposable-clone destination" is a bare existence check on `command -v
-//   dc-enter` — no polarity, no qualifier. Inverting the sentence around it
-//   ("Do NOT run `command -v dc-enter`; where it is found, avoid ...") is
-//   green, and so is replacing the whole `dc-enter` calling convention — the
-//   `DC="$(dc-enter <slug>)"` form, `dc-remove`, the reused-slug refusal — with
-//   "Run `command -v dc-enter` if you like." Kept bare because those mechanics
-//   are a helper's usage text rather than clause material: pinning them would
-//   put `dc-enter`'s calling convention under this suite, where every future
-//   change to the helper breaks a destroy-boundary test. What must survive is
-//   pinned in full by the clauses either side — verification belongs ONLY in a
-//   disposable clone, and, where the helper is absent, the fallback is an
-//   absolute path outside the repository — and both hold whatever the helper's
-//   usage text says. "In full" is the load-bearing word and the neighbouring
-//   phrases are what have to deliver it, which is why the fallback's phrase
-//   spans its condition and verb rather than starting at the destination: the
-//   shorter span is green against a fallback that FORBIDS or WAIVES the
-//   absolute path, and this exception's whole safety rests on it. This entry
-//   asserts only that a destination is named at all.
+// The span reaches the INVOCATION FORM and stops there, deliberately. The rest
+// of the helper's usage text — `dc-remove`, `--replace`, the reused-slug
+// refusal, the guarded `cd` — stays unpinned here for the reason the old bare
+// entry gave and which still holds: those mechanics are a helper's usage text
+// rather than clause material, and pinning them would put `dc-enter`'s calling
+// convention under this suite, where every future change to the helper breaks a
+// destroy-boundary test. What changed is only that the invocation form itself is
+// no longer optional to pin, because it is now the ONLY destination the boundary
+// names. (The guarded `cd` form is pinned elsewhere on its own terms:
+// `test-address-review-reconcile.mjs` carries `${DC:?dc-enter returned no path}`
+// as a known literal span.)
+//
+// THE ONE EXCEPTION, stated here rather than left to be rediscovered as a bug.
+// A rule with unrecorded exceptions is worse than a bounded one: a reader who
+// takes the rule at face value trusts this entry for something it does not do,
+// and each round that rediscovers it spends itself re-measuring what was already
+// known. It is measured green against boundaries saying something else, and it
+// is kept anyway, for the reason given:
 //
 //   "permitted set" stops after `queries` and leaves the permitted half's SCOPE
 //   tail unpinned, so WIDENING that tail is green: "— plus edits, commits, and
@@ -453,7 +470,7 @@ function shippedWorkflows() {
 //   branch it names" versus "and the specific mutations this assignment spells
 //   out"), so no single literal span covers both and a pattern would need an
 //   alternation — an added case, against this repository's bias toward deleting
-//   them, and paid for out of a tolerance already spent down to under a third.
+//   them, and paid for out of the unpinned two fifths measured above.
 //   So the entry keeps the job it was added for, which is narrower than the
 //   rule above: it fails when the Permitted line is LOST, not when it is
 //   widened. The forbidden half is the half that binds, and it is pinned
@@ -474,12 +491,7 @@ const REQUIRED = [
   ["worktree is not a blast radius", /A worktree is not a blast radius/],
   ["shared `.git` reaches every sibling worktree", /so `branch -f`, `reset`, `update-ref`, and `gc` reach every sibling worktree through the shared `\.git`/],
   ["a repository is addressed by path", /Address any repository other than your own checkout BY PATH: `git -C <absolute path>`\. NEVER derive a working directory from a glob, and NEVER chain a state-changing git command after a `cd` whose success you have not checked/],
-  ["empirical verification is clone-only", /Empirical verification that could change state belongs ONLY in a disposable clone/],
-  // A deliberate exception (see above): a bare existence check, deliberately.
-  // Asserts that a destination is named, not what the surrounding sentence says
-  // of it.
-  ["disposable-clone destination", /command -v dc-enter/],
-  ["absolute-path fallback", /Where the helper is absent, use an absolute path outside the repository — never a relative one/],
+  ["clone-only verification and its named destination", /Empirical verification that could change state belongs ONLY in a disposable clone: work in `DC="\$\(dc-enter <slug>\)"`/],
 ];
 
 // What a destination CONSTANT must say, for REQUIRED's reason — a brief carrying
@@ -487,7 +499,7 @@ const REQUIRED = [
 // instructs anything, so the gutting this closes is the one that keeps the
 // vocabulary and destroys the instruction — but NOT on REQUIRED's terms, and the
 // difference was demonstrated rather than reasoned. REQUIRED matches each clause
-// by the phrase that carries it because it spans twelve clauses over five
+// by the phrase that carries it because it spans nine clauses over five
 // constants, where a byte comparison would turn every wording tweak into a
 // failure. That tolerance does not survive one sentence: three phrase regexes
 // over this constant ("output you redirect to a file", "goes under that same
