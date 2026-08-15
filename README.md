@@ -54,7 +54,7 @@ A slug that already has a clone is refused rather than reused, because concurren
 
 `dc-enter` also refuses rather than handing back a clone whose isolation the surrounding environment would weaken — one whose caller-side git configuration defines a remote or a push destination outside the clone, where no local write can remove it — and refuses a **partial clone** it cannot copy faithfully. A **shallow** source is bounded rather than refused, so its clone cannot answer "was this unreferenced object still there?". Each of those refusals names the configuration it decided by.
 
-Why each of those is drawn where it is, and what bounds it, is documented in the helper's own header comment in `plugins/dev-skills/bin/dc-enter`; `scripts/test-dc-helpers.sh` pins the behaviour.
+Why each of those is drawn where it is, and what bounds it, is documented in the helper's own header comment in `plugins/dev-skills/bin/dc-enter`; `scripts/test-dc-helpers.sh` pins the behavior.
 
 ### `codex/`
 
