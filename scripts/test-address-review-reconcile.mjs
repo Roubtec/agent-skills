@@ -2228,12 +2228,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "a worktree working location": { flags: { push: true }, args: [[], []], packet: { locationMode: "worktree", worktree: "/w/.worktrees/c/pr-42" } },
   };
   // `DESTROY_BOUNDARY` (task 018) carries one legitimate `${…}`-shaped span of
-  // its own — the guarded-`cd` bash form `${DC:?dc-enter returned no path}` — and
+  // its own — the guarded-`cd` bash form `${DC:?dc-enter returned no path — install it from the dev-skills plugin bin/}` — and
   // every arm renders it via the shared boundary text, so it is excluded by name
   // rather than narrowing the scan: the scan's job is catching a builder
   // interpolation this template failed to resolve, not a bash parameter
   // expansion the boundary text states on purpose.
-  const KNOWN_LITERAL_SPANS = ["${DC:?dc-enter returned no path}"];
+  const KNOWN_LITERAL_SPANS = ["${DC:?dc-enter returned no path — install it from the dev-skills plugin bin/}"];
   const unrendered = [];
   const rendered = {};
   for (const [what, { flags, args, packet }] of Object.entries(arms)) {

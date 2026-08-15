@@ -24,7 +24,7 @@
 //
 //   CONTENT, checked per boundary constant, against the clause list below.
 //   Task 017's criterion is about what the constants SAY, and they say it once
-//   each; asserting nine clauses against all sixty-six renders re-derived the
+//   each; asserting ten clauses against all sixty-six renders re-derived the
 //   same five answers sixty-six times over. The constants are evaluated out of the
 //   same declaration prefix the builders come from, so this is the value the
 //   briefs actually interpolate rather than the source text of the literal.
@@ -384,14 +384,19 @@ function shippedWorkflows() {
 // phrase that carries it rather than by a byte comparison of the whole
 // constant. This must fail when a clause is LOST. What that buys is narrow, and
 // measured rather than hoped for: summing each phrase's match length over each
-// evaluated constant, the phrases pin three fifths of it in contiguous literal
-// runs (60.0% overall, 58.7% of a `CYCLE_DESTROY_BOUNDARY` and 60.8% of a
-// `DESTROY_BOUNDARY`, up from 58.5% before task 046b retired the no-helper
-// fallback clause and folded its neighbour into one longer span). So it is the
-// unpinned two fifths — the mechanics, the reasons, the tails — that may be
+// evaluated constant, the phrases pin two thirds of the constants IN AGGREGATE in
+// contiguous literal runs — 66.8% over the five, which is 65.4% of a
+// `CYCLE_DESTROY_BOUNDARY` and 67.8% of a `DESTROY_BOUNDARY`, so no single
+// fraction is true of EACH constant and the aggregate is the honest way to state
+// it. It was 58.5% before task 046b retired the no-helper fallback clause and
+// folded its neighbour into one longer span, and 60.0% before that task's review
+// round pinned the guarded `cd` and the install step its message names. So it is
+// the unpinned third — the mechanics, the reasons, the tails — that may be
 // reworded freely, and the pinned spans that may not. State the fraction as
-// measured rather than as remembered: the figure this replaced said "just over
-// two thirds" and no arrangement of these phrases has reached that.
+// measured rather than as remembered, and re-measure it whenever an entry is
+// added or a constant is reworded: an earlier figure here said "just over two
+// thirds" while the phrases pinned three fifths, and its replacement said three
+// fifths "of each constant" when that was only ever true in aggregate.
 // Inside a pinned span even an obviously benign edit
 // fails: dropping an Oxford comma does, lowercasing `NOT in a clone` does, and
 // so does ADDING a command to the forbidden list, i.e. hardening the boundary
@@ -443,15 +448,28 @@ function shippedWorkflows() {
 //
 // The span reaches the INVOCATION FORM and stops there, deliberately. The rest
 // of the helper's usage text — `dc-remove`, `--replace`, the reused-slug
-// refusal, the guarded `cd` — stays unpinned here for the reason the old bare
-// entry gave and which still holds: those mechanics are a helper's usage text
-// rather than clause material, and pinning them would put `dc-enter`'s calling
-// convention under this suite, where every future change to the helper breaks a
-// destroy-boundary test. What changed is only that the invocation form itself is
-// no longer optional to pin, because it is now the ONLY destination the boundary
-// names. (The guarded `cd` form is pinned elsewhere on its own terms:
-// `test-address-review-reconcile.mjs` carries `${DC:?dc-enter returned no path}`
-// as a known literal span.)
+// refusal — stays unpinned here for the reason the old bare entry gave and which
+// still holds: those mechanics are a helper's usage text rather than clause
+// material, and pinning them would put `dc-enter`'s calling convention under this
+// suite, where every future change to the helper breaks a destroy-boundary test.
+// What changed is only that the invocation form itself is no longer optional to
+// pin, because it is now the ONLY destination the boundary names.
+//
+// THE GUARDED `cd` IS PINNED SEPARATELY, by the entry after it, and was pinned by
+// nothing at all until task 046b's review round. It is not the helper's usage
+// text: with the no-helper fallback retired, an empty `DC` aborting the shell is
+// the ONLY thing between a missing helper and a subagent running in the shared
+// checkout, and 046b's acceptance criterion is stated over it — the stop must NAME
+// THE INSTALL STEP — which is why the span runs through the `${DC:?…}` message
+// rather than stopping at the `cd`. An earlier round claimed the form was "pinned
+// elsewhere on its own terms", in `test-address-review-reconcile.mjs`'s
+// `KNOWN_LITERAL_SPANS`. That was wrong in the strongest available direction: that
+// list is an EXCLUSION list for a scan hunting unrendered `${…}` builder
+// interpolations, so deleting the guarded `cd` makes that scan pass more easily
+// and could never fail it. Measured before the entry below existed — deleting the
+// sentence `Never `cd` into a path held in a variable unguarded: … Write `cd --
+// "${DC:?…}"`, and confirm `pwd` before the first command that writes.` from all
+// five boundary constants passed all twelve suites at exit 0.
 //
 // THE ONE EXCEPTION, stated here rather than left to be rediscovered as a bug.
 // A rule with unrecorded exceptions is worse than a bounded one: a reader who
@@ -492,6 +510,12 @@ const REQUIRED = [
   ["shared `.git` reaches every sibling worktree", /so `branch -f`, `reset`, `update-ref`, and `gc` reach every sibling worktree through the shared `\.git`/],
   ["a repository is addressed by path", /Address any repository other than your own checkout BY PATH: `git -C <absolute path>`\. NEVER derive a working directory from a glob, and NEVER chain a state-changing git command after a `cd` whose success you have not checked/],
   ["clone-only verification and its named destination", /Empirical verification that could change state belongs ONLY in a disposable clone: work in `DC="\$\(dc-enter <slug>\)"`/],
+  // The stop, and the install step it names — see the paragraph above. Pinned
+  // from its own imperative verb through the message the shell prints, since a
+  // span starting later is green against a boundary that leaves the `cd`
+  // unguarded, and one stopping at the `cd` is green against a stop that names
+  // no remedy.
+  ["guarded `cd`, naming the install step", /Write `cd -- "\$\{DC:\?dc-enter returned no path — install it from the dev-skills plugin bin\/\}"`, and confirm `pwd` before the first command that writes/],
 ];
 
 // What a destination CONSTANT must say, for REQUIRED's reason — a brief carrying
@@ -499,7 +523,7 @@ const REQUIRED = [
 // instructs anything, so the gutting this closes is the one that keeps the
 // vocabulary and destroys the instruction — but NOT on REQUIRED's terms, and the
 // difference was demonstrated rather than reasoned. REQUIRED matches each clause
-// by the phrase that carries it because it spans nine clauses over five
+// by the phrase that carries it because it spans ten clauses over five
 // constants, where a byte comparison would turn every wording tweak into a
 // failure. That tolerance does not survive one sentence: three phrase regexes
 // over this constant ("output you redirect to a file", "goes under that same
