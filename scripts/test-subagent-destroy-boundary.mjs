@@ -24,7 +24,7 @@
 //
 //   CONTENT, checked per boundary constant, against the clause list below.
 //   Task 017's criterion is about what the constants SAY, and they say it once
-//   each; asserting ten clauses against all sixty-six renders re-derived the
+//   each; asserting eleven clauses against all sixty-six renders re-derived the
 //   same five answers sixty-six times over. The constants are evaluated out of the
 //   same declaration prefix the builders come from, so this is the value the
 //   briefs actually interpolate rather than the source text of the literal.
@@ -391,8 +391,8 @@ function shippedWorkflows() {
 // it. It was 58.5% before task 046b retired the no-helper fallback clause and
 // folded its neighbour into one longer span, 60.0% before that task's review
 // round pinned the guarded `cd`, and 66.8% before its third round pinned the
-// install remedy at the invocation as well. So it is
-// the unpinned third — the mechanics, the reasons, the tails — that may be
+// install remedy at the invocation as well. So it is the unpinned remainder —
+// the mechanics, the reasons, the tails — that may be
 // reworded freely, and the pinned spans that may not. State the fraction as
 // measured rather than as remembered, and re-measure it whenever an entry is
 // added or a constant is reworded: an earlier figure here said "just over two
@@ -489,7 +489,7 @@ function shippedWorkflows() {
 //   branch it names" versus "and the specific mutations this assignment spells
 //   out"), so no single literal span covers both and a pattern would need an
 //   alternation — an added case, against this repository's bias toward deleting
-//   them, and paid for out of the unpinned third measured above.
+//   them, and paid for out of the unpinned remainder measured above.
 //   So the entry keeps the job it was added for, which is narrower than the
 //   rule above: it fails when the Permitted line is LOST, not when it is
 //   widened. The forbidden half is the half that binds, and it is pinned
@@ -534,7 +534,7 @@ const REQUIRED = [
 // instructs anything, so the gutting this closes is the one that keeps the
 // vocabulary and destroys the instruction — but NOT on REQUIRED's terms, and the
 // difference was demonstrated rather than reasoned. REQUIRED matches each clause
-// by the phrase that carries it because it spans ten clauses over five
+// by the phrase that carries it because it spans eleven clauses over five
 // constants, where a byte comparison would turn every wording tweak into a
 // failure. That tolerance does not survive one sentence: three phrase regexes
 // over this constant ("output you redirect to a file", "goes under that same

@@ -2,7 +2,7 @@
 
 ## Why
 
-`README.md`'s `## Focused tests` section is the wordiest thing left in the file. Nine of its paragraphs run past 600 characters and four past 1,800: the `test-review-cycle-retirement.mjs` paragraph is roughly 3,000 characters on one line, and `test-unreviewed-close-carriage.mjs`, `test-subagent-destroy-boundary.mjs`'s second paragraph, and `test-skill-worktree-base-exclude.mjs` are each over 1,800. Together the section's paragraphs are about 14,700 characters.
+`README.md`'s `## Focused tests` section is the wordiest thing left in the file. Measured as of this task's writing, it runs to about 16,600 characters across fifteen paragraphs; nine of those exceed 600 characters and five exceed 1,800, the longest being the `test-review-cycle-retirement.mjs` paragraph at roughly 3,000 characters on a single line. Re-measure before starting rather than trusting these figures: they are a snapshot taken to size the job, and the section is edited often.
 
 This is the same complaint the maintainer raised on the PR that produced task 046b, in a review comment on the `## Layout` bullets: *"consider whether these massive lines could do as normal structured prose with headings instead… if the contract is clear, the mechanism need not be documented publicly in a README file, in my opinion… the file is getting too wordy for my liking."* That comment authorized restructuring the rest of the file too. Layout was restructured in that PR and this section was deliberately left, because the two are not the same job and bundling them would have tripled a review already carrying a safety change.
 
