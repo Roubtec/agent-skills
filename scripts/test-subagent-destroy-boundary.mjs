@@ -384,13 +384,14 @@ function shippedWorkflows() {
 // phrase that carries it rather than by a byte comparison of the whole
 // constant. This must fail when a clause is LOST. What that buys is narrow, and
 // measured rather than hoped for: summing each phrase's match length over each
-// evaluated constant, the phrases pin two thirds of the constants IN AGGREGATE in
-// contiguous literal runs — 66.8% over the five, which is 65.4% of a
-// `CYCLE_DESTROY_BOUNDARY` and 67.8% of a `DESTROY_BOUNDARY`, so no single
+// evaluated constant, the phrases pin seven tenths of the constants IN AGGREGATE
+// in contiguous literal runs — 69.7% over the five, which is 68.4% of a
+// `CYCLE_DESTROY_BOUNDARY` and 70.6% of a `DESTROY_BOUNDARY`, so no single
 // fraction is true of EACH constant and the aggregate is the honest way to state
 // it. It was 58.5% before task 046b retired the no-helper fallback clause and
-// folded its neighbour into one longer span, and 60.0% before that task's review
-// round pinned the guarded `cd` and the install step its message names. So it is
+// folded its neighbour into one longer span, 60.0% before that task's review
+// round pinned the guarded `cd`, and 66.8% before its third round pinned the
+// install remedy at the invocation as well. So it is
 // the unpinned third — the mechanics, the reasons, the tails — that may be
 // reworded freely, and the pinned spans that may not. State the fraction as
 // measured rather than as remembered, and re-measure it whenever an entry is
@@ -510,12 +511,22 @@ const REQUIRED = [
   ["shared `.git` reaches every sibling worktree", /so `branch -f`, `reset`, `update-ref`, and `gc` reach every sibling worktree through the shared `\.git`/],
   ["a repository is addressed by path", /Address any repository other than your own checkout BY PATH: `git -C <absolute path>`\. NEVER derive a working directory from a glob, and NEVER chain a state-changing git command after a `cd` whose success you have not checked/],
   ["clone-only verification and its named destination", /Empirical verification that could change state belongs ONLY in a disposable clone: work in `DC="\$\(dc-enter <slug>\)"`/],
+  // The remedy, stated where a stuck subagent can still act on it. It is NOT a
+  // duplicate of the message below: under `set -e` the assignment
+  // `DC="$(dc-enter <slug>)"` exits 127 on an absent helper, so the shell dies
+  // before the guarded `cd` expands anything and the message below never
+  // prints. This sentence is then the only carrier of the install step, which
+  // is why it is pinned rather than left to ride along with the clause above.
+  ["install remedy at the invocation", /Where that command is not found at all, install the helpers from the dev-skills plugin `bin\/` rather than improvising a destination/],
   // The stop, and the install step it names — see the paragraph above. Pinned
   // from its own imperative verb through the message the shell prints, since a
   // span starting later is green against a boundary that leaves the `cd`
   // unguarded, and one stopping at the `cd` is green against a stop that names
-  // no remedy.
-  ["guarded `cd`, naming the install step", /Write `cd -- "\$\{DC:\?dc-enter returned no path — install it from the dev-skills plugin bin\/\}"`, and confirm `pwd` before the first command that writes/],
+  // no remedy. The message points at the error `dc-enter` itself printed rather
+  // than asserting absence, because absence is NOT its commonest cause: the
+  // helper refusing a reused slug exits non-zero with empty stdout too, and
+  // there it is installed and its own stderr already names the fix.
+  ["guarded `cd`, naming the install step", /Write `cd -- "\$\{DC:\?dc-enter returned no path — see its error above; if it is not installed, install it from the dev-skills plugin bin\/\}"`, and confirm `pwd` before the first command that writes/],
 ];
 
 // What a destination CONSTANT must say, for REQUIRED's reason — a brief carrying
