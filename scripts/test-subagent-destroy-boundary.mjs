@@ -488,7 +488,7 @@ function shippedWorkflows() {
 //   branch it names" versus "and the specific mutations this assignment spells
 //   out"), so no single literal span covers both and a pattern would need an
 //   alternation — an added case, against this repository's bias toward deleting
-//   them, and paid for out of the unpinned two fifths measured above.
+//   them, and paid for out of the unpinned third measured above.
 //   So the entry keeps the job it was added for, which is narrower than the
 //   rule above: it fails when the Permitted line is LOST, not when it is
 //   widened. The forbidden half is the half that binds, and it is pinned
