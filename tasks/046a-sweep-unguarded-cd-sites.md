@@ -2,7 +2,7 @@
 
 ## Why
 
-Task 046 closed the destroy-boundary occurrences: every shipped copy of the boundary that names the disposable clone now mandates `cd -- "${DC:?dc-enter returned no path}"` rather than a bare `cd "$DC"`. That is the site the incident actually went through, and it is the only one 046 touched.
+Task 046 closed the destroy-boundary occurrences: every shipped copy of the boundary that names the disposable clone now mandates a guarded `cd -- "${DC:?…}"` rather than a bare `cd "$DC"`. That is the site the incident actually went through, and it is the only one 046 touched. The message inside that expansion has since grown the install step it points at, in task 046b's review round, so grep for the guarded form rather than for the wording 046 shipped.
 
 It is not the only site. These skills and workflows tell an agent to `cd` into a path held in a variable in several other places — a task worktree resolved by `wt-enter`, a checkout path a brief carries, an artifact directory a round created — and each of those has the same failure mode 046 measured: `cd ""` exits 0 and moves nowhere, so a lookup that produced nothing leaves the agent in whatever directory it was already in, believing it left. The worktree case is the one with teeth, since the directory it was already in is usually the shared main checkout.
 
