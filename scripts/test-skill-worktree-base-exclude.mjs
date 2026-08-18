@@ -63,6 +63,24 @@ function workflowText(file) {
 const reviewWorkflow = workflowText("wf-address-review.js");
 const tasksWorkflow = workflowText("wf-address-tasks.js");
 
+// A workflow's prompt states each numbered step as one line, the same shape the
+// skills' steps have, so a clause can be pinned to the exact line that must
+// carry it rather than to the file. That matters where a phrase is stated more
+// than once: `establishes no ignore rule` appears twice in `wf-address-tasks.js`
+// — the prompt's step 1 and `BOOTSTRAP_SCHEMA`'s `wtBase` description — so a
+// file-wide pin would survive the prompt's copy being reworded into an actively
+// WRONG claim while the schema's copy went on satisfying it, which is exactly
+// the claim 047a retired. Fails loudly, like `stepLine`, if the anchor stops
+// selecting one line, so no pin can silently run against text it did not find.
+function workflowLine(text, file, anchor) {
+  const hits = text.split("\n").filter((l) => l.includes(anchor));
+  if (hits.length !== 1) {
+    console.error(`FAIL: ${file} has ${hits.length} lines containing ${JSON.stringify(anchor)}; expected 1.`);
+    process.exit(1);
+  }
+  return hits[0];
+}
+
 // Clauses every one of the three steps must carry. Each is the ANSWER to a way
 // the recipe silently fails: ask Git for the exclude file rather than spelling
 // it (a linked worktree has no `.git/info` directory); ask from inside the
@@ -236,12 +254,35 @@ for (const [name, re] of SHARED) {
 // to stop. The retired claim is asserted ABSENT: 047a's review plan treats a
 // restored "performs the whole Session Bootstrap" as a regression, and omission
 // from a clause list would not notice one coming back.
+const tasksHelperStep = workflowLine(tasksWorkflow, "wf-address-tasks.js", "1. From the repo root, run `wt-bootstrap`");
+const tasksIgnoreStep = workflowLine(tasksWorkflow, "wf-address-tasks.js", "2. Where it reported `ok`");
+const tasksMappingStep = workflowLine(tasksWorkflow, "wf-address-tasks.js", "Map that JSON onto the structured result verbatim");
+const tasksWtBaseField = workflowLine(tasksWorkflow, "wf-address-tasks.js", "Absolute path to this container's worktree base");
+
 for (const [name, re] of SHARED) {
-  check(`wf-address-tasks.js states the same clause — ${name}`, re.test(tasksWorkflow));
+  check(`wf-address-tasks.js states the same clause — ${name}`, re.test(tasksIgnoreStep));
 }
+// Anchored to the step that PREFERS the helper, not to the file: the schema's
+// copy of the same statement must not be able to stand in for it.
 for (const [name, re] of PREFERENCE) {
-  check(`wf-address-tasks.js: ${name}`, re.test(tasksWorkflow));
+  check(`wf-address-tasks.js: ${name}`, re.test(tasksHelperStep));
 }
+// The schema field carries the statement too — the acceptance criterion covers
+// "prompt literals or schema field descriptions" — so it is pinned in its own
+// right rather than left to be satisfied by the prompt's copy.
+check(
+  "wf-address-tasks.js: `BOOTSTRAP_SCHEMA`'s `wtBase` says the helper establishes no ignore rule",
+  /establishes no ignore rule/.test(tasksWtBaseField),
+);
+// The mapping step orders the helper's JSON copied "with no reinterpretation",
+// and it is the LATER instruction, so an unqualified form silently outranks the
+// still-unignored blocker the ignore step exists to emit — and the batch would
+// proceed on the helper's `ok` over an unprotected base. The qualifier is what
+// makes the two steps one decision, so it is pinned rather than trusted.
+check(
+  "wf-address-tasks.js: the verbatim mapping is qualified by the ignore step's override",
+  /no reinterpretation[^.]*step 2/i.test(tasksMappingStep),
+);
 check(
   "wf-address-tasks.js no longer claims the helper performs the whole Session Bootstrap",
   !/performs the whole Session Bootstrap/.test(tasksWorkflow),
