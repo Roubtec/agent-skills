@@ -2,10 +2,12 @@
 // Renders EVERY prompt a dynamic workflow hands to a spawned subagent and
 // asserts two rules are in the rendered text: the destroy boundary, and — where
 // the brief orders a build or validation — a destination for output redirected
-// to a file. It also deletion-guards the same destination rule where it lives in
-// prose the workflows do not render, the `SKILL.md` briefs of both skill
-// mirrors. The file name names the first of those jobs, which is the one it
-// shipped with; task 045 widened the remit to the other two.
+// to a file. It also deletion-guards two rules where they live in prose the
+// workflows do not render, the `SKILL.md` briefs of both skill mirrors: that
+// same destination rule, and the destroy boundary's own disposable-clone bullet.
+// The file name names the first of those jobs, which is the one it shipped with;
+// task 045 widened the remit to the other two, and task 046e added the second
+// guarded prose rule.
 //
 // Why rendering rather than reading: the boundary lives in shared constants and
 // in a section one workflow embeds byte-for-byte from another, so the source
@@ -127,7 +129,18 @@
 // without joining that count. It is censused instead by the delegation it makes,
 // against the anchors declared for THAT category, so both categories are held to
 // a count read off the mirrors rather than one of them resting on the table
-// alone. The table below states all three categories.
+// alone.
+//
+// The same half also guards a rule that is not a destination at all, on the same
+// two terms: the DESTROY BOUNDARY's disposable-clone bullet, which these mirrors
+// ship in the seven skills that name `dc-enter` and which the workflows state in
+// their own boundary constants. Task 046b left it unguarded here deliberately —
+// it spells no warning, so appending its anchors to a warning-carrying entry
+// would have broken that entry's equality — and deleting it from all fourteen
+// copies passed every suite, measured in a disposable clone during that task's
+// review round. It is a category of its own with a census key of its own for
+// exactly that reason, so its count comes off the shipped mirrors rather than
+// off a number written down here. The table below states all four categories.
 //
 // The ASYMMETRY that leaves is the point, and must not be read as parity with
 // the rendered checks. Call-site accounting discovers a new BUILDER because a
@@ -269,8 +282,10 @@
 //   `BESPOKE_DESTINATIONS` — empty, or an entry holding an empty span: the
 //     cross-check searches for that clause in nothing, silently. Guarded by the
 //     declared-tables check below, both shapes.
-//   `PROSE_MIRRORS` — empty: reported "0 prose destination clauses
-//     deletion-guarded" as a pass. Guarded by the declared-tables check below.
+//   `PROSE_MIRRORS` — empty: reported "0 prose clauses deletion-guarded" as a
+//     pass — that summary read "0 prose destination clauses deletion-guarded"
+//     when it was measured, before task 046e's category widened it past
+//     destinations. Guarded by the declared-tables check below.
 //   the GUARD REGISTRY those three are read out of — the inline
 //     `[["REQUIRED", REQUIRED], …]` literal `emptyTables` filters — which is the
 //     INPUT to the declared-tables check rather than one of its results, and the
@@ -283,9 +298,11 @@
 //     ("Guarded there now") rests on an input that is itself unguarded. That is
 //     the shrinkage class stated after this list, and this registry is its
 //     floor: nothing censuses it against anything.
-//   `PROSE_CLAUSES` — empty: every skill carrying a warning phrase or a
-//     by-reference clause is undeclared, so the census FAILs in both mirrors.
-//   the `anchors` and `byReference` lists inside one `PROSE_CLAUSES` entry —
+//   `PROSE_CLAUSES` — empty: every skill carrying a warning phrase, a
+//     by-reference clause or the destroy-boundary bullet is undeclared, so the
+//     census FAILs in both mirrors.
+//   the `anchors`, `byReference` and `destroyBoundary` lists inside one
+//     `PROSE_CLAUSES` entry —
 //     empty TOGETHER, or holding an empty string: FAILs as an entry that claims a
 //     guard and asserts nothing. A `byReference` key PRESENT and EMPTY FAILs on its
 //     own too, and that one was measured on this check rather than reasoned about:
@@ -300,9 +317,18 @@
 //     legitimate (no entry is shaped that way today): it says the file's only
 //     guarded clause carries no warning, and the warning equality then holds at
 //     zero.
-//   `census` — empty (no skill carries a warning or a by-reference clause): every
-//     declared entry FAILs with "0 warning-carrying destination clause(s) in the
-//     file but N anchored", or with its by-reference counterpart.
+//   a `destroyBoundary` key PRESENT and EMPTY — the same vacuum as the
+//     `byReference` one above and guarded beside it, since the warning census
+//     and the by-reference census both still hold when the destroy-boundary
+//     anchor is removed. An ABSENT key is the ordinary shape for a skill that
+//     ships no such bullet, and is no longer a free way to un-guard one either:
+//     `PROSE_DESTROY_BOUNDARY` counts the bullet the mirrors ship and holds
+//     `destroyBoundary.length` to it, so deleting the key while the bullet ships
+//     FAILs.
+//   `census` — empty (no skill carries a warning, a by-reference clause or a
+//     destroy-boundary bullet): every declared entry FAILs with "0
+//     warning-carrying destination clause(s) in the file but N anchored", or with
+//     its by-reference or destroy-boundary counterpart.
 //   `deputyRules` — empty: the drift comparison over the deputy copies of the
 //     finish-in-turn rule answers vacuously, and it reported "0 deputy copy(ies)
 //     match the cycle's rule" as a pass until this was demonstrated by deleting
@@ -335,8 +361,9 @@
 // answer splits by whether anything counts that collection against the shipped
 // files. Where something does, shrinking FAILS on its own: dropping a
 // warning-carrying anchor from `PROSE_CLAUSES` leaves the census counting a
-// clause the table no longer declares, and dropping a `byReference` anchor now
-// fails too, against the guards beside it. Where nothing does —
+// clause the table no longer declares, and dropping a `byReference` or a
+// `destroyBoundary` anchor now fails too, each against the census key of its own
+// category and the guards beside it. Where nothing does —
 // `BESPOKE_DESTINATIONS`' entries, the guard registry above — shrinking is
 // invisible, and what the guards buy is that closing the resulting hole takes a
 // SECOND deliberate edit: removing the `rebaseTempDirectory` entry from
@@ -924,7 +951,7 @@ function report() {
   // count: on the vanished path one key names a file that is gone, and counting
   // it would contradict the row directly above that says exactly that.
   const accountedFor = Object.keys(CUT).filter((f) => shipped.includes(f)).length;
-  console.log(`\n${rendered} rendered prompt paths across ${accountedFor} accounted-for workflows, ${clauseChecks} boundary constants clause-checked, ${destinationChecks} of those renders ordering a build and destination-checked (${destinationContentChecks} destination constants content-pinned), ${proseAnchors} prose destination clauses deletion-guarded, ${failures} failing.`);
+  console.log(`\n${rendered} rendered prompt paths across ${accountedFor} accounted-for workflows, ${clauseChecks} boundary constants clause-checked, ${destinationChecks} of those renders ordering a build and destination-checked (${destinationContentChecks} destination constants content-pinned), ${proseAnchors} prose clauses deletion-guarded, ${failures} failing.`);
   if (failures) process.exit(1);
 }
 
@@ -1217,10 +1244,12 @@ if (!canonicalRule) {
 // lockstep rule this repository keeps by hand: these clauses are byte-identical
 // across the two sides today, so a mirror reworded on one side alone fails here.
 //
-// A grep for the CONCEPT finds more clauses than the census counts, so this
-// table sorts them into THREE categories and states the census equality over the
-// first alone. Naming all three is what reconciles the two numbers; naming one of
-// them did not, and the clause that fell through the gap is category 2:
+// A grep for the CONCEPT finds more clauses than any one census counts, so this
+// table sorts them into FOUR categories, each with the census it is held to.
+// Naming them all is what reconciles the numbers; naming one of them did not, and
+// the clause that fell through the gap is category 2. Categories 1 to 3 are each
+// guarded and each censused by a key of its own; category 4 is guarded by
+// nothing, deliberately:
 //
 //   1. WARNING-CARRYING clauses (`anchors`) — a clause that spells the shared-name
 //      warning `PROSE_WARNING` counts. `counted` must equal exactly this many, so
@@ -1252,7 +1281,23 @@ if (!canonicalRule) {
 //      symmetrical with category 1, and the residue is the same one: deleting the
 //      clause from both mirrors AND its key here is two edits, which is the
 //      shrinkage class the header states.
-//   3. DELIBERATELY UNANCHORED restatements — a brief template that RESTATES an
+//   3. THE DESTROY-BOUNDARY BULLET (`destroyBoundary`) — not a destination rule
+//      at all, and the one category here whose subject is where empirical
+//      verification RUNS rather than where its output lands. The seven skills
+//      that name `dc-enter` each ship it once, in both mirrors, fourteen copies
+//      byte-identical to one another today. It spells no shared-name warning and
+//      delegates nothing, so neither census above can reach it: appending its
+//      anchor to an existing entry's `anchors` would have broken that entry's
+//      `counted !== anchors.length` equality, which is why task 046b left it
+//      unguarded rather than bolting it on. Measured there, in a disposable
+//      clone: deleting the bullet from all fourteen copies passed every suite in
+//      `.github/workflows/tests.yml`. It gets a census of its own,
+//      `PROSE_DESTROY_BOUNDARY`, keyed on the SUBJECT the bullet opens with the
+//      way the first is keyed on the warning and the second on the reference, and
+//      `destroyBoundary.length` is held to that count by the same equality — so a
+//      bullet arriving in a skill this table does not name fails as undeclared,
+//      and one leaving a declared skill fails the count.
+//   4. DELIBERATELY UNANCHORED restatements — a brief template that RESTATES an
 //      already-anchored allocation by pointing back at it:
 //      `address-tasks-serialized`'s "Any build or lint output that must land in a
 //      file goes to `<validation-output path allocated above>`, never anywhere
@@ -1260,7 +1305,7 @@ if (!canonicalRule) {
 //      warning phrase, by design. What separates it from category 2 is that it
 //      imposes nothing: the rule it points at is anchored in the same file, in
 //      both mirrors, so deleting the restatement cannot delete the rule. That is
-//      why this shape is not guarded at all where category 2 is.
+//      why this shape is not guarded at all where categories 2 and 3 are.
 const PROSE_MIRRORS = ["plugins/dev-skills/skills", "codex/dev-skills/skills"];
 // The warning every one of these clauses carries, and the census key. It is not
 // the anchor: a clause could keep this phrase and lose its destination, which is
@@ -1304,16 +1349,87 @@ const PROSE_WARNING = /shared scratchpad (?:name|filename)|fixed shared filename
 // stops matching leaves `byReference` declaring a clause the census no longer
 // finds, which fails the equality.
 const PROSE_BY_REFERENCE = /under this cycle's artifact-directory rules/g;
+// The third census key, for category 3, keyed on what makes a clause one of that
+// category the way the first is keyed on the warning it spells and the second on
+// the reference it delegates to: the SUBJECT the destroy-boundary bullet opens
+// with. Measured over both mirrors as this lands — exactly one occurrence in
+// each of the fourteen files that ship the bullet, and zero in every other
+// `SKILL.md` on either side — so the count it yields is one per shipped bullet.
+//
+// It is NOT the guard, for the reason `PROSE_WARNING` is not: a bullet could keep
+// this opening and lose the destination and the guarded `cd` under it, which is
+// what the anchor below is long enough to catch. Its limits are the other two
+// keys' too — a bullet stating the same obligation in some other words is counted
+// zero times and is the "guarded, not discovered" asymmetry the header states, so
+// widen this pattern when one arrives; narrowing it is not a quiet way out, since
+// a pattern that stops matching leaves `destroyBoundary` declaring a bullet the
+// census no longer finds, which fails the equality.
+const PROSE_DESTROY_BOUNDARY = /Empirical verification that could change state/g;
+// Category 3's anchor, declared once and shared by all seven entries because that
+// is what ships: the bullet is byte-identical across the seven skills AND both
+// mirrors, measured. Declaring it once therefore holds every copy to the same
+// bytes, so a copy reworded on one side alone — or in one skill alone — fails
+// here, which is the strongest form of the lockstep rule this repository keeps by
+// hand. A skill that ever needs its own wording gets its own string in its entry;
+// nothing about the check requires these to be the same object.
+//
+// WHERE THE SPAN OPENS is a deliberate choice, made once here for a category
+// written from scratch. Task 046b measured the alternative on the workflow-side
+// pin this category is modelled after, "guarded `cd`, naming the install step":
+// that span opens on its imperative verb, and rewriting the five boundary
+// constants to say Never Write `cd -- …` left the suite at exit 0, because a
+// one-word negation prefixed to the verb leaves the pinned bytes intact. This
+// span opens instead on the clause's SUBJECT — `**Empirical verification that
+// could change state goes where you send it.**` — which puts the polarity inside
+// the span, so inverting the rule IN PLACE takes rewriting that sentence rather
+// than prefixing an adverb to it. It does not FORECLOSE negation, and is not claimed
+// to: a frame put in front of a complete declarative sentence leaves any span
+// intact, and that is measured, not assumed: one framing sentence prefixed to the
+// bullet in both mirrors inverts its effect and leaves this suite at exit 0 — the
+// same order of cost as the one adverb. What the choice buys is therefore narrower
+// than that contrast reads. It is the cost of inverting the rule IN PLACE, raised
+// from one adverb to a rewritten sentence; a negation framed around the whole
+// bullet stays exactly as cheap as it was, and that is all it is stated as.
+//
+// WHERE IT ENDS: the end of the bullet, so the span covers both operative clauses
+// — the named destination `DC="$(dc-enter <slug>)"` and the guarded `cd` with
+// the install pointer its message carries — and stops on the `pwd` confirmation
+// exactly where the workflow-side entry above stops. One span rather than several
+// because the rule is one bullet and the census counts it once; holding an
+// `anchors`-style list of two or three spans to a count of one would need a census
+// key that matched once per span, which is a worse thing to key on than the
+// obligation itself.
+//
+// What the span costs is the bullet's middle, carried along by continuity: the
+// slug-reuse mechanics and `Never leave the choice to the subagent.` cannot be
+// reworded without editing this string. That is the pins' cost taken knowingly
+// everywhere in this suite. What it buys, besides the two clauses it is here for,
+// is the third sentence between them — the install remedy at the invocation, the
+// half that survives `set -e`, where an absent helper exits the assignment 127 and
+// the guarded `cd` never expands at all. So the three REQUIRED entries that pin
+// this rule on the rendered side — the clone-only destination, that remedy, and
+// the guarded `cd` naming the install step — are all held on the prose side by
+// this one span.
+//
+// The em dashes inside are the shipped ones. Task 046b measured that this
+// message degrades under `zsh` at a non-UTF-8 locale and left the separator alone
+// as churn across nineteen shipped sites plus the pin; whoever does swap it for an
+// ASCII one edits this anchor in the same change, which is the point of spanning
+// the message rather than stopping at the `cd`.
+const PROSE_DESTROY_BOUNDARY_ANCHOR =
+  "**Empirical verification that could change state goes where you send it.** Send the subagent to `DC=\"$(dc-enter <slug>)\"` — one absolute path on stdout, dropped again with `dc-remove <slug>`; a reused slug is refused rather than re-derived, so anything that may run twice passes `--replace` or removes the slug first. Where that command is not found at all, install the helpers from the dev-skills plugin `bin/` rather than improvising a destination. Never leave the choice to the subagent. Give it the guarded `cd` too: `cd \"\"` returns 0 and moves nowhere, so checking the status catches nothing and a failed lookup leaves the subagent in the shared checkout — the form is `cd -- \"${DC:?dc-enter returned no path — see its error above; if it is not installed, install it from the dev-skills plugin bin/}\"`, with `pwd` confirmed before the first command that writes.";
 const PROSE_CLAUSES = {
   "address-review": {
     anchors: [
       "hand it the path any build or check output must land in — namespaced by this PR number, or created with `mktemp -d`, and outside the checkout it commits from — never a fixed shared scratchpad name",
     ],
+    destroyBoundary: [PROSE_DESTROY_BOUNDARY_ANCHOR],
   },
   "address-reviews": {
     anchors: [
       "Any output that must land in a file goes inside this worktree (a gitignored path, removed before any commit), never a shared scratchpad filename",
     ],
+    destroyBoundary: [PROSE_DESTROY_BOUNDARY_ANCHOR],
   },
   "address-tasks": {
     // The implementer template, the reviewer's own rule, and the quoted brief
@@ -1324,6 +1440,7 @@ const PROSE_CLAUSES = {
       "any build or check output that must land in a file goes inside this task's worktree (a gitignored path, removed before any commit), never a shared scratchpad filename",
       "create a unique directory for it first with `mktemp -d`, outside every worktree, and write there — never a fixed shared scratchpad name",
     ],
+    destroyBoundary: [PROSE_DESTROY_BOUNDARY_ANCHOR],
   },
   // Both of these clauses state their destination in a PRECEDING sentence and
   // refer back to it as "there", so an anchor starting at "Any build or … output"
@@ -1337,6 +1454,7 @@ const PROSE_CLAUSES = {
       "**An absolute path for validation output**, which you allocate — namespaced by this task's number or created with `mktemp -d`, and outside the working tree the implementer commits from. Any build or lint output that must land in a file goes there, never a fixed shared scratchpad name",
       "**An absolute path for validation output**, which you allocate — namespaced by this task's number or created with `mktemp -d`. Any build or check output that must land in a file goes there, never a fixed shared scratchpad name",
     ],
+    destroyBoundary: [PROSE_DESTROY_BOUNDARY_ANCHOR],
   },
   // The briefless spawn instruction: the rule sits in the skill text the
   // orchestrator itself follows, because there is no template to carry it.
@@ -1344,12 +1462,14 @@ const PROSE_CLAUSES = {
     anchors: [
       "Output that must land in a file goes to a path namespaced by the task number, or one created with `mktemp -d` — never a fixed shared scratchpad name",
     ],
+    destroyBoundary: [PROSE_DESTROY_BOUNDARY_ANCHOR],
   },
   "resolve-open-questions": {
     anchors: [
       "Hand it the path any of that output must land in — namespaced by the item, or created with `mktemp -d` — never a fixed shared scratchpad name",
       "Hand it the path any of that validation output must land in — namespaced by the item, or created with `mktemp -d`, and outside the worktree it commits from, which must be left clean — never a fixed shared scratchpad name",
     ],
+    destroyBoundary: [PROSE_DESTROY_BOUNDARY_ANCHOR],
   },
   // Two clauses: the Reviewer role's, which every consumer of the cycle reaches
   // through this one file, and the ALL-ROLES rule under `## Artifacts and
@@ -1382,6 +1502,7 @@ const PROSE_CLAUSES = {
     byReference: [
       "so the brief carries that absolute path, the branch, the pinned base below, and a destination for any build output under this cycle's artifact-directory rules",
     ],
+    destroyBoundary: [PROSE_DESTROY_BOUNDARY_ANCHOR],
   },
 };
 
@@ -1389,8 +1510,9 @@ const PROSE_CLAUSES = {
 // switches OFF rather than breaks, and the header enumerates all of them. These
 // two are the ones nothing else would notice: an emptied `REQUIRED` reported
 // "all 0 clauses" per boundary constant as a pass, and an emptied
-// `PROSE_MIRRORS` reported "0 prose destination clauses deletion-guarded" as
-// one. The rest fail on their own — an empty `CUT` leaves every shipped workflow
+// `PROSE_MIRRORS` reported "0 prose clauses deletion-guarded" as one — the
+// summary said "prose destination clauses" when that was measured, and task
+// 046e's category is what widened it past destinations. The rest fail on their own — an empty `CUT` leaves every shipped workflow
 // unlisted, an empty `PROSE_CLAUSES` leaves every censused clause undeclared —
 // so they are not restated here.
 const emptyTables = [
@@ -1430,20 +1552,22 @@ for (const mirror of PROSE_MIRRORS) {
     } catch {
       continue;
     }
-    // Two counts per file, one per censused category: the warning-carrying
-    // clauses and the by-reference ones. A file is in the census when it carries
-    // either, so a by-reference clause arriving in a file this table does not
-    // name fails as undeclared exactly as a warning-carrying one does.
+    // Three counts per file, one per censused category: the warning-carrying
+    // clauses, the by-reference ones and the destroy-boundary bullets. A file is
+    // in the census when it carries ANY of them, so a by-reference clause or a
+    // destroy-boundary bullet arriving in a file this table does not name fails
+    // as undeclared exactly as a warning-carrying one does.
     const counted = (text.match(PROSE_WARNING) || []).length;
     const byRefCounted = (text.match(PROSE_BY_REFERENCE) || []).length;
-    if (counted || byRefCounted) census.set(skill, { counted, byRefCounted });
+    const destroyCounted = (text.match(PROSE_DESTROY_BOUNDARY) || []).length;
+    if (counted || byRefCounted || destroyCounted) census.set(skill, { counted, byRefCounted, destroyCounted });
   }
   const undeclared = [...census.keys()].filter((skill) => !PROSE_CLAUSES[skill]);
   if (undeclared.length) {
     failures++;
-    rows.push([mirror, "prose census", "FAIL", `carries a destination clause but is not guarded: ${undeclared.join(", ")} — add its anchor(s)`]);
+    rows.push([mirror, "prose census", "FAIL", `carries a guarded-category clause but is not guarded: ${undeclared.join(", ")} — add its anchor(s)`]);
   } else {
-    rows.push([mirror, "prose census", "ok", `${census.size} skills carry destination clauses, all guarded`]);
+    rows.push([mirror, "prose census", "ok", `${census.size} skills carry guarded-category clauses, all guarded`]);
   }
   for (const [skill, entry] of Object.entries(PROSE_CLAUSES)) {
     const path = `${mirror}/${skill}/SKILL.md`;
@@ -1452,24 +1576,26 @@ for (const mirror of PROSE_MIRRORS) {
       text = readFileSync(join(dir, skill, "SKILL.md"), "utf8");
     } catch (err) {
       failures++;
-      rows.push([path, "prose destination", "FAIL", `cannot read: ${err.message}`]);
+      rows.push([path, "prose clauses", "FAIL", `cannot read: ${err.message}`]);
       continue;
     }
-    // Category 1 is what the census equality is stated over; category 2 is
-    // deletion-guarded on the same terms and excluded from that count, because it
-    // carries no warning for the census to have counted. Both are anchored, so
-    // both are checked present exactly once and both count toward the tally.
-    // `entry.anchors || []` because an OMITTED `anchors` key is the same claim as
-    // an empty one — the file's only guarded clause carries no warning — and the
-    // header offers that shape as legitimate. Reading it bare crashed on
-    // `TypeError: anchors is not iterable` before any table was printed, which is
-    // not what "legitimate" reads as anywhere else in this suite.
+    // Each guarded category has a census of its own and an equality of its own,
+    // because no one key could count all three: category 2 spells no warning and
+    // category 3 spells neither a warning nor a delegation. All three are
+    // anchored, so all three are checked present exactly once and all three count
+    // toward the tally. `entry.anchors || []` because an OMITTED `anchors` key is
+    // the same claim as an empty one — the file's only guarded clause carries no
+    // warning — and the header offers that shape as legitimate. Reading it bare
+    // crashed on `TypeError: anchors is not iterable` before any table was
+    // printed, which is not what "legitimate" reads as anywhere else in this
+    // suite; the other two keys are read the same way for the same reason.
     const anchors = entry.anchors || [];
     const byReference = entry.byReference || [];
-    const guarded = [...anchors, ...byReference];
+    const destroyBoundary = entry.destroyBoundary || [];
+    const guarded = [...anchors, ...byReference, ...destroyBoundary];
     const wrong = guarded.map((anchor) => [anchor, text.split(anchor).length - 1]).filter(([, n]) => n !== 1);
-    const { counted = 0, byRefCounted = 0 } = census.get(skill) || {};
-    // A skill listed here with no anchors of either kind claims to be guarded and
+    const { counted = 0, byRefCounted = 0, destroyCounted = 0 } = census.get(skill) || {};
+    // A skill listed here with no anchors of any kind claims to be guarded and
     // asserts nothing — the same vacuum an empty pin list is on the rendered side
     // — and an empty anchor is that vacuum one step down, since every file
     // contains one. The census would catch a clause arriving in the file, but an
@@ -1488,29 +1614,35 @@ for (const mirror of PROSE_MIRRORS) {
     // says the file's only guarded clause carries no warning, and the warning
     // equality then holds at zero.
     const vacuous = !guarded.length
-      ? "listed with no anchors of either kind — an entry asserting nothing; remove the key or give it its clause(s)"
+      ? "listed with no anchors of any kind — an entry asserting nothing; remove the key or give it its clause(s)"
       : guarded.some((anchor) => !anchor)
         ? "holds an empty anchor — every file contains one, so it guards nothing"
         : entry.byReference && !entry.byReference.length
           ? "declares a `byReference` category and puts no anchor in it — an empty list guards nothing; drop the key or anchor the clause"
-          : "";
+          : entry.destroyBoundary && !entry.destroyBoundary.length
+            ? "declares a `destroyBoundary` category and puts no anchor in it — an empty list guards nothing; drop the key or anchor the bullet"
+            : "";
     if (vacuous) {
       failures++;
-      rows.push([path, "prose destination", "FAIL", vacuous]);
+      rows.push([path, "prose clauses", "FAIL", vacuous]);
     } else if (wrong.length) {
       failures++;
       const [anchor, n] = wrong[0];
-      rows.push([path, "prose destination", "FAIL", `${wrong.length} of ${guarded.length} anchor(s) not present exactly once; first found ${n}x: ${JSON.stringify(anchor.slice(0, 70))}…`]);
+      rows.push([path, "prose clauses", "FAIL", `${wrong.length} of ${guarded.length} anchor(s) not present exactly once; first found ${n}x: ${JSON.stringify(anchor.slice(0, 70))}…`]);
     } else if (counted !== anchors.length) {
       failures++;
-      rows.push([path, "prose destination", "FAIL", `${counted} warning-carrying destination clause(s) in the file but ${anchors.length} anchored — a clause arrived or left; update the anchors`]);
+      rows.push([path, "prose clauses", "FAIL", `${counted} warning-carrying destination clause(s) in the file but ${anchors.length} anchored — a clause arrived or left; update the anchors`]);
     } else if (byRefCounted !== byReference.length) {
       failures++;
-      rows.push([path, "prose destination", "FAIL", `${byRefCounted} by-reference destination clause(s) in the file but ${byReference.length} anchored — a clause arrived, left, lost its \`byReference\` key, or was reworded past \`PROSE_BY_REFERENCE\`; update the anchors or the pattern`]);
+      rows.push([path, "prose clauses", "FAIL", `${byRefCounted} by-reference destination clause(s) in the file but ${byReference.length} anchored — a clause arrived, left, lost its \`byReference\` key, or was reworded past \`PROSE_BY_REFERENCE\`; update the anchors or the pattern`]);
+    } else if (destroyCounted !== destroyBoundary.length) {
+      failures++;
+      rows.push([path, "prose clauses", "FAIL", `${destroyCounted} destroy-boundary bullet(s) in the file but ${destroyBoundary.length} anchored — a bullet arrived, left, lost its \`destroyBoundary\` key, or was reworded past \`PROSE_DESTROY_BOUNDARY\`; update the anchors or the pattern`]);
     } else {
       proseAnchors += guarded.length;
       const also = byReference.length ? ` + ${byReference.length} by-reference` : "";
-      rows.push([path, "prose destination", "ok", `${anchors.length} clause(s) anchored${also}, ${counted} counted in the file${byRefCounted ? ` + ${byRefCounted} by reference` : ""}`]);
+      const alsoDestroy = destroyBoundary.length ? ` + ${destroyBoundary.length} destroy-boundary` : "";
+      rows.push([path, "prose clauses", "ok", `${anchors.length} clause(s) anchored${also}${alsoDestroy}, ${counted} counted in the file${byRefCounted ? ` + ${byRefCounted} by reference` : ""}${destroyCounted ? ` + ${destroyCounted} destroy-boundary` : ""}`]);
     }
   }
 }
