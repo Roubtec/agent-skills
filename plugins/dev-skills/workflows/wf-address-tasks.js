@@ -869,6 +869,13 @@ function worktreeContract(task, { mayCreate = false, measuring = false } = {}) {
   // attach an existing branch, create off the base) so prompts never re-derive
   // it. Stages that must not create work (reviewer, PR) omit the base: a
   // missing branch then errors instead of silently checking out an empty tree.
+  // The `cd` is deliberately bare rather than the guarded `cd -- "${WT:?…}"`
+  // `prPrompt` carries: the verify line below already fails closed on an empty
+  // `$WT`, since `cd ""` returns 0 and leaves the stage in the main checkout,
+  // where `git rev-parse --show-toplevel` prints a path that is not `$WT` and
+  // `git branch --show-current` prints some other branch. One guard per site —
+  // `prPrompt` guards its own `cd` because it has no such verification to lean
+  // on.
   const enter = mayCreate
     ? `WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)} ${shq(task.base)})" && cd "$WT"`
     : `WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && cd "$WT"`;
@@ -3118,6 +3125,11 @@ function prPrompt(task, ready, remote) {
   const assessments = Array.isArray(ready && ready.deviationAssessments) ? ready.deviationAssessments : [];
   const notes = (ready && ready.notes) || "";
   const rec = (ready && ready.recordOnly) || null;
+  // No-remote arm: `git -C "$WT"` rather than a `cd`, and left unguarded on
+  // purpose. Git skips the chdir outright for an empty `-C`, so an empty `$WT`
+  // runs the log in the main checkout — the same repository, answering a
+  // ref-to-ref range that resolves identically there. Nothing is misreported,
+  // and a guard here would be a case added for a failure that cannot show.
   if (!remote) {
     return `Remote push/PR is unavailable this run. Verify branch \`${task.branch}\` and its commits are intact: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && git -C "$WT" log --oneline ${shq(task.base)}..${shq(task.branch)}\` shows the work. Return \`opened: false\`, \`pushed: false\`, \`reason: "no remote auth this run"\`. Do not fail.
 
@@ -3134,7 +3146,7 @@ ${DESTROY_BOUNDARY}`;
   const flakeRecord = rec
     ? `\n\nThe cycle concluded over a FAILED delivery run, on the flake rule's evidenced-unrelated disposition${rec.range ? `, and over a final commit (\`${rec.range}\`) no fresh reviewer saw — the diagnosis-only follow-up task that failure earned` : ", and over no post-run commit this record points you at, so cite none"}. Carry a "Delivery-run failure — recorded, not reviewed" section in the body with these verbatim, so the maintainer sees the gap here and decides how to absorb it; do not re-diagnose, soften, or omit it:\n${JSON.stringify({ note: rec.note || "", ...(rec.range ? { rangeCheck: rec.verified || "" } : {}) }, null, 2)}`
     : "";
-  return `Open a pull request for branch \`${task.branch}\` against base \`${task.base}\`. Work from this task's worktree: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && cd "$WT"\` (rerun-safe resolve of the existing worktree; if it errors, STOP and report).
+  return `Open a pull request for branch \`${task.branch}\` against base \`${task.base}\`. Work from this task's worktree: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && cd -- "\${WT:?wt-enter returned no path — see its error above}"\` (rerun-safe resolve of the existing worktree; if it errors, STOP and report).
 
 ${DEPUTY_FINISH_IN_TURN}
 
@@ -3295,6 +3307,11 @@ async function discoverWaveCollisions({ ready, wave, defaultBase }) {
 // be reached from out here, and which names a different destination anyway: the
 // cycle's roles write into a round directory they keep, while this deputy needs
 // its log out of the worktree it is about to `git add` and commit.
+// The listed `wt-enter` command keeps the bare `cd "$WT"`, like
+// `worktreeContract`'s: the brief below makes the deputy verify
+// `git rev-parse --show-toplevel` and `git branch --show-current` against the
+// branch it is about to edit, which is what fails closed when an empty `$WT`
+// leaves it standing in the main checkout.
 function resolveCollisionsPrompt(tasks, waveCollisions, remote) {
   const taskList = tasks
     .map(
