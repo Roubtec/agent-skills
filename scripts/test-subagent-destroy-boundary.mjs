@@ -361,8 +361,9 @@
 // answer splits by whether anything counts that collection against the shipped
 // files. Where something does, shrinking FAILS on its own: dropping a
 // warning-carrying anchor from `PROSE_CLAUSES` leaves the census counting a
-// clause the table no longer declares, and dropping a `byReference` anchor now
-// fails too, against the guards beside it. Where nothing does —
+// clause the table no longer declares, and dropping a `byReference` or a
+// `destroyBoundary` anchor now fails too, each against the census key of its own
+// category and the guards beside it. Where nothing does —
 // `BESPOKE_DESTINATIONS`' entries, the guard registry above — shrinking is
 // invisible, and what the guards buy is that closing the resulting hole takes a
 // SECOND deliberate edit: removing the `rebaseTempDirectory` entry from
@@ -1380,11 +1381,15 @@ const PROSE_DESTROY_BOUNDARY = /Empirical verification that could change state/g
 // one-word negation prefixed to the verb leaves the pinned bytes intact. This
 // span opens instead on the clause's SUBJECT — `**Empirical verification that
 // could change state goes where you send it.**` — which puts the polarity inside
-// the span, so inverting the rule takes rewriting that sentence rather than
-// prefixing an adverb to it. It does not FORECLOSE negation, and is not claimed
+// the span, so inverting the rule IN PLACE takes rewriting that sentence rather
+// than prefixing an adverb to it. It does not FORECLOSE negation, and is not claimed
 // to: a frame put in front of a complete declarative sentence leaves any span
-// intact. What the choice buys is the cost of the edit that inverts the rule,
-// raised from one adverb to a rewritten sentence, and that is all it is stated as.
+// intact, and that is measured, not assumed: one framing sentence prefixed to the
+// bullet in both mirrors inverts its effect and leaves this suite at exit 0 — the
+// same order of cost as the one adverb. What the choice buys is therefore narrower
+// than that contrast reads. It is the cost of inverting the rule IN PLACE, raised
+// from one adverb to a rewritten sentence; a negation framed around the whole
+// bullet stays exactly as cheap as it was, and that is all it is stated as.
 //
 // WHERE IT ENDS: the end of the bullet, so the span covers both operative clauses
 // — the named destination `DC="$(dc-enter <slug>)"` and the guarded `cd` with
