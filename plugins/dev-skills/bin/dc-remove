@@ -59,9 +59,9 @@
 # subdirectory — so it is refused here rather than resolved to a second place.
 #
 # Sync discipline: see the header of `dc-enter` — this plugin copy is canonical
-# and net-new here, with no powbox-baked original to pin against, and any
-# behavior change to either helper must update scripts/test-dc-helpers.sh in the
-# same PR.
+# and powbox bakes both helpers onto the container PATH from it, nothing is
+# pinned, and any behavior change to either helper must update
+# scripts/test-dc-helpers.sh in the same PR.
 #
 # This script keeps the same discipline as dc-enter: `set -euo pipefail`, no
 # load-bearing command piped, and it never changes its own working directory —
