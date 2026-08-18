@@ -901,7 +901,7 @@ function cyclePeerPreflightPrompt() {
 
 ${CYCLE_DESTROY_BOUNDARY}
 
-If \`command -v codex\` fails, return \`{ "outcome": "unavailable", "detail": "missing binary" }\`. Otherwise run \`codex login status\`. If it succeeds, return \`{ "outcome": "available", "detail": "" }\`. If it fails and \`CODEX_API_KEY\` is unset, return unavailable with the exact login diagnostic in \`detail\`. If it fails while \`CODEX_API_KEY\` is set, return available because the environment key may authenticate the real invocation. Return only the schema; do not throw or launch codex exec.`;
+If \`command -v codex\` fails, return \`{ "outcome": "unavailable", "detail": "missing binary" }\`. Otherwise run \`codex login status\`. If it succeeds, return \`{ "outcome": "available", "detail": "" }\`. If it fails and \`CODEX_API_KEY\` is unset, return unavailable with the exact login diagnostic in \`detail\`. If it fails while \`CODEX_API_KEY\` is set, return available. Return only the schema; do not throw or launch codex exec.`;
 }
 
 function normalizeCyclePeerNotes(notes) {
