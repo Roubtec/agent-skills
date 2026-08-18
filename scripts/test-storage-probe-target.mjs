@@ -1,16 +1,19 @@
 #!/usr/bin/env node
 // Focused unit test for wf-address-tasks.js's storage-probe targeting and its
-// throttle-retention rule: `validateBootstrapWtBase` (the batch may not start
-// without an absolute worktree base) and `nextAvailBytes` (a probe that fails or
-// cannot measure keeps the previous reading). The workflow is a runtime script
+// throttle-retention rule: `validateBootstrapWtBase` (a bootstrap reporting `ok`
+// without an absolute worktree base fails the batch before any task runs) and
+// `nextAvailBytes` (a probe that failed or could not measure keeps the previous
+// reading, rather than widening or disabling the concurrency cap on a reading
+// nobody took). The workflow is a runtime script
 // (top-level await/return, injected `agent`/`phase`/`log` globals), so it cannot
 // be imported as a module; the pure functions are extracted by source and
 // evaluated in isolation, exercising the ACTUAL shipped code rather than a copy
 // — the same approach as test-checkout-cleanliness-report.mjs.
 //
 // The properties that live at CALL SITES rather than inside a pure function —
-// that every `df` probe is handed the validated base, and that the gate runs
-// before any task work — are asserted against the workflow source below.
+// that every `df` probe measures that validated base rather than a relative
+// fallback, and that the gate runs before any task work — are asserted against
+// the workflow source below.
 //
 // Run: node scripts/test-storage-probe-target.mjs
 
