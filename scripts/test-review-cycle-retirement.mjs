@@ -33,6 +33,24 @@
 // reading is taken when the packet RETURNS rather than folded into a later
 // round, which is what the confirmation-pass scenario pins.
 //
+// Three further groups ride in this file because they belong to the same
+// section rather than to a suite of their own, and each is documented at its
+// own scenario below. The SHARED PEER PREFLIGHT latch — exactly-once under
+// first-wave concurrency, reset after a synthesized throw — with the adaptive
+// throttle's exact helper/raw forfeiture-reason mapping and its negative
+// near-matches, on both workflow copies. The Codex-side prose's DIRECT-PROVIDER
+// PID/start-time helpers, extracted and driven to simulate `/proc` reuse,
+// start-read and identity-file-write cleanup, bounded TERM/KILL, survivor
+// failure, and missing-process death without signalling a real process; the
+// same section pins that the Claude-provider helper conversion stays deferred
+// until powbox documents a provider-neutral full-review payload, and parses the
+// retained raw path's passed-versus-issues evidence-failure contract. And
+// `wf-review-cycle.js`'s parse of the INVOKER'S GRANT of the close-out, which
+// decides whether that gate is reachable at all.
+//
+// Byte identity of the two executable cores is pinned at the end of the file,
+// after both have been driven as running code rather than compared as text.
+//
 // The workflows are runtime scripts (top-level await/return, injected
 // `agent`/`parallel`/`log` globals), so they cannot be imported. This evaluates
 // the ACTUAL shipped `review-cycle-core` section — no second copy — with those
