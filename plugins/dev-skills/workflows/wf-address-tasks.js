@@ -871,11 +871,14 @@ function worktreeContract(task, { mayCreate = false, measuring = false } = {}) {
   // missing branch then errors instead of silently checking out an empty tree.
   // The `cd` is deliberately bare rather than the guarded `cd -- "${WT:?…}"`
   // `prPrompt` carries: the verify line below already fails closed on an empty
-  // `$WT`, since `cd ""` returns 0 and leaves the stage in the main checkout,
-  // where `git rev-parse --show-toplevel` prints a path that is not `$WT` and
-  // `git branch --show-current` prints some other branch. One guard per site —
-  // `prPrompt` guards its own `cd` because it has no such verification to lean
-  // on.
+  // `$WT`, since `cd ""` returns 0 and leaves the stage wherever it already
+  // stood, where `git rev-parse --show-toplevel` prints a real repository root
+  // — which an empty `$WT` can never equal, whatever that tree is. That
+  // conjunct carries the guarantee by itself; the `git branch --show-current`
+  // one beside it is a second check rather than a second guard, and does not
+  // even hold in general (a detached main checkout prints nothing rather than
+  // some other branch). One guard per site — `prPrompt` guards its own `cd`
+  // because it has no such verification to lean on.
   const enter = mayCreate
     ? `WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)} ${shq(task.base)})" && cd "$WT"`
     : `WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && cd "$WT"`;
@@ -3311,7 +3314,10 @@ async function discoverWaveCollisions({ ready, wave, defaultBase }) {
 // `worktreeContract`'s: the brief below makes the deputy verify
 // `git rev-parse --show-toplevel` and `git branch --show-current` against the
 // branch it is about to edit, which is what fails closed when an empty `$WT`
-// leaves it standing in the main checkout.
+// leaves it wherever it already stood. That is the main checkout only for the
+// FIRST branch it enters; for every branch after it, the tree it never left is
+// the previously entered sibling's worktree — the one thing the same brief
+// forbids it to touch, and the stronger reason the check is there.
 function resolveCollisionsPrompt(tasks, waveCollisions, remote) {
   const taskList = tasks
     .map(
