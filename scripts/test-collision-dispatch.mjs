@@ -18,7 +18,18 @@
 // held branch of a cleared clash gets one), because "which branches did you
 // touch" is a self-report this stage has no way to check: a resolver that renamed
 // on two branches and named one would otherwise deliver the omitted branch's
-// post-cycle edits unreviewed.
+// post-cycle edits unreviewed. A rename the resolver reports but the tree does
+// not carry therefore holds BOTH sides, the untouched one included — the side
+// that used to deliver with no check at all.
+//
+// Every DEGRADED path into that decision is covered the same way, each its own
+// scenario below: no resolution packet at all, an unusable re-scan, too few of
+// a clash's branches in hand to compare, a clash the re-scan still sees, a
+// failed re-review, and a re-review that passed but left a standing deviation
+// from a LOCKED decision unassessed. So is the cost, which is the control in
+// the other direction: a wave that collided with nothing holds nothing and
+// spawns no agent from this stage at all, so widening who gets re-reviewed
+// never charges a clean wave for it.
 //
 // The workflow is a runtime script (top-level await/return, injected
 // `agent`/`phase`/`log` globals), so it cannot be imported. This evaluates the

@@ -2,6 +2,22 @@
 // Behavior suite for wf-address-tasks.js's discovery-stage collision partition.
 // It evaluates the shipped declaration prefix and drives its actual
 // `discoverWaveCollisions` helper; no second copy of the partition lives here.
+//
+// The property it exists for: a reported clash must name AT LEAST TWO reviewed
+// branches, attributed through the shared branch-name rule, or the whole
+// reviewed wave is held with a detail actionable enough to deconflict from.
+// Attribution is the weak point, so the scenarios below drive every way it can
+// come up short of two — a one-branch clash, a cross-task branch/slug alias,
+// two raw spellings that normalize to one branch, and two distinct names that
+// resolve to one task — and fully qualified local refs are canonicalized
+// through that same rule rather than counted as separate branches.
+//
+// The two ends are pinned as well: a well-formed clash reaches resolution
+// unchanged apart from its wave, and a CLEAN scan costs nothing — nothing held,
+// nothing routed to resolution, and no agent call beyond the discovery scan
+// this stage already made.
+//
+// Run: node scripts/test-collision-discovery.mjs
 
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
