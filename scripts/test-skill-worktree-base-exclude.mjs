@@ -343,9 +343,47 @@ for (const tree of ["plugins", "codex"]) {
 // span through its message, for the reason the destroy-boundary suite pins its
 // `${DC:?…}` twin that way: a span stopping at the `cd` stays green against a
 // stop that names no step, and the message is the whole diagnostic when it
-// fires. The bare form is pinned as ABSENT file-wide too, so a re-introduction
-// anywhere — including a second copy of the block — fails rather than hiding
-// behind the guarded one.
+// fires. Every UNGUARDED spelling is pinned as ABSENT file-wide too, so a
+// re-introduction anywhere — including a second copy of the block — fails
+// rather than hiding behind the guarded one. What separates the two is the
+// `:?` itself, not the punctuation around it: `--` and the quotes are free to
+// vary (`cd -- "$WT_BASE/…"` is the very convention every other guarded site
+// in this sweep writes, so an unguarded copy is more likely to carry `--` than
+// not), and only a `$WT_BASE` whose expansion is guarded may follow a `cd`.
+// A `cd` (with or without `--`, with or without quotes) onto `$WT_BASE` or
+// `${WT_BASE}`, EXCEPT where the name is immediately followed by the `:?` that
+// makes an empty base fatal — which is exactly the guarded form above, and the
+// only spelling this file admits.
+const UNGUARDED_CD = /\bcd[ \t]+(?:--[ \t]+)?"?\$\{?WT_BASE(?!:\?)/;
+
+// The parity check below compares the WHOLE fenced block, so the
+// `git worktree add --detach` line drifting in one mirror alone is caught too —
+// filtering to the `gh pr checkout` line would have pinned only the one line the
+// positive guard pins already force into both mirrors. Located as the single
+// fenced block that runs `gh pr checkout`; anything else means the recipe moved
+// and the comparison is no longer looking at it, so say so and stop.
+function forkAttachBlock(text, tree) {
+  const lines = text.split("\n");
+  const blocks = [];
+  let open = null;
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^\s*```/.test(lines[i])) continue;
+    if (open === null) open = i;
+    else {
+      blocks.push(lines.slice(open, i + 1).join("\n"));
+      open = null;
+    }
+  }
+  const hits = blocks.filter((b) => b.includes("gh pr checkout"));
+  if (hits.length !== 1) {
+    console.error(
+      `FAIL: ${tree}/dev-skills/skills/address-reviews/SKILL.md has ${hits.length} fenced blocks running \`gh pr checkout\`; expected 1.`,
+    );
+    process.exit(1);
+  }
+  return hits[0];
+}
+
 const FORK_ATTACH_GUARD =
   '( cd -- "${WT_BASE:?Session Bootstrap step 1 set no worktree base — prepare one there before attaching}/pr-<N>" && gh pr checkout N )';
 {
@@ -359,14 +397,13 @@ const FORK_ATTACH_GUARD =
       text.includes(FORK_ATTACH_GUARD),
     );
     check(
-      `${tree}/address-reviews: no bare \`cd\` into a \`$WT_BASE\`-built path survives anywhere in the file`,
-      !/cd "\$WT_BASE/.test(text) && !/cd \$WT_BASE/.test(text),
+      `${tree}/address-reviews: no unguarded \`cd\` into a \`$WT_BASE\`-built path — quoted, unquoted, or \`--\`-prefixed — survives anywhere in the file`,
+      !UNGUARDED_CD.test(text),
     );
   }
   check(
     "address-reviews: the fork attach block is byte-identical across the two mirrors",
-    texts[0][1].split("\n").filter((l) => l.includes("gh pr checkout N")).join("\n") ===
-      texts[1][1].split("\n").filter((l) => l.includes("gh pr checkout N")).join("\n"),
+    forkAttachBlock(texts[0][1], "plugins") === forkAttachBlock(texts[1][1], "codex"),
   );
 }
 
