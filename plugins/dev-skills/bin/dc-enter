@@ -276,10 +276,10 @@
 # other than what the caller supplied. The newline rule is re-applied to the
 # resolved value as well, which can acquire a newline the raw value never had
 # when a symlinked component resolves into a directory whose own name has one.
-# `DC_ROOT` is the placement interface between this repository and the container
-# image: powbox will express its "outside /workspace" placement by setting it,
-# and until it does, a clone in a powbox container lands under `$TMPDIR` like
-# anywhere else. Do not rename it on one side only.
+# `DC_ROOT` is the placement interface: a container image or a caller that wants
+# the clones somewhere particular says so by setting it. Nothing has to — with it
+# unset the root is `$TMPDIR` when that is set and `/tmp` otherwise, the order
+# this block opens with. Do not rename it on one side only.
 #
 # PATH LAYOUT: <root>/dc-<agent>-<repo-hash>/<slug>/repo
 # The `<agent>-<repo-hash>` component scopes clones per agent AND per invoking
@@ -333,11 +333,11 @@
 # negotiated, and a borrowing one loses the unreachable objects the dissociation's
 # repack cannot see.
 #
-# Sync discipline: this plugin copy is canonical and net-new here — unlike
-# `gh-review-threads` there is no powbox-baked original to vendor or checksum
-# against, so nothing is pinned. If powbox later bakes `dc-enter`/`dc-remove`
-# onto the container PATH, it must bake from this copy and keep `DC_ROOT` as the
-# placement interface. Any behavior change to either helper must update
+# Sync discipline: this plugin copy is canonical, and powbox bakes
+# `dc-enter`/`dc-remove` onto the container PATH from it. A baked copy comes from
+# this copy and keeps `DC_ROOT` as the placement interface — that is the contract,
+# not a description of one bake. Nothing is vendored or checksummed here, so
+# nothing is pinned. Any behavior change to either helper must update
 # scripts/test-dc-helpers.sh in the same PR.
 #
 # This script must not repeat the trap that caused the incident it exists to
