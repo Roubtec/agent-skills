@@ -128,7 +128,7 @@ Merge with `gh pr merge <PR#> --merge --match-head-commit <the polled headRefOid
 
 ## Focused tests
 
-Each subsection leads with the command and the change that obliges you to run it. What a suite pins, and the measured trade-offs behind how each of its checks is drawn, live in that script's own header comment rather than here.
+Each subsection leads with the command and the change that obliges you to run it. What a suite pins, and the measured trade-offs behind how each of its checks is drawn, live in that script's own comments.
 
 ### `test-gh-review-threads.sh`
 
@@ -180,7 +180,7 @@ Run `node scripts/test-unreviewed-close-carriage.mjs` after changing what a revi
 
 The delivery gate admits a failed delivery run only on the promise that the failures reach the maintainer, so the suite drives the shipped result carriers and PR-body/summary-comment briefs of `wf-address-tasks.js` and `wf-address-review.js` and fails when either drops, stops rendering, or over-claims that record. It also covers the one consumer stage that can falsify part of the record — the pre-PR collision guard's fresh re-review of a renamed branch, which sees the very commit the record says no fresh reviewer saw — on both halves: what it must correct, and what it must leave alone.
 
-Which routes reach the record's no-commit shape, and why the measurement log is named in the refusal message that sends a reader to it, are in the script's own header comment.
+Which routes reach the record's no-commit shape, and why the measurement log is named in the refusal message that sends a reader to it, are in the script's own comments.
 
 ### `test-address-review-reconcile.mjs`
 
