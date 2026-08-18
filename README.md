@@ -128,13 +128,23 @@ Merge with `gh pr merge <PR#> --merge --match-head-commit <the polled headRefOid
 
 ## Focused tests
 
+Each subsection leads with the command and the change that obliges you to run it. What a suite pins, and the measured trade-offs behind how each of its checks is drawn, live in that script's own header comment rather than here.
+
+### `test-gh-review-threads.sh`
+
 Run `bash scripts/test-gh-review-threads.sh` after any behavior change to `plugins/dev-skills/bin/gh-review-threads`; the hermetic suite stubs `gh` and needs only Bash and `jq`.
+
+### `test-dc-helpers.sh`
 
 Run `bash scripts/test-dc-helpers.sh` after any behavior change to `plugins/dev-skills/bin/dc-enter` or `plugins/dev-skills/bin/dc-remove`; the hermetic suite builds throwaway repositories under one `mktemp -d` root, never touches this repository, and needs only Bash, git, and coreutils.
 
+### `test-checkout-cleanliness-report.mjs`
+
 Run `node scripts/test-checkout-cleanliness-report.mjs` after changing the batch workflow's checkout-report behavior.
 
-Run `node scripts/test-storage-probe-target.mjs` after changing where the batch workflow points its `df` storage probes or what it does with a reading: it pins that a bootstrap reporting `ok` without an absolute worktree base fails the batch before any task runs, that every probe measures that validated path rather than a relative fallback, and that a probe which failed or could not measure keeps the previous reading instead of widening or disabling the concurrency cap.
+### `test-storage-probe-target.mjs`
+
+Run `node scripts/test-storage-probe-target.mjs` after changing where the batch workflow points its `df` storage probes or what it does with a reading.
 
 Run `node scripts/test-collision-discovery.mjs` after changing how the batch workflow partitions a discovery scan before collision resolution. It drives the shipped discovery helper with scripted scan packets and pins that a reported clash must name at least two reviewed branches through the shared branch-name attribution rule or hold the whole reviewed wave with an actionable detail; fully qualified local refs are canonicalized through that same rule, a well-formed clash reaches resolution unchanged, and a clean scan adds no agent call.
 
@@ -154,7 +164,11 @@ Run `node scripts/test-address-review-reconcile.mjs` after changing `wf-address-
 
 Run `node scripts/test-skill-worktree-base-exclude.mjs` after changing how any SKILL.md — or either workflow's own statement of it, `wf-address-tasks.js`'s bootstrap prompt and `wf-address-review.js`'s worktree-attach step — tells a run to make the worktree base ignored. The reconcile suite above pins that recipe on the workflow side; three skill steps state it in prose as well — `address-reviews`' and `address-tasks`' bootstrap steps and `address-review`'s attach paragraph — each shipped in two hand-edited mirrors with no generator between them, which is six files that can drift from the workflow and from each other one edit at a time. It asserts each step's two mirrors are byte-identical, that each carries the load-bearing clauses (the exclude file asked of `git rev-parse --git-path info/exclude`, that question asked from inside the repository, and the trailing-slash probe), and that no mention of `.git/info/exclude` stands undisclaimed as a path to write — the defect task 018a repaired, where the literal append simply fails from a linked worktree. The same clauses are asserted against the own text of both workflows that state the recipe, `wf-address-review.js` and `wf-address-tasks.js`, so no surface can be reconciled into a second spelling of one recipe; on `wf-address-tasks.js` it also pins the bootstrap prompt's step that discharges the obligation — its preference clauses, each anchored to the line that must carry them, and its probe stated exactly once across the whole file — and asserts the claim task 047a retired, that the helper "performs the whole Session Bootstrap", stays ABSENT. Two exclusions are pinned as decisions rather than left to a later audit, each asserted in the direction a later round would actually move it, since a required-clause list pins only the direction that drops one: `address-review`'s restatement is asserted NOT to carry the re-probe or its blocker, so reconciling that deviation costs a deliberate edit to the suite instead of passing unnoticed, and `declare-shadows` is asserted to name the exclude exactly ONCE, under its framing as a rule source that does not reach teammates rather than a file to append to — the count is what makes that "only" mean only, this being the one skill whose two mirror files carry the literal with no undisclaimed-mention scan over them.
 
-Run `node scripts/test-resolve-tasks-contract.mjs` after changing `resolve-tasks`, any task consumer's pointer preflight, or `wf-address-tasks`' resolve stage. It pins the resolver packet and its two mirrors, direct literal/glob semantics and the well-formed-task boundary, the provenance boundary that keeps explicit path/glob behavior additive even outside the resolved task subtree, each consumer's interactive-default and hands-off policy (including `reap-tasks`' already-reaped reading), and the workflow's exact structured-exclusion and wave-coverage gates for both no-op and nonempty plans, plus the argument reconciliation that rejects a packet silently dropping or inventing a raw pointer.
+### `test-resolve-tasks-contract.mjs`
+
+Run `node scripts/test-resolve-tasks-contract.mjs` after changing `resolve-tasks`, any task consumer's pointer preflight, or `wf-address-tasks`' resolve stage.
+
+### Dynamic workflow parse check
 
 Parse-check any changed dynamic workflow under `plugins/dev-skills/workflows/`. That check is not a `scripts/` suite: the command, and what a pass does and does not establish, live in `plugins/dev-skills/workflows/README.md`'s Validation section rather than here.
 

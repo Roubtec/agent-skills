@@ -3,6 +3,27 @@
 // three consumers in both hand-maintained mirrors, and wf-address-tasks's
 // hands-off structured-plan adoption.
 //
+// What it pins:
+//
+//   The RESOLVER PACKET and byte identity of its two mirrors; the direct
+//   literal/glob semantics and the well-formed-task boundary that decides what
+//   an arbitrary matched file is not.
+//
+//   The PROVENANCE BOUNDARY, which keeps explicit path/glob behavior additive
+//   even outside the resolved task subtree: such a path is reported as
+//   `outside-subtree` rather than invented into subtree state or flattened to
+//   `not-found`.
+//
+//   Each CONSUMER's interactive-default and hands-off policy, keyed off the
+//   packet's provenance rather than off resolver mechanics restated in the
+//   consumer — including `reap-tasks`' already-reaped reading, whose
+//   no-argument sweep still passes its discovered candidates through this same
+//   packet boundary.
+//
+//   The WORKFLOW's exact structured-exclusion and wave-coverage gates, for both
+//   the no-op and the nonempty plan, plus the argument reconciliation that
+//   rejects a packet silently dropping or inventing a raw pointer.
+//
 // Run: node scripts/test-resolve-tasks-contract.mjs
 
 import { readFileSync } from "node:fs";
