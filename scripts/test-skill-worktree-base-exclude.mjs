@@ -19,8 +19,8 @@
 //
 // What is pinned here is the resolved form's load-bearing clauses, not whole
 // sentences: reword freely around them. The clauses are asserted to appear in
-// the WORKFLOW's own text too, so the skills cannot be "reconciled" into a
-// second spelling of one recipe.
+// the WORKFLOWS' own text too — both of the two that state the recipe — so no
+// surface can be "reconciled" into a second spelling of one recipe.
 //
 // Run: node scripts/test-skill-worktree-base-exclude.mjs
 
@@ -55,12 +55,13 @@ function stepLine(tree, skill, anchor) {
   return hits[0];
 }
 
-// The workflow states the recipe inside a JS template literal, where every
+// The workflows state the recipe inside a JS template literal, where every
 // backtick of the prose is escaped; unescape so the clauses compare as text.
-const workflowText = readFileSync(
-  join(repo, "plugins", "dev-skills", "workflows", "wf-address-review.js"),
-  "utf8",
-).replace(/\\`/g, "`");
+function workflowText(file) {
+  return readFileSync(join(repo, "plugins", "dev-skills", "workflows", file), "utf8").replace(/\\`/g, "`");
+}
+const reviewWorkflow = workflowText("wf-address-review.js");
+const tasksWorkflow = workflowText("wf-address-tasks.js");
 
 // Clauses every one of the three steps must carry. Each is the ANSWER to a way
 // the recipe silently fails: ask Git for the exclude file rather than spelling
@@ -209,10 +210,60 @@ for (const skill of ["address-tasks", "address-reviews"]) {
   }
 }
 
-// One recipe, one spelling: the shared clauses are the workflow's own words, so
+// One recipe, one spelling: the shared clauses are the workflows' own words, so
 // a later round cannot "reconcile" the skills into a second phrasing of it.
 for (const [name, re] of SHARED) {
-  check(`wf-address-review.js states the same clause — ${name}`, re.test(workflowText));
+  check(`wf-address-review.js states the same clause — ${name}`, re.test(reviewWorkflow));
+}
+
+// Task 047a carried the same obligation onto the OTHER workflow surface.
+// `wf-address-tasks.js`'s bootstrap prompt used to tell its subagent that
+// `wt-bootstrap` "performs the whole Session Bootstrap deterministically" and
+// then enumerate what it does — a list with no ignore rule in it, because the
+// helper establishes none — while its helper-ABSENT branch returned a blocker
+// and said not to re-derive the checks by hand. So the rule was established in
+// no configuration: helper present, the step reported complete; helper absent,
+// the run stopped. Only the first of those was a defect, and only it was fixed:
+// the absent branch still stops, because a bootstrap that returns `ok: false`
+// adds no worktree and so has no base to protect (task 046b keeps that fallback
+// reachable rather than retiring it).
+//
+// Pinned beside the skills' PREFERENCE block rather than in a workflow-only
+// suite, so the two surfaces cannot drift apart again: the workflow now states
+// the SHARED clauses in the same spelling, carries the preference clauses the
+// skills carry, and states the probe exactly once — this file being the one
+// that counts occurrences, since a second spelling here is the drift it exists
+// to stop. The retired claim is asserted ABSENT: 047a's review plan treats a
+// restored "performs the whole Session Bootstrap" as a regression, and omission
+// from a clause list would not notice one coming back.
+for (const [name, re] of SHARED) {
+  check(`wf-address-tasks.js states the same clause — ${name}`, re.test(tasksWorkflow));
+}
+for (const [name, re] of PREFERENCE) {
+  check(`wf-address-tasks.js: ${name}`, re.test(tasksWorkflow));
+}
+check(
+  "wf-address-tasks.js no longer claims the helper performs the whole Session Bootstrap",
+  !/performs the whole Session Bootstrap/.test(tasksWorkflow),
+);
+{
+  const probes = tasksWorkflow.match(/git check-ignore/g) ?? [];
+  check(
+    "wf-address-tasks.js states the ignore recipe's probe exactly once",
+    probes.length === 1,
+    `${probes.length} occurrence(s)`,
+  );
+  // Same undisclaimed-literal scan the skill steps get: every mention of the
+  // literal must sit under a disclaimer (the RELATIVE answer a primary checkout
+  // gives, or the literal you must not spell), never stand as a path to write.
+  const bad = [...tasksWorkflow.matchAll(EXCLUDE_LITERAL)].filter(
+    (m) => !/literal|RELATIVE/.test(tasksWorkflow.slice(Math.max(0, m.index - 60), m.index)),
+  );
+  check(
+    "wf-address-tasks.js: no undisclaimed `.git/info/exclude` stated as a path to write",
+    bad.length === 0,
+    `${bad.length} undisclaimed mention(s)`,
+  );
 }
 
 // `declare-shadows` names `.git/info/exclude` too, as a rule source that does

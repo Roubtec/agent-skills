@@ -59,7 +59,11 @@
  * + remote probe), `wt-enter` (rerun-safe worktree resolve/attach/create), and
  * `wt-remove` (guarded cleanup) — the same single source of truth the
  * worktree-running skills call. Agents here invoke those scripts and exercise
- * judgment; they never re-derive the lifecycle from prose.
+ * judgment; they never re-derive the lifecycle from prose. The one exception is
+ * the ignore rule for the in-repo worktree base: no helper establishes it —
+ * `wt-bootstrap` reports `ok` whether or not it exists — so there is nothing to
+ * defer to and `bootstrapPrompt` states that recipe itself, once, in the same
+ * spelling `wf-address-review.js` uses.
  *
  * Runtime notes:
  *  - The script itself cannot read files or run shell/git — every git, gh, and
@@ -81,7 +85,7 @@ export const meta = {
   description: "Implement a batch selected by task numbers, paths, or globs: dependency waves, per-task worktree, and the shared review cycle per task — implement -> fresh-eyes review plus a best-effort cross-harness codex peer review -> fix (review is cross-harness; peer outcomes never block; bounded round cap) — with a pre-PR collision guard that deconflicts add/add clashes (rename one side + re-review) or holds an imperative name, one PR per delivered task.",
   whenToUse: "Execute numbers, paths, or globs for pre-planned task files end to end with per-task worktree isolation and cross-harness review (a best-effort codex peer beside each task's fresh reviewer). Not for one-off coding requests or planning new tasks.",
   phases: [
-    { title: "Bootstrap", detail: "wt-bootstrap: root-safety checks, orphan prune, remote probe" },
+    { title: "Bootstrap", detail: "wt-bootstrap: root-safety checks, orphan prune, remote probe; then the worktree base's ignore rule" },
     { title: "Resolve batch", detail: "read task files, derive dependency waves and branches" },
     { title: "Peer review (codex)", detail: "best-effort cross-harness second opinion beside each task's reviewer rounds; its outcome never blocks" },
     { title: "Collision scan", detail: "diff added files across sibling branches for add/add clashes" },
@@ -101,8 +105,8 @@ const BOOTSTRAP_SCHEMA = {
   type: "object",
   properties: {
     ok: { type: "boolean" },
-    blocker: { type: "string", description: "Why the batch cannot proceed (worktree roots unsafe, CONTAINER_NAME unset, wt-bootstrap missing). Empty when ok." },
-    wtBase: { type: "string", description: "Absolute path to this container's worktree base, `<repo>/.worktrees/$CONTAINER_NAME`. Mandatory whenever `ok` is true: the batch aborts rather than probe an unknown filesystem." },
+    blocker: { type: "string", description: "Why the batch cannot proceed (worktree roots unsafe, CONTAINER_NAME unset, wt-bootstrap missing, the in-repo worktree base still unignored after the append). Empty when ok." },
+    wtBase: { type: "string", description: "Absolute path to this container's worktree base, `<repo>/.worktrees/$CONTAINER_NAME`. Mandatory whenever `ok` is true: the batch aborts rather than probe an unknown filesystem. `ok` also asserts that base is IGNORED — `wt-bootstrap` establishes no ignore rule, so the bootstrap agent's own probe/append/re-probe is what backs that half." },
     remote: { type: "boolean", description: "True if push/PR is available (remote reachable); false means local-branch-only fallback." },
     availBytes: { type: "number", description: "Free bytes on the .worktrees mount, verbatim from wt-bootstrap (drives wave-width throttling)." },
   },
@@ -325,10 +329,11 @@ function bootstrapPrompt() {
 
 ${DESTROY_BOUNDARY}
 
-1. From the repo root, run \`wt-bootstrap\` (an image-baked helper on PATH). It performs the whole Session Bootstrap deterministically: verifies the worktree roots are container-local (never the host bind mount), prunes ONLY this container's orphaned worktrees under \`.worktrees/$CONTAINER_NAME/\`, sets up the container-local SSH→HTTPS remote rewrite, probes push access, and prints one JSON object.
-2. Map that JSON onto the structured result verbatim — \`ok\`, \`blocker\`, \`wtBase\`, \`remote\`, \`availBytes\` — with no reinterpretation. \`remote: false\` is NOT a blocker (the batch falls back to local branches and skips PRs). On \`ok: true\`, \`wtBase\` must be the absolute path the script printed: never a relative path, never one derived from your own working directory. The batch aborts without it rather than measure an unknown filesystem.
-3. If \`wt-bootstrap\` is not on PATH, the image predates it: return \`ok: false\` with blocker \`"image predates the wt-* helpers; rebuild the powbox image and relaunch"\`. Do not re-derive the checks by hand.
-4. On \`ok: false\` from the script, return its \`blocker\` verbatim (typical remedies it names: set CONTAINER_NAME, run \`enable-worktrees\`, rebuild/relaunch).`;
+1. From the repo root, run \`wt-bootstrap\` (an image-baked helper on PATH). It performs the deterministic checks of the Session Bootstrap: verifies the worktree roots are container-local (never the host bind mount), prunes ONLY this container's orphaned worktrees under \`.worktrees/$CONTAINER_NAME/\`, sets up the container-local SSH→HTTPS remote rewrite, probes push access, and prints one JSON object. It establishes no ignore rule, though: the in-repo base it reports is still yours to make ignored, by step 2 below, and it reports \`ok\` whether or not that rule exists.
+2. Where it reported \`ok\`, make that base ignored BEFORE any worktree is added under it. The \`wtBase\` it prints is \`<repo>/.worktrees/$CONTAINER_NAME\`, inside the repository, and only this run makes it ignored: \`git worktree add\` excludes nothing on its own, so in a repository that does not already carry the rule this batch's adds leave \`?? .worktrees/\` standing in the main checkout for as long as its worktrees live — dirtying the one tree the batch promises never to dirty and exposing it to a stray \`git add -A\`. So run \`git check-ignore -q "<repo>/.worktrees/"\` — with the TRAILING SLASH, since \`/.worktrees/\` is a directory-only rule and \`check-ignore\` answers NO for a bare \`.worktrees\` that does not exist on disk yet, which is every first run — and, where it answers no, append \`/.worktrees/\` to the file \`git rev-parse --git-path info/exclude\` names — run it from inside \`<repo>\`, because in a primary checkout it answers with the RELATIVE \`.git/info/exclude\` (only a linked worktree gets an absolute path), so a \`git -C <repo>\` form whose answer you then append to from your own directory writes the rule to a file \`check-ignore\` never reads — then re-probe and make a still-no answer a blocker: return \`ok: false\` with a \`blocker\` naming the base that is still not ignored, rather than an \`ok\` this batch would add worktrees under. Ask Git for that path rather than writing a literal \`.git/info/exclude\`: THIS checkout may itself be a linked worktree, where \`.git\` is a gitfile and \`.git/info\` is not a directory at all, so the literal append fails outright and the protection is never established — while \`--git-path\` resolves to the shared exclude file that \`check-ignore\` actually reads, in a linked worktree and a primary checkout alike. It is the repo-local ignore file, which is untracked and so dirties nothing itself, and NOT the tracked \`.gitignore\`, which is the maintainer's to edit and whose edit would dirty the main checkout mid-run.
+3. Map that JSON onto the structured result verbatim — \`ok\`, \`blocker\`, \`wtBase\`, \`remote\`, \`availBytes\` — with no reinterpretation. \`remote: false\` is NOT a blocker (the batch falls back to local branches and skips PRs). On \`ok: true\`, \`wtBase\` must be the absolute path the script printed: never a relative path, never one derived from your own working directory. The batch aborts without it rather than measure an unknown filesystem.
+4. If \`wt-bootstrap\` is not on PATH, the image predates it: return \`ok: false\` with blocker \`"image predates the wt-* helpers; rebuild the powbox image and relaunch"\`. Do not re-derive the checks by hand — and step 2 does not apply either: an \`ok: false\` bootstrap adds no worktree, so there is no base to protect and nothing to write to this repository's exclude file on the way out.
+5. On \`ok: false\` from the script, return its \`blocker\` verbatim (typical remedies it names: set CONTAINER_NAME, run \`enable-worktrees\`, rebuild/relaunch). Step 2 does not apply there either, for the same reason.`;
 }
 
 const STORAGE_PROBE_SCHEMA = {
