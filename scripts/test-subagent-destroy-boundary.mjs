@@ -1374,9 +1374,9 @@ const PROSE_DESTROY_BOUNDARY = /Empirical verification that could change state/g
 //
 // WHERE THE SPAN OPENS is a deliberate choice, made once here for a category
 // written from scratch. Task 046b measured the alternative on the workflow-side
-// pin this category is modelled after, `guarded \`cd\`, naming the install step`:
+// pin this category is modelled after, "guarded `cd`, naming the install step":
 // that span opens on its imperative verb, and rewriting the five boundary
-// constants to `Never Write \`cd -- …\`` left the suite at exit 0, because a
+// constants to say Never Write `cd -- …` left the suite at exit 0, because a
 // one-word negation prefixed to the verb leaves the pinned bytes intact. This
 // span opens instead on the clause's SUBJECT — `**Empirical verification that
 // could change state goes where you send it.**` — which puts the polarity inside
@@ -1389,14 +1389,22 @@ const PROSE_DESTROY_BOUNDARY = /Empirical verification that could change state/g
 // WHERE IT ENDS: the end of the bullet, so the span covers both operative clauses
 // — the named destination `DC="$(dc-enter <slug>)"` and the guarded `cd` with
 // the install pointer its message carries — and stops on the `pwd` confirmation
-// exactly where the workflow-side entry above stops. Continuity carries the
-// bullet's middle along: the slug-reuse mechanics, the install remedy at the
-// invocation, and `Never leave the choice to the subagent.` That is the pins' cost
-// taken knowingly everywhere in this suite, and here it is also the point, since
-// two of those three sentences are REQUIRED entries of their own on the workflow
-// side — `install remedy at the invocation` and the permitted/forbidden split's
-// neighbours — so one span holds the prose copy to what three pins hold the
-// rendered one to.
+// exactly where the workflow-side entry above stops. One span rather than several
+// because the rule is one bullet and the census counts it once; holding an
+// `anchors`-style list of two or three spans to a count of one would need a census
+// key that matched once per span, which is a worse thing to key on than the
+// obligation itself.
+//
+// What the span costs is the bullet's middle, carried along by continuity: the
+// slug-reuse mechanics and `Never leave the choice to the subagent.` cannot be
+// reworded without editing this string. That is the pins' cost taken knowingly
+// everywhere in this suite. What it buys, besides the two clauses it is here for,
+// is the third sentence between them — the install remedy at the invocation, the
+// half that survives `set -e`, where an absent helper exits the assignment 127 and
+// the guarded `cd` never expands at all. So the three REQUIRED entries that pin
+// this rule on the rendered side — the clone-only destination, that remedy, and
+// the guarded `cd` naming the install step — are all held on the prose side by
+// this one span.
 //
 // The em dashes inside are the shipped ones. Task 046b measured that this
 // message degrades under `zsh` at a non-UTF-8 locale and left the separator alone
@@ -1404,7 +1412,7 @@ const PROSE_DESTROY_BOUNDARY = /Empirical verification that could change state/g
 // ASCII one edits this anchor in the same change, which is the point of spanning
 // the message rather than stopping at the `cd`.
 const PROSE_DESTROY_BOUNDARY_ANCHOR =
-  "**Empirical verification that could change state goes where you send it.** Send the subagent to `DC=\"$(dc-enter <slug>)\"` \u2014 one absolute path on stdout, dropped again with `dc-remove <slug>`; a reused slug is refused rather than re-derived, so anything that may run twice passes `--replace` or removes the slug first. Where that command is not found at all, install the helpers from the dev-skills plugin `bin/` rather than improvising a destination. Never leave the choice to the subagent. Give it the guarded `cd` too: `cd \"\"` returns 0 and moves nowhere, so checking the status catches nothing and a failed lookup leaves the subagent in the shared checkout \u2014 the form is `cd -- \"${DC:?dc-enter returned no path \u2014 see its error above; if it is not installed, install it from the dev-skills plugin bin/}\"`, with `pwd` confirmed before the first command that writes.";
+  "**Empirical verification that could change state goes where you send it.** Send the subagent to `DC=\"$(dc-enter <slug>)\"` — one absolute path on stdout, dropped again with `dc-remove <slug>`; a reused slug is refused rather than re-derived, so anything that may run twice passes `--replace` or removes the slug first. Where that command is not found at all, install the helpers from the dev-skills plugin `bin/` rather than improvising a destination. Never leave the choice to the subagent. Give it the guarded `cd` too: `cd \"\"` returns 0 and moves nowhere, so checking the status catches nothing and a failed lookup leaves the subagent in the shared checkout — the form is `cd -- \"${DC:?dc-enter returned no path — see its error above; if it is not installed, install it from the dev-skills plugin bin/}\"`, with `pwd` confirmed before the first command that writes.";
 const PROSE_CLAUSES = {
   "address-review": {
     anchors: [
@@ -1582,7 +1590,7 @@ for (const mirror of PROSE_MIRRORS) {
     const guarded = [...anchors, ...byReference, ...destroyBoundary];
     const wrong = guarded.map((anchor) => [anchor, text.split(anchor).length - 1]).filter(([, n]) => n !== 1);
     const { counted = 0, byRefCounted = 0, destroyCounted = 0 } = census.get(skill) || {};
-    // A skill listed here with no anchors of either kind claims to be guarded and
+    // A skill listed here with no anchors of any kind claims to be guarded and
     // asserts nothing — the same vacuum an empty pin list is on the rendered side
     // — and an empty anchor is that vacuum one step down, since every file
     // contains one. The census would catch a clause arriving in the file, but an
@@ -1601,7 +1609,7 @@ for (const mirror of PROSE_MIRRORS) {
     // says the file's only guarded clause carries no warning, and the warning
     // equality then holds at zero.
     const vacuous = !guarded.length
-      ? "listed with no anchors of either kind — an entry asserting nothing; remove the key or give it its clause(s)"
+      ? "listed with no anchors of any kind — an entry asserting nothing; remove the key or give it its clause(s)"
       : guarded.some((anchor) => !anchor)
         ? "holds an empty anchor — every file contains one, so it guards nothing"
         : entry.byReference && !entry.byReference.length
