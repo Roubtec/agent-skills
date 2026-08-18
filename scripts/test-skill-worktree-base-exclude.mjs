@@ -343,15 +343,15 @@ for (const tree of ["plugins", "codex"]) {
 // span through its message, for the reason the destroy-boundary suite pins its
 // `${DC:?…}` twin that way: a span stopping at the `cd` stays green against a
 // stop that names no step, and the message is the whole diagnostic when it
-// fires. Every UNGUARDED spelling is pinned as ABSENT file-wide too, so a
-// re-introduction anywhere — including a second copy of the block — fails
-// rather than hiding behind the guarded one. What separates the two is the
-// `:?` itself, not the punctuation around it: `--` and the quotes are free to
-// vary (`cd -- "$WT_BASE/…"` is the very convention every other guarded site
-// in this sweep writes, so an unguarded copy is more likely to carry `--` than
+// fires. The absence pin runs file-wide, so a re-introduction anywhere —
+// including a second copy of the block — fails rather than hiding behind the
+// guarded one. What separates guarded from unguarded is the `:?` itself, not
+// the punctuation around it: `--` and the quotes are free to vary
+// (`cd -- "$WT_BASE/…"` is the very convention every other guarded site in
+// this sweep writes, so an unguarded copy is more likely to carry `--` than
 // not), so the pattern below admits a `$WT_BASE` — or a `${WT_BASE}` — after a
 // `cd` only where the `:?` that makes an empty base fatal immediately follows
-// the name, which is exactly the guarded form and nothing else.
+// the name.
 const UNGUARDED_CD = /\bcd[ \t]+(?:--[ \t]+)?"?\$\{?WT_BASE(?!:\?)/;
 
 // The parity check below compares the WHOLE fenced block, so the
@@ -401,7 +401,7 @@ const FORK_ATTACH_GUARD =
   }
   check(
     "address-reviews: the fork attach block is byte-identical across the two mirrors",
-    forkAttachBlock(texts[0][1], "plugins") === forkAttachBlock(texts[1][1], "codex"),
+    forkAttachBlock(texts[0][1], texts[0][0]) === forkAttachBlock(texts[1][1], texts[1][0]),
   );
 }
 
