@@ -332,6 +332,44 @@ for (const tree of ["plugins", "codex"]) {
   );
 }
 
+// The fork-attach recipe is the one place a skill tells a run to `cd` INTO a
+// path built out of `$WT_BASE` (task 046a). `cd ""` returns 0 and moves
+// nowhere, but an empty `$WT_BASE` here is worse than that: the path becomes
+// the absolute `/pr-<N>`, so wherever such a directory exists the `cd`
+// SUCCEEDS and `gh pr checkout` runs in a tree nobody chose — measured under a
+// namespace that binds one there. Nothing else in the recipe catches it; the
+// `git worktree add` on the line before is a separate command with the same
+// expansion, not a guard on this one. So the guard is pinned as ONE CONTINUOUS
+// span through its message, for the reason the destroy-boundary suite pins its
+// `${DC:?…}` twin that way: a span stopping at the `cd` stays green against a
+// stop that names no step, and the message is the whole diagnostic when it
+// fires. The bare form is pinned as ABSENT file-wide too, so a re-introduction
+// anywhere — including a second copy of the block — fails rather than hiding
+// behind the guarded one.
+const FORK_ATTACH_GUARD =
+  '( cd -- "${WT_BASE:?Session Bootstrap step 1 set no worktree base — prepare one there before attaching}/pr-<N>" && gh pr checkout N )';
+{
+  const texts = ["plugins", "codex"].map((tree) => [
+    tree,
+    readFileSync(join(repo, tree, "dev-skills", "skills", "address-reviews", "SKILL.md"), "utf8"),
+  ]);
+  for (const [tree, text] of texts) {
+    check(
+      `${tree}/address-reviews: the fork attach enters through a guard that fails on an empty base and names the step that should have set it`,
+      text.includes(FORK_ATTACH_GUARD),
+    );
+    check(
+      `${tree}/address-reviews: no bare \`cd\` into a \`$WT_BASE\`-built path survives anywhere in the file`,
+      !/cd "\$WT_BASE/.test(text) && !/cd \$WT_BASE/.test(text),
+    );
+  }
+  check(
+    "address-reviews: the fork attach block is byte-identical across the two mirrors",
+    texts[0][1].split("\n").filter((l) => l.includes("gh pr checkout N")).join("\n") ===
+      texts[1][1].split("\n").filter((l) => l.includes("gh pr checkout N")).join("\n"),
+  );
+}
+
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed.`);
   process.exit(1);
