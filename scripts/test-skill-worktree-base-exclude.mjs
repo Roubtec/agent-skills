@@ -349,11 +349,9 @@ for (const tree of ["plugins", "codex"]) {
 // `:?` itself, not the punctuation around it: `--` and the quotes are free to
 // vary (`cd -- "$WT_BASE/…"` is the very convention every other guarded site
 // in this sweep writes, so an unguarded copy is more likely to carry `--` than
-// not), and only a `$WT_BASE` whose expansion is guarded may follow a `cd`.
-// A `cd` (with or without `--`, with or without quotes) onto `$WT_BASE` or
-// `${WT_BASE}`, EXCEPT where the name is immediately followed by the `:?` that
-// makes an empty base fatal — which is exactly the guarded form above, and the
-// only spelling this file admits.
+// not), so the pattern below admits a `$WT_BASE` — or a `${WT_BASE}` — after a
+// `cd` only where the `:?` that makes an empty base fatal immediately follows
+// the name, which is exactly the guarded form and nothing else.
 const UNGUARDED_CD = /\bcd[ \t]+(?:--[ \t]+)?"?\$\{?WT_BASE(?!:\?)/;
 
 // The parity check below compares the WHOLE fenced block, so the
