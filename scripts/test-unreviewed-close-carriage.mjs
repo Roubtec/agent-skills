@@ -77,7 +77,7 @@ function check(name, cond, detail) {
 // does not count. Bump it deliberately when adding or removing one — a check
 // that silently stops running is invisible to a suite that only gates on
 // failures.
-const EXPECTED_CHECKS = 50;
+const EXPECTED_CHECKS = 51;
 
 // Evaluate a workflow's declaration prefix up to its documented cut marker and
 // hand back the named ones. Each is returned by an explicit reference, so a
@@ -220,6 +220,26 @@ const cycleResult = (extra) => ({
   // it has nowhere to put.
   const noRemote = prPrompt(task, { notes: "", deviations: [], recordOnly: RECORD }, false);
   check("the no-remote brief, which opens no PR, carries no record", !noRemote.includes(NOTE) && !/recorded, not reviewed/.test(noRemote), "pr prompt");
+
+  // --- The worktree entry's guarded `cd` (task 046a) -------------------------
+  // `cd ""` returns 0 and moves nowhere, so a `wt-enter` that exited 0 printing
+  // nothing would leave this deputy pushing and opening a PR from the shared
+  // main checkout — and the `&&` catches none of it, because the assignment
+  // itself succeeded. Every other stage's `wt-enter` line is followed by a
+  // `git rev-parse --show-toplevel` / `git branch --show-current` check that
+  // fails closed on that empty value instead; this brief has none, which is why
+  // the guard sits on its `cd` and why nothing but this entry holds it.
+  //
+  // Pinned as ONE CONTINUOUS span, for the reason the destroy-boundary suite
+  // pins its `${DC:?…}` twin rather than the bare `cd`: a span stopping at the
+  // `cd` is green against a stop that names no step, and the message is the
+  // whole diagnostic when it fires.
+  const GUARDED_ENTER = `WT="$(wt-enter 't035' 'task/035-x')" && cd -- "\${WT:?wt-enter returned no path — see its error above}"`;
+  check(
+    "the PR brief enters the worktree through a guard that fails on an empty path and names the step that should have produced it",
+    withRecord.includes(GUARDED_ENTER),
+    "pr prompt",
+  );
 
   // --- The PR-creation read-backs the same brief performs (task 023b) --------
   // `prPrompt`'s step 3 asserts a just-created PR's base and its step 4 recovers

@@ -332,6 +332,79 @@ for (const tree of ["plugins", "codex"]) {
   );
 }
 
+// The fork-attach recipe is the one place a skill tells a run to `cd` INTO a
+// path built out of `$WT_BASE` (task 046a). `cd ""` returns 0 and moves
+// nowhere, but an empty `$WT_BASE` here is worse than that: the path becomes
+// the absolute `/pr-<N>`, so wherever such a directory exists the `cd`
+// SUCCEEDS and `gh pr checkout` runs in a tree nobody chose — measured under a
+// namespace that binds one there. Nothing else in the recipe catches it; the
+// `git worktree add` on the line before is a separate command with the same
+// expansion, not a guard on this one. So the guard is pinned as ONE CONTINUOUS
+// span through its message, for the reason the destroy-boundary suite pins its
+// `${DC:?…}` twin that way: a span stopping at the `cd` stays green against a
+// stop that names no step, and the message is the whole diagnostic when it
+// fires. The absence pin runs file-wide, so a re-introduction anywhere —
+// including a second copy of the block — fails rather than hiding behind the
+// guarded one. What separates guarded from unguarded is the `:?` itself, not
+// the punctuation around it: `--` and the quotes are free to vary
+// (`cd -- "$WT_BASE/…"` is the very convention every other guarded site in
+// this sweep writes, so an unguarded copy is more likely to carry `--` than
+// not), so the pattern below admits a `$WT_BASE` — or a `${WT_BASE}` — after a
+// `cd` only where the `:?` that makes an empty base fatal immediately follows
+// the name.
+const UNGUARDED_CD = /\bcd[ \t]+(?:--[ \t]+)?"?\$\{?WT_BASE(?!:\?)/;
+
+// The parity check below compares the WHOLE fenced block, so the
+// `git worktree add --detach` line drifting in one mirror alone is caught too —
+// filtering to the `gh pr checkout` line would have pinned only the one line the
+// positive guard pins already force into both mirrors. Located as the single
+// fenced block that runs `gh pr checkout`; anything else means the recipe moved
+// and the comparison is no longer looking at it, so say so and stop.
+function forkAttachBlock(text, tree) {
+  const lines = text.split("\n");
+  const blocks = [];
+  let open = null;
+  for (let i = 0; i < lines.length; i++) {
+    if (!/^\s*```/.test(lines[i])) continue;
+    if (open === null) open = i;
+    else {
+      blocks.push(lines.slice(open, i + 1).join("\n"));
+      open = null;
+    }
+  }
+  const hits = blocks.filter((b) => b.includes("gh pr checkout"));
+  if (hits.length !== 1) {
+    console.error(
+      `FAIL: ${tree}/dev-skills/skills/address-reviews/SKILL.md has ${hits.length} fenced blocks running \`gh pr checkout\`; expected 1.`,
+    );
+    process.exit(1);
+  }
+  return hits[0];
+}
+
+const FORK_ATTACH_GUARD =
+  '( cd -- "${WT_BASE:?Session Bootstrap step 1 set no worktree base — prepare one there before attaching}/pr-<N>" && gh pr checkout N )';
+{
+  const texts = ["plugins", "codex"].map((tree) => [
+    tree,
+    readFileSync(join(repo, tree, "dev-skills", "skills", "address-reviews", "SKILL.md"), "utf8"),
+  ]);
+  for (const [tree, text] of texts) {
+    check(
+      `${tree}/address-reviews: the fork attach enters through a guard that fails on an empty base and names the step that should have set it`,
+      text.includes(FORK_ATTACH_GUARD),
+    );
+    check(
+      `${tree}/address-reviews: no unguarded \`cd\` into a \`$WT_BASE\`-built path — quoted, unquoted, or \`--\`-prefixed — survives anywhere in the file`,
+      !UNGUARDED_CD.test(text),
+    );
+  }
+  check(
+    "address-reviews: the fork attach block is byte-identical across the two mirrors",
+    forkAttachBlock(texts[0][1], texts[0][0]) === forkAttachBlock(texts[1][1], texts[1][0]),
+  );
+}
+
 if (failures > 0) {
   console.error(`\n${failures} check(s) failed.`);
   process.exit(1);
