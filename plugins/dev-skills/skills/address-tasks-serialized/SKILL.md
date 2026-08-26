@@ -1,6 +1,6 @@
 ---
 name: address-tasks-serialized
-description: Execute a batch of pre-planned task files end to end, strictly sequentially on one shared working tree — one branch per task, delegate implementation and review to fresh subagents, and open PRs against the resolved base. Trigger only when sequential single-branch execution is explicitly wanted — e.g. to stay within rate limits, or when parallel worktrees are not suitable; otherwise the parallel `address-tasks` is the default. Do not trigger for one-off coding requests or for planning new tasks.
+description: A batch of pre-planned task files must be implemented strictly one after another on a single working tree. Trigger only when the user explicitly wants sequential single-branch execution - to stay within rate limits, or because parallel worktrees are unsuitable - or runs address-tasks-serialized; otherwise address-tasks is the default. Not for one-off coding requests or for planning new tasks (use write-tasks).
 ---
 
 Implement the given task or a set of tasks using a delegated subagent workflow.

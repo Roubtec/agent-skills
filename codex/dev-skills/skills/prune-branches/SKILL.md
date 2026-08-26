@@ -1,6 +1,6 @@
 ---
 name: prune-branches
-description: "Safely classify and prune local Git branches after merged task batches while preserving uncertain or recoverable work with backup refs. Trigger when the user asks to prune branches, clean up local branches or the workspace, delete merged branches, or remove post-batch branch scaffolding. Do not trigger for remote branch cleanup, deleting branches on origin, rebase-stack work, or enabling worktrees."
+description: Local branches have piled up after merged task batches and need cleaning out. Trigger when the user asks to prune branches, clean up local branches or the workspace, delete merged branches, remove post-batch branch scaffolding, or run prune-branches. Classifies before deleting and keeps backup refs for anything uncertain or recoverable. Not for remote branch cleanup or deleting branches on origin, for restacking (use rebase-stack), or for enabling worktrees (use enable-worktrees).
 ---
 
 # Prune Branches

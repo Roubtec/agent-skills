@@ -1,6 +1,6 @@
 ---
 name: session-learnings
-description: "Capture actionable learnings from a substantial Codex agent run as a concise Markdown report — ferried off the machine by committing only the report on a dedicated temporary branch, pushing that branch to origin, and opening no PR (ferry mode, the default whenever the working directory is in a Git repository with an `origin` remote), or written as a plain untracked file anywhere else (local mode; pass `local` or `ferry` to force either). Review the visible session transcript/context for powbox sandbox deficiencies, orchestration friction, wasted turns, missing tooling, docs gaps, and automation opportunities. Trigger when the user asks to record session learnings, run a post-run retrospective, capture environment issues, document improvement opportunities after an agent session, or improve powbox based on agent-run friction. Do not trigger for ordinary code review or project bug reports unless they affected the agent environment or workflow."
+description: A substantial Codex agent run has just finished and its friction is worth recording. Trigger when the user asks to record session learnings, run a post-run retrospective, capture environment issues, document improvement opportunities after an agent session, improve powbox based on agent-run friction, or run session-learnings. May suggest useful skill improvements. Not for ordinary code review or project bug reports unless the agent environment caused issues or was accidentally affected.
 ---
 
 # Session Learnings

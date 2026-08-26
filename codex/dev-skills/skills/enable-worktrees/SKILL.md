@@ -1,6 +1,6 @@
 ---
 name: enable-worktrees
-description: Prepare a repository for git-worktree-based parallel development — verify and fix the repo-root .powbox.yml declarations and .gitignore so worktree scaffolding stays container-local (persistent volume for .worktrees and its co-located .git/worktrees metadata, tmpfs for the harness .claude/worktrees root) and is never committed. Trigger when the user wants to enable, set up, or prepare a repo for parallel worktree tasks, or to fix a repo that is not worktree-ready. Do NOT trigger to actually execute a task batch (use address-tasks) or for unrelated .gitignore edits.
+description: A repository needs to be made ready for git-worktree-based parallel development. Trigger when the user wants to enable, set up, or prepare a repo for parallel worktree tasks, fix a repo that is not worktree-ready, or run enable-worktrees. Keeps worktree scaffolding container-local and out of the commit history. Not for executing a task batch (use address-tasks), declaring artifact shadows (use declare-shadows), or unrelated .gitignore edits.
 ---
 
 Prepare the current repository to support the git-worktree parallel-development workflow.

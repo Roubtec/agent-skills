@@ -3494,10 +3494,9 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         text.includes("never a reason for you not to spawn it"),
       "the named target is re-resolved per point, a site still falls back to `baseRefName` under `no-rebase`, or the second point is claimed to be a guaranteed no-op",
     );
-    // This file's frontmatter `description` is the longest in the repository and
-    // this branch grew it twice. It is what the harness loads the skill by, and
-    // nothing else here measures it, so the next clause anyone appends would
-    // break loading with the suite green. The cap is 1024; the margin is what
+    // This file's frontmatter `description` is what the harness loads the skill
+    // by, and nothing else here measures it, so the next clause anyone appends
+    // would break loading with the suite green. The cap is 1024; the margin is what
     // makes the check useful rather than a tripwire that fires on the change
     // that breaks it.
     const description = (text.match(/^description: (.*)$/m) || [])[1] || "";
