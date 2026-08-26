@@ -1,6 +1,6 @@
 ---
 name: address-tasks
-description: A batch of pre-planned task files is ready to be implemented. Trigger when the user asks to address tasks, work through a task batch, kick off implementation of planned work, process a folder of task files, or run address-tasks. The default task-batch executor - each task is implemented in its own worktree and delivered as its own PR. Not for one-off coding requests, for planning new tasks (use write-tasks), or when strictly sequential single-branch execution is explicitly wanted (use address-tasks-serialized).
+description: A batch of pre-planned task files is ready to be implemented. Trigger when the user asks to address tasks, work through a task batch, kick off implementation of planned work, process a folder of task files, or run address-tasks. The default concurrent task-batch executor - each task is implemented in its own worktree and delivered as its own PR. Not for one-off coding requests or small fixes, for planning new tasks (use write-tasks), or when strictly sequential single-branch execution is explicitly wanted (use address-tasks-serialized).
 ---
 
 Implement a set of pre-planned task files using a **parallel, worktree-isolated** delegated subagent workflow.

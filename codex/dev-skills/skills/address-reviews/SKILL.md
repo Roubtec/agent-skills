@@ -1,6 +1,6 @@
 ---
 name: address-reviews
-description: Several pull requests or branches need their review feedback addressed at once. Trigger when the user asks to address reviews on multiple PRs or branches, fix review comments across many PRs in parallel, or run address-reviews. Fans address-review out over isolated worktrees so the PRs are fixed concurrently without cross-talk. Not for a single PR (use address-review), for implementing task files (use address-tasks), or for rebasing a stack (use rebase-stack).
+description: Several pull requests or branches need their review feedback addressed at once. Trigger when the user asks to address reviews on multiple PRs or branches, fix review comments across many PRs in parallel, or run address-reviews. Fans address-review out over isolated worktrees so the PRs are fixed concurrently without cross-talk. Not for implementing task spec files (use address-tasks); for a single PR prefer address-review.
 ---
 
 Address the review feedback on **several pull requests at once**, fanning each PR out into its own git worktree so they progress concurrently without polluting each other.

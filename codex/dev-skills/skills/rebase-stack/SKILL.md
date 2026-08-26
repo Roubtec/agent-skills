@@ -1,6 +1,6 @@
 ---
 name: rebase-stack
-description: A chain of dependent local branches needs to move forward after some of its predecessors were merged. Trigger when the user asks to rebase a stack of stacked-PR branches, move a chain onto main after merges, restack feature branches, or run rebase-stack. Replays the chain with awareness of its history, dropping commits already on the target. Not for single-branch rebases (address-review rebases one PR branch itself).
+description: Stack up branches that are not linear, or transport a chain of dependent local branches into a new arrangement. A smart version of `git rebase xyz --update-refs` with conflict resolution when `--update-refs` is not quite enough. Trigger when the user asks to linearize a stack of branches, move a chain of PRs, transplant a chain onto main after merges, restack feature branches, or run rebase-stack.
 ---
 
 Rebase a chain of stacked local branches onto a target branch.
