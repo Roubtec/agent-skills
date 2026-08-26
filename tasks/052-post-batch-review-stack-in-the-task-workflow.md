@@ -38,6 +38,8 @@ Out of scope:
 
 `plugins/dev-skills/workflows/wf-address-tasks.js` (primary) and `plugins/dev-skills/workflows/README.md`. The `address-tasks` skill mirrors are the source of the rules and should need no edit; if implementing reveals the skill's own text is wrong or ambiguous, fix it in both mirrors in lockstep and say so.
 
+Task 050 reaches the same primary file in a disjoint region — the embedded `review-cycle-core` section, never the terminal `Summary` stage this task builds — so a parallel batch should expect a same-file collision there and nowhere else.
+
 ## Implementation notes
 
 - **The timestamp cannot come from the script.** Workflow scripts may not call `Date.now()`, `Math.random()`, or an argument-less `new Date()` — the runtime rejects them because they break resume — and the guide-branch names and worktree path both want the ref-safe `YYYYMMDD-HHMMSS` form `rebase-stack` already uses. Have the delegating subagent derive the stamp in its own shell and report the exact names it created, or thread one in through `args`. Do not invent a stamp-free naming scheme: collision-free names across repeated batches are the reason the form exists.
