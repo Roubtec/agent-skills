@@ -1,6 +1,6 @@
 ---
 name: session-learnings
-description: A substantial Codex agent run has just finished and its friction is worth recording. Trigger when the user asks to record session learnings, run a post-run retrospective, capture environment issues, document improvement opportunities after an agent session, improve powbox based on agent-run friction, or run session-learnings. Not for ordinary code review or project bug reports unless they (are) affected (by) the agent environment or workflow.
+description: A substantial Codex agent run has just finished and its friction is worth recording. Trigger when the user asks to record session learnings, run a post-run retrospective, capture environment issues, document improvement opportunities after an agent session, improve powbox based on agent-run friction, or run session-learnings. May suggest useful skill improvements. Not for ordinary code review or project bug reports unless the agent environment caused issues or was accidentally affected.
 ---
 
 # Session Learnings
