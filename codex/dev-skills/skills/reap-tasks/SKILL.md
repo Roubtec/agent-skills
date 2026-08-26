@@ -1,6 +1,6 @@
 ---
 name: reap-tasks
-description: Reap completed task files by verifying their acceptance criteria against the actual codebase, archiving satisfied tasks into a done/ folder, and writing follow-up task files for concrete gaps. Trigger when the user asks to reap completed tasks, close out a delivered batch, sweep finished work, or audit task acceptance after implementation. Do not trigger for unfinished work or for code review of an in-flight PR.
+description: Delivered task files need to be checked against the codebase and closed out. Trigger when the user asks to reap completed tasks, close out a delivered batch, sweep finished work, audit task acceptance after implementation, or run reap-tasks. Archives satisfied tasks and writes follow-up task files for concrete gaps. Not for unfinished work or for reviewing an in-flight PR (use address-review or review-cycle).
 ---
 
 Reap the specified task files by checking them against the current state of the codebase and determining whether each task has been delivered satisfactorily.

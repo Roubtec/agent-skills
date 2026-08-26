@@ -1,6 +1,6 @@
 ---
 name: declare-shadows
-description: Sweep a repository for gitignored build-artifact directories that should be tmpfs-shadowed and declare them in the repo-root .powbox.yml, so a container build never writes host-incompatible output onto the host bind mount. Applies the judgment auto-detection cannot — shadowing disposable output is a win, shadowing a build cache makes every future build slower. Trigger when the user wants to declare, review, or fix shadow mounts for a repo, shield ignored artifact folders from the host, or onboard a newly added project into the shadow config. Do NOT trigger to set up worktrees (use enable-worktrees), to run a task batch (use address-tasks), or for unrelated .gitignore edits.
+description: A repository's gitignored build-artifact folders should be shielded from the host bind mount. Trigger when the user wants to declare, review, or fix shadow mounts for a repo, shield ignored artifact folders from the host, onboard a newly added project into the shadow config, or run declare-shadows. Applies the judgment auto-detection cannot - disposable output gets shadowed, build caches do not. Not for setting up worktrees (use enable-worktrees), running a task batch (use address-tasks), or unrelated .gitignore edits.
 ---
 
 Review the current repository's gitignored artifact directories and declare the ones worth shadowing in `.powbox.yml`.

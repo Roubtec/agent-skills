@@ -1,16 +1,6 @@
 ---
 name: resolve-open-questions
-description: >-
-  Resolve outstanding decisions or open questions with the maintainer, one at a time, by grounding
-  each item in real artifacts, showing a concrete trigger example, presenting distinct resolution
-  outcomes with a recommendation, capturing the maintainer's choice, and applying it. Use for
-  generic decision lists and especially for deferred/open items left by address-review or
-  address-reviews runs: agent-proposed deferrals, hands-off blockers, discovered findings,
-  and cross-branch issues. Trigger when the user wants to work through decision points, decide
-  fix-now-vs-defer on follow-ups, or unblock PR/implementation progress. With no arguments, use the
-  just-completed run's in-context items; with a pointer (PRs, task file, issue list, doc), re-derive
-  the list. Do not trigger to address fresh review threads (use address-review or
-  address-reviews) or to rebase a stack (use rebase-stack).
+description: Open decisions are blocking progress and need the maintainer's call, one at a time. Trigger when the user wants to work through decision points, decide fix-now-vs-defer on follow-ups, unblock PR or implementation progress, resolve the open items left by an address-review, address-reviews, or review-cycle run, or run resolve-open-questions. Grounds each question in real artifacts, offers a recommendation, and applies the choice. With no arguments it takes the just-completed run's in-context items; with a pointer (PRs, task file, issue list, doc) it re-derives the list. Not for addressing fresh review threads (use address-review or address-reviews) or rebasing a stack (use rebase-stack).
 ---
 
 # resolve-open-questions

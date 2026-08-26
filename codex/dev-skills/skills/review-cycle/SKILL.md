@@ -1,6 +1,6 @@
 ---
 name: review-cycle
-description: Run the canonical implement/fix → fresh-eyes review → best-effort cross-harness peer review → fix cycle on a committed change, worktree, or drafted document until it converges, disposing every reviewer and peer finding explicitly — fixed, declined with reason, or escalated to an open question — and returning a result whose open questions feed resolve-open-questions directly. Trigger when the user asks to run the review cycle on a change, worktree, task file, or ad-hoc uncommitted edit, or wants a local review pass before opening a PR. Do not trigger to address existing PR review threads (use address-review) or to run a task batch (use address-tasks); those skills consume this protocol by reference.
+description: A change, worktree, or drafted document should be reviewed and fixed until it converges, before a PR exists. Trigger when the user asks to run the review cycle on a change, worktree, task file, or uncommitted edit, wants a local review pass before opening a PR, or runs review-cycle. The canonical fix-review-peer-review-fix loop; every finding is disposed explicitly and open questions feed resolve-open-questions. Not for addressing existing PR review threads (use address-review) or running a task batch (use address-tasks); those skills consume this cycle themselves.
 ---
 
 Run one complete review cycle — fix → own fresh-eyes review → best-effort peer review → fix — on a single artifact.

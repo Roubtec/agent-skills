@@ -1,6 +1,6 @@
 ---
 name: resolve-tasks
-description: Resolve a mixed list of task numbers, task-file paths, and globs into a provenance-tagged task-file set with active, done, deferred, ambiguous, and not-found diagnostics. Use directly to inspect task pointers or from task-consuming skills before they plan work. It is read-only and never edits, moves, or renumbers task files. Do not use for review-skill numbers, which are PR numbers.
+description: Task pointers - numbers, file paths, globs - need to be turned into a definite, provenance-tagged set of task files. Trigger when the user asks to resolve, look up, or inspect task pointers, or run resolve-tasks; task-consuming skills call it before planning work. Read-only - it never edits, moves, or renumbers task files. Not for review-skill numbers, which are PR numbers.
 ---
 
 # Resolve task pointers

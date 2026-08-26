@@ -1,6 +1,6 @@
 ---
 name: write-tasks
-description: Turn a plan, design doc, or free-form description into a sequence of concrete, numbered task files an implementer can execute one at a time, then by default run the review cycle over the drafted files — a fresh-eyes prose review plus that cycle's best-effort cross-harness peer — and commit the fixes, unless `no-review` is given. Trigger when the user asks to decompose work into committable task files, write tasks from a plan, or produce a phased task list. Do not trigger for one-off implementation requests or general planning advice.
+description: A plan, design doc, or free-form description needs to become concrete, numbered task files. Trigger when the user asks to decompose work into committable task files, write tasks from a plan, produce a phased task list, or run write-tasks. Produces tasks an implementer can execute one at a time (address-tasks consumes them). Not for one-off implementation requests or general planning advice.
 ---
 
 Write one or more actionable task files based on the input.

@@ -1,6 +1,6 @@
 ---
 name: address-review
-description: Address the maintainer-vetted review feedback on one pull request — rebase the branch onto its freshest base by default (a named target overrides it, no-rebase suppresses it), fix, push back on, or defer each unresolved review thread to a committed follow-up task file, fix or re-run each failing CI lane on the PR head (or hand a structural one to the maintainer), verify every disposition with a fresh-eyes reviewer, then publish by default — push with exact lease protection, reply/resolve the threads, post a "Summary of Review Fixes" comment, and re-ping the reviewers that contributed — unless no-push is given for a local-only pass. Trigger when the user asks to address review comments, action a reviewed PR, work through review feedback, or run address-review. Do not trigger for planning, for implementing new task files (use address-tasks), or for rebasing a whole stacked chain (use rebase-stack).
+description: Pull request review comments or CI failures require addressing or resolving. Trigger when the user asks to address review comments, action a reviewed PR, work through review feedback, or run address-review. Propels the review-fix-review cycle in a structured way. Not for planning, for implementing task files (use address-tasks), or for rebasing a whole stacked chain (use rebase-stack).
 ---
 
 Address the review feedback on a single pull request, end to end.

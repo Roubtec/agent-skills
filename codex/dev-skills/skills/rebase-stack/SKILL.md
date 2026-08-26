@@ -1,6 +1,6 @@
 ---
 name: rebase-stack
-description: Replay a chain of dependent local branches onto a target (typically main) after some predecessors have been merged, using one replay for verified linear runs and a branch-at-a-time fallback, dropping commits already present on the target and resolving conflicts with awareness of the chain's history. Trigger when the user asks to rebase a stack of stacked-PR branches, move a chain forward onto main after merges, or restack feature branches. Do not trigger for single-branch rebases.
+description: A chain of dependent local branches needs to move forward after some of its predecessors were merged. Trigger when the user asks to rebase a stack of stacked-PR branches, move a chain onto main after merges, restack feature branches, or run rebase-stack. Replays the chain with awareness of its history, dropping commits already on the target. Not for single-branch rebases (address-review rebases one PR branch itself).
 ---
 
 Rebase a chain of stacked local branches onto a target branch.
