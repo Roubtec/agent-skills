@@ -285,7 +285,7 @@ const COLLISION_SCHEMA = {
     taskNumbers: { type: "array", items: { type: "string" }, description: "Every full task number the branch under the guard CLAIMS — its unpaired task-file additions relative to its own base under the referenced guard's relocation pairing (e.g. `028`, `028a`). Empty when it adds no task file. The run reserves these for the branch once it clears the guard." },
     merged: {
       type: "array",
-      description: "Run-local DELIVERED members whose PR has merged since delivery, each with the branch it merged into. Empty when none has.",
+      description: "Run-local DELIVERED members whose PR has merged since delivery, each with the branch it merged into. Empty when none has — and always present: the run reads an omitted reading as a failed scan, never as none merged.",
       items: {
         type: "object",
         properties: {
@@ -298,7 +298,7 @@ const COLLISION_SCHEMA = {
     scanComplete: { type: "boolean", description: "False when the referenced guard's remote enumeration was degraded or incomplete under its note-and-proceed rule; say how in `detail`. True when every member it names was read." },
     detail: { type: "string" },
   },
-  required: ["collisions"],
+  required: ["collisions", "merged"],
 };
 
 const RESOLUTION_SCHEMA = {
@@ -3355,9 +3355,12 @@ function collisionIsAttributable(collision, taskEntries) {
 // shared rule over the ready entry plus those members; one malformed or foreign
 // entry voids the whole packet and holds the branch, since partial attribution
 // could otherwise deliver a side of a live clash. A scan that returns nothing
-// usable holds the branch too. The packet's other readings — the numbers the
-// branch claims, and the delivered members whose PR has merged — ride back
-// untouched for the pipeline to act on.
+// usable holds the branch too — a packet with no `merged` reading included:
+// the pipeline retargets and rebases a dependent off that reading, so an
+// omission silently read as "none merged" would walk it onto a parent branch
+// the base has since absorbed or deleted. The packet's other readings — the
+// numbers the branch claims, and the delivered members whose PR has merged —
+// ride back untouched for the pipeline to act on.
 async function discoverGuardCollisions({ ready, members, defaultBase }) {
   const { task, result } = ready;
   const entries = [{ task }, ...members.map((m) => ({ task: { slug: m.slug, branch: m.branch } }))];
@@ -3376,6 +3379,9 @@ async function discoverGuardCollisions({ ready, members, defaultBase }) {
   if (!scan || !Array.isArray(scan.collisions)) {
     scanError = `collision guard scan failed for ${task.slug}; holding the reviewed branch before delivery`;
     log(scanError);
+  } else if (!Array.isArray(scan.merged)) {
+    scanError = `collision guard scan for ${task.slug} carried no \`merged\` reading; an omitted reading is not "none merged" — a delivered parent whose PR merged before this scan would go unreported, and this branch would proceed against a base the merge has absorbed — so the reviewed branch is held before delivery; re-run the scan with every delivered member's PR state read back, then deliver`;
+    log(scanError);
   } else if (scan.collisions.length) {
     collisions = scan.collisions.map((c) => ({ ...c, guard: task.slug }));
     if (!scan.collisions.every((c) => collisionIsAttributable(c, entries) && collisionInvolvesTask(c, task))) {
@@ -3388,7 +3394,7 @@ async function discoverGuardCollisions({ ready, members, defaultBase }) {
   const readings = {
     taskNumbers: scan && Array.isArray(scan.taskNumbers) ? scan.taskNumbers.filter((n) => typeof n === "string" && n.trim()).map((n) => n.trim()) : [],
     merged: scan && Array.isArray(scan.merged) ? scan.merged.filter((m) => m && typeof m.branch === "string") : [],
-    scanComplete: !!scan && Array.isArray(scan.collisions) && scan.scanComplete !== false,
+    scanComplete: !!scan && Array.isArray(scan.collisions) && Array.isArray(scan.merged) && scan.scanComplete !== false,
     detail: scan && typeof scan.detail === "string" ? scan.detail : "",
   };
   if (scanError) {
@@ -3862,7 +3868,14 @@ async function settleGuardCollisions({ heldTasks, members = [], collisions, labe
   // actionable hold. An entry the re-scan cannot attribute through the shared
   // rule — a foreign name, a lone name with no second holder — is not a clash as
   // COLLISION_SCHEMA defines one, so the whole packet is evidence about nobody
-  // and every held branch stays held. The scan runs over ONE held branch with
+  // and every held branch stays held. So is an entry that involves no held
+  // branch at all — a clash the re-scan reports among delivered or reserved
+  // members only: the scan's brief is the held branch against those members,
+  // as the discovery scan's is, and a packet reporting on the members'
+  // clashes with one another has left the brief and may have omitted the held
+  // branch's own; read as usable, it would leave `stillColliding` empty for
+  // the held branch and deliver it on a packet that established nothing
+  // about it. The scan runs over ONE held branch with
   // nothing run-local beside it too: the referenced section's comparison set
   // always holds the base branch and every open PR head, and the branch's own
   // unpaired additions are compared with one another, so a lone branch that
@@ -3888,7 +3901,7 @@ async function settleGuardCollisions({ heldTasks, members = [], collisions, labe
     } catch (e) {
       log(`collision re-scan failed for ${label}: ${e && e.message ? e.message : String(e)}`);
     }
-    if (rescan && Array.isArray(rescan.collisions) && rescan.collisions.every((c) => collisionIsAttributable(c, [...heldTasks, ...memberEntries]))) {
+    if (rescan && Array.isArray(rescan.collisions) && rescan.collisions.every((c) => collisionIsAttributable(c, [...heldTasks, ...memberEntries]) && heldTasks.some(({ task }) => involves(c, task)))) {
       rescanned = rescan.collisions;
       taskNumbers = Array.isArray(rescan.taskNumbers) ? rescan.taskNumbers.filter((n) => typeof n === "string" && n.trim()).map((n) => n.trim()) : [];
     }
@@ -3905,15 +3918,28 @@ async function settleGuardCollisions({ heldTasks, members = [], collisions, labe
       // touched — keep it held for a human/design decision.
       held.push({ slug: task.slug, branch: task.branch, status: "collision-blocked", detail: "shared name must stay identical (imperative); resolver could not deconflict — needs a human/design decision", collisions: related, ...cycleCarried(result) });
     } else if (!stillColliding) {
-      held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "post-resolution collision re-scan established nothing (it failed, returned no usable result, could not attribute every named branch, attributed a clash to no second holder, or nothing was in hand to compare the branch against); branch held before delivery — re-scan this branch by hand, deconflict what remains, and re-review", collisions: related, ...cycleCarried(result) });
+      held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "post-resolution collision re-scan established nothing (it failed, returned no usable result, could not attribute every named branch, attributed a clash to no second holder, named a clash involving no held branch, or nothing was in hand to compare the branch against); branch held before delivery — re-scan this branch by hand, deconflict what remains, and re-review", collisions: related, ...cycleCarried(result) });
     } else if (stillColliding.length) {
       held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "the clash is still in the refs after the resolver ran; branch held before delivery — rename or renumber this branch's side so that no delivered, reserved, or outside holder shares the value, regenerate whatever derives from it, and re-review", collisions: stillColliding, ...cycleCarried(result) });
     } else {
       // The clash this branch was held for is gone from the refs. Fresh
       // delivery-tier re-review before it delivers (`deliveryReReview`); a
       // deviation the reviewer leaves unassessed holds the branch — the gate
-      // its own brief states.
-      const { verdict, reviewed, coverage, freshAssessments } = await deliveryReReview(task, result, remote, peerMode);
+      // its own brief states. A re-review that THROWS is a hold too, caught
+      // here as the rebase path catches its own: under the pipelined guard
+      // this stage runs inside the guard turn before any reservation exists,
+      // so a throw left to escape reaches the pipeline's catch with nothing
+      // to settle and returns a generic `error` carrying no cycle record, no
+      // collision context, and no claimed numbers — while the resolver's
+      // durability push already sits on origin holding them with no PR.
+      let reReview;
+      try {
+        reReview = await deliveryReReview(task, result, remote, peerMode);
+      } catch (e) {
+        held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: `the deconflicted branch's fresh re-review crashed (${e && e.message ? e.message : String(e)}); held before delivery — the tier the rename owes is unpaid, so no PR is opened; re-review this branch by hand`, collisions: related, ...cycleCarried(result) });
+        continue;
+      }
+      const { verdict, reviewed, coverage, freshAssessments } = reReview;
       if (reviewed && !coverage.unassessed.length) {
         // A pass here is a fresh reviewer's read of the whole branch, so it
         // settles the one claim the cycle's `recordOnly` can no longer make —
@@ -4225,12 +4251,15 @@ function abortedReservationReport(ledger) {
 // summary beside the cap — rather than either waiting on a release that cannot
 // come or being admitted over headroom the retained worktrees still hold.
 function createSlotGate(cap) {
-  return { cap, inFlight: 0, retained: 0, waiters: [] };
+  return { cap, inFlight: 0, retained: 0, retainedBy: [], waiters: [] };
 }
 async function acquireSlot(gate) {
   let waited = false;
   while (gate.inFlight >= gate.cap) {
-    if (gate.inFlight - gate.retained <= 0) return { waited, denied: true };
+    // Denied, and told by whom: the script cannot see the worktrees (every
+    // Git read is a deputy's), so the retainers are named for the reader to
+    // reclaim or inspect rather than found for them.
+    if (gate.inFlight - gate.retained <= 0) return { waited, denied: true, retainedBy: gate.retainedBy.slice() };
     waited = true;
     await new Promise((resolve) => gate.waiters.push(resolve));
   }
@@ -4241,11 +4270,13 @@ function wakeSlotWaiters(gate) {
   const waiters = gate.waiters.splice(0);
   waiters.forEach((resolve) => resolve());
 }
+const slotHolders = (holders) => (Array.isArray(holders) && holders.length ? holders.map((h) => `\`${h}\``).join(", ") : "(unnamed)");
 function releaseSlot(gate) {
   gate.inFlight = Math.max(0, gate.inFlight - 1);
   wakeSlotWaiters(gate);
 }
-function retainSlot(gate) {
+function retainSlot(gate, holder) {
+  if (gate.retained < gate.inFlight) gate.retainedBy.push(holder);
   gate.retained = Math.min(gate.inFlight, gate.retained + 1);
   wakeSlotWaiters(gate);
 }
@@ -4417,9 +4448,9 @@ async function runTaskPipeline(task, ctx) {
   }
 
   const slot = await acquireSlot(gate);
-  if (slot.waited || slot.denied) throttled.push({ slug: task.slug, cap: gate.cap, ...(slot.denied ? { denied: true } : {}) });
+  if (slot.waited || slot.denied) throttled.push({ slug: task.slug, cap: gate.cap, ...(slot.denied ? { denied: true, retainedBy: slot.retainedBy } : {}) });
   if (slot.denied) {
-    return finish({ slug: task.slug, branch: task.branch, status: "storage-throttled", detail: `every one of the ${gate.cap} live-worktree slot(s) the measured storage headroom allows is held by a worktree left in place for inspection, so no delivery can free one; this task never started — reclaim or inspect those worktrees, then rerun it` });
+    return finish({ slug: task.slug, branch: task.branch, status: "storage-throttled", detail: `every one of the ${gate.cap} live-worktree slot(s) the measured storage headroom allows is held by a worktree left in place for inspection (${slotHolders(slot.retainedBy)}), so no delivery can free one; this task never started — reclaim or inspect those worktrees, then rerun it` });
   }
   // Set once delivery REPORTED the worktree reclaimed; every other exit — a
   // hold, a crash, a `wt-remove` refusal the delivery carries as
@@ -4455,7 +4486,15 @@ async function runTaskPipeline(task, ctx) {
           if (r) { r.merged = true; r.mergedInto = entry.mergedInto; }
         }
       }
-      if (discovery.held) return { held: discovery.held };
+      // A hold is outside the guard's comparison set by the skill's definition,
+      // and the branch's durability push sits on origin holding the numbers the
+      // guard read with no PR to advertise them — so the held result names
+      // them, as the rebase-hold arm below names its released claim's, and the
+      // summary shows the maintainer what the unadvertised branch holds. The
+      // numbers are the latest the guard read: the re-scan's where it was
+      // usable (the claim as it stands after a rename), else the discovery's.
+      const heldWithNumbers = (h, numbers) => (Array.isArray(numbers) && numbers.length ? { ...h, taskNumbers: numbers.slice() } : h);
+      if (discovery.held) return { held: heldWithNumbers(discovery.held, discovery.readings.taskNumbers) };
       let ready = res;
       let taskNumbers = discovery.readings.taskNumbers;
       if (discovery.collisions.length) {
@@ -4468,7 +4507,7 @@ async function runTaskPipeline(task, ctx) {
         // would publish it. A clash is the rare case; the common case pays only
         // for the scan.
         const settled = await settleGuardCollisions({ heldTasks: [{ task, result: res }], members, collisions: discovery.collisions, label: task.slug, defaultBase, remote, peerMode });
-        if (settled.held.length) return { held: settled.held[0] };
+        if (settled.held.length) return { held: heldWithNumbers(settled.held[0], settled.taskNumbers || taskNumbers) };
         ready = settled.deliverable[0].result;
         if (settled.taskNumbers) taskNumbers = settled.taskNumbers;
       }
@@ -4542,7 +4581,7 @@ async function runTaskPipeline(task, ctx) {
     }
     return finish(res);
   } finally {
-    if (reclaimed) releaseSlot(gate); else retainSlot(gate);
+    if (reclaimed) releaseSlot(gate); else retainSlot(gate, task.slug);
   }
 }
 
@@ -5347,6 +5386,9 @@ const results = [];
 const throttled = [];
 const collisions = [];
 const ledger = createReservationLedger();
+// Sized inside the try below from the bootstrap reading; declared here because
+// the review stack, past the batch, takes a slot from the same gate.
+let gate = createSlotGate(Infinity);
 const pipeline = { tasksBySlug: new Map(), guardOrder: [], mergedDuringRun: [], orphanReconciliation: [] };
 
 try {
@@ -5398,7 +5440,7 @@ try {
   // `createSlotGate` for why a slot handoff may spawn nothing.
   const availBytes = nextAvailBytes(0, boot);
   const widthCapFor = (bytes) => (bytes > 0 ? Math.max(1, Math.floor(bytes / PER_WORKTREE_BYTES)) : Infinity);
-  const gate = createSlotGate(widthCapFor(availBytes));
+  gate = createSlotGate(widthCapFor(availBytes));
 
   await runPipelinedBatch({ plan, remote, peerMode, statusBySlug, results, throttled, collisions, ledger, gate, pipeline });
 } catch (e) {
@@ -5439,7 +5481,22 @@ const orphans = { acted: pipeline.orphanReconciliation, survivors: orphanSurvivo
 // A member that merged during the run is excluded from the stack by
 // `reviewStackMergeable`: its content is on the base already, and a dependent
 // that was rebased onto that base carries its retargeted recorded base.
-const reviewStack = await buildReviewStack({ plan, results, wtBase });
+// The stack's dedicated worktree is one more live worktree under the cap the
+// headroom was measured against, so it takes a slot from the gate like a
+// task's does. Every pipeline is terminal here, so the gate holds nothing but
+// retained worktrees: a slot is free at once or never — a wait cannot be
+// answered — and a denial skips the stack rather than creating a worktree
+// over the headroom the retained trees still hold. The slot goes back only
+// where the teardown reported the worktree removed; nothing after this draws
+// on the gate, but its count stays what the summary can read as true.
+const stackSlot = await acquireSlot(gate);
+let reviewStack;
+if (stackSlot.denied) {
+  reviewStack = { built: false, skipped: true, reason: `every one of the ${gate.cap} live-worktree slot(s) the measured storage headroom allows is held by a worktree left in place for inspection (${slotHolders(stackSlot.retainedBy)}); the stack's dedicated worktree would stand over that headroom, so the integration check did not run and nothing was created — the canonical order is unavailable until those worktrees are reclaimed` };
+} else {
+  reviewStack = await buildReviewStack({ plan, results, wtBase });
+  if (reviewStack.worktree && !(reviewStack.teardown && reviewStack.teardown.worktreeRemoved === true)) retainSlot(gate, "review-stack"); else releaseSlot(gate);
+}
 if (reviewStack.skipped) {
   log(`Review stack skipped: ${reviewStack.reason}`);
 } else if (!reviewStack.built) {

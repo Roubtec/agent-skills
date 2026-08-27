@@ -76,7 +76,7 @@ function check(name, cond, detail) {
 // it — an edit that drops one, or a guard that swallows a throw, would pass.
 // Counting the oks too lets the run assert it executed the whole suite. Bump
 // this deliberately when adding or removing a check; the number is the assertion.
-const EXPECTED_CHECKS = 224;
+const EXPECTED_CHECKS = 233;
 
 async function scenario(name, fn) {
   try {
@@ -118,6 +118,7 @@ function scriptedAgent(packets, calls) {
     if (label.startsWith("re-review:")) {
       const slug = label.slice("re-review:".length);
       const reviews = packets.reviews || {};
+      if (reviews[slug] === THROWS) throw new Error("re-review agent exploded");
       return Object.prototype.hasOwnProperty.call(reviews, slug) ? reviews[slug] : PASS_REVIEW;
     }
     throw new Error(`unexpected agent label: ${label}`);
@@ -300,6 +301,45 @@ await scenario("unattributable re-scan entry", async () => {
   check("re-scan entry names no branches at all → both branches held", JSON.stringify(slugs(out.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(out.held)));
   check("re-scan entry names no branches at all → detail says the re-scan established nothing", out.held.length === 2 && out.held.every((h) => /established nothing/.test(h.detail) && /by hand/.test(h.detail)), JSON.stringify(out.held.map((h) => h.detail)));
   check("re-scan entry names no branches at all → no re-review is paid for", !labels(out.calls).some((l) => l.startsWith("re-review:")), JSON.stringify(labels(out.calls)));
+});
+
+// 5ba. A re-scan entry that involves NO held branch — a clash the deputy reports
+//      among delivered or reserved members only — attributes through the shared
+//      rule (both members are in hand) and yet says nothing about the held
+//      branch: read as usable, it leaves `stillColliding` empty for the held
+//      branch and delivers it on a packet that left its brief. The pipelined
+//      shape: one held branch beside two members.
+await scenario("member-only re-scan entry", async () => {
+  const out = await run({
+    held: [mkHeld("a")],
+    members: [member("b"), member("c", "reserved")],
+    collisions: [clash(["task/a", "task/b"])],
+    packets: { resolution: renamed(["task/a"]), rescan: { collisions: [clash(["task/b", "task/c"])] } },
+  });
+  check("member-only re-scan entry → nothing delivers", out.deliverable.length === 0, JSON.stringify(slugs(out.deliverable)));
+  check("member-only re-scan entry → the held branch stays held", JSON.stringify(slugs(out.held)) === JSON.stringify(["a"]) && out.held[0].status === "collision-hold", JSON.stringify(out.held));
+  check("member-only re-scan entry → detail says the re-scan established nothing, naming this cause", /established nothing/.test(out.held[0].detail) && /no held branch/.test(out.held[0].detail) && /by hand/.test(out.held[0].detail), out.held[0].detail);
+  check("member-only re-scan entry → no re-review is paid for", !labels(out.calls).some((l) => l.startsWith("re-review:")), JSON.stringify(labels(out.calls)));
+});
+
+// 5bz. A re-review that THROWS is a hold, not an escape. Under the pipelined
+//      guard this stage runs inside the guard turn before any reservation
+//      exists, so a throw left to escape reaches the pipeline's catch with
+//      nothing to settle and returns a generic `error` carrying no cycle
+//      record, no collision context, and no numbers — while the resolver's
+//      durability push already sits on origin with no PR.
+await scenario("re-review crash", async () => {
+  const out = await run({
+    held: [mkHeld("a")],
+    members: [member("b")],
+    collisions: [clash(["task/a", "task/b"])],
+    packets: { resolution: renamed(["task/a"]), rescan: { collisions: [] }, reviews: { a: THROWS } },
+  });
+  check("re-review crash → nothing delivers", out.deliverable.length === 0, JSON.stringify(slugs(out.deliverable)));
+  check("re-review crash → the branch is held as collision-hold", out.held.length === 1 && out.held[0].slug === "a" && out.held[0].status === "collision-hold", JSON.stringify(out.held));
+  check("re-review crash → the detail names the crash and the unpaid tier", /re-review crashed \(re-review agent exploded\)/.test(out.held[0].detail) && /no PR is opened/.test(out.held[0].detail), out.held[0].detail);
+  check("re-review crash → the hold carries the clash it was held for", Array.isArray(out.held[0].collisions) && out.held[0].collisions.length === 1 && out.held[0].collisions[0].name === NAME, JSON.stringify(out.held[0].collisions));
+  check("re-review crash → the hold carries the cycle record", out.held[0].artifactDir === "/tmp/art" && out.held[0].rounds === 2, JSON.stringify(out.held[0]));
 });
 
 // 5bb. Fully-qualified local refs name the same branches as their ordinary

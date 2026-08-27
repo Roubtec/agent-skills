@@ -49,7 +49,7 @@ function check(name, cond, detail) {
   }
 }
 
-const EXPECTED_CHECKS = 58;
+const EXPECTED_CHECKS = 62;
 
 function loadDiscovery(agent, events) {
   const at = src.indexOf(CUT);
@@ -166,6 +166,18 @@ async function run({ ready, members = [], scan }) {
     check(`${name} → the scan was attempted once`, out.calls.length === 1);
     check(`${name} → the readings are empty and incomplete`, out.readings.taskNumbers.length === 0 && out.readings.merged.length === 0 && out.readings.scanComplete === false);
   }
+}
+
+// 6b. A packet with NO `merged` reading is a failed scan, not "none merged":
+//     the pipeline retargets and rebases a dependent off that reading, so an
+//     omission read as an empty list would walk it onto a parent branch the
+//     base has absorbed. The schema requires the key; the code holds without it.
+{
+  const out = await run({ ready: mkReady("a"), members: [member("b")], scan: { collisions: [], taskNumbers: ["042"] } });
+  check("scan omitted merged → held as collision-scan-error", out.held && out.held.status === "collision-scan-error", JSON.stringify(out.held));
+  check("scan omitted merged → the detail names the missing reading and what an omission is not", /no `merged` reading/.test(out.held.detail) && /not "none merged"/.test(out.held.detail), out.held && out.held.detail);
+  check("scan omitted merged → the readings are incomplete", out.readings.merged.length === 0 && out.readings.scanComplete === false, JSON.stringify(out.readings));
+  check("the scan's schema requires the merged reading beside the collisions", out.calls[0].schema && Array.isArray(out.calls[0].schema.required) && out.calls[0].schema.required.includes("merged") && out.calls[0].schema.required.includes("collisions"), JSON.stringify(out.calls[0].schema && out.calls[0].schema.required));
 }
 
 // 7. The merged reading is filtered to well-formed entries; incompleteness is

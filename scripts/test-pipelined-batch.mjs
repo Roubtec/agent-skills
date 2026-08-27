@@ -42,7 +42,7 @@ function check(name, cond, detail) {
     console.error(`NOT ok - ${name}${detail ? `: ${detail}` : ""}`);
   }
 }
-const EXPECTED_CHECKS = 140;
+const EXPECTED_CHECKS = 145;
 
 async function scenario(name, fn) {
   try {
@@ -467,6 +467,7 @@ await scenario("storage-derived slot gate", async () => {
   const retained = await runBatch({ plan: { defaultBase: "main", waves: [[t("001-a"), t("002-b"), t("003-c")], [t("004-d", "task/002-b", ["002-b"])]] }, cap: 1, overrides: capOut });
   check("cap 1, first task retained → the rest end storage-throttled, terminal, with no agent spent", by(retained.results, "001-a").status === "review-cap" && ["002-b", "003-c"].every((x) => by(retained.results, x).status === "storage-throttled" && /held by a worktree left in place/.test(by(retained.results, x).detail)) && !labels(retained.calls).some((l) => /^(002-b|003-c):/.test(l)), JSON.stringify(retained.results.map((r) => `${r.slug}:${r.status}`)));
   check("cap 1, first task retained → each denial is recorded as throttled, and the retained worktree still holds the slot", retained.throttled.filter((x) => x.denied).length === 2 && retained.gate.inFlight === 1 && retained.gate.retained === 1 && retained.gate.waiters.length === 0, JSON.stringify({ throttled: retained.throttled, gate: retained.gate }));
+  check("cap 1, first task retained → the denial names the retaining task, on the result and on the throttle record", ["002-b", "003-c"].every((x) => /\(`001-a`\)/.test(by(retained.results, x).detail)) && retained.throttled.filter((x) => x.denied).every((x) => JSON.stringify(x.retainedBy) === JSON.stringify(["001-a"])) && JSON.stringify(retained.gate.retainedBy) === JSON.stringify(["001-a"]), JSON.stringify({ throttled: retained.throttled, details: retained.results.map((r) => r.detail) }));
   check("cap 1, first task retained → a dependent of a throttled task skips on that state", by(retained.results, "004-d").status === "skipped-dep" && by(retained.results, "004-d").depStatus === "storage-throttled");
   check("the census names the throttled state", JSON.stringify(retained.fns.terminalStates(retained.results)) === JSON.stringify({ "review-cap": 1, "storage-throttled": 2, "skipped-dep": 1 }), JSON.stringify(retained.fns.terminalStates(retained.results)));
   // Cap 2 with one retained: the one slot left serializes the rest, and
@@ -545,11 +546,35 @@ await scenario("a held branch releases the guard queue", async () => {
   check("the second task still took its guard turn and delivered", by(out.results, "002-b").status === "done" && JSON.stringify(out.pipeline.guardOrder) === JSON.stringify(["001-a", "002-b"]));
 });
 
+// 8b. A held branch's result names the numbers the guard read — the re-scan's
+//     where one was usable (the claim as it stands after the rename), else the
+//     discovery's — since its durability push holds them on origin with no PR;
+//     and a scan that carries no `merged` reading holds rather than reading as
+//     "none merged".
+await scenario("a held branch carries its claimed numbers; a scan without a merged reading holds", async () => {
+  const one = { defaultBase: "main", waves: [[t("001-a")]] };
+  const ext = { kind: "task-number", name: "042", branches: ["task/001-a"], external: true, member: "PR #7", detail: "PR #7 adds tasks/042-x.md" };
+  const stillClashing = await runBatch({
+    plan: one,
+    overrides: {
+      "collision-scan:001-a": { collisions: [ext], taskNumbers: ["042"], merged: [], scanComplete: true },
+      "collision-resolve:001-a": { resolutions: [{ collision: "042", action: "renamed", changedBranches: ["task/001-a"], from: "042", to: "043", regenerated: "", reason: "PR #7 holds 042" }] },
+      "collision-rescan:001-a": { collisions: [{ ...ext, name: "043" }], taskNumbers: ["043"], merged: [], scanComplete: true },
+    },
+  });
+  check("a collision-hold after a usable re-scan carries the re-scan's numbers", by(stillClashing.results, "001-a").status === "collision-hold" && JSON.stringify(by(stillClashing.results, "001-a").taskNumbers) === JSON.stringify(["043"]) && stillClashing.ledger.reserved.size === 0, JSON.stringify(by(stillClashing.results, "001-a")));
+  const unattributable = await runBatch({ plan: one, overrides: { "collision-scan:001-a": { collisions: [{ kind: "path", name: "src/x.ts", branches: ["task/zzz", "task/001-a"] }], taskNumbers: ["044"], merged: [], scanComplete: true } } });
+  check("a scan-error hold carries the numbers the discovery scan read", by(unattributable.results, "001-a").status === "collision-scan-error" && JSON.stringify(by(unattributable.results, "001-a").taskNumbers) === JSON.stringify(["044"]), JSON.stringify(by(unattributable.results, "001-a")));
+  const noMerged = await runBatch({ plan: one, overrides: { "collision-scan:001-a": { collisions: [], taskNumbers: [], scanComplete: true } } });
+  check("a scan with no merged reading holds the branch as a scan error rather than reading as none merged", by(noMerged.results, "001-a").status === "collision-scan-error" && /no `merged` reading/.test(by(noMerged.results, "001-a").detail) && !labels(noMerged.calls).includes("pr:001-a"), JSON.stringify(by(noMerged.results, "001-a")));
+});
+
 // 9. The batch body composes it all: source-level pins the scenarios cannot see.
 {
   const body = src.slice(src.indexOf(CUT));
   check("the batch body runs the pipeline with the shared ledger, the gate, and the live pipeline object the abort catch reads", /await runPipelinedBatch\(\{ plan, remote, peerMode, statusBySlug, results, throttled, collisions, ledger, gate, pipeline \}\);/.test(body) && /const pipeline = \{ tasksBySlug: new Map\(\), guardOrder: \[\], mergedDuringRun: \[\], orphanReconciliation: \[\] \};/.test(body));
   check("no df re-probe remains anywhere in the workflow", !/storageProbePrompt|STORAGE_PROBE_SCHEMA|reprobe/.test(src));
+  check("the review stack takes a slot from the batch's gate before creating its worktree, skips on a denial, and gives the slot back only when the teardown reported the worktree removed", (() => { const a = body.indexOf("const stackSlot = await acquireSlot(gate);"); const b = body.indexOf("buildReviewStack({ plan, results, wtBase })"); return a !== -1 && b !== -1 && a < b && /if \(stackSlot\.denied\) \{\n\s*reviewStack = \{ built: false, skipped: true,/.test(body) && /teardown\.worktreeRemoved === true\)\) retainSlot\(gate, "review-stack"\); else releaseSlot\(gate\);/.test(body); })());
   const summaryAt = body.lastIndexOf('phase("Summary");');
   const summary = body.slice(summaryAt);
   check("the Summary spawns nothing for orphans: it names the ledger's survivors and the pipeline's actions, then the review stack, then the closing reading", /const orphans = \{ acted: pipeline\.orphanReconciliation, survivors: orphanSurvivors\(ledger\) \};/.test(summary) && !/await agent\([^\n]*orphan/.test(summary) && summary.indexOf("orphanSurvivors(ledger)") < summary.indexOf("buildReviewStack(") && summary.indexOf("buildReviewStack(") < summary.indexOf("await finalMainCheckoutReport()"));
