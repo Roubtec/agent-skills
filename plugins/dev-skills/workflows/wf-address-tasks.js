@@ -3169,21 +3169,18 @@ function taskCycleConfig(task, remote, peerMode) {
 // Reading the fields off the whole ready result rather than taking each as its
 // own parameter is what keeps that list one edit long the next time the cycle
 // grows a record worth publishing.
-function prPrompt(task, ready, remote) {
+// The PR body sections the reviewed result owes the maintainer — a locked-
+// decision deviation and its assessment, a delivery-run failure recorded but
+// not reviewed, the reviewer's caveats. ONE rendering, shared by the delivery
+// brief and the orphan retry: the retry is the call that opens the PR when the
+// first attempt failed after the push, and a PR opened from a generic summary
+// there would end `done` without the information delivery requires the
+// maintainer to see before merging.
+function prBodySections(ready) {
   const dev = Array.isArray(ready && ready.deviations) ? ready.deviations : [];
   const assessments = Array.isArray(ready && ready.deviationAssessments) ? ready.deviationAssessments : [];
   const notes = (ready && ready.notes) || "";
   const rec = (ready && ready.recordOnly) || null;
-  // No-remote arm: `git -C "$WT"` rather than a `cd`, and left unguarded on
-  // purpose. Git skips the chdir outright for an empty `-C`, so an empty `$WT`
-  // runs the log in the main checkout — the same repository, answering a
-  // ref-to-ref range that resolves identically there. Nothing is misreported,
-  // and a guard here would be a case added for a failure that cannot show.
-  if (!remote) {
-    return `Remote push/PR is unavailable this run. Verify branch \`${task.branch}\` and its commits are intact: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && git -C "$WT" log --oneline ${shq(task.base)}..${shq(task.branch)}\` shows the work. Return \`opened: false\`, \`pushed: false\`, \`reason: "no remote auth this run"\`. Do not fail.
-
-${DESTROY_BOUNDARY}`;
-  }
   const caveats = notes ? `\n\nReviewer caveats to surface in the PR body:\n${notes}` : "";
   const deviationLead = dev.length
     ? `\n\nLEAD the PR body with a "Deviation from a locked decision" section, above everything else, carrying these verbatim — each is the maintainer's to ratify or ask conformance on, so neither correct nor soften one:\n${JSON.stringify(dev, null, 2)}${
@@ -3195,6 +3192,20 @@ ${DESTROY_BOUNDARY}`;
   const flakeRecord = rec
     ? `\n\nThe cycle concluded over a FAILED delivery run, on the flake rule's evidenced-unrelated disposition${rec.range ? `, and over a final commit (\`${rec.range}\`) no fresh reviewer saw — the diagnosis-only follow-up task that failure earned` : ", and over no post-run commit this record points you at, so cite none"}. Carry a "Delivery-run failure — recorded, not reviewed" section in the body with these verbatim, so the maintainer sees the gap here and decides how to absorb it; do not re-diagnose, soften, or omit it:\n${JSON.stringify({ note: rec.note || "", ...(rec.range ? { rangeCheck: rec.verified || "" } : {}) }, null, 2)}`
     : "";
+  return `${deviationLead}${flakeRecord}${caveats}`;
+}
+
+function prPrompt(task, ready, remote) {
+  // No-remote arm: `git -C "$WT"` rather than a `cd`, and left unguarded on
+  // purpose. Git skips the chdir outright for an empty `-C`, so an empty `$WT`
+  // runs the log in the main checkout — the same repository, answering a
+  // ref-to-ref range that resolves identically there. Nothing is misreported,
+  // and a guard here would be a case added for a failure that cannot show.
+  if (!remote) {
+    return `Remote push/PR is unavailable this run. Verify branch \`${task.branch}\` and its commits are intact: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && git -C "$WT" log --oneline ${shq(task.base)}..${shq(task.branch)}\` shows the work. Return \`opened: false\`, \`pushed: false\`, \`reason: "no remote auth this run"\`. Do not fail.
+
+${DESTROY_BOUNDARY}`;
+  }
   return `Open a pull request for branch \`${task.branch}\` against base \`${task.base}\`. Work from this task's worktree: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && cd -- "\${WT:?wt-enter returned no path — see its error above}"\` (rerun-safe resolve of the existing worktree; if it errors, STOP and report).
 
 ${DEPUTY_FINISH_IN_TURN}
@@ -3206,7 +3217,7 @@ ${DESTROY_BOUNDARY}
    - Reference the task file (${task.path}); don't restate the whole task unless it adds review value.
    - Note tradeoffs / intentional divergences / uncertainties.
 3. Capture the URL step 2 printed and assert THAT PR's base by URL: \`gh pr view <pr-url> --json baseRefName\` must report \`${task.base}\`. Address the PR by its URL, never by whatever branch you are standing on — the check must follow the PR you just created. Every read in this step reads the same eventually-consistent API the creation and the repair just wrote, so a base that disagrees once is not proof the repair failed — and is not yet a mismatch to repair: re-read until the answer reports \`${task.base}\` or repeats the same other base — a bounded budget of a few re-reads, held briefly apart, an errored read spending it like a stale one — and set \`baseOk: true\` only from a read that reported \`${task.base}\`. A read still unsettled when that budget is spent, before any repair as much as after one, returns \`opened: false\` WITH the \`url\` and \`baseOk: false\`, with \`reason\` naming the read that did not settle and what it last returned. On a mismatch that settled, repair it in the same breath, \`gh pr edit <pr-url> --base ${shq(task.base)}\`, re-read it under the same rule, and return the base it carried before the repair in \`baseRepaired\`. If the repair command itself fails, the failure alone decides nothing — a \`gh pr edit\` failure can arrive after the server applied the change — so rest the verdict on a read settled AFTER the failure, under the same rule: a settled \`${task.base}\` means the repair landed, so return \`baseOk: true\` with \`baseRepaired\` as above; the same other base settled again means that PR is delivered with the wrong base, not delivered — return \`opened: false\` WITH the \`url\`, \`baseOk: false\`, and a \`reason\` naming the settled base it still carries. If the read-back after a repair — failed or succeeded — kept disagreeing without settling, return \`opened: false\` WITH the \`url\` and \`baseOk: false\` the same way, with \`reason\` naming the read that did not settle and the base it last reported — an unsettled read, not a proven wrong base; a repair the server confirmed makes even a repeated old-base answer that unsettled read, never the wrong-base verdict.
-4. If \`gh pr create\` fails BEFORE printing a URL, the PR may exist server-side anyway. If the failure itself names an existing PR's URL (an "already exists" error does), take that URL to step 3 rather than looking anything up. Otherwise, before retrying creation, look it up by the head branch you pushed, in the repository that OWNS the PR — the base repository the creation targeted, never the head repository, where a fork's PR does not live: \`gh pr list --repo <base-repo> --head ${shq(task.branch)} --state open --json url,headRepositoryOwner\`. \`--head\` cannot carry an \`<owner>:<branch>\` form, so require the returned PR's head repository owner to match the head you pushed before trusting the match; then assert its base per step 3. This lookup reads the same eventually-consistent API the creation just wrote, so a lookup that finds nothing is not proof no PR exists — retrying on an answer that merely has not converged is how one branch gets two PRs. Retry creation ONLY on a lookup that finds nothing where nothing-found is trustworthy: the creation failure did not claim the PR exists, AND a re-run of the lookup, held briefly rather than immediate, still finds nothing. Even that held pair closes only the unconverged-lookup window — no answer here proves the failed creation did not open a PR whose success report was lost — so the license is for ONE retry: a retry that fails naming an existing PR's URL goes to step 3 like the first attempt's failure would, and a spent retry that still captured no URL and found no match ends this step at \`opened: false\`, \`pushed: true\`, and \`reason\`, not at another attempt. Where those do not both hold, do not retry — return \`opened: false\`, \`pushed: true\`, and a \`reason\` naming the read that did not settle and what each answer said.${deviationLead}${flakeRecord}${caveats}
+4. If \`gh pr create\` fails BEFORE printing a URL, the PR may exist server-side anyway. If the failure itself names an existing PR's URL (an "already exists" error does), take that URL to step 3 rather than looking anything up. Otherwise, before retrying creation, look it up by the head branch you pushed, in the repository that OWNS the PR — the base repository the creation targeted, never the head repository, where a fork's PR does not live: \`gh pr list --repo <base-repo> --head ${shq(task.branch)} --state open --json url,headRepositoryOwner\`. \`--head\` cannot carry an \`<owner>:<branch>\` form, so require the returned PR's head repository owner to match the head you pushed before trusting the match; then assert its base per step 3. This lookup reads the same eventually-consistent API the creation just wrote, so a lookup that finds nothing is not proof no PR exists — retrying on an answer that merely has not converged is how one branch gets two PRs. Retry creation ONLY on a lookup that finds nothing where nothing-found is trustworthy: the creation failure did not claim the PR exists, AND a re-run of the lookup, held briefly rather than immediate, still finds nothing. Even that held pair closes only the unconverged-lookup window — no answer here proves the failed creation did not open a PR whose success report was lost — so the license is for ONE retry: a retry that fails naming an existing PR's URL goes to step 3 like the first attempt's failure would, and a spent retry that still captured no URL and found no match ends this step at \`opened: false\`, \`pushed: true\`, and \`reason\`, not at another attempt. Where those do not both hold, do not retry — return \`opened: false\`, \`pushed: true\`, and a \`reason\` naming the read that did not settle and what each answer said.${prBodySections(ready)}
 
 Return \`opened: true\` with the \`url\` ONLY if a PR URL exists — from step 2 or step 4's lookup — AND step 3's read-back confirmed its base is \`${task.base}\`, after any repair; set \`baseOk\` to that same fact. If the push succeeded but no PR could be created or found (auth, API, or base-branch error), return \`opened: false\`, \`pushed: true\`, and \`reason\`; ending with neither a captured URL nor a lookup match is that failure, not a delivery. Do not claim a PR that was not created, and do not claim one whose base you did not read back.`;
 }
@@ -3221,8 +3232,9 @@ const CLEANUP_SCHEMA = {
 };
 
 function cleanupNote(task) {
-  // Best-effort worktree removal is requested after delivery; commits and the
-  // branch persist in shared `.git` and on the remote, so removal is safe.
+  // Best-effort worktree removal is requested after a DELIVERED task's terminal
+  // state is settled (see `reclaimWorktree`); commits and the branch persist in
+  // shared `.git` and on the remote, so removal is safe.
   return `Remove this task's worktree to reclaim space — the branch and commits persist. From the repo root (not inside the worktree) run \`wt-remove ${shq(task.slug)}\`. It refuses to delete uncommitted work; if it refuses, report why instead of forcing (\`--force\` only clears git's refusal over ignored build artifacts — the clean checks still apply). It never deletes the branch \`${task.branch}\`. Report \`removed: true\` ONLY when the helper reported the worktree removed; on a refusal or any failure report \`removed: false\` with what it said in \`reason\`.
 
 ${DESTROY_BOUNDARY}
@@ -3685,29 +3697,42 @@ async function implementTask(task, remote, peerMode) {
   return { slug: task.slug, branch: task.branch, status: "ready", notes: result.reviewerNotes || "", ...carried };
 }
 
-async function deliverTask(task, ready, remote) {
-  const pr = await agent(prPrompt(task, ready, remote), {
-    label: `pr:${task.slug}`,
-    schema: PR_SCHEMA,
-  });
-
-  // The reclaim's outcome is read, not assumed: a `wt-remove` refusal (or a
-  // cleanup agent that crashes) leaves the worktree live, and the pipeline's
-  // slot gate must keep its slot for it (`retainSlot`) — the worktree is
-  // reported retained on the result, whatever the delivery itself reported,
-  // and never turns a delivered PR into an error.
+// The reclaim of a DELIVERED task's worktree, run by the pipeline once the
+// task's terminal state is settled — after the orphan action where delivery
+// left one, since a `pushed-no-pr` that the retry converts to `done` is
+// delivered only then, and one that survives the retry is stopped short of
+// delivery and keeps its worktree for inspection, as the skill's Cleanup says
+// every stopped task does. The reclaim's outcome is read, not assumed: a
+// `wt-remove` refusal (or a cleanup agent that crashes) leaves the worktree
+// live, and the pipeline's slot gate must keep its slot for it (`retainSlot`)
+// — the worktree is reported retained on the result, whatever the delivery
+// itself reported, and never turns a delivered PR into an error.
+async function reclaimWorktree(task) {
   let cleanup;
   try {
     cleanup = await agent(cleanupNote(task), { label: `cleanup:${task.slug}`, schema: CLEANUP_SCHEMA });
   } catch (e) {
     cleanup = { removed: false, reason: `cleanup agent crashed: ${e && e.message ? e.message : String(e)}` };
   }
-  const worktreeRetained = cleanup && cleanup.removed === true ? {} : { worktreeRetained: (cleanup && cleanup.reason) || "cleanup agent reported no removal" };
+  return cleanup && cleanup.removed === true ? {} : { worktreeRetained: (cleanup && cleanup.reason) || "cleanup agent reported no removal" };
+}
+// Delivered, for the reclaim: a PR that exists on its recorded base, or the
+// branch that IS the run's delivery where no remote is written this run — the
+// same reading the ledger and the dependency gate take of `local-only`. On a
+// remote run `local-only` is a push taken back off origin, a task stopped
+// short of delivery.
+const RECLAIMABLE = (status, remote) => status === "done" || (!remote && status === "local-only");
+
+async function deliverTask(task, ready, remote) {
+  const pr = await agent(prPrompt(task, ready, remote), {
+    label: `pr:${task.slug}`,
+    schema: PR_SCHEMA,
+  });
 
   // The base a merged sibling advanced this branch onto rides beside the
   // cycle's record: it is the guard's doing, not the cycle's, so the carrier
   // does not know it.
-  const carried = { ...cycleCarried(ready), ...(ready.rebasedOnto ? { rebasedOnto: ready.rebasedOnto } : {}), ...worktreeRetained };
+  const carried = { ...cycleCarried(ready), ...(ready.rebasedOnto ? { rebasedOnto: ready.rebasedOnto } : {}) };
   // A PR that exists but whose base was neither verified nor repaired to the
   // recorded one is its own outcome, not a landed delivery: the diff it shows
   // and the review it collects belong to another branch's work. Tested before
@@ -3978,14 +4003,28 @@ async function settleGuardCollisions({ heldTasks, members = [], collisions, labe
 // IS the merged branch (the PR is retargeted with it — a stacked PR whose parent
 // merged has no parent PR to stack on), or the recorded base itself where a
 // sibling merged into it. Null when no merge touched this branch's base.
+//
+// The merged-into relation is chased to its end: a stack whose ancestors
+// merged one into the next before this branch reached the guard (`B` into
+// `A`, then `A` into `main`) is reported as two merges in one scan, and the
+// branch belongs on the first base that did NOT merge, not on `A` — a base
+// that is itself merged and possibly deleted, where the rebase would hold or
+// the PR would open against an obsolete branch.
 function baseAdvance(task, merged) {
-  for (const m of merged) {
-    const into = typeof m.mergedInto === "string" && m.mergedInto.trim() ? m.mergedInto.trim() : "";
-    if (m.branch === task.base && into) return { reason: `its recorded base \`${task.base}\` merged into \`${into}\``, target: into, retarget: true };
+  const into = (m) => (m && typeof m.mergedInto === "string" && m.mergedInto.trim() ? m.mergedInto.trim() : "");
+  const mergedInto = (branch) => into(merged.find((m) => m.branch === branch && into(m)));
+  if (mergedInto(task.base)) {
+    const chain = [task.base];
+    const seen = new Set(chain);
+    for (let next = mergedInto(task.base); next && !seen.has(next); next = mergedInto(next)) {
+      seen.add(next);
+      chain.push(next);
+    }
+    const hops = chain.slice(1).map((b, i) => `${i ? ", which merged into" : "merged into"} \`${b}\``).join("");
+    return { reason: `its recorded base \`${task.base}\` ${hops}`, target: chain[chain.length - 1], retarget: true };
   }
   for (const m of merged) {
-    const into = typeof m.mergedInto === "string" && m.mergedInto.trim() ? m.mergedInto.trim() : "";
-    if (into && into === task.base) return { reason: `sibling \`${m.branch}\` merged into its base \`${task.base}\``, target: task.base, retarget: false };
+    if (into(m) === task.base) return { reason: `sibling \`${m.branch}\` merged into its base \`${task.base}\``, target: task.base, retarget: false };
   }
   return null;
 }
@@ -4098,8 +4137,22 @@ async function rebaseOntoAdvancedBase(task, result, advance, remote, peerMode) {
     if (advance.retarget) task.base = advance.target;
     return { result: { ...result, rebasedOnto: effectiveBase } };
   }
+  // A replay is a rewrite — on a remote run a force-pushed one — so it is
+  // accepted only with its way back in evidence: a full pre-rebase tip, the
+  // recovery ref named in full under THIS branch's prefix with the stamp the
+  // brief writes, and that ref read back resolving to that tip. The schema
+  // marks the three required whenever `ok` is true, but a schema cannot make
+  // a deputy fill them, and a replay reported without them has no proven
+  // backup of the tip it rewrote — the same report the standalone rebase
+  // (`wf-address-review.js`) refuses to adopt.
+  const recoveryRef = String(report.recoveryRef || "").trim();
+  const recoveryPrefix = `refs/pre-rebase/${task.branch}/`;
+  const recoveryNamed = recoveryRef.startsWith(recoveryPrefix) && /^\d{8}-\d{6}$/.test(recoveryRef.slice(recoveryPrefix.length));
+  if (!TASK_REBASE_OID.test(before) || !recoveryNamed || String(report.recoveryTip || "").trim() !== before) {
+    return hold(`the rebase replayed onto \`${advance.target}\` without proving its way back: it reported ${JSON.stringify(report.before === undefined ? null : report.before)} as the pre-rebase tip, ${JSON.stringify(report.recoveryRef === undefined ? null : report.recoveryRef)} as the recovery ref (expected \`${recoveryPrefix}<YYYYmmdd-HHMMSS>\`), and ${JSON.stringify(report.recoveryTip === undefined ? null : report.recoveryTip)} as what that ref resolves to; a replayed tip is accepted only with the saved tip it rewrote in evidence, so the branch is held before delivery — check the pre-rebase refs under \`${recoveryPrefix}\` yourself before treating any as this branch's way back`);
+  }
   if (!TASK_REBASE_OID.test(after) || report.validationPassed !== true) {
-    return hold(`the rebase replayed onto \`${advance.target}\` but ${report.validationPassed === true ? "reported no full post-rebase tip" : "its validation did not pass"}: ${report.detail || "(no detail reported)"}; branch held before delivery — the recovery ref ${report.recoveryRef || "(unreported)"} is the way back`);
+    return hold(`the rebase replayed onto \`${advance.target}\` but ${report.validationPassed === true ? "reported no full post-rebase tip" : "its validation did not pass"}: ${report.detail || "(no detail reported)"}; branch held before delivery — the recovery ref ${recoveryRef} is the way back`);
   }
   if (remote && report.pushed !== true) {
     return hold(`the rebase replayed and validated but the rebased tip was not pushed (${report.detail || "no detail"}); branch held before delivery so the remote copy is not left behind the reviewed tree`);
@@ -4168,7 +4221,9 @@ async function withGuardTurn(queue, slug, fn) {
 //   - a reservation CONVERTS to delivered once the PR exists (or the branch is
 //     the run's local delivery on a no-remote run, or the PR exists on a base
 //     the maintainer retargets in one command);
-//   - it may only be DROPPED when delivery failed with no remote write;
+//   - it may only be DROPPED when delivery failed with no remote write — at
+//     once where the delivery reported none, or once the orphan action below
+//     found the push never landed or took the branch back off origin;
 //   - where the push landed but no PR advertises the branch, `origin` carries
 //     the number while it appears in neither the reservation set of a later run
 //     nor its open PR heads, so the reservation PERSISTS as an orphan, and the
@@ -4309,8 +4364,11 @@ const ORPHAN_SCHEMA = {
   required: ["outcome", "reason"],
 };
 
-function orphanReconcilePrompt(task, entry) {
+function orphanReconcilePrompt(task, entry, ready) {
   const numbers = entry.taskNumbers.length ? entry.taskNumbers.map((n) => `\`${n}\``).join(", ") : "(none recorded)";
+  // The retry may be the call that opens the PR, so the body it writes owes
+  // the maintainer the same sections the first attempt was briefed with.
+  const sections = prBodySections(ready);
   return `Reconcile ONE orphaned pushed branch while a task batch is still running (sibling tasks may be mid-delivery; touch nothing of theirs): \`${task.branch}\` was pushed to origin while this run was delivering it, but no PR advertises it (the delivery step reported \`${entry.status}\`). It holds task number(s) ${numbers}: while it sits on origin with no PR, the next run's same-number guard sees that number on neither the base branch nor any open PR head, and the collision this run caught reappears there. So this branch must not survive this run in that state: open its PR, or delete it from origin.
 
 ${DEPUTY_FINISH_IN_TURN}
@@ -4321,7 +4379,7 @@ You stand in the repository's SHARED main checkout (confirm with \`git rev-parse
 
 1. **Establish what origin holds.** \`git ls-remote --heads origin ${shq(task.branch)}\`. Nothing printed means the push never landed: report \`not-on-origin\` and stop — there is nothing to reconcile and nothing to delete. Then look for a PR the earlier attempt may have opened without reporting it: \`gh pr list --head ${shq(task.branch)} --state open --json url,baseRefName,headRepositoryOwner\` in the repository that owns the PR (the base repository), requiring the head repository owner to match the one you pushed to. A match goes to step 2's read-back rather than to creation.
 2. **Retry PR creation ONCE.** \`gh pr create --base ${shq(task.base)} --head ${shq(task.branch)} --title "<concise title>" --body "<summary referencing ${task.path}>"\`, then read the PR back BY URL — \`gh pr view <url> --json baseRefName\` must report \`${task.base}\`; on a settled mismatch repair it with \`gh pr edit <url> --base ${shq(task.base)}\` and re-read. Report \`pr-opened\` with the \`url\` and \`baseOk\` from that read-back. A creation that fails naming an existing PR's URL takes that URL to the read-back. A creation that fails any other way is not retried again: go to step 3.
-3. **Otherwise delete the branch from origin.** \`git push origin --delete ${shq(task.branch)}\` — the local branch and its commits stay in the shared \`.git\` for a later run to push again, so nothing reviewed is lost; only the unadvertised remote copy goes. Confirm with \`git ls-remote --heads origin ${shq(task.branch)}\` printing nothing, and report \`branch-deleted\`. Where the delete fails or the branch is still listed, report \`unresolved\` with everything each step said in \`reason\`: the batch summary names this branch beside its task number(s) so the next run can reclaim it by hand.
+3. **Otherwise delete the branch from origin.** \`git push origin --delete ${shq(task.branch)}\` — the local branch and its commits stay in the shared \`.git\` for a later run to push again, so nothing reviewed is lost; only the unadvertised remote copy goes. Confirm with \`git ls-remote --heads origin ${shq(task.branch)}\` printing nothing, and report \`branch-deleted\`. Where the delete fails or the branch is still listed, report \`unresolved\` with everything each step said in \`reason\`: the batch summary names this branch beside its task number(s) so the next run can reclaim it by hand.${sections ? `\n\nThe PR body step 2 writes carries what the reviewed branch owes the maintainer, exactly as the first creation attempt was briefed:${sections}` : ""}
 
 Delete no other branch, touch no other PR, and never force-push anything.`;
 }
@@ -4332,14 +4390,16 @@ Delete no other branch, touch no other PR, and never force-push anything.`;
 // flagged `orphaned` where it survived both — and records the action on the
 // batch's `orphanReconciliation` list. Never throws: an agent that does is an
 // `unresolved` outcome, and a survivor keeps its ledger entry (with the reason)
-// so a later scan still reads it RESERVED and the summary names it.
-async function reconcileOrphan({ ledger, task, prior, remote, orphanReconciliation }) {
+// so a later scan still reads it RESERVED and the summary names it. `ready` is
+// the reviewed result the delivery was briefed with (null where the pipeline
+// crashed before it had one), for the PR body the retry writes.
+async function reconcileOrphan({ ledger, task, prior, ready, remote, orphanReconciliation }) {
   const entry = ledger.orphaned.get(task.slug);
   if (!remote || !entry) return prior;
   phase(`Orphan reconciliation ${task.slug}`);
   let out = null;
   try {
-    out = await agent(orphanReconcilePrompt(task, entry), { label: `orphan:${task.slug}`, schema: ORPHAN_SCHEMA });
+    out = await agent(orphanReconcilePrompt(task, entry, ready), { label: `orphan:${task.slug}`, schema: ORPHAN_SCHEMA });
   } catch (e) {
     log(`orphan reconciliation for ${task.slug} threw: ${e && e.message ? e.message : String(e)}`);
   }
@@ -4353,10 +4413,15 @@ async function reconcileOrphan({ ledger, task, prior, remote, orphanReconciliati
     ledger.reserved.delete(task.slug);
     ledger.delivered.set(task.slug, { ...entry, state: "delivered", prUrl: out.url });
   } else if (outcome === "branch-deleted" || outcome === "not-on-origin") {
+    // Origin carries nothing of this branch now, so the claim is DROPPED, as a
+    // delivery that reported no remote write drops it at settlement: the
+    // branch is no member for a later scan to compare against — kept as a
+    // DELIVERED member, it would hold its numbers and added paths over a
+    // sibling for a collision origin no longer carries. Its own re-push, in a
+    // later run, meets that run's same-number guard like any other branch.
     next = { ...prior, status: "local-only", pushed: false, reason: `${prior.reason ? `${prior.reason}; ` : ""}${outcome === "branch-deleted" ? "the pushed branch was deleted from origin so its task number is not held unadvertised — push it again once its PR can be opened" : "the push never landed on origin; the branch exists locally only"}` };
     ledger.orphaned.delete(task.slug);
     ledger.reserved.delete(task.slug);
-    ledger.delivered.set(task.slug, { ...entry, state: "delivered", prUrl: "" });
   } else {
     next = { ...prior, orphaned: true };
     entry.reason = (out && out.reason) || "orphan reconciliation returned nothing usable";
@@ -4475,10 +4540,14 @@ async function runTaskPipeline(task, ctx) {
   if (slot.denied) {
     return finish({ slug: task.slug, branch: task.branch, status: "storage-throttled", detail: `every one of the ${gate.cap} live-worktree slot(s) the measured storage headroom allows is held by a worktree left in place for inspection (${slotHolders(slot.retainedBy)}), so no delivery can free one; this task never started — reclaim or inspect those worktrees, then rerun it` });
   }
-  // Set once delivery REPORTED the worktree reclaimed; every other exit — a
-  // hold, a crash, a `wt-remove` refusal the delivery carries as
+  // Set once the reclaim REPORTED the worktree removed; every other exit — a
+  // hold, a crash, a delivery stopped short (`pushed-no-pr`, `pr-wrong-base`,
+  // a push taken back off origin), a `wt-remove` refusal carried as
   // `worktreeRetained` — leaves it in place, and the slot stays held for it.
   let reclaimed = false;
+  // The reviewed result delivery was briefed with, kept in the pipeline's own
+  // scope so the crash path's orphan action can brief its PR retry with it.
+  let reviewed = null;
   try {
     phase(`Task ${task.slug}`);
     let res;
@@ -4585,10 +4654,10 @@ async function runTaskPipeline(task, ctx) {
     // a branch that survives both. A read at this boundary would leave the
     // same window one call later; the maintainer's T6 decision on the
     // review-stack window declines the refresh for the same reason.
+    reviewed = cleared.ready;
     let delivered;
     try {
       delivered = await deliverTask(task, cleared.ready, remote);
-      reclaimed = !(delivered && delivered.worktreeRetained);
     } catch (e) {
       // The cycle itself completed, so its record is still in hand — carry it
       // rather than losing it with the crash. `pushed` is left UNKNOWN: the
@@ -4605,7 +4674,15 @@ async function runTaskPipeline(task, ctx) {
     // final state that is 025's no-latched-flags case exactly.
     if (settleReservation(ledger, task.slug, delivered, remote) === "orphaned") {
       // Before `finish`: the state a dependent reads is the reconciled one.
-      delivered = await reconcileOrphan({ ledger, task, prior: delivered, remote, orphanReconciliation });
+      delivered = await reconcileOrphan({ ledger, task, prior: delivered, ready: reviewed, remote, orphanReconciliation });
+    }
+    // The reclaim comes AFTER the settlement, and only for a task that ended
+    // delivered: the orphan action above can turn a `pushed-no-pr` into a
+    // delivered PR, and the one it leaves unresolved is stopped short of
+    // delivery, whose worktree the skill's Cleanup keeps in place.
+    if (RECLAIMABLE(delivered.status, remote)) {
+      Object.assign(delivered, await reclaimWorktree(task));
+      reclaimed = !delivered.worktreeRetained;
     }
     if (cleared.scanComplete === false) delivered.guardScanIncomplete = cleared.scanDetail || "the guard's remote enumeration was degraded; see the referenced section's note-and-proceed rule";
     return finish(delivered);
@@ -4618,7 +4695,13 @@ async function runTaskPipeline(task, ctx) {
     // action never throws) and named by the summary where it survives, rather
     // than an entry no stage ever reconciles or reports.
     if (settleReservation(ledger, task.slug, res, remote) === "orphaned") {
-      res = await reconcileOrphan({ ledger, task, prior: res, remote, orphanReconciliation });
+      res = await reconcileOrphan({ ledger, task, prior: res, ready: reviewed, remote, orphanReconciliation });
+      // A PR the retry opened is a delivery like any other; its worktree is
+      // reclaimed on the same terms as the delivered path's.
+      if (RECLAIMABLE(res.status, remote)) {
+        Object.assign(res, await reclaimWorktree(task));
+        reclaimed = !res.worktreeRetained;
+      }
     }
     return finish(res);
   } finally {

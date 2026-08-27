@@ -219,7 +219,7 @@ It evaluates the shipped declaration prefix with scripted agents and drives the 
 
 ### `test-pipelined-batch.mjs`
 
-Run `node scripts/test-pipelined-batch.mjs` after changing the batch workflow's per-task pipeline (task 033): how a task waits for its prerequisites, the serialized first-ready-wins guard and the reservation it holds through delivery, the rebase onto a base a merged sibling advanced, the storage-derived slot gate and the slot a worktree left in place keeps (the review stack's worktree takes one too), the numbers a held branch's result names, the in-pipeline reconciliation of pushed branches left without a PR, or the terminal-state census the summary reads.
+Run `node scripts/test-pipelined-batch.mjs` after changing the batch workflow's per-task pipeline (task 033): how a task waits for its prerequisites, the serialized first-ready-wins guard and the reservation it holds through delivery, the rebase onto a base a merged sibling advanced (chased through merged ancestors, and adopted only with its recovery proof), the storage-derived slot gate and the slot a worktree left in place keeps (the review stack's worktree takes one too, and a reclaim waits for the task's settled, delivered state), the numbers a held branch's result names, the in-pipeline reconciliation of pushed branches left without a PR and the PR body its retry carries, or the terminal-state census the summary reads.
 
 It drives the shipped pipeline with scripted agents, some deferred so the suite can observe order rather than only outcomes. A live multi-task workflow run is outside what a script can do; what it establishes, and the perturbations it was checked against, are in `plugins/dev-skills/workflows/README.md`'s Validation section.
 

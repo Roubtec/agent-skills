@@ -42,7 +42,7 @@ function check(name, cond, detail) {
     console.error(`NOT ok - ${name}${detail ? `: ${detail}` : ""}`);
   }
 }
-const EXPECTED_CHECKS = 147;
+const EXPECTED_CHECKS = 168;
 
 async function scenario(name, fn) {
   try {
@@ -52,7 +52,7 @@ async function scenario(name, fn) {
   }
 }
 
-const NAMES = ["runPipelinedBatch", "createReservationLedger", "createSlotGate", "settleReservation", "orphanSurvivors", "terminalStates", "abortedReservationReport", "reviewStackMergeable", "reviewStackOrder", "unschedulable", "effectiveDeps", "baseAdvance", "DEP_SUCCEEDED"];
+const NAMES = ["runPipelinedBatch", "createReservationLedger", "createSlotGate", "settleReservation", "orphanSurvivors", "terminalStates", "abortedReservationReport", "reviewStackMergeable", "reviewStackOrder", "unschedulable", "effectiveDeps", "baseAdvance", "DEP_SUCCEEDED", "prPrompt", "orphanReconcilePrompt"];
 function load(agent, events) {
   const at = src.indexOf(CUT);
   if (at < 0) throw new Error(`cut marker not found: ${JSON.stringify(CUT)}`);
@@ -236,6 +236,7 @@ await scenario("orphaned pushed branches are reconciled in their own pipeline, a
       // No packet at all: the agent may have pushed before it lost its report.
       "pr:015-n": null,
       "014-z:review#1": zReview,
+      "010-p:review#1": { ...PASS_REVIEW, notes: "watch the migration ordering" },
       "orphan:010-p": { outcome: "pr-opened", url: "https://example.invalid/pr/10", baseOk: true, reason: "retry succeeded" },
       "orphan:011-q": { outcome: "branch-deleted", reason: "PR retry failed; branch deleted from origin" },
       "orphan:012-r": { outcome: "unresolved", reason: "gh unreachable; delete refused" },
@@ -251,7 +252,10 @@ await scenario("orphaned pushed branches are reconciled in their own pipeline, a
   check("and sees the orphan whose PR retry succeeded as DELIVERED with that PR", /task\/010-p[^\n]*DELIVERED[^\n]*pr\/10/.test(zScan), zScan.slice(0, 600));
   check("and does not see the branch whose delivery made no remote write", !/task\/013-s/.test(zScan));
   check("a null PR packet leaves the push state unknown: pushed-no-pr, so it was acted on as an orphan rather than dropped", L.includes("orphan:015-n") && by(out.results, "015-n").status === "local-only" && /returned nothing/.test(by(out.results, "015-n").reason) && /never landed/.test(by(out.results, "015-n").reason), JSON.stringify(by(out.results, "015-n")));
-  check("each orphan was acted on inside its own pipeline, right after its delivery", ["010-p", "011-q", "012-r", "015-n"].every((x) => at(out.calls, `orphan:${x}`) > at(out.calls, `cleanup:${x}`)) && at(out.calls, "orphan:010-p") < at(out.calls, "016-dp:fix#1"), JSON.stringify(L));
+  check("each orphan was acted on inside its own pipeline, right after its delivery", ["010-p", "011-q", "012-r", "015-n"].every((x) => at(out.calls, `orphan:${x}`) > at(out.calls, `pr:${x}`)) && at(out.calls, "orphan:010-p") < at(out.calls, "016-dp:fix#1"), JSON.stringify(L));
+  // The reclaim waits for the settlement and runs for a DELIVERED task only: the orphan whose retry opened its PR is reclaimed after that retry; a survivor, and a push taken back off origin on a remote run, are stopped short of delivery and keep their worktrees (and slots) for inspection, as the skill's Cleanup says.
+  check("the worktree is reclaimed after the orphan settlement, and only where it ended delivered", at(out.calls, "cleanup:010-p") > at(out.calls, "orphan:010-p") && ["011-q", "012-r", "013-s", "015-n"].every((x) => !L.includes(`cleanup:${x}`)) && L.includes("cleanup:014-z") && out.gate.retained === 4 && out.gate.inFlight === 4, JSON.stringify({ L, gate: out.gate }));
+  check("a branch taken back off origin, or never on it, is DROPPED from the ledger rather than kept as a delivered member", !out.ledger.delivered.has("011-q") && !out.ledger.delivered.has("015-n") && !out.ledger.reserved.has("011-q") && !out.ledger.reserved.has("015-n") && !/task\/011-q|task\/015-n/.test(zScan), zScan.slice(0, 800));
   check("the batch records exactly the four actions", JSON.stringify(out.pipeline.orphanReconciliation.map((a) => `${a.slug}:${a.outcome}`).sort()) === JSON.stringify(["010-p:pr-opened", "011-q:branch-deleted", "012-r:unresolved", "015-n:not-on-origin"]), JSON.stringify(out.pipeline.orphanReconciliation));
   check("a PR retried successfully converts the result to done, marked late", by(out.results, "010-p").status === "done" && by(out.results, "010-p").prUrl === "https://example.invalid/pr/10" && by(out.results, "010-p").lateDelivery === true);
   check("its dependent ran on that recovered state and delivered", by(out.results, "016-dp").status === "done" && at(out.calls, "016-dp:fix#1") > at(out.calls, "orphan:010-p"));
@@ -269,6 +273,9 @@ await scenario("orphaned pushed branches are reconciled in their own pipeline, a
   check("the survivor's result is flagged orphaned and stays pushed-no-pr", by(out.results, "012-r").status === "pushed-no-pr" && by(out.results, "012-r").orphaned === true);
   check("the no-remote-write failure dropped its reservation and got no orphan step", !out.ledger.orphaned.has("013-s") && !out.ledger.reserved.has("013-s") && !L.includes("orphan:013-s"));
   check("the census reads the mixed terminal states", (() => { const c = out.fns.terminalStates(out.results); return c.done === 3 && c["local-only"] === 2 && c["pushed-no-pr"] === 2 && c["skipped-dep"] === 1 && Object.keys(c).length === 4; })(), JSON.stringify(out.fns.terminalStates(out.results)));
+  // The retry may be the call that opens the PR, so its body owes the maintainer what the first attempt's did: the same sections, rendered once.
+  check("the orphan brief carries the reviewer caveats the delivery brief carried, for the PR body its retry writes", (() => { const o = out.calls.find((c) => c.label === "orphan:010-p").prompt; const d = out.calls.find((c) => c.label === "pr:010-p").prompt; const caveat = "Reviewer caveats to surface in the PR body:\nwatch the migration ordering"; return o.includes(caveat) && d.includes(caveat) && /exactly as the first creation attempt was briefed/.test(o); })(), out.calls.find((c) => c.label === "orphan:010-p").prompt.slice(-600));
+  check("the deviation and delivery-failure sections render identically in the delivery brief and the orphan brief, and an orphan brief with nothing to carry adds no section", (() => { const ready = { deviations: ["chose X over the locked Y"], deviationAssessments: [{ deviation: "chose X over the locked Y", inSpecRoute: "Y", recommendation: "RATIFY" }], recordOnly: { note: "flaky net", range: "", verified: "" }, notes: "" }; const task = t("020-x"); const entry = { taskNumbers: ["020"], status: "pushed-no-pr" }; const d = out.fns.prPrompt(task, ready, true); const o = out.fns.orphanReconcilePrompt(task, entry, ready); const bare = out.fns.orphanReconcilePrompt(task, entry, null); const section = (p, from) => p.slice(p.indexOf(from)); const dev = "LEAD the PR body with a \"Deviation from a locked decision\" section"; const rec = "Delivery-run failure — recorded, not reviewed"; return d.includes(dev) && o.includes(dev) && d.includes(rec) && o.includes(rec) && /"recommendation": "RATIFY"/.test(o) && section(d, dev).split("\n\nReturn `opened: true`")[0] === section(o, dev).split("\n\nDelete no other branch")[0] && !/first creation attempt was briefed/.test(bare); })());
   check("the orphan brief spells out the PR retry and the guarded delete, and names the numbers", (() => { const p = out.calls.find((c) => c.label === "orphan:012-r").prompt; return /Retry PR creation ONCE/.test(p) && /git push origin --delete 'task\/012-r'/.test(p) && /`012`, `012a`/.test(p); })());
   check("a no-remote ledger never orphans", (() => { const l = out.fns.createReservationLedger(); l.reserved.set("x", { slug: "x", branch: "task/x", base: "main", state: "reserved", taskNumbers: [] }); return out.fns.settleReservation(l, "x", { status: "pushed-no-pr", pushed: true }, false) === "dropped"; })());
   check("a crashed delivery with unknown push state is kept as an orphan on a remote run", (() => { const l = out.fns.createReservationLedger(); l.reserved.set("x", { slug: "x", branch: "task/x", base: "main", state: "reserved", taskNumbers: [] }); return out.fns.settleReservation(l, "x", { status: "error" }, true) === "orphaned" && l.orphaned.has("x"); })());
@@ -305,6 +312,8 @@ await scenario("merged sibling: rebase onto the advanced base before delivery", 
   const reviewB = deferred();
   const plan = { defaultBase: "main", waves: [[t("001-a"), t("002-b")], [t("003-c", "task/001-a", ["001-a"])]] };
   const merged = { collisions: [], taskNumbers: [], merged: [{ branch: "task/001-a", mergedInto: "main" }], scanComplete: true };
+  // The way back a replay must prove: the branch-scoped recovery ref, read back to the pre-rebase tip.
+  const RECOVERY = { recoveryRef: "refs/pre-rebase/task/002-b/20260827-120000", recoveryTip: "1".repeat(40) };
   const out = await (async () => {
     const running = runBatch({
       plan,
@@ -312,7 +321,7 @@ await scenario("merged sibling: rebase onto the advanced base before delivery", 
         "002-b:review#1": reviewB,
         "collision-scan:002-b": merged,
         "collision-scan:003-c": merged,
-        "rebase:002-b": { ok: true, halted: false, noop: false, effectiveBase: "9".repeat(40), before: "1".repeat(40), after: "2".repeat(40), recoveryRef: "refs/pre-rebase/task/002-b/20260827-120000", recoveryTip: "1".repeat(40), validationPassed: true, pushed: true, detail: "replayed 2 commits" },
+        "rebase:002-b": { ok: true, halted: false, noop: false, effectiveBase: "9".repeat(40), before: "1".repeat(40), after: "2".repeat(40), ...RECOVERY, validationPassed: true, pushed: true, detail: "replayed 2 commits" },
         "re-review:002-b": { pass: true, issues: [], notes: "replay reads clean", flakeRecord: "" },
         "rebase:003-c": { ok: true, halted: false, noop: true, effectiveBase: "9".repeat(40), before: "3".repeat(40), after: "3".repeat(40), validationPassed: true, pushed: false, detail: "nothing to replay" },
       },
@@ -360,6 +369,7 @@ await scenario("merged sibling: rebase onto the advanced base before delivery", 
   }
   check("the merged member is excluded from the review stack as merged", !out.fns.reviewStackMergeable(by(out.results, "001-a")) && out.fns.reviewStackOrder(plan, out.results).excluded.some((e) => e.slug === "001-a" && e.status === "merged"));
   check("baseAdvance: the merged branch AS the base retargets; a merge INTO the base does not", JSON.stringify(out.fns.baseAdvance({ base: "task/x" }, [{ branch: "task/x", mergedInto: "main" }])) === JSON.stringify({ reason: "its recorded base `task/x` merged into `main`", target: "main", retarget: true }) && out.fns.baseAdvance({ base: "main" }, [{ branch: "task/x", mergedInto: "main" }]).retarget === false && out.fns.baseAdvance({ base: "dev" }, [{ branch: "task/x", mergedInto: "main" }]) === null);
+  check("baseAdvance: a merged base is chased through every ancestor that merged, to the first that did not, and a cyclic reading cannot loop", JSON.stringify(out.fns.baseAdvance({ base: "task/b" }, [{ branch: "task/a", mergedInto: "main" }, { branch: "task/b", mergedInto: "task/a" }])) === JSON.stringify({ reason: "its recorded base `task/b` merged into `task/a`, which merged into `main`", target: "main", retarget: true }) && out.fns.baseAdvance({ base: "task/b" }, [{ branch: "task/b", mergedInto: "task/a" }, { branch: "task/a", mergedInto: "task/b" }]).target === "task/a", JSON.stringify(out.fns.baseAdvance({ base: "task/b" }, [{ branch: "task/a", mergedInto: "main" }, { branch: "task/b", mergedInto: "task/a" }])));
 
   // A merge reading naming a branch this ledger never delivered is ignored:
   // the pipeline acts only on members it tracks.
@@ -371,16 +381,21 @@ await scenario("merged sibling: rebase onto the advanced base before delivery", 
   // Degraded rebases hold.
   for (const [name, rebase, test] of [
     ["halted", { ok: true, halted: true, noop: false, question: "src/a.ts: both sides changed the export", recoveryRef: "refs/pre-rebase/task/002-b/x", detail: "aborted" }, (r) => r.status === "rebase-hold" && r.openQuestions.length === 1 && r.openQuestions[0].origin === "rebase" && /both sides changed/.test(r.openQuestions[0].question)],
-    ["validation failed", { ok: true, halted: false, noop: false, effectiveBase: "9".repeat(40), before: "1".repeat(40), after: "2".repeat(40), validationPassed: false, pushed: false, detail: "tests failed" }, (r) => r.status === "rebase-hold" && /validation did not pass/.test(r.detail)],
+    ["validation failed", { ok: true, halted: false, noop: false, effectiveBase: "9".repeat(40), before: "1".repeat(40), after: "2".repeat(40), ...RECOVERY, validationPassed: false, pushed: false, detail: "tests failed" }, (r) => r.status === "rebase-hold" && /validation did not pass/.test(r.detail)],
     ["not ok", { ok: false, halted: false, noop: false, detail: "dirty tree" }, (r) => r.status === "rebase-hold" && /could not be carried out/.test(r.detail)],
     ["unevidenced no-op", { ok: true, halted: false, noop: true, effectiveBase: "9".repeat(40), before: "1".repeat(40), after: "2".repeat(40), detail: "" }, (r) => r.status === "rebase-hold" && /unevidenced/.test(r.detail)],
     ["no-op with abbreviated tips", { ok: true, halted: false, noop: true, effectiveBase: "9".repeat(40), before: "abc1234", after: "abc1234", detail: "" }, (r) => r.status === "rebase-hold" && /two equal full-OID tips/.test(r.detail)],
     ["no-op without an effective base", { ok: true, halted: false, noop: true, before: "3".repeat(40), after: "3".repeat(40), detail: "" }, (r) => r.status === "rebase-hold" && /no full effective-base OID/.test(r.detail)],
     ["no-op with an abbreviated effective base", { ok: true, halted: false, noop: true, effectiveBase: "main", before: "3".repeat(40), after: "3".repeat(40), detail: "" }, (r) => r.status === "rebase-hold" && /no full effective-base OID/.test(r.detail)],
     ["replay without an effective base", { ok: true, halted: false, noop: false, before: "1".repeat(40), after: "2".repeat(40), validationPassed: true, pushed: true, detail: "replayed" }, (r) => r.status === "rebase-hold" && /no full effective-base OID/.test(r.detail)],
-    ["replayed but unpushed", { ok: true, halted: false, noop: false, effectiveBase: "9".repeat(40), before: "1".repeat(40), after: "2".repeat(40), validationPassed: true, pushed: false, detail: "lease refused" }, (r) => r.status === "rebase-hold" && /not pushed/.test(r.detail)],
+    ["replayed but unpushed", { ok: true, halted: false, noop: false, effectiveBase: "9".repeat(40), before: "1".repeat(40), after: "2".repeat(40), ...RECOVERY, validationPassed: true, pushed: false, detail: "lease refused" }, (r) => r.status === "rebase-hold" && /not pushed/.test(r.detail)],
     ["returned nothing", null, (r) => r.status === "rebase-hold" && /nothing usable/.test(r.detail)],
-    ["re-review failed", { ok: true, halted: false, noop: false, effectiveBase: "9".repeat(40), before: "1".repeat(40), after: "2".repeat(40), validationPassed: true, pushed: true, detail: "replayed" }, (r) => r.status === "rebase-hold" && /did not pass fresh re-review/.test(r.detail)],
+    ["re-review failed", { ok: true, halted: false, noop: false, effectiveBase: "9".repeat(40), before: "1".repeat(40), after: "2".repeat(40), ...RECOVERY, validationPassed: true, pushed: true, detail: "replayed" }, (r) => r.status === "rebase-hold" && /did not pass fresh re-review/.test(r.detail)],
+    // A replay is accepted only with its way back in evidence: the schema marks the three fields required, but a deputy can omit them, and a force-pushed rewrite with no proven backup of the tip it rewrote is what the standalone rebase refuses too.
+    ["replay without a recovery ref", { ok: true, halted: false, noop: false, effectiveBase: "9".repeat(40), before: "1".repeat(40), after: "2".repeat(40), validationPassed: true, pushed: true, detail: "replayed" }, (r) => r.status === "rebase-hold" && /without proving its way back/.test(r.detail) && /null as the recovery ref/.test(r.detail)],
+    ["replay whose recovery ref names another branch", { ok: true, halted: false, noop: false, effectiveBase: "9".repeat(40), before: "1".repeat(40), after: "2".repeat(40), recoveryRef: "refs/pre-rebase/task/001-a/20260827-120000", recoveryTip: "1".repeat(40), validationPassed: true, pushed: true, detail: "replayed" }, (r) => r.status === "rebase-hold" && /without proving its way back/.test(r.detail)],
+    ["replay whose recovery ref was not read back to the pre-rebase tip", { ok: true, halted: false, noop: false, effectiveBase: "9".repeat(40), before: "1".repeat(40), after: "2".repeat(40), recoveryRef: RECOVERY.recoveryRef, recoveryTip: "2".repeat(40), validationPassed: true, pushed: true, detail: "replayed" }, (r) => r.status === "rebase-hold" && /without proving its way back/.test(r.detail)],
+    ["replay without a pre-rebase tip", { ok: true, halted: false, noop: false, effectiveBase: "9".repeat(40), after: "2".repeat(40), ...RECOVERY, validationPassed: true, pushed: true, detail: "replayed" }, (r) => r.status === "rebase-hold" && /without proving its way back/.test(r.detail)],
   ]) {
     const two = { defaultBase: "main", waves: [[t("001-a"), t("002-b")]] };
     const rb = deferred();
@@ -408,7 +423,7 @@ await scenario("merged sibling: rebase onto the advanced base before delivery", 
       overrides: {
         "002-b:review#1": rb,
         "collision-scan:002-b": { ...merged, taskNumbers: ["002"] },
-        "rebase:002-b": { ok: true, halted: false, noop: false, effectiveBase: "9".repeat(40), before: "1".repeat(40), after: "2".repeat(40), validationPassed: true, pushed: true, detail: "replayed" },
+        "rebase:002-b": { ok: true, halted: false, noop: false, effectiveBase: "9".repeat(40), before: "1".repeat(40), after: "2".repeat(40), ...RECOVERY, validationPassed: true, pushed: true, detail: "replayed" },
         "re-review:002-b": new Error("re-review agent crashed"),
       },
     });
@@ -430,7 +445,7 @@ await scenario("merged sibling: rebase onto the advanced base before delivery", 
       overrides: {
         "002-b:review#1": rb,
         "collision-scan:002-b": { ...merged, taskNumbers: ["002"] },
-        "rebase:002-b": { ok: true, halted: false, noop: false, effectiveBase: "9".repeat(40), before: "1".repeat(40), after: "2".repeat(40), validationPassed: true, pushed: true, detail: "replayed" },
+        "rebase:002-b": { ok: true, halted: false, noop: false, effectiveBase: "9".repeat(40), before: "1".repeat(40), after: "2".repeat(40), ...RECOVERY, validationPassed: true, pushed: true, detail: "replayed" },
         "re-review:002-b": { pass: true, issues: [], notes: "replay reads clean", flakeRecord: "" },
         "pr:002-b": new Error("gh pr create crashed"),
         "orphan:002-b": { outcome: "unresolved", reason: "gh unreachable; delete refused" },
