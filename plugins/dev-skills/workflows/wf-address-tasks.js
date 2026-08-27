@@ -4146,6 +4146,16 @@ function settleReservation(ledger, slug, delivered, remote) {
   ledger.reserved.delete(slug);
   return "dropped";
 }
+// The abort catch's report of what the ledger still holds. An orphan keeps its
+// `reserved` entry on purpose (a later scan must still read it RESERVED), so
+// it is named ONCE, under the orphan reason: its delivery did complete, with
+// a known status. Only a reservation that never settled is the unknown case.
+function abortedReservationReport(ledger) {
+  return [
+    ...[...ledger.orphaned.values()].map((o) => ({ slug: o.slug, branch: o.branch, taskNumbers: o.taskNumbers, reason: "the batch aborted before the orphan could be reconciled" })),
+    ...[...ledger.reserved.values()].filter((o) => !ledger.orphaned.has(o.slug)).map((o) => ({ slug: o.slug, branch: o.branch, taskNumbers: o.taskNumbers, reason: "the batch aborted while this branch was still delivering; its push may have landed, so its delivery state is unknown" })),
+  ];
+}
 
 // Live worktrees are bounded continuously rather than per wave: a task takes a
 // slot before its worktree is created and gives it back once delivery has
@@ -4420,7 +4430,14 @@ async function runTaskPipeline(task, ctx) {
     if (reservation === "orphaned") delivered.reservationHeld = true;
     return finish(delivered);
   } catch (e) {
-    return finish({ slug: task.slug, branch: task.branch, status: "error", detail: `pipeline crashed: ${e && e.message ? e.message : String(e)}` });
+    const res = { slug: task.slug, branch: task.branch, status: "error", detail: `pipeline crashed: ${e && e.message ? e.message : String(e)}` };
+    // The crash may have come AFTER the claim was entered — in the rebase, in
+    // its re-review, anywhere under the reservation — so every exit from the
+    // reserved state settles it: with the push state unknown, a remote run
+    // keeps it as an orphan the terminal stage acts on and the summary names,
+    // rather than an entry no stage ever reconciles or reports.
+    if (settleReservation(ledger, task.slug, res, remote) === "orphaned") res.reservationHeld = true;
+    return finish(res);
   } finally {
     releaseSlot(gate);
   }
@@ -5292,9 +5309,10 @@ try {
   // so the absence is never read as the fewer-than-two skip. An orphaned
   // reservation an abort leaves behind is named here rather than acted on:
   // this path spawns nothing.
-  // A reservation still HELD at the abort is named beside them: that task was
-  // mid-delivery, its push may have landed, and nothing will settle it now.
-  return { error: `Batch aborted: ${e && e.message ? e.message : String(e)}`, batch: args, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), throttled, collisions, guardOrder: pipeline.guardOrder, mergedDuringRun: pipeline.mergedDuringRun, orphanedBranches: [...[...ledger.orphaned.values()].map((o) => ({ slug: o.slug, branch: o.branch, taskNumbers: o.taskNumbers, reason: "the batch aborted before the orphan could be reconciled" })), ...[...ledger.reserved.values()].map((o) => ({ slug: o.slug, branch: o.branch, taskNumbers: o.taskNumbers, reason: "the batch aborted while this branch was still delivering; its push may have landed, so its delivery state is unknown" }))], terminalStates: terminalStates(results), resolution: plan && plan.resolution ? plan.resolution : null, results, mainCheckout: await finalMainCheckoutReport(), reviewStack: { built: false, skipped: true, reason: "the batch aborted, so the integration check did not run; the review stack excludes an aborted batch whatever it delivered, and nothing was created for it" } };
+  // A reservation still HELD at the abort is named beside them, once each:
+  // that task was mid-delivery, its push may have landed, and nothing will
+  // settle it now.
+  return { error: `Batch aborted: ${e && e.message ? e.message : String(e)}`, batch: args, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), throttled, collisions, guardOrder: pipeline.guardOrder, mergedDuringRun: pipeline.mergedDuringRun, orphanedBranches: abortedReservationReport(ledger), terminalStates: terminalStates(results), resolution: plan && plan.resolution ? plan.resolution : null, results, mainCheckout: await finalMainCheckoutReport(), reviewStack: { built: false, skipped: true, reason: "the batch aborted, so the integration check did not run; the review stack excludes an aborted batch whatever it delivered, and nothing was created for it" } };
 }
 
 phase("Summary");
