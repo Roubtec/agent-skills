@@ -4531,10 +4531,31 @@ function unschedulable(tasks, slugByBranch) {
 
 async function runTaskPipeline(task, ctx) {
   const { slugByBranch, terminal, statusBySlug, results, ledger, guard, gate, remote, peerMode, defaultBase, throttled, collisions, mergedDuringRun, orphanReconciliation } = ctx;
-  const finish = (res) => {
+  // The dependency-visible terminal state, settled ONCE: `statusBySlug` and
+  // the terminal promise a dependent awaits. A delivered task settles it
+  // before its worktree is reclaimed — the reclaim adds only
+  // `worktreeRetained`, never a status — so a dependent starts on the
+  // delivery rather than on a cleanup deputy that may be slow or hung; the
+  // slot the reclaim frees is the gate's to hand over, and the dependent's own
+  // `acquireSlot` waits for it where the cap binds. Every other exit settles
+  // through `finish`.
+  const settle = (res) => {
+    if (statusBySlug.has(task.slug)) return;
     statusBySlug.set(task.slug, res.status);
-    results.push(res);
     terminal.get(task.slug).resolve(res);
+  };
+  const finish = (res) => {
+    // A merge the guard observed while this task was between its settlement
+    // and here (its reclaim still running) was recorded on the ledger entry
+    // and could not be stamped on a result that did not exist yet: read it
+    // back now, so the review stack excludes the merged branch.
+    const entry = ledger.delivered.get(task.slug);
+    if (entry && entry.merged === true && res.merged !== true) {
+      res.merged = true;
+      res.mergedInto = entry.mergedInto;
+    }
+    settle(res);
+    results.push(res);
     return res;
   };
   const blocked = ctx.unschedulable.get(task.slug);
@@ -4691,7 +4712,9 @@ async function runTaskPipeline(task, ctx) {
     // delivered — the same reading the gate below takes when it lets a
     // dependent start: the orphan action above can turn a `pushed-no-pr` into
     // a delivered PR, and the one it leaves unresolved is stopped short of
-    // delivery, whose worktree the skill's Cleanup keeps in place.
+    // delivery, whose worktree the skill's Cleanup keeps in place. Dependents
+    // are released before the reclaim (see `settle`).
+    settle(delivered);
     if (DEP_SUCCEEDED(delivered.status, remote)) {
       Object.assign(delivered, await reclaimWorktree(task));
       reclaimed = !delivered.worktreeRetained;
@@ -4710,6 +4733,7 @@ async function runTaskPipeline(task, ctx) {
       res = await reconcileOrphan({ ledger, task, prior: res, ready: reviewed, remote, orphanReconciliation });
       // A PR the retry opened is a delivery like any other; its worktree is
       // reclaimed on the same terms as the delivered path's.
+      settle(res);
       if (DEP_SUCCEEDED(res.status, remote)) {
         Object.assign(res, await reclaimWorktree(task));
         reclaimed = !res.worktreeRetained;

@@ -42,7 +42,7 @@ function check(name, cond, detail) {
     console.error(`NOT ok - ${name}${detail ? `: ${detail}` : ""}`);
   }
 }
-const EXPECTED_CHECKS = 170;
+const EXPECTED_CHECKS = 176;
 
 async function scenario(name, fn) {
   try {
@@ -161,13 +161,59 @@ await scenario("fast task delivers while a slow sibling is still in review; depe
   const L = labels(out.calls);
   check("b's PR opened before a's review returned", at(out.calls, "pr:002-b") !== -1 && at(out.calls, "pr:002-b") < at(out.calls, "001-a:fix#2"), JSON.stringify(L));
   check("b's worktree was reclaimed before a delivered", at(out.calls, "cleanup:002-b") < at(out.calls, "pr:001-a"));
-  check("c did not start until a delivered", at(out.calls, "003-c:fix#1") > at(out.calls, "pr:001-a") && at(out.calls, "003-c:fix#1") > at(out.calls, "cleanup:001-a"), JSON.stringify(L));
+  check("c did not start until a delivered", at(out.calls, "003-c:fix#1") > at(out.calls, "pr:001-a"), JSON.stringify(L));
   check("every task delivered", out.results.length === 3 && out.results.every((r) => r.status === "done"), JSON.stringify(out.results.map((r) => `${r.slug}:${r.status}`)));
   check("the guard ran once per task, in readiness order: b first", JSON.stringify(out.pipeline.guardOrder) === JSON.stringify(["002-b", "001-a", "003-c"]), JSON.stringify(out.pipeline.guardOrder));
   check("the census reports three done", JSON.stringify(out.fns.terminalStates(out.results)) === JSON.stringify({ done: 3 }));
   check("c's guard scan listed a and b as DELIVERED members with their PRs", /task\/001-a[^\n]*DELIVERED[^\n]*pr\/001-a/.test(out.calls[at(out.calls, "collision-scan:003-c")].prompt));
   check("the ledger holds every task as delivered and reserves nothing", out.ledger.delivered.size === 3 && out.ledger.reserved.size === 0 && out.ledger.orphaned.size === 0);
   check("the dependency gate is the structural one: c's effective deps include a from its base alone", JSON.stringify(out.fns.effectiveDeps({ slug: "x", base: "task/001-a", dependsOn: [] }, new Map([["task/001-a", "001-a"]]))) === JSON.stringify(["001-a"]));
+});
+
+// 1b. DELIVERY, NOT RECLAIM, RELEASES A DEPENDENT. `a`'s cleanup deputy is
+//     deferred: `c` (dependent on `a`) starts on `a`'s delivery while that
+//     cleanup is still pending; a merge of `a` that `b`'s guard observes in
+//     that window reaches `a`'s result once it finishes; and under cap 1 the
+//     dependent waits for the slot the reclaim frees, not for the reclaim as
+//     a dependency.
+await scenario("a dependent starts on delivery while the prerequisite's reclaim is pending; a merge observed in that window lands on the result", async () => {
+  const cleanupA = deferred();
+  const reviewB = deferred();
+  // `a`'s cleanup is released by the scenario; `c`'s PR step records whether
+  // that release had happened yet when `c` reached delivery.
+  let aCleanupReleased = false;
+  let cDeliveredWhileACleanupPending = null;
+  const plan = { defaultBase: "main", waves: [[t("001-a"), t("002-b")], [t("003-c", "task/001-a", ["001-a"])]] };
+  const running = runBatch({ plan, overrides: {
+    "cleanup:001-a": cleanupA,
+    "002-b:review#1": reviewB,
+    "collision-scan:002-b": { collisions: [], taskNumbers: [], merged: [{ branch: "task/001-a", mergedInto: "main" }], scanComplete: true },
+    "rebase:002-b": { ok: true, halted: false, noop: true, effectiveBase: "9".repeat(40), before: "3".repeat(40), after: "3".repeat(40), validationPassed: true, pushed: false, detail: "nothing to replay" },
+    "pr:003-c": () => { cDeliveredWhileACleanupPending = !aCleanupReleased; return PR_OK("003-c"); },
+  } });
+  await new Promise((r) => setTimeout(r, 20));
+  reviewB.resolve({ ...PASS_REVIEW });
+  await new Promise((r) => setTimeout(r, 20));
+  const peek = await Promise.race([running, new Promise((r) => setTimeout(() => r(null), 5))]);
+  check("the batch is still running while a's cleanup is pending", peek === null);
+  aCleanupReleased = true;
+  cleanupA.resolve({ removed: true, reason: "" });
+  const out = await running;
+  const L = labels(out.calls);
+  check("c started after a delivered, and its own PR opened while a's cleanup was still pending", at(out.calls, "003-c:fix#1") > at(out.calls, "pr:001-a") && cDeliveredWhileACleanupPending === true, JSON.stringify({ cDeliveredWhileACleanupPending, L }));
+  check("every task delivered, a's worktree was reclaimed, and the gate is idle", out.results.length === 3 && out.results.every((r) => r.status === "done" && !r.worktreeRetained) && out.gate.inFlight === 0, JSON.stringify(out.results.map((r) => `${r.slug}:${r.status}`)));
+  check("the merge b observed while a was mid-reclaim is on a's result, and the review stack excludes it", by(out.results, "001-a").merged === true && by(out.results, "001-a").mergedInto === "main" && out.pipeline.mergedDuringRun.some((m) => m.slug === "001-a") && !out.fns.reviewStackMergeable(by(out.results, "001-a")) && out.fns.terminalStates(out.results)["merged-during-run"] === 1, JSON.stringify({ a: by(out.results, "001-a"), merged: out.pipeline.mergedDuringRun }));
+  // Cap 1: the dependent is released by the delivery but the slot is the
+  // reclaim's to free, so it waits on the gate (recorded as throttled), and
+  // a reclaim that refuses denies it exactly as before.
+  const cleanupSlow = deferred();
+  const capped = runBatch({ plan: { defaultBase: "main", waves: [[t("001-a")], [t("003-c", "task/001-a", ["001-a"])]] }, cap: 1, overrides: { "cleanup:001-a": cleanupSlow } });
+  await new Promise((r) => setTimeout(r, 20));
+  cleanupSlow.resolve({ removed: true, reason: "" });
+  const c1 = await capped;
+  check("cap 1 → the dependent waited for the slot the reclaim frees and then delivered", by(c1.results, "003-c").status === "done" && c1.throttled.some((x) => x.slug === "003-c" && !x.denied) && at(c1.calls, "003-c:fix#1") > at(c1.calls, "cleanup:001-a"), JSON.stringify({ throttled: c1.throttled, labels: labels(c1.calls) }));
+  const refused = await runBatch({ plan: { defaultBase: "main", waves: [[t("001-a")], [t("003-c", "task/001-a", ["001-a"])]] }, cap: 1, overrides: { "cleanup:001-a": { removed: false, reason: "wt-remove: refusing" } } });
+  check("cap 1 → a reclaim that refuses still denies the released dependent as storage-throttled", by(refused.results, "001-a").status === "done" && by(refused.results, "003-c").status === "storage-throttled" && refused.gate.retained === 1, JSON.stringify(refused.results));
 });
 
 // 2. THE RESERVATION. `a` and `b` both pass review; `a` reaches the guard first
