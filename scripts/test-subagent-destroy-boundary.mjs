@@ -718,6 +718,15 @@ const REBASE_DESTINATION_STEM =
 const rebaseTempDirectory = (point) =>
   destinationPins(`${REBASE_DESTINATION_STEM}${point}.XXXXXX"\`) — never a fixed shared scratchpad name`);
 
+// The delegated restack's clause is the `address-tasks` skill's own prompt
+// contract line, rendered verbatim rather than paraphrased — the same sentence
+// the prose half below anchors in both skill mirrors — so the pin is the whole
+// sentence, and a workflow that drifted from the skill's wording would fail
+// here before it drifted in meaning.
+const RESTACK_TEMP_DIRECTORY = destinationPins(
+  "If that validation runs a build and you redirect its output to a file, create a unique directory for it first with `mktemp -d`, outside every worktree, and write there — never a fixed shared scratchpad name (one session's agents share that directory), and never inside this worktree, which must be left clean.",
+);
+
 // Every bespoke destination clause THIS SUITE declares, named by the spec that
 // carries it. This is the NO_BUILD cross-check's search set, and it is built from
 // the DECLARATIONS rather than from the verdicts that use them, because built
@@ -734,6 +743,7 @@ const BESPOKE_DESTINATIONS = [
   ["REREVIEW_TEMP_DIRECTORY", REREVIEW_TEMP_DIRECTORY.pins[0]],
   ["COLLISION_TEMP_DIRECTORY", COLLISION_TEMP_DIRECTORY.pins[0]],
   ["rebaseTempDirectory", REBASE_DESTINATION_STEM],
+  ["RESTACK_TEMP_DIRECTORY", RESTACK_TEMP_DIRECTORY.pins[0]],
 ];
 
 // --- Fixtures -------------------------------------------------------------
@@ -749,6 +759,16 @@ const task = {
   path: "tasks/042-widget.md",
   content: "# 042 — Widget\n",
 };
+
+// Two canonical branches and their guide snapshots, the smallest stack the
+// review-stack stage builds (it skips below two).
+const reviewStackOrder = [
+  { slug: "042-widget", branch: "task/042-widget", base: "main", wave: 1, dependsOn: [] },
+  { slug: "043-gadget", branch: "task/043-gadget", base: "task/042-widget", wave: 2, dependsOn: ["042-widget"] },
+];
+const reviewStackPrefix = reviewStackOrder.map((t, i) => ({ ...t, tip: `${i}`.repeat(40) }));
+const reviewStackTips = reviewStackPrefix.map((t) => ({ branch: t.branch, tip: t.tip }));
+const reviewStackMapping = reviewStackPrefix.map((t, i) => ({ branch: t.branch, guide: `review-stack/042-to-043-20260827-120000/0${i + 1}-${t.slug}`, tip: t.tip }));
 
 const cycleBase = {
   slug: "042-widget",
@@ -878,6 +898,19 @@ const FIXTURES = {
       ["collisionReReviewPrompt (remote)", (f) => f.collisionReReviewPrompt(task, true, "on"), REREVIEW_TEMP_DIRECTORY],
       ["collisionReReviewPrompt (no remote)", (f) => f.collisionReReviewPrompt(task, false, "on"), REREVIEW_TEMP_DIRECTORY],
       ["collisionReReviewPrompt (standing deviation)", (f) => f.collisionReReviewPrompt(task, true, "on", deviations), REREVIEW_TEMP_DIRECTORY],
+    ],
+    // The post-batch review stack's four deputies (task 052). Only the restack
+    // orders a build — `rebase-stack`'s post-conflict validation — so only it
+    // carries a destination; the other three are reads, ref creations, and a
+    // guarded removal, and the NO_BUILD cross-check holds them to that.
+    reviewStackInspectPrompt: [["reviewStackInspectPrompt", (f) => f.reviewStackInspectPrompt(reviewStackOrder), NO_BUILD]],
+    reviewStackGuidesPrompt: [["reviewStackGuidesPrompt", (f) => f.reviewStackGuidesPrompt(reviewStackPrefix, "042-to-043", "/w/.worktrees/c"), NO_BUILD]],
+    reviewStackRestackPrompt: [["reviewStackRestackPrompt", (f) => f.reviewStackRestackPrompt({ mapping: reviewStackMapping, base: "main", worktree: "/w/.worktrees/c/_review-stack-042-to-043-20260827-120000", slug: "_review-stack-042-to-043-20260827-120000" }), RESTACK_TEMP_DIRECTORY]],
+    reviewStackTeardownPrompt: [
+      ["reviewStackTeardownPrompt (refs reported)", (f) => f.reviewStackTeardownPrompt({ worktree: "/w/.worktrees/c/_review-stack-042-to-043-20260827-120000", slug: "_review-stack-042-to-043-20260827-120000", tips: reviewStackTips, mapping: reviewStackMapping, preRebaseRefs: ["refs/pre-rebase/review-stack/042-to-043-20260827-120000/01-042-widget/20260827-120101"], restackOutcome: "it completed" }), NO_BUILD],
+      // The list is rendered differently when the restack reported no ref —
+      // a run that threw before saving one, or stopped at its first branch.
+      ["reviewStackTeardownPrompt (no refs)", (f) => f.reviewStackTeardownPrompt({ worktree: "/w/.worktrees/c/_review-stack-042-to-043-20260827-120000", slug: "_review-stack-042-to-043-20260827-120000", tips: reviewStackTips, mapping: reviewStackMapping, preRebaseRefs: [], restackOutcome: "the stage threw before or during the restack" }), NO_BUILD],
     ],
   },
   "wf-address-review.js": {

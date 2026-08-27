@@ -3845,6 +3845,510 @@ async function settleWaveCollisions({ heldTasks, waveCollisions, wave, defaultBa
   return { deliverable, held };
 }
 
+// ============================================================================
+// Post-batch review stack — the integration check and merge-order guide the
+// `address-tasks` skill's "Post-batch restack: a local review stack (never
+// pushed)" section owns. Every rule below is that section's, not a second
+// rendering of it: what this file adds is the control flow the runtime owns
+// and the four briefs the Git work is delegated through — an inspection of the
+// canonical branches, the guide-branch and worktree creation, the delegated
+// `rebase-stack` run, and the teardown. Four agents rather than one because
+// the safe prefix is decided between the inspection and the creation (a
+// branch carrying a merge commit ends it), the restack agent must see the
+// canonical branches as read-only from its first line, and the teardown's
+// tips-unchanged check is a check ON the restack agent's work, which that
+// agent cannot be resumed to perform on itself.
+//
+// Nothing here pushes, moves a canonical branch, or touches a remote ref; the
+// guide branches and the dedicated worktree are the stage's whole footprint,
+// and the teardown takes the worktree back.
+
+// The skill's rule — reviewed and delivered, minus failed review and skipped —
+// written out as the statuses that satisfy it. All four are `deliverTask`'s,
+// which only a branch that passed its review cycle and the collision guard
+// reaches, so each names a reviewed branch that exists; they differ only in
+// what became of the PR. `done` alone would withhold the stack from a whole
+// no-remote batch, whose reviewed tasks all end `local-only`. The wave loop's
+// `succeeded` gate is NOT this predicate: it asks whether a dependent may
+// build on a branch, and leaves out `pushed-no-pr` because a stacked PR would
+// have no parent PR — which says nothing about whether the branch was
+// reviewed, which is the only question the merge order asks.
+const REVIEW_STACK_MERGEABLE = ["done", "local-only", "pushed-no-pr", "pr-wrong-base"];
+function reviewStackMergeable(result) {
+  return !!result && REVIEW_STACK_MERGEABLE.includes(result.status);
+}
+
+// One path segment of a guide-branch name. Task slugs are ref-safe by the plan
+// schema's contract, but the name is built here and `git check-ref-format`
+// decides, so the segment is normalized rather than trusted.
+function reviewStackRefSegment(s) {
+  const out = String(s)
+    .replace(/[^A-Za-z0-9._-]+/g, "-")
+    .replace(/\.\.+/g, "-")
+    .replace(/\.lock$/i, "-lock")
+    .replace(/^[-.]+|[-.]+$/g, "");
+  return out || "x";
+}
+
+// A full object id, as `git rev-parse` prints one; an abbreviation is a prefix
+// a growing repository can make ambiguous, so the stage refuses it.
+const REVIEW_STACK_OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+
+// The canonical merge order, from the dependency graph the batch already
+// holds: `plan.waves` (wave N depends only on earlier waves), each task's
+// declared `dependsOn`, and the `base` → `branch` prerequisite the wave gate
+// derives the same way. Dependency edges are binding. Between independent
+// branches the order is the skill's advisory tie-break rendered for a script
+// that cannot judge "closely related areas": a dependent follows the branch
+// it extends as directly as the graph allows (the one relatedness the graph
+// states), and roots fall back to task number, which leads the slug.
+function reviewStackOrder(plan, results) {
+  const statusBySlug = new Map();
+  for (const r of results) if (r && typeof r.slug === "string") statusBySlug.set(r.slug, r);
+  const tasks = [];
+  const slugByBranch = new Map();
+  (Array.isArray(plan.waves) ? plan.waves : []).forEach((wave, w) => {
+    if (!Array.isArray(wave)) return;
+    for (const t of wave) {
+      if (!t || typeof t.slug !== "string" || typeof t.branch !== "string") continue;
+      tasks.push({ slug: t.slug, branch: t.branch, base: t.base, wave: w + 1, dependsOn: Array.isArray(t.dependsOn) ? t.dependsOn : [] });
+      slugByBranch.set(t.branch, t.slug);
+    }
+  });
+  const mergeable = tasks.filter((t) => reviewStackMergeable(statusBySlug.get(t.slug)));
+  const inSet = new Set(mergeable.map((t) => t.slug));
+  const excluded = tasks
+    .filter((t) => !inSet.has(t.slug))
+    .map((t) => ({ slug: t.slug, branch: t.branch, status: statusBySlug.has(t.slug) ? statusBySlug.get(t.slug).status : "unreported" }));
+  const depsOf = (t) => {
+    const d = new Set(t.dependsOn);
+    const baseDep = slugByBranch.get(t.base);
+    if (baseDep && baseDep !== t.slug) d.add(baseDep);
+    return [...d].filter((s) => inSet.has(s));
+  };
+  const placedAt = new Map();
+  const order = [];
+  const remaining = [...mergeable].sort((a, b) => a.wave - b.wave || a.slug.localeCompare(b.slug));
+  while (remaining.length) {
+    let pick = -1;
+    let pickScore = -Infinity;
+    remaining.forEach((t, i) => {
+      const deps = depsOf(t);
+      if (!deps.every((s) => placedAt.has(s))) return;
+      // Prefer the task that extends the most recently placed branch; among
+      // equals the sorted position (wave, then slug) already breaks the tie.
+      const score = deps.length ? Math.max(...deps.map((s) => placedAt.get(s))) : -1;
+      if (score > pickScore) { pick = i; pickScore = score; }
+    });
+    if (pick < 0) return { order, excluded, cycle: remaining.map((t) => t.slug) };
+    const [t] = remaining.splice(pick, 1);
+    placedAt.set(t.slug, order.length);
+    order.push({ slug: t.slug, branch: t.branch, base: t.base, wave: t.wave, dependsOn: depsOf(t) });
+  }
+  return { order, excluded, cycle: [] };
+}
+
+// The merge-commit safety check, decided from the inspection agent's reading:
+// the first canonical branch whose `<pr-base>..<branch>` carries a merge
+// commit — or whose reading did not arrive in a usable shape — ends the safe
+// prefix, and it and every branch after it are reported as not
+// integration-checked. `rebase-stack` linearizes, and a merge-only conflict
+// resolution would be linearized away.
+function reviewStackSafePrefix(order, inspection) {
+  const byBranch = new Map();
+  for (const i of Array.isArray(inspection) ? inspection : []) if (i && typeof i.branch === "string") byBranch.set(i.branch, i);
+  const prefix = [];
+  const unchecked = [];
+  let guard = null;
+  for (const t of order) {
+    if (guard) { unchecked.push(t.branch); continue; }
+    const i = byBranch.get(t.branch);
+    if (!i || !REVIEW_STACK_OID.test(String(i.tip || "")) || !Array.isArray(i.mergeCommits)) {
+      guard = { branch: t.branch, reason: "the inspection did not report a full tip object id and a merge-commit list for this branch", mergeCommits: [] };
+      unchecked.push(t.branch);
+      continue;
+    }
+    if (i.mergeCommits.length) {
+      guard = { branch: t.branch, reason: `\`git rev-list --merges ${t.base}..${t.branch}\` is non-empty; a linearizing rebase could discard merge-only conflict resolutions`, mergeCommits: i.mergeCommits.slice() };
+      unchecked.push(t.branch);
+      continue;
+    }
+    prefix.push({ ...t, tip: i.tip });
+  }
+  return { prefix, unchecked, guard };
+}
+
+// `<batch>` in the skill's `review-stack/<batch>-<YYYYMMDD-HHMMSS>/NN-<slug>`
+// form: the task numbers the canonical order spans. The stamp is the agent's
+// (see `reviewStackGuidesPrompt`), so the name is a template here and a
+// function of the stamp once one is reported.
+function reviewStackBatchLabel(order) {
+  const numbers = order.map((t) => (String(t.slug).match(/^\d+[A-Za-z]?/) || [reviewStackRefSegment(t.slug)])[0]);
+  return numbers.length > 1 ? `${numbers[0]}-to-${numbers[numbers.length - 1]}` : numbers[0] || "batch";
+}
+function reviewStackGuideName(batchLabel, stamp, index, slug) {
+  return `review-stack/${batchLabel}-${stamp}/${String(index + 1).padStart(2, "0")}-${reviewStackRefSegment(slug)}`;
+}
+function reviewStackWorktreeSlug(batchLabel, stamp) {
+  return `_review-stack-${batchLabel}-${stamp}`;
+}
+const REVIEW_STACK_STAMP = /^\d{8}-\d{6}$/;
+
+const REVIEW_STACK_INSPECT_SCHEMA = {
+  type: "object",
+  properties: {
+    ok: { type: "boolean" },
+    branches: {
+      type: "array",
+      description: "One entry per canonical branch handed in, in the same order.",
+      items: {
+        type: "object",
+        properties: {
+          branch: { type: "string" },
+          tip: { type: "string", description: "The FULL object id `git rev-parse --verify refs/heads/<branch>^{commit}` printed; empty where the branch does not resolve." },
+          mergeCommits: { type: "array", items: { type: "string" }, description: "Every object id `git rev-list --merges <pr-base>..<branch>` printed; empty when there are none." },
+          detail: { type: "string" },
+        },
+        required: ["branch", "tip", "mergeCommits"],
+      },
+    },
+    detail: { type: "string" },
+  },
+  required: ["ok", "branches"],
+};
+
+const REVIEW_STACK_GUIDES_SCHEMA = {
+  type: "object",
+  properties: {
+    ok: { type: "boolean" },
+    stamp: { type: "string", description: "The `YYYYMMDD-HHMMSS` UTC stamp every name this step created carries." },
+    guides: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          branch: { type: "string", description: "The canonical branch `bN`." },
+          guide: { type: "string", description: "The guide branch `gN` created, exactly as named." },
+          tip: { type: "string", description: "The full object id the guide branch points at, read back after creation." },
+        },
+        required: ["branch", "guide", "tip"],
+      },
+    },
+    worktree: { type: "string", description: "The absolute path of the dedicated worktree attached to g1; empty when none was created." },
+    detail: { type: "string" },
+    blocker: { type: "string" },
+  },
+  required: ["ok", "guides", "worktree"],
+};
+
+const REVIEW_STACK_RESTACK_SCHEMA = {
+  type: "object",
+  properties: {
+    ok: { type: "boolean", description: "True when every guide branch in the chain was rebased and validated; false on a clean stop or any other failure." },
+    outcomes: {
+      type: "array",
+      description: "One entry per guide branch in chain order, in the skill's one-line outcome vocabulary.",
+      items: {
+        type: "object",
+        properties: {
+          guide: { type: "string" },
+          outcome: { type: "string", description: "rebased clean | rebased with conflicts (resolved) | rebased + validation passed | stopped at this branch | not reached | restored to snapshot" },
+          detail: { type: "string" },
+        },
+        required: ["guide", "outcome"],
+      },
+    },
+    stoppedAt: { type: "string", description: "The guide branch the run stopped at, or empty when it completed." },
+    stopReason: { type: "string", description: "Why it stopped, and what was restored (the whole run's snapshots, or the current guide's pre-rebase ref)." },
+    conflicts: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: {
+          guide: { type: "string" },
+          files: { type: "array", items: { type: "string" } },
+          commit: { type: "string", description: "The offending commit." },
+          resolution: { type: "string", description: "How a trivial conflict was resolved, or the abort reason." },
+        },
+        required: ["guide", "files", "resolution"],
+      },
+    },
+    emptyGuides: { type: "array", items: { type: "string" }, description: "Guide branches left with no unique commits relative to their new base." },
+    preRebaseRefs: { type: "array", items: { type: "string" }, description: "Every `refs/pre-rebase/...` ref this run created, each in full." },
+    detail: { type: "string" },
+  },
+  required: ["ok", "outcomes", "stoppedAt", "conflicts", "emptyGuides", "preRebaseRefs"],
+};
+
+const REVIEW_STACK_TEARDOWN_SCHEMA = {
+  type: "object",
+  properties: {
+    tipsUnchanged: { type: "boolean" },
+    tipMismatches: {
+      type: "array",
+      items: {
+        type: "object",
+        properties: { branch: { type: "string" }, expected: { type: "string" }, actual: { type: "string" } },
+        required: ["branch", "expected", "actual"],
+      },
+    },
+    recovered: { type: "boolean", description: "True only when the worktree was found dirty or mid-operation and the abnormal-return recovery restored it to the reported pre-rebase ref." },
+    worktreeRemoved: { type: "boolean" },
+    pruned: { type: "boolean" },
+    refsDeleted: { type: "array", items: { type: "string" } },
+    refsNotDeleted: { type: "array", items: { type: "string" } },
+    detail: { type: "string" },
+  },
+  required: ["tipsUnchanged", "tipMismatches", "recovered", "worktreeRemoved", "pruned", "refsDeleted", "refsNotDeleted", "detail"],
+};
+
+function reviewStackInspectPrompt(order) {
+  const rows = order.map((t, i) => `- b${i + 1}: \`${t.branch}\` (recorded PR base \`${t.base}\`)`).join("\n");
+  return `Read-only inspection of ${order.length} canonical task branches before the batch's local review stack is built. OBSERVE ONLY — create, move, check out, delete, fetch, and push nothing; this step decides nothing and edits nothing.
+
+${DEPUTY_FINISH_IN_TURN}
+
+${DESTROY_BOUNDARY}
+
+You stand in the repository's SHARED main checkout (confirm with \`git rev-parse --show-toplevel\`; do not \`cd\` into any \`.worktrees/...\` worktree). Every command below is a read.
+
+Branches, in the batch's canonical merge order:
+${rows}
+
+For EACH branch, in that order, report one entry:
+1. \`tip\`: \`git rev-parse --verify refs/heads/<branch>^{commit}\` — the FULL object id it prints, never an abbreviation; the stage refuses a short id, since a prefix is what a growing repository can make ambiguous. Where the branch does not resolve, report an empty \`tip\` and say so in \`detail\`.
+2. \`mergeCommits\`: every object id \`git rev-list --merges <recorded PR base>..<branch>\` prints, as a list — empty when it prints nothing. Where the recorded base does not resolve locally, report the branch's \`tip\` and say in \`detail\` that the range could not be taken; leave \`mergeCommits\` empty ONLY where the range was taken and was empty — a range you could not take is reported in \`detail\`, and the stage treats a missing reading as a reason not to stack that branch, never as a clean one.
+
+Report \`ok: true\` when every branch got a reading (a branch that does not resolve is still a reading), and \`ok: false\` with \`detail\` when git itself could not be run here.`;
+}
+
+function reviewStackGuidesPrompt(prefix, batchLabel, wtBase) {
+  const rows = prefix.map((t, i) => `- b${i + 1}: \`${t.branch}\` at \`${t.tip}\` → g${i + 1}: \`${reviewStackGuideName(batchLabel, "<STAMP>", i, t.slug)}\``).join("\n");
+  const worktree = `${wtBase}/${reviewStackWorktreeSlug(batchLabel, "<STAMP>")}`;
+  return `Create the disposable guide branches for the batch's local review stack, and the one dedicated worktree the restack runs in. This step creates exactly the ${prefix.length} branches and the one worktree named below and nothing else: no canonical branch is checked out, moved, or rewritten, nothing is fetched, and nothing is pushed.
+
+${DEPUTY_FINISH_IN_TURN}
+
+${DESTROY_BOUNDARY}
+
+You stand in the repository's SHARED main checkout (confirm with \`git rev-parse --show-toplevel\`; do not \`cd\` into any \`.worktrees/...\` worktree). The branch creations and the worktree add below are the specific mutations this assignment spells out.
+
+1. Derive the stamp ONCE, in your shell, and use it in every name: \`STAMP="$(date -u +%Y%m%d-%H%M%S)"\` — the ref-safe \`YYYYMMDD-HHMMSS\` UTC form \`rebase-stack\` uses for its pre-rebase refs (digits and dashes only; ISO-8601 colons are invalid in ref names). Report it as \`stamp\`. The script cannot derive it — the workflow runtime rejects clocks — and it is what keeps names collision-free across repeated batches.
+2. Create each guide branch at EXACTLY the captured tip listed for its canonical branch, with \`git branch <guide> <tip>\` (a create, never \`-f\`: an existing name is a collision to report as \`ok: false\`, not to overwrite). Substitute \`$STAMP\` for \`<STAMP>\` in every name; change nothing else about them. Before creating anything, re-read each canonical branch's tip — \`git rev-parse --verify refs/heads/<branch>^{commit}\` — and require it to equal the tip listed here; a branch that moved since the inspection is \`ok: false\` with the mismatch in \`blocker\`, and you create NOTHING in that case. Do not point a guide at the branch NAME: the tip is what was inspected.
+${rows}
+3. Read every guide back — \`git rev-parse --verify refs/heads/<guide>^{commit}\` — and report the full object id as that entry's \`tip\`; it must equal the listed one.
+4. Attach the dedicated worktree to g1, and to g1 only: \`git worktree add ${shq(worktree)} <g1>\` with \`$STAMP\` substituted for \`<STAMP>\` — \`g1\` already exists, so this attaches it without creating any branch — and report the absolute path you created as \`worktree\`. Run it from the main checkout so the path lands under the batch's worktree base as written; do not choose another location.
+5. Nothing else: no dependency install, no build, no push, no fetch, no checkout in the main checkout. Report \`ok: true\` with \`stamp\`, the \`guides\` list (one entry per canonical branch, in order: \`branch\`, \`guide\`, \`tip\`), and \`worktree\`. On any failure after a guide was created, report \`ok: false\`, list in \`guides\` exactly the branches that DO exist, report \`worktree\` empty or as created, and say in \`blocker\` what failed — delete nothing on the way out.`;
+}
+
+function reviewStackRestackPrompt({ mapping, base, worktree, slug }) {
+  const chain = `chain ${mapping.map((m) => m.guide).join(" ")} onto ${base}`;
+  const rows = mapping.map((m, i) => `- b${i + 1}: \`${m.branch}\` → g${i + 1}: \`${m.guide}\``).join("\n");
+  return `Build the batch's local review stack: rebase the disposable guide branches below into one linear chain, in a dedicated worktree, through the \`rebase-stack\` skill. This is an integration check and merge-order guide; it is never pushed.
+
+${DEPUTY_FINISH_IN_TURN}
+
+${DESTROY_BOUNDARY}
+
+The \`rebase-stack\` skill's own \`git update-ref refs/pre-rebase/...\` snapshots, \`git reset --hard\`, and \`git clean -fd\` — scoped as its delegated unattended mode states, to the guide branches named below and to this worktree only — are the mutations this assignment spells out. Nothing else is: no other ref, no other worktree, no other branch.
+
+## WORKTREE CONTRACT (do this before anything else)
+
+Your worktree is \`${worktree}\` (slug \`${slug}\`). \`cd\` into it and verify \`git rev-parse --show-toplevel\` prints exactly that path and \`git branch --show-current\` prints \`${mapping[0].guide}\`. If either differs, STOP and report \`ok: false\` — run nothing else. Do ALL work inside this worktree only. Never \`cd\` to the repo root or into a sibling worktree, and never run a command against the shared main checkout.
+
+A fresh worktree has no installed dependencies, so if \`rebase-stack\`'s post-conflict validation would need a build, install the project's dependencies in this worktree first (cheap when the package store hardlinks — same filesystem) — otherwise a resolved trivial conflict that triggers validation false-stops the guide on missing modules rather than a real failure. Install them only where a validation is actually reached; leave the install's artifacts ignored, so the worktree reads clean when you return.
+
+## The chain
+
+Canonical task branches and their guide snapshots, in the batch's recommended merge order (\`b1\` is the recommended first merge):
+${rows}
+
+- Invoke the \`rebase-stack\` skill in its delegated unattended mode with exactly: \`${chain}\`. This explicit chain and prompt are the up-front authorization; do not re-derive, reorder, or wait for confirmation.
+- Every \`gN\` is a disposable local snapshot created only for this integration check. The canonical task branches \`b1 ... bN\` and all remote refs are read-only.
+- Do not push and do not fetch. Resolve only conflicts the skill classifies as trivial. On the first non-trivial conflict or unrecoverable validation failure, use the unattended clean-stop behavior. If the stop follows the combined replay itself because no confident repair is apparent, restore every guide branch in that run to its snapshot. If the combined replay has already been restored for a clear repair and the stop occurs during its per-branch fallback, or the stop follows any other per-branch replay, restore only the current guide branch to its pre-rebase ref. Leave the worktree clean and stop without waiting for input.
+- If that validation runs a build and you redirect its output to a file, create a unique directory for it first with \`mktemp -d\`, outside every worktree, and write there — never a fixed shared scratchpad name (one session's agents share that directory), and never inside this worktree, which must be left clean.
+- Report the canonical merge order, the \`bN → gN\` mapping, each guide branch outcome, any stop point, every conflict's files/offending commit/resolution or abort reason, any guide branch with no unique commits relative to its new base, and the exact \`refs/pre-rebase/...\` snapshots created.
+
+Report through the structured result: \`ok\` (true only when every guide branch was rebased and validated), one \`outcomes\` entry per guide branch in chain order, \`stoppedAt\` and \`stopReason\` on a stop (empty otherwise), \`conflicts\`, \`emptyGuides\`, and \`preRebaseRefs\` listing EVERY \`refs/pre-rebase/...\` ref the run created, each in full — the teardown deletes exactly that list and nothing else, so one you leave out survives. Before you return, \`git status --porcelain\` in this worktree must print nothing and no rebase may be in progress; a return in any other state is what the teardown's recovery is for, not a shape to aim at.`;
+}
+
+function reviewStackTeardownPrompt({ worktree, slug, tips, mapping, preRebaseRefs, restackOutcome }) {
+  const tipRows = tips.map((t) => `- \`${t.branch}\` must still be \`${t.tip}\``).join("\n");
+  const guideRows = mapping.map((m) => `- \`${m.guide}\``).join("\n");
+  const refRows = preRebaseRefs.length ? preRebaseRefs.map((r) => `- \`${r}\``).join("\n") : "- (none reported)";
+  return `Tear down the batch's review-stack worktree now that the restack has returned (${restackOutcome}). This is a verification followed by one worktree removal and the deletion of exactly the pre-rebase snapshots listed below; it changes nothing else.
+
+${DEPUTY_FINISH_IN_TURN}
+
+${DESTROY_BOUNDARY}
+
+You stand in the repository's SHARED main checkout (confirm with \`git rev-parse --show-toplevel\`; do not \`cd\` anywhere). Address the worktree BY PATH — \`git -C ${shq(worktree)} …\` — for every read and every write below. The \`git rebase --abort\`, \`git reset --hard\`, and \`git clean -fd\` of step 3's recovery, run ONLY inside that worktree on ITS guide branch and ONLY when step 2 found it held, the \`wt-remove\` of step 4, and the \`git update-ref -d\` of step 5 over exactly the listed refs are the mutations this assignment spells out.
+
+1. **Canonical tips unchanged.** For each branch, \`git rev-parse --verify refs/heads/<branch>^{commit}\` must print the object id captured before the guide branches were created:
+${tipRows}
+   Report \`tipsUnchanged\` and every mismatch in \`tipMismatches\`. Move NOTHING to fix one: a moved canonical branch is a finding for the maintainer, and the pre-rebase refs below are its recovery source, which is why step 5 deletes none of them in that case.
+2. **The worktree is idle and clean.** \`git -C ${shq(worktree)} status --porcelain\` must print nothing, and no Git operation may be in progress there: no \`rebase-merge\`/\`rebase-apply\` path, and no \`MERGE_HEAD\`, \`CHERRY_PICK_HEAD\`, \`REVERT_HEAD\`, or \`BISECT_LOG\` under its git dir (\`git -C <worktree> rev-parse --git-path <name>\` names each; the last three print empty porcelain). Where \`git rev-parse --show-toplevel\` there does not print exactly \`${worktree}\`, remove NOTHING and report what you saw.
+3. **Abnormal-return recovery, only where step 2 found the tree held.** The restack was told to return clean; where it did not, reset the worktree to the disposable branch's reported pre-rebase ref, clear any untracked leftovers with \`git clean -fd\`, and confirm a clean \`git status\` before removal: identify the guide branch checked out there (\`git -C <worktree> branch --show-current\`; mid-rebase, the branch named by \`git -C <worktree> rev-parse --git-path rebase-merge/head-name\` or \`rebase-apply/head-name\`), find ITS ref in the list of step 5 (\`refs/pre-rebase/<that guide>/<stamp>\`), abort a rebase still in progress first (\`git -C <worktree> rebase --abort\` — a reset leaves the rebase state behind, and the removal would still refuse), then \`git -C <worktree> reset --hard <that ref>\` and \`git -C <worktree> clean -fd\`, and re-run step 2. Where the checked-out branch is not one of the guide branches below, or no pre-rebase ref of its own is listed, recover NOTHING: leave the worktree in place, report why, and skip step 4. The recovery reaches the guide branch only — never a canonical branch, never any other worktree. Report \`recovered: true\` only when this step ran.
+4. **Remove the worktree, refusing rather than forcing.** From this main checkout run \`wt-remove ${shq(slug)}\` — it enforces the step-2 checks itself and refuses over uncommitted work or an in-progress operation; a refusal is the helper working, so report it as \`worktreeRemoved: false\` with its message rather than forcing (\`--force\` never clears those checks; it only clears git's refusal over ignored build artifacts AFTER they pass, which is the one case you may pass it). Where \`command -v wt-remove\` finds no helper, \`git worktree remove ${shq(worktree)}\` after step 2 passed, never with \`--force\`. Then \`git worktree prune\` — the helper's success path removes without pruning — and report \`pruned\`. Removing the worktree never touches a branch.
+5. **Delete exactly these pre-rebase snapshots, and only after step 1 found every canonical tip unchanged** — the unchanged canonical branches are their recovery source; where a tip moved, delete none and list them all in \`refsNotDeleted\`:
+${refRows}
+   For each: \`git update-ref -d <ref>\`, that exact name. Never bulk-delete, never glob \`refs/pre-rebase/\`, and never delete a ref that is not on this list — other runs' snapshots live in the same namespace. Report each in \`refsDeleted\` or \`refsNotDeleted\`.
+6. **Never delete or push the guide branches.** They are the local artifact the maintainer inspects:
+${guideRows}
+
+Report \`tipsUnchanged\`, \`tipMismatches\`, \`recovered\`, \`worktreeRemoved\`, \`pruned\`, \`refsDeleted\`, \`refsNotDeleted\`, and one line of \`detail\`.`;
+}
+
+// The one place the stage's rules meet the runtime's control flow. Everything
+// it learns is REPORTED in the object it returns — never thrown: a failed
+// integration check must not take the batch's delivery results down with it,
+// and a teardown is owed on every path that created the worktree.
+async function buildReviewStack({ plan, results, wtBase }) {
+  const { order, excluded, cycle } = reviewStackOrder(plan, results);
+  const canonicalOrder = order.map((t) => t.branch);
+  const base = plan.defaultBase;
+  const report = { built: false, skipped: false, reason: "", base, canonicalOrder, excluded };
+  if (order.length < 2) {
+    return { ...report, skipped: true, reason: `the batch reached ${order.length} mergeable branch${order.length === 1 ? "" : "es"}; the skill skips the stack below two` };
+  }
+  if (cycle.length) {
+    return { ...report, skipped: true, reason: `the dependency graph among the mergeable branches is not acyclic (${cycle.join(", ")}); no merge order can be emitted` };
+  }
+  phase("Review stack");
+  const batchLabel = reviewStackBatchLabel(order);
+  let mapping = [];
+  let tips = [];
+  let worktree = "";
+  let slug = "";
+  let preRebaseRefs = [];
+  let restackOutcome = "";
+  let created = false;
+  // The stage's own steps, as a function whose early returns all land on the
+  // teardown below: a guide-branch step that created the worktree and then
+  // reported a drift has still created it, and a `return` out of a `try`
+  // would walk past the reclaim it owes.
+  const run = async () => {
+    const inspection = await agent(reviewStackInspectPrompt(order), { label: "review-stack:inspect", schema: REVIEW_STACK_INSPECT_SCHEMA, effort: "low" });
+    if (!inspection || inspection.ok !== true) {
+      report.reason = `the canonical branches could not be inspected: ${inspection && inspection.detail ? inspection.detail : "(agent returned nothing usable)"}`;
+      return;
+    }
+    const { prefix, unchecked, guard } = reviewStackSafePrefix(order, inspection.branches);
+    report.safePrefix = prefix.map((t) => t.branch);
+    report.notIntegrationChecked = unchecked;
+    report.mergeGuard = guard;
+    if (prefix.length < 2) {
+      report.reason = guard
+        ? `the safe prefix holds ${prefix.length} branch${prefix.length === 1 ? "" : "es"}: \`${guard.branch}\` ends it (${guard.reason}), so there is nothing to stack; the canonical order stands as the recommendation, not integration-checked`
+        : "the safe prefix holds fewer than two branches";
+      return;
+    }
+    tips = prefix.map((t) => ({ branch: t.branch, tip: t.tip }));
+
+    const guides = await agent(reviewStackGuidesPrompt(prefix, batchLabel, wtBase), { label: "review-stack:guides", schema: REVIEW_STACK_GUIDES_SCHEMA });
+    const reported = guides && Array.isArray(guides.guides) ? guides.guides : [];
+    const stamp = guides && typeof guides.stamp === "string" ? guides.stamp : "";
+    // The worktree is what the teardown reclaims, so its existence — as the
+    // agent reported it, whatever else went wrong — is what owes one. Guide
+    // branches alone owe nothing: they are kept on every path.
+    worktree = guides && typeof guides.worktree === "string" ? guides.worktree : "";
+    slug = worktree.slice(worktree.lastIndexOf("/") + 1);
+    created = worktree !== "";
+    report.stamp = stamp;
+    report.mapping = reported;
+    report.worktree = worktree;
+    if (!guides || guides.ok !== true) {
+      report.reason = `the guide branches were not created: ${guides ? guides.blocker || guides.detail || "(no reason reported)" : "(agent returned nothing usable)"}`;
+      return;
+    }
+    if (!REVIEW_STACK_STAMP.test(stamp)) {
+      report.reason = `the guide-branch step reported stamp ${JSON.stringify(stamp)}, not the YYYYMMDD-HHMMSS form; the restack did not run`;
+      return;
+    }
+    // The names are a function of the stamp, so the agent's list is checked
+    // against what the script would have named rather than adopted.
+    const expected = prefix.map((t, i) => ({ branch: t.branch, guide: reviewStackGuideName(batchLabel, stamp, i, t.slug), tip: t.tip }));
+    const expectedWorktree = `${wtBase}/${reviewStackWorktreeSlug(batchLabel, stamp)}`;
+    const drift = expected.findIndex((e, i) => !reported[i] || reported[i].branch !== e.branch || reported[i].guide !== e.guide || reported[i].tip !== e.tip);
+    if (drift >= 0 || reported.length !== expected.length || worktree !== expectedWorktree) {
+      const what = drift >= 0
+        ? `expected \`${expected[drift].guide}\` at \`${expected[drift].tip}\` for \`${expected[drift].branch}\`, got ${reported[drift] ? `\`${reported[drift].guide}\` at \`${reported[drift].tip}\` for \`${reported[drift].branch}\`` : "nothing"}`
+        : reported.length !== expected.length
+          ? `${reported.length} guides reported for ${expected.length} requested`
+          : `worktree ${JSON.stringify(worktree)} rather than ${JSON.stringify(expectedWorktree)}`;
+      report.reason = `the guide-branch step reported names, tips, or a worktree that do not match what was requested (${what}); the restack did not run`;
+      return;
+    }
+    mapping = expected;
+
+    const restack = await agent(reviewStackRestackPrompt({ mapping, base, worktree, slug }), { label: "review-stack:restack", schema: REVIEW_STACK_RESTACK_SCHEMA });
+    const guideNames = new Set(mapping.map((m) => m.guide));
+    const isOwnRef = (r) => typeof r === "string" && [...guideNames].some((g) => r.startsWith(`refs/pre-rebase/${g}/`) && REVIEW_STACK_STAMP.test(r.slice(`refs/pre-rebase/${g}/`.length)));
+    const reportedRefs = restack && Array.isArray(restack.preRebaseRefs) ? restack.preRebaseRefs : [];
+    // Only a ref that names one of THIS batch's guide branches is the teardown's
+    // to delete; anything else the agent listed is reported and left alone.
+    preRebaseRefs = reportedRefs.filter(isOwnRef);
+    report.preRebaseRefs = preRebaseRefs;
+    report.preRebaseRefsNotOwned = reportedRefs.filter((r) => !isOwnRef(r));
+    if (!restack) {
+      restackOutcome = "the restack agent returned nothing";
+      report.reason = restackOutcome;
+    } else {
+      report.restack = {
+        ok: restack.ok === true,
+        outcomes: restack.outcomes,
+        stoppedAt: restack.stoppedAt || "",
+        stopReason: restack.stopReason || "",
+        conflicts: restack.conflicts,
+        emptyGuides: restack.emptyGuides,
+        detail: restack.detail || "",
+      };
+      report.built = restack.ok === true;
+      if (restack.stoppedAt) {
+        const at = mapping.findIndex((m) => m.guide === restack.stoppedAt);
+        report.integrationCheckedPrefix = at > 0 ? mapping.slice(0, at).map((m) => m.branch) : [];
+        report.firstUnstacked = at >= 0 ? mapping[at].branch : restack.stoppedAt;
+        report.remainingSuffix = at >= 0 ? mapping.slice(at).map((m) => m.branch) : [];
+        restackOutcome = `it stopped cleanly at ${restack.stoppedAt}`;
+        report.reason = `the restack stopped at \`${restack.stoppedAt}\`: ${restack.stopReason || "(no reason reported)"}; the canonical order remains the recommendation, and only the completed prefix was integration-checked`;
+      } else if (restack.ok === true) {
+        report.integrationCheckedPrefix = mapping.map((m) => m.branch);
+        restackOutcome = "it completed";
+      } else {
+        restackOutcome = "it reported a failure without a stop point";
+        report.reason = `the restack did not complete: ${restack.detail || "(no detail reported)"}`;
+      }
+    }
+  };
+  try {
+    await run();
+  } catch (e) {
+    report.error = `review-stack stage threw: ${e && e.message ? e.message : String(e)}`;
+    restackOutcome = restackOutcome || "the stage threw before or during the restack";
+  }
+  if (created) {
+    // Its own agent, never the restack agent's last act and never the script's:
+    // the tips-unchanged verification is a check on the restack's work, and the
+    // script may not do Git work. Runs on the success path and the clean-stop
+    // path alike — a stopped restack leaves the same worktree registered.
+    try {
+      const teardown = await agent(reviewStackTeardownPrompt({ worktree, slug, tips, mapping: mapping.length ? mapping : report.mapping, preRebaseRefs, restackOutcome: restackOutcome || "it did not run" }), { label: "review-stack:teardown", schema: REVIEW_STACK_TEARDOWN_SCHEMA });
+      report.teardown = teardown || { detail: "teardown agent returned nothing" };
+      report.canonicalTipsUnchanged = !!teardown && teardown.tipsUnchanged === true;
+      if (teardown && teardown.tipsUnchanged !== true) {
+        log(`Review stack: a canonical branch tip moved during the restack — ${JSON.stringify(teardown.tipMismatches)}; the guide branches' pre-rebase refs were kept.`);
+      }
+      if (teardown && teardown.worktreeRemoved !== true) {
+        log(`Review stack: the dedicated worktree ${worktree} was NOT removed: ${teardown.detail || "(no detail)"}`);
+      }
+    } catch (e) {
+      report.teardown = { error: `teardown threw: ${e && e.message ? e.message : String(e)}`, worktree };
+      report.canonicalTipsUnchanged = false;
+    }
+  }
+  return report;
+}
+
 // --- Flag parsing: `peer-opinions=off` must arrive through args (a workflow
 // cannot read prose elsewhere) and suppresses the embedded cycle's peer stage
 // for every task in the batch. The flag's spelling has ONE definition,
@@ -3988,7 +4492,7 @@ try {
     if (!emptyPlanIsExplained(plan)) {
       return { error: "Could not resolve task pointers from the argument.", args, resolution: plan.resolution, mainCheckout: await finalMainCheckoutReport() };
     }
-    return { batch: args, defaultBase: plan.defaultBase, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), waves: 0, throttled: [], collisions: [], resolution: plan.resolution, mainCheckout: await finalMainCheckoutReport(), openQuestions: [], deviations: [], deviationAssessments: [], results: [] };
+    return { batch: args, defaultBase: plan.defaultBase, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), waves: 0, throttled: [], collisions: [], resolution: plan.resolution, mainCheckout: await finalMainCheckoutReport(), reviewStack: { built: false, skipped: true, reason: "the batch resolved no task, so there is no branch to stack" }, openQuestions: [], deviations: [], deviationAssessments: [], results: [] };
   }
 
   // Map every in-batch branch to the slug that produces it. A dependent task's
@@ -4157,10 +4661,31 @@ try {
   // reader than an unwound stack. `finalMainCheckoutReport` cannot throw, so
   // this exit always carries a report — an unmeasured one if the reading failed.
   phase("Summary");
-  return { error: `Batch aborted: ${e && e.message ? e.message : String(e)}`, batch: args, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), throttled, collisions, resolution: plan && plan.resolution ? plan.resolution : null, results, mainCheckout: await finalMainCheckoutReport() };
+  // An aborted batch is excluded from the review stack outright, whatever it
+  // delivered — this catch is the batch's guaranteed report path, and it
+  // creates nothing on the way out: no guide branch, no worktree, no
+  // pre-rebase ref, so no teardown is reached from here. The reason is stated
+  // so the absence is never read as the fewer-than-two skip.
+  return { error: `Batch aborted: ${e && e.message ? e.message : String(e)}`, batch: args, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), throttled, collisions, resolution: plan && plan.resolution ? plan.resolution : null, results, mainCheckout: await finalMainCheckoutReport(), reviewStack: { built: false, skipped: true, reason: "the batch aborted, so the integration check did not run; the review stack excludes an aborted batch whatever it delivered, and nothing was created for it" } };
 }
 
 phase("Summary");
+// The review stack runs BEFORE the closing main-checkout reading, deliberately:
+// that reading is the batch's last barrier over the shared checkout, and it is
+// only worth its name if it observes everything the batch did — this stage
+// included. Its footprint should register nowhere the reading looks (guide
+// refs live in the shared `.git`, which `git status` never surfaces, and the
+// dedicated worktree sits under the ignored `.worktrees/` base), and running
+// first is what turns "should" into something the report can contradict: a
+// restack that dirtied the main checkout is then a finding in `mainCheckout`
+// rather than one made after the comparison closed. The stage reports and
+// never throws, so the reading below still runs on every one of its paths.
+const reviewStack = await buildReviewStack({ plan, results, wtBase });
+if (reviewStack.skipped) {
+  log(`Review stack skipped: ${reviewStack.reason}`);
+} else if (!reviewStack.built) {
+  log(`Review stack not completed: ${reviewStack.reason || reviewStack.error || "(no reason reported)"}`);
+}
 // Post-batch snapshot of the shared main checkout, compared against the
 // baseline (see finalMainCheckoutReport, which the empty-batch return and the
 // thrown-stage catch above run too).
@@ -4177,4 +4702,4 @@ const deviations = results.flatMap((r) => (Array.isArray(r.deviations) ? r.devia
 // read here without it is one the maintainer would rule on knowing only what
 // the implementer said.
 const deviationAssessments = results.flatMap((r) => (Array.isArray(r.deviationAssessments) ? r.deviationAssessments : []));
-return { batch: args, defaultBase: plan.defaultBase, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), waves: plan.waves.length, throttled, collisions, resolution: plan.resolution, mainCheckout, openQuestions, deviations, deviationAssessments, results };
+return { batch: args, defaultBase: plan.defaultBase, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), waves: plan.waves.length, throttled, collisions, resolution: plan.resolution, mainCheckout, reviewStack, openQuestions, deviations, deviationAssessments, results };
