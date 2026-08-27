@@ -166,7 +166,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 265;
+const EXPECTED_CHECKS = 267;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -4607,7 +4607,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   check(
     "an incomplete record carries the displaced record's orphaned entries forward — fetched from the replayed record, keyed by thread identity, marked as carried — while a complete map and a prior-less incomplete one carry nothing",
     /CARRY the earlier record's orphaned entries into this one/.test(incompleteOverPrior) &&
-      /whose identity \(`thread=<threadId or url>`\) no disposition below carries/.test(incompleteOverPrior) &&
+      /whose identity \(`thread=<threadId, url \(finding N of M\), or lane>`\) no disposition below carries/.test(incompleteOverPrior) &&
       incompleteOverPrior.includes("marking each `carried unchanged from https://example.invalid/pr/42#issuecomment-9`") &&
       /the next run's gather replays only the MOST RECENT record/.test(incompleteOverPrior) &&
       /gh api repos\/<owner>\/<repo>\/issues\/comments\/<id> --jq \.body/.test(incompleteOverPrior) &&
@@ -5982,6 +5982,25 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   await rejected({ ...LANE_ENTRY, lane: "deploy / preview" }, "a ci-failure entry naming a lane the gather never reported is unpublishable", /lane was never gathered/);
   await rejected({ ...GREEN_ENTRY, kind: "flake-rerun", detail: "evidence: green on base" }, "a flake re-run ordered on a replayed lane the head shows green is unpublishable — nothing is failing to re-run", /flake re-run on a lane the gather reports as \\"green\\"/, isGreen);
   await rejected({ ...CYCLE_PASS.workReport[0], kind: "flake-rerun" }, "a flake-rerun on a review thread is unpublishable — the only action that kind orders is a workflow re-run", /flake-rerun on something that is not a CI lane/, isThread);
+  // The kind's one action is `gh run rerun`, which needs the run id an Actions
+  // details URL carries: a lane with no workflow run (a StatusContext, an
+  // external app's check) cannot take it, however well the flake is evidenced
+  // — the same evidence goes to the maintainer as ambiguous-skipped instead.
+  const ITEM_LANE_EXTERNAL = { ...ITEM_LANE, lane: "ci/circleci: build", body: "logs and re-runs unavailable through gh run; the details page showed a timed-out job", url: "https://example.invalid/circleci/pipelines/12" };
+  const externalPacket = { reconcile: { outcome: "work" }, items: [ITEM, ITEM_LANE_EXTERNAL] };
+  const externalEntry = (kind, detail) => ({ ...LANE_ENTRY, lane: ITEM_LANE_EXTERNAL.lane, url: ITEM_LANE_EXTERNAL.url, ref: ITEM_LANE_EXTERNAL.lane, kind, detail });
+  const externalFlake = await run(gathered(externalPacket), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], externalEntry("flake-rerun", "evidence: the same lane green on the base at a commit carrying the same files"))] });
+  check(
+    "a flake-rerun on a lane whose url names no workflow run is unpublishable — nothing here can re-run it, so the disposition would be recorded as performed while it never was",
+    externalFlake.status === "publish-aborted-incomplete-dispositions" && /lane whose url names no workflow run/.test(JSON.stringify(externalFlake.result && externalFlake.result.malformedDispositions || [])),
+    JSON.stringify(externalFlake.result).slice(0, 300),
+  );
+  const externalSkipped = await run(gathered(externalPacket), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], externalEntry("ambiguous-skipped", "evidenced flake (green on the base at a commit carrying the same files); no workflow run to re-run from here, left for the maintainer"))] });
+  check(
+    "the same no-run lane disposed of as ambiguous-skipped with the evidence carried publishes — the maintainer re-runs it",
+    externalSkipped.status === "fixed-published",
+    JSON.stringify(externalSkipped.result).slice(0, 300),
+  );
   await rejected({ ...CYCLE_PASS.workReport[0], lane: "tests / node" }, "a review-thread entry that also carries a gathered lane is unpublishable — one entry may not cover two items", /typed review-thread but carries a gathered CI lane/, (e) => isThread(e) || isLane(e));
   // The duplicate direction, keyed the same way: two entries for one lane.
   const twoLanes = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], LANE_ENTRY, { ...LANE_ENTRY, kind: "ambiguous-skipped" }, GREEN_ENTRY, findingEntry(1), findingEntry(2))] });
@@ -6000,7 +6019,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /gh run rerun <run-id> --repo <owner>\/<repo> --failed/.test(flakePublish) &&
       /ONCE PER RUN ID/.test(flakePublish) &&
       /ONLY where the push was a no-op/.test(flakePublish) &&
-      /the repository from the URL, never the checkout's default/.test(flakePublish),
+      /the repository from the URL, never the checkout's default/.test(flakePublish) &&
+      /the publishability check admits the kind on no other lane/.test(flakePublish),
     `${flake.status}: ${flakePublish.slice(0, 200)}`,
   );
   // The Summary comment's two new sections, and that nothing replies on the
@@ -6063,6 +6083,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /A flake needs EVIDENCE, not a hunch/.test(fixer) &&
       /A log that names only files the diff does not touch is NOT that evidence/.test(fixer) &&
       /a flake that has bitten before ALSO earns a follow-up task/.test(fixer) &&
+      /An evidenced flake is `flake-rerun` where the lane's `url` names a workflow run, and `ambiguous-skipped` with the evidence in `detail` where it does not/.test(fixer) &&
       /`push-back` is not a disposition it can take/.test(fixer) &&
       /A lane the item reports as `rollup: "green"` or `"running"` is a REPLAYED one/.test(fixer) &&
       /A `standalone` item carrying `finding` is ONE finding of a bot's misfired top-level comment/.test(fixer),
@@ -6072,6 +6093,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "the reviewer confirms a lane's disposition by cause and matches entries by lane and by url plus finding ordinal",
     /A `ci-failure` entry's disposition is by CAUSE, judged from the item's evidence and never from the lane's name/.test(reviewer) &&
       /`flake-rerun` only on EVIDENCE named in `detail`/.test(reviewer) &&
+      /only on a lane whose `url` names a workflow run: an evidenced flake on a lane with none is `ambiguous-skipped`/.test(reviewer) &&
       /a `standalone` by its `url` — plus its `finding` ordinal where it carries one/.test(reviewer) &&
       /a `ci-failure` by its `lane`/.test(reviewer),
     reviewer.slice(0, 200),
