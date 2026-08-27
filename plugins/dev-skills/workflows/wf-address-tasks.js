@@ -3968,6 +3968,15 @@ function reviewStackSafePrefix(order, inspection) {
       unchecked.push(t.branch);
       continue;
     }
+    // The range outcome is a field the guard checks positively, never prose it
+    // parses: an empty `mergeCommits` beside `rangeTaken: false` is a range
+    // the agent could not take (the recorded base did not resolve), and an
+    // unread range is not a merge-free one.
+    if (i.rangeTaken !== true) {
+      guard = { branch: t.branch, reason: `\`git rev-list --merges ${t.base}..${t.branch}\` could not be taken${i.detail ? ` (${i.detail})` : ""}; an unread range is not a merge-free one`, mergeCommits: [] };
+      unchecked.push(t.branch);
+      continue;
+    }
     if (i.mergeCommits.length) {
       guard = { branch: t.branch, reason: `\`git rev-list --merges ${t.base}..${t.branch}\` is non-empty; a linearizing rebase could discard merge-only conflict resolutions`, mergeCommits: i.mergeCommits.slice() };
       unchecked.push(t.branch);
@@ -4006,10 +4015,11 @@ const REVIEW_STACK_INSPECT_SCHEMA = {
         properties: {
           branch: { type: "string" },
           tip: { type: "string", description: "The FULL object id `git rev-parse --verify refs/heads/<branch>^{commit}` printed; empty where the branch does not resolve." },
-          mergeCommits: { type: "array", items: { type: "string" }, description: "Every object id `git rev-list --merges <pr-base>..<branch>` printed; empty when there are none." },
+          rangeTaken: { type: "boolean", description: "true ONLY when `git rev-list --merges <pr-base>..<branch>` ran and exited 0; false when the recorded base or the branch did not resolve, or the command failed." },
+          mergeCommits: { type: "array", items: { type: "string" }, description: "Every object id `git rev-list --merges <pr-base>..<branch>` printed; empty when there are none, and empty with `rangeTaken: false` when the range was not taken." },
           detail: { type: "string" },
         },
-        required: ["branch", "tip", "mergeCommits"],
+        required: ["branch", "tip", "rangeTaken", "mergeCommits"],
       },
     },
     detail: { type: "string" },
@@ -4117,7 +4127,7 @@ ${rows}
 
 For EACH branch, in that order, report one entry:
 1. \`tip\`: \`git rev-parse --verify refs/heads/<branch>^{commit}\` — the FULL object id it prints, never an abbreviation; the stage refuses a short id, since a prefix is what a growing repository can make ambiguous. Where the branch does not resolve, report an empty \`tip\` and say so in \`detail\`.
-2. \`mergeCommits\`: every object id \`git rev-list --merges <recorded PR base>..<branch>\` prints, as a list — empty when it prints nothing. Where the recorded base does not resolve locally, report the branch's \`tip\` and say in \`detail\` that the range could not be taken; leave \`mergeCommits\` empty ONLY where the range was taken and was empty — a range you could not take is reported in \`detail\`, and the stage treats a missing reading as a reason not to stack that branch, never as a clean one.
+2. \`rangeTaken\` and \`mergeCommits\`: run \`git rev-list --merges <recorded PR base>..<branch>\`. Where it exits 0, report \`rangeTaken: true\` and every object id it printed in \`mergeCommits\` — empty when it printed nothing. Where the recorded base or the branch does not resolve locally, or the command fails, report \`rangeTaken: false\` with an empty \`mergeCommits\` and say why in \`detail\`; the stage reads \`rangeTaken\`, not \`detail\`, and treats an untaken range as a reason not to stack that branch, never as a clean one.
 
 Report \`ok: true\` when every branch got a reading (a branch that does not resolve is still a reading), and \`ok: false\` with \`detail\` when git itself could not be run here.`;
 }
@@ -4188,7 +4198,7 @@ You stand in the repository's SHARED main checkout (confirm with \`git rev-parse
 ${tipRows}
    Report \`tipsUnchanged\` and every mismatch in \`tipMismatches\`. Move NOTHING to fix one: a moved canonical branch is a finding for the maintainer, and the pre-rebase refs below are its recovery source, which is why step 5 deletes none of them in that case.
 2. **The worktree is idle and clean.** \`git -C ${shq(worktree)} status --porcelain\` must print nothing, and no Git operation may be in progress there: no \`rebase-merge\`/\`rebase-apply\` path, and no \`MERGE_HEAD\`, \`CHERRY_PICK_HEAD\`, \`REVERT_HEAD\`, or \`BISECT_LOG\` under its git dir (\`git -C <worktree> rev-parse --git-path <name>\` names each; the last three print empty porcelain). Where \`git rev-parse --show-toplevel\` there does not print exactly \`${worktree}\`, remove NOTHING and report what you saw.
-3. **Abnormal-return recovery, only where step 2 found the tree held.** The restack was told to return clean; where it did not, reset the worktree to the disposable branch's reported pre-rebase ref, clear any untracked leftovers with \`git clean -fd\`, and confirm a clean \`git status\` before removal: identify the guide branch checked out there (\`git -C <worktree> branch --show-current\`; mid-rebase, the branch named by \`git -C <worktree> rev-parse --git-path rebase-merge/head-name\` or \`rebase-apply/head-name\`), find ITS ref in the list of step 5 (\`refs/pre-rebase/<that guide>/<stamp>\`), abort a rebase still in progress first (\`git -C <worktree> rebase --abort\` — a reset leaves the rebase state behind, and the removal would still refuse), then \`git -C <worktree> reset --hard <that ref>\` and \`git -C <worktree> clean -fd\`, and re-run step 2. Where the checked-out branch is not one of the guide branches below, or no pre-rebase ref of its own is listed, recover NOTHING: leave the worktree in place, report why, and skip step 4. The recovery reaches the guide branch only — never a canonical branch, never any other worktree. Report \`recovered: true\` only when this step ran.
+3. **Abnormal-return recovery, only where step 2 found the tree held.** The restack was told to return clean; where it did not, reset the worktree to the disposable branch's reported pre-rebase ref, clear any untracked leftovers with \`git clean -fd\`, and confirm a clean \`git status\` before removal: identify the guide branch checked out there (\`git -C <worktree> branch --show-current\`; mid-rebase, the branch named by \`git -C <worktree> rev-parse --git-path rebase-merge/head-name\` or \`rebase-apply/head-name\`), find ITS ref in the list of step 5 (\`refs/pre-rebase/<that guide>/<stamp>\`) — where that list holds none for it (a restack that threw reports no list at all), look it up with \`git for-each-ref --format='%(refname)' 'refs/pre-rebase/<that exact guide>/'\`, that one guide's own namespace spelled out in full and never \`refs/pre-rebase/\` itself, and take the newest stamp it prints; a ref found this way is a recovery source only, reported in \`refsNotDeleted\`, and step 5 still deletes nothing beyond its list — abort a rebase still in progress first (\`git -C <worktree> rebase --abort\` — a reset leaves the rebase state behind, and the removal would still refuse), then \`git -C <worktree> reset --hard <that ref>\` and \`git -C <worktree> clean -fd\`, and re-run step 2. Where the checked-out branch is not one of the guide branches below, or no pre-rebase ref of its own is listed or found, recover NOTHING: leave the worktree in place, report why, and skip step 4. The recovery reaches the guide branch only — never a canonical branch, never any other worktree. Report \`recovered: true\` only when this step ran.
 4. **Remove the worktree, refusing rather than forcing.** From this main checkout run \`wt-remove ${shq(slug)}\` — it enforces the step-2 checks itself and refuses over uncommitted work or an in-progress operation; a refusal is the helper working, so report it as \`worktreeRemoved: false\` with its message rather than forcing (\`--force\` never clears those checks; it only clears git's refusal over ignored build artifacts AFTER they pass, which is the one case you may pass it). Where \`command -v wt-remove\` finds no helper, \`git worktree remove ${shq(worktree)}\` after step 2 passed, never with \`--force\`. Then \`git worktree prune\` — the helper's success path removes without pruning — and report \`pruned\`. Removing the worktree never touches a branch.
 5. **Delete exactly these pre-rebase snapshots, and only after step 1 found every canonical tip unchanged** — the unchanged canonical branches are their recovery source; where a tip moved, delete none and list them all in \`refsNotDeleted\`:
 ${refRows}
@@ -4214,7 +4224,6 @@ async function buildReviewStack({ plan, results, wtBase }) {
   if (cycle.length) {
     return { ...report, skipped: true, reason: `the dependency graph among the mergeable branches is not acyclic (${cycle.join(", ")}); no merge order can be emitted` };
   }
-  phase("Review stack");
   const batchLabel = reviewStackBatchLabel(order);
   let mapping = [];
   let tips = [];

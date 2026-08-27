@@ -31,7 +31,7 @@ if (at < 0) {
   process.exit(1);
 }
 const prefix = src.slice(0, at).replace(/^export const meta/m, "const meta");
-const NAMES = ["reviewStackMergeable", "reviewStackOrder", "reviewStackSafePrefix", "reviewStackBatchLabel", "reviewStackGuideName", "reviewStackRefSegment", "buildReviewStack", "REVIEW_STACK_MERGEABLE"];
+const NAMES = ["reviewStackMergeable", "reviewStackOrder", "reviewStackSafePrefix", "reviewStackBatchLabel", "reviewStackGuideName", "reviewStackRefSegment", "buildReviewStack", "REVIEW_STACK_MERGEABLE", "REVIEW_STACK_INSPECT_SCHEMA"];
 function load({ agent, phase, log }) {
   const body = `"use strict";\n${prefix}\nreturn { ${NAMES.join(", ")} };`;
   // eslint-disable-next-line no-new-func
@@ -131,33 +131,46 @@ const oid = (n) => String(n).repeat(40);
     { slug: "002-b", branch: "task/002-b", base: "task/001-a" },
     { slug: "003-c", branch: "task/003-c", base: "task/002-b" },
   ];
-  const clean = pure.reviewStackSafePrefix(order, order.map((o, i) => ({ branch: o.branch, tip: oid(i + 1), mergeCommits: [] })));
+  const clean = pure.reviewStackSafePrefix(order, order.map((o, i) => ({ branch: o.branch, tip: oid(i + 1), rangeTaken: true, mergeCommits: [] })));
   check("no merges: the whole order is the safe prefix, with tips", clean.prefix.length === 3 && clean.unchecked.length === 0 && clean.guard === null && clean.prefix[2].tip === oid(3));
 
   const mid = pure.reviewStackSafePrefix(order, [
-    { branch: "task/001-a", tip: oid(1), mergeCommits: [] },
-    { branch: "task/002-b", tip: oid(2), mergeCommits: ["c".repeat(40)] },
-    { branch: "task/003-c", tip: oid(3), mergeCommits: [] },
+    { branch: "task/001-a", tip: oid(1), rangeTaken: true, mergeCommits: [] },
+    { branch: "task/002-b", tip: oid(2), rangeTaken: true, mergeCommits: ["c".repeat(40)] },
+    { branch: "task/003-c", tip: oid(3), rangeTaken: true, mergeCommits: [] },
   ]);
   check("a merge on b2 ends the prefix at b1 and leaves b2 and b3 unchecked", same(mid.prefix.map((p) => p.branch), ["task/001-a"]) && same(mid.unchecked, ["task/002-b", "task/003-c"]));
   check("the guard names the branch and its merge commits", mid.guard && mid.guard.branch === "task/002-b" && same(mid.guard.mergeCommits, ["c".repeat(40)]) && /rev-list --merges task\/001-a\.\.task\/002-b/.test(mid.guard.reason));
 
   const first = pure.reviewStackSafePrefix(order, [
-    { branch: "task/001-a", tip: oid(1), mergeCommits: ["d".repeat(40)] },
-    { branch: "task/002-b", tip: oid(2), mergeCommits: [] },
-    { branch: "task/003-c", tip: oid(3), mergeCommits: [] },
+    { branch: "task/001-a", tip: oid(1), rangeTaken: true, mergeCommits: ["d".repeat(40)] },
+    { branch: "task/002-b", tip: oid(2), rangeTaken: true, mergeCommits: [] },
+    { branch: "task/003-c", tip: oid(3), rangeTaken: true, mergeCommits: [] },
   ]);
   check("a merge on b1 leaves an empty prefix", first.prefix.length === 0 && first.unchecked.length === 3);
 
   const short = pure.reviewStackSafePrefix(order, [
-    { branch: "task/001-a", tip: oid(1), mergeCommits: [] },
-    { branch: "task/002-b", tip: "abc1234", mergeCommits: [] },
-    { branch: "task/003-c", tip: oid(3), mergeCommits: [] },
+    { branch: "task/001-a", tip: oid(1), rangeTaken: true, mergeCommits: [] },
+    { branch: "task/002-b", tip: "abc1234", rangeTaken: true, mergeCommits: [] },
+    { branch: "task/003-c", tip: oid(3), rangeTaken: true, mergeCommits: [] },
   ]);
   check("an abbreviated tip is not a reading; it ends the prefix", short.prefix.length === 1 && short.guard.branch === "task/002-b");
 
-  const missing = pure.reviewStackSafePrefix(order, [{ branch: "task/001-a", tip: oid(1), mergeCommits: [] }]);
+  const missing = pure.reviewStackSafePrefix(order, [{ branch: "task/001-a", tip: oid(1), rangeTaken: true, mergeCommits: [] }]);
   check("a branch the inspection did not report ends the prefix", missing.prefix.length === 1 && missing.unchecked.length === 2);
+
+  // The peer's round-1 finding: an untaken range used to arrive as an empty
+  // `mergeCommits` plus prose in `detail`, which the guard read as merge-free.
+  const untaken = pure.reviewStackSafePrefix(order, [
+    { branch: "task/001-a", tip: oid(1), rangeTaken: true, mergeCommits: [] },
+    { branch: "task/002-b", tip: oid(2), rangeTaken: false, mergeCommits: [], detail: "recorded PR base task/001-a does not resolve locally" },
+    { branch: "task/003-c", tip: oid(3), rangeTaken: true, mergeCommits: [] },
+  ]);
+  check("a range that was not taken is not a merge-free one; it ends the prefix", same(untaken.prefix.map((p) => p.branch), ["task/001-a"]) && same(untaken.unchecked, ["task/002-b", "task/003-c"]));
+  check("the untaken-range guard names the branch and carries the agent's detail", untaken.guard && untaken.guard.branch === "task/002-b" && /could not be taken/.test(untaken.guard.reason) && /does not resolve locally/.test(untaken.guard.reason));
+  const noField = pure.reviewStackSafePrefix(order, [{ branch: "task/001-a", tip: oid(1), mergeCommits: [] }, { branch: "task/002-b", tip: oid(2), rangeTaken: true, mergeCommits: [] }, { branch: "task/003-c", tip: oid(3), rangeTaken: true, mergeCommits: [] }]);
+  check("a reading with no rangeTaken at all is not a clean one", noField.prefix.length === 0 && noField.guard.branch === "task/001-a");
+  check("the inspection schema requires rangeTaken", same(pure.REVIEW_STACK_INSPECT_SCHEMA.properties.branches.items.required, ["branch", "tip", "rangeTaken", "mergeCommits"]));
 }
 
 // --- Naming -----------------------------------------------------------------
@@ -194,7 +207,7 @@ const plan3 = { defaultBase: "main", waves: [[t("042-a", "main")], [t("043-b", "
 const results3 = ["042-a", "043-b", "044-c"].map((slug) => ({ slug, branch: `task/${slug}`, status: "local-only" }));
 const wtBase = "/repo/.worktrees/c";
 const STAMP = "20260827-120000";
-const inspectionClean = { ok: true, branches: ["042-a", "043-b", "044-c"].map((s, i) => ({ branch: `task/${s}`, tip: oid(i + 1), mergeCommits: [] })) };
+const inspectionClean = { ok: true, branches: ["042-a", "043-b", "044-c"].map((s, i) => ({ branch: `task/${s}`, tip: oid(i + 1), rangeTaken: true, mergeCommits: [] })) };
 const guidesFor = (prefixSlugs, label) => ({
   ok: true,
   stamp: STAMP,
@@ -286,9 +299,9 @@ const teardownOk = { tipsUnchanged: true, tipMismatches: [], recovered: false, w
     const label = "042-to-044";
     const guides = guidesFor(["042-a", "043-b"], label);
     const inspection = { ok: true, branches: [
-      { branch: "task/042-a", tip: oid(1), mergeCommits: [] },
-      { branch: "task/043-b", tip: oid(2), mergeCommits: [] },
-      { branch: "task/044-c", tip: oid(3), mergeCommits: ["f".repeat(40)] },
+      { branch: "task/042-a", tip: oid(1), rangeTaken: true, mergeCommits: [] },
+      { branch: "task/043-b", tip: oid(2), rangeTaken: true, mergeCommits: [] },
+      { branch: "task/044-c", tip: oid(3), rangeTaken: true, mergeCommits: ["f".repeat(40)] },
     ] };
     const { fns, calls } = stage({
       "review-stack:inspect": inspection,
@@ -304,9 +317,9 @@ const teardownOk = { tipsUnchanged: true, tipMismatches: [], recovered: false, w
   {
     // A merge on b2 of three leaves a one-branch prefix: nothing to stack.
     const inspection = { ok: true, branches: [
-      { branch: "task/042-a", tip: oid(1), mergeCommits: [] },
-      { branch: "task/043-b", tip: oid(2), mergeCommits: ["f".repeat(40)] },
-      { branch: "task/044-c", tip: oid(3), mergeCommits: [] },
+      { branch: "task/042-a", tip: oid(1), rangeTaken: true, mergeCommits: [] },
+      { branch: "task/043-b", tip: oid(2), rangeTaken: true, mergeCommits: ["f".repeat(40)] },
+      { branch: "task/044-c", tip: oid(3), rangeTaken: true, mergeCommits: [] },
     ] };
     const { fns, calls } = stage({ "review-stack:inspect": inspection });
     const r = await fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
@@ -363,10 +376,15 @@ const teardownOk = { tipsUnchanged: true, tipMismatches: [], recovered: false, w
   // their reasons, and the normal return joins the stage's result.
   {
     const body = src.slice(at);
-    check("abort catch excludes the batch with a stated reason and creates nothing", /Batch aborted[\s\S]*reviewStack: \{ built: false, skipped: true, reason: "the batch aborted/.test(body) && !/buildReviewStack\([\s\S]*Batch aborted/.test(body.slice(body.indexOf("} catch (e) {"))));
+    const abortCatch = body.indexOf("} catch (e) {\n  // Reported, not rethrown");
+    const abortReturn = body.indexOf("Batch aborted:", abortCatch);
+    const abortPath = abortCatch >= 0 && abortReturn > abortCatch ? body.slice(abortCatch, abortReturn) : null;
+    check("abort catch excludes the batch with a stated reason", /Batch aborted[\s\S]*reviewStack: \{ built: false, skipped: true, reason: "the batch aborted/.test(body));
+    check("abort catch creates nothing: no stage call and no agent between its catch and its return", abortPath !== null && !/buildReviewStack\(|\bagent\(/.test(abortPath));
     check("the normal return carries reviewStack beside mainCheckout", /mainCheckout, reviewStack, openQuestions/.test(body));
     const summaryAt = body.lastIndexOf('phase("Summary");');
     const summary = body.slice(summaryAt);
+    check("the stage renders under Summary: no undeclared phase() call inside it", !/phase\("Review stack"\)/.test(src) && !/title: "Review stack"/.test(src));
     check("the stage runs before the closing main-checkout reading, with the placement justified", summary.indexOf("buildReviewStack(") < summary.indexOf("await finalMainCheckoutReport()") && /BEFORE the closing main-checkout reading, deliberately/.test(summary));
   }
 
