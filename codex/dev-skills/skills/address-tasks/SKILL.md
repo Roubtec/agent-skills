@@ -94,7 +94,7 @@ Your responsibilities:
 3. Build a **dependency graph** across the tasks; readiness is per task — a task starts the moment its specific prerequisites have delivered (see Scheduling).
 4. For each task, the moment it is ready: create its worktree on the right base branch and drive its implement→review→fix loop to a pass — every ready task's loop runs **concurrently** with its siblings', each task one end-to-end pipeline.
 5. Run each passing task through the **serialized pre-delivery guard**, then push its branch, open its PR against the resolved base, and reclaim its worktree — without waiting for any sibling (see Per-task pipeline and Delivery).
-6. Clean up each finished worktree as its task delivers; once **every** task has reached a terminal state, act on any pushed branch left without a PR (see Delivery).
+6. Clean up each finished worktree as its task delivers; act on a pushed branch left without a PR the moment its delivery settles, inside that task's own pipeline and before its terminal state reaches its dependents (see Delivery).
 7. Build a **local review stack** from disposable copies of the mergeable branches — delegated to the `rebase-stack` skill in a subagent, never pushed and never rewriting the PR branches (see Post-batch restack).
 8. Produce the final batch summary.
 
