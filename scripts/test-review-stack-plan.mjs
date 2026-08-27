@@ -333,13 +333,40 @@ const teardownOk = { tipsUnchanged: true, tipMismatches: [], recovered: false, w
     guides.guides[1].guide = "review-stack/oops";
     const { fns, calls } = stage({ "review-stack:inspect": inspectionClean, "review-stack:guides": guides, "review-stack:teardown": teardownOk });
     const r = await fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
+    check("the teardown brief refuses removal over a worktree holding a non-guide branch", calls[2].prompt.includes("is not one of the guide branches of step 6, remove NOTHING"));
     check("guide drift: restack not run, reason names the drift, teardown reclaims the reported worktree", same(calls.map((c) => c.label), ["review-stack:inspect", "review-stack:guides", "review-stack:teardown"]) && /oops/.test(r.reason) && calls[2].prompt.includes(guides.worktree));
+  }
+  // Worktree-path drift: the deputy's path is nobody's to remove on its word
+  // alone, so no teardown is scheduled over it; it is reported and logged.
+  {
+    const guides = guidesFor(["042-a", "043-b", "044-c"], "042-to-044");
+    guides.worktree = `${wtBase}/_some-other-worktree`;
+    const { fns, calls, logs } = stage({ "review-stack:inspect": inspectionClean, "review-stack:guides": guides, "review-stack:teardown": teardownOk });
+    const r = await fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
+    check("worktree drift: restack not run, no teardown over the unverified path", same(calls.map((c) => c.label), ["review-stack:inspect", "review-stack:guides"]) && /rather than/.test(r.reason) && !r.teardown);
+    check("worktree drift: the path is reported as not reclaimed, with the expected path, and logged", r.worktreeNotReclaimed && r.worktreeNotReclaimed.path === guides.worktree && r.worktreeNotReclaimed.reason.includes(`${wtBase}/_review-stack-042-to-044-${STAMP}`) && logs.some((m) => /NOT reclaimed/.test(m) && m.includes(guides.worktree)));
+  }
+  // The guides deputy failed AFTER attaching the worktree, at the path the
+  // batch named: that one is still torn down.
+  {
+    const guides = { ...guidesFor(["042-a", "043-b"], "042-to-044"), ok: false, blocker: "g3 exists" };
+    const { fns, calls } = stage({ "review-stack:inspect": inspectionClean, "review-stack:guides": guides, "review-stack:teardown": teardownOk });
+    const r = await fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
+    check("guides failure with the expected worktree: reported, teardown reclaims it", /g3 exists/.test(r.reason) && calls.at(-1).label === "review-stack:teardown" && calls.at(-1).prompt.includes(guides.worktree) && !r.worktreeNotReclaimed);
+  }
+  // The guides deputy threw after it may have attached the worktree: nothing
+  // can name the path, so it is reported with the stamp unfilled, not torn down.
+  {
+    const { fns, calls, logs } = stage({ "review-stack:inspect": inspectionClean, "review-stack:guides": new Error("deputy interrupted") });
+    const r = await fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
+    check("guides throw: reported, no teardown", calls.length === 2 && /deputy interrupted/.test(r.error) && !r.teardown);
+    check("guides throw: the possibly-registered worktree is reported by the batch's naming and logged", r.worktreeNotReclaimed && r.worktreeNotReclaimed.path === `${wtBase}/_review-stack-042-to-044-<stamp>` && /threw before reporting/.test(r.worktreeNotReclaimed.reason) && logs.some((m) => /NOT reclaimed/.test(m)));
   }
   {
     // The guides agent failed before creating a worktree: nothing to tear down.
     const { fns, calls } = stage({ "review-stack:inspect": inspectionClean, "review-stack:guides": { ok: false, stamp: "", guides: [], worktree: "", blocker: "branch exists" } });
     const r = await fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
-    check("guides failure with no worktree: reported, no teardown", calls.length === 2 && /branch exists/.test(r.reason));
+    check("guides failure with no worktree: reported, no teardown, nothing left unreclaimed", calls.length === 2 && /branch exists/.test(r.reason) && !r.worktreeNotReclaimed);
   }
   {
     // A bad stamp is refused before any name is adopted.
@@ -347,6 +374,7 @@ const teardownOk = { tipsUnchanged: true, tipMismatches: [], recovered: false, w
     const { fns } = stage({ "review-stack:inspect": inspectionClean, "review-stack:guides": guides, "review-stack:teardown": teardownOk });
     const r = await fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
     check("a stamp that is not YYYYMMDD-HHMMSS stops the stage", /YYYYMMDD-HHMMSS/.test(r.reason) && r.built === false);
+    check("a bad stamp leaves the reported worktree unreclaimed rather than torn down: no expected path to prove it by", !r.teardown && r.worktreeNotReclaimed && /no valid stamp/.test(r.worktreeNotReclaimed.reason));
   }
 
   // Inspection failure: nothing created, nothing to tear down, no throw.

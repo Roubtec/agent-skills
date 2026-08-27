@@ -4204,7 +4204,7 @@ You stand in the repository's SHARED main checkout (confirm with \`git rev-parse
 1. **Canonical tips unchanged.** For each branch, \`git rev-parse --verify refs/heads/<branch>^{commit}\` must print the object id captured before the guide branches were created:
 ${tipRows}
    Report \`tipsUnchanged\` and every mismatch in \`tipMismatches\`. Move NOTHING to fix one: a moved canonical branch is a finding for the maintainer, and the pre-rebase refs below are its recovery source, which is why step 5 deletes none of them in that case.
-2. **The worktree is idle and clean.** \`git -C ${shq(worktree)} status --porcelain\` must print nothing, and no Git operation may be in progress there: no \`rebase-merge\`/\`rebase-apply\` path, and no \`MERGE_HEAD\`, \`CHERRY_PICK_HEAD\`, \`REVERT_HEAD\`, or \`BISECT_LOG\` under its git dir (\`git -C <worktree> rev-parse --git-path <name>\` names each; the last three print empty porcelain). Where \`git rev-parse --show-toplevel\` there does not print exactly \`${worktree}\`, remove NOTHING and report what you saw.
+2. **The worktree is idle and clean.** \`git -C ${shq(worktree)} status --porcelain\` must print nothing, and no Git operation may be in progress there: no \`rebase-merge\`/\`rebase-apply\` path, and no \`MERGE_HEAD\`, \`CHERRY_PICK_HEAD\`, \`REVERT_HEAD\`, or \`BISECT_LOG\` under its git dir (\`git -C <worktree> rev-parse --git-path <name>\` names each; the last three print empty porcelain). Where \`git rev-parse --show-toplevel\` there does not print exactly \`${worktree}\`, or the branch checked out there — \`git -C <worktree> branch --show-current\`, or mid-rebase the one \`git -C <worktree> rev-parse --git-path rebase-merge/head-name\` or \`rebase-apply/head-name\` names — is not one of the guide branches of step 6, remove NOTHING and report what you saw: a worktree at this path holding any other branch is not this batch's to remove, however clean.
 3. **Abnormal-return recovery, only where step 2 found the tree held.** The restack was told to return clean; where it did not, reset the worktree to the disposable branch's reported pre-rebase ref, clear any untracked leftovers with \`git clean -fd\`, and confirm a clean \`git status\` before removal: identify the guide branch checked out there (\`git -C <worktree> branch --show-current\`; mid-rebase, the branch named by \`git -C <worktree> rev-parse --git-path rebase-merge/head-name\` or \`rebase-apply/head-name\`), find ITS ref in the list of step 5 (\`refs/pre-rebase/<that guide>/<stamp>\`) — where that list holds none for it (a restack that threw reports no list at all), look it up with \`git for-each-ref --format='%(refname)' 'refs/pre-rebase/<that exact guide>/'\`, that one guide's own namespace spelled out in full and never \`refs/pre-rebase/\` itself, and take the newest stamp it prints; a ref found this way is a recovery source only, reported in \`refsNotDeleted\`, and step 5 still deletes nothing beyond its list — abort a rebase still in progress first (\`git -C <worktree> rebase --abort\` — a reset leaves the rebase state behind, and the removal would still refuse), then \`git -C <worktree> reset --hard <that ref>\` and \`git -C <worktree> clean -fd\`, and re-run step 2. Where the checked-out branch is not one of the guide branches below, or no pre-rebase ref of its own is listed or found, recover NOTHING: leave the worktree in place, report why, and skip step 4. The recovery reaches the guide branch only — never a canonical branch, never any other worktree. Report \`recovered: true\` only when this step ran.
 4. **Remove the worktree, refusing rather than forcing.** From this main checkout run \`wt-remove ${shq(slug)}\` — it enforces the step-2 checks itself and refuses over uncommitted work or an in-progress operation; a refusal is the helper working, so report it as \`worktreeRemoved: false\` with its message rather than forcing (\`--force\` never clears those checks; it only clears git's refusal over ignored build artifacts AFTER they pass, which is the one case you may pass it). Where \`command -v wt-remove\` finds no helper, \`git worktree remove ${shq(worktree)}\` after step 2 passed, never with \`--force\`. Then \`git worktree prune\` — the helper's success path removes without pruning — and report \`pruned\`. Removing the worktree never touches a branch.
 5. **Delete exactly these pre-rebase snapshots, and only after step 1 found every canonical tip unchanged** — the unchanged canonical branches are their recovery source; where a tip moved, delete none and list them all in \`refsNotDeleted\`:
@@ -4239,6 +4239,21 @@ async function buildReviewStack({ plan, results, wtBase }) {
   let preRebaseRefs = [];
   let restackOutcome = "";
   let created = false;
+  // Set around the guide-branch deputy's call: a throw between the two (the
+  // deputy interrupted after its `git worktree add`, before it reported) is
+  // the one path where a worktree may exist that nothing here can name.
+  let guidesStarted = false;
+  let guidesReturned = false;
+  // A worktree this stage will not tear down but which may be registered, with
+  // why: reported and logged rather than reclaimed, since the only way to find
+  // it is to glob the shared worktree base, which the destroy boundary forbids
+  // a deputy and the script may not run git for. `path` is the exact path the
+  // deputy reported, or the batch's own naming with `<stamp>` unfilled where
+  // the deputy never reported one.
+  const leaveUnreclaimed = (path, reason) => {
+    report.worktreeNotReclaimed = { path, reason };
+    log(`Review stack: a dedicated worktree may be registered at ${path} and was NOT reclaimed: ${reason}. Check \`git worktree list\` and, once verified as this batch's, remove it with \`wt-remove\`.`);
+  };
   // The stage's own steps, as a function whose early returns all land on the
   // teardown below: a guide-branch step that created the worktree and then
   // reported a drift has still created it, and a `return` out of a `try`
@@ -4261,30 +4276,41 @@ async function buildReviewStack({ plan, results, wtBase }) {
     }
     tips = prefix.map((t) => ({ branch: t.branch, tip: t.tip }));
 
+    guidesStarted = true;
     const guides = await agent(reviewStackGuidesPrompt(prefix, batchLabel, wtBase), { label: "review-stack:guides", schema: REVIEW_STACK_GUIDES_SCHEMA });
+    guidesReturned = true;
     const reported = guides && Array.isArray(guides.guides) ? guides.guides : [];
     const stamp = guides && typeof guides.stamp === "string" ? guides.stamp : "";
     // The worktree is what the teardown reclaims, so its existence — as the
     // agent reported it, whatever else went wrong — is what owes one. Guide
-    // branches alone owe nothing: they are kept on every path.
+    // branches alone owe nothing: they are kept on every path. But the path
+    // is the deputy's word, and the teardown runs `wt-remove` over whatever
+    // path it is handed once that tree is clean: only the exact path this
+    // batch asked for — its own naming over the reported stamp — is scheduled,
+    // and any other nonempty answer is reported as unreclaimed rather than
+    // torn down, since a clean worktree at a path this batch never named is
+    // somebody else's.
     worktree = guides && typeof guides.worktree === "string" ? guides.worktree : "";
-    slug = worktree.slice(worktree.lastIndexOf("/") + 1);
-    created = worktree !== "";
+    const expectedWorktree = REVIEW_STACK_STAMP.test(stamp) ? `${wtBase}/${reviewStackWorktreeSlug(batchLabel, stamp)}` : "";
+    created = worktree !== "" && worktree === expectedWorktree;
+    slug = created ? reviewStackWorktreeSlug(batchLabel, stamp) : "";
     report.stamp = stamp;
     report.mapping = reported;
     report.worktree = worktree;
+    if (worktree && !created) {
+      leaveUnreclaimed(worktree, expectedWorktree ? `it is not the path this batch requested (${expectedWorktree}), so nothing here may prove it is this batch's worktree` : "the guide-branch step reported no valid stamp, so the path this batch requested cannot be derived to compare it against");
+    }
     if (!guides || guides.ok !== true) {
       report.reason = `the guide branches were not created: ${guides ? guides.blocker || guides.detail || "(no reason reported)" : "(agent returned nothing usable)"}`;
       return;
     }
-    if (!REVIEW_STACK_STAMP.test(stamp)) {
+    if (!expectedWorktree) {
       report.reason = `the guide-branch step reported stamp ${JSON.stringify(stamp)}, not the YYYYMMDD-HHMMSS form; the restack did not run`;
       return;
     }
     // The names are a function of the stamp, so the agent's list is checked
     // against what the script would have named rather than adopted.
     const expected = prefix.map((t, i) => ({ branch: t.branch, guide: reviewStackGuideName(batchLabel, stamp, i, t.slug), tip: t.tip }));
-    const expectedWorktree = `${wtBase}/${reviewStackWorktreeSlug(batchLabel, stamp)}`;
     const drift = expected.findIndex((e, i) => !reported[i] || reported[i].branch !== e.branch || reported[i].guide !== e.guide || reported[i].tip !== e.tip);
     if (drift >= 0 || reported.length !== expected.length || worktree !== expectedWorktree) {
       const what = drift >= 0
@@ -4341,6 +4367,9 @@ async function buildReviewStack({ plan, results, wtBase }) {
   } catch (e) {
     report.error = `review-stack stage threw: ${e && e.message ? e.message : String(e)}`;
     restackOutcome = restackOutcome || "the stage threw before or during the restack";
+    if (guidesStarted && !guidesReturned) {
+      leaveUnreclaimed(`${wtBase}/${reviewStackWorktreeSlug(batchLabel, "<stamp>")}`, "the guide-branch step threw before reporting, after it may already have run its `git worktree add`; the stamp in the path is the deputy's and was never reported");
+    }
   }
   if (created) {
     // Its own agent, never the restack agent's last act and never the script's:
