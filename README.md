@@ -30,6 +30,8 @@ scripts/
   test-address-review-reconcile.mjs     # behavior coverage for the review-addressing workflow's reconciliation and location gates, delegated rebase points, publication guard, and disposition record
   test-skill-worktree-base-exclude.mjs  # asserts the skill steps that make the worktree base ignored carry the workflow's own recipe
   test-resolve-tasks-contract.mjs       # pins the shared task-pointer packet, consumer policies, mirror parity, and workflow hands-off exclusions
+  test-skill-mirror-parity.mjs          # asserts the two skill mirrors agree in structure — skill presence, heading sequence, per-section list-item counts — with legitimate deltas pinned in skill-mirror-parity-allowlist.json
+  skill-mirror-parity-allowlist.json    # the pinned structural deltas the parity suite excuses, one harness reason each
   verify-014-peer-strength-pin.md       # harness-neutral prompt: observe the peer step's pinned review strength (task 014)
   verify-015-peer-review-run.md         # harness-neutral prompt: exercise the peer-review-run primary launch, its reviewFile relay, the stub-helper degradation route, strength, and evidence (tasks 015, 050)
 ```
@@ -199,6 +201,12 @@ Two exclusions are pinned as decisions rather than left to a later audit, each a
 ### `test-resolve-tasks-contract.mjs`
 
 Run `node scripts/test-resolve-tasks-contract.mjs` after changing `resolve-tasks`, any task consumer's pointer preflight, or `wf-address-tasks`' resolve stage.
+
+### `test-skill-mirror-parity.mjs`
+
+Run `node scripts/test-skill-mirror-parity.mjs` after adding, removing, or editing any `SKILL.md` in either mirror — `plugins/dev-skills/skills/` or `codex/dev-skills/skills/` — or after editing `scripts/skill-mirror-parity-allowlist.json`.
+
+The mirrors are hand-edited in lockstep and legitimately differ in prose, so this suite compares structure only: every skill exists in both trees, the ordered sequence of ATX headings (level and text, fenced blocks excluded) matches, and each shared section holds the same number of ordered-list items and top-level bullets. It replaces the divergence count a PR summary used to recite, which no check ever depended on. A legitimate structural difference is pinned in the allowlist as an exact delta — the skill, the heading, and the one-sided heading or both mirrors' counts — with a one-line harness reason; an unlisted divergence, a divergence that drifted from its entry, and an entry whose divergence has vanished all fail, and a failure names the skill, the heading, the element, and the side. The three clause-scoped suites above keep pinning what they pin; this one only notices a whole step, bullet, or section arriving on one side.
 
 ### Dynamic workflow parse check
 

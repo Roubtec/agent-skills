@@ -22,3 +22,4 @@ jobs:
       - run: node scripts/test-address-review-reconcile.mjs
       - run: node scripts/test-skill-worktree-base-exclude.mjs
       - run: node scripts/test-resolve-tasks-contract.mjs
+      - run: node scripts/test-skill-mirror-parity.mjs

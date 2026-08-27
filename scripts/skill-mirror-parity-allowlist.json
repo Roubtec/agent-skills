@@ -1,0 +1,42 @@
+[
+  {
+    "skill": "address-review",
+    "heading": "### Codex subagent execution",
+    "side": "codex",
+    "reason": "Codex names its multi_agent_v1 spawn/wait/close tools and worker/explorer roles in a section of its own; the Claude mirror's Agent tool needs no such section."
+  },
+  {
+    "skill": "address-reviews",
+    "heading": "## Codex subagent execution",
+    "side": "codex",
+    "reason": "Same harness-specific subagent section as address-review, at ## because this skill's phases are its own top-level sections."
+  },
+  {
+    "skill": "address-tasks",
+    "heading": "## Codex subagent execution",
+    "side": "codex",
+    "reason": "Same harness-specific subagent section as address-reviews: Codex's interactive-vs-tool-enabled spawn interface has no Claude counterpart."
+  },
+  {
+    "skill": "address-tasks-serialized",
+    "heading": "### How to spawn a subagent in Codex",
+    "side": "codex",
+    "reason": "The serialized executor's Codex spawn recipe (multi_agent_v1 tools, worker/explorer roles, no context fork); Claude's Agent tool is described inline."
+  },
+  {
+    "skill": "resolve-open-questions",
+    "heading": "### 4. Serve each question — the core move",
+    "element": "bullets",
+    "claude": 0,
+    "codex": 2,
+    "reason": "Codex chooses between a structured user-input tool and a numbered chat list per question, stated as two bullets; Claude has only the chat surface and states it in prose."
+  },
+  {
+    "skill": "review-cycle",
+    "heading": "## The peer step",
+    "element": "bullets",
+    "claude": 0,
+    "codex": 5,
+    "reason": "Codex's peer is the claude CLI, whose preflight (command -v, auth status, ANTHROPIC_API_KEY, older-CLI) is a five-rung classification ladder; Claude's codex preflight is one sentence of prose."
+  }
+]
