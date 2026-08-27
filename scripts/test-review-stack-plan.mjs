@@ -292,9 +292,16 @@ const teardownOk = { tipsUnchanged: true, tipMismatches: [], recovered: false, w
   // Mid-rebase, `branch --show-current` is empty and the head-name file spells
   // the branch as `refs/heads/...`; the guide list is short names, so the
   // teardown is told to strip exactly that prefix before its allowlist check.
+  // Detached with NO head-name file is `rebase-stack`'s whole-run restore
+  // stop (it detaches to restore the run and never re-attaches), so that
+  // shape is owned rather than foreign, and a held detached tree names no
+  // guide to recover.
   {
     const p = pure.reviewStackTeardownPrompt({ worktree: `${wtBase}/_review-stack-x`, slug: "_review-stack-x", tips: [], mapping: [{ guide: "review-stack/x/01-a" }], preRebaseRefs: [], restackOutcome: "it did not run" });
     check("teardown: the head-name value is normalized from refs/heads/ before the guide allowlist comparison", p.includes("spells it in full as `refs/heads/<branch>`: strip exactly that `refs/heads/` prefix before comparing") && p.includes("with that prefix stripped the same way"));
+    check("teardown: a detached, clean, idle worktree at the script's path is the whole-run-restore stop shape, removed rather than refused", p.includes("A DETACHED head there") && p.includes("is this batch's own rather than foreign") && p.includes("and step 4 removes it"));
+    check("teardown: a held detached tree names no guide branch, so recovery is skipped rather than guessed", p.includes("where the head is detached (a held detached tree names no guide branch to recover)"));
+    check("teardown: snapshots are enumerated per guide namespace, never from the reported list alone and never from `refs/pre-rebase/` itself", p.includes("`git for-each-ref --format='%(refname)' 'refs/pre-rebase/<that exact guide>/'`") && p.includes("the enumeration and not the list is what is deleted") && p.includes("never glob `refs/pre-rebase/`"));
   }
 
   // The success path: inspect -> guides -> restack -> teardown.
@@ -363,6 +370,10 @@ const teardownOk = { tipsUnchanged: true, tipMismatches: [], recovered: false, w
     try { r = await fns.buildReviewStack({ plan: plan3, results: results3, wtBase }); } catch { threw = true; }
     check("restack throw: the stage reports rather than throws", !threw && r && /agent stage failed/.test(r.error));
     check("restack throw: the teardown still reclaims the worktree", calls.at(-1).label === "review-stack:teardown" && calls.at(-1).prompt.includes("(none reported)"));
+    // An interrupted restack reports no list, but the snapshots it saved
+    // stand: the teardown is told the list is an account, and to delete what
+    // it enumerates under this batch's guide namespaces after the tip check.
+    check("restack throw: the teardown enumerates the guide namespaces rather than deleting nothing", calls.at(-1).prompt.includes("A restack that threw or was interrupted reports no list at all") && guides.guides.every((g) => calls.at(-1).prompt.includes(`- \`${g.guide}\``)));
   }
 
   // A merge commit mid-order: the safe prefix is built, the rest reported.
