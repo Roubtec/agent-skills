@@ -2769,10 +2769,8 @@ const TRIAGE_KINDS = new Set([
   "ambiguous-skipped",
   "flake-rerun",
 ]);
-// Keyed TRIMMED, like every identity map below: the gather is an emitted
-// packet as apt to pad an id as the fixer's report is, and coverage trims both
-// sides, so an untrimmed key here would let a thread entry naming the trimmed
-// url of a padded gathered standalone pass the cross-kind guard below.
+// Keyed TRIMMED, like every identity map below — see the cross-kind guard in
+// `dispositionDefect` for why both sides must be.
 const threadItemById = new Map(
   packet.items.filter((it) => it.type === "review-thread" && it.threadId).map((it) => [String(it.threadId).trim(), it])
 );
