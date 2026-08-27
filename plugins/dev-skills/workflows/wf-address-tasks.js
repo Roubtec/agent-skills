@@ -3709,11 +3709,11 @@ async function implementTask(task, remote, peerMode) {
 // `gh pr edit --base`, nothing in the worktree to inspect), or the branch that
 // IS the run's delivery where no remote is written this run. On a remote run
 // `local-only` is a push taken back off origin, a task stopped short of
-// delivery, which neither gate accepts. The reclaim's outcome is read, not assumed: a
-// `wt-remove` refusal (or a cleanup agent that crashes) leaves the worktree
-// live, and the pipeline's slot gate must keep its slot for it (`retainSlot`)
-// — the worktree is reported retained on the result, whatever the delivery
-// itself reported, and never turns a delivered PR into an error.
+// delivery, which neither gate accepts. The reclaim's outcome is read, not
+// assumed: a `wt-remove` refusal (or a cleanup agent that crashes) leaves the
+// worktree live, and the pipeline's slot gate must keep its slot for it
+// (`retainSlot`) — the worktree is reported retained on the result, whatever
+// the delivery itself reported, and never turns a delivered PR into an error.
 async function reclaimWorktree(task) {
   let cleanup;
   try {
