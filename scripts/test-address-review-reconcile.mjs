@@ -166,7 +166,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 267;
+const EXPECTED_CHECKS = 268;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -6023,6 +6023,21 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /the publishability check admits the kind on no other lane/.test(flakePublish),
     `${flake.status}: ${flakePublish.slice(0, 200)}`,
   );
+  // A lane the rollup carried more than once (one workflow fired by two
+  // events on the head) is ONE item but two workflow runs; its `instances`
+  // carry every failing instance's URL and the publish brief orders a re-run
+  // of every distinct run id, not only `url`'s.
+  const repeatedPacket = { ...packet, items: packet.items.map((it) => (it === ITEM_LANE ? { ...it, instances: [it.url, "https://example.invalid/owner/repo/actions/runs/779/job/890"] } : it)) };
+  const repeated = await run(gathered(repeatedPacket), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], { ...LANE_ENTRY, kind: "flake-rerun", detail: "cause: an earlier re-run of this head went green; evidence runs 777 and 779" }, GREEN_ENTRY, findingEntry(1), findingEntry(2))] });
+  const repeatedPublish = repeated.seen.publishPrompts[0] || "";
+  check(
+    "a flake-rerun on a lane the rollup carried twice publishes, and the publish brief re-runs every distinct run id the lane's url and instances name — a re-run of url's alone would leave the other instance red",
+    repeated.status === "fixed-published" &&
+      /and from EVERY URL in its `instances` where it carries them/.test(repeatedPublish) &&
+      /a re-run of `url`'s alone leaves the others red/.test(repeatedPublish) &&
+      /ONCE PER RUN ID, every distinct id the lane names/.test(repeatedPublish),
+    `${repeated.status}: ${repeatedPublish.slice(0, 200)}`,
+  );
   // The Summary comment's two new sections, and that nothing replies on the
   // bot's comment or resolves a lane.
   check(
@@ -6083,6 +6098,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /A flake needs EVIDENCE, not a hunch/.test(fixer) &&
       /A log that names only files the diff does not touch is NOT that evidence/.test(fixer) &&
       /a flake that has bitten before ALSO earns a follow-up task/.test(fixer) &&
+      /every `workReport` entry names a gathered item, so a second entry for the flake-fix task would name none/.test(fixer) &&
       /An evidenced flake is `flake-rerun` where the lane's `url` names a workflow run, and `ambiguous-skipped` with the evidence in `detail` where it does not/.test(fixer) &&
       /`push-back` is not a disposition it can take/.test(fixer) &&
       /A lane the item reports as `rollup: "green"` or `"running"` is a REPLAYED one/.test(fixer) &&
@@ -6111,6 +6127,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /`<workflowName> \/ <name>`/.test(ciPara) &&
       /its `checkSuite\.app\.slug` fills that slot, read through GraphQL's `statusCheckRollup\.contexts`/.test(ciPara) &&
       /holds ONE lane there, failing while any instance is/.test(ciPara) &&
+      /with the details URL of EVERY failing instance in `instances`, since each is its own workflow run and a re-run of one leaves the others red/.test(ciPara) &&
       /gh run view --repo <owner>\/<repo> --job <job-id> --log-failed \| tail -n 200/.test(ciPara) &&
       /gh run view <run-id> --repo <owner>\/<repo> --log-failed \| tail -n 200/.test(ciPara) &&
       /under `set -o pipefail`/.test(ciPara) &&
