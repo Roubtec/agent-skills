@@ -13,7 +13,9 @@
 //   PRESENCE  — the skill exists in both trees.
 //   HEADINGS  — the ordered sequence of ATX headings (level + text) matches.
 //   COUNTS    — within each section both mirrors share, the number of
-//               ordered-list items and of top-level bullets matches.
+//               ordered-list items and of top-level bullets matches; a
+//               section one mirror holds alone is counted against an empty
+//               counterpart, so its items are deltas of their own.
 //
 // Measurement rules, stated so a quoted figure can be reproduced: ATX headings
 // only (`#`..`######` at column zero followed by a space); list markers at
@@ -32,8 +34,11 @@
 // naming the harness difference that produces it. It is a pinned delta, not
 // an exempted region: a divergence the list does not name fails, a divergence
 // that no longer matches its entry fails (so adding or deleting a one-sided
-// bullet inside an excused section fails), and an entry whose divergence has
-// disappeared fails (so the list cannot rot into things that used to be true).
+// bullet inside an excused section fails — an excused one-sided HEADING pins
+// the heading alone, and each list item under it is a count delta needing its
+// own entry), an entry whose divergence has disappeared fails (so the list
+// cannot rot into things that used to be true), and each entry excuses exactly
+// one divergence (so a second copy of an excused one-sided heading fails).
 //
 // Neighbouring suites pin CLAUSES and stay untouched by this one:
 // `test-resolve-tasks-contract.mjs` asserts byte identity for `resolve-tasks`
@@ -71,7 +76,9 @@ function check(name, condition, detail = "") {
 // ---------------------------------------------------------------- parsing --
 
 const FENCE = /^ {0,3}(`{3,}|~{3,})/;
-const HEADING = /^(#{1,6}) +(.*?)\s*(?:#+\s*)?$/;
+// A closing hash run is optional and, per CommonMark, must follow whitespace:
+// `## Arguments#` is heading text ending in a hash, not a closed heading.
+const HEADING = /^(#{1,6}) +(.*?)(?:\s+#+)?\s*$/;
 const ORDERED = /^\d+[.)] /;
 const BULLET = /^[-*+] /;
 
@@ -156,14 +163,19 @@ function compareMirrors(skill, texts) {
     paired.claude.add(ci);
     paired.codex.add(xi);
   }
+  const EMPTY = { ordered: [], bullets: [] };
+  const comparisons = pairs.map(([ci, xi]) => [structure.claude[ci], structure.codex[xi]]);
   for (const side of SIDES) {
     structure[side].forEach((section, index) => {
-      if (!paired[side].has(index)) divergences.push({ kind: "heading", skill, heading: section.key, side });
+      if (paired[side].has(index)) return;
+      divergences.push({ kind: "heading", skill, heading: section.key, side });
+      // Its items are compared against an empty counterpart below, so the
+      // heading allowance does not silently cover everything beneath it.
+      comparisons.push(side === "claude" ? [section, EMPTY] : [EMPTY, section]);
     });
   }
-  for (const [ci, xi] of pairs) {
-    const c = structure.claude[ci];
-    const x = structure.codex[xi];
+  for (const [c, x] of comparisons) {
+    const key = c === EMPTY ? x.key : c.key;
     for (const element of Object.keys(ELEMENTS)) {
       if (c[element].length === x[element].length) continue;
       // Best-effort naming of the delta: items whose text appears on one side
@@ -172,7 +184,7 @@ function compareMirrors(skill, texts) {
       divergences.push({
         kind: "count",
         skill,
-        heading: c.key,
+        heading: key,
         element,
         claude: c[element].length,
         codex: x[element].length,
@@ -210,12 +222,30 @@ function main() {
   // Parser self-check, on a fixture rather than a mirror: a fence indented
   // inside a list item is still a fence, so the heading and bullet it holds
   // are excluded; the column-zero heading after it is not.
-  const fixture = ["- item", "   ```", "# heading", "- bullet", "   ```", "## Real"].join("\n");
+  const fixture = ["- item", "   ```", "# heading", "- bullet", "   ```", "## Real", "## Closed ##", "## Trailing#"].join("\n");
   const parsed = parseStructure(fixture);
   check(
     "parser excludes headings and bullets inside a fence indented up to three spaces",
-    parsed.length === 2 && parsed[0].key === "(preamble)" && parsed[0].bullets.length === 1 && parsed[1].key === "## Real",
+    parsed.length === 4 && parsed[0].key === "(preamble)" && parsed[0].bullets.length === 1 && parsed[1].key === "## Real",
     JSON.stringify(parsed.map((s) => [s.key, s.bullets.length])),
+  );
+  // A closing hash run needs whitespace before it; a hash glued to the text
+  // is text, so a mirror renaming `## Arguments` to `## Arguments#` diverges.
+  check(
+    "parser strips a closing hash run only after whitespace",
+    parsed.length === 4 && parsed[2].key === "## Closed" && parsed[3].key === "## Trailing#",
+    JSON.stringify(parsed.map((s) => s.key)),
+  );
+
+  // Comparison self-check, on fixtures rather than mirrors: a one-sided
+  // section's items count against an empty counterpart, and a one-sided
+  // heading duplicated on its side is two heading divergences, not one.
+  const oneSided = compareMirrors("fixture", { claude: "## A\n", codex: "## A\n## B\n- x\n1. y\n## B\n" });
+  check(
+    "a one-sided section's items are count divergences and a duplicated one-sided heading is two",
+    JSON.stringify(oneSided.map((d) => (d.kind === "heading" ? [d.heading, d.side] : [d.heading, d.element, d.claude, d.codex]))) ===
+      JSON.stringify([["## B", "codex"], ["## B", "codex"], ["## B", "ordered", 0, 1], ["## B", "bullets", 0, 1]]),
+    JSON.stringify(oneSided),
   );
 
   let allowlist;
@@ -246,21 +276,25 @@ function main() {
   }
   check("at least one skill was discovered in the mirrors", names.size > 0);
 
-  const found = [];
+  // Each entry excuses exactly one divergence: consumed on first match, so a
+  // second divergence identical to an excused one (the same one-sided heading
+  // duplicated within a mirror) stays unexcused, and liveness is consumption.
+  const consumed = new Set();
   for (const skill of [...names].sort()) {
     const missing = SIDES.filter((side) => !existsSync(join(TREES[side], skill, "SKILL.md")));
     check(`${skill}: SKILL.md present in both trees`, missing.length === 0, `missing from the ${missing.join(", ")} mirror`);
     if (missing.length) continue;
     const texts = Object.fromEntries(SIDES.map((side) => [side, readFileSync(join(TREES[side], skill, "SKILL.md"), "utf8")]));
-    const divergences = compareMirrors(skill, texts);
-    const unexcused = divergences.filter((d) => !entries.some((e) => matches(e, d)));
+    const unexcused = compareMirrors(skill, texts).filter((d) => {
+      const i = entries.findIndex((e, j) => !consumed.has(j) && matches(e, d));
+      if (i !== -1) consumed.add(i);
+      return i === -1;
+    });
     check(`${skill}: heading sequence and per-section counts match, or every divergence is pinned in the allowlist`, unexcused.length === 0, unexcused.map(describe).join("\n         "));
-    found.push(...divergences);
   }
 
   for (const [i, e] of entries.entries()) {
-    const live = found.some((d) => matches(e, d));
-    check(`allowlist entry ${i} still names a live divergence — ${describeEntry(e)}`, live, "its divergence is absent or no longer matches; remove or re-pin the entry");
+    check(`allowlist entry ${i} still names a live divergence — ${describeEntry(e)}`, consumed.has(i), "its divergence is absent or no longer matches; remove or re-pin the entry");
   }
 
   if (failures > 0) {
