@@ -91,15 +91,10 @@ worktree="/absolute/path/to/committed-checkout-or-worktree"
 artifact_dir="/absolute/path/outside/the/worktree/<cycle-slug-segment>/round-1"
 mkdir -p "${artifact_dir}"
 
-prompt_file="${artifact_dir}/peer-review.prompt"
+# prompt_file: already written above, before the primary launch.
 outfile="${artifact_dir}/peer-review.out"
 stderr_file="${artifact_dir}/peer-review.stderr"
 pid_file="${artifact_dir}/peer-review.pid"
-
-# Write the complete peer prompt, including verbatim items and findings:
-# cat > "${prompt_file}" <<'PEER_PROMPT'
-# ...literal prompt...
-# PEER_PROMPT
 
 # Pin peer effort per invocation; this never changes the container's configuration.
 peer_args=(-c model_reasoning_effort=medium)
