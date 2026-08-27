@@ -19,7 +19,7 @@ Included:
   - the same skill exists in both trees (a skill added to one only is the loudest possible drift and currently fails nothing);
   - the ordered sequence of headings — level and text — matches;
   - within each section, the count of ordered-list items and of top-level bullets matches.
-- **A declared allowlist for legitimate structural divergence**, checked in beside the suite as data, with a one-line reason per entry. An entry names the skill and the specific heading or section it excuses. Divergence not named there fails; an allowlist entry whose divergence has since disappeared fails too, so the list cannot rot into a list of things that used to be true.
+- **A declared allowlist for legitimate structural divergence**, checked in beside the suite as data, with a one-line reason per entry. **An entry pins the exact divergence, never the section that holds it:** the skill, the heading, and the specific structural delta excused there — for a count divergence, both mirrors' expected counts; for a one-sided heading, that heading. A section-scoped entry is an exemption rather than an allowance, and both of today's known divergences are one-sided bullet runs *inside* a section, so an entry naming only the section keeps passing when a sixth Codex-only bullet appears or one of the five is deleted: the section stays divergent, the entry stays live, and the stale-entry check never fires. That would lose the "deleting a bullet from one mirror fails" criterion below in exactly the two places the allowlist reaches — the only places it could ever be lost. Divergence not named there fails; a divergence that no longer matches its entry's delta fails; an entry whose divergence has disappeared altogether fails too, so the list cannot rot into a list of things that used to be true. The precision costs one number pair per entry and does not enlarge the list — the "keep the allowlist small" note below bounds how many entries there are, not how exactly each one is drawn.
 - **Wire it into `.github/workflows/tests.yml`** and give it a subsection under README's *Focused tests*, in that section's established shape: the command first, then the change that obliges you to run it.
 - **The `scripts/` map in README's Layout block** gains its line.
 
@@ -56,6 +56,7 @@ Out of scope:
 
 - `node scripts/test-skill-mirror-parity.mjs` passes on `main` as it stands, with every divergence either absent or named in the allowlist with a reason.
 - Deleting a numbered step, a bullet, or a section heading from one mirror only fails the suite, and the failure names the skill, the element, and the side.
+- The same is true inside an allowlisted section: deleting one of the excused one-sided bullets, or adding another beside them, fails the suite. An allowlisted divergence is a pinned delta, not an exempted region.
 - Adding a new skill to one tree only fails the suite.
 - Removing an allowlist entry whose divergence still exists fails; keeping one whose divergence no longer exists also fails.
 - Rewording a paragraph in one mirror to match its harness — without changing the structure — passes.
@@ -69,4 +70,4 @@ Out of scope:
 
 ## Review plan
 
-Reviewer checks that the suite fails for each of the acceptance criteria's break cases rather than only passing on a clean tree, that it does not duplicate an assertion the three existing clause-scoped suites already make, that no check rests on the divergence count, that every allowlist entry names a harness reason a reader can verify, and that no `SKILL.md` was edited to make the guard pass.
+Reviewer checks that the suite fails for each of the acceptance criteria's break cases rather than only passing on a clean tree, that it does not duplicate an assertion the three existing clause-scoped suites already make, that no check rests on the divergence count, that every allowlist entry pins a delta rather than exempting a section and names a harness reason a reader can verify, and that no `SKILL.md` was edited to make the guard pass.
