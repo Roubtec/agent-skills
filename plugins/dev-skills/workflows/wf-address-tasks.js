@@ -93,7 +93,7 @@
 // mismatch silently splits the progress display into an extra group.
 export const meta = {
   name: "wf-address-tasks",
-  description: "Implement a batch selected by task numbers, paths, or globs as per-task pipelines on a dependency graph: each task starts when its prerequisites deliver, runs in its own worktree through the shared review cycle — implement -> fresh-eyes review plus a best-effort cross-harness codex peer review -> fix (review is cross-harness; peer outcomes never block; bounded round cap) — then a serialized first-ready-wins pre-delivery guard that deconflicts add/add and same-number clashes against delivered and reserved siblings (rename the branch under the guard + re-review) or holds an imperative name, reserves its numbers through delivery, and opens its PR without waiting for the batch; the batch ends by acting on any pushed branch left without a PR.",
+  description: "Implement a batch selected by task numbers, paths, or globs as per-task pipelines on a dependency graph: each task starts when its prerequisites deliver, runs in its own worktree through the shared review cycle — implement -> fresh-eyes review plus a best-effort cross-harness codex peer review -> fix (review is cross-harness; peer outcomes never block; bounded round cap) — then a serialized first-ready-wins pre-delivery guard that deconflicts add/add and same-number clashes against delivered and reserved siblings (rename the branch under the guard + re-review) or holds an imperative name, reserves its numbers through delivery, opens its PR without waiting for the batch, and acts on a pushed branch it left without a PR inside that same pipeline.",
   whenToUse: "Execute numbers, paths, or globs for pre-planned task files end to end with per-task worktree isolation and cross-harness review (a best-effort codex peer beside each task's fresh reviewer). Not for one-off coding requests or planning new tasks.",
   phases: [
     { title: "Bootstrap", detail: "wt-bootstrap: root-safety checks, orphan prune, remote probe; then the worktree base's ignore rule" },
@@ -103,7 +103,7 @@ export const meta = {
     { title: "Collision resolve", detail: "rename or renumber the branch under the guard, regen, commit" },
     { title: "Collision re-scan", detail: "re-derive the clash from the refs; a branch the re-scan clears delivers only after a fresh re-review" },
     { title: "Rebase onto advanced base", detail: "a sibling merged mid-run: rebase the branch under the guard onto the base it advanced, then re-review" },
-    { title: "Orphan reconciliation", detail: "every pushed branch left without a PR gets its PR retried or is deleted from origin before the summary" },
+    { title: "Orphan reconciliation", detail: "a pushed branch left without a PR gets its PR retried or is deleted from origin inside its own pipeline, before its state reaches its dependents" },
     { title: "Summary" },
   ],
 };
@@ -4571,13 +4571,20 @@ async function runTaskPipeline(task, ctx) {
     // to `gh pr create`: a parent that merges in that interval is NOT refreshed
     // here, deliberately. Its branch still on origin, the PR opens against it
     // and `baseOk` reads that back — the same state every stacked PR reaches
-    // when its parent merges a minute AFTER delivery, which the review stack
-    // and a restack absorb (GitHub retargets the PR itself when the merged
-    // branch is later deleted). Its branch already gone, `gh pr create` fails,
-    // `settleReservation` orphans the push, and `reconcileOrphan` retries once
-    // and names the survivor. A read at this boundary would leave the same
-    // window one call later; the maintainer's T6 decision on the review-stack
-    // window declines the refresh for the same reason.
+    // when its parent merges a minute AFTER delivery, which a restack absorbs
+    // (the local review stack drops the merged member; it repairs no remote
+    // base). GitHub's retarget is keyed to the DELETION of a merged branch,
+    // not to the merge: every open PR based on it is moved to the merged PR's
+    // base at that moment, whenever it was created, so a PR opened in this
+    // window is retargeted like one opened before the merge; a branch never
+    // deleted leaves the PR on a merged base for the restack, exactly as
+    // after delivery. Its branch already gone before `gh pr create`, creation
+    // fails, `settleReservation` orphans the push, and `reconcileOrphan`
+    // retries once and then deletes it from origin (`local-only`, with a
+    // push-again reason; on a remote run its dependents are skipped), naming
+    // a branch that survives both. A read at this boundary would leave the
+    // same window one call later; the maintainer's T6 decision on the
+    // review-stack window declines the refresh for the same reason.
     let delivered;
     try {
       delivered = await deliverTask(task, cleared.ready, remote);
