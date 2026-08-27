@@ -103,7 +103,7 @@ const GIB = 1024 ** 3;
 }
 
 // 3. A valid absolute base is accepted verbatim (surrounding whitespace from the
-//    agent's transcription trimmed, nothing else rewritten).
+//    agent's transcription and any trailing slash trimmed, nothing else rewritten).
 {
   const r = validateBootstrapWtBase({ ok: true, wtBase: "/workspace/repo/.worktrees/agent-1" });
   check("absolute wtBase → accepted", r.ok === true);
@@ -114,6 +114,15 @@ const GIB = 1024 ** 3;
   // A path with a space is legal and must survive; the probe prompt shell-quotes it.
   const spaced = validateBootstrapWtBase({ ok: true, wtBase: "/work space/repo/.worktrees/a" });
   check("absolute wtBase containing a space → accepted unmangled", spaced.ok === true && spaced.wtBase === "/work space/repo/.worktrees/a");
+  // A trailing slash is dropped: the review-stack stage joins the base with
+  // `/<slug>` into a path it then matches EXACTLY against what git reports,
+  // and git collapses the `//` such a base would produce.
+  const slashed = validateBootstrapWtBase({ ok: true, wtBase: "/workspace/repo/.worktrees/agent-1/" });
+  check("absolute wtBase with a trailing slash → accepted with the slash dropped", slashed.ok === true && slashed.wtBase === "/workspace/repo/.worktrees/agent-1");
+  const doubled = validateBootstrapWtBase({ ok: true, wtBase: "/workspace/repo/.worktrees/agent-1//\n" });
+  check("absolute wtBase with trailing slashes and whitespace → both dropped", doubled.ok === true && doubled.wtBase === "/workspace/repo/.worktrees/agent-1");
+  const root = validateBootstrapWtBase({ ok: true, wtBase: "/" });
+  check("the bare root keeps its one slash", root.ok === true && root.wtBase === "/");
 }
 
 // 4. Retention: a later probe that failed or could not measure keeps the last

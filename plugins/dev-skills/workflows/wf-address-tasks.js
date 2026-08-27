@@ -125,8 +125,15 @@ const BOOTSTRAP_SCHEMA = {
 // `wtBase` to BOOTSTRAP_SCHEMA's `required`: an `ok: false` bootstrap has no
 // worktree base to report, and a schema-required key would still admit `""` and
 // `.worktrees` — so the second gate would add a case without adding enforcement.
+//
+// Trailing slashes are dropped along with the whitespace: the review-stack
+// stage joins this base with `/<slug>` and then requires the deputy's reported
+// worktree path and `git rev-parse --show-toplevel` to echo that spelling
+// EXACTLY, while git registers and reports a worktree with the doubled slash
+// collapsed — so a `wtBase` written `.../$CONTAINER_NAME/` would fail every
+// stack's drift check on spelling alone.
 function validateBootstrapWtBase(boot) {
-  const raw = boot && typeof boot.wtBase === "string" ? boot.wtBase.trim() : "";
+  const raw = boot && typeof boot.wtBase === "string" ? boot.wtBase.trim().replace(/(?<=.)\/+$/, "") : "";
   if (!raw) {
     return { ok: false, wtBase: "", blocker: "Bootstrap contract violated: reported ok without a `wtBase`. wt-bootstrap must report an absolute worktree base (`<repo>/.worktrees/$CONTAINER_NAME`); the batch will not guess one." };
   }
