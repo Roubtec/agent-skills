@@ -6011,7 +6011,10 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   );
   // An evidenced flake on the failing lane publishes, and the publisher's
   // account keys that lane by its identity — the default stub echoes `lane`.
-  const flake = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], { ...LANE_ENTRY, kind: "flake-rerun", detail: "cause: the same lane went green on the base at a commit carrying the same files; evidence run 700" }, GREEN_ENTRY, findingEntry(1), findingEntry(2))] });
+  // The entry carries an `instances` list the gather never reported (run 999):
+  // the contract says it is not echoed, and the check below pins that it is
+  // stripped rather than passed through to a `gh run rerun 999`.
+  const flake = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], { ...LANE_ENTRY, kind: "flake-rerun", detail: "cause: the same lane went green on the base at a commit carrying the same files; evidence run 700", instances: ["https://example.invalid/owner/repo/actions/runs/999/job/999"] }, GREEN_ENTRY, findingEntry(1), findingEntry(2))] });
   const flakePublish = flake.seen.publishPrompts[0] || "";
   check(
     "an evidenced flake-rerun on the failing lane publishes, and the publish brief re-runs it once per run id only on a no-op push, with the repository taken from the run URL",
@@ -6041,14 +6044,16 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // The wording above is inert unless the other instance's URL actually
   // reaches the publisher: the fixer's entry never carries `instances`, so the
   // workflow attaches the gathered lane's list onto the disposition it hands
-  // over. The one-instance flake above attaches nothing.
+  // over. The one-instance flake above attaches nothing — and the bogus list
+  // its entry carried (run 999) is stripped, not passed through.
   check(
-    "the publisher's disposition for the repeated lane carries the gathered item's instances, so run 779's URL reaches the publish brief; a one-instance lane carries no instances key",
+    "the publisher's disposition for the repeated lane carries the gathered item's instances, so run 779's URL reaches the publish brief; a one-instance lane carries no instances key, and the list its entry invented is stripped",
     /actions\/runs\/779/.test(repeatedPublish) &&
       /"instances": \[/.test(repeatedPublish) &&
       !/"instances"/.test(flakePublish) &&
-      !/actions\/runs\/779/.test(flakePublish),
-    `repeated names 779: ${/actions\/runs\/779/.test(repeatedPublish)}; single carries key: ${/"instances"/.test(flakePublish)}`,
+      !/actions\/runs\/779/.test(flakePublish) &&
+      !/actions\/runs\/999/.test(flakePublish),
+    `repeated names 779: ${/actions\/runs\/779/.test(repeatedPublish)}; single carries key: ${/"instances"/.test(flakePublish)}; single names 999: ${/actions\/runs\/999/.test(flakePublish)}`,
   );
   // The Summary comment's two new sections, and that nothing replies on the
   // bot's comment or resolves a lane.

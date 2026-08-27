@@ -3044,11 +3044,15 @@ phase("Publish");
 // field no entry carries and re-run only `url`'s run, leaving the repeated
 // lane's other runs red. Every lane below resolves — an entry naming an
 // ungathered lane aborted above — and a one-instance lane attaches nothing.
+// Whatever `instances` the entry itself carried is dropped either way: the
+// gathered list is the only one the publisher may re-run from, so an invented
+// one must not reach the brief on a lane that has no list to replace it.
 const publishDispositions = workReport.map((d) => {
   if (!d || d.type !== "ci-failure" || typeof d.lane !== "string") return d;
   const gathered = laneItemById.get(d.lane.trim());
   const instances = gathered && Array.isArray(gathered.instances) && gathered.instances.length ? gathered.instances : null;
-  return instances ? { ...d, instances } : d;
+  const { instances: _echoed, ...entry } = d;
+  return instances ? { ...entry, instances } : entry;
 });
 const publishReport = await agent(publishPrompt(packet, publishDispositions, publishFlags, cycle.deviations, cycle.deviationAssessments, cycle.recordOnly, cycle.preRebaseRecordOnly), {
   label: "publish",
