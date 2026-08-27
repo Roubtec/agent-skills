@@ -18,7 +18,9 @@
 // Measurement rules, stated so a quoted figure can be reproduced: ATX headings
 // only (`#`..`######` at column zero followed by a space); list markers at
 // column zero only, so nested items are the parent's prose; every line inside
-// a fenced code block (``` or ~~~) and inside YAML front matter is excluded —
+// a fenced code block (``` or ~~~, indented by up to three spaces as CommonMark
+// allows, so a fence nested in a list item counts) and inside YAML front matter
+// is excluded —
 // `review-cycle`'s launch snippets carry shell comments that would otherwise
 // count as four headings. A section runs from its heading to the next heading
 // of ANY level; the text before the first heading is the preamble section.
@@ -68,7 +70,7 @@ function check(name, condition, detail = "") {
 
 // ---------------------------------------------------------------- parsing --
 
-const FENCE = /^(`{3,}|~{3,})/;
+const FENCE = /^ {0,3}(`{3,}|~{3,})/;
 const HEADING = /^(#{1,6}) +(.*?)\s*(?:#+\s*)?$/;
 const ORDERED = /^\d+[.)] /;
 const BULLET = /^[-*+] /;
@@ -77,7 +79,7 @@ const BULLET = /^[-*+] /;
 // (`"## Text"`, or `"(preamble)"` for the text before the first heading), the
 // heading's level and text, and its two element counts plus each element's
 // first line (for naming what a count divergence is, best-effort).
-export function parseStructure(markdown) {
+function parseStructure(markdown) {
   const lines = markdown.split(/\r?\n/);
   const sections = [];
   let current = { key: "(preamble)", level: 0, text: "", ordered: [], bullets: [] };
@@ -144,7 +146,7 @@ function lcsPairs(a, b) {
 // same shape an allowlist entry pins:
 //   { kind: "heading", skill, heading, side }
 //   { kind: "count", skill, heading, element, claude, codex, extra }
-export function compareMirrors(skill, texts) {
+function compareMirrors(skill, texts) {
   const structure = Object.fromEntries(SIDES.map((side) => [side, parseStructure(texts[side])]));
   const keys = Object.fromEntries(SIDES.map((side) => [side, structure[side].map((s) => s.key)]));
   const pairs = lcsPairs(keys.claude, keys.codex);
@@ -205,7 +207,24 @@ function describeEntry(e) {
 // ------------------------------------------------------------------- main --
 
 function main() {
-  const allowlist = JSON.parse(readFileSync(ALLOWLIST_PATH, "utf8"));
+  // Parser self-check, on a fixture rather than a mirror: a fence indented
+  // inside a list item is still a fence, so the heading and bullet it holds
+  // are excluded; the column-zero heading after it is not.
+  const fixture = ["- item", "   ```", "# heading", "- bullet", "   ```", "## Real"].join("\n");
+  const parsed = parseStructure(fixture);
+  check(
+    "parser excludes headings and bullets inside a fence indented up to three spaces",
+    parsed.length === 2 && parsed[0].key === "(preamble)" && parsed[0].bullets.length === 1 && parsed[1].key === "## Real",
+    JSON.stringify(parsed.map((s) => [s.key, s.bullets.length])),
+  );
+
+  let allowlist;
+  try {
+    allowlist = JSON.parse(readFileSync(ALLOWLIST_PATH, "utf8"));
+  } catch (err) {
+    allowlist = undefined;
+    check("allowlist file parses as JSON", false, err.message);
+  }
   check("allowlist is an array of entries", Array.isArray(allowlist));
   const entries = Array.isArray(allowlist) ? allowlist : [];
   for (const [i, e] of entries.entries()) {
