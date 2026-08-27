@@ -1939,7 +1939,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       [
         "every entry's field set, whatever its disposition",
         "**Every entry carries the same field set whatever its disposition**",
-        [/the permalink, and the reply body verbatim/, /adding the committed file and its queued or deferred placement/],
+        [/the permalink \(the thread's, the standalone comment's url, or the lane's details URL\), and the reply body verbatim/, /written there once rather than in both slots/, /adding the committed file and its queued or deferred placement/],
       ],
       [
         "the recipe that finds it",
