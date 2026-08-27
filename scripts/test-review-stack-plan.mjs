@@ -12,7 +12,7 @@
 // something a script can do; what this pins is everything the script decides
 // on its own — which branches count, in what order, where the safe prefix
 // ends, which pre-rebase refs the teardown may delete, and that the teardown
-// runs on every path that created the worktree while the stage never throws.
+// runs on every path past the guide-branch call while the stage never throws.
 //
 // Run: node scripts/test-review-stack-plan.mjs
 

@@ -4222,7 +4222,8 @@ Report \`tipsUnchanged\`, \`tipMismatches\`, \`recovered\`, \`worktreeRemoved\`,
 // The one place the stage's rules meet the runtime's control flow. Everything
 // it learns is REPORTED in the object it returns — never thrown: a failed
 // integration check must not take the batch's delivery results down with it,
-// and a teardown is owed on every path that created the worktree.
+// and a teardown is owed on every path past the guide-branch call, whether
+// or not that call attached anything.
 async function buildReviewStack({ plan, results, wtBase }) {
   const { order, excluded, cycle } = reviewStackOrder(plan, results);
   const canonicalOrder = order.map((t) => t.branch);
@@ -4250,6 +4251,19 @@ async function buildReviewStack({ plan, results, wtBase }) {
   // to remove. Every name is the script's, derived from the inspection's
   // stamp before the deputy runs, so nothing the deputy reports is ever the
   // path or the branch list the teardown is handed.
+  //
+  // What that ownership claim rests on: the names are unique per batch label
+  // and clock second, and `wtBase` is this container's own. It does NOT tell
+  // apart two runs of the SAME batch in one container whose inspections read
+  // the clock in the same second: the second run's guide-branch deputy stops
+  // at `git branch`'s collision, but its teardown then finds the first run's
+  // worktree at the path, holding a guide branch on its allowlist, and removes
+  // it whenever that worktree is clean and idle (the branches stay; the first
+  // run's restack then fails and reports the missing worktree). Not guarded:
+  // such a pair already shares every per-task worktree (`wt-enter <task
+  // slug>`) from wave 1, so a batch run twice at once is not a run this
+  // workflow supports, and telling the two apart would need a per-run nonce in
+  // the skill's documented naming form. Run a batch once per container.
   let guidesStarted = false;
   // The stage's own steps, as a function whose early returns all land on the
   // teardown below: a guide-branch step that created the worktree and then

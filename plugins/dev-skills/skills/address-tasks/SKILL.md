@@ -282,6 +282,7 @@ If the batch used a synthetic multi-parent integration branch, or `git rev-list 
 Build and report the safe prefix, then report the remaining canonical order as not integration-checked and include the integration-branch merge advice already recorded during Scheduling.
 
 Create collision-free guide branch names such as `review-stack/<batch>-<YYYYMMDD-HHMMSS>/01-<task-slug>`, using a git-ref-safe UTC timestamp — digits and dashes only, no `:` (ISO-8601 colons are invalid in ref names), matching the `YYYYMMDD-HHMMSS` form `rebase-stack` already uses for pre-rebase refs.
+Those names are unique per batch and clock second, which is what the teardown's ownership check rests on: the same batch run twice at once in one container would share them (and already shares its per-task worktrees), so run a batch once per container.
 Point each guide branch `gN` at the captured tip of its canonical branch `bN`; do not check out or move any `bN`.
 Create a dedicated worktree attached to `g1`: `git worktree add "$WT_BASE/_review-stack-<batch>-<YYYYMMDD-HHMMSS>" <g1>` (same ref-safe timestamp; `g1` already exists, so this attaches it without creating any branch).
 Running the restack there keeps the user's main checkout and current branch untouched.
