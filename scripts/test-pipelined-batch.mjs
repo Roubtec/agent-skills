@@ -42,7 +42,7 @@ function check(name, cond, detail) {
     console.error(`NOT ok - ${name}${detail ? `: ${detail}` : ""}`);
   }
 }
-const EXPECTED_CHECKS = 145;
+const EXPECTED_CHECKS = 147;
 
 async function scenario(name, fn) {
   try {
@@ -283,15 +283,17 @@ await scenario("orphaned pushed branches are reconciled in their own pipeline, a
 //    skips its dependents; a cycle and a missing prerequisite are skipped up
 //    front rather than awaited forever.
 await scenario("dependency gate", async () => {
-  const plan = { defaultBase: "main", waves: [[t("001-a"), t("005-e", "main", ["009-missing"])], [t("002-b", "task/001-a", ["001-a"])], [t("003-c", "task/002-b", ["002-b"])], [t("006-f", "main", ["007-g"]), t("007-g", "main", ["006-f"])]] };
+  const plan = { defaultBase: "main", waves: [[t("001-a"), t("005-e", "main", ["009-missing"])], [t("002-b", "task/001-a", ["001-a"])], [t("003-c", "task/002-b", ["002-b"])], [t("006-f", "main", ["007-g"]), t("007-g", "main", ["006-f"])], [t("008-h", "main", ["005-e"]), t("010-j", "task/006-f", ["006-f"])]] };
   const out = await runBatch({ plan, overrides: { "001-a:review#*": { pass: false, issues: [{ category: "logic", location: "x", problem: "p", fix: "f" }], notes: "" }, "001-a:fix#*": { ...PASS_PACKET } } });
   check("the failing prerequisite ends at the round cap", by(out.results, "001-a").status === "review-cap");
   check("its dependent is skipped with the prerequisite named", by(out.results, "002-b").status === "skipped-dep" && by(out.results, "002-b").blockedBy === "001-a" && by(out.results, "002-b").depStatus === "review-cap");
   check("and the dependent's dependent too, through the structural base->branch edge", by(out.results, "003-c").status === "skipped-dep" && by(out.results, "003-c").blockedBy === "002-b");
   check("a missing prerequisite is skipped up front", by(out.results, "005-e").status === "skipped-dep" && by(out.results, "005-e").depStatus === "missing");
-  check("a dependency cycle is skipped rather than awaited", by(out.results, "006-f").status === "skipped-dep" && by(out.results, "007-g").status === "skipped-dep" && by(out.results, "006-f").depStatus === "dependency cycle");
-  check("no skipped task ever spent an agent", !labels(out.calls).some((l) => /^(002-b|003-c|005-e|006-f|007-g):/.test(l)), JSON.stringify(labels(out.calls)));
-  check("every task reached a terminal state", out.results.length === 6);
+  check("a dependency cycle is skipped rather than awaited", by(out.results, "006-f").status === "skipped-dep" && by(out.results, "007-g").status === "skipped-dep" && by(out.results, "006-f").depStatus === "dependency cycle" && by(out.results, "007-g").depStatus === "dependency cycle");
+  check("a dependent of a task with a missing prerequisite is blocked by that task, not misread as a cycle", by(out.results, "008-h").status === "skipped-dep" && by(out.results, "008-h").blockedBy === "005-e" && by(out.results, "008-h").depStatus === "skipped-dep", JSON.stringify(by(out.results, "008-h")));
+  check("a dependent hanging off a cycle is blocked by the member it names, not counted as a member", by(out.results, "010-j").status === "skipped-dep" && by(out.results, "010-j").blockedBy === "006-f" && by(out.results, "010-j").depStatus === "skipped-dep", JSON.stringify(by(out.results, "010-j")));
+  check("no skipped task ever spent an agent", !labels(out.calls).some((l) => /^(002-b|003-c|005-e|006-f|007-g|008-h|010-j):/.test(l)), JSON.stringify(labels(out.calls)));
+  check("every task reached a terminal state", out.results.length === 8);
 });
 
 // 5. EARLY MERGES MOVE THE BASE. `a` delivers and merges into main while `b`

@@ -4407,26 +4407,49 @@ function effectiveDeps(task, slugByBranch) {
 
 // Tasks whose prerequisite graph never resolves — a cycle, or a dependency on a
 // slug the plan does not hold — are found before anything starts: a pipeline
-// awaiting them would wait forever, and the Summary barrier with it.
+// awaiting them would wait forever, and the Summary barrier with it. A task
+// downstream of one is unschedulable too, but by the state its prerequisite
+// ends in, `skipped-dep` — what the runtime gate would report had it awaited
+// the terminal — never as a cycle member: only a task that reaches itself
+// through the unresolved tasks is one, so the summary sends the maintainer to
+// the missing task or the cycle rather than to a cycle that is not there.
 function unschedulable(tasks, slugByBranch) {
   const bySlug = new Map(tasks.map((t) => [t.slug, t]));
+  const deps = new Map(tasks.map((t) => [t.slug, effectiveDeps(t, slugByBranch)]));
   const out = new Map();
   for (const t of tasks) {
-    const missing = effectiveDeps(t, slugByBranch).find((d) => !bySlug.has(d));
+    const missing = deps.get(t.slug).find((d) => !bySlug.has(d));
     if (missing) out.set(t.slug, { blockedBy: missing, depStatus: "missing" });
   }
-  let progressed = true;
   const settled = new Set();
-  while (progressed) {
-    progressed = false;
-    for (const t of tasks) {
-      if (settled.has(t.slug) || out.has(t.slug)) continue;
-      if (effectiveDeps(t, slugByBranch).every((d) => settled.has(d))) { settled.add(t.slug); progressed = true; }
+  const propagate = () => {
+    let progressed = true;
+    while (progressed) {
+      progressed = false;
+      for (const t of tasks) {
+        if (settled.has(t.slug) || out.has(t.slug)) continue;
+        const blocked = deps.get(t.slug).find((d) => out.has(d));
+        if (blocked) { out.set(t.slug, { blockedBy: blocked, depStatus: "skipped-dep" }); progressed = true; continue; }
+        if (deps.get(t.slug).every((d) => settled.has(d))) { settled.add(t.slug); progressed = true; }
+      }
     }
-  }
-  for (const t of tasks) {
-    if (!settled.has(t.slug) && !out.has(t.slug)) out.set(t.slug, { blockedBy: effectiveDeps(t, slugByBranch).find((d) => !settled.has(d)) || t.slug, depStatus: "dependency cycle" });
-  }
+  };
+  propagate();
+  const unresolved = new Set(tasks.map((t) => t.slug).filter((s) => !settled.has(s) && !out.has(s)));
+  const reachesItself = (start) => {
+    const seen = new Set();
+    const stack = [start];
+    while (stack.length) {
+      for (const d of deps.get(stack.pop())) {
+        if (d === start) return true;
+        if (unresolved.has(d) && !seen.has(d)) { seen.add(d); stack.push(d); }
+      }
+    }
+    return false;
+  };
+  const members = new Set([...unresolved].filter(reachesItself));
+  for (const s of members) out.set(s, { blockedBy: deps.get(s).find((d) => members.has(d)) || s, depStatus: "dependency cycle" });
+  propagate();
   return out;
 }
 
