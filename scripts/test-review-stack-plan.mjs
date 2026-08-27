@@ -31,7 +31,7 @@ if (at < 0) {
   process.exit(1);
 }
 const prefix = src.slice(0, at).replace(/^export const meta/m, "const meta");
-const NAMES = ["reviewStackMergeable", "reviewStackOrder", "reviewStackTaskNumber", "reviewStackSafePrefix", "reviewStackBatchLabel", "reviewStackGuideName", "reviewStackRefSegment", "reviewStackTeardownPrompt", "buildReviewStack", "REVIEW_STACK_MERGEABLE", "REVIEW_STACK_INSPECT_SCHEMA"];
+const NAMES = ["reviewStackMergeable", "reviewStackOrder", "reviewStackTaskNumber", "reviewStackSafePrefix", "reviewStackInspectedTips", "reviewStackBatchLabel", "reviewStackGuideName", "reviewStackRefSegment", "reviewStackTeardownPrompt", "buildReviewStack", "REVIEW_STACK_MERGEABLE", "REVIEW_STACK_INSPECT_SCHEMA"];
 function load({ agent, phase, log }) {
   const body = `"use strict";\n${prefix}\nreturn { ${NAMES.join(", ")} };`;
   // eslint-disable-next-line no-new-func
@@ -177,6 +177,12 @@ const oid = (n) => String(n).repeat(40);
   ]);
   check("a merge on b2 ends the prefix at b1 and leaves b2 and b3 unchecked", same(mid.prefix.map((p) => p.branch), ["task/001-a"]) && same(mid.unchecked, ["task/002-b", "task/003-c"]));
   check("the guard names the branch and its merge commits", mid.guard && mid.guard.branch === "task/002-b" && same(mid.guard.mergeCommits, ["c".repeat(40)]) && /rev-list --merges task\/001-a\.\.task\/002-b/.test(mid.guard.reason));
+  const tips = pure.reviewStackInspectedTips(order, [
+    { branch: "task/001-a", tip: oid(1), rangeTaken: true, mergeCommits: [] },
+    { branch: "task/002-b", tip: oid(2), rangeTaken: true, mergeCommits: ["c".repeat(40)] },
+    { branch: "task/003-c", tip: "", rangeTaken: false, mergeCommits: [] },
+  ]);
+  check("inspected tips span the whole order past the guard, and leave out a branch with no captured tip", same(tips, [{ branch: "task/001-a", tip: oid(1) }, { branch: "task/002-b", tip: oid(2) }]));
 
   const first = pure.reviewStackSafePrefix(order, [
     { branch: "task/001-a", tip: oid(1), rangeTaken: true, mergeCommits: ["d".repeat(40)] },
@@ -417,6 +423,10 @@ const teardownOk = { tipsUnchanged: true, tipMismatches: [], recovered: false, w
     check("merge guard: only the safe prefix is stacked", r.built === true && same(r.safePrefix, ["task/042-a", "task/043-b"]) && same(r.notIntegrationChecked, ["task/044-c"]) && r.mergeGuard.branch === "task/044-c");
     check("merge guard: the chain handed to the restack holds two guides", calls[2].prompt.includes(`chain ${guides.guides.map((x) => x.guide).join(" ")} onto main`) && !calls[2].prompt.includes("03-044-c"));
     check("merge guard: the batch label still spans the whole canonical order", guides.guides[0].guide.startsWith(`review-stack/${label}-`) && calls[1].prompt.includes(`review-stack/${label}-${STAMP}/01-042-a`));
+    // The guard exempts b3 from the restack, not from the teardown's check:
+    // the restack mutates refs in the shared `.git`, so every inspected
+    // canonical tip is verified, the guarded branch included.
+    check("merge guard: the teardown still verifies the guarded branch's tip beyond the safe prefix", calls[3].prompt.includes(`\`task/044-c\` must still be \`${oid(3)}\``) && calls[3].prompt.includes(`\`task/043-b\` must still be \`${oid(2)}\``));
   }
   {
     // A merge on b2 of three leaves a one-branch prefix: nothing to stack.

@@ -4029,6 +4029,22 @@ function reviewStackSafePrefix(order, inspection) {
   return { prefix, unchecked, guard };
 }
 
+// The tips the teardown verifies: every canonical branch whose inspection
+// reported a full object id, over the WHOLE canonical order and not only the
+// safe prefix. The restack's shared-ref mutations run in one `.git`, so the
+// guarantee that every `bN` stays where it was is owed to the branch a merge
+// guard truncated the chain at, and to every branch after it, as much as to
+// the ones a guide was built from. A branch whose tip did not resolve at
+// inspection time has nothing captured to compare against and is left out.
+function reviewStackInspectedTips(order, inspection) {
+  const byBranch = new Map();
+  for (const i of Array.isArray(inspection) ? inspection : []) if (i && typeof i.branch === "string") byBranch.set(i.branch, i);
+  return order.flatMap((t) => {
+    const i = byBranch.get(t.branch);
+    return i && REVIEW_STACK_OID.test(String(i.tip || "")) ? [{ branch: t.branch, tip: i.tip }] : [];
+  });
+}
+
 // `<batch>` in the skill's `review-stack/<batch>-<YYYYMMDD-HHMMSS>/NN-<slug>`
 // form: the task numbers the canonical order spans. The stamp is the
 // inspection deputy's (see `reviewStackInspectPrompt`): the runtime rejects
@@ -4239,7 +4255,7 @@ ${DESTROY_BOUNDARY}
 
 You stand in the repository's SHARED main checkout (confirm with \`git rev-parse --show-toplevel\`; do not \`cd\` anywhere). Address the worktree BY PATH — \`git -C ${shq(worktree)} …\` — for every read and every write below. The \`git rebase --abort\`, \`git reset --hard\`, and \`git clean -fd\` of step 3's recovery, run ONLY inside that worktree on ITS guide branch and ONLY when step 2 found it held, the \`wt-remove\` of step 4, and the \`git update-ref -d\` of step 5 over exactly the snapshots it finds under this batch's guide namespaces are the mutations this assignment spells out.
 
-1. **Canonical tips unchanged.** For each branch, \`git rev-parse --verify refs/heads/<branch>^{commit}\` must print the object id captured before the guide branches were created:
+1. **Canonical tips unchanged.** For each branch — the WHOLE canonical order the inspection captured, not only the branches a guide was built from, since a merge guard that ended the chain early exempted those after it from the restack, never from this check — \`git rev-parse --verify refs/heads/<branch>^{commit}\` must print the object id captured before the guide branches were created:
 ${tipRows}
    Report \`tipsUnchanged\` and every mismatch in \`tipMismatches\`. Move NOTHING to fix one: a moved canonical branch is a finding for the maintainer, and the snapshots step 5 enumerates are its recovery source, which is why step 5 deletes none of them in that case.
 2. **The worktree is idle and clean.** First, \`git worktree list --porcelain\` must list a \`worktree ${worktree}\` line: where it lists none, the guide-branch step stopped before attaching it (or was interrupted before it could), so report \`worktreeRemoved: false\` with \`detail\` saying no worktree is registered there, skip steps 3 and 4, and go on to step 5. \`git -C ${shq(worktree)} status --porcelain\` must print nothing, and no Git operation may be in progress there: no \`rebase-merge\`/\`rebase-apply\` path, and no \`MERGE_HEAD\`, \`CHERRY_PICK_HEAD\`, \`REVERT_HEAD\`, or \`BISECT_LOG\` under its git dir (\`git -C <worktree> rev-parse --git-path <name>\` names each; the last three print empty porcelain). Where \`git rev-parse --show-toplevel\` there does not print exactly \`${worktree}\`, or the branch checked out there — \`git -C <worktree> branch --show-current\`, or, where that prints nothing mid-rebase, the branch recorded in the file \`git -C <worktree> rev-parse --git-path rebase-merge/head-name\` (or \`rebase-apply/head-name\`) names, which spells it in full as \`refs/heads/<branch>\`: strip exactly that \`refs/heads/\` prefix before comparing, and treat a value without it as no guide branch — is not one of the guide branches of step 6, remove NOTHING and report what you saw: a worktree at this path holding any other branch is not this batch's to remove, however clean. A DETACHED head there — \`branch --show-current\` printing nothing with no \`head-name\` file, and \`git worktree list --porcelain\` reading \`detached\` for the path — is this batch's own rather than foreign: \`rebase-stack\` detaches the worktree to restore a whole run's guide branches to their snapshots and stops there without checking one out again, so a detached worktree at exactly this path that is clean and idle is its ordinary clean-stop shape, and step 4 removes it (the detached commit is the segment base \`rebase-stack\` detached at before restoring, or a replay it discarded; either way, removing the worktree touches no branch).
@@ -4330,7 +4346,7 @@ async function buildReviewStack({ plan, results, wtBase }) {
       report.reason = `the inspection reported stamp ${JSON.stringify(stamp)}, not the YYYYMMDD-HHMMSS form; no guide branch was named, so none was created`;
       return;
     }
-    tips = prefix.map((t) => ({ branch: t.branch, tip: t.tip }));
+    tips = reviewStackInspectedTips(order, inspection.branches);
     mapping = prefix.map((t, i) => ({ branch: t.branch, guide: reviewStackGuideName(batchLabel, stamp, i, t.slug), tip: t.tip }));
     slug = reviewStackWorktreeSlug(batchLabel, stamp);
     worktree = `${wtBase}/${slug}`;
