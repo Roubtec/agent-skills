@@ -3211,10 +3211,19 @@ ${DESTROY_BOUNDARY}
 Return \`opened: true\` with the \`url\` ONLY if a PR URL exists — from step 2 or step 4's lookup — AND step 3's read-back confirmed its base is \`${task.base}\`, after any repair; set \`baseOk\` to that same fact. If the push succeeded but no PR could be created or found (auth, API, or base-branch error), return \`opened: false\`, \`pushed: true\`, and \`reason\`; ending with neither a captured URL nor a lookup match is that failure, not a delivery. Do not claim a PR that was not created, and do not claim one whose base you did not read back.`;
 }
 
+const CLEANUP_SCHEMA = {
+  type: "object",
+  properties: {
+    removed: { type: "boolean", description: "True ONLY when `wt-remove` reported the worktree removed. False on a refusal, a missing helper, or any failure — the worktree is then still live." },
+    reason: { type: "string", description: "What `wt-remove` said; REQUIRED when `removed` is false." },
+  },
+  required: ["removed"],
+};
+
 function cleanupNote(task) {
   // Best-effort worktree removal is requested after delivery; commits and the
   // branch persist in shared `.git` and on the remote, so removal is safe.
-  return `Remove this task's worktree to reclaim space — the branch and commits persist. From the repo root (not inside the worktree) run \`wt-remove ${shq(task.slug)}\`. It refuses to delete uncommitted work; if it refuses, report why instead of forcing (\`--force\` only clears git's refusal over ignored build artifacts — the clean checks still apply). It never deletes the branch \`${task.branch}\`. Report done.
+  return `Remove this task's worktree to reclaim space — the branch and commits persist. From the repo root (not inside the worktree) run \`wt-remove ${shq(task.slug)}\`. It refuses to delete uncommitted work; if it refuses, report why instead of forcing (\`--force\` only clears git's refusal over ignored build artifacts — the clean checks still apply). It never deletes the branch \`${task.branch}\`. Report \`removed: true\` ONLY when the helper reported the worktree removed; on a refusal or any failure report \`removed: false\` with what it said in \`reason\`.
 
 ${DESTROY_BOUNDARY}
 
@@ -3676,12 +3685,23 @@ async function deliverTask(task, ready, remote) {
     schema: PR_SCHEMA,
   });
 
-  await agent(cleanupNote(task), { label: `cleanup:${task.slug}` });
+  // The reclaim's outcome is read, not assumed: a `wt-remove` refusal (or a
+  // cleanup agent that crashes) leaves the worktree live, and the pipeline's
+  // slot gate must keep its slot for it (`retainSlot`) — the worktree is
+  // reported retained on the result, whatever the delivery itself reported,
+  // and never turns a delivered PR into an error.
+  let cleanup;
+  try {
+    cleanup = await agent(cleanupNote(task), { label: `cleanup:${task.slug}`, schema: CLEANUP_SCHEMA });
+  } catch (e) {
+    cleanup = { removed: false, reason: `cleanup agent crashed: ${e && e.message ? e.message : String(e)}` };
+  }
+  const worktreeRetained = cleanup && cleanup.removed === true ? {} : { worktreeRetained: (cleanup && cleanup.reason) || "cleanup agent reported no removal" };
 
   // The base a merged sibling advanced this branch onto rides beside the
   // cycle's record: it is the guard's doing, not the cycle's, so the carrier
   // does not know it.
-  const carried = { ...cycleCarried(ready), ...(ready.rebasedOnto ? { rebasedOnto: ready.rebasedOnto } : {}) };
+  const carried = { ...cycleCarried(ready), ...(ready.rebasedOnto ? { rebasedOnto: ready.rebasedOnto } : {}), ...worktreeRetained };
   // A PR that exists but whose base was neither verified nor repaired to the
   // recorded one is its own outcome, not a landed delivery: the diff it shows
   // and the review it collects belong to another branch's work. Tested before
@@ -4143,7 +4163,9 @@ function reserveNumbers(ledger, task, taskNumbers) {
 // the cycle's push in place and no reservation, and delivery never ran to
 // orphan anything.
 function releaseReservation(ledger, slug) {
+  const entry = ledger.reserved.get(slug);
   ledger.reserved.delete(slug);
+  return entry || null;
 }
 // `remote` decides the remote-write question for the ambiguous outcomes: on a
 // no-remote run nothing was ever written to origin, so nothing can be orphaned.
@@ -4258,7 +4280,7 @@ const ORPHAN_SCHEMA = {
 
 function orphanReconcilePrompt(task, entry) {
   const numbers = entry.taskNumbers.length ? entry.taskNumbers.map((n) => `\`${n}\``).join(", ") : "(none recorded)";
-  return `Reconcile ONE orphaned pushed branch at the end of a task batch: \`${task.branch}\` was pushed to origin while this run was delivering it, but no PR advertises it (the delivery step reported \`${entry.status}\`). It holds task number(s) ${numbers}: while it sits on origin with no PR, the next run's same-number guard sees that number on neither the base branch nor any open PR head, and the collision this run caught reappears there. So this branch must not survive the batch in that state: open its PR, or delete it from origin.
+  return `Reconcile ONE orphaned pushed branch while a task batch is still running (sibling tasks may be mid-delivery; touch nothing of theirs): \`${task.branch}\` was pushed to origin while this run was delivering it, but no PR advertises it (the delivery step reported \`${entry.status}\`). It holds task number(s) ${numbers}: while it sits on origin with no PR, the next run's same-number guard sees that number on neither the base branch nor any open PR head, and the collision this run caught reappears there. So this branch must not survive this run in that state: open its PR, or delete it from origin.
 
 ${DEPUTY_FINISH_IN_TURN}
 
@@ -4399,8 +4421,9 @@ async function runTaskPipeline(task, ctx) {
   if (slot.denied) {
     return finish({ slug: task.slug, branch: task.branch, status: "storage-throttled", detail: `every one of the ${gate.cap} live-worktree slot(s) the measured storage headroom allows is held by a worktree left in place for inspection, so no delivery can free one; this task never started — reclaim or inspect those worktrees, then rerun it` });
   }
-  // Set once delivery has reclaimed the worktree; every other exit leaves it
-  // in place, and the slot stays held for it.
+  // Set once delivery REPORTED the worktree reclaimed; every other exit — a
+  // hold, a crash, a `wt-remove` refusal the delivery carries as
+  // `worktreeRetained` — leaves it in place, and the slot stays held for it.
   let reclaimed = false;
   try {
     phase(`Task ${task.slug}`);
@@ -4465,11 +4488,15 @@ async function runTaskPipeline(task, ctx) {
     // not a delivery outcome: the branch is held for inspection with the
     // cycle's push in place, as every hold is, so the reservation is released
     // rather than settled — nothing was orphaned by a delivery that never ran.
+    // Held branches are outside the guard's comparison set by the skill's
+    // definition, so the numbers the released claim held ride on the held
+    // result: the summary names them beside the branch, as it does an orphan's,
+    // since its durability push sits on origin holding them with no PR.
     if (cleared.advance) {
       const rebased = await rebaseOntoAdvancedBase(task, cleared.ready, cleared.advance, remote, peerMode);
       if (rebased.held) {
-        releaseReservation(ledger, task.slug);
-        return finish(rebased.held);
+        const claim = releaseReservation(ledger, task.slug);
+        return finish({ ...rebased.held, ...(claim ? { taskNumbers: claim.taskNumbers.slice() } : {}) });
       }
       cleared.ready = rebased.result;
       // A retarget moved the recorded base; the reservation's copy, which a
@@ -4481,7 +4508,7 @@ async function runTaskPipeline(task, ctx) {
     let delivered;
     try {
       delivered = await deliverTask(task, cleared.ready, remote);
-      reclaimed = true;
+      reclaimed = !(delivered && delivered.worktreeRetained);
     } catch (e) {
       // The cycle itself completed, so its record is still in hand — carry it
       // rather than losing it with the crash. `pushed` is left UNKNOWN: the
@@ -4535,8 +4562,9 @@ function terminalStates(list) {
 // The batch: every task's pipeline launched at once through `parallel()`, each
 // gated on its own prerequisites' terminal promises rather than on a wave. The
 // only true end-of-batch barriers left are the ones after this returns — the
-// orphan reconciliation, the review stack, the Summary and its main-checkout
-// comparison — and `parallel()` returns only once EVERY task has reached some
+// review stack, the Summary and its main-checkout comparison (an orphan is
+// reconciled inside its own pipeline, not here) — and `parallel()` returns
+// only once EVERY task has reached some
 // terminal state (delivered, blocked, failed, skipped), so a batch in which
 // every task fails still reaches them.
 async function runPipelinedBatch({ plan, remote, peerMode, statusBySlug, results, throttled, collisions, ledger, gate, pipeline }) {

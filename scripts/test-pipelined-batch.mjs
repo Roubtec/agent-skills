@@ -42,7 +42,7 @@ function check(name, cond, detail) {
     console.error(`NOT ok - ${name}${detail ? `: ${detail}` : ""}`);
   }
 }
-const EXPECTED_CHECKS = 125;
+const EXPECTED_CHECKS = 140;
 
 async function scenario(name, fn) {
   try {
@@ -109,7 +109,7 @@ function scriptedAgent(slugs, overrides, calls) {
       if (slug) value = defaultFor(label, slug);
       else if (label.startsWith("collision-scan:")) value = { ...CLEAN_SCAN };
       else if (label.startsWith("pr:")) value = PR_OK(label.slice(3));
-      else if (label.startsWith("cleanup:")) value = { done: true };
+      else if (label.startsWith("cleanup:")) value = { removed: true, reason: "" };
       else throw new Error(`unscripted agent: ${label}`);
     }
     if (value && value.deferred) value = await value.promise;
@@ -382,13 +382,14 @@ await scenario("merged sibling: rebase onto the advanced base before delivery", 
   ]) {
     const two = { defaultBase: "main", waves: [[t("001-a"), t("002-b")]] };
     const rb = deferred();
-    const running = runBatch({ plan: two, overrides: { "002-b:review#1": rb, "collision-scan:002-b": merged, "rebase:002-b": rebase, "re-review:002-b": { pass: false, issues: [{ claim: "broken" }], notes: "", flakeRecord: "" } } });
+    const running = runBatch({ plan: two, overrides: { "002-b:review#1": rb, "collision-scan:002-b": { ...merged, taskNumbers: ["002"] }, "rebase:002-b": rebase, "re-review:002-b": { pass: false, issues: [{ claim: "broken" }], notes: "", flakeRecord: "" } } });
     await new Promise((r) => setTimeout(r, 20));
     rb.resolve({ ...PASS_REVIEW });
     const o = await running;
     check(`${name} rebase → holds as rebase-hold with the right record`, test(by(o.results, "002-b")), JSON.stringify(by(o.results, "002-b")));
     check(`${name} rebase → no PR and no reservation for the held branch`, !labels(o.calls).includes("pr:002-b") && !o.ledger.reserved.has("002-b") && !o.ledger.delivered.has("002-b") && !o.ledger.orphaned.has("002-b"));
     check(`${name} rebase → the retarget did not move the recorded base`, o.pipeline.tasksBySlug.get("002-b").base === "main");
+    check(`${name} rebase → the held result carries the numbers its released claim held`, JSON.stringify(by(o.results, "002-b").taskNumbers) === JSON.stringify(["002"]), JSON.stringify(by(o.results, "002-b")));
   }
 
   // The post-rebase re-review is the tier the replay owes, and a re-review that
@@ -475,6 +476,17 @@ await scenario("storage-derived slot gate", async () => {
   // A delivery that throws before the reclaim leaves its worktree too.
   const crashed = await runBatch({ plan: { defaultBase: "main", waves: [[t("001-a"), t("002-b")]] }, cap: 1, overrides: { "pr:001-a": new Error("gh exploded"), "orphan:001-a": { outcome: "branch-deleted", reason: "deleted" } } });
   check("a delivery that threw before the reclaim keeps its slot (its orphan action then settled the branch off origin)", by(crashed.results, "001-a").status === "local-only" && /delivery crashed/.test(by(crashed.results, "001-a").detail) && by(crashed.results, "002-b").status === "storage-throttled" && crashed.gate.retained === 1, JSON.stringify(crashed.results));
+  // The reclaim's outcome is READ: a `wt-remove` refusal after a delivered PR
+  // leaves the worktree live, so the slot stays held (and, at cap 1, the
+  // waiter is denied) while the delivery itself still reads `done`. A cleanup
+  // agent that crashes is the same retention, not a delivery error.
+  const refused = await runBatch({ plan: { defaultBase: "main", waves: [[t("001-a"), t("002-b")]] }, cap: 1, overrides: { "cleanup:001-a": { removed: false, reason: "wt-remove: refusing — uncommitted changes" } } });
+  check("a reclaim `wt-remove` refused keeps its slot: the PR is still done, the worktree is reported retained, and the waiter is denied", by(refused.results, "001-a").status === "done" && /uncommitted changes/.test(by(refused.results, "001-a").worktreeRetained) && by(refused.results, "002-b").status === "storage-throttled" && refused.gate.retained === 1 && refused.gate.inFlight === 1, JSON.stringify({ results: refused.results, gate: refused.gate }));
+  check("the cleanup deputy is briefed with a schema that reads the removal back", refused.calls.find((c) => c.label === "cleanup:001-a").schema && refused.calls.find((c) => c.label === "cleanup:001-a").schema.required.includes("removed") && /removed: true/.test(refused.calls.find((c) => c.label === "cleanup:001-a").prompt));
+  const cleanupCrashed = await runBatch({ plan: { defaultBase: "main", waves: [[t("001-a"), t("002-b")]] }, cap: 1, overrides: { "cleanup:001-a": new Error("cleanup exploded") } });
+  check("a cleanup agent that throws retains the worktree without turning the delivered PR into an error", by(cleanupCrashed.results, "001-a").status === "done" && /cleanup agent crashed: cleanup exploded/.test(by(cleanupCrashed.results, "001-a").worktreeRetained) && !cleanupCrashed.ledger.orphaned.has("001-a") && by(cleanupCrashed.results, "002-b").status === "storage-throttled" && cleanupCrashed.gate.retained === 1, JSON.stringify(cleanupCrashed.results));
+  const reclaimedFine = await runBatch({ plan: { defaultBase: "main", waves: [[t("001-a"), t("002-b")]] }, cap: 1 });
+  check("a reclaim reported removed releases the slot and marks nothing retained", by(reclaimedFine.results, "001-a").status === "done" && by(reclaimedFine.results, "001-a").worktreeRetained === undefined && by(reclaimedFine.results, "002-b").status === "done" && reclaimedFine.gate.retained === 0, JSON.stringify(reclaimedFine.results));
 });
 
 // 7. MIXED TERMINAL STATES all reach the barrier: a crash, a cap-out, a
