@@ -166,7 +166,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 268;
+const EXPECTED_CHECKS = 269;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -6037,6 +6037,18 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /a re-run of `url`'s alone leaves the others red/.test(repeatedPublish) &&
       /ONCE PER RUN ID, every distinct id the lane names/.test(repeatedPublish),
     `${repeated.status}: ${repeatedPublish.slice(0, 200)}`,
+  );
+  // The wording above is inert unless the other instance's URL actually
+  // reaches the publisher: the fixer's entry never carries `instances`, so the
+  // workflow attaches the gathered lane's list onto the disposition it hands
+  // over. The one-instance flake above attaches nothing.
+  check(
+    "the publisher's disposition for the repeated lane carries the gathered item's instances, so run 779's URL reaches the publish brief; a one-instance lane carries no instances key",
+    /actions\/runs\/779/.test(repeatedPublish) &&
+      /"instances": \[/.test(repeatedPublish) &&
+      !/"instances"/.test(flakePublish) &&
+      !/actions\/runs\/779/.test(flakePublish),
+    `repeated names 779: ${/actions\/runs\/779/.test(repeatedPublish)}; single carries key: ${/"instances"/.test(flakePublish)}`,
   );
   // The Summary comment's two new sections, and that nothing replies on the
   // bot's comment or resolves a lane.
