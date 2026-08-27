@@ -471,20 +471,28 @@ await scenario("re-scan entry names two known branches but only one held task", 
   check("two-names-one-task re-scan → no re-review is paid for", !labels(out.calls).some((l) => l.startsWith("re-review:")), JSON.stringify(labels(out.calls)));
 });
 
-// 6. Fewer than two of a clash's branches in hand. A scan over ONE branch has no
-//    sibling to compare against and returns an empty set for want of one, which
-//    would read as "clash gone" on no evidence — so no scan is run and the
-//    branch is held.
+// 6. ONE held branch with nothing run-local beside it is still re-scanned: the
+//    comparison set the scan applies always holds the base branch and every
+//    open PR head, and the branch's own additions are compared with one
+//    another, so a lone branch that renumbered away from an outside holder (or
+//    from itself) clears on the re-scan's evidence. Withholding the scan here
+//    held every such renumbering forever. The re-scan's `taskNumbers` come back
+//    as the claims to reserve — the renumbered ones, not the discovery scan's.
 await scenario("single held branch", async () => {
   const out = await run({
     held: [mkHeld("a")],
-    collisions: [clash(["task/a", "task/b"])],
-    packets: { resolution: renamed(["task/a"]), rescan: { collisions: [] } },
+    collisions: [{ kind: "task-number", name: "042", branches: ["task/a"], external: true, member: "PR #7" }],
+    packets: { resolution: renamed(["task/a"]), rescan: { collisions: [], taskNumbers: ["043"] } },
   });
-  check("single held branch → does not deliver", out.deliverable.length === 0, JSON.stringify(slugs(out.deliverable)));
-  check("single held branch → held", out.held.length === 1 && out.held[0].status === "collision-hold");
-  check("single held branch → detail says the re-scan established nothing", /established nothing/.test(out.held[0].detail), out.held[0].detail);
-  check("single held branch → no re-scan agent is spawned", !labels(out.calls).some((l) => l.startsWith("collision-rescan:")), JSON.stringify(labels(out.calls)));
+  check("single held branch → the re-scan agent is spawned over that one branch", labels(out.calls).some((l) => l.startsWith("collision-rescan:")), JSON.stringify(labels(out.calls)));
+  check("single held branch → a clean re-scan delivers it after re-review", out.deliverable.length === 1 && out.held.length === 0 && labels(out.calls).includes("re-review:a"), JSON.stringify(out.held.map((h) => h.detail)));
+  check("single held branch → the re-scan's task numbers are handed back for the reservation", JSON.stringify(out.taskNumbers) === JSON.stringify(["043"]), JSON.stringify(out.taskNumbers));
+  const still = await run({
+    held: [mkHeld("a")],
+    collisions: [{ kind: "task-number", name: "042", branches: ["task/a"], external: true, member: "PR #7" }],
+    packets: { resolution: renamed(["task/a"]), rescan: { collisions: [{ kind: "task-number", name: "042", branches: ["task/a"], external: true, member: "PR #7" }] } },
+  });
+  check("single held branch → a re-scan still naming the outside holder holds it", still.held.length === 1 && still.held[0].status === "collision-hold" && /still in the refs/.test(still.held[0].detail), JSON.stringify(still.held.map((h) => h.detail)));
 });
 
 // 7. The resolver returned nothing usable. Nothing is known about the tree, so

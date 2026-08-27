@@ -42,7 +42,7 @@ function check(name, cond, detail) {
     console.error(`NOT ok - ${name}${detail ? `: ${detail}` : ""}`);
   }
 }
-const EXPECTED_CHECKS = 80;
+const EXPECTED_CHECKS = 88;
 
 async function scenario(name, fn) {
   try {
@@ -110,7 +110,6 @@ function scriptedAgent(slugs, overrides, calls) {
       else if (label.startsWith("collision-scan:")) value = { ...CLEAN_SCAN };
       else if (label.startsWith("pr:")) value = PR_OK(label.slice(3));
       else if (label.startsWith("cleanup:")) value = { done: true };
-      else if (label.startsWith("storage-probe:")) value = { availBytes: 0 };
       else throw new Error(`unscripted agent: ${label}`);
     }
     if (value && value.deferred) value = await value.promise;
@@ -134,14 +133,12 @@ async function runBatch({ plan, overrides = {}, remote = true, cap = Infinity })
   const collisions = [];
   const ledger = fns.createReservationLedger();
   const gate = fns.createSlotGate(cap);
-  let reprobes = 0;
-  const reprobe = async () => {
-    reprobes += 1;
-    await agent("probe", { label: `storage-probe:${reprobes}` });
-    return cap;
-  };
-  const pipeline = await fns.runPipelinedBatch({ plan, remote, peerMode: "off", statusBySlug, results, throttled, collisions, ledger, gate, reprobe });
-  return { fns, calls, events, statusBySlug, results, throttled, collisions, ledger, gate, pipeline, reprobes: () => reprobes };
+  // The body's own pre-run default, handed in by reference: the abort catch
+  // reads it live, so the suite pins that the batch writes into it.
+  const pipeline = { tasksBySlug: new Map(), guardOrder: [], mergedDuringRun: [] };
+  const returned = await fns.runPipelinedBatch({ plan, remote, peerMode: "off", statusBySlug, results, throttled, collisions, ledger, gate, pipeline });
+  if (returned !== pipeline) throw new Error("runPipelinedBatch must return the live pipeline object it was handed");
+  return { fns, calls, events, statusBySlug, results, throttled, collisions, ledger, gate, pipeline };
 }
 const labels = (calls) => calls.map((c) => c.label);
 const at = (calls, label) => calls.findIndex((c) => c.label === label);
@@ -208,6 +205,7 @@ await scenario("a reserved number is visible to the next task in the guard while
   check("the resolver was told a's side is reserved and read-only, b renames", /branch "task\/001-a" \(reserved\)/.test(resolve) && /the held branch under the guard renames/.test(resolve));
   check("b was re-reviewed before delivering, after the re-scan", at(out.calls, "re-review:002-b") > at(out.calls, "collision-rescan:002-b") && at(out.calls, "pr:002-b") > at(out.calls, "re-review:002-b"));
   check("a's reservation carried the number b's scan saw, and converted to delivered", out.ledger.delivered.get("001-a").taskNumbers[0] === "042" && out.ledger.reserved.size === 0);
+  check("b's reservation is the re-scan's claim — the number it renumbered TO, not the one it renumbered away from", JSON.stringify(out.ledger.delivered.get("002-b").taskNumbers) === JSON.stringify(["043"]), JSON.stringify(out.ledger.delivered.get("002-b").taskNumbers));
   check("the collisions the batch reports carry the guard that found them", out.collisions.length === 1 && out.collisions[0].guard === "002-b");
 });
 
@@ -219,20 +217,24 @@ await scenario("a reserved number is visible to the next task in the guard while
 //    no orphan step at all). A later task `z` sees the orphans still RESERVED.
 await scenario("orphaned pushed branches persist as reservations and are acted on at the end", async () => {
   const zReview = deferred();
-  const plan = { defaultBase: "main", waves: [[t("010-p"), t("011-q"), t("012-r"), t("013-s"), t("014-z")]] };
+  const plan = { defaultBase: "main", waves: [[t("010-p"), t("011-q"), t("012-r"), t("013-s"), t("014-z"), t("015-n")]] };
   const running = runBatch({
     plan,
     overrides: {
       "collision-scan:010-p": { ...CLEAN_SCAN, taskNumbers: ["010"] },
       "collision-scan:012-r": { ...CLEAN_SCAN, taskNumbers: ["012", "012a"] },
+      "collision-scan:015-n": { ...CLEAN_SCAN, taskNumbers: ["015"] },
       "pr:010-p": { opened: false, pushed: true, reason: "gh pr create failed after the push" },
       "pr:011-q": { opened: false, pushed: true, reason: "API error" },
       "pr:012-r": { opened: false, pushed: true, reason: "API error" },
       "pr:013-s": { opened: false, pushed: false, reason: "push refused" },
+      // No packet at all: the agent may have pushed before it lost its report.
+      "pr:015-n": null,
       "014-z:review#1": zReview,
       "orphan:010-p": { outcome: "pr-opened", url: "https://example.invalid/pr/10", baseOk: true, reason: "retry succeeded" },
       "orphan:011-q": { outcome: "branch-deleted", reason: "PR retry failed; branch deleted from origin" },
       "orphan:012-r": { outcome: "unresolved", reason: "gh unreachable; delete refused" },
+      "orphan:015-n": { outcome: "not-on-origin", reason: "ls-remote printed nothing" },
     },
   });
   await new Promise((r) => setTimeout(r, 30));
@@ -241,16 +243,17 @@ await scenario("orphaned pushed branches persist as reservations and are acted o
   const zScan = out.calls[at(out.calls, "collision-scan:014-z")].prompt;
   check("a later guard scan still sees the orphaned branches as RESERVED", /task\/010-p[^\n]*RESERVED/.test(zScan) && /task\/012-r[^\n]*RESERVED/.test(zScan), zScan.slice(0, 600));
   check("and does not see the branch whose delivery made no remote write", !/task\/013-s/.test(zScan));
+  check("a null PR packet leaves the push state unknown: pushed-no-pr with `pushed` undefined, held as an orphan rather than dropped", (() => { const n = by(out.results, "015-n"); return !!n && n.status === "pushed-no-pr" && n.pushed === undefined && /returned nothing/.test(n.reason) && n.reservationHeld === true && out.ledger.orphaned.has("015-n"); })(), JSON.stringify(by(out.results, "015-n")));
   check("the orphan step ran for exactly the pushed-without-PR branches, after every task ended", JSON.stringify(labels(out.calls).filter((l) => l.startsWith("orphan:")).sort()) === JSON.stringify([]) , "orphan reconciliation is the batch body's, not the pipeline's — it runs after runPipelinedBatch returns");
   // The obligation is discharged by the terminal stage the body runs next.
   const orphans = await out.fns.reconcileOrphanedBranches({ ledger: out.ledger, tasksBySlug: out.pipeline.tasksBySlug, results: out.results, statusBySlug: out.statusBySlug, remote: true });
-  check("the terminal stage acted on exactly the three orphans", JSON.stringify(orphans.acted.map((a) => `${a.slug}:${a.outcome}`).sort()) === JSON.stringify(["010-p:pr-opened", "011-q:branch-deleted", "012-r:unresolved"]), JSON.stringify(orphans.acted));
+  check("the terminal stage acted on exactly the four orphans — the null PR packet among them", JSON.stringify(orphans.acted.map((a) => `${a.slug}:${a.outcome}`).sort()) === JSON.stringify(["010-p:pr-opened", "011-q:branch-deleted", "012-r:unresolved", "015-n:not-on-origin"]), JSON.stringify(orphans.acted));
   check("a PR retried successfully converts the result to done, marked late", by(out.results, "010-p").status === "done" && by(out.results, "010-p").prUrl === "https://example.invalid/pr/10" && by(out.results, "010-p").lateDelivery === true);
   check("a deleted branch reads as local-only with the reason", by(out.results, "011-q").status === "local-only" && /deleted from origin/.test(by(out.results, "011-q").reason));
   check("a survivor is named beside the numbers it still holds", JSON.stringify(orphans.survivors) === JSON.stringify([{ slug: "012-r", branch: "task/012-r", taskNumbers: ["012", "012a"], reason: "gh unreachable; delete refused" }]), JSON.stringify(orphans.survivors));
   check("the survivor's result is flagged orphaned and stays pushed-no-pr", by(out.results, "012-r").status === "pushed-no-pr" && by(out.results, "012-r").orphaned === true);
   check("the no-remote-write failure dropped its reservation and got no orphan step", !out.ledger.orphaned.has("013-s") && !out.ledger.reserved.has("013-s") && !orphans.acted.some((a) => a.slug === "013-s"));
-  check("the census reads the mixed terminal states", JSON.stringify(out.fns.terminalStates(out.results)) === JSON.stringify({ done: 2, "local-only": 1, "pushed-no-pr": 2 }), JSON.stringify(out.fns.terminalStates(out.results)));
+  check("the census reads the mixed terminal states", JSON.stringify(out.fns.terminalStates(out.results)) === JSON.stringify({ done: 2, "local-only": 2, "pushed-no-pr": 2 }), JSON.stringify(out.fns.terminalStates(out.results)));
   check("the orphan brief spells out the PR retry and the guarded delete, and names the numbers", (() => { const p = out.calls.find((c) => c.label === "orphan:012-r").prompt; return /Retry PR creation ONCE/.test(p) && /git push origin --delete 'task\/012-r'/.test(p) && /`012`, `012a`/.test(p); })());
   check("a no-remote ledger never orphans", (() => { const l = out.fns.createReservationLedger(); l.reserved.set("x", { slug: "x", branch: "task/x", base: "main", state: "reserved", taskNumbers: [] }); return out.fns.settleReservation(l, "x", { status: "pushed-no-pr", pushed: true }, false) === "dropped"; })());
   check("a crashed delivery with unknown push state is kept as an orphan on a remote run", (() => { const l = out.fns.createReservationLedger(); l.reserved.set("x", { slug: "x", branch: "task/x", base: "main", state: "reserved", taskNumbers: [] }); return out.fns.settleReservation(l, "x", { status: "error" }, true) === "orphaned" && l.orphaned.has("x"); })());
@@ -301,9 +304,37 @@ await scenario("merged sibling: rebase onto the advanced base before delivery", 
   check("b was rebased, re-reviewed, then delivered", at(out.calls, "rebase:002-b") > at(out.calls, "collision-scan:002-b") && at(out.calls, "re-review:002-b") > at(out.calls, "rebase:002-b") && at(out.calls, "pr:002-b") > at(out.calls, "re-review:002-b"), JSON.stringify(labels(out.calls)));
   check("b delivered carrying the base it was rebased onto", by(out.results, "002-b").status === "done" && by(out.results, "002-b").rebasedOnto === "9".repeat(40));
   const rebaseBrief = out.calls[at(out.calls, "rebase:002-b")].prompt;
-  check("the rebase brief names the reason, refreshes the target with an explicit refspec, and spells out the lease push", /sibling `task\/001-a` merged into its base `main`/.test(rebaseBrief) && /git fetch origin '\+refs\/heads\/main:refs\/remotes\/origin\/main'/.test(rebaseBrief) && /git push --force-with-lease='task\/002-b:\$before' origin 'task\/002-b'/.test(rebaseBrief) && /"The delegated rebase step"/.test(rebaseBrief));
+  check("the rebase brief names the reason, refreshes the target with an explicit refspec, and spells out the lease push", /sibling `task\/001-a` merged into its base `main`/.test(rebaseBrief) && /git fetch origin '\+refs\/heads\/main:refs\/remotes\/origin\/main'/.test(rebaseBrief) && /git push --force-with-lease='task\/002-b':"\$before" origin 'task\/002-b'/.test(rebaseBrief) && /"The delegated rebase step"/.test(rebaseBrief));
   check("c's base was retargeted from the merged branch to main, and its no-op rebase cost no re-review", by(out.results, "003-c").status === "done" && out.pipeline.tasksBySlug.get("003-c").base === "main" && !labels(out.calls).includes("re-review:003-c"));
   check("c's PR was opened against the retargeted base", /against base `main`/.test(out.calls[at(out.calls, "pr:003-c")].prompt));
+  check("c's ledger entry followed the retarget, so a sibling's scan reads the member by its new base", out.ledger.delivered.get("003-c").base === "main");
+  // The rebase runs OUTSIDE the guard turn, under the reservation: a sibling
+  // whose cycle passes while b is mid-rebase takes its turn and sees b RESERVED,
+  // rather than queueing behind b's replay, build, tests, and re-review.
+  {
+    const rb = deferred();
+    const reviewD = deferred();
+    let scanD = null;
+    const running = runBatch({
+      plan: { defaultBase: "main", waves: [[t("001-a"), t("002-b"), t("004-d")]] },
+      overrides: {
+        "002-b:review#1": rb,
+        "004-d:review#1": reviewD,
+        "collision-scan:002-b": { ...merged, taskNumbers: ["002"] },
+        "collision-scan:004-d": (prompt) => { scanD = prompt; return { ...CLEAN_SCAN }; },
+        "rebase:002-b": deferred(),
+      },
+    });
+    await new Promise((r) => setTimeout(r, 20));
+    rb.resolve({ ...PASS_REVIEW });
+    await new Promise((r) => setTimeout(r, 20));
+    // b is now inside its deferred rebase; d's review returns and d enters the guard.
+    reviewD.resolve({ ...PASS_REVIEW });
+    await new Promise((r) => setTimeout(r, 20));
+    check("a sibling took its guard turn while the rebase was still pending", scanD !== null && /task\/002-b[^\n]*RESERVED/.test(scanD), scanD && scanD.slice(0, 400));
+    const o = await Promise.race([running, new Promise((r) => setTimeout(() => r("pending"), 5))]);
+    check("the batch itself is still waiting on that rebase", o === "pending");
+  }
   check("the merged member is excluded from the review stack as merged", !out.fns.reviewStackMergeable(by(out.results, "001-a")) && out.fns.reviewStackOrder(plan, out.results).excluded.some((e) => e.slug === "001-a" && e.status === "merged"));
   check("baseAdvance: the merged branch AS the base retargets; a merge INTO the base does not", JSON.stringify(out.fns.baseAdvance({ base: "task/x" }, [{ branch: "task/x", mergedInto: "main" }])) === JSON.stringify({ reason: "its recorded base `task/x` merged into `main`", target: "main", retarget: true }) && out.fns.baseAdvance({ base: "main" }, [{ branch: "task/x", mergedInto: "main" }]).retarget === false && out.fns.baseAdvance({ base: "dev" }, [{ branch: "task/x", mergedInto: "main" }]) === null);
 
@@ -331,22 +362,25 @@ await scenario("merged sibling: rebase onto the advanced base before delivery", 
     rb.resolve({ ...PASS_REVIEW });
     const o = await running;
     check(`${name} rebase → holds as rebase-hold with the right record`, test(by(o.results, "002-b")), JSON.stringify(by(o.results, "002-b")));
-    check(`${name} rebase → no PR and no reservation for the held branch`, !labels(o.calls).includes("pr:002-b") && !o.ledger.reserved.has("002-b") && !o.ledger.delivered.has("002-b"));
+    check(`${name} rebase → no PR and no reservation for the held branch`, !labels(o.calls).includes("pr:002-b") && !o.ledger.reserved.has("002-b") && !o.ledger.delivered.has("002-b") && !o.ledger.orphaned.has("002-b"));
   }
 });
 
-// 6. THE SLOT GATE. Cap 1 over two independent tasks: the second waits, the
-//    wait is recorded, and the mount is re-probed once before the slot is
-//    reused. An unmeasured cap never waits and never probes.
+// 6. THE SLOT GATE. Cap 1 over three independent tasks: the later ones wait,
+//    each wait is recorded, and the slot handoff spawns NOTHING — it runs from
+//    the pipeline's `finally`, past that task's own catch, so an agent call
+//    there could only reject the whole batch with siblings mid-cycle and leave
+//    the waiters asleep (the round-1 re-probe did exactly that). The cap is the
+//    bootstrap's, derived once. An unmeasured cap never waits.
 await scenario("storage-derived slot gate", async () => {
-  const plan = { defaultBase: "main", waves: [[t("001-a"), t("002-b")]] };
+  const plan = { defaultBase: "main", waves: [[t("001-a"), t("002-b"), t("003-c")]] };
   const capped = await runBatch({ plan, cap: 1 });
-  check("cap 1 → the second task waited and was recorded as throttled", capped.throttled.length === 1 && capped.throttled[0].cap === 1, JSON.stringify(capped.throttled));
-  check("cap 1 → the second task's cycle started only after the first was reclaimed", at(capped.calls, "002-b:fix#1") > at(capped.calls, "cleanup:001-a"), JSON.stringify(labels(capped.calls)));
-  check("cap 1 → the mount was re-probed once, before the slot was reused", capped.reprobes() === 1 && at(capped.calls, "storage-probe:1") < at(capped.calls, "002-b:fix#1"));
-  check("cap 1 → both delivered", capped.results.every((r) => r.status === "done"));
+  check("cap 1 → the later tasks waited and were recorded as throttled", capped.throttled.length === 2 && capped.throttled.every((x) => x.cap === 1), JSON.stringify(capped.throttled));
+  check("cap 1 → each cycle started only after the previous worktree was reclaimed", at(capped.calls, "002-b:fix#1") > at(capped.calls, "cleanup:001-a") && at(capped.calls, "003-c:fix#1") > at(capped.calls, "cleanup:002-b"), JSON.stringify(labels(capped.calls)));
+  check("cap 1 → no agent ran at a slot handoff: the labels are the tasks' own stages, the guard, the PR, and the reclaim", labels(capped.calls).every((l) => /^(001-a|002-b|003-c):|^(collision-scan|pr|cleanup):/.test(l)), JSON.stringify(labels(capped.calls)));
+  check("cap 1 → all three delivered and the gate is idle", capped.results.every((r) => r.status === "done") && capped.results.length === 3 && capped.gate.inFlight === 0 && capped.gate.waiters.length === 0);
   const open = await runBatch({ plan, cap: Infinity });
-  check("no cap → nothing waited, nothing probed, both cycles started together", open.throttled.length === 0 && open.reprobes() === 0 && at(open.calls, "002-b:fix#1") < at(open.calls, "001-a:packet#1"));
+  check("no cap → nothing waited, and the cycles started together", open.throttled.length === 0 && at(open.calls, "002-b:fix#1") < at(open.calls, "001-a:packet#1"));
 });
 
 // 7. MIXED TERMINAL STATES all reach the barrier: a crash, a cap-out, a
@@ -374,6 +408,24 @@ await scenario("mixed terminal states", async () => {
   check("a held branch keeps its worktree (no cleanup) while a delivered one is reclaimed", !labels(out.calls).includes("cleanup:005-e") && labels(out.calls).includes("cleanup:001-a"));
 });
 
+// 8a. A lone first branch that clashes with an OUTSIDE holder (an open PR head,
+//     the base) has no run-local member beside it, and still renumbers and
+//     clears: the re-scan applies the same comparison set — outside holders
+//     included — and its claim is what the reservation records.
+await scenario("first branch, outside holder: renumbering clears the guard", async () => {
+  const out = await runBatch({
+    plan: { defaultBase: "main", waves: [[t("001-a")]] },
+    overrides: {
+      "collision-scan:001-a": { collisions: [{ kind: "task-number", name: "042", branches: ["task/001-a"], external: true, member: "PR #7", detail: "PR #7 adds tasks/042-x.md" }], taskNumbers: ["042"], merged: [], scanComplete: true },
+      "collision-resolve:001-a": { resolutions: [{ collision: "042", action: "renamed", changedBranches: ["task/001-a"], from: "042", to: "043", regenerated: "", reason: "PR #7 holds 042" }] },
+      "collision-rescan:001-a": { collisions: [], taskNumbers: ["043"], merged: [], scanComplete: true },
+      "re-review:001-a": { pass: true, issues: [], notes: "", flakeRecord: "" },
+    },
+  });
+  check("the lone branch was re-scanned and delivered", labels(out.calls).includes("collision-rescan:001-a") && by(out.results, "001-a").status === "done", JSON.stringify(by(out.results, "001-a")));
+  check("its reservation converted to delivered on the renumbered claim", JSON.stringify(out.ledger.delivered.get("001-a").taskNumbers) === JSON.stringify(["043"]));
+});
+
 // 8. The guard cannot deadlock on a held branch: a task whose guard turn ends in
 //    a hold releases the queue, and the next task's turn runs.
 await scenario("a held branch releases the guard queue", async () => {
@@ -390,15 +442,16 @@ await scenario("a held branch releases the guard queue", async () => {
 // 9. The batch body composes it all: source-level pins the scenarios cannot see.
 {
   const body = src.slice(src.indexOf(CUT));
-  check("the batch body runs the pipeline with the shared ledger, gate, and reprobe", /pipeline = await runPipelinedBatch\(\{ plan, remote, peerMode, statusBySlug, results, throttled, collisions, ledger, gate, reprobe \}\);/.test(body));
+  check("the batch body runs the pipeline with the shared ledger, the gate, and the live pipeline object the abort catch reads", /await runPipelinedBatch\(\{ plan, remote, peerMode, statusBySlug, results, throttled, collisions, ledger, gate, pipeline \}\);/.test(body) && /const pipeline = \{ tasksBySlug: new Map\(\), guardOrder: \[\], mergedDuringRun: \[\] \};/.test(body));
+  check("no df re-probe remains anywhere in the workflow", !/storageProbePrompt|STORAGE_PROBE_SCHEMA|reprobe/.test(src));
   const summaryAt = body.lastIndexOf('phase("Summary");');
   const summary = body.slice(summaryAt);
   check("the orphan obligation runs under Summary before the review stack and the closing reading", summary.indexOf("await reconcileOrphanedBranches(") !== -1 && summary.indexOf("await reconcileOrphanedBranches(") < summary.indexOf("buildReviewStack(") && summary.indexOf("buildReviewStack(") < summary.indexOf("await finalMainCheckoutReport()"));
   check("the summary names the surviving orphans, the merges, the guard order, and the census", /orphanedBranches: orphans\.survivors/.test(summary) && /mergedDuringRun: pipeline\.mergedDuringRun/.test(summary) && /guardOrder: pipeline\.guardOrder/.test(summary) && /terminalStates: terminalStates\(results\)/.test(summary));
-  check("the abort catch names any orphan it could not act on rather than spawning anything", /orphanedBranches: \[\.\.\.ledger\.orphaned\.values\(\)\]/.test(body) && /the batch aborted before the orphan could be reconciled/.test(body));
+  check("the abort catch names any orphan it could not act on, and every reservation still held, rather than spawning anything", /orphanedBranches: \[\.\.\.\[\.\.\.ledger\.orphaned\.values\(\)\]/.test(body) && /\.\.\.\[\.\.\.ledger\.reserved\.values\(\)\]/.test(body) && /the batch aborted before the orphan could be reconciled/.test(body) && /its push may have landed, so its delivery state is unknown/.test(body));
   check("no wave loop remains in the body", !/for \(let w = 0; w < plan\.waves\.length; w\+\+\)/.test(body) && !/phase\(`Wave/.test(body));
   check("the peer throttle is the one shared object every cycle gets", /peerThrottle: batchPeerThrottle,/.test(src) && /const batchPeerThrottle = createCyclePeerThrottle\(\);/.test(src));
-  check("the reservation is entered inside the guard turn, after the settlement and the rebase", (() => { const turn = src.slice(src.indexOf("await withGuardTurn(guard, task.slug"), src.indexOf("if (cleared.held) return finish(cleared.held);")); const r = turn.indexOf("reserveNumbers(ledger, task"); return r > turn.indexOf("settleGuardCollisions({") && r > turn.indexOf("rebaseOntoAdvancedBase(") && r !== -1; })());
+  check("the reservation is entered inside the guard turn after the settlement, and the rebase runs after the turn under it", (() => { const turn = src.slice(src.indexOf("await withGuardTurn(guard, task.slug"), src.indexOf("if (cleared.held) return finish(cleared.held);")); const r = turn.indexOf("reserveNumbers(ledger, task"); const rebaseAt = src.indexOf("rebaseOntoAdvancedBase(task, cleared.ready"); return r !== -1 && r > turn.indexOf("settleGuardCollisions({") && !turn.includes("rebaseOntoAdvancedBase(") && rebaseAt > src.indexOf("if (cleared.held) return finish(cleared.held);") && rebaseAt < src.indexOf("delivered = await deliverTask("); })());
 }
 
 check(`the suite ran all ${EXPECTED_CHECKS} checks`, ok + failures === EXPECTED_CHECKS, `ran ${ok + failures}`);

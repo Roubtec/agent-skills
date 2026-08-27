@@ -885,7 +885,6 @@ const FIXTURES = {
   "wf-address-tasks.js": {
     ...cycleCases,
     bootstrapPrompt: [["bootstrapPrompt", (f) => f.bootstrapPrompt(), NO_BUILD]],
-    storageProbePrompt: [["storageProbePrompt", (f) => f.storageProbePrompt(".worktrees"), NO_BUILD]],
     mainCheckoutStatusPrompt: [
       ["mainCheckoutStatusPrompt (baseline)", (f) => f.mainCheckoutStatusPrompt("pre-batch baseline"), NO_BUILD],
       ["mainCheckoutStatusPrompt (post-batch)", (f) => f.mainCheckoutStatusPrompt("post-batch"), NO_BUILD],
@@ -1095,7 +1094,7 @@ for (const file of Object.keys(CUT)) {
     // failure of the constant, reported once as such below, not of thirty-three
     // briefs — the measured count, taken by emptying `CYCLE_REDIRECTED_OUTPUT`
     // and dropping this guard: the NO_BUILD renders of the two files that declare
-    // it, 11 in `wf-review-cycle.js` and 22 in `wf-address-tasks.js`, out of 40
+    // it, 11 in `wf-review-cycle.js` and 21 in `wf-address-tasks.js`, out of 39
     // NO_BUILD renders overall. An emptied BESPOKE_DESTINATIONS span is dropped
     // here for the same reason and reported once by the declared-tables check.
   ].filter(([, span]) => span);

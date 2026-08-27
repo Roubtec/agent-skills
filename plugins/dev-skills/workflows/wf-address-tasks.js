@@ -126,13 +126,15 @@ const BOOTSTRAP_SCHEMA = {
   required: ["ok"],
 };
 
-// `wtBase` is the path every later `df` probe is pointed at, and each probe is a
-// fresh agent with its own working directory — so an empty or relative base
-// measures whatever filesystem that agent happened to start in rather than the
-// `.worktrees` mount, and the storage throttle silently guards the wrong thing.
-// `wt-bootstrap` reports an absolute path by contract, so an `ok` bootstrap that
-// does not is a broken contract: refuse the batch instead of guessing a path
-// from the workflow's or an agent's working directory.
+// `wtBase` is the mount the bootstrap's `df` reading (`availBytes`, the one
+// measurement the concurrency cap is derived from) describes, and the path the
+// review stack's worktree is later added under by a fresh agent with its own
+// working directory — so an empty or relative base names whatever filesystem
+// that agent happened to start in rather than the `.worktrees` mount, and the
+// storage throttle silently guards the wrong thing. `wt-bootstrap` reports an
+// absolute path by contract, so an `ok` bootstrap that does not is a broken
+// contract: refuse the batch instead of guessing a path from the workflow's or
+// an agent's working directory.
 //
 // This is deliberately the ONLY gate on the property, rather than also adding
 // `wtBase` to BOOTSTRAP_SCHEMA's `required`: an `ok: false` bootstrap has no
@@ -373,27 +375,13 @@ ${DESTROY_BOUNDARY}
 5. On \`ok: false\` from the script, return its \`blocker\` verbatim (typical remedies it names: set CONTAINER_NAME, run \`enable-worktrees\`, rebuild/relaunch). Step 2 does not apply there either, for the same reason.`;
 }
 
-const STORAGE_PROBE_SCHEMA = {
-  type: "object",
-  properties: {
-    availBytes: { type: "number", description: "Free bytes on the .worktrees mount right now, from `df`; 0 when the probe could not measure." },
-  },
-  required: ["availBytes"],
-};
-
-function storageProbePrompt(wtBase) {
-  return `Measure free storage for the batch's live-worktree concurrency cap. This is measurement only — edit nothing, create nothing.
-
-${DESTROY_BOUNDARY}
-
-Run \`df -B1 --output=avail ${shq(wtBase)}\` (POSIX fallback: \`df -kP\`, avail column, times 1024) and return the mount's free bytes as \`availBytes\`. Measure that exact path — do not substitute a relative path or one derived from your working directory. If the path is missing or \`df\` fails, return \`availBytes: 0\`.`;
-}
-
-// The storage throttle's retention rule, in one place so no probe site can relax
-// it: a reading counts only when it is a positive number, and anything else — no
-// result at all, a `df` that could not measure (0), a non-numeric or negative
-// value — keeps the previous reading. Stale-but-conservative beats dropping the
-// cap mid-batch, which is the ENOSPC the throttle exists to prevent.
+// The storage throttle's retention rule, in one place: a reading counts only
+// when it is a positive number, and anything else — no result at all, a `df`
+// that could not measure (0), a non-numeric or negative value — keeps the
+// previous reading. The bootstrap's `availBytes` is the ONE measurement the run
+// takes (task 033 replaced the wave-boundary re-probe with a cap derived from
+// it once), so the previous reading there is the unmeasured 0: no cap, rather
+// than a cap invented from a reading nobody took.
 function nextAvailBytes(previous, reading) {
   const bytes = reading && typeof reading.availBytes === "number" ? reading.availBytes : 0;
   return bytes > 0 ? bytes : previous;
@@ -3248,8 +3236,13 @@ ${DESTROY_BOUNDARY}
 // rather than restated: the run-local members listed there are the members of
 // that definition this run tracks, not a second membership rule.
 //
-// Kept cheap on purpose: ref-only diffs from the repo root, no worktree entry,
-// so the one new synchronization point never becomes the new barrier.
+// Kept cheap on purpose: the turn is the ref-only scan from the repo root, no
+// worktree entry, plus the reservation — and, only where the scan found a
+// clash, the settlement of that clash (its rename is judged against the
+// members it renamed against, so it cannot leave the turn; see the turn). The
+// rebase onto a base a merged sibling advanced, with its build, tests, and
+// re-review, runs after the turn under the reservation, so the one new
+// synchronization point never becomes the new barrier.
 // ============================================================================
 
 function guardScanPrompt(ready, members) {
@@ -3711,11 +3704,14 @@ async function deliverTask(task, ready, remote) {
     return { slug: task.slug, branch: task.branch, status: "done", prUrl: pr.url, ...(pr.baseRepaired ? { baseRepaired: pr.baseRepaired } : {}), ...carried };
   }
   // Reviewed and (usually) pushed, but no PR — do NOT count this as a landed PR.
+  // A PR agent that returned nothing leaves `pushed` UNKNOWN, as a crash does:
+  // it may have pushed before it lost its packet, and only `false` — a reported
+  // no-remote-write — lets `settleReservation` drop the number it holds.
   return {
     slug: task.slug,
     branch: task.branch,
     status: remote ? "pushed-no-pr" : "local-only",
-    pushed: pr ? pr.pushed : false,
+    pushed: pr ? pr.pushed : undefined,
     reason: pr ? pr.reason : "PR agent returned nothing",
     ...carried,
   };
@@ -3846,13 +3842,17 @@ async function settleGuardCollisions({ heldTasks, members = [], collisions, labe
   // actionable hold. An entry the re-scan cannot attribute through the shared
   // rule — a foreign name, a lone name with no second holder — is not a clash as
   // COLLISION_SCHEMA defines one, so the whole packet is evidence about nobody
-  // and every held branch stays held. Under the one-at-a-time guard the scan
-  // needs no second HELD branch: the members and the outside holders are the
-  // other side; a caller holding several branches and no members still needs
-  // two of them, since a scan over one branch with nothing beside it returns an
-  // empty set for want of a comparison rather than as proof of absence.
+  // and every held branch stays held. The scan runs over ONE held branch with
+  // nothing run-local beside it too: the referenced section's comparison set
+  // always holds the base branch and every open PR head, and the branch's own
+  // unpaired additions are compared with one another, so a lone branch that
+  // clashed with an outside holder or with itself is re-scanned against exactly
+  // the side it clashed with — a scan withheld there would hold a renumbering
+  // that succeeded, forever. The re-scan's `taskNumbers` are the claims as they
+  // stand AFTER the rename, and are what the guard reserves.
   let rescanned = null;
-  if (resolutions && heldTasks.length + members.length >= 2) {
+  let taskNumbers = null;
+  if (resolutions) {
     phase("Collision re-scan");
     let rescan = null;
     try {
@@ -3870,6 +3870,7 @@ async function settleGuardCollisions({ heldTasks, members = [], collisions, labe
     }
     if (rescan && Array.isArray(rescan.collisions) && rescan.collisions.every((c) => collisionIsAttributable(c, [...heldTasks, ...memberEntries]))) {
       rescanned = rescan.collisions;
+      taskNumbers = Array.isArray(rescan.taskNumbers) ? rescan.taskNumbers.filter((n) => typeof n === "string" && n.trim()).map((n) => n.trim()) : [];
     }
   }
 
@@ -3912,7 +3913,7 @@ async function settleGuardCollisions({ heldTasks, members = [], collisions, labe
     }
   }
 
-  return { deliverable, held };
+  return { deliverable, held, taskNumbers };
 }
 
 // ============================================================================
@@ -3962,12 +3963,19 @@ const TASK_REBASE_SCHEMA = {
   required: ["ok", "halted", "noop", "detail"],
 };
 
+// The brief spells the step out — the recovery ref and its read-back, the
+// `--no-update-refs --no-rebase-merges` form, the lease push — rather than
+// relying on the deputy to find the flags in the skill, because the suite pins
+// exactly those and a brief that only named the skill would pin nothing; what
+// it does NOT restate (hunk-level conflict handling, the merge classification's
+// finer cases) it defers to the `review-cycle` skill's "The delegated rebase
+// step" by name, the way this file's other briefs defer to their skills.
 function taskRebasePrompt(task, advance, remote) {
   const targetPin = remote
     ? `Refresh it first with an explicit refspec, moving no local branch — \`git fetch origin ${shq(`+refs/heads/${advance.target}:refs/remotes/origin/${advance.target}`)}\` — then pin \`git rev-parse --verify ${shq(`refs/remotes/origin/${advance.target}^{commit}`)}\`.`
     : `Remote access is unavailable this run, so pin the local ref as it stands: \`git rev-parse --verify ${shq(`refs/heads/${advance.target}^{commit}`)}\`.`;
   const pushLine = remote
-    ? `7. **Push the replayed tip over the branch's remote copy — with the lease, and only after validation passed.** The cycle pushed this branch for durability, so its remote copy now diverges from the rebased tip and delivery's ordinary \`git push\` would be refused. Run exactly \`git push --force-with-lease=${shq(`${task.branch}:$before`)} origin ${shq(task.branch)}\` with \`$before\` the pre-rebase tip from step 3 — the one force-push this assignment spells out, on this task's own branch, which no PR advertises yet; a lease that fails means the remote moved under you, so report \`pushed: false\` with what it said and push nothing else. A no-op rebase pushes nothing.`
+    ? `7. **Push the replayed tip over the branch's remote copy — with the lease, and only after validation passed.** The cycle pushed this branch for durability, so its remote copy now diverges from the rebased tip and delivery's ordinary \`git push\` would be refused. Run exactly \`git push --force-with-lease=${shq(task.branch)}:"$before" origin ${shq(task.branch)}\` with \`$before\` the pre-rebase tip from step 3 — the one force-push this assignment spells out, on this task's own branch, which no PR advertises yet; a lease that fails means the remote moved under you, so report \`pushed: false\` with what it said and push nothing else. A no-op rebase pushes nothing.`
     : `7. Remote push is unavailable this run; commit nothing further and report \`pushed: false\`.`;
   return `Rebase one task branch onto its ADVANCED base, and nothing else: ${advance.reason} while this branch was in review, so it now stands on history the base has absorbed. Follow the \`review-cycle\` skill's "The delegated rebase step" for everything this brief does not state.
 
@@ -4108,6 +4116,14 @@ function ledgerMembers(ledger) {
 function reserveNumbers(ledger, task, taskNumbers) {
   ledger.reserved.set(task.slug, { slug: task.slug, branch: task.branch, base: task.base, state: "reserved", taskNumbers: taskNumbers.slice(), prUrl: "", merged: false });
 }
+// A hold between the guard and delivery (the rebase onto an advanced base) is
+// not a delivery outcome, so the asymmetric release below does not apply: the
+// branch is held for inspection exactly as one held inside the turn is, with
+// the cycle's push in place and no reservation, and delivery never ran to
+// orphan anything.
+function releaseReservation(ledger, slug) {
+  ledger.reserved.delete(slug);
+}
 // `remote` decides the remote-write question for the ambiguous outcomes: on a
 // no-remote run nothing was ever written to origin, so nothing can be orphaned.
 function settleReservation(ledger, slug, delivered, remote) {
@@ -4134,14 +4150,14 @@ function settleReservation(ledger, slug, delivered, remote) {
 // Live worktrees are bounded continuously rather than per wave: a task takes a
 // slot before its worktree is created and gives it back once delivery has
 // reclaimed the worktree (or the task ended holding it for inspection). The cap
-// comes from the same `df` measurement the wave loop used, taken at bootstrap;
-// a task that had to WAIT for a slot is the storage-bound case, and only there
-// is the mount re-probed before the slot is reused — a cheap read that keeps a
-// stale reading from widening the cap over headroom that reclaim does not
-// return (build artifacts, package-store growth), and that costs nothing on a
-// batch the cap never bound. `Infinity` (no measurement) never waits.
+// is derived ONCE, from the same bootstrap `df` measurement the wave loop used,
+// and the mount is never re-probed: a handoff runs from a pipeline's `finally`,
+// after that task's own catch, so an agent call there could not fail into any
+// task's terminal state — it would reject the whole batch mid-run with siblings
+// in flight and leave the queued waiters asleep. Release spawns nothing and
+// cannot throw. `Infinity` (no measurement) never waits.
 function createSlotGate(cap) {
-  return { cap, inFlight: 0, waiters: [], reprobes: 0 };
+  return { cap, inFlight: 0, waiters: [] };
 }
 async function acquireSlot(gate) {
   let waited = false;
@@ -4152,12 +4168,8 @@ async function acquireSlot(gate) {
   gate.inFlight += 1;
   return waited;
 }
-async function releaseSlot(gate, reprobe) {
+function releaseSlot(gate) {
   gate.inFlight = Math.max(0, gate.inFlight - 1);
-  if (gate.waiters.length && Number.isFinite(gate.cap) && typeof reprobe === "function") {
-    gate.reprobes += 1;
-    gate.cap = await reprobe();
-  }
   const waiters = gate.waiters.splice(0);
   waiters.forEach((resolve) => resolve());
 }
@@ -4245,10 +4257,10 @@ async function reconcileOrphanedBranches({ ledger, tasksBySlug, results, statusB
 
 // ============================================================================
 // One task's pipeline, end to end: wait for its prerequisites, take a slot,
-// implement -> review -> fix, the serialized guard (scan, deconflict, rebase
-// onto an advanced base, reserve), deliver, reclaim. Every exit — including a
-// throw — resolves the task's terminal promise, so a dependent never waits on
-// a task that is already over.
+// implement -> review -> fix, the serialized guard (scan, deconflict, reserve),
+// the rebase onto an advanced base under the reservation, deliver, reclaim.
+// Every exit — including a throw — resolves the task's terminal promise, so a
+// dependent never waits on a task that is already over.
 // ============================================================================
 
 // The dependency gate, kept whole from the wave loop: a task whose in-batch
@@ -4315,12 +4327,6 @@ async function runTaskPipeline(task, ctx) {
 
   const waited = await acquireSlot(gate);
   if (waited) throttled.push({ slug: task.slug, cap: gate.cap });
-  let released = false;
-  const release = async () => {
-    if (released) return;
-    released = true;
-    await releaseSlot(gate, ctx.reprobe);
-  };
   try {
     phase(`Task ${task.slug}`);
     let res;
@@ -4355,22 +4361,49 @@ async function runTaskPipeline(task, ctx) {
       }
       if (discovery.held) return { held: discovery.held };
       let ready = res;
+      let taskNumbers = discovery.readings.taskNumbers;
       if (discovery.collisions.length) {
+        // Settled INSIDE the turn, deliberately: the resolver renumbers the
+        // branch against the members the scan compared it with, the re-scan
+        // re-derives the rule against those same members, and the claim entered
+        // below is the re-scan's — the numbers as they stand after the rename.
+        // Run outside the turn, a sibling could clear the guard on the very
+        // number the rename is moving to before this branch re-scans, and both
+        // would publish it. A clash is the rare case; the common case pays only
+        // for the scan.
         const settled = await settleGuardCollisions({ heldTasks: [{ task, result: res }], members, collisions: discovery.collisions, label: task.slug, defaultBase, remote, peerMode });
         if (settled.held.length) return { held: settled.held[0] };
         ready = settled.deliverable[0].result;
-      }
-      const advance = baseAdvance(task, discovery.readings.merged.filter((m) => [...ledger.delivered.values()].some((d) => d.branch === m.branch)));
-      if (advance) {
-        const rebased = await rebaseOntoAdvancedBase(task, ready, advance, remote, peerMode);
-        if (rebased.held) return { held: rebased.held };
-        ready = rebased.result;
+        if (settled.taskNumbers) taskNumbers = settled.taskNumbers;
       }
       // The claim, entered before the turn ends and the next scan can run.
-      reserveNumbers(ledger, task, discovery.readings.taskNumbers);
-      return { ready, scanComplete: discovery.readings.scanComplete, scanDetail: discovery.readings.detail };
+      reserveNumbers(ledger, task, taskNumbers);
+      const advance = baseAdvance(task, discovery.readings.merged.filter((m) => [...ledger.delivered.values()].some((d) => d.branch === m.branch)));
+      return { ready, advance, scanComplete: discovery.readings.scanComplete, scanDetail: discovery.readings.detail };
     });
     if (cleared.held) return finish(cleared.held);
+
+    // The rebase onto an advanced base runs OUTSIDE the turn, under the
+    // reservation: it replays, builds, tests, and re-reviews — the expensive
+    // work the guard must not serialize, since after one sibling merges every
+    // in-flight task owes it — and it changes nothing a sibling's scan reads
+    // (the branch ref moves only when the rebase completes, and the files it
+    // adds relative to its base are the same before and after). A hold here is
+    // not a delivery outcome: the branch is held for inspection with the
+    // cycle's push in place, as every hold is, so the reservation is released
+    // rather than settled — nothing was orphaned by a delivery that never ran.
+    if (cleared.advance) {
+      const rebased = await rebaseOntoAdvancedBase(task, cleared.ready, cleared.advance, remote, peerMode);
+      if (rebased.held) {
+        releaseReservation(ledger, task.slug);
+        return finish(rebased.held);
+      }
+      cleared.ready = rebased.result;
+      // A retarget moved the recorded base; the reservation's copy, which a
+      // sibling's scan reads the member by, moves with it.
+      const entry = ledger.reserved.get(task.slug);
+      if (entry) entry.base = task.base;
+    }
 
     let delivered;
     try {
@@ -4389,7 +4422,7 @@ async function runTaskPipeline(task, ctx) {
   } catch (e) {
     return finish({ slug: task.slug, branch: task.branch, status: "error", detail: `pipeline crashed: ${e && e.message ? e.message : String(e)}` });
   } finally {
-    await release();
+    releaseSlot(gate);
   }
 }
 
@@ -4413,7 +4446,7 @@ function terminalStates(list) {
 // comparison — and `parallel()` returns only once EVERY task has reached some
 // terminal state (delivered, blocked, failed, skipped), so a batch in which
 // every task fails still reaches them.
-async function runPipelinedBatch({ plan, remote, peerMode, statusBySlug, results, throttled, collisions, ledger, gate, reprobe }) {
+async function runPipelinedBatch({ plan, remote, peerMode, statusBySlug, results, throttled, collisions, ledger, gate, pipeline }) {
   const tasks = [];
   const slugByBranch = new Map();
   for (const wave of plan.waves) {
@@ -4433,11 +4466,16 @@ async function runPipelinedBatch({ plan, remote, peerMode, statusBySlug, results
     const promise = new Promise((r) => { resolve = r; });
     terminal.set(task.slug, { promise, resolve });
   }
-  const mergedDuringRun = [];
   const guard = createGuardQueue();
-  const ctx = { slugByBranch, terminal, statusBySlug, results, ledger, guard, gate, remote, peerMode, defaultBase: plan.defaultBase, throttled, collisions, mergedDuringRun, reprobe, unschedulable: unschedulable(tasks, slugByBranch) };
+  // The batch's live state is written into the caller's `pipeline` object
+  // BEFORE the fan-out, by reference: the abort catch reads it, and an abort is
+  // exactly the exit on which a value returned here never arrives.
+  pipeline.tasksBySlug = new Map(tasks.map((t) => [t.slug, t]));
+  pipeline.guardOrder = guard.order;
+  pipeline.mergedDuringRun = [];
+  const ctx = { slugByBranch, terminal, statusBySlug, results, ledger, guard, gate, remote, peerMode, defaultBase: plan.defaultBase, throttled, collisions, mergedDuringRun: pipeline.mergedDuringRun, unschedulable: unschedulable(tasks, slugByBranch) };
   await parallel(tasks.map((task) => () => runTaskPipeline(task, ctx)));
-  return { tasksBySlug: new Map(tasks.map((t) => [t.slug, t])), guardOrder: guard.order.slice(), mergedDuringRun };
+  return pipeline;
 }
 
 // ============================================================================
@@ -5187,7 +5225,7 @@ const results = [];
 const throttled = [];
 const collisions = [];
 const ledger = createReservationLedger();
-let pipeline = { tasksBySlug: new Map(), guardOrder: [], mergedDuringRun: [] };
+const pipeline = { tasksBySlug: new Map(), guardOrder: [], mergedDuringRun: [] };
 
 try {
   phase("Resolve batch");
@@ -5231,26 +5269,16 @@ try {
   // headroom requires fewer live worktrees. The workflow runtime/provider owns
   // its own active-agent ceiling and rate limiting; no arbitrary smaller policy
   // cap is imposed here. An unmeasured reading (0) yields `Infinity` — no
-  // storage cap — and the gate never waits. The cap is derived from the
-  // bootstrap measurement; deliver-then-reclaim per task bounds live worktrees
-  // continuously, and the mount is re-probed only when a task actually waited
-  // for a slot (the storage-bound case), before that slot is reused — see
-  // `createSlotGate`. `nextAvailBytes` owns what a failed or unmeasurable probe
-  // does with the previous reading. This probe carries no local catch: why
-  // `agent()` throws is not something this repository establishes, so nothing
-  // here rests on it — a throw unwinds through the pipeline's own catch into a
-  // terminal error for that task rather than widening the cap, and the ENOSPC
-  // the throttle exists to prevent stays unreachable by that path.
-  let availBytes = nextAvailBytes(0, boot);
+  // storage cap — and the gate never waits. The cap is derived ONCE, from the
+  // bootstrap measurement (`nextAvailBytes` owns what an unmeasurable reading
+  // does with the unmeasured 0), and deliver-then-reclaim per task bounds live
+  // worktrees continuously under it; no `df` re-probe runs mid-batch — see
+  // `createSlotGate` for why a slot handoff may spawn nothing.
+  const availBytes = nextAvailBytes(0, boot);
   const widthCapFor = (bytes) => (bytes > 0 ? Math.max(1, Math.floor(bytes / PER_WORKTREE_BYTES)) : Infinity);
   const gate = createSlotGate(widthCapFor(availBytes));
-  const reprobe = async () => {
-    const probe = await agent(storageProbePrompt(wtBase), { label: `storage-probe:${gate.reprobes}`, schema: STORAGE_PROBE_SCHEMA, effort: "low" });
-    availBytes = nextAvailBytes(availBytes, probe);
-    return widthCapFor(availBytes);
-  };
 
-  pipeline = await runPipelinedBatch({ plan, remote, peerMode, statusBySlug, results, throttled, collisions, ledger, gate, reprobe });
+  await runPipelinedBatch({ plan, remote, peerMode, statusBySlug, results, throttled, collisions, ledger, gate, pipeline });
 } catch (e) {
   // Reported, not rethrown: the batch is over either way, and the closing
   // comparison plus whatever terminal statuses were reached are more use to the
@@ -5264,7 +5292,9 @@ try {
   // so the absence is never read as the fewer-than-two skip. An orphaned
   // reservation an abort leaves behind is named here rather than acted on:
   // this path spawns nothing.
-  return { error: `Batch aborted: ${e && e.message ? e.message : String(e)}`, batch: args, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), throttled, collisions, guardOrder: pipeline.guardOrder, mergedDuringRun: pipeline.mergedDuringRun, orphanedBranches: [...ledger.orphaned.values()].map((o) => ({ slug: o.slug, branch: o.branch, taskNumbers: o.taskNumbers, reason: "the batch aborted before the orphan could be reconciled" })), terminalStates: terminalStates(results), resolution: plan && plan.resolution ? plan.resolution : null, results, mainCheckout: await finalMainCheckoutReport(), reviewStack: { built: false, skipped: true, reason: "the batch aborted, so the integration check did not run; the review stack excludes an aborted batch whatever it delivered, and nothing was created for it" } };
+  // A reservation still HELD at the abort is named beside them: that task was
+  // mid-delivery, its push may have landed, and nothing will settle it now.
+  return { error: `Batch aborted: ${e && e.message ? e.message : String(e)}`, batch: args, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), throttled, collisions, guardOrder: pipeline.guardOrder, mergedDuringRun: pipeline.mergedDuringRun, orphanedBranches: [...[...ledger.orphaned.values()].map((o) => ({ slug: o.slug, branch: o.branch, taskNumbers: o.taskNumbers, reason: "the batch aborted before the orphan could be reconciled" })), ...[...ledger.reserved.values()].map((o) => ({ slug: o.slug, branch: o.branch, taskNumbers: o.taskNumbers, reason: "the batch aborted while this branch was still delivering; its push may have landed, so its delivery state is unknown" }))], terminalStates: terminalStates(results), resolution: plan && plan.resolution ? plan.resolution : null, results, mainCheckout: await finalMainCheckoutReport(), reviewStack: { built: false, skipped: true, reason: "the batch aborted, so the integration check did not run; the review stack excludes an aborted batch whatever it delivered, and nothing was created for it" } };
 }
 
 phase("Summary");
