@@ -4052,8 +4052,20 @@ async function rebaseOntoAdvancedBase(task, result, advance, remote, peerMode) {
   if (advance.retarget) task.base = advance.target;
   // The replay changed the tree after the cycle's delivery-tier pass, so the
   // branch owes that tier again before it opens a PR — the same fresh pass a
-  // deconfliction rename earns, under the same deviation gate.
-  const { verdict, reviewed, coverage, freshAssessments } = await deliveryReReview(task, result, remote, peerMode);
+  // deconfliction rename earns, under the same deviation gate. A re-review
+  // that THROWS owes that tier exactly as much as one that comes back failing,
+  // so it takes the same exit: held, no PR, the reservation released by the
+  // caller. Left to escape, it would reach the pipeline's catch, which settles
+  // the still-held claim as an orphan — and the terminal stage discharges an
+  // orphan by retrying `gh pr create`, which would open the PR on a replayed
+  // tip no delivery-tier pass ever saw.
+  let reReview;
+  try {
+    reReview = await deliveryReReview(task, result, remote, peerMode);
+  } catch (e) {
+    return hold(`the rebased branch's fresh re-review crashed (${e && e.message ? e.message : String(e)}); held before delivery — the tier the replay owes is unpaid, so no PR is opened`);
+  }
+  const { verdict, reviewed, coverage, freshAssessments } = reReview;
   if (reviewed && !coverage.unassessed.length) {
     return { result: { ...result, notes: verdict.notes || result.notes, ...freshAssessments, ...collisionReviewedRecord(result), ...collisionReReviewFlakeRecord(result, verdict), rebasedOnto: report.effectiveBase || "" } };
   }
@@ -4148,12 +4160,14 @@ function settleReservation(ledger, slug, delivered, remote) {
 }
 // The abort catch's report of what the ledger still holds. An orphan keeps its
 // `reserved` entry on purpose (a later scan must still read it RESERVED), so
-// it is named ONCE, under the orphan reason: its delivery did complete, with
-// a known status. Only a reservation that never settled is the unknown case.
+// it is named ONCE, under the orphan reason: its claim was settled, whatever
+// the exit reported and whether or not its push landed. The second reason is
+// for a claim nothing settled at all — the abort cut across that task before
+// any of its exits reached `settleReservation`.
 function abortedReservationReport(ledger) {
   return [
     ...[...ledger.orphaned.values()].map((o) => ({ slug: o.slug, branch: o.branch, taskNumbers: o.taskNumbers, reason: "the batch aborted before the orphan could be reconciled" })),
-    ...[...ledger.reserved.values()].filter((o) => !ledger.orphaned.has(o.slug)).map((o) => ({ slug: o.slug, branch: o.branch, taskNumbers: o.taskNumbers, reason: "the batch aborted while this branch was still delivering; its push may have landed, so its delivery state is unknown" })),
+    ...[...ledger.reserved.values()].filter((o) => !ledger.orphaned.has(o.slug)).map((o) => ({ slug: o.slug, branch: o.branch, taskNumbers: o.taskNumbers, reason: "the batch aborted while this branch still held its claim; nothing settled it, and its push may have landed, so its remote state is unknown" })),
   ];
 }
 
@@ -4425,9 +4439,15 @@ async function runTaskPipeline(task, ctx) {
       delivered = { slug: task.slug, branch: task.branch, status: "error", detail: `delivery crashed: ${e && e.message ? e.message : String(e)}`, ...cycleCarried(cleared.ready) };
     }
     delivered = delivered || { slug: task.slug, branch: task.branch, status: "error", detail: "delivery crashed", ...cycleCarried(cleared.ready) };
-    const reservation = settleReservation(ledger, task.slug, delivered, remote);
+    // The settlement is the ledger's business, and the ledger is what the
+    // terminal stage and the summary read: `ledger.orphaned` drives the
+    // reconciliation, whose own outcome rewrites this result. Stamping the
+    // held-ness onto the result too would only latch — reconciliation spreads
+    // the prior result into its `done`/`local-only` rewrite, so a claim that
+    // has since been settled and converted would still read as held on a
+    // final state that is 025's no-latched-flags case exactly.
+    settleReservation(ledger, task.slug, delivered, remote);
     if (cleared.scanComplete === false) delivered.guardScanIncomplete = cleared.scanDetail || "the guard's remote enumeration was degraded; see the referenced section's note-and-proceed rule";
-    if (reservation === "orphaned") delivered.reservationHeld = true;
     return finish(delivered);
   } catch (e) {
     const res = { slug: task.slug, branch: task.branch, status: "error", detail: `pipeline crashed: ${e && e.message ? e.message : String(e)}` };
@@ -4436,7 +4456,7 @@ async function runTaskPipeline(task, ctx) {
     // reserved state settles it: with the push state unknown, a remote run
     // keeps it as an orphan the terminal stage acts on and the summary names,
     // rather than an entry no stage ever reconciles or reports.
-    if (settleReservation(ledger, task.slug, res, remote) === "orphaned") res.reservationHeld = true;
+    settleReservation(ledger, task.slug, res, remote);
     return finish(res);
   } finally {
     releaseSlot(gate);
@@ -5309,9 +5329,8 @@ try {
   // so the absence is never read as the fewer-than-two skip. An orphaned
   // reservation an abort leaves behind is named here rather than acted on:
   // this path spawns nothing.
-  // A reservation still HELD at the abort is named beside them, once each:
-  // that task was mid-delivery, its push may have landed, and nothing will
-  // settle it now.
+  // A claim still HELD at the abort is named beside them, once each: nothing
+  // settled it, its push may have landed, and nothing will settle it now.
   return { error: `Batch aborted: ${e && e.message ? e.message : String(e)}`, batch: args, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), throttled, collisions, guardOrder: pipeline.guardOrder, mergedDuringRun: pipeline.mergedDuringRun, orphanedBranches: abortedReservationReport(ledger), terminalStates: terminalStates(results), resolution: plan && plan.resolution ? plan.resolution : null, results, mainCheckout: await finalMainCheckoutReport(), reviewStack: { built: false, skipped: true, reason: "the batch aborted, so the integration check did not run; the review stack excludes an aborted batch whatever it delivered, and nothing was created for it" } };
 }
 
