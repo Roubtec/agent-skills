@@ -3900,17 +3900,22 @@ function reviewStackRefSegment(s) {
   return out || "x";
 }
 
-// The leading task number of a slug, compared numerically so `10-b` follows
-// `2-a` whatever the repository's zero-padding convention; a slug that leads
-// with no number sorts after every numbered one, by its text.
+// The task number of a slug, under the conventions `resolve-tasks` admits: a
+// leading number with an optional letter suffix (`2-b`, `015b-x`), or the
+// same behind a letter phase prefix as in `write-tasks`' `A-01-...` fallback
+// (`A-2-x`, `A-10-y`). The number is compared as a number so `10-` follows
+// `2-` whatever the zero-padding, within its phase; a slug carrying no such
+// number parses to null and sorts after every numbered one, by its text.
+const REVIEW_STACK_TASK_NUMBER = /^(?:([A-Za-z]+)-)?(\d+)([A-Za-z]?)/;
 function reviewStackTaskNumber(slug) {
-  const m = String(slug).match(/^(\d+)([A-Za-z]?)/);
-  return m ? [Number(m[1]), m[2]] : [Infinity, ""];
+  const m = String(slug).match(REVIEW_STACK_TASK_NUMBER);
+  return m ? { prefix: m[1] || "", number: Number(m[2]), suffix: m[3], label: m[0] } : null;
 }
 function reviewStackSlugCompare(a, b) {
-  const [na, sa] = reviewStackTaskNumber(a);
-  const [nb, sb] = reviewStackTaskNumber(b);
-  return na - nb || sa.localeCompare(sb) || String(a).localeCompare(String(b));
+  const ta = reviewStackTaskNumber(a);
+  const tb = reviewStackTaskNumber(b);
+  if (!ta || !tb) return (ta ? -1 : tb ? 1 : 0) || String(a).localeCompare(String(b));
+  return ta.prefix.localeCompare(tb.prefix) || ta.number - tb.number || ta.suffix.localeCompare(tb.suffix) || String(a).localeCompare(String(b));
 }
 
 // Every name the stage's briefs hand a deputy — canonical branches, their
@@ -4025,7 +4030,7 @@ function reviewStackSafePrefix(order, inspection) {
 // so every name below — guide branches and the worktree alike — is the
 // script's own before the deputy that creates them is asked to.
 function reviewStackBatchLabel(order) {
-  const numbers = order.map((t) => (String(t.slug).match(/^\d+[A-Za-z]?/) || [reviewStackRefSegment(t.slug)])[0]);
+  const numbers = order.map((t) => (reviewStackTaskNumber(t.slug) || { label: reviewStackRefSegment(t.slug) }).label);
   return numbers.length > 1 ? `${numbers[0]}-to-${numbers[numbers.length - 1]}` : numbers[0] || "batch";
 }
 function reviewStackGuideName(batchLabel, stamp, index, slug) {

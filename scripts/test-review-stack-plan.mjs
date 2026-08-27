@@ -108,6 +108,18 @@ const t = (slug, base, dependsOn = []) => ({ slug, branch: `task/${slug}`, base,
   check("unpadded task numbers sort numerically, a letter suffix after its number, an unnumbered slug last", same(order.map((x) => x.slug), ["2-b", "2a-c", "9-i", "10-j", "misc"]), JSON.stringify(order.map((x) => x.slug)));
 }
 {
+  // The `write-tasks` phase-prefixed fallback (`A-01-...`): the number behind
+  // the prefix is what is compared, within its phase, and a slug with no such
+  // number still sorts last.
+  const slugs = ["A-10-j", "B-1-k", "A-2-b", "misc", "A-9-i", "A-2a-c"];
+  const plan = { defaultBase: "main", waves: [slugs.map((s) => t(s, "main"))] };
+  const results = slugs.map((slug) => ({ slug, branch: `task/${slug}`, status: "done" }));
+  const { order } = pure.reviewStackOrder(plan, results);
+  check("phase-prefixed task numbers sort numerically within their phase, an unnumbered slug last", same(order.map((x) => x.slug), ["A-2-b", "A-2a-c", "A-9-i", "A-10-j", "B-1-k", "misc"]), JSON.stringify(order.map((x) => x.slug)));
+  const label = pure.reviewStackBatchLabel(order.slice(0, 4));
+  check("batch label spans phase-prefixed task numbers", label === "A-2-to-A-10", label);
+}
+{
   // Exclusions: failed review, skipped dependents, crashed, held, unreported.
   const plan = { defaultBase: "main", waves: [[t("001-a", "main"), t("002-b", "main"), t("003-c", "main"), t("004-d", "main"), t("005-e", "main")], [t("006-f", "task/002-b", ["002-b"])]] };
   const results = [
