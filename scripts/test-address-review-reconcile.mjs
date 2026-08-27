@@ -166,7 +166,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 289;
+const EXPECTED_CHECKS = 290;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -6000,6 +6000,21 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     paddedUrl.status === "publish-aborted-incomplete-dispositions" && /typed review-thread but carries a gathered standalone item's url/.test(defectsIn(paddedUrl)) &&
       paddedThread.status === "publish-aborted-incomplete-dispositions" && /typed standalone but names a gathered review thread/.test(defectsIn(paddedThread)),
     `${paddedUrl.status}: ${defectsIn(paddedUrl).slice(0, 200)} | ${paddedThread.status}: ${defectsIn(paddedThread).slice(0, 200)}`,
+  );
+  // The item side pads just as readily — the gather is an emitted packet too.
+  // A gathered standalone whose url carries whitespace, covered by a thread
+  // entry naming it trimmed, and a gathered thread whose threadId is padded,
+  // named trimmed by a standalone entry: coverage counts both as covered, so
+  // the guard has to read the ITEM's identity trimmed as well.
+  const paddedItemPacket = { reconcile: { outcome: "work" }, items: [ITEM, { ...ITEM_NAMED, url: ` ${NAMED_URL} ` }] };
+  const paddedItemUrl = await run(gathered(paddedItemPacket), { args: "push no-rebase", cycles: [withReport({ ...CYCLE_PASS.workReport[0], url: NAMED_URL })] });
+  const paddedThreadItemPacket = { reconcile: { outcome: "work" }, items: [{ ...ITEM, threadId: " T1 " }, ITEM_NAMED] };
+  const paddedItemThread = await run(gathered(paddedThreadItemPacket), { args: "push no-rebase", cycles: [withReport({ type: "standalone", url: NAMED_URL, threadId: "T1", ref: "issue comment a-maintainer", kind: "actionable-fixed", detail: "bumped in cde3456", author: "a-maintainer", authorIsBot: false, newFinding: true })] });
+  check(
+    "the cross-kind guard reads the GATHERED item's identity trimmed too, so a thread entry naming the trimmed url of a padded gathered standalone — or a standalone entry naming the trimmed id of a padded gathered thread — is rejected rather than counted as covering both items",
+    paddedItemUrl.status === "publish-aborted-incomplete-dispositions" && /typed review-thread but carries a gathered standalone item's url/.test(defectsIn(paddedItemUrl)) &&
+      paddedItemThread.status === "publish-aborted-incomplete-dispositions" && /typed standalone but names a gathered review thread/.test(defectsIn(paddedItemThread)),
+    `${paddedItemUrl.status}: ${defectsIn(paddedItemUrl).slice(0, 200)} | ${paddedItemThread.status}: ${defectsIn(paddedItemThread).slice(0, 200)}`,
   );
   // The kind's one action is `gh run rerun`, which needs the run id an Actions
   // details URL carries: a lane with no workflow run (a StatusContext, an

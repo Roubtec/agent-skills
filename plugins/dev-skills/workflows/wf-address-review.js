@@ -2769,8 +2769,12 @@ const TRIAGE_KINDS = new Set([
   "ambiguous-skipped",
   "flake-rerun",
 ]);
+// Keyed TRIMMED, like every identity map below: the gather is an emitted
+// packet as apt to pad an id as the fixer's report is, and coverage trims both
+// sides, so an untrimmed key here would let a thread entry naming the trimmed
+// url of a padded gathered standalone pass the cross-kind guard below.
 const threadItemById = new Map(
-  packet.items.filter((it) => it.type === "review-thread" && it.threadId).map((it) => [it.threadId, it])
+  packet.items.filter((it) => it.type === "review-thread" && it.threadId).map((it) => [String(it.threadId).trim(), it])
 );
 // Standalone items by their identity — the url, plus the finding ordinal for
 // one finding of a misfired comment — and CI lanes by theirs. A lookup on an
@@ -2780,7 +2784,7 @@ const threadItemById = new Map(
 const standaloneItemByKey = new Map(
   packet.items.filter((it) => it.type === "standalone" && itemKeyOf(it)).map((it) => [itemKeyOf(it), it])
 );
-const standaloneUrls = new Set(packet.items.filter((it) => it.type === "standalone" && it.url).map((it) => it.url));
+const standaloneUrls = new Set(packet.items.filter((it) => it.type === "standalone" && it.url).map((it) => String(it.url).trim()));
 const laneItemById = new Map(
   packet.items.filter((it) => it.type === "ci-failure" && itemKeyOf(it)).map((it) => [itemKeyOf(it), it])
 );
@@ -2793,11 +2797,12 @@ function dispositionDefect(d) {
   let gathered;
   // The cross-kind naming an entry may not do, whatever its own kind: one entry
   // reads as covering two items while publication serves one. Each identity is
-  // read TRIMMED, exactly as the coverage check keys it through `itemKeyOf`:
-  // this guard backs that check, so it must never be narrower than it — an
-  // entry whose padded url coverage counted for a standalone item, but which
-  // an exact lookup here missed, would pass as covering both while publication
-  // routed it to the thread alone, the standalone silently unaddressed.
+  // read TRIMMED on BOTH sides, exactly as the coverage check keys them through
+  // `itemKeyOf`: this guard backs that check, so it must never be narrower than
+  // it — an entry whose padded url coverage counted for a standalone item, or a
+  // gathered standalone whose padded url coverage matched to the entry's, but
+  // which an exact lookup here missed, would pass as covering both while
+  // publication routed it to the thread alone, the standalone silently unaddressed.
   const entryUrl = typeof d.url === "string" ? d.url.trim() : "";
   const namesLane = typeof d.lane === "string" && laneItemById.has(d.lane.trim());
   const namesStandaloneUrl = !!entryUrl && standaloneUrls.has(entryUrl);
