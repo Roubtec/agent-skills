@@ -841,6 +841,12 @@ function resolutionAccountsForInputs(resolution, required) {
 // Every executable hard-list path must occur exactly once in the waves, and no
 // other path may occur. This applies to non-empty plans too: the executor never
 // trusts a structurally valid plan that silently dropped or invented work.
+// Each task's identity is validated here too — a non-empty `slug` and `branch`,
+// each unique across the plan — because the pipeline keys its terminal
+// promises by slug and derives prerequisites by branch: a task the fan-out
+// could not key would have to be dropped, and a dropped task is requested work
+// the batch then completes without, reporting neither a result nor an error.
+// The plan fails closed instead, like a dropped or invented path.
 function planResolutionIsExact(plan) {
   if (!plan || typeof plan !== "object" || !Array.isArray(plan.waves)) return false;
   const resolution = plan.resolution;
@@ -855,11 +861,16 @@ function planResolutionIsExact(plan) {
   }
 
   const planned = new Set();
+  const slugs = new Set();
+  const branches = new Set();
   for (const wave of plan.waves) {
     if (!Array.isArray(wave) || wave.length === 0) return false;
     for (const task of wave) {
       if (!task || typeof task !== "object" || !nonEmptyString(task.path) || !executable.has(task.path) || planned.has(task.path)) return false;
+      if (!nonEmptyString(task.slug) || !nonEmptyString(task.branch) || slugs.has(task.slug) || branches.has(task.branch)) return false;
       planned.add(task.path);
+      slugs.add(task.slug);
+      branches.add(task.branch);
     }
   }
   if (planned.size !== executable.size) return false;
@@ -4734,10 +4745,10 @@ function terminalStates(list) {
 async function runPipelinedBatch({ plan, remote, peerMode, statusBySlug, results, throttled, collisions, ledger, gate, pipeline }) {
   const tasks = [];
   const slugByBranch = new Map();
+  // Every task carries a unique slug and branch: `planResolutionIsExact`
+  // refused the plan otherwise, so nothing is filtered (and so dropped) here.
   for (const wave of plan.waves) {
-    if (!Array.isArray(wave)) continue;
     for (const task of wave) {
-      if (!task || typeof task.slug !== "string" || typeof task.branch !== "string") continue;
       tasks.push(task);
       // A dependent task's `base` IS its prerequisite's `branch` (stacked PRs),
       // so the gate derives the prerequisite structurally instead of trusting
@@ -4881,9 +4892,7 @@ function reviewStackOrder(plan, results) {
   const tasks = [];
   const slugByBranch = new Map();
   (Array.isArray(plan.waves) ? plan.waves : []).forEach((wave, w) => {
-    if (!Array.isArray(wave)) return;
     for (const t of wave) {
-      if (!t || typeof t.slug !== "string" || typeof t.branch !== "string") continue;
       tasks.push({ slug: t.slug, branch: t.branch, base: t.base, wave: w + 1, dependsOn: Array.isArray(t.dependsOn) ? t.dependsOn : [] });
       slugByBranch.set(t.branch, t.slug);
     }
