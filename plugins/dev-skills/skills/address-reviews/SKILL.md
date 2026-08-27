@@ -143,7 +143,7 @@ The absolute worktree path, the checked-out branch name, the **paired PR number*
 ## Per-PR phased subagents
 
 Claude subagents cannot be assumed to spawn their own subagents, so the top-level orchestrator owns every phase, including both rebase points, peer launch and triage.
-For each reviewer round, fan out one same-phase `general-purpose` `Agent` per distinct worktree concurrently and, when enabled and available, launch that entry's peer beside it; wait for every Reviewer and any launched peers, recording disabled, unavailable, or forfeited peer outcomes explicitly, then advance the phase.
+For each reviewer round, fan out one same-phase `general-purpose` `Agent` per distinct worktree concurrently and, when enabled and available, launch that entry's peer beside it; wait for each entry's own Reviewer and its launched peer, recording disabled, unavailable, or forfeited peer outcomes explicitly, then advance **that entry** — to its fix-up round or, per "Publication", its publisher — the moment its own outcomes are in. The phase is per entry, not a batch barrier: an entry never waits for a sibling's reviewer, and the only waits between entries are the stack dependencies "Publication" and the parent gate name.
 
 At every apply boundary — immediately before Phase A, each later dependency-wave launch, and each fix-up — re-fetch each affected PR's current state and relevant remote refs, then re-verify its open/merged state, fully qualified head/base pairs, and OIDs. Recompute stack ordering from those refreshed facts, but preserve the original non-parent target the invocation named, in either of its flavors — the commit it gave, or the OID a ref it named was resolved to once at setup: what this holds stable is the pin against a recomputation, and for a named target it is held across the run's own rebase points too, only a DEFAULT target being re-resolved there per "Re-pin a default target at each rebase point".
 
@@ -226,7 +226,7 @@ Do **not** give any subagent another PR's context — strict per-PR isolation.
 
 Inherit `address-tasks` → "Adaptive throttling" in full (storage headroom before each fan-out, `ENOSPC` back-off, serialize shared-exclusive-resource phases, fan out less on `429`/`529`).
 
-Effective subagent concurrency remains the number of PRs in the current phase, while each review entry also starts one peer CLI process.
+Effective subagent concurrency remains the number of PRs in flight at once, while each review entry also starts one peer CLI process.
 Start every distinct, dependency-ready PR that available agent slots and objective resource headroom support; do not impose a fixed small initial sub-batch. Serialize shared build/database resources when their exclusivity is known or reasonably anticipated.
 Because concurrent entries each invoke the peer, repeated peer-side rate, transient usage, or capacity failures are a signal to reduce the next fan-out (and retry each affected invocation at most once), just like provider `429`/`529` pressure; a definitive auth/usage exhaustion may mark the peer unavailable without blocking own-harness review.
 When breadth contributes to a failure, preserve completed and viable in-flight entries and use a materially narrower subsequent review/fix-up phase rather than restarting partial work or repeating a full failed review at the same width.
