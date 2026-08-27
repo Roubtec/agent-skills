@@ -4029,13 +4029,11 @@ function reviewStackSafePrefix(order, inspection) {
   return { prefix, unchecked, guard };
 }
 
-// The tips the teardown verifies: every canonical branch whose inspection
-// reported a full object id, over the WHOLE canonical order and not only the
-// safe prefix. The restack's shared-ref mutations run in one `.git`, so the
-// guarantee that every `bN` stays where it was is owed to the branch a merge
-// guard truncated the chain at, and to every branch after it, as much as to
-// the ones a guide was built from. A branch whose tip did not resolve at
-// inspection time has nothing captured to compare against and is left out.
+// Over the WHOLE canonical order, not only the safe prefix: the restack's
+// shared-ref mutations run in one `.git`, so the guarantee that every `bN`
+// stays where it was is owed to the branch a merge guard truncated the chain
+// at, and to every branch after it, as much as to the ones a guide was built
+// from.
 function reviewStackInspectedTips(order, inspection) {
   const byBranch = new Map();
   for (const i of Array.isArray(inspection) ? inspection : []) if (i && typeof i.branch === "string") byBranch.set(i.branch, i);
