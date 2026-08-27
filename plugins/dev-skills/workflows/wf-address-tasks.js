@@ -3702,7 +3702,14 @@ async function implementTask(task, remote, peerMode) {
 // left one, since a `pushed-no-pr` that the retry converts to `done` is
 // delivered only then, and one that survives the retry is stopped short of
 // delivery and keeps its worktree for inspection, as the skill's Cleanup says
-// every stopped task does. The reclaim's outcome is read, not assumed: a
+// every stopped task does. "Delivered" here is `DEP_SUCCEEDED`, the one reading
+// the ledger and the dependency gate already take: a PR that is open (on its
+// recorded base or, as `pr-wrong-base`, not — the skill's Cleanup removes the
+// worktree once the PR is open, and a wrong base is repaired on the PR with
+// `gh pr edit --base`, nothing in the worktree to inspect), or the branch that
+// IS the run's delivery where no remote is written this run. On a remote run
+// `local-only` is a push taken back off origin, a task stopped short of
+// delivery, which neither gate accepts. The reclaim's outcome is read, not assumed: a
 // `wt-remove` refusal (or a cleanup agent that crashes) leaves the worktree
 // live, and the pipeline's slot gate must keep its slot for it (`retainSlot`)
 // — the worktree is reported retained on the result, whatever the delivery
@@ -3716,13 +3723,6 @@ async function reclaimWorktree(task) {
   }
   return cleanup && cleanup.removed === true ? {} : { worktreeRetained: (cleanup && cleanup.reason) || "cleanup agent reported no removal" };
 }
-// Delivered, for the reclaim: a PR that exists on its recorded base, or the
-// branch that IS the run's delivery where no remote is written this run — the
-// same reading the ledger and the dependency gate take of `local-only`. On a
-// remote run `local-only` is a push taken back off origin, a task stopped
-// short of delivery.
-const RECLAIMABLE = (status, remote) => status === "done" || (!remote && status === "local-only");
-
 async function deliverTask(task, ready, remote) {
   const pr = await agent(prPrompt(task, ready, remote), {
     label: `pr:${task.slug}`,
@@ -4541,8 +4541,8 @@ async function runTaskPipeline(task, ctx) {
     return finish({ slug: task.slug, branch: task.branch, status: "storage-throttled", detail: `every one of the ${gate.cap} live-worktree slot(s) the measured storage headroom allows is held by a worktree left in place for inspection (${slotHolders(slot.retainedBy)}), so no delivery can free one; this task never started — reclaim or inspect those worktrees, then rerun it` });
   }
   // Set once the reclaim REPORTED the worktree removed; every other exit — a
-  // hold, a crash, a delivery stopped short (`pushed-no-pr`, `pr-wrong-base`,
-  // a push taken back off origin), a `wt-remove` refusal carried as
+  // hold, a crash, a delivery stopped short (`pushed-no-pr`, a push refused or
+  // taken back off origin), a `wt-remove` refusal carried as
   // `worktreeRetained` — leaves it in place, and the slot stays held for it.
   let reclaimed = false;
   // The reviewed result delivery was briefed with, kept in the pipeline's own
@@ -4677,10 +4677,11 @@ async function runTaskPipeline(task, ctx) {
       delivered = await reconcileOrphan({ ledger, task, prior: delivered, ready: reviewed, remote, orphanReconciliation });
     }
     // The reclaim comes AFTER the settlement, and only for a task that ended
-    // delivered: the orphan action above can turn a `pushed-no-pr` into a
-    // delivered PR, and the one it leaves unresolved is stopped short of
+    // delivered — the same reading the gate below takes when it lets a
+    // dependent start: the orphan action above can turn a `pushed-no-pr` into
+    // a delivered PR, and the one it leaves unresolved is stopped short of
     // delivery, whose worktree the skill's Cleanup keeps in place.
-    if (RECLAIMABLE(delivered.status, remote)) {
+    if (DEP_SUCCEEDED(delivered.status, remote)) {
       Object.assign(delivered, await reclaimWorktree(task));
       reclaimed = !delivered.worktreeRetained;
     }
@@ -4698,7 +4699,7 @@ async function runTaskPipeline(task, ctx) {
       res = await reconcileOrphan({ ledger, task, prior: res, ready: reviewed, remote, orphanReconciliation });
       // A PR the retry opened is a delivery like any other; its worktree is
       // reclaimed on the same terms as the delivered path's.
-      if (RECLAIMABLE(res.status, remote)) {
+      if (DEP_SUCCEEDED(res.status, remote)) {
         Object.assign(res, await reclaimWorktree(task));
         reclaimed = !res.worktreeRetained;
       }

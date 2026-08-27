@@ -42,7 +42,7 @@ function check(name, cond, detail) {
     console.error(`NOT ok - ${name}${detail ? `: ${detail}` : ""}`);
   }
 }
-const EXPECTED_CHECKS = 168;
+const EXPECTED_CHECKS = 170;
 
 async function scenario(name, fn) {
   try {
@@ -491,9 +491,20 @@ await scenario("storage-derived slot gate", async () => {
   // nothing is denied while a delivery can still free it.
   const half = await runBatch({ plan, cap: 2, overrides: capOut });
   check("cap 2, one retained → the remaining slot serializes the rest and nothing is denied", by(half.results, "002-b").status === "done" && by(half.results, "003-c").status === "done" && !half.throttled.some((x) => x.denied) && at(half.calls, "003-c:fix#1") > at(half.calls, "cleanup:002-b") && half.gate.inFlight === 1 && half.gate.retained === 1, JSON.stringify({ throttled: half.throttled, labels: labels(half.calls) }));
-  // A delivery that throws before the reclaim leaves its worktree too.
+  // A delivery that throws is settled by its orphan action; where that action
+  // takes the branch back off origin the task is stopped short of delivery on a
+  // remote run (`local-only`) and keeps its worktree, and where it opens the PR
+  // the task is delivered late and reclaimed on the delivered path's terms.
   const crashed = await runBatch({ plan: { defaultBase: "main", waves: [[t("001-a"), t("002-b")]] }, cap: 1, overrides: { "pr:001-a": new Error("gh exploded"), "orphan:001-a": { outcome: "branch-deleted", reason: "deleted" } } });
   check("a delivery that threw before the reclaim keeps its slot (its orphan action then settled the branch off origin)", by(crashed.results, "001-a").status === "local-only" && /delivery crashed/.test(by(crashed.results, "001-a").detail) && by(crashed.results, "002-b").status === "storage-throttled" && crashed.gate.retained === 1, JSON.stringify(crashed.results));
+  const crashedOpened = await runBatch({ plan: { defaultBase: "main", waves: [[t("001-a"), t("002-b")]] }, cap: 1, overrides: { "pr:001-a": new Error("gh exploded"), "orphan:001-a": { outcome: "pr-opened", url: "https://example.invalid/pr/1", baseOk: true, reason: "retry succeeded" } } });
+  check("a delivery that threw, whose orphan retry opened the PR, is reclaimed after that retry and frees its slot", by(crashedOpened.results, "001-a").status === "done" && at(crashedOpened.calls, "cleanup:001-a") > at(crashedOpened.calls, "orphan:001-a") && by(crashedOpened.results, "002-b").status === "done" && crashedOpened.gate.retained === 0, JSON.stringify({ results: crashedOpened.results, labels: labels(crashedOpened.calls) }));
+  // `pr-wrong-base` is an OPEN PR: the skill's Cleanup removes the worktree
+  // once the PR is open, and the wrong base is repaired on the PR, so it is
+  // reclaimed — the same reading `DEP_SUCCEEDED` takes when it lets a
+  // dependent stack on it — rather than held over nothing to inspect.
+  const wrongBase = await runBatch({ plan: { defaultBase: "main", waves: [[t("001-a"), t("002-b")]] }, cap: 1, overrides: { "pr:001-a": { opened: true, url: "https://example.invalid/pr/1", pushed: true, baseOk: false, baseRepaired: "", reason: "base read back as main-old" } } });
+  check("a `pr-wrong-base` delivery is reclaimed like any open PR, and its slot freed", by(wrongBase.results, "001-a").status === "pr-wrong-base" && labels(wrongBase.calls).includes("cleanup:001-a") && by(wrongBase.results, "002-b").status === "done" && at(wrongBase.calls, "002-b:fix#1") > at(wrongBase.calls, "cleanup:001-a") && wrongBase.gate.retained === 0, JSON.stringify({ results: wrongBase.results, labels: labels(wrongBase.calls) }));
   // The reclaim's outcome is READ: a `wt-remove` refusal after a delivered PR
   // leaves the worktree live, so the slot stays held (and, at cap 1, the
   // waiter is denied) while the delivery itself still reads `done`. A cleanup
