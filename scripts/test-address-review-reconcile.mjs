@@ -1939,7 +1939,15 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       [
         "every entry's field set, whatever its disposition",
         "**Every entry carries the same field set whatever its disposition**",
-        [/the permalink, and the reply body verbatim/, /adding the committed file and its queued or deferred placement/],
+        [/the permalink \(the thread's, the standalone comment's url, or the lane's details URL\), and the reply body verbatim/, /written there once rather than in both slots/, /adding the committed file and its queued or deferred placement/],
+      ],
+      // Step 3's replay premise has to admit both routes a standalone item
+      // arrives by, or the gathering step excludes a recorded misfired
+      // finding before the replay bullet (pinned below) ever sees it.
+      [
+        "step 3's replay premise for a recorded standalone item",
+        "- **Top-level review summaries** (`gh pr view --json reviews`)",
+        [/an earlier run having gathered it — by the request that identified it or as a misfired finding that qualified on its own — and is what makes that entry replayable at all/],
       ],
       [
         "the recipe that finds it",
