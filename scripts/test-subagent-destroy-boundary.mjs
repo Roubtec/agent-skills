@@ -904,7 +904,7 @@ const FIXTURES = {
     // carries a destination; the other three are reads, ref creations, and a
     // guarded removal, and the NO_BUILD cross-check holds them to that.
     reviewStackInspectPrompt: [["reviewStackInspectPrompt", (f) => f.reviewStackInspectPrompt(reviewStackOrder), NO_BUILD]],
-    reviewStackGuidesPrompt: [["reviewStackGuidesPrompt", (f) => f.reviewStackGuidesPrompt(reviewStackPrefix, "042-to-043", "/w/.worktrees/c"), NO_BUILD]],
+    reviewStackGuidesPrompt: [["reviewStackGuidesPrompt", (f) => f.reviewStackGuidesPrompt(reviewStackMapping, "/w/.worktrees/c/_review-stack-042-to-043-20260827-120000"), NO_BUILD]],
     reviewStackRestackPrompt: [["reviewStackRestackPrompt", (f) => f.reviewStackRestackPrompt({ mapping: reviewStackMapping, base: "main", worktree: "/w/.worktrees/c/_review-stack-042-to-043-20260827-120000", slug: "_review-stack-042-to-043-20260827-120000" }), RESTACK_TEMP_DIRECTORY]],
     reviewStackTeardownPrompt: [
       ["reviewStackTeardownPrompt (refs reported)", (f) => f.reviewStackTeardownPrompt({ worktree: "/w/.worktrees/c/_review-stack-042-to-043-20260827-120000", slug: "_review-stack-042-to-043-20260827-120000", tips: reviewStackTips, mapping: reviewStackMapping, preRebaseRefs: ["refs/pre-rebase/review-stack/042-to-043-20260827-120000/01-042-widget/20260827-120101"], restackOutcome: "it completed" }), NO_BUILD],
