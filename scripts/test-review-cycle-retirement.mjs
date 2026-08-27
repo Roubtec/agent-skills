@@ -42,9 +42,12 @@
 // PID/start-time helpers, extracted and driven to simulate `/proc` reuse,
 // start-read and identity-file-write cleanup, bounded TERM/KILL, survivor
 // failure, and missing-process death without signalling a real process; the
-// same section pins that the Claude-provider helper conversion stays deferred
-// until powbox documents a provider-neutral full-review payload, and parses the
-// retained raw path's passed-versus-issues evidence-failure contract. And
+// same section pins that both mirrors launch the peer through `peer-review-run`
+// as the primary path, read its review from `reviewFile`, and keep the direct
+// launch as the fallback the result — never the binary or the schema string —
+// selects, and parses the fallback's passed-versus-issues evidence-failure
+// contract. The peer prompt's own launch shape and degradation route are pinned
+// beside the shared-preflight scenario, on both workflow copies. And
 // `wf-review-cycle.js`'s parse of the INVOKER'S GRANT of the close-out, which
 // decides whether that gate is reachable at all.
 //
@@ -92,7 +95,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 203;
+const CHECKS_PER_LEG = 210;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -111,14 +114,14 @@ async function scenario(name, fn) {
 // Load the marked section and hand back `runReviewCycle`, bound to a scripted
 // `agent`. Fail loudly if the markers moved, so this cannot silently pass
 // against a section it no longer found.
-function loadCycle(src, agent) {
+function loadCycle(src, agent, logSink) {
   const b = src.indexOf("BEGIN EMBEDDABLE SECTION: review-cycle-core");
   const e = src.indexOf("END EMBEDDABLE SECTION: review-cycle-core");
   if (b < 0 || e < 0 || e < b) throw new Error("review-cycle-core markers not found");
   const section = src.slice(src.indexOf("\n", b) + 1, src.lastIndexOf("\n", e));
   const parallel = async (fns) => Promise.all(fns.map((f) => f()));
   const pipeline = async () => [];
-  const log = () => {};
+  const log = logSink || (() => {});
   const phase = () => {};
   // `cycleReviewChecks` comes back beside the cycle because its TIER DEFAULT is
   // reachable no other way: `runReviewCycle` always states a tier, and so does
@@ -1639,7 +1642,7 @@ for (const name of WORKFLOWS) {
       "documented helper reason mapping",
     );
     check(
-      "the retained raw path's exact empty and garbled reasons remain eligible",
+      "the fallback path's exact empty and garbled reasons remain eligible",
       cyclePeerTrouble({ outcome: "forfeited", reason: "empty output" }) &&
         cyclePeerTrouble({ outcome: "forfeited", reason: "garbled output" }),
       "documented raw reason mapping",
@@ -1687,11 +1690,51 @@ for (const name of WORKFLOWS) {
       "pass-note bar",
     );
     check(
-      "the consumer extracts notes from raw output now and only documented helper payloads later",
+      "the consumer extracts notes from the helper's reviewFile or the fallback's outfile and from nothing else",
       /copy into `notes` ONLY valid bullets/.test(renderedPeer) &&
-        /documented `reviewFile`\/`reviewText` payload only/.test(renderedPeer) &&
-        /never enumerate `artifactDir`, guess a filename/.test(renderedPeer),
-      "raw/future payload split",
+        /the bytes of `\$reviewFile` on the helper path, or `\$outfile` on the fallback/.test(renderedPeer) &&
+        /documented `reviewFile` payload only/.test(renderedPeer) &&
+        /never enumerate `artifactDir`, guess a filename/.test(renderedPeer) &&
+        !/reviewText/.test(renderedPeer),
+      "reviewFile/outfile payload split",
+    );
+    // Task 050: the helper is the PRIMARY launch. The shape is pinned exactly —
+    // `--effort medium` explicit because the helper's own default is `high`,
+    // no `--model` because codex gives no stable non-dated alias — and the
+    // direct launch survives complete (the `nohup sh -c` identity wrapper and
+    // the `codex exec` line), reachable only from the two named triggers.
+    const primaryLaunch = renderedPeer.match(/peer-review-run --provider codex --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --effort medium/g) || [];
+    check(
+      "the peer prompt launches the helper first, once, in the foreground, at medium effort and with no model flag",
+      primaryLaunch.length === 1 &&
+        /4\. Primary launch, when `command -v peer-review-run` succeeds/.test(renderedPeer) &&
+        /exactly once, in the foreground/.test(renderedPeer) &&
+        !/peer-review-run --provider codex[^`]*--model/.test(renderedPeer) &&
+        /Pass `--effort medium` explicitly \(the helper's own default is `high`\) and no `--model`/.test(renderedPeer),
+      "primary helper launch shape",
+    );
+    check(
+      "the prompt reads the review from reviewFile and falls back only on an absent helper or a passed/issues result with no usable reviewFile",
+      /For a `passed` or `issues` result, `reviewFile` is the peer's complete review as plain text: it must be non-null and name a readable file/.test(renderedPeer) &&
+        /whose `reviewFile` is null or names a file that is not there is a result this stage cannot relay verbatim, whatever produced it: take the fallback in step 5 for this round with `fallbackReason` exactly `helper result carried no usable reviewFile`/.test(renderedPeer) &&
+        /5\. Fallback launch, ONLY when `command -v peer-review-run` fails \(`fallbackReason` exactly `peer-review-run absent from PATH`\) or step 4 found no usable `reviewFile`/.test(renderedPeer) &&
+        /nohup sh -c '[\s\S]*codex exec --sandbox read-only --cd "\$worktree" -o "\$outfile"[\s\S]*-c model_reasoning_effort=medium/.test(renderedPeer),
+      "capability probe on the result; complete fallback",
+    );
+    check(
+      "a reported model: null is a strength note, never a fallback trigger, and no deferral prose survives",
+      /a reported `model: null` is a strength note and never a fallback trigger/.test(renderedPeer) &&
+        /Set `strength` to `model=<model> effort=<effort>` exactly as the result reports them/.test(renderedPeer) &&
+        !/prerequisite/i.test(renderedPeer) &&
+        !/issues\/145/.test(renderedPeer) &&
+        !/retain(?:s|ed)? the (?:pinned )?raw launch/.test(renderedPeer),
+      "model:null note; deferral prose gone",
+    );
+    check(
+      "the primary and fallback triggers are the only ones the prompt names",
+      (renderedPeer.match(/`fallbackReason` exactly `/g) || []).length === 2 &&
+        /Every other helper outcome \(`unavailable`, `timeout`, `forfeited`, `failed`\) is returned as reported, with its `reason` verbatim and `fallbackReason` empty/.test(renderedPeer),
+      "fallback trigger census",
     );
     const calls = Array.from({ length: 6 }, (_, i) => runCyclePeerStage(cycle, state(i + 1)));
     await ownerEntered;
@@ -1792,6 +1835,65 @@ for (const name of WORKFLOWS) {
       "advisory notes beside an issues verdict stay in peerRounds and out of every later fixer input",
       issuesResult.verdict === "pass" && issuesResult.rounds === 2 && issuesResult.peerRounds[0].detail === `advisory notes:\n${issuesNoteMarker}` && issuesFixPrompts.length === 3 && issuesFixPrompts.every((p) => !p.includes(issuesNoteMarker)),
       `${JSON.stringify(issuesResult.peerRounds)} / ${issuesResult.rounds} round(s) / ${issuesFixPrompts.filter((p) => p.includes(issuesNoteMarker)).length} fixer leak(s)`,
+    );
+
+    // The strength note and the fallback reason are NOTES on the record, never
+    // control flow: a passed result carrying `model=null` still passes, the
+    // record shows the applied strength either way, and a run that took the
+    // fallback says why ONCE for the run — the second round's identical reason
+    // adds no second log line — while every peerRounds entry still carries it.
+    const fallbackLogs = [];
+    const fallbackAgent = async (prompt, opts) => {
+      const label = (opts && opts.label) || "";
+      if (label === "fix#1") return { ...PASS_PACKET, changed: true, dispositions: [] };
+      if (label === "fix#2") return { ...PASS_PACKET, changed: false, dispositions: [{ findingId: "p1-1", finding: "fix the defect", origin: "peer", disposition: "declined", detail: "reviewed and declined" }] };
+      if (label === "fix#3") return { ...idle };
+      if (label.startsWith("packet#")) return { measured: true, dirty: [], operation: "", detail: "" };
+      if (label.startsWith("review#")) return { ...OK };
+      if (label === "peer-preflight") return { outcome: "available", detail: "" };
+      if (label === "peer#1") return { outcome: "issues", findings: [{ claim: "fix the defect" }], notes: "", detail: "", reason: "", teardownFailure: false, strength: "", fallbackReason: "helper result carried no usable reviewFile" };
+      if (label === "peer#2") return { outcome: "passed", findings: [], notes: "", detail: "", reason: "", teardownFailure: false, strength: "", fallbackReason: "helper result carried no usable reviewFile" };
+      if (label === "ground#1") return { verdicts: [] };
+      return null;
+    };
+    const fallbackLoaded = loadCycle(src, fallbackAgent, (line) => fallbackLogs.push(String(line)));
+    const fallbackResult = await fallbackLoaded.runReviewCycle({ ...CYCLE, peer: "on" });
+    const fallbackLines = fallbackLogs.filter((line) => /manual fallback taken/.test(line));
+    check(
+      "a round that took the manual fallback still gates on its findings, and the run states the reason once",
+      fallbackResult.verdict === "pass" && fallbackResult.rounds === 2 &&
+        fallbackResult.peerRounds.length === 2 &&
+        fallbackResult.peerRounds.every((r) => r.fallbackReason === "helper result carried no usable reviewFile" && !("strength" in r)) &&
+        fallbackLines.length === 1 && /helper result carried no usable reviewFile/.test(fallbackLines[0]),
+      `${JSON.stringify(fallbackResult.peerRounds)} / ${JSON.stringify(fallbackLines)}`,
+    );
+    const nullModelAgent = async (_prompt, opts) => {
+      const label = (opts && opts.label) || "";
+      if (label === "fix#1") return { ...PASS_PACKET, changed: true, dispositions: [] };
+      if (label === "fix#2") return { ...idle };
+      if (label.startsWith("packet#")) return { measured: true, dirty: [], operation: "", detail: "" };
+      if (label === "review#1") return { ...OK };
+      if (label === "peer-preflight") return { outcome: "available", detail: "" };
+      if (label === "peer#1") return { outcome: "passed", findings: [], notes: "", detail: "", reason: "", teardownFailure: false, strength: "model=null effort=medium", fallbackReason: "" };
+      return null;
+    };
+    const nullModelLogs = [];
+    const nullModelResult = await loadCycle(src, nullModelAgent, (line) => nullModelLogs.push(String(line))).runReviewCycle({ ...CYCLE, peer: "on" });
+    check(
+      "a helper result reporting model: null is recorded as the applied strength and triggers no fallback",
+      nullModelResult.verdict === "pass" && nullModelResult.rounds === 1 &&
+        nullModelResult.peerRounds.length === 1 && nullModelResult.peerRounds[0].outcome === "passed" &&
+        nullModelResult.peerRounds[0].strength === "model=null effort=medium" && !("fallbackReason" in nullModelResult.peerRounds[0]) &&
+        !nullModelLogs.some((line) => /manual fallback taken/.test(line)),
+      JSON.stringify(nullModelResult.peerRounds),
+    );
+    const { normalizeCyclePeerResult: normalizePeer } = fallbackLoaded;
+    check(
+      "strength and fallbackReason normalize to empty strings when a peer omits them and never change the outcome",
+      (() => { const n = normalizePeer({ outcome: "passed", findings: [], reason: "" }); return n.outcome === "passed" && n.strength === "" && n.fallbackReason === ""; })() &&
+        normalizePeer({ outcome: "passed", findings: [], reason: "", strength: 7, fallbackReason: null }).strength === "" &&
+        normalizePeer({ outcome: "issues", findings: [{ claim: "x" }], reason: "", fallbackReason: "peer-review-run absent from PATH" }).outcome === "issues",
+      "note-field normalization",
     );
 
     let preflightAttempts = 0;
@@ -2004,7 +2106,7 @@ const BATCH_CONTRACT_CHECKS = 5;
 // constant — the reuse failure this guard exists for — without ever probing or
 // signalling a real process. The fake `kill` records every operand and can
 // model TERM resistance, KILL death, or a teardown survivor.
-const PEER_LIFECYCLE_CHECKS = 21;
+const PEER_LIFECYCLE_CHECKS = 22;
 {
   console.log("# codex review-cycle prose — peer lifecycle negative controls");
   const before = legOk + legFail;
@@ -2099,28 +2201,44 @@ const PEER_LIFECYCLE_CHECKS = 21;
   );
   check("the direct Codex provider gets bounded TERM, death verification, safe KILL, and a survivor stop", /send TERM[\s\S]*at most ten seconds[\s\S]*send KILL only if[\s\S]*ten more seconds[\s\S]*stop the cycle and escalate/.test(pluginsProse), "raw Codex lifecycle prose");
   check(
-    "the future Codex helper gets a private session artifact root and a caller wait that covers retry plus reaping",
-    /first establish `artifact_root` as a unique, private, session-scoped directory outside the reviewed worktree[\s\S]*peer-review-run --provider codex[\s\S]*caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(pluginsProse),
-    "future Codex helper envelope",
+    "the Codex helper launch is primary in the Claude mirror, at medium effort, with no model flag, from a private session artifact root, with a caller wait that covers retry plus reaping",
+    /\*\*Primary launch through `peer-review-run`\.\*\* First establish `artifact_root` as a unique, private, session-scoped directory outside the reviewed worktree[\s\S]*peer-review-run --provider codex --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --effort medium`[\s\S]*caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(pluginsProse) &&
+      !/peer-review-run --provider codex[^\n]*--model/.test(pluginsProse) &&
+      /`reviewFile` is the peer's full review as plain text: read that file in full before applying verdict logic/.test(pluginsProse) &&
+      /A reported `model: null` is that note and never a fallback trigger/.test(pluginsProse),
+    "primary Codex helper envelope",
   );
-  const futureHelperStart = prose.indexOf("**Future helper conversion, only after both powbox prerequisites land.**");
-  const retainedRawStart = prose.indexOf("**Retained raw launch until both powbox prerequisites land.**");
-  const futureHelperProse = futureHelperStart >= 0 && retainedRawStart > futureHelperStart ? prose.slice(futureHelperStart, retainedRawStart) : "";
+  const primaryHelperStart = prose.indexOf("**Primary launch through `peer-review-run`.**");
+  const degradationStart = prose.indexOf("**Capability degradation is read from the result, not from the binary or the schema string.**", primaryHelperStart);
+  const fallbackStart = prose.indexOf("**Hardened direct launch (fallback).**", degradationStart);
+  const primaryHelperProse = primaryHelperStart >= 0 && degradationStart > primaryHelperStart ? prose.slice(primaryHelperStart, degradationStart) : "";
   check(
-    "the Claude-provider helper conversion is exact, prerequisite-bound, and still leaves raw as the current primary",
-    /schema `powbox\.peer-review-run\/v1` must expose the complete provider-neutral review through a documented field such as `reviewFile` or `reviewText`/.test(prose) &&
-      /`artifactDir` alone does not identify a stable file/.test(prose) &&
-      /Until both prerequisites land, use the direct launch below even when `peer-review-run` is installed/.test(prose) &&
-      /The direct launch below remains the current primary path/.test(futureHelperProse) &&
-      /peer-review-run --provider claude --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --model opus --effort medium/.test(futureHelperProse) &&
-      /caller-side tool wait to at least 570 seconds[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(futureHelperProse) &&
-      /require schema `powbox\.peer-review-run\/v1`[\s\S]*reported `model` is `opus` and `effort` is `medium`/.test(futureHelperProse) &&
-      /when the contract supplies `reviewFile`, read that file in full and relay every finding from it verbatim/.test(futureHelperProse) &&
-      /Never infer the review from `artifactDir`/.test(futureHelperProse) &&
+    "the Claude-provider helper launch is primary and exact, pins and reads back both strength dimensions, relays reviewFile verbatim, and the direct launch follows as the fallback",
+    primaryHelperStart >= 0 && degradationStart > primaryHelperStart && fallbackStart > degradationStart &&
+      /peer-review-run --provider claude --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --model opus --effort medium/.test(primaryHelperProse) &&
+      /caller-side tool wait to at least 570 seconds[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(primaryHelperProse) &&
+      /require schema `powbox\.peer-review-run\/v1`[\s\S]*reported `model` is `opus` and `effort` is `medium`/.test(primaryHelperProse) &&
+      /`reviewFile` is the absolute path of the peer's full review as plain text — read that file in full and relay every finding from it verbatim/.test(primaryHelperProse) &&
+      /Never infer the review from `artifactDir`/.test(primaryHelperProse) &&
+      /embedded-evidence contract above and the OID\/token proof rules below apply to that complete review/.test(primaryHelperProse) &&
       (prose.match(/peer-review-run --provider claude/g) || []).length === 1 &&
-      retainedRawStart > futureHelperStart &&
-      /nohup claude -p --model opus --effort medium/.test(prose.slice(retainedRawStart)),
-    "provider-neutral review payload prerequisite",
+      /Taken when `command -v peer-review-run` fails, and on the capability-degradation route above/.test(prose.slice(fallbackStart)) &&
+      /nohup claude -p --model opus --effort medium/.test(prose.slice(fallbackStart)),
+    "primary Claude helper launch",
+  );
+  check(
+    "both mirrors probe capability on the result, not the binary or the schema string, and no deferral prose survives",
+    [prose, pluginsProse].map((text) => text.slice(text.indexOf("\n## The peer step"), text.indexOf("\n## ", text.indexOf("\n## The peer step") + 1))).every(
+      (text) =>
+        /`reviewFile` is additive within schema v1, so the schema cannot say whether a helper carries it/.test(text) &&
+        /whose `reviewFile` is null or names a file that is not there is a result this cycle cannot relay verbatim/.test(text) &&
+        /the run states the reason once rather than repeating it every round/.test(text) &&
+        !/prerequisite/i.test(text) &&
+        !/issues\/145/.test(text) &&
+        !/reviewText/.test(text) &&
+        !/deferred conversion/.test(text),
+    ),
+    "capability probe and deferral census",
   );
   check("the retained Claude launch is direct-PID only and stops on a survivor", /records `\$!` as the direct provider PID[\s\S]*peer_stop_pid[\s\S]*A surviving identity stops the entire cycle/.test(prose) && !/peer_group_alive|peer_signal_group|setsid --fork/.test(prose), "Claude direct-PID lifecycle prose");
   // Dropping the wrapper took its guarded `cd` with it, and `claude -p` has no
@@ -2136,7 +2254,7 @@ const PEER_LIFECYCLE_CHECKS = 21;
     "peer launch working directory",
   );
   check(
-    "the retained raw verdict is proved from literal embedded evidence and exact pinned OIDs",
+    "the fallback verdict is proved from literal embedded evidence and exact pinned OIDs",
     /BEGIN GENERATED REVIEW DATA/.test(prose) &&
       /END GENERATED REVIEW DATA/.test(prose) &&
       /BEGIN EMBEDDED GIT EVIDENCE/.test(prose) &&
@@ -2187,9 +2305,9 @@ const PEER_LIFECYCLE_CHECKS = 21;
   });
   check("the two executable review-cycle cores remain byte-identical", workflowCores[0] === workflowCores[1], `${workflowCores[0].length}/${workflowCores[1].length}`);
   check(
-    "both workflow cores pin the future helper's private artifact root and caller wait budget",
-    workflowCores.every((core) => /first establish \\`artifact_root\\` as a unique, private, session-scoped directory outside the reviewed worktree[\s\S]*peer-review-run --provider codex[\s\S]*caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(core)),
-    "future helper envelope in workflow cores",
+    "both workflow cores pin the primary helper launch, its private artifact root, and the caller wait budget",
+    workflowCores.every((core) => /4\. Primary launch, when \\`command -v peer-review-run\\` succeeds: run \\`peer-review-run --provider codex --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --effort medium\\`[\s\S]*caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(core) && !/prerequisite/i.test(core.slice(core.indexOf("function cyclePeerPrompt")))),
+    "primary helper envelope in workflow cores",
   );
 
   const n = legOk + legFail - before;

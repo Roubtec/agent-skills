@@ -31,7 +31,7 @@ scripts/
   test-skill-worktree-base-exclude.mjs  # asserts the skill steps that make the worktree base ignored carry the workflow's own recipe
   test-resolve-tasks-contract.mjs       # pins the shared task-pointer packet, consumer policies, mirror parity, and workflow hands-off exclusions
   verify-014-peer-strength-pin.md       # harness-neutral prompt: observe the peer step's pinned review strength (task 014)
-  verify-015-peer-review-run.md         # harness-neutral prompt: exercise retained raw peer paths, strength, evidence, and helper prerequisites (task 015)
+  verify-015-peer-review-run.md         # harness-neutral prompt: exercise the peer-review-run primary launch, its reviewFile relay, the stub-helper degradation route, strength, and evidence (tasks 015, 050)
 ```
 
 ### `plugins/`
@@ -160,7 +160,7 @@ The property the stage exists for is that a held branch delivers only where a se
 
 Run `node scripts/test-review-cycle-retirement.mjs` after changing how the review cycle raises, retires, or serves open questions, how it carries a locked-decision deviation — the two things a pass can claim off the maintainer's list, plus the one it can put ON that list on its way out — or any gate that ends a cycle without a fresh reviewer seeing the result: the trivial-round close-out and its record-only suffix, the standalone record-only close over the delivery gate's one tolerated post-run commit, the light-mode conclusion, and the validation tier a reviewer's brief states.
 
-Run it after changing the packet hard-check's measuring half too — the independent reading of a fixer's worktree that decides whether the cycle adopts its packet at all, which every one of those gates sits behind — and after changing the shared peer preflight, the adaptive throttle's forfeiture-reason mapping, the direct-provider process-identity helpers, or how `wf-review-cycle.js` parses the invoker's grant of the close-out.
+Run it after changing the packet hard-check's measuring half too — the independent reading of a fixer's worktree that decides whether the cycle adopts its packet at all, which every one of those gates sits behind — and after changing the shared peer preflight, the peer prompt's primary `peer-review-run` launch shape or its capability-degradation route (a `passed`/`issues` result with no usable `reviewFile` takes the manual fallback, stated once per run; a reported `model: null` is a strength note and never a trigger), the adaptive throttle's forfeiture-reason mapping, the direct-provider process-identity helpers, or how `wf-review-cycle.js` parses the invoker's grant of the close-out.
 
 It drives the shipped `review-cycle-core` section of both workflows through scripted rounds. Why each check is drawn where it is lives in the script's own comments beside the scenario it governs — including why a parentless HEAD is read as a definitive empty rather than a failed reading, which is what keeps an ordinary depth-1 checkout from refusing every packet, and why a branch named `feature/close-out-ui` grants no close-out.
 
