@@ -1,7 +1,12 @@
 #!/usr/bin/env node
-// Behavior suite for wf-address-tasks.js's pre-PR collision dispatch —
-// `settleWaveCollisions`, the stage that turns one wave's HELD branches into
-// deliveries and holds after the resolver deputy has run.
+// Behavior suite for wf-address-tasks.js's pre-delivery collision dispatch —
+// `settleGuardCollisions`, the stage that turns the branch the serialized
+// guard HELD (task 033: one branch at a time, first-ready-wins) into a delivery
+// or a hold after the resolver deputy has run. The function still settles a
+// several-branch hold by the older any-side rule, and most scenarios below
+// drive that shape because it is the one with two sides to get wrong; the
+// pipelined shape — one held branch beside delivered, reserved, or outside
+// sides the resolver may not touch — has scenarios of its own at the end.
 //
 // The property it exists for: a branch reaches delivery only when the clash has
 // been RE-DERIVED from the refs after resolution, and only behind a fresh
@@ -36,7 +41,7 @@
 // shipped file's DECLARATION PREFIX — everything up to the documented cut marker,
 // where its runtime body begins — with those globals stubbed, and drives
 // scripted resolver / re-scan / re-review packets through the ACTUAL shipped
-// `settleWaveCollisions`. No second copy of the dispatch exists here, which is
+// `settleGuardCollisions`. No second copy of the dispatch exists here, which is
 // why the source checks at the end assert the batch body still calls it: a
 // dispatch nothing calls would pass every scenario below.
 //
@@ -71,7 +76,7 @@ function check(name, cond, detail) {
 // it — an edit that drops one, or a guard that swallows a throw, would pass.
 // Counting the oks too lets the run assert it executed the whole suite. Bump
 // this deliberately when adding or removing a check; the number is the assertion.
-const EXPECTED_CHECKS = 203;
+const EXPECTED_CHECKS = 224;
 
 async function scenario(name, fn) {
   try {
@@ -92,7 +97,7 @@ function loadDispatch(agent) {
     "phase",
     "log",
     "parallel",
-    `"use strict";\n${prefix}\nreturn settleWaveCollisions;`,
+    `"use strict";\n${prefix}\nreturn settleGuardCollisions;`,
   )("", agent, () => {}, () => {}, async (fns) => Promise.all(fns.map((f) => f())));
 }
 
@@ -137,23 +142,25 @@ const mkHeldWithBranch = (slug, branch, extra) => ({
 });
 
 const NAME = "src/shared.ts";
-const clash = (branches, name = NAME) => ({ kind: "path", name, branches, detail: `both add ${name} — rename one side`, wave: 1 });
+const clash = (branches, name = NAME) => ({ kind: "path", name, branches, detail: `both add ${name} — rename one side`, guard: "g1" });
 const RESCAN_DETAIL = "re-scan: both branches still add it";
 const renamed = (changedBranches, collision = NAME) => ({ resolutions: [{ collision, action: "renamed", changedBranches, from: collision, to: "src/shared-b.ts", regenerated: "", reason: "fewer references" }] });
 
-async function run({ held, collisions, packets }) {
+async function run({ held, members = [], collisions, packets }) {
   const calls = [];
   const settle = loadDispatch(scriptedAgent(packets, calls));
   const out = await settle({
     heldTasks: held,
-    waveCollisions: collisions,
-    wave: 1,
+    members,
+    collisions,
+    label: "g1",
     defaultBase: "main",
     remote: true,
     peerMode: "off",
   });
   return { ...out, calls };
 }
+const member = (slug, state = "delivered") => ({ slug, branch: `task/${slug}`, base: "main", state, prUrl: state === "delivered" ? `https://example.invalid/pr/${slug}` : "" });
 
 const slugs = (entries) => entries.map((e) => (e.task ? e.task.slug : e.slug)).sort();
 const labels = (calls) => calls.map((c) => c.label);
@@ -180,7 +187,7 @@ await scenario("unreflected rename", async () => {
   for (const s of ["a", "b"]) {
     const h = heldBySlug(out, s);
     check(`unreflected rename → ${s}'s detail says the clash is still in the refs`, /still in the refs/.test(h.detail), h.detail);
-    check(`unreflected rename → ${s}'s detail says what to do next`, /rename enough sides/.test(h.detail) && /re-review/.test(h.detail), h.detail);
+    check(`unreflected rename → ${s}'s detail says what to do next`, /rename or renumber/.test(h.detail) && /re-review/.test(h.detail), h.detail);
     check(`unreflected rename → ${s} carries the RE-DERIVED clash, not the discovery one`, Array.isArray(h.collisions) && h.collisions.length === 1 && h.collisions[0].name === NAME && h.collisions[0].detail === RESCAN_DETAIL, JSON.stringify(h.collisions));
     check(`unreflected rename → ${s} still carries its cycle record`, h.artifactDir === "/tmp/art" && h.rounds === 2);
   }
@@ -207,11 +214,12 @@ await scenario("resolved two-branch clash", async () => {
   // Ordering: resolve, then re-scan, then any re-review. A re-review before the
   // re-scan would mean a branch was being cleared on the resolver's word.
   const order = labels(out.calls);
-  check("resolved clash → resolve runs before the re-scan", order.indexOf("collision-resolve:w1") === 0 && order.indexOf("collision-rescan:w1") === 1, JSON.stringify(order));
-  check("resolved clash → the re-scan runs before any re-review", order.indexOf("collision-rescan:w1") < order.indexOf("re-review:a"), JSON.stringify(order));
-  const rescanCall = out.calls.find((c) => c.label === "collision-rescan:w1");
+  check("resolved clash → resolve runs before the re-scan", order.indexOf("collision-resolve:g1") === 0 && order.indexOf("collision-rescan:g1") === 1, JSON.stringify(order));
+  check("resolved clash → the re-scan runs before any re-review", order.indexOf("collision-rescan:g1") < order.indexOf("re-review:a"), JSON.stringify(order));
+  const rescanCall = out.calls.find((c) => c.label === "collision-rescan:g1");
   check("resolved clash → the re-scan is the read-only discovery scan, same schema", rescanCall.schema && Array.isArray(rescanCall.schema.required) && rescanCall.schema.required.includes("collisions"));
   check("resolved clash → the re-scan is scoped to the held branches", /task\/a/.test(rescanCall.prompt) && /task\/b/.test(rescanCall.prompt));
+  check("resolved clash → the re-scan is the guard's own scan, the other held branch listed beside the first", /branch "task\/b"[^\n]*HELD beside/.test(rescanCall.prompt), rescanCall.prompt.slice(0, 400));
 });
 
 // 3. 027's 3+ branch rule, now re-derived rather than computed from the packet:
@@ -374,7 +382,7 @@ await scenario("re-scan throws", async () => {
     collisions: [clash(["task/a", "task/b"])],
     packets: { resolution: renamed(["task/a"]), rescan: THROWS },
   });
-  check("re-scan throws → the re-scan was actually attempted", labels(out.calls).includes("collision-rescan:w1"), JSON.stringify(labels(out.calls)));
+  check("re-scan throws → the re-scan was actually attempted", labels(out.calls).includes("collision-rescan:g1"), JSON.stringify(labels(out.calls)));
   check("re-scan throws → nothing delivers", out.deliverable.length === 0, JSON.stringify(slugs(out.deliverable)));
   check("re-scan throws → both branches held with the re-scan detail", JSON.stringify(slugs(out.held)) === JSON.stringify(["a", "b"]) && out.held.every((h) => h.status === "collision-hold" && /established nothing/.test(h.detail) && /by hand/.test(h.detail)), JSON.stringify(out.held.map((h) => h.detail)));
   check("re-scan throws → no re-review is paid for", !labels(out.calls).some((l) => l.startsWith("re-review:")), JSON.stringify(labels(out.calls)));
@@ -757,17 +765,112 @@ await scenario("still-colliding branch is never asked for assessments", async ()
   check("still colliding → the hold is the refs one, not the assessment one", heldBySlug(out, "a").detail.includes("still in the refs") && !("unassessedDeviations" in heldBySlug(out, "a")), heldBySlug(out, "a").detail);
 });
 
+// --- The pipelined shape: one held branch beside read-only sides -----------
+//
+// Under task 033's guard the held set is the one branch under it, and the
+// other sides are delivered or reserved run-local members, or holders outside
+// the run. The resolver is told outright which side renames; the re-scan has
+// the members to compare against, so a single held branch is NOT the
+// nothing-in-hand case it is with no members.
+
+// 16. A held branch against a RESERVED member: the resolver brief lists the
+//     member read-only and names the held branch as the side that renames; the
+//     re-scan runs over the member; the branch delivers behind its re-review.
+await scenario("held branch against a reserved member", async () => {
+  const out = await run({
+    held: [mkHeld("a")],
+    members: [member("b", "reserved"), member("c")],
+    collisions: [clash(["task/a", "task/b"])],
+    packets: { resolution: renamed(["task/a"]), rescan: { collisions: [] } },
+  });
+  check("reserved member → the held branch delivers", JSON.stringify(slugs(out.deliverable)) === JSON.stringify(["a"]), JSON.stringify(slugs(out.deliverable)));
+  check("reserved member → nothing held", out.held.length === 0);
+  check("reserved member → resolve, re-scan, re-review in that order", JSON.stringify(labels(out.calls)) === JSON.stringify(["collision-resolve:g1", "collision-rescan:g1", "re-review:a"]), JSON.stringify(labels(out.calls)));
+  const resolve = out.calls[0].prompt;
+  check("reserved member → the resolver brief lists the member read-only with its state", /Read-only sides/.test(resolve) && /branch "task\/b" \(reserved\)/.test(resolve), resolve.slice(0, 300));
+  check("reserved member → the resolver brief names the held branch as the side that renames", /The side to change is decided already: the held branch under the guard renames/.test(resolve) && /never rewritten/.test(resolve));
+  check("reserved member → the resolver brief never offers the least-disruptive-side judgment", !/choose the LEAST disruptive/.test(resolve));
+  const rescan = out.calls[1].prompt;
+  check("reserved member → the re-scan lists the member as RESERVED beside the held branch", /task\/b[^\n]*RESERVED/.test(rescan) && /The branch under the guard:\n- slug "a"/.test(rescan), rescan.slice(0, 300));
+  check("reserved member → a member the clash never named is not listed read-only for the resolver", !/task\/c/.test(resolve));
+});
+
+// 17. The clash survives the re-scan against the member: the held branch
+//     stays held, and the member — not a held task — is never re-reviewed or
+//     reported held.
+await scenario("clash with a member survives", async () => {
+  const out = await run({
+    held: [mkHeld("a")],
+    members: [member("b")],
+    collisions: [clash(["task/a", "task/b"])],
+    packets: { resolution: renamed(["task/a"]), rescan: { collisions: [clash(["task/a", "task/b"])] } },
+  });
+  check("surviving member clash → nothing delivers", out.deliverable.length === 0);
+  check("surviving member clash → only the held branch is reported held", JSON.stringify(slugs(out.held)) === JSON.stringify(["a"]) && /still in the refs/.test(out.held[0].detail), JSON.stringify(out.held));
+  check("surviving member clash → the detail says which sides may not change", /no delivered, reserved, or outside holder shares the value/.test(out.held[0].detail), out.held[0].detail);
+  check("surviving member clash → no re-review is paid for", !labels(out.calls).some((l) => l.startsWith("re-review:")));
+});
+
+// 18. An EXTERNAL clash — a task number an open PR outside the run holds. The
+//     resolver is handed the holder read-only; the re-scan (which enumerates
+//     the outside members itself) comes back empty; the branch delivers.
+await scenario("external task-number clash", async () => {
+  const ext = { kind: "task-number", name: "042", branches: ["task/a"], external: true, member: "#7", guard: "g1" };
+  const out = await run({
+    held: [mkHeld("a")],
+    members: [member("b")],
+    collisions: [ext],
+    packets: { resolution: { resolutions: [{ collision: "042", action: "renamed", changedBranches: ["task/a"], from: "042", to: "043", regenerated: "", reason: "renumbered the new claimant" }] }, rescan: { collisions: [] } },
+  });
+  check("external clash → the held branch delivers after renumbering", JSON.stringify(slugs(out.deliverable)) === JSON.stringify(["a"]) && out.held.length === 0, JSON.stringify(out.held));
+  const resolve = out.calls[0].prompt;
+  check("external clash → the outside holder is listed read-only", /outside member "#7" \(outside this run\)/.test(resolve), resolve.slice(0, 300));
+  check("external clash → the brief states the renumbering rule for the new claimant", /renumber the flagged NEW claimant/.test(resolve) && /never a copy under `tasks\/done\/`/.test(resolve));
+  const survives = await run({
+    held: [mkHeld("a")],
+    members: [member("b")],
+    collisions: [ext],
+    packets: { resolution: renamed(["task/a"], "042"), rescan: { collisions: [ext] } },
+  });
+  check("external clash still in the re-scan → held", survives.deliverable.length === 0 && survives.held.length === 1 && /still in the refs/.test(survives.held[0].detail));
+  const imperative = await run({
+    held: [mkHeld("a")],
+    members: [member("b")],
+    collisions: [ext],
+    packets: { resolution: { resolutions: [{ collision: "042", action: "blocked", changedBranches: [], reason: "the maintainer pinned 042" }] }, rescan: { collisions: [] } },
+  });
+  check("external clash on an imperative number → collision-blocked", imperative.held.length === 1 && imperative.held[0].status === "collision-blocked");
+});
+
+// 19. A single held branch with NO members and no external side is still the
+//     nothing-in-hand case (scenario 6); with a member it is not — the member
+//     is what the re-scan compares against.
+await scenario("single held branch with a member re-scans", async () => {
+  const out = await run({
+    held: [mkHeld("a")],
+    members: [member("b")],
+    collisions: [clash(["task/a", "task/b"])],
+    packets: { resolution: renamed(["task/a"]), rescan: { collisions: [] } },
+  });
+  check("single held + member → the re-scan runs", labels(out.calls).includes("collision-rescan:g1"), JSON.stringify(labels(out.calls)));
+  check("single held + member → delivers", JSON.stringify(slugs(out.deliverable)) === JSON.stringify(["a"]));
+});
+
 // 15. Source-level properties the scenarios cannot see. The first is what makes
 //     every scenario above speak for the shipped workflow at all: a dispatch the
 //     batch body no longer calls would pass all of them.
 {
-  const fnStart = src.indexOf("async function settleWaveCollisions(");
-  check("settleWaveCollisions is declared", fnStart !== -1);
+  const fnStart = src.indexOf("async function settleGuardCollisions(");
+  check("settleGuardCollisions is declared", fnStart !== -1);
   const body = src.slice(fnStart, src.indexOf("\n}", fnStart));
-  const callSite = src.indexOf("await settleWaveCollisions({");
-  check("the batch body awaits settleWaveCollisions", callSite !== -1 && callSite > fnStart, String(callSite));
-  check("the re-scan reuses the read-only discovery scan", /collisionScanPrompt\(heldTasks\.map/.test(body));
-  check("the re-scan is validated by the discovery schema", /label: `collision-rescan:w\$\{wave\}`, schema: COLLISION_SCHEMA/.test(body));
+  // The pipeline's guard turn is what calls it, and the pipeline is what the
+  // batch body runs — a dispatch nothing reaches would pass every scenario.
+  const callSite = src.indexOf("await settleGuardCollisions({");
+  const pipelineStart = src.indexOf("async function runTaskPipeline(");
+  const batchCall = src.indexOf("await runPipelinedBatch({");
+  check("the guard turn awaits settleGuardCollisions, and the batch body runs the pipeline", callSite !== -1 && callSite > pipelineStart && pipelineStart > fnStart && batchCall > callSite, `${callSite}/${pipelineStart}/${batchCall}`);
+  check("the re-scan reuses the read-only guard scan", /guardScanPrompt\(\{ slug: first\.task\.slug/.test(body));
+  check("the re-scan is validated by the discovery schema", /label: `collision-rescan:\$\{label\}`, schema: COLLISION_SCHEMA/.test(body));
   // Every delivery in this stage sits after the re-derived state exists. The
   // count is asserted too: a second push added elsewhere in the function —
   // before the gate, or outside the loop — fails here rather than sliding in
@@ -796,8 +899,11 @@ await scenario("still-colliding branch is never asked for assessments", async ()
   // push publishes. A dispatch that computed the coverage and delivered the
   // carried assessments anyway would pass every scenario that never scripts a
   // pre-rename entry.
-  check("the re-review is handed the branch's standing deviations", /collisionReReviewPrompt\(task, remote, peerMode, standingDeviations\)/.test(body), "dispatch body");
-  check("and the delivering push publishes the re-review's assessments, not the carried ones", /deviationAssessments: coverage\.assessments/.test(body) && /const coverage = collisionDeviationCoverage\(standingDeviations, reviewed \? verdict : null\);/.test(body), "dispatch body");
+  const reStart = src.indexOf("async function deliveryReReview(");
+  const reBody = reStart >= 0 ? src.slice(reStart, src.indexOf("\n}", reStart)) : "";
+  check("the dispatch runs the shared delivery-tier re-review", reStart !== -1 && /await deliveryReReview\(task, result, remote, peerMode\)/.test(body), "dispatch body");
+  check("the re-review is handed the branch's standing deviations", /collisionReReviewPrompt\(task, remote, peerMode, standingDeviations\)/.test(reBody), "re-review body");
+  check("and the delivering push publishes the re-review's assessments, not the carried ones", /deviationAssessments: coverage\.assessments/.test(reBody) && /const coverage = collisionDeviationCoverage\(standingDeviations, reviewed \? verdict : null\);/.test(reBody) && /\.\.\.freshAssessments/.test(body), "re-review body");
 }
 
 check(`the suite ran all ${EXPECTED_CHECKS} checks`, ok + failures === EXPECTED_CHECKS, `ran ${ok + failures}`);

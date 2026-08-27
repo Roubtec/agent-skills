@@ -61,6 +61,14 @@ const pure = load({ agent: () => { throw new Error("no agent expected"); }, phas
     check(`not mergeable: ${String(status)}`, !m({ status }));
   }
   check("not mergeable: missing result", !m(undefined) && !m(null));
+  // Task 033: a delivered branch whose PR merged during the run is on the
+  // base already, so it is not stacked, and the exclusion says why.
+  check("not mergeable: done but merged during the run", !m({ status: "done", merged: true }));
+  {
+    const plan = { defaultBase: "main", waves: [[{ slug: "001-a", branch: "task/001-a", base: "main", dependsOn: [] }, { slug: "002-b", branch: "task/002-b", base: "main", dependsOn: [] }]] };
+    const { order, excluded } = pure.reviewStackOrder(plan, [{ slug: "001-a", branch: "task/001-a", status: "done", merged: true, mergedInto: "main" }, { slug: "002-b", branch: "task/002-b", status: "done" }]);
+    check("a merged member is excluded as `merged`, its siblings still ordered", order.length === 1 && order[0].slug === "002-b" && excluded.length === 1 && excluded[0].status === "merged", JSON.stringify({ order, excluded }));
+  }
   check("the predicate is wider than `done`", pure.REVIEW_STACK_MERGEABLE.length > 1 && pure.REVIEW_STACK_MERGEABLE.includes("local-only"));
 }
 

@@ -1,21 +1,30 @@
 #!/usr/bin/env node
-// Behavior suite for wf-address-tasks.js's discovery-stage collision partition.
-// It evaluates the shipped declaration prefix and drives its actual
-// `discoverWaveCollisions` helper; no second copy of the partition lives here.
+// Behavior suite for wf-address-tasks.js's guard-discovery partition (task
+// 033's pipelined form of the pre-PR collision guard). It evaluates the shipped
+// declaration prefix and drives its actual `discoverGuardCollisions` helper; no
+// second copy of the partition lives here.
 //
-// The property it exists for: a reported clash must name AT LEAST TWO reviewed
-// branches, attributed through the shared branch-name rule, or the whole
-// reviewed wave is held with a detail actionable enough to deconflict from.
-// Attribution is the weak point, so the scenarios below drive every way it can
-// come up short of two — a one-branch clash, a cross-task branch/slug alias,
-// two raw spellings that normalize to one branch, and two distinct names that
-// resolve to one task — and fully qualified local refs are canonicalized
-// through that same rule rather than counted as separate branches.
+// The property it exists for: a reported clash must involve the ONE branch
+// under the guard and attribute through the shared branch-name rule to a
+// second holder — a delivered or reserved run-local member, or, marked
+// `external`, a member of the same-number guard's comparison set that this run
+// never holds (an open PR head, the base branch) — or the branch is held with a
+// detail actionable enough to deconflict from. Attribution is the weak point,
+// so the scenarios below drive every way it can come up short: a one-branch
+// clash with no external holder, an external clash naming no holder, a clash
+// among members that does not involve the branch under the guard, a foreign
+// name, a cross-entry branch/slug alias, and two raw spellings that normalize
+// to one branch — while fully qualified local refs are canonicalized through
+// that same rule rather than counted as separate branches.
 //
 // The two ends are pinned as well: a well-formed clash reaches resolution
-// unchanged apart from its wave, and a CLEAN scan costs nothing — nothing held,
-// nothing routed to resolution, and no agent call beyond the discovery scan
-// this stage already made.
+// unchanged apart from its guard stamp, and a CLEAN scan costs nothing beyond
+// the one read-only scan this stage always makes — the pipelined guard scans
+// even the first branch of a run, because the referenced section's remote
+// members exist whether or not the run has delivered anything yet. The
+// readings the scan carries beside the clashes — the numbers the branch claims
+// and the delivered members whose PR has merged — ride back filtered, so the
+// pipeline reserves and rebases off what the agent actually reported.
 //
 // Run: node scripts/test-collision-discovery.mjs
 
@@ -40,7 +49,7 @@ function check(name, cond, detail) {
   }
 }
 
-const EXPECTED_CHECKS = 55;
+const EXPECTED_CHECKS = 58;
 
 function loadDiscovery(agent, events) {
   const at = src.indexOf(CUT);
@@ -53,163 +62,142 @@ function loadDiscovery(agent, events) {
     "phase",
     "log",
     "parallel",
-    `"use strict";\n${prefix}\nreturn discoverWaveCollisions;`,
+    `"use strict";\n${prefix}\nreturn { discoverGuardCollisions, collisionIsAttributable, guardScanPrompt };`,
   )("", agent, (message) => events.push({ type: "phase", message }), (message) => events.push({ type: "log", message }), async (fns) => Promise.all(fns.map((f) => f())));
 }
 
-const mkTask = (slug) => ({ slug, branch: `task/${slug}`, base: "main", path: `tasks/${slug}.md`, content: `# ${slug}\n` });
-const mkReady = (slug) => ({
-  task: mkTask(slug),
-  result: { slug, branch: `task/${slug}`, status: "ready", notes: "cycle notes", rounds: 2, openQuestions: [], deviations: [], peerRounds: 1, artifactDir: "/tmp/art" },
-});
-const mkTaskWithBranch = (slug, branch) => ({ slug, branch, base: "main", path: `tasks/${slug}.md`, content: `# ${slug}\n` });
-const mkReadyWithBranch = (slug, branch) => ({
-  task: mkTaskWithBranch(slug, branch),
-  result: { slug, branch, status: "ready", notes: "cycle notes", rounds: 2, openQuestions: [], deviations: [], peerRounds: 1, artifactDir: "/tmp/art" },
-});
-const clash = (branches, name = "src/shared.ts") => ({ kind: "path", name, branches, detail: `both add ${name} — rename one side` });
-const slugs = (entries) => entries.map((entry) => (entry.task ? entry.task.slug : entry.slug)).sort();
+const mkTask = (slug, branch = `task/${slug}`) => ({ slug, branch, base: "main", path: `tasks/${slug}.md`, content: `# ${slug}\n` });
+const mkReady = (slug, branch) => ({ task: mkTask(slug, branch), result: { slug, branch: branch || `task/${slug}`, status: "ready", notes: "n", rounds: 1, openQuestions: [], deviations: [], peerRounds: 0, artifactDir: "/tmp/art" } });
+const member = (slug, state = "delivered", extra = {}) => ({ slug, branch: `task/${slug}`, base: "main", state, prUrl: state === "delivered" ? `https://example.invalid/pr/${slug}` : "", ...extra });
+const NAME = "src/shared.ts";
+const clash = (branches, extra = {}) => ({ kind: "path", name: NAME, branches, detail: "both add it", ...extra });
+const THROWS = Symbol("throws");
 
-async function run(ready, scan) {
-  const calls = [];
+async function run({ ready, members = [], scan }) {
   const events = [];
-  const discover = loadDiscovery(async (prompt, opts) => {
-    calls.push({ prompt, label: opts && opts.label, schema: opts && opts.schema });
+  const calls = [];
+  const agent = async (prompt, opts) => {
+    calls.push({ label: (opts && opts.label) || "", prompt, schema: opts && opts.schema });
+    if (scan === THROWS) throw new Error("scan exploded");
     return scan;
-  }, events);
-  const out = await discover({ ready, wave: 1, defaultBase: "main" });
-  return { ...out, calls, events };
+  };
+  const { discoverGuardCollisions } = loadDiscovery(agent, events);
+  const out = await discoverGuardCollisions({ ready, members, defaultBase: "main" });
+  return { ...out, events, calls };
 }
 
-const wellFormed = await run(
-  [mkReady("a"), mkReady("b"), mkReady("c")],
-  { collisions: [clash(["task/a", "task/b"])] },
-);
-check("well-formed clash → exactly one discovery scan runs", wellFormed.calls.length === 1 && wellFormed.calls[0].label === "collision-scan:w1", JSON.stringify(wellFormed.calls.map((call) => call.label)));
-check("well-formed clash → both named branches route to resolution", JSON.stringify(slugs(wellFormed.heldTasks)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(wellFormed.heldTasks)));
-check("well-formed clash → the clean branch stays deliverable", JSON.stringify(slugs(wellFormed.deliverable)) === JSON.stringify(["c"]), JSON.stringify(slugs(wellFormed.deliverable)));
-check("well-formed clash → nobody is held at discovery", wellFormed.held.length === 0, JSON.stringify(wellFormed.held));
-check("well-formed clash → the collision reaches resolution unchanged apart from its wave", wellFormed.waveCollisions.length === 1 && wellFormed.waveCollisions[0].name === "src/shared.ts" && wellFormed.waveCollisions[0].wave === 1);
+// 1. A clean scan: nothing held, the readings ride back, exactly one agent call
+//    — even with no members, since the referenced section's remote members are
+//    always there to compare against.
+{
+  const out = await run({ ready: mkReady("a"), scan: { collisions: [], taskNumbers: ["042", " 042a "], merged: [], scanComplete: true } });
+  check("clean scan → the branch is not held", out.held === null);
+  check("clean scan → no collisions", out.collisions.length === 0);
+  check("clean scan → exactly one scan call, even for the first branch of the run", out.calls.length === 1 && out.calls[0].label === "collision-scan:a", JSON.stringify(out.calls.map((c) => c.label)));
+  check("clean scan → the claimed task numbers ride back trimmed", JSON.stringify(out.readings.taskNumbers) === JSON.stringify(["042", "042a"]), JSON.stringify(out.readings.taskNumbers));
+  check("clean scan → scanComplete true", out.readings.scanComplete === true);
+  check("clean scan → the phase is the guard's", out.events.some((e) => e.type === "phase" && e.message === "Collision guard"));
+  check("clean scan → the scan is validated by the collision schema", out.calls[0].schema && out.calls[0].schema.required.includes("collisions"));
+  check("clean scan → the brief says this is the first branch", /first branch to reach the guard/.test(out.calls[0].prompt));
+}
 
-const qualified = await run(
-  [mkReady("a"), mkReady("b")],
-  { collisions: [clash(["refs/heads/task/a", "heads/task/b"])] },
-);
-check("qualified refs → nothing is deliverable before resolution", qualified.deliverable.length === 0, JSON.stringify(slugs(qualified.deliverable)));
-check("qualified refs → both branches route to resolution", JSON.stringify(slugs(qualified.heldTasks)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(qualified.heldTasks)));
-check("qualified refs → the scan is usable rather than a discovery error", qualified.held.length === 0, JSON.stringify(qualified.held));
-check("qualified refs → no extra agent call is added", qualified.calls.length === 1, JSON.stringify(qualified.calls.map((call) => call.label)));
+// 2. A well-formed clash against a reserved member reaches resolution unchanged
+//    apart from its guard stamp; the branch is not held here (the settlement
+//    decides), and the members reach the brief with their state.
+{
+  const c = clash(["task/a", "task/b"]);
+  const out = await run({ ready: mkReady("a"), members: [member("b", "reserved"), member("c")], scan: { collisions: [c], taskNumbers: [], merged: [] } });
+  check("member clash → not held by discovery", out.held === null);
+  check("member clash → the clash reaches resolution stamped with the guard", out.collisions.length === 1 && out.collisions[0].name === NAME && out.collisions[0].guard === "a" && JSON.stringify(out.collisions[0].branches) === JSON.stringify(["task/a", "task/b"]));
+  const p = out.calls[0].prompt;
+  check("member clash → the brief lists the reserved member as RESERVED and the delivered one with its PR", /task\/b.*RESERVED/.test(p) && /task\/c.*DELIVERED[^\n]*pr\/c/.test(p), p.slice(0, 200));
+  check("member clash → the brief compares by ref from the repo root and enters no worktree", /do not enter or create any worktree/.test(p) && /git diff --diff-filter=A --name-only 'main'\.\.\.'task\/a'/.test(p));
+}
 
-const unattributable = await run(
-  [mkReady("a"), mkReady("b")],
-  { collisions: [clash(["origin/task/a", "origin/task/b"])] },
-);
-check("unattributable clash → nothing is deliverable", unattributable.deliverable.length === 0, JSON.stringify(slugs(unattributable.deliverable)));
-check("unattributable clash → nothing routes to resolution", unattributable.heldTasks.length === 0, JSON.stringify(slugs(unattributable.heldTasks)));
-check("unattributable clash → every reviewed branch is held", JSON.stringify(slugs(unattributable.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(unattributable.held)));
-check("unattributable clash → hold is actionable", unattributable.held.every((held) => held.status === "collision-scan-error" && /exact branch strings/.test(held.detail) && /deconflict and re-review/.test(held.detail)), JSON.stringify(unattributable.held.map((held) => held.detail)));
-check("unattributable clash → no extra agent call is added", unattributable.calls.length === 1, JSON.stringify(unattributable.calls.map((call) => call.label)));
+// 3. The external arm: the other holder is outside the run.
+{
+  const ext = { kind: "task-number", name: "042", branches: ["task/a"], external: true, member: "#7" };
+  const out = await run({ ready: mkReady("a"), scan: { collisions: [ext], taskNumbers: ["042"], merged: [] } });
+  check("external clash with a holder → usable, not held", out.held === null && out.collisions.length === 1 && out.collisions[0].external === true);
+  const noHolder = await run({ ready: mkReady("a"), scan: { collisions: [{ ...ext, member: "  " }], taskNumbers: [], merged: [] } });
+  check("external clash naming no holder → the branch is held", noHolder.held && noHolder.held.status === "collision-scan-error", JSON.stringify(noHolder.held));
+  check("external clash naming no holder → the detail is actionable", /no second holder/.test(noHolder.held.detail) && /exact branch strings/.test(noHolder.held.detail), noHolder.held.detail);
+  const notReady = await run({ ready: mkReady("a"), members: [member("b")], scan: { collisions: [{ ...ext, branches: ["task/b"] }], taskNumbers: [], merged: [] } });
+  check("external clash naming a member but not the branch under the guard → held", notReady.held && notReady.held.status === "collision-scan-error");
+}
 
-const partlyUnattributable = await run(
-  [mkReady("a"), mkReady("b"), mkReady("c")],
-  { collisions: [clash(["task/a", "task/b"]), clash(["origin/task/b", "origin/task/c"], "Widget")] },
-);
-check("partly unattributable packet → nothing is deliverable", partlyUnattributable.deliverable.length === 0, JSON.stringify(slugs(partlyUnattributable.deliverable)));
-check("partly unattributable packet → nothing routes to resolution", partlyUnattributable.heldTasks.length === 0, JSON.stringify(slugs(partlyUnattributable.heldTasks)));
-check("partly unattributable packet → the whole reviewed wave is held", JSON.stringify(slugs(partlyUnattributable.held)) === JSON.stringify(["a", "b", "c"]), JSON.stringify(slugs(partlyUnattributable.held)));
-check("partly unattributable packet → no extra agent call is added", partlyUnattributable.calls.length === 1, JSON.stringify(partlyUnattributable.calls.map((call) => call.label)));
+// 4. Every way attribution can come up short holds the branch with the
+//    scan-error detail and carries its cycle record.
+{
+  const cases = [
+    ["one-branch clash with no external holder", [clash(["task/a"])], []],
+    ["clash among members only", [clash(["task/b", "task/c"])], [member("b"), member("c")]],
+    ["foreign name", [clash(["task/a", "origin/task/b"])], [member("b")]],
+    ["empty branches", [clash([])], [member("b")]],
+    ["two spellings of one branch", [clash(["task/a", "refs/heads/task/a"])], [member("b")]],
+    ["one usable entry beside a foreign one", [clash(["task/a", "task/b"]), clash(["task/a", "ghost"])], [member("b")]],
+  ];
+  for (const [name, collisions, members] of cases) {
+    const out = await run({ ready: mkReady("a"), members, scan: { collisions, taskNumbers: ["042"], merged: [] } });
+    check(`${name} → the branch is held as collision-scan-error`, out.held && out.held.status === "collision-scan-error", JSON.stringify(out.held));
+    check(`${name} → the hold carries the cycle record`, out.held && out.held.artifactDir === "/tmp/art" && out.held.rounds === 1);
+    check(`${name} → the readings still ride back`, JSON.stringify(out.readings.taskNumbers) === JSON.stringify(["042"]));
+  }
+}
 
-const partlyAttributedEntry = await run(
-  [mkReady("a"), mkReady("b"), mkReady("c")],
-  { collisions: [clash(["task/a", "task/b", "origin/task/c"])] },
-);
-check("partly attributed entry → nothing is deliverable", partlyAttributedEntry.deliverable.length === 0, JSON.stringify(slugs(partlyAttributedEntry.deliverable)));
-check("partly attributed entry → nothing routes to resolution", partlyAttributedEntry.heldTasks.length === 0, JSON.stringify(slugs(partlyAttributedEntry.heldTasks)));
-check("partly attributed entry → the whole reviewed wave is held", JSON.stringify(slugs(partlyAttributedEntry.held)) === JSON.stringify(["a", "b", "c"]), JSON.stringify(slugs(partlyAttributedEntry.held)));
-check("partly attributed entry → the foreign name is reported as an attribution failure", partlyAttributedEntry.held.every((held) => /unknown branch/.test(held.detail) && /exact branch strings/.test(held.detail)), JSON.stringify(partlyAttributedEntry.held.map((held) => held.detail)));
+// 4b. A cross-entry branch/slug alias: task `a` on branch `b`, member `b` on
+//     `task/b`. One reported string matches two entries but is one branch.
+{
+  const out = await run({ ready: mkReady("a", "b"), members: [member("b")], scan: { collisions: [clash(["b"])], taskNumbers: [], merged: [] } });
+  check("cross-entry alias singleton → held", out.held && out.held.status === "collision-scan-error");
+}
 
-const oneBranch = await run(
-  [mkReady("a"), mkReady("b")],
-  { collisions: [clash(["task/a"])] },
-);
-check("one-branch clash → nothing is deliverable", oneBranch.deliverable.length === 0, JSON.stringify(slugs(oneBranch.deliverable)));
-check("one-branch clash → nothing routes to resolution", oneBranch.heldTasks.length === 0, JSON.stringify(slugs(oneBranch.heldTasks)));
-check("one-branch clash → every reviewed branch is held", JSON.stringify(slugs(oneBranch.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(oneBranch.held)));
-check("one-branch clash → detail names the attribution failure", oneBranch.held.every((held) => /fewer than two reviewed branches/.test(held.detail)), JSON.stringify(oneBranch.held.map((held) => held.detail)));
-check("one-branch clash → no extra agent call is added", oneBranch.calls.length === 1, JSON.stringify(oneBranch.calls.map((call) => call.label)));
+// 5. Fully qualified local refs canonicalize through the shared rule.
+{
+  const out = await run({ ready: mkReady("a"), members: [member("b")], scan: { collisions: [clash(["refs/heads/task/a", "heads/task/b"])], taskNumbers: [], merged: [] } });
+  check("qualified refs → attributable, not held", out.held === null && out.collisions.length === 1);
+}
 
-// Task `a` is on branch `b`; task `b` is on branch `task/b`. A malformed
-// entry naming only `b` matches TWO task entries (task a via its branch,
-// task b via its slug) from a SINGLE reported branch name — the two-task
-// count must not stand in for a second distinct reported branch.
-const crossTaskAlias = await run(
-  [mkReadyWithBranch("a", "b"), mkReadyWithBranch("b", "task/b")],
-  { collisions: [clash(["b"])] },
-);
-check("cross-task branch/slug alias → nothing is deliverable", crossTaskAlias.deliverable.length === 0, JSON.stringify(slugs(crossTaskAlias.deliverable)));
-check("cross-task branch/slug alias → nothing routes to resolution", crossTaskAlias.heldTasks.length === 0, JSON.stringify(slugs(crossTaskAlias.heldTasks)));
-check("cross-task branch/slug alias → the whole reviewed wave is held", JSON.stringify(slugs(crossTaskAlias.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(crossTaskAlias.held)));
-check("cross-task branch/slug alias → detail names the attribution failure", crossTaskAlias.held.every((held) => /fewer than two reviewed branches/.test(held.detail)), JSON.stringify(crossTaskAlias.held.map((held) => held.detail)));
-check("cross-task branch/slug alias → no extra agent call is added", crossTaskAlias.calls.length === 1, JSON.stringify(crossTaskAlias.calls.map((call) => call.label)));
+// 6. A scan that returns nothing usable, or throws, holds the branch.
+{
+  for (const [name, scan] of [["scan returned nothing", null], ["scan omitted collisions", {}], ["scan returned a non-array", { collisions: "none" }], ["scan threw", THROWS]]) {
+    const out = await run({ ready: mkReady("a"), scan });
+    check(`${name} → held as collision-scan-error`, out.held && out.held.status === "collision-scan-error" && /scan failed/.test(out.held.detail), JSON.stringify(out.held));
+    check(`${name} → the scan was attempted once`, out.calls.length === 1);
+    check(`${name} → the readings are empty and incomplete`, out.readings.taskNumbers.length === 0 && out.readings.merged.length === 0 && out.readings.scanComplete === false);
+  }
+}
 
-// Same alias shape, but the malformed entry names `b` twice with different
-// raw spellings (`b` and `refs/heads/b`) that both normalize to `b`. Two
-// raw entries still normalize to one distinct branch name, so this must be
-// rejected the same way even though `names.length` equals the reported count.
-const duplicateNormalized = await run(
-  [mkReadyWithBranch("a", "b"), mkReadyWithBranch("b", "task/b")],
-  { collisions: [clash(["b", "refs/heads/b"])] },
-);
-check("duplicate-normalized clash → nothing is deliverable", duplicateNormalized.deliverable.length === 0, JSON.stringify(slugs(duplicateNormalized.deliverable)));
-check("duplicate-normalized clash → nothing routes to resolution", duplicateNormalized.heldTasks.length === 0, JSON.stringify(slugs(duplicateNormalized.heldTasks)));
-check("duplicate-normalized clash → the whole reviewed wave is held", JSON.stringify(slugs(duplicateNormalized.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(duplicateNormalized.held)));
-check("duplicate-normalized clash → detail names the attribution failure", duplicateNormalized.held.every((held) => /fewer than two reviewed branches/.test(held.detail)), JSON.stringify(duplicateNormalized.held.map((held) => held.detail)));
-check("duplicate-normalized clash → no extra agent call is added", duplicateNormalized.calls.length === 1, JSON.stringify(duplicateNormalized.calls.map((call) => call.label)));
+// 7. The merged reading is filtered to well-formed entries; incompleteness is
+//    reported with its detail.
+{
+  const out = await run({ ready: mkReady("a"), members: [member("b")], scan: { collisions: [], taskNumbers: [], merged: [{ branch: "task/b", mergedInto: "main" }, null, { mergedInto: "main" }], scanComplete: false, detail: "gh unavailable" } });
+  check("merged reading → only entries naming a branch survive", JSON.stringify(out.readings.merged) === JSON.stringify([{ branch: "task/b", mergedInto: "main" }]), JSON.stringify(out.readings.merged));
+  check("incomplete scan → reported with its detail, the branch not held for it", out.readings.scanComplete === false && out.readings.detail === "gh unavailable" && out.held === null);
+}
 
-// A malformed entry can name two distinct KNOWN branches yet still match only
-// ONE task: `task/a` is task a's own branch and `a` is task a's own slug, so
-// both aliases point at task a alone; task b is named by neither. The
-// distinct-name clause this task added is satisfied (two distinct normalized
-// names), but the pre-existing distinct-task clause is not — acceptance
-// criterion 3 requires this stays rejected, and specifically by that existing
-// check, not by the new one. Without `taskEntries.filter(...).length >= 2`
-// this packet would pass attribution.
-const twoNamesOneTask = await run(
-  [mkReady("a"), mkReady("b")],
-  { collisions: [clash(["task/a", "a"])] },
-);
-check("two distinct names but one matching task → nothing is deliverable", twoNamesOneTask.deliverable.length === 0, JSON.stringify(slugs(twoNamesOneTask.deliverable)));
-check("two distinct names but one matching task → nothing routes to resolution", twoNamesOneTask.heldTasks.length === 0, JSON.stringify(slugs(twoNamesOneTask.heldTasks)));
-check("two distinct names but one matching task → every reviewed branch is held", JSON.stringify(slugs(twoNamesOneTask.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(twoNamesOneTask.held)));
-check("two distinct names but one matching task → detail names the attribution failure", twoNamesOneTask.held.every((held) => /fewer than two reviewed branches/.test(held.detail)), JSON.stringify(twoNamesOneTask.held.map((held) => held.detail)));
-check("two distinct names but one matching task → no extra agent call is added", twoNamesOneTask.calls.length === 1, JSON.stringify(twoNamesOneTask.calls.map((call) => call.label)));
+// 8. The brief references the same-number guard's owner and does not present
+//    the run-local list as the comparison set.
+{
+  const events = [];
+  const { guardScanPrompt, collisionIsAttributable } = loadDiscovery(async () => null, events);
+  const p = guardScanPrompt({ slug: "a", branch: "task/a", base: "main" }, [member("b", "reserved")]);
+  check("brief names the section that owns the comparison set", p.includes('`address-tasks-serialized` skill\'s "Task-number collisions across in-flight branches" section'));
+  check("brief says that section OWNS the set and that the run-local list is NOT it", /OWNS the comparison set/.test(p) && /the run-local list above is NOT that set/.test(p));
+  check("brief asks for the claimed numbers and the merged members", /`taskNumbers`/.test(p) && /`merged`/.test(p) && /gh pr view <url> --json state,mergedAt,baseRefName/.test(p));
+  check("brief never asks to rename or edit anything", /Edit, stage, commit, or push NOTHING/.test(p));
+  // The attribution helper directly: external needs the known branch AND a holder.
+  const entries = [{ task: mkTask("a") }];
+  check("attribution: external with holder", collisionIsAttributable({ branches: ["task/a"], external: true, member: "#7" }, entries));
+  check("attribution: external without holder", !collisionIsAttributable({ branches: ["task/a"], external: true, member: "" }, entries));
+  check("attribution: external with a foreign name is still foreign", !collisionIsAttributable({ branches: ["task/zzz"], external: true, member: "#7" }, entries));
+  check("attribution: a lone name without external is not a clash", !collisionIsAttributable({ branches: ["task/a"] }, entries));
+}
 
-const failedScan = await run([mkReady("a"), mkReady("b")], null);
-check("failed scan → nothing is deliverable", failedScan.deliverable.length === 0, JSON.stringify(slugs(failedScan.deliverable)));
-check("failed scan → nothing routes to resolution", failedScan.heldTasks.length === 0, JSON.stringify(slugs(failedScan.heldTasks)));
-check("failed scan → every reviewed branch is held", JSON.stringify(slugs(failedScan.held)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(failedScan.held)));
-check("failed scan → the existing failure detail is preserved", failedScan.held.every((held) => held.status === "collision-scan-error" && /scan failed/.test(held.detail)), JSON.stringify(failedScan.held.map((held) => held.detail)));
-check("failed scan → no extra agent call is added", failedScan.calls.length === 1, JSON.stringify(failedScan.calls.map((call) => call.label)));
-
-const clean = await run([mkReady("a"), mkReady("b")], { collisions: [] });
-check("clean scan → both branches are deliverable", JSON.stringify(slugs(clean.deliverable)) === JSON.stringify(["a", "b"]), JSON.stringify(slugs(clean.deliverable)));
-check("clean scan → nothing routes to resolution", clean.heldTasks.length === 0, JSON.stringify(slugs(clean.heldTasks)));
-check("clean scan → nobody is held", clean.held.length === 0, JSON.stringify(clean.held));
-check("clean scan → only the existing discovery agent call runs", clean.calls.length === 1 && clean.calls[0].label === "collision-scan:w1", JSON.stringify(clean.calls.map((call) => call.label)));
-
-const singleton = await run([mkReady("a")], undefined);
-check("one reviewed branch → no discovery agent call runs", singleton.calls.length === 0, JSON.stringify(singleton.calls.map((call) => call.label)));
-check("one reviewed branch → it remains deliverable", JSON.stringify(slugs(singleton.deliverable)) === JSON.stringify(["a"]), JSON.stringify(slugs(singleton.deliverable)));
-
-const bodyStart = src.indexOf(CUT);
-const body = bodyStart >= 0 ? src.slice(bodyStart) : "";
-check("the batch body awaits the discovery partition", /await discoverWaveCollisions\(\{ ready, wave: w \+ 1, defaultBase: plan\.defaultBase \}\)/.test(body), "batch body");
-check("the discovery output feeds settleWaveCollisions unchanged", /heldTasks: discovery\.heldTasks|const heldTasks = discovery\.heldTasks/.test(body) && /waveCollisions: collisions\.filter/.test(body), "batch body");
-
-check("all expected assertions ran", ok + failures === EXPECTED_CHECKS, `${ok + failures} ran; expected ${EXPECTED_CHECKS}`);
+check(`the suite ran all ${EXPECTED_CHECKS} checks`, ok + failures === EXPECTED_CHECKS, `ran ${ok + failures}`);
 
 if (failures) {
-  console.error(`\n${failures} collision-discovery check(s) failed.`);
+  console.error(`\n${failures} check(s) failed.`);
   process.exit(1);
 }
 console.log("\nAll collision-discovery checks passed.");
