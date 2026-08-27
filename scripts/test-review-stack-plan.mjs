@@ -31,7 +31,7 @@ if (at < 0) {
   process.exit(1);
 }
 const prefix = src.slice(0, at).replace(/^export const meta/m, "const meta");
-const NAMES = ["reviewStackMergeable", "reviewStackOrder", "reviewStackSafePrefix", "reviewStackBatchLabel", "reviewStackGuideName", "reviewStackRefSegment", "reviewStackTeardownPrompt", "buildReviewStack", "REVIEW_STACK_MERGEABLE", "REVIEW_STACK_INSPECT_SCHEMA"];
+const NAMES = ["reviewStackMergeable", "reviewStackOrder", "reviewStackTaskNumber", "reviewStackSafePrefix", "reviewStackBatchLabel", "reviewStackGuideName", "reviewStackRefSegment", "reviewStackTeardownPrompt", "buildReviewStack", "REVIEW_STACK_MERGEABLE", "REVIEW_STACK_INSPECT_SCHEMA"];
 function load({ agent, phase, log }) {
   const body = `"use strict";\n${prefix}\nreturn { ${NAMES.join(", ")} };`;
   // eslint-disable-next-line no-new-func
@@ -118,6 +118,22 @@ const t = (slug, base, dependsOn = []) => ({ slug, branch: `task/${slug}`, base,
   check("phase-prefixed task numbers sort numerically within their phase, an unnumbered slug last", same(order.map((x) => x.slug), ["A-2-b", "A-2a-c", "A-9-i", "A-10-j", "B-1-k", "misc"]), JSON.stringify(order.map((x) => x.slug)));
   const label = pure.reviewStackBatchLabel(order.slice(0, 4));
   check("batch label spans phase-prefixed task numbers", label === "A-2-to-A-10", label);
+}
+{
+  // The bound of that parser: a numeric phase (`write-tasks`' `02-12-...`
+  // example) is read as the task number itself, so within one phase the
+  // slugs keep whole-slug text order — `12` before `2` before `3` — and the
+  // label names the phase. Widening the prefix to digits would misread a
+  // plain-numbered `042-3d-model` as phase 042, task 3, so this is pinned as
+  // the accepted shape rather than repaired.
+  const slugs = ["02-12-hook", "02-3-x", "01-9-y", "02-2-z"];
+  const plan = { defaultBase: "main", waves: [slugs.map((s) => t(s, "main"))] };
+  const results = slugs.map((slug) => ({ slug, branch: `task/${slug}`, status: "done" }));
+  const { order } = pure.reviewStackOrder(plan, results);
+  check("numeric-phase slugs sort by phase as the number, then whole-slug text within it", same(order.map((x) => x.slug), ["01-9-y", "02-12-hook", "02-2-z", "02-3-x"]), JSON.stringify(order.map((x) => x.slug)));
+  check("batch label of a numeric-phase batch names the phase", pure.reviewStackBatchLabel(order.slice(1)) === "02-to-02", pure.reviewStackBatchLabel(order.slice(1)));
+  const plain = pure.reviewStackTaskNumber("042-3d-model");
+  check("a plain-numbered slug whose name starts with a digit is not read as a phase", plain && plain.prefix === "" && plain.number === 42, JSON.stringify(plain));
 }
 {
   // Exclusions: failed review, skipped dependents, crashed, held, unreported.

@@ -3906,6 +3906,12 @@ function reviewStackRefSegment(s) {
 // (`A-2-x`, `A-10-y`). The number is compared as a number so `10-` follows
 // `2-` whatever the zero-padding, within its phase; a slug carrying no such
 // number parses to null and sorts after every numbered one, by its text.
+// Only a letter phase prefix is parsed. `write-tasks`' other fallback shape,
+// a numeric phase (`02-12-x`), reads as task number 2 with no prefix, so such
+// slugs keep whole-slug text order within their phase (`02-12-x` before
+// `02-3-x`) and the batch label names the phase. Admitting digits in the
+// prefix would misread a plain-numbered slug whose name starts with a digit
+// (`042-3d-model` as phase 042, task 3), so the narrower bound is kept.
 const REVIEW_STACK_TASK_NUMBER = /^(?:([A-Za-z]+)-)?(\d+)([A-Za-z]?)/;
 function reviewStackTaskNumber(slug) {
   const m = String(slug).match(REVIEW_STACK_TASK_NUMBER);
@@ -4266,7 +4272,7 @@ async function buildReviewStack({ plan, results, wtBase }) {
   }
   const unsafeName = [base, ...order.flatMap((t) => [t.branch, t.base])].find((name) => !REVIEW_STACK_SHELL_SAFE.test(String(name)));
   if (unsafeName !== undefined) {
-    return { ...report, skipped: true, reason: `the name ${JSON.stringify(String(unsafeName))} is not shell-inert (letters, digits, \`.\`, \`_\`, \`/\`, \`-\`; no leading \`-\`), and the stage's deputies compose shell commands from the names they are briefed with; nothing was inspected or created` };
+    return { ...report, skipped: true, reason: `the name ${JSON.stringify(String(unsafeName))} is not shell-inert (letters, digits, \`.\`, \`_\`, \`/\`, \`-\`; none leading with \`-\`, \`.\`, \`_\`, or \`/\`), and the stage's deputies compose shell commands from the names they are briefed with; nothing was inspected or created` };
   }
   const batchLabel = reviewStackBatchLabel(order);
   let mapping = [];
