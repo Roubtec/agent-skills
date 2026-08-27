@@ -122,6 +122,21 @@
 // then stop on forever), which no scenario can observe because the gather agent
 // is stubbed.
 //
+// And it covers the two item kinds task 049 carried onto this surface from the
+// skill's step 3: a `ci-failure` item per lane failing on the reconciled head,
+// identified by its lane rather than its per-head details URL and disposed of
+// BY CAUSE (`flake-rerun` being the one kind only a lane may take, `push-back`
+// the one it may not), and a bot's findings misfired into a top-level comment
+// as `standalone` items where fresh and applicable, identified by the permalink
+// PLUS the finding's `N of M` ordinal, since every finding one body holds
+// shares the url. Both are driven through the coverage and publishability
+// gates as running code — an entry for one finding covers no other, a lane
+// keyed twice conflicts, and every cross-kind naming is rejected — and the
+// skill prose the rules ride on ("CI on the PR head", "fresh and applicable",
+// the CI disposition, the Summary comment's two sections) is pinned in both
+// mirrors beside the workflow's own gather brief, so a reword of any one
+// surface fails here.
+//
 // Run: node scripts/test-address-review-reconcile.mjs
 
 import { readFileSync } from "node:fs";
@@ -151,7 +166,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 244;
+const EXPECTED_CHECKS = 300;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -411,6 +426,10 @@ async function run(packet, opts = {}) {
               ref: `src/app.ts:12 ${it.author}`,
               threadId: it.threadId,
               url: it.url,
+              // The two identities task 049 added, echoed where the item
+              // carries them: a lane's, and a misfired finding's ordinal.
+              ...(it.lane ? { lane: it.lane } : {}),
+              ...(it.finding ? { finding: it.finding } : {}),
               outcome: "replied and resolved",
               replied: true,
               resolved: true,
@@ -490,7 +509,7 @@ const ITEM = {
 // location pair is written the same way: `locationMode` defaults to the inline
 // mode every reconciliation scenario runs in, and passing `null` omits the
 // field, which the working-location gate below rejects.
-function gathered({ workingBranch = "feature/x", items = [], reconcile, locationMode = "inline", worktree, baseOid = GATHERED_BASE_OID, priorRecord, startingHead = "deadbeef", finalHead = "deadbeef", rebased = false }) {
+function gathered({ workingBranch = "feature/x", items = [], reconcile, locationMode = "inline", worktree, baseOid = GATHERED_BASE_OID, priorRecord, startingHead = "deadbeef", finalHead = "deadbeef", rebased = false, detail }) {
   const packet = {
     ok: true,
     // Every `ok: true` gather the caller can CONTINUE on owes this echo —
@@ -518,6 +537,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     items,
   };
   if (baseOid !== null) packet.pr.baseOid = baseOid;
+  if (detail !== undefined) packet.detail = detail;
   if (locationMode !== null) packet.pr.locationMode = locationMode;
   if (worktree !== undefined) packet.pr.worktree = worktree;
   if (reconcile !== undefined) packet.reconcile = reconcile;
@@ -4588,7 +4608,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   check(
     "an incomplete record carries the displaced record's orphaned entries forward — fetched from the replayed record, keyed by thread identity, marked as carried — while a complete map and a prior-less incomplete one carry nothing",
     /CARRY the earlier record's orphaned entries into this one/.test(incompleteOverPrior) &&
-      /whose identity \(`thread=<threadId or url>`\) no disposition below carries/.test(incompleteOverPrior) &&
+      /whose identity \(`thread=<threadId, url \(finding N of M\), or lane>`\) no disposition below carries/.test(incompleteOverPrior) &&
       incompleteOverPrior.includes("marking each `carried unchanged from https://example.invalid/pr/42#issuecomment-9`") &&
       /the next run's gather replays only the MOST RECENT record/.test(incompleteOverPrior) &&
       /gh api repos\/<owner>\/<repo>\/issues\/comments\/<id> --jq \.body/.test(incompleteOverPrior) &&
@@ -5865,6 +5885,778 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "and a PR with no prior record hands the fixer no replay section",
     !!freshFixer && !/DISPOSITION RECORD/.test(freshFixer) && !/cherry-pick B\.\.\.F/.test(freshFixer),
     freshFixer ? "the fixer brief carries a replay section with no record to replay" : "no cycle was reached",
+  );
+}
+
+// --- CI lanes and misfired top-level findings as items (task 049) ------------
+// PR #114 taught the `address-review` skill two gather rules the workflow did
+// not carry: every lane failing on the reconciled head is an item, disposed
+// of BY CAUSE, and a bot's findings misfired into a top-level review summary
+// or issue comment are standalone items where fresh and applicable. Both
+// halves are read here: the item kinds are driven through the coverage and
+// publishability gates as running code, and the prose the rules ride on is
+// pinned in both skill mirrors BESIDE the workflow's rendering of it, so a
+// reword in one place fails here rather than drifting alone.
+//
+// The identity property is the one the whole section turns on: two findings
+// of one misfired comment share a permalink, so an entry keyed on the url
+// alone would cover both while the Summary comment serves one — and a lane's
+// details URL names one head's run, so a recorded lane is matched to the new
+// head's rollup by its lane identity, never by that URL.
+{
+  const ITEM_LANE = {
+    type: "ci-failure",
+    lane: "tests / node",
+    rollup: "failing",
+    author: "",
+    authorIsBot: false,
+    body: "FAIL scripts/test-x.mjs: expected 3, got 2 (log tail)",
+    url: "https://example.invalid/owner/repo/actions/runs/777/job/888",
+  };
+  const ITEM_LANE_GREEN = { ...ITEM_LANE, lane: "lint / markdown", rollup: "green", body: "green on this head; recorded cause: a shared fixture pin", url: "https://example.invalid/owner/repo/actions/runs/778/job/889" };
+  const MISFIRED_URL = "https://example.invalid/pr/42#pullrequestreview-9";
+  const ITEM_FINDING_1 = { type: "standalone", finding: "1 of 2", author: "chatgpt-codex-connector", authorIsBot: true, body: "the retry loop never backs off", url: MISFIRED_URL };
+  const ITEM_FINDING_2 = { ...ITEM_FINDING_1, finding: "2 of 2", body: "the timeout is read before the config loads" };
+  const LANE_ENTRY = {
+    type: "ci-failure",
+    lane: "tests / node",
+    url: ITEM_LANE.url,
+    ref: "tests / node",
+    kind: "actionable-fixed",
+    detail: "cause: the new guard changed the count the suite pins; fixed in abc1234",
+    author: "",
+    authorIsBot: false,
+    newFinding: true,
+  };
+  const GREEN_ENTRY = { ...LANE_ENTRY, lane: ITEM_LANE_GREEN.lane, url: ITEM_LANE_GREEN.url, ref: ITEM_LANE_GREEN.lane, kind: "already-addressed", detail: "replayed: recorded cause a shared fixture pin, left for the maintainer; green on this head", newFinding: false };
+  const findingEntry = (n) => ({
+    type: "standalone",
+    url: MISFIRED_URL,
+    finding: `${n} of 2`,
+    ref: `misfired review finding ${n} of 2 chatgpt-codex-connector`,
+    kind: n === 1 ? "actionable-fixed" : "push-back",
+    detail: n === 1 ? "added exponential backoff in bcd2345" : "the config is loaded synchronously before that read",
+    author: "chatgpt-codex-connector",
+    authorIsBot: true,
+    newFinding: n === 1,
+  });
+  const packet = { reconcile: { outcome: "work" }, items: [ITEM, ITEM_LANE, ITEM_LANE_GREEN, ITEM_FINDING_1, ITEM_FINDING_2] };
+  const full = { ...CYCLE_PASS, workReport: [CYCLE_PASS.workReport[0], LANE_ENTRY, GREEN_ENTRY, findingEntry(1), findingEntry(2)] };
+  const withReport = (...entries) => ({ ...CYCLE_PASS, workReport: entries });
+  const publishes = await run(gathered(packet), { args: "push no-rebase", cycles: [full] });
+  check(
+    "a run whose map covers a failing lane, a replayed green lane and both findings of one misfired comment — each by its own identity — publishes",
+    publishes.status === "fixed-published",
+    JSON.stringify(publishes.result).slice(0, 400),
+  );
+  // Coverage keys on the url PLUS the finding ordinal: the second finding's
+  // entry missing is an uncovered item, not a covered comment.
+  const oneFinding = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], LANE_ENTRY, GREEN_ENTRY, findingEntry(1))] });
+  check(
+    "an entry for one finding of a misfired comment does not cover the other finding sharing its url — the second is an uncovered item",
+    oneFinding.status === "publish-aborted-incomplete-dispositions" && (oneFinding.result.uncoveredItems || []).join() === `${MISFIRED_URL} (finding 2 of 2)`,
+    JSON.stringify(oneFinding.result).slice(0, 300),
+  );
+  // And an entry naming the comment's url with no ordinal covers neither
+  // finding and is itself unpublishable, saying which half is missing.
+  const noOrdinal = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], LANE_ENTRY, GREEN_ENTRY, { ...findingEntry(1), finding: undefined }, findingEntry(2))] });
+  check(
+    "a standalone entry naming a misfired comment's url without its finding ordinal covers no finding — the finding it dropped the ordinal of is uncovered",
+    noOrdinal.status === "publish-aborted-incomplete-dispositions" && (noOrdinal.result.uncoveredItems || []).join() === `${MISFIRED_URL} (finding 1 of 2)`,
+    JSON.stringify(noOrdinal.result).slice(0, 400),
+  );
+  // The publishability check on one entry, with the full map otherwise intact:
+  // `replacing` names the entry the tested one stands in for, so the map stays
+  // one-per-item and the coverage gates ahead of this check do not fire first.
+  const rejected = async (entry, what, phrase, replacing = () => false) => {
+    const map = [CYCLE_PASS.workReport[0], LANE_ENTRY, GREEN_ENTRY, findingEntry(1), findingEntry(2)].filter((e) => !replacing(e));
+    const r = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(...map, entry)] });
+    const defects = JSON.stringify(r.result && r.result.malformedDispositions || []);
+    check(what, r.status === "publish-aborted-incomplete-dispositions" && phrase.test(defects), `${r.status}: ${defects.slice(0, 300)}`);
+  };
+  const isLane = (e) => e.lane === LANE_ENTRY.lane;
+  const isGreen = (e) => e.lane === GREEN_ENTRY.lane;
+  const isThread = (e) => e.threadId === "T1";
+  await rejected({ ...findingEntry(1), finding: undefined, url: `${MISFIRED_URL}` }, "a standalone entry naming a misfired comment's url without its ordinal is rejected naming the missing half — on the url alone it would stand for every finding of that comment", /finding ordinal is absent and names no finding gathered from it/);
+  await rejected({ ...findingEntry(1), finding: "3 of 2" }, "a standalone entry naming a misfired comment's url with an ordinal no gathered finding carries is rejected the same way", /finding ordinal \\"3 of 2\\" names no finding gathered from it/);
+  await rejected({ ...LANE_ENTRY, kind: "push-back", detail: "not our lane" }, "a push-back on a CI lane is unpublishable — a lane has nobody to push back to", /push-back on a CI lane/, isLane);
+  // A lane's disposition is by cause, and its structural/sprawling case is
+  // `ambiguous-skipped` with the follow-up OFFERED in detail: the maintainer
+  // chooses between fixing here, a task, and accepting the red lane, so a task
+  // committed and published as the lane's disposition pre-empts that choice.
+  await rejected({ ...LANE_ENTRY, kind: "deferred-to-task", detail: "cause: a shared fixture pin; deferred to tasks/999-fixture-pin.md" }, "a deferred-to-task on a CI lane is unpublishable — a structural cause is ambiguous-skipped with the follow-up offered, never a task committed in the maintainer's place", /defers a CI lane to a task/, isLane);
+  const laneKindsScope = ((publishes.seen.cycleOpts || {}).opts || {}).scope || {};
+  check(
+    "the fixer and reviewer briefs both say a lane takes neither push-back nor deferred-to-task",
+    /`push-back` and `deferred-to-task` on every kind but that one/.test(laneKindsScope.instructions || "") &&
+      /A lane takes neither `push-back` nor `deferred-to-task`/.test(laneKindsScope.reviewInstructions || ""),
+    `${(laneKindsScope.instructions || "").length} / ${(laneKindsScope.reviewInstructions || "").length} chars`,
+  );
+  await rejected({ ...LANE_ENTRY, lane: "deploy / preview" }, "a ci-failure entry naming a lane the gather never reported is unpublishable", /lane was never gathered/);
+  await rejected({ ...GREEN_ENTRY, kind: "flake-rerun", detail: "evidence: green on base" }, "a flake re-run ordered on a replayed lane the head shows green is unpublishable — nothing is failing to re-run", /flake re-run on a lane the gather reports as \\"green\\"/, isGreen);
+  await rejected({ ...CYCLE_PASS.workReport[0], kind: "flake-rerun" }, "a flake-rerun on a review thread is unpublishable — the only action that kind orders is a workflow re-run", /flake-rerun on something that is not a CI lane/, isThread);
+  // The cross-kind guard reads identities the way coverage keys them —
+  // trimmed. A thread entry carrying a maintainer-named standalone's url with
+  // whitespace around it is counted by coverage as covering that standalone
+  // (so nothing is uncovered), and an exact lookup here would let it through
+  // with the standalone silently unaddressed; the same for a standalone entry
+  // carrying a padded gathered threadId.
+  const NAMED_URL = "https://example.invalid/pr/42#issuecomment-5";
+  const ITEM_NAMED = { type: "standalone", author: "a-maintainer", authorIsBot: false, body: "please also bump the README", url: NAMED_URL };
+  const namedPacket = { reconcile: { outcome: "work" }, items: [ITEM, ITEM_NAMED] };
+  const paddedUrl = await run(gathered(namedPacket), { args: "push no-rebase", cycles: [withReport({ ...CYCLE_PASS.workReport[0], url: ` ${NAMED_URL} ` })] });
+  const paddedThread = await run(gathered(namedPacket), { args: "push no-rebase", cycles: [withReport({ type: "standalone", url: NAMED_URL, threadId: " T1 ", ref: "issue comment a-maintainer", kind: "actionable-fixed", detail: "bumped in cde3456", author: "a-maintainer", authorIsBot: false, newFinding: true })] });
+  const defectsIn = (r) => JSON.stringify(r.result && r.result.malformedDispositions || []);
+  check(
+    "the cross-kind guard normalizes an entry's url and threadId the way coverage keys them, so a thread entry carrying a gathered standalone's url with surrounding whitespace — or a standalone entry carrying a padded gathered threadId — is rejected rather than counted as covering both items",
+    paddedUrl.status === "publish-aborted-incomplete-dispositions" && /typed review-thread but carries a gathered standalone item's url/.test(defectsIn(paddedUrl)) &&
+      paddedThread.status === "publish-aborted-incomplete-dispositions" && /typed standalone but names a gathered review thread/.test(defectsIn(paddedThread)),
+    `${paddedUrl.status}: ${defectsIn(paddedUrl).slice(0, 200)} | ${paddedThread.status}: ${defectsIn(paddedThread).slice(0, 200)}`,
+  );
+  // The item side pads just as readily — the gather is an emitted packet too.
+  // A gathered standalone whose url carries whitespace, covered by a thread
+  // entry naming it trimmed, and a gathered thread whose threadId is padded,
+  // named trimmed by a standalone entry: coverage counts both as covered, so
+  // the guard has to read the ITEM's identity trimmed as well.
+  const paddedItemPacket = { reconcile: { outcome: "work" }, items: [ITEM, { ...ITEM_NAMED, url: ` ${NAMED_URL} ` }] };
+  const paddedItemUrl = await run(gathered(paddedItemPacket), { args: "push no-rebase", cycles: [withReport({ ...CYCLE_PASS.workReport[0], url: NAMED_URL })] });
+  const paddedThreadItemPacket = { reconcile: { outcome: "work" }, items: [{ ...ITEM, threadId: " T1 " }, ITEM_NAMED] };
+  const paddedItemThread = await run(gathered(paddedThreadItemPacket), { args: "push no-rebase", cycles: [withReport({ type: "standalone", url: NAMED_URL, threadId: "T1", ref: "issue comment a-maintainer", kind: "actionable-fixed", detail: "bumped in cde3456", author: "a-maintainer", authorIsBot: false, newFinding: true })] });
+  check(
+    "the cross-kind guard reads the GATHERED item's identity trimmed too, so a thread entry naming the trimmed url of a padded gathered standalone — or a standalone entry naming the trimmed id of a padded gathered thread — is rejected rather than counted as covering both items",
+    paddedItemUrl.status === "publish-aborted-incomplete-dispositions" && /typed review-thread but carries a gathered standalone item's url/.test(defectsIn(paddedItemUrl)) &&
+      paddedItemThread.status === "publish-aborted-incomplete-dispositions" && /typed standalone but names a gathered review thread/.test(defectsIn(paddedItemThread)),
+    `${paddedItemUrl.status}: ${defectsIn(paddedItemUrl).slice(0, 200)} | ${paddedItemThread.status}: ${defectsIn(paddedItemThread).slice(0, 200)}`,
+  );
+  // The kind's one action is `gh run rerun`, which needs the run id an Actions
+  // details URL carries: a lane with no workflow run (a StatusContext, an
+  // external app's check) cannot take it, however well the flake is evidenced
+  // — the same evidence goes to the maintainer as ambiguous-skipped instead.
+  const ITEM_LANE_EXTERNAL = { ...ITEM_LANE, lane: "ci/circleci: build", body: "logs and re-runs unavailable through gh run; the details page showed a timed-out job", url: "https://example.invalid/circleci/pipelines/12" };
+  const externalPacket = { reconcile: { outcome: "work" }, items: [ITEM, ITEM_LANE_EXTERNAL] };
+  const externalEntry = (kind, detail) => ({ ...LANE_ENTRY, lane: ITEM_LANE_EXTERNAL.lane, url: ITEM_LANE_EXTERNAL.url, ref: ITEM_LANE_EXTERNAL.lane, kind, detail });
+  const externalFlake = await run(gathered(externalPacket), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], externalEntry("flake-rerun", "evidence: the same lane green on the base at a commit carrying the same files"))] });
+  check(
+    "a flake-rerun on a lane whose url names no workflow run is unpublishable — nothing here can re-run it, so the disposition would be recorded as performed while it never was",
+    externalFlake.status === "publish-aborted-incomplete-dispositions" && /lane whose url names no workflow run/.test(JSON.stringify(externalFlake.result && externalFlake.result.malformedDispositions || [])),
+    JSON.stringify(externalFlake.result).slice(0, 300),
+  );
+  const externalSkipped = await run(gathered(externalPacket), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], externalEntry("ambiguous-skipped", "evidenced flake (green on the base at a commit carrying the same files); no workflow run to re-run from here, left for the maintainer"))] });
+  check(
+    "the same no-run lane disposed of as ambiguous-skipped with the evidence carried publishes — the maintainer re-runs it",
+    externalSkipped.status === "fixed-published",
+    JSON.stringify(externalSkipped.result).slice(0, 300),
+  );
+  await rejected({ ...CYCLE_PASS.workReport[0], lane: "tests / node" }, "a review-thread entry that also carries a gathered lane is unpublishable — one entry may not cover two items", /typed review-thread but carries a gathered CI lane/, (e) => isThread(e) || isLane(e));
+  // The duplicate direction, keyed the same way: two entries for one lane.
+  const twoLanes = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], LANE_ENTRY, { ...LANE_ENTRY, kind: "ambiguous-skipped" }, GREEN_ENTRY, findingEntry(1), findingEntry(2))] });
+  check(
+    "two entries for one lane are a conflicting map, keyed by the lane identity",
+    twoLanes.status === "publish-aborted-conflicting-dispositions" && /tests \/ node \[actionable-fixed, ambiguous-skipped\]/.test((twoLanes.result.duplicatedItems || []).join()),
+    JSON.stringify(twoLanes.result).slice(0, 300),
+  );
+  // An evidenced flake on the failing lane publishes, and the publisher's
+  // account keys that lane by its identity — the default stub echoes `lane`.
+  // The entry carries an `instances` list the gather never reported (run 999):
+  // the contract says it is not echoed, and the check below pins that it is
+  // stripped rather than passed through to a `gh run rerun 999`.
+  const flake = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], { ...LANE_ENTRY, kind: "flake-rerun", detail: "cause: the same lane went green on the base at a commit carrying the same files; evidence run 700", instances: ["https://example.invalid/owner/repo/actions/runs/999/job/999"] }, GREEN_ENTRY, findingEntry(1), findingEntry(2))] });
+  const flakePublish = flake.seen.publishPrompts[0] || "";
+  check(
+    "an evidenced flake-rerun on the failing lane publishes, and the publish brief re-runs it once per run id only on a no-op push, with the repository taken from the run URL",
+    flake.status === "fixed-published" &&
+      /gh run rerun <run-id> --repo <owner>\/<repo> --failed/.test(flakePublish) &&
+      /ONCE PER RUN ID/.test(flakePublish) &&
+      /ONLY where the push was a no-op/.test(flakePublish) &&
+      /the repository from the URL, never the checkout's default/.test(flakePublish) &&
+      /the publishability check admits the kind on no other lane/.test(flakePublish),
+    `${flake.status}: ${flakePublish.slice(0, 200)}`,
+  );
+  // A lane the rollup carried more than once (one workflow fired by two
+  // events on the head) is ONE item but two workflow runs; its `instances`
+  // carry every failing instance's URL and the publish brief orders a re-run
+  // of every distinct run id, not only `url`'s.
+  const repeatedPacket = { ...packet, items: packet.items.map((it) => (it === ITEM_LANE ? { ...it, instances: [it.url, "https://example.invalid/owner/repo/actions/runs/779/job/890"] } : it)) };
+  const repeated = await run(gathered(repeatedPacket), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], { ...LANE_ENTRY, kind: "flake-rerun", detail: "cause: an earlier re-run of this head went green; evidence runs 777 and 779" }, GREEN_ENTRY, findingEntry(1), findingEntry(2))] });
+  const repeatedPublish = repeated.seen.publishPrompts[0] || "";
+  check(
+    "a flake-rerun on a lane the rollup carried twice publishes, and the publish brief re-runs every distinct run id the lane's url and instances name — a re-run of url's alone would leave the other instance red",
+    repeated.status === "fixed-published" &&
+      /and from EVERY URL in its `instances` where it carries them/.test(repeatedPublish) &&
+      /a re-run of `url`'s alone leaves the others red/.test(repeatedPublish) &&
+      /ONCE PER RUN ID, every distinct id the lane names/.test(repeatedPublish),
+    `${repeated.status}: ${repeatedPublish.slice(0, 200)}`,
+  );
+  // The wording above is inert unless the other instance's URL actually
+  // reaches the publisher: the fixer's entry never carries `instances`, so the
+  // workflow attaches the gathered lane's list onto the disposition it hands
+  // over. The one-instance flake above attaches nothing — and the bogus list
+  // its entry carried (run 999) is stripped, not passed through.
+  check(
+    "the publisher's disposition for the repeated lane carries the gathered item's instances, so run 779's URL reaches the publish brief; a one-instance lane carries no instances key, and the list its entry invented is stripped",
+    /actions\/runs\/779/.test(repeatedPublish) &&
+      /"instances": \[/.test(repeatedPublish) &&
+      !/"instances"/.test(flakePublish) &&
+      !/actions\/runs\/779/.test(flakePublish) &&
+      !/actions\/runs\/999/.test(flakePublish),
+    `repeated names 779: ${/actions\/runs\/779/.test(repeatedPublish)}; single carries key: ${/"instances"/.test(flakePublish)}; single names 999: ${/actions\/runs\/999/.test(flakePublish)}`,
+  );
+  // The Summary comment's two new sections, and that nothing replies on the
+  // bot's comment or resolves a lane.
+  check(
+    "the publish brief renders a \"Top-level findings\" section for misfired findings and a \"CI\" section naming each lane with its cause and disposition, and posts nothing on the bot's comment",
+    /a "Top-level findings" section for every `standalone` disposition taken from a bot's misfired top-level comment/.test(flakePublish) &&
+      /a "CI" section where any `ci-failure` disposition is below — each lane named by its identity with the cause found and its disposition/.test(flakePublish) &&
+      /post NOTHING on the comment they came from — a misfired bot finding \(one carrying `finding`\) included/.test(flakePublish) &&
+      /`ci-failure` items \(no thread at all\): address them only in the Summary comment's "CI" section below/.test(flakePublish),
+    flakePublish.slice(0, 200),
+  );
+  // The part-way record's standing line for a lane: nothing is owed on it.
+  const partWay = await run(gathered(packet), {
+    args: "push no-rebase",
+    cycles: [full],
+    publish: {
+      published: false,
+      aborted: "lease rejected",
+      pushed: false,
+      pushedNewCommits: false,
+      summaryCommentUrl: "",
+      threadOutcomes: [
+        { threadId: "T1", ref: "src/app.ts:12 a-reviewer", outcome: "replied", replied: true, resolved: false },
+        { lane: "tests / node", ref: "tests / node", outcome: "not reached", replied: false, resolved: false },
+        { lane: "lint / markdown", ref: "lint / markdown", outcome: "not reached", replied: false, resolved: false },
+        { url: MISFIRED_URL, finding: "1 of 2", ref: "finding 1 of 2", outcome: "not reached", replied: false, resolved: false },
+        { url: MISFIRED_URL, finding: "2 of 2", ref: "finding 2 of 2", outcome: "not reached", replied: false, resolved: false },
+      ],
+    },
+  });
+  const partRecord = partWay.seen.recordPrompts[0] || "";
+  check(
+    "a part-way publication's record keys a lane's standing by its identity and a finding's by url plus ordinal, owing nothing on either",
+    /thread=tests \/ node {2}tests \/ node — NOTHING is owed on it: a CI lane is addressed in the Summary comment's CI section alone/.test(partRecord) &&
+      new RegExp(`thread=${MISFIRED_URL.replace(/[.*+?^${}()|[\\]\\\\]/g, "\\\\$&")} \\(finding 2 of 2\\) {2}misfired review finding 2 of 2 chatgpt-codex-connector — NOTHING is owed on it: a standalone item`).test(partRecord) &&
+      /thread=T1 {2}src\/app\.ts:12 a-reviewer — reply ALREADY POSTED/.test(partRecord),
+    partRecord.split("\n").filter((l) => /thread=/.test(l)).join(" | ").slice(0, 600),
+  );
+  // The record's entry shapes, per the field-set sentence task 049a settled.
+  check(
+    "the record brief's entry shape carries the finding ordinal and the lane identity in the stable-reference slot, the details URL as the lane's permalink, and both new Summary sections",
+    /thread=<threadId, or url \(finding N of M\) for a standalone item, or lane for a CI lane>/.test(partRecord) &&
+      /for a misfired finding — the finding's ordinal within its comment, `finding N of M`/.test(partRecord) &&
+      /finding: <a misfired finding only: its text as the gather took it, verbatim, as the one-line JSON string literal listed under "Misfired findings as gathered" below>/.test(partRecord) &&
+      /for a CI lane, its `lane` identity as the gather recorded it — its details URL names one head's run and the next push replaces it, so it is the lane's permalink rather than its identity/.test(partRecord) &&
+      /a "Top-level findings" section for every misfired finding taken as a standalone item/.test(partRecord) &&
+      /a "CI" section naming each `ci-failure` lane with the cause found and its disposition/.test(partRecord),
+    partRecord.slice(0, 200),
+  );
+  // The finding's text rides the record beside its ordinal: the dispositions
+  // carry url and ordinal only, so the brief lists each gathered misfired
+  // finding's text for the `finding:` slot, and the next gather's replay
+  // compares the finding now at that ordinal against it rather than trusting
+  // the ordinal alone across an edit of the comment.
+  const findingsBlock = partRecord.split("## Misfired findings as gathered")[1] || "";
+  check(
+    "the record brief lists each misfired finding's gathered text under its url and ordinal, and tells the author the finding slot carries it verbatim because the ordinal alone cannot survive an edit of the comment",
+    findingsBlock.includes(JSON.stringify(ITEM_FINDING_1.body)) && findingsBlock.includes(JSON.stringify(ITEM_FINDING_2.body)) &&
+      /"finding": "2 of 2"/.test(findingsBlock) &&
+      /on its own `finding:` line, that finding's text VERBATIM as the gather took it/.test(partRecord) &&
+      /the next run's gather decodes this literal \(`JSON.parse`\) and compares the finding now at N against it before replaying the entry/.test(partRecord),
+    findingsBlock.slice(0, 300) || partRecord.slice(-300),
+  );
+  // The slot's SERIALIZATION: a finding is ordinarily several paragraphs, a
+  // code fence or a quote, and placed raw on the single `finding:` line its
+  // lines would run into the entry's other slots — so the record carries it as
+  // the one-line JSON string literal the brief's listing already renders, and
+  // the gather brief decodes it before the edit check. Pinned on all three
+  // surfaces: the record brief's instruction, the listing's actual encoding of
+  // a multi-line finding, and the gather's decode step.
+  const multiline = "the retry loop never backs off:\n\n```js\nfor (;;) fetch();\n```\n> and the \"timeout\" is ignored";
+  const multilinePacket = { ...packet, items: packet.items.map((it) => (it === ITEM_FINDING_1 ? { ...it, body: multiline } : it)) };
+  const multilinePart = await run(gathered(multilinePacket), { args: "push no-rebase", cycles: [full], publish: { published: false, aborted: "lease rejected", pushed: false, pushedNewCommits: false, summaryCommentUrl: "", threadOutcomes: [] } });
+  const multilineRecord = multilinePart.seen.recordPrompts[0] || "";
+  const multilineBlock = multilineRecord.split("## Misfired findings as gathered")[1] || "";
+  const multilineGather = gatherPrompt("#42", false);
+  check(
+    "a multi-line misfired finding reaches the record brief's listing as ONE JSON string literal line, the brief says the finding slot copies that literal rather than raw text, and the gather brief decodes the literal before the edit check",
+    multilineBlock.includes(JSON.stringify(multiline)) &&
+      !multilineBlock.includes("```js\nfor") &&
+      /written as the ONE-LINE JSON string literal that list carries, copied byte for byte, never as raw text/.test(multilineRecord) &&
+      /Each `text` below is already the one-line JSON string literal the `finding:` line takes: copy it as it stands/.test(multilineRecord) &&
+      /a one-line JSON string literal, which you decode \(`JSON.parse`\) before comparing/.test(multilineGather),
+    `${multilineBlock.slice(0, 200)} || ${(multilineGather.match(/which you decode[^,]*/) || ["no decode step"])[0]}`,
+  );
+  // The fixer's and reviewer's halves, read off the nested cycle's scope.
+  const scope = ((publishes.seen.cycleOpts || {}).opts || {}).scope || {};
+  const fixer = scope.instructions || "";
+  const reviewer = scope.reviewInstructions || "";
+  check(
+    "the fixer brief disposes of a lane by cause from its evidence, never by name — actionable, ambiguous for the maintainer, or an evidenced flake-rerun — and replays a green lane as its recorded account",
+    /A `ci-failure` item is one lane of the head's check rollup, and its disposition is by CAUSE/.test(fixer) &&
+      /never from the lane's name/.test(fixer) &&
+      /Caused by this branch and within the PR's scope → `actionable-fixed`/.test(fixer) &&
+      /structural or sprawling to fix \(a shared fixture, a toolchain pin, a suite that fails on the base too\) → `ambiguous-skipped`/.test(fixer) &&
+      /A flake needs EVIDENCE, not a hunch/.test(fixer) &&
+      /A log that names only files the diff does not touch is NOT that evidence/.test(fixer) &&
+      /a flake that has bitten before ALSO earns a follow-up task/.test(fixer) &&
+      /every `workReport` entry names a gathered item, so a second entry for the flake-fix task would name none/.test(fixer) &&
+      /An evidenced flake is `flake-rerun` where the lane's `url` names a workflow run, and `ambiguous-skipped` with the evidence in `detail` where it does not/.test(fixer) &&
+      /`push-back` is not a disposition it can take/.test(fixer) &&
+      /A lane the item reports as `rollup: "green"`, `"running"` or `"absent"` is a REPLAYED one/.test(fixer) &&
+      /no longer carries its identity at all \(renamed, removed, or path-filtered off this head\)/.test(fixer) &&
+      /A `standalone` item carrying `finding` is ONE finding of a bot's misfired top-level comment/.test(fixer),
+    fixer.slice(0, 200),
+  );
+  check(
+    "the reviewer confirms a lane's disposition by cause and matches entries by lane and by url plus finding ordinal",
+    /A `ci-failure` entry's disposition is by CAUSE, judged from the item's evidence and never from the lane's name/.test(reviewer) &&
+      /`flake-rerun` only on EVIDENCE named in `detail`/.test(reviewer) &&
+      /only on a lane whose `url` names a workflow run: an evidenced flake on a lane with none is `ambiguous-skipped`/.test(reviewer) &&
+      /a `standalone` by its `url` — plus its `finding` ordinal where it carries one/.test(reviewer) &&
+      /a `ci-failure` by its `lane`/.test(reviewer),
+    reviewer.slice(0, 200),
+  );
+  // The gather brief's two bullets — the producer half — read off the rendered
+  // brief, and the phrases the skill's rules ride on are pinned HERE as well
+  // as in the mirrors below, so the three surfaces are held to one wording.
+  const brief = gatherPrompt("#42", false);
+  const ciPara = brief.split("\n").find((l) => l.startsWith("- CI on the PR head")) || "";
+  check(
+    "the gather brief gathers every lane failing on the reconciled head, read by __typename with terminal values tested positively, identified by lane with a bounded failed-log tail under pipefail and the repository from the run URL, skipping lanes in progress or on another head",
+    /read the way README's \*Contributing\* reads it — by `__typename`, terminal values tested positively/.test(ciPara) &&
+      /every lane whose verdict is not `SUCCESS`\/`NEUTRAL`\/`SKIPPED` is a review item too/.test(ciPara) &&
+      /emitted as `type: "ci-failure"` with `rollup: "failing"`/.test(ciPara) &&
+      /`<workflowName> \/ <name>`/.test(ciPara) &&
+      /its `checkSuite\.app\.slug` fills that slot, read through GraphQL's `statusCheckRollup\.contexts`/.test(ciPara) &&
+      /holds ONE lane there, failing while any instance is/.test(ciPara) &&
+      /with the details URL of EVERY failing instance in `instances`, since each is its own workflow run and a re-run of one leaves the others red/.test(ciPara) &&
+      /gh run view --repo <owner>\/<repo> --job <job-id> --log-failed \| tail -n 200/.test(ciPara) &&
+      /gh run view <run-id> --repo <owner>\/<repo> --log-failed \| tail -n 200/.test(ciPara) &&
+      /under `set -o pipefail`/.test(ciPara) &&
+      /a failed gather to stop on with `ok: false`/.test(ciPara) &&
+      /with `<owner>\/<repo>` taken from that URL rather than left to the checkout's default/.test(ciPara) &&
+      /state in `body` that logs and re-runs are unavailable through `gh run`/.test(ciPara) &&
+      /A lane still in progress on the current head is NOT an item/.test(ciPara) &&
+      /A rollup describing a head other than the one you reconciled against/.test(ciPara) &&
+      /matched to this head's rollup by its `lane` identity, the new head's run carrying a new details URL/.test(ciPara) &&
+      /emitted anyway as a `ci-failure` item with `rollup: "green"` or `"running"`/.test(ciPara) &&
+      /one whose identity NO lane of this head's rollup carries — the workflow or check renamed or removed since, or not fired for this head by a path filter — is emitted the same way with `rollup: "absent"`/.test(ciPara) &&
+      /No state of the rollup drops a recorded lane/.test(ciPara),
+    ciPara ? ciPara.slice(0, 240) : "the gather brief has no CI bullet",
+  );
+  const misfiredPara = brief.split("\n").find((l) => l.startsWith("- One more source qualifies on its own")) || "";
+  check(
+    "the gather brief takes a bot's misfired top-level findings as standalone items only where fresh and applicable under all four conditions, one item per finding by permalink plus ordinal, and none where freshness is only ambiguous",
+    /\*\*fresh and applicable\*\* — ALL of:/.test(misfiredPara) &&
+      /the review's `commit_id` — read from the REST review object, `gh api --paginate repos\/<owner>\/<repo>\/pulls\/<PR>\/reviews`/.test(misfiredPara) &&
+      /`gh pr view --json reviews` names the commit `commit\.oid` and carries neither/.test(misfiredPara) &&
+      /`created_at` cannot stand in for it/.test(misfiredPara) &&
+      /no thread on this PR, resolved or unresolved, already raises it/.test(misfiredPara) &&
+      /`gh-review-threads --all`/.test(misfiredPara) &&
+      /no maintainer reply dismisses it and the review's own `state` is not `DISMISSED`/.test(misfiredPara) &&
+      /the code it names still exists on the branch/.test(misfiredPara) &&
+      /take NONE of them and say so in `detail`/.test(misfiredPara) &&
+      /`finding` its ordinal within that comment, exactly `N of M`, counted in the order the body presents them/.test(misfiredPara) &&
+      /Nothing replies on the bot's comment/.test(misfiredPara),
+    misfiredPara ? misfiredPara.slice(0, 240) : "the gather brief has no misfired-findings bullet",
+  );
+  const standalonePara = brief.split("\n").find((l) => l.startsWith("- A standalone issue comment or review summary becomes its own item")) || "";
+  const zeroPara = brief.split("\n").find((l) => l.startsWith("If there are no unresolved threads")) || "";
+  check(
+    "a recorded misfired finding is re-gathered by its recorded ordinal and left to the maintainer where the comment no longer holds it, and a gathered lane keeps a run off the zero-item exit",
+    /A recorded misfired finding is reintroduced by its recorded ordinal \(`finding N of M`\), checked against the finding's text the record's entry carries on its `finding:` line/.test(standalonePara) &&
+      /fewer than M findings, or the text at N differs from the recorded text beyond whitespace/.test(standalonePara) &&
+      /rather than matching it to whichever finding now sits at N/.test(standalonePara) &&
+      /and no CI lane gathered above, failing or replayed from the record — a red lane is an item like any other, so a run that gathered one never takes this exit/.test(zeroPara),
+    `${standalonePara.slice(0, 120)} || ${zeroPara.slice(0, 120)}`,
+  );
+  // The skill prose these rules ride on, in both mirrors, pinned BESIDE the
+  // workflow's own wording: the step-3 bullets' opening phrases, step 4's
+  // disposition, and step 7's two Summary sections. The workflow's gather
+  // brief is held to the same two step-3 phrases in the same check, so a
+  // reword of either surface alone fails here — which is the drift the mirror
+  // discipline exists to prevent, and why this task landed as a task.
+  const wanted = [
+    ["step 3's CI bullet", "- **CI on the PR head**", [/every lane whose verdict is not `SUCCESS`\/`NEUTRAL`\/`SKIPPED` is a review item too/, /A lane still in progress on the current head is not an item/, /A rollup describing a head other than the one you reconciled against says nothing about this branch/]],
+    ["step 3's misfired-findings rule", "**One more source qualifies on its own: a bot reviewer that misfired", [/where it is \*\*fresh and applicable\*\*/, /is the current head/, /no thread on this PR, resolved or unresolved, already raises it/, /the review's own `state` is not `DISMISSED`/, /the code it names still exists on the branch/, /take none and say so in the Summary comment/, /\*\*plus its ordinal within that comment\*\*/]],
+    ["step 4's CI disposition", "- **CI failure** — one of the lanes step 3 gathered.", [/never from the lane's name/, /→ \*\*actionable\*\*/, /→ \*\*ambiguous\*\*/, /A \*\*flake\*\* — evidence, not a hunch/, /only where the run pushes nothing new/]],
+    ["step 7's Summary sections", "5. **Summary comment** — post a top-level", [/a \*\*"Top-level findings"\*\* section for every standalone item taken from a bot's misfired top-level comment/, /a \*\*"CI"\*\* section where step 3 gathered a failing lane or a replayed record carried one/]],
+    ["step 7's flake re-run on a no-op push", "3. **Re-read unresolved threads after the push.**", [/Re-run any lane step 4 judged a flake only where the push was a no-op/, /Each re-run request is part of the publication's success contract/]],
+    ["the replayed-lane rule", "A recorded CI lane is re-gathered in the same spirit", [/no lane of the current head's rollup carries the recorded identity at all/, /no state of the rollup drops a recorded lane/]],
+    ["the replayed misfired finding's text check", "A misfired finding is reintroduced by its recorded ordinal", [/checked against the finding's text the record carries for it, decoded from the JSON string literal its `finding:` line holds/, /fewer than M findings, or the text at N differs from the recorded text beyond whitespace/]],
+    ["the record entry's finding slot", "**Every entry carries the same field set whatever its disposition**", [/on its own `finding:` line, that finding's text verbatim as step 3 took it — as a one-line JSON string literal, its newlines and quotes escaped/]],
+    ["step 7's per-run-id re-run account", "3. **Re-read unresolved threads after the push.**", [/report which run ids' `gh run rerun` was accepted, per id rather than per lane/, /the next turn orders only the rest rather than meeting an accepted run already re-running/]],
+  ];
+  const missing = [];
+  for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
+    const path = `${mirror}/address-review/SKILL.md`;
+    let text;
+    try {
+      text = readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8");
+    } catch (err) {
+      missing.push(`${path} cannot be read: ${err.message}`);
+      continue;
+    }
+    const lines = text.split("\n");
+    for (const [what, anchor, phrases] of wanted) {
+      const line = lines.find((l) => l.includes(anchor));
+      if (!line) {
+        missing.push(`${path} states nothing for ${what}`);
+        continue;
+      }
+      for (const phrase of phrases) if (!phrase.test(line)) missing.push(`${path}'s ${what} does not state ${phrase}`);
+    }
+  }
+  if (!ciPara.includes("CI on the PR head")) missing.push("the workflow's gather brief does not open its CI bullet with \"CI on the PR head\"");
+  if (!/\*\*fresh and applicable\*\*/.test(misfiredPara)) missing.push("the workflow's gather brief does not state the misfired-findings test as \"fresh and applicable\"");
+  check(
+    "both skill mirrors state step 3's \"CI on the PR head\" bullet and \"fresh and applicable\" misfired-findings rule, step 4's CI disposition by cause, and step 7's \"Top-level findings\" and \"CI\" sections — and the workflow's gather brief carries the same two step-3 phrases beside them",
+    missing.length === 0,
+    missing.join("; "),
+  );
+}
+
+// --- 049 review round: the three gaps codex named on PR #120 -----------------
+// (1) A recorded lane the new head's rollup no longer carries at all is
+// replayed as `rollup: "absent"` — one more state in which a lane is an item
+// so its recorded account rides out, never an order to re-run anything.
+// (2) A flake re-run on a no-op push is part of the completion contract: the
+// publisher reports it structurally (`rerun` on the lane's entry) and the
+// caller refuses a completion claim that does not carry it accepted.
+// (3) What the gather left out (`packet.detail`) reaches the run's result, the
+// terminal no-op's detail, and the publish brief's Summary section.
+{
+  const ITEM_LANE = { type: "ci-failure", lane: "tests / node", rollup: "failing", author: "", authorIsBot: false, body: "FAIL scripts/test-x.mjs (log tail)", url: "https://example.invalid/owner/repo/actions/runs/777/job/888" };
+  const ITEM_LANE_ABSENT = { ...ITEM_LANE, lane: "lint / markdown", rollup: "absent", body: "no lane of this head's rollup carries `lint / markdown` (renamed or path-filtered); recorded cause: a shared fixture pin", url: "https://example.invalid/owner/repo/actions/runs/778/job/889" };
+  const LANE_ENTRY = { type: "ci-failure", lane: ITEM_LANE.lane, url: ITEM_LANE.url, ref: ITEM_LANE.lane, kind: "actionable-fixed", detail: "cause: the new guard changed the count; fixed in abc1234", author: "", authorIsBot: false, newFinding: true };
+  const ABSENT_ENTRY = { ...LANE_ENTRY, lane: ITEM_LANE_ABSENT.lane, url: ITEM_LANE_ABSENT.url, ref: ITEM_LANE_ABSENT.lane, kind: "already-addressed", detail: "replayed: recorded cause a shared fixture pin, left for the maintainer; the lane is absent from this head's rollup", newFinding: false };
+  const FLAKE_ENTRY = { ...LANE_ENTRY, kind: "flake-rerun", detail: "cause: the same lane went green on the base at a commit carrying the same files; evidence run 700" };
+  const packet = { reconcile: { outcome: "work" }, items: [ITEM, ITEM_LANE, ITEM_LANE_ABSENT] };
+  const withReport = (...entries) => ({ ...CYCLE_PASS, workReport: entries });
+  const absent = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], LANE_ENTRY, ABSENT_ENTRY)] });
+  check(
+    "a recorded lane the new head's rollup no longer carries replays as an `absent` item disposed of as already-addressed, and publishes",
+    absent.status === "fixed-published",
+    JSON.stringify(absent.result).slice(0, 300),
+  );
+  const absentRerun = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], LANE_ENTRY, { ...ABSENT_ENTRY, kind: "flake-rerun", detail: "evidence: green on base" })] });
+  check(
+    "a flake re-run ordered on a replayed lane the head's rollup does not carry is unpublishable — there is no run of it to re-run",
+    absentRerun.status === "publish-aborted-incomplete-dispositions" && /flake re-run on a lane the gather reports as \\"absent\\"/.test(JSON.stringify(absentRerun.result.malformedDispositions || [])),
+    JSON.stringify(absentRerun.result).slice(0, 300),
+  );
+  // The publisher's contract for the re-run: structural, and part of success.
+  const flake = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], FLAKE_ENTRY, ABSENT_ENTRY)] });
+  const flakeBrief = flake.seen.publishPrompts[0] || "";
+  check(
+    "the publish brief makes each ordered re-run part of the success contract — `rerun` reported on the lane's entry, a rejected request an abort before the replies — and the schema carries the field",
+    /set `rerun` to true ONLY if that list covers EVERY distinct run id the lane names/.test(flakeBrief) &&
+      /set `published: false` and `aborted: "flake re-run failed: <lane, run id, what gh returned>"` and STOP here, before step 4/.test(flakeBrief) &&
+      /On a push that ADVANCED the branch nothing is ordered here and both fields are left out/.test(flakeBrief) &&
+      /rerun: \{ type: "boolean", description: "On a `ci-failure` entry whose disposition is `flake-rerun`, after a NO-OP push/.test(src),
+    flakeBrief.slice(0, 200),
+  );
+  // PER RUN ID beneath that: a repeated lane names several runs and each
+  // `gh run rerun` accepts one, so the brief has the publisher issue every
+  // request before judging, report the accepted ids in `rerunAccepted`, and
+  // skip an id the disposition's detail names as already ordered — and the
+  // fixer, replaying a record, carries those ids into the detail.
+  check(
+    "the publish brief accounts for re-runs per run id — every request issued before judging, the accepted ids reported in `rerunAccepted`, an id already ordered by an earlier turn skipped — the schema carries the list, and the replaying fixer carries the accepted ids into the entry's detail",
+    /Issue the request for EVERY remaining id before judging any/.test(flakeBrief) &&
+      /set `rerunAccepted` to the list of every run id of the lane's that is accepted/.test(flakeBrief) &&
+      /SKIP an id the disposition's `detail` names as ALREADY ORDERED/.test(flakeBrief) &&
+      /ordering only the run ids `rerunAccepted` does not carry, which is why an accepted id is reported even beside a rejected one/.test(flakeBrief) &&
+      /rerunAccepted: \{ type: "array", items: \{ type: "string" \}/.test(src) &&
+      /carry that line's accepted run ids into the entry's \\`detail\\`, since publication orders only the rest/.test(src),
+    flakeBrief.slice(flakeBrief.indexOf("SKIP an id") - 40, flakeBrief.indexOf("SKIP an id") + 200),
+  );
+  // The caller's per-id half: one of the repeated lane's two runs accepted and
+  // the other rejected leaves the lane owed (`rerun: false`), but the record's
+  // standing line names the accepted id as ALREADY ORDERED and the rejected one
+  // as still owed, and the accepted re-run counts as what landed — a
+  // lane-level "still owed" alone had the next turn order run 777 again.
+  const repeatedPacket = { ...packet, items: packet.items.map((it) => (it === ITEM_LANE ? { ...it, instances: [it.url, "https://example.invalid/owner/repo/actions/runs/779/job/890"] } : it)) };
+  const partial = await run(gathered(repeatedPacket), {
+    args: "push no-rebase",
+    cycles: [withReport(CYCLE_PASS.workReport[0], FLAKE_ENTRY, ABSENT_ENTRY)],
+    publish: {
+      published: false,
+      aborted: "flake re-run failed: tests / node, run 779, gh: HTTP 403 this workflow run cannot be retried",
+      pushed: true,
+      pushedNewCommits: false,
+      summaryCommentUrl: "",
+      threadOutcomes: [
+        { threadId: "T1", ref: "src/app.ts:12 a-reviewer", outcome: "not reached", replied: false, resolved: false },
+        { lane: ITEM_LANE.lane, ref: ITEM_LANE.lane, outcome: "re-run accepted for 777, rejected for 779", replied: false, resolved: false, rerun: false, rerunAccepted: ["777", "999"] },
+        { lane: ITEM_LANE_ABSENT.lane, ref: ITEM_LANE_ABSENT.lane, outcome: "not reached", replied: false, resolved: false },
+      ],
+    },
+  });
+  const partialRecord = partial.seen.recordPrompts[0] || "";
+  check(
+    "a repeated lane whose re-run GitHub accepted for one run id and rejected for the other is recorded per id — the standing line names the accepted id as ALREADY ORDERED and only the rejected one as still owed, an id the lane never named is ignored, the accepted re-run is what landed, and the lane still counts as owed",
+    partial.status === "fixed-publish-failed" &&
+      /thread=tests \/ node {2}tests \/ node — its flake re-run is STILL OWED on run id\(s\) 779: run id\(s\) 777 are ALREADY ORDERED and accepted, so the next turn orders only the rest/.test(partialRecord) &&
+      !/run id\(s\) 777, 999/.test(partialRecord) &&
+      /^reached origin: 1 flake re-run ordered on the no-op push and accepted by GitHub for SOME of the lane's run ids only — still outstanding: .*1 of 1 flake re-run\(s\) still owed on the no-op push/m.test(partialRecord) &&
+      !/this run changed NOTHING on origin/.test(partialRecord),
+    `${partial.status}: ${partialRecord.split("\n").filter((l) => /thread=tests|^reached origin/.test(l)).join(" | ").slice(0, 500)}`,
+  );
+  // The caller's half: a completion claim over a no-op push whose account does
+  // not report the re-run accepted is refused, and the record's standing line
+  // says the re-run is still owed; with `rerun: true` it publishes; and on a
+  // push that advanced the branch nothing is owed (the default stub above).
+  const account = (rerun, rerunAccepted) => ({
+    published: true, pushed: true, pushedNewCommits: false, summaryCommentUrl: "https://example.invalid/pr/42#issuecomment-5",
+    threadOutcomes: [
+      { threadId: "T1", ref: "src/app.ts:12 a-reviewer", outcome: "replied and resolved", replied: true, resolved: true },
+      { lane: ITEM_LANE.lane, ref: ITEM_LANE.lane, outcome: "re-run ordered", replied: false, resolved: false, ...(rerun === undefined ? {} : { rerun }), ...(rerunAccepted ? { rerunAccepted } : {}) },
+      { lane: ITEM_LANE_ABSENT.lane, ref: ITEM_LANE_ABSENT.lane, outcome: "summary only", replied: false, resolved: false },
+    ],
+  });
+  const noRerun = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], FLAKE_ENTRY, ABSENT_ENTRY)], publish: account(undefined) });
+  const noRerunRecord = noRerun.seen.recordPrompts[0] || "";
+  check(
+    "a completion claim over a no-op push whose account does not report the flake re-run accepted is refused as contradicted, the record written, and the lane's standing line says the re-run is still owed",
+    noRerun.status === "fixed-publish-failed" &&
+      /1 of 1 flake-rerun lane\(s\) it owes a re-run after its no-op push report no `gh run rerun` accepted/.test(noRerun.result.note || "") &&
+      /thread=tests \/ node {2}tests \/ node — its flake re-run is STILL OWED/.test(noRerunRecord) &&
+      /thread=lint \/ markdown {2}lint \/ markdown — NOTHING is owed on it/.test(noRerunRecord) &&
+      noRerun.seen.spendPrompts.length === 0,
+    `${noRerun.status}: ${(noRerun.result.note || "").slice(0, 300)} | ${noRerunRecord.split("\n").filter((l) => /thread=/.test(l)).join(" | ").slice(0, 400)}`,
+  );
+  const rejectedRerun = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], FLAKE_ENTRY, ABSENT_ENTRY)], publish: account(false) });
+  check(
+    "the same claim over `rerun: false` is refused the same way",
+    rejectedRerun.status === "fixed-publish-failed" && /flake-rerun lane\(s\) it owes a re-run/.test(rejectedRerun.result.note || ""),
+    `${rejectedRerun.status}: ${(rejectedRerun.result.note || "").slice(0, 200)}`,
+  );
+  const withRerun = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], FLAKE_ENTRY, ABSENT_ENTRY)], publish: account(true, ["777"]) });
+  check(
+    "with the re-run reported accepted — `rerun: true` and `rerunAccepted` naming the lane's run — the same no-op-push publication completes",
+    withRerun.status === "fixed-published",
+    JSON.stringify(withRerun.result).slice(0, 300),
+  );
+  // The lane-level flag is read as what the per-id list supports: `rerun: true`
+  // over a list naming only one of a repeated lane's two runs — or naming none
+  // — leaves the lane owed on the missing id, the standing line naming it, and
+  // the completion claim refused rather than the prior record spent while one
+  // run was never re-run.
+  const uncoveredRerun = await run(gathered(repeatedPacket), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], FLAKE_ENTRY, ABSENT_ENTRY)], publish: account(true, ["777"]) });
+  const uncoveredRecord = uncoveredRerun.seen.recordPrompts[0] || "";
+  const bareTrue = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], FLAKE_ENTRY, ABSENT_ENTRY)], publish: account(true) });
+  check(
+    "a completion claim over `rerun: true` whose `rerunAccepted` does not cover every run id the lane names is refused as contradicted, the lane's standing line naming the uncovered id as still owed beside the accepted one, and `rerun: true` with no list at all is refused the same way",
+    uncoveredRerun.status === "fixed-publish-failed" &&
+      /1 of 1 flake-rerun lane\(s\) it owes a re-run after its no-op push report no `gh run rerun` accepted for every run id the lane names/.test(uncoveredRerun.result.note || "") &&
+      /thread=tests \/ node {2}tests \/ node — its flake re-run is STILL OWED on run id\(s\) 779: run id\(s\) 777 are ALREADY ORDERED and accepted/.test(uncoveredRecord) &&
+      uncoveredRerun.seen.spendPrompts.length === 0 &&
+      bareTrue.status === "fixed-publish-failed" && /report no `gh run rerun` accepted for every run id/.test(bareTrue.result.note || "") &&
+      /thread=tests \/ node {2}tests \/ node — its flake re-run is STILL OWED: the push was a no-op/.test(bareTrue.seen.recordPrompts[0] || ""),
+    `${uncoveredRerun.status}: ${(uncoveredRerun.result.note || "").slice(0, 200)} | ${uncoveredRecord.split("\n").filter((l) => /thread=tests/.test(l)).join(" | ").slice(0, 300)} | bare: ${bareTrue.status}`,
+  );
+  const coveredRerun = await run(gathered(repeatedPacket), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], FLAKE_ENTRY, ABSENT_ENTRY)], publish: account(true, [" 777 ", "779"]) });
+  check(
+    "the same claim over a list covering both of the repeated lane's runs, read trimmed, completes",
+    coveredRerun.status === "fixed-published",
+    JSON.stringify(coveredRerun.result).slice(0, 300),
+  );
+  check(
+    "on a push that advanced the branch nothing is ordered, so a flake-rerun entry without `rerun` completes",
+    flake.status === "fixed-published",
+    JSON.stringify(flake.result).slice(0, 300),
+  );
+  // What the gather left out is surfaced rather than discarded.
+  const LEFT_OUT = "lane `deploy / preview` still in progress on this head; the misfired review at .../pullrequestreview-9 names no head, so its findings were taken as none";
+  const noop = await run(gathered({ items: [], reconcile: { outcome: "work" }, detail: LEFT_OUT }), { args: "push no-rebase" });
+  check(
+    "a terminal no-op carries what the gather left out in its detail and result rather than reporting only \"nothing to address\"",
+    noop.status === "no-op" && (noop.result.detail || "").includes(`The gather left out: ${LEFT_OUT}`) && noop.result.gatherLeftOut === LEFT_OUT,
+    JSON.stringify(noop.result).slice(0, 400),
+  );
+  const itemful = await run(gathered({ ...packet, detail: LEFT_OUT }), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], LANE_ENTRY, ABSENT_ENTRY)] });
+  const itemfulBrief = itemful.seen.publishPrompts[0] || "";
+  check(
+    "an itemful run's publish brief puts what the gather left out into the Summary comment verbatim, and its result carries it",
+    itemful.status === "fixed-published" &&
+      /under a "Left out of this run's gather" heading — what the gather step reported it left out and why, VERBATIM:/.test(itemfulBrief) &&
+      itemfulBrief.includes(JSON.stringify(LEFT_OUT)) &&
+      itemful.result.gatherLeftOut === LEFT_OUT,
+    `${itemful.status}: ${itemfulBrief.includes(LEFT_OUT)}`,
+  );
+  check(
+    "a gather that left nothing out adds no section and no result field",
+    !/Left out of this run's gather/.test(flakeBrief) && !("gatherLeftOut" in (flake.result || {})),
+    flakeBrief.slice(0, 100),
+  );
+}
+
+// --- 049 second review round: the four gaps codex named on PR #120 ----------
+// (1) Every `ci-failure` item's `rollup` is validated at the gather, and a
+// lane the head does not show failing takes the replay disposition only.
+// (2) The publisher's disposition for a lane carries the GATHERED url, so a
+// one-instance flake whose entry echoed none still names a run to re-run.
+// (3) A flake re-run GitHub accepted on a no-op push is what LANDED where the
+// publication then stopped, so the lane's "already ordered" standing reaches
+// the record rather than the canonical "nothing reached origin" rendering.
+// (4) A misfired bot comment enters by one route only, split per finding.
+{
+  const ITEM_LANE = { type: "ci-failure", lane: "tests / node", rollup: "failing", author: "", authorIsBot: false, body: "FAIL scripts/test-x.mjs (log tail)", url: "https://example.invalid/owner/repo/actions/runs/777/job/888" };
+  const ITEM_LANE_GREEN = { ...ITEM_LANE, lane: "lint / markdown", rollup: "green", body: "green on this head; recorded cause: a shared fixture pin", url: "https://example.invalid/owner/repo/actions/runs/778/job/889" };
+  const LANE_ENTRY = { type: "ci-failure", lane: ITEM_LANE.lane, url: ITEM_LANE.url, ref: ITEM_LANE.lane, kind: "actionable-fixed", detail: "cause: the new guard changed the count; fixed in abc1234", author: "", authorIsBot: false, newFinding: true };
+  const GREEN_ENTRY = { ...LANE_ENTRY, lane: ITEM_LANE_GREEN.lane, url: ITEM_LANE_GREEN.url, ref: ITEM_LANE_GREEN.lane, kind: "already-addressed", detail: "replayed: recorded cause a shared fixture pin; green on this head", newFinding: false };
+  const FLAKE_ENTRY = { ...LANE_ENTRY, kind: "flake-rerun", detail: "cause: the same lane went green on the base at a commit carrying the same files; evidence run 700" };
+  const packet = { reconcile: { outcome: "work" }, items: [ITEM, ITEM_LANE, ITEM_LANE_GREEN] };
+  const withReport = (...entries) => ({ ...CYCLE_PASS, workReport: entries });
+  // (1) The gather guard: a rollup outside the four states, a missing one, and
+  // a lane with no identity each stop the run before any cycle is dispatched.
+  const badRollup = await run(gathered({ ...packet, items: [ITEM, { ...ITEM_LANE, rollup: "flaky" }] }), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], LANE_ENTRY)] });
+  const noRollup = await run(gathered({ ...packet, items: [ITEM, { ...ITEM_LANE, rollup: undefined }] }), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], LANE_ENTRY)] });
+  const noLane = await run(gathered({ ...packet, items: [ITEM, { ...ITEM_LANE, lane: " " }] }), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], LANE_ENTRY)] });
+  check(
+    "a ci-failure item gathered with a rollup outside the four states, or none, or with no lane, stops the run as a gather-contract defect naming the lane, before any cycle runs",
+    badRollup.status === "gather-contract" && /lane "tests \/ node" carries rollup "flaky"/.test((badRollup.result.malformedItems || []).join()) && badRollup.seen.cycleCalls.length === 0 &&
+      noRollup.status === "gather-contract" && /carries rollup null/.test((noRollup.result.malformedItems || []).join()) &&
+      noLane.status === "gather-contract" && /a ci-failure item with no lane/.test((noLane.result.malformedItems || []).join()),
+    JSON.stringify({ bad: badRollup.status, badItems: badRollup.result.malformedItems, none: noRollup.status, noLane: noLane.status, cycles: badRollup.seen.cycleCalls.length }).slice(0, 400),
+  );
+  check(
+    "the same guard passes every lane carrying one of the four states, so the itemful run above it still publishes",
+    (await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], LANE_ENTRY, GREEN_ENTRY)] })).status === "fixed-published",
+  );
+  // And one item per identity: a lane the gather emitted per event instead of
+  // consolidating into `instances` would leave the identity map holding the
+  // last item while one entry covers both, so a flake re-run forwards one run
+  // URL and publication reports success over the other still red. A thread
+  // gathered twice and a misfired finding emitted twice are refused the same
+  // way, before any cycle runs.
+  const twiceLane = await run(gathered({ ...packet, items: [ITEM, ITEM_LANE, { ...ITEM_LANE, url: "https://example.invalid/owner/repo/actions/runs/779/job/890" }] }), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], LANE_ENTRY)] });
+  const twiceThread = await run(gathered({ ...packet, items: [ITEM, { ...ITEM, url: "https://example.invalid/pr/42#d1-again" }, ITEM_LANE] }), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], LANE_ENTRY)] });
+  const FINDING = { type: "standalone", finding: "1 of 1", author: "chatgpt-codex-connector", authorIsBot: true, body: "the retry loop never backs off", url: "https://example.invalid/pr/42#pullrequestreview-9" };
+  const twiceFinding = await run(gathered({ ...packet, items: [ITEM, ITEM_LANE, FINDING, { ...FINDING }] }), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], LANE_ENTRY)] });
+  check(
+    "a packet gathering one identity twice — two ci-failure items on one lane, a thread twice, or one misfired finding twice — stops the run as a gather-contract defect naming the duplicated identity, before any cycle runs, rather than collapsing them onto the last item",
+    twiceLane.status === "gather-contract" && (twiceLane.result.duplicateItems || []).join() === 'ci-failure "tests / node"' && twiceLane.seen.cycleCalls.length === 0 &&
+      twiceThread.status === "gather-contract" && (twiceThread.result.duplicateItems || []).join() === 'review-thread "T1"' &&
+      twiceFinding.status === "gather-contract" && (twiceFinding.result.duplicateItems || []).join() === 'standalone "https://example.invalid/pr/42#pullrequestreview-9 (finding 1 of 1)"',
+    JSON.stringify({ lane: twiceLane.status, laneDup: twiceLane.result.duplicateItems, thread: twiceThread.result.duplicateItems, finding: twiceFinding.result.duplicateItems, cycles: twiceLane.seen.cycleCalls.length }).slice(0, 400),
+  );
+  // And every misfired finding's ordinal in the exact `N of M` form, at the
+  // same gate: `findingOrdinal` keys on the string as given, so a malformed one
+  // would key an item, pass coverage and publication under it, and reach the
+  // record as an ordinal the next gather cannot locate in an unchanged comment.
+  // One count per comment, and never the comment whole beside its findings.
+  const ordinal = (finding, extra = {}) => run(gathered({ ...packet, items: [ITEM, ITEM_LANE, { ...FINDING, finding }, ...(extra.items || [])] }), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], LANE_ENTRY)] });
+  const slash = await ordinal("1/2");
+  const beyond = await ordinal("3 of 2");
+  const zero = await ordinal("0 of 1");
+  const countClash = await ordinal("1 of 2", { items: [{ ...FINDING, finding: "2 of 3", body: "another" }] });
+  const wholeBeside = await ordinal("1 of 1", { items: [{ ...FINDING, finding: undefined, body: "the whole comment" }] });
+  const itemsOf = (r) => (r.result && r.result.malformedItems || []).join(" || ");
+  check(
+    "a misfired finding gathered with an ordinal that is not the exact `N of M` form, or outside its own count, or disagreeing with a sibling on M, or beside the same comment gathered whole, stops the run as a gather-contract defect naming the item, before any cycle runs",
+    slash.status === "gather-contract" && /carries finding "1\/2", not the exact `N of M` ordinal/.test(itemsOf(slash)) && slash.seen.cycleCalls.length === 0 &&
+      beyond.status === "gather-contract" && /carries finding "3 of 2", an ordinal outside its own count/.test(itemsOf(beyond)) &&
+      zero.status === "gather-contract" && /carries finding "0 of 1", an ordinal outside its own count/.test(itemsOf(zero)) &&
+      countClash.status === "gather-contract" && /disagree on how many that comment holds \(M of 2, 3\)/.test(itemsOf(countClash)) &&
+      wholeBeside.status === "gather-contract" && /is gathered whole beside its per-finding items — one route per comment/.test(itemsOf(wholeBeside)),
+    JSON.stringify({ slash: [slash.status, itemsOf(slash)], beyond: [beyond.status, itemsOf(beyond)], zero: zero.status, clash: [countClash.status, itemsOf(countClash)], whole: [wholeBeside.status, itemsOf(wholeBeside)] }).slice(0, 600),
+  );
+  check(
+    "the same guard passes a well-formed ordinal, read trimmed, so the itemful run still publishes",
+    (await run(gathered({ ...packet, items: [ITEM, ITEM_LANE, { ...FINDING, finding: " 1 of 1 " }] }), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], LANE_ENTRY, { type: "standalone", url: FINDING.url, finding: "1 of 1", ref: "finding 1 of 1", kind: "actionable-fixed", detail: "added backoff in bcd2345", author: FINDING.author, authorIsBot: true, newFinding: true })] })).status === "fixed-published",
+  );
+  // And the publishability half: a green lane under any kind but the replay
+  // disposition is unpublishable, not only under `flake-rerun`.
+  const greenFixed = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], LANE_ENTRY, { ...GREEN_ENTRY, kind: "actionable-fixed", detail: "fixed in abc1234" })] });
+  const greenSkipped = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], LANE_ENTRY, { ...GREEN_ENTRY, kind: "ambiguous-skipped", detail: "left for the maintainer" })] });
+  const defectsOf = (r) => JSON.stringify(r.result && r.result.malformedDispositions || []);
+  check(
+    "a replayed lane the head shows green disposed of as actionable-fixed or ambiguous-skipped is unpublishable — a lane not failing on this head takes already-addressed with the recorded account, and nothing else",
+    greenFixed.status === "publish-aborted-incomplete-dispositions" && /lane the gather reports as \\"green\\" on this head as actionable-fixed/.test(defectsOf(greenFixed)) &&
+      greenSkipped.status === "publish-aborted-incomplete-dispositions" && /on this head as ambiguous-skipped/.test(defectsOf(greenSkipped)),
+    `${greenFixed.status}: ${defectsOf(greenFixed).slice(0, 200)} | ${greenSkipped.status}: ${defectsOf(greenSkipped).slice(0, 120)}`,
+  );
+  // And the converse: `already-addressed` is that replay's disposition and no
+  // failing lane's — admitted on a red lane, a lane-only run pushed nothing,
+  // published a completed Summary and spent the prior record while the head
+  // stayed red. A fix the tree carries for a red lane is actionable-fixed.
+  const redAddressed = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], { ...LANE_ENTRY, kind: "already-addressed", detail: "main already carries the fixture pin at def5678", newFinding: false }, GREEN_ENTRY)] });
+  check(
+    "a lane the head shows failing disposed of as already-addressed is unpublishable — a failing lane takes actionable-fixed, ambiguous-skipped or flake-rerun by cause, and the fixer and reviewer briefs and both skill mirrors say so",
+    redAddressed.status === "publish-aborted-incomplete-dispositions" && /lane failing on this head as already-addressed, the replay disposition of a lane the head shows green, running or absent/.test(defectsOf(redAddressed)) &&
+      /is THAT replay's disposition alone, never a failing lane's: a lane failing on this head is judged by cause/.test(src) &&
+      /a fix the tree carries for it is .{0,2}actionable-fixed.{0,2} with where it lives, since only the push re-runs the lane/.test(src) &&
+      ["plugins/dev-skills/skills", "codex/dev-skills/skills"].every((mirror) => /Those three are a failing lane's only dispositions — \*\*already-addressed\*\* is the replay disposition of a recorded lane this head shows green, running or absent/.test(readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8"))),
+    `${redAddressed.status}: ${defectsOf(redAddressed).slice(0, 300)}`,
+  );
+  // (2) The gathered url reaches the publisher on a lane entry that echoed none
+  // — and replaces one that echoed a different URL.
+  const noUrlFlake = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], { ...FLAKE_ENTRY, url: undefined }, GREEN_ENTRY)] });
+  const wrongUrlFlake = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], { ...FLAKE_ENTRY, url: "https://example.invalid/owner/repo/actions/runs/999/job/999" }, GREEN_ENTRY)] });
+  const flakeLine = (r) => ((r.seen.publishPrompts[0] || "").match(/"lane": "tests \/ node"[\s\S]*?"url": "([^"]*)"/) || [])[1] || "";
+  check(
+    "the publisher's disposition for a lane carries the gathered details URL — filled in where the entry echoed none, and replacing one the entry invented — so a one-instance flake-rerun names a run to re-run",
+    noUrlFlake.status === "fixed-published" && flakeLine(noUrlFlake) === ITEM_LANE.url &&
+      wrongUrlFlake.status === "fixed-published" && flakeLine(wrongUrlFlake) === ITEM_LANE.url && !/actions\/runs\/999/.test(wrongUrlFlake.seen.publishPrompts[0] || ""),
+    JSON.stringify({ none: noUrlFlake.status, noneUrl: flakeLine(noUrlFlake), wrong: wrongUrlFlake.status, wrongUrl: flakeLine(wrongUrlFlake) }),
+  );
+  // (3) A no-op push whose flake re-run GitHub accepted, then a stop before any
+  // reply: the re-run is what landed, so the record renders published-in-part
+  // with the lane's "already ordered" standing, the tips already on origin.
+  const stoppedAfterRerun = (rerun) => ({
+    published: false,
+    aborted: "the push was a no-op and the re-run was accepted, then posting the reply to T1 failed with a 502",
+    pushed: true,
+    pushedNewCommits: false,
+    summaryCommentUrl: "",
+    threadOutcomes: [
+      { threadId: "T1", ref: "src/app.ts:12 a-reviewer", outcome: "reply failed", replied: false, resolved: false },
+      { lane: ITEM_LANE.lane, ref: ITEM_LANE.lane, outcome: rerun ? "re-run accepted" : "re-run rejected", replied: false, resolved: false, rerun, ...(rerun ? { rerunAccepted: ["777"] } : {}) },
+      { lane: ITEM_LANE_GREEN.lane, ref: ITEM_LANE_GREEN.lane, outcome: "not reached", replied: false, resolved: false },
+    ],
+  });
+  const rerunLanded = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], FLAKE_ENTRY, GREEN_ENTRY)], publish: stoppedAfterRerun(true) });
+  const rerunRecord = rerunLanded.seen.recordPrompts[0] || "";
+  const rerunOrigin = (rerunRecord.match(/^reached origin: .*/m) || [""])[0];
+  check(
+    "a no-op push whose accepted flake re-run is followed by a stop before any reply records the re-run as what landed — published in part, the lane's standing ALREADY ORDERED, the tips already on origin — rather than \"nothing reached origin\" with no standing lines",
+    rerunLanded.status === "fixed-publish-failed" &&
+      /^reached origin: 1 flake re-run ordered on the no-op push and accepted by GitHub — still outstanding: 1 of 1 thread\(s\) still owed their reply, 1 of 1 not resolved, the Summary comment — and the tips above are already on origin, this run having put nothing there/m.test(rerunRecord) &&
+      /thread=tests \/ node {2}tests \/ node — flake re-run ALREADY ORDERED \(every run id the lane names accepted\) — do not order it again/.test(rerunRecord) &&
+      /thread=T1 {2}src\/app\.ts:12 a-reviewer — no reply reached the PR/.test(rerunRecord) &&
+      !/this run changed NOTHING on origin/.test(rerunRecord) &&
+      /what reached origin: 1 flake re-run ordered on the no-op push and accepted by GitHub/.test(rerunLanded.result.note || ""),
+    `${rerunLanded.status}: ${rerunOrigin.slice(0, 300) || "no origin line"} | ${rerunRecord.split("\n").filter((l) => /thread=/.test(l)).join(" | ").slice(0, 300)}`,
+  );
+  const rerunRejected = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], FLAKE_ENTRY, GREEN_ENTRY)], publish: stoppedAfterRerun(false) });
+  const rejectedRecord = rerunRejected.seen.recordPrompts[0] || "";
+  check(
+    "the same stop over a REJECTED re-run keeps the no-op rendering: nothing landed, the record says the no-op push changed nothing on origin, and no standing line claims the re-run ordered",
+    rerunRejected.status === "fixed-publish-failed" &&
+      /this run changed NOTHING on origin: its push was an `Everything up-to-date` no-op/.test(rejectedRecord) &&
+      !/^reached origin: /m.test(rejectedRecord) &&
+      !/ALREADY ORDERED/.test(rejectedRecord),
+    `${rerunRejected.status}: ${(rejectedRecord.match(/^this run changed NOTHING.*/m) || ["no no-op line"])[0].slice(0, 200)}`,
+  );
+  // (4) One route per comment: the gather brief's standalone bullet never emits
+  // a bot's misfired comment whole, the misfired bullet takes a request-named
+  // one split per finding, and both skill mirrors state the same rule on the
+  // misfired-findings sentence.
+  const brief = gatherPrompt("#42", false);
+  const standalonePara = brief.split("\n").find((l) => l.startsWith("- A standalone issue comment or review summary becomes its own item")) || "";
+  const misfiredPara = brief.split("\n").find((l) => l.startsWith("- One more source qualifies on its own")) || "";
+  const mirrorsState = ["plugins/dev-skills/skills", "codex/dev-skills/skills"].map((mirror) => {
+    const line = readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8").split("\n").find((l) => l.includes("**One more source qualifies on its own: a bot reviewer that misfired")) || "";
+    return /One route per comment, never both: such a comment is never taken whole under the rule above, even where the maintainer names it/.test(line);
+  });
+  check(
+    "a bot's misfired top-level comment enters the gather by one route only — never whole under the standalone bullet, split per finding under the misfired bullet even where the request names it — and both skill mirrors state the rule",
+    /ONE ROUTE PER COMMENT, never both: a bot reviewer's misfired top-level comment — one holding findings, the next bullet's source — is NEVER emitted whole under this bullet, even where the request names it/.test(standalonePara) &&
+      /the request's naming settling that its findings ARE taken/.test(standalonePara) &&
+      /A comment of this kind the request names, or the record holds entries for, is taken HERE and split the same way whatever that test says/.test(misfiredPara) &&
+      mirrorsState.every(Boolean),
+    JSON.stringify({ standalone: /ONE ROUTE PER COMMENT/.test(standalonePara), misfired: /taken HERE and split the same way/.test(misfiredPara), mirrors: mirrorsState }),
   );
 }
 

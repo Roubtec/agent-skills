@@ -17,8 +17,21 @@
  * new commits/rewritten history; a no-op push (nothing new to review) skips them
  * so an automated review -> address -> review loop can terminate.
  *
+ * The gather emits three item kinds, per the skill's step 3: every UNRESOLVED
+ * review thread; a `standalone` top-level comment where the request names it,
+ * a prior record holds a disposition for it, or a bot's finding misfired into
+ * a top-level review summary or issue comment is fresh and applicable (one
+ * item per finding, identified by the comment's permalink PLUS its `N of M`
+ * ordinal); and a `ci-failure` item per lane failing on the reconciled head
+ * (identified by its lane, its details URL being one head's permalink), which
+ * the fixer disposes of BY CAUSE — actionable, ambiguous for the maintainer,
+ * or an evidenced `flake-rerun` the publisher re-runs on a no-op push only —
+ * and the Summary comment lists under "CI", as it lists misfired findings
+ * under "Top-level findings". The disposition record carries both kinds by
+ * those identities and replays them (task 049).
+ *
  * An EMPTY gather is not one exit but two, per the skill's step 3. A run with
- * no unresolved thread and no included standalone item ends as a TERMINAL
+ * no unresolved thread, no included standalone item and no CI lane ends as a TERMINAL
  * no-op only where `HEAD`, the tip the run started from, and the PR's recorded
  * `headRefOid` all name one commit; any other zero-item run takes the
  * ZERO-ITEM PATH — it continues through the rebase points, the nested cycle,
@@ -141,7 +154,7 @@ export const meta = {
   description: "Address every unresolved review thread on one PR: fix or push back, verify through the shared review cycle — a fresh-eyes reviewer plus a best-effort cross-harness codex peer review each round (review is cross-harness; peer outcomes never block; bounded round cap) — then publish by default (use no-push for a local-only dry run).",
   whenToUse: "Work through maintainer-vetted review feedback on a single PR hands-off, with cross-harness verification (a best-effort codex peer beside the fresh reviewer). Not for new task batches (wf-address-tasks) or stack rebases.",
   phases: [
-    { title: "Gather", detail: "resolve the PR, branch state, and unresolved threads" },
+    { title: "Gather", detail: "resolve the PR, branch state, unresolved threads, misfired top-level findings, and failing CI lanes" },
     { title: "Rebase", detail: "delegated rebase onto the freshest base — before fixing, and again before publication" },
     { title: "Fix and verify", detail: "fix/push-back per thread through the nested wf-review-cycle" },
     { title: "Peer review (codex)", detail: "best-effort cross-harness second opinion beside each reviewer round; its outcome never blocks" },
@@ -204,23 +217,28 @@ const PACKET_SCHEMA = {
     },
     items: {
       type: "array",
-      description: "Every UNRESOLVED review thread plus any explicitly-included standalone item (issue comment / review summary), verbatim.",
+      description: "Every UNRESOLVED review thread, every standalone item — one the request names, one a prior record holds a disposition for, or a bot's finding misfired into a top-level comment that is fresh and applicable — and every CI lane failing on the reconciled head (or replayed from a prior record), verbatim.",
       items: {
         type: "object",
         properties: {
-          type: { type: "string", description: "`review-thread` (resolvable, threaded) or `standalone` (a top-level issue/review comment with no resolve state)." },
-          threadId: { type: "string", description: "GraphQL review-thread node id — REQUIRED for type `review-thread` (used to resolve). Absent/empty for `standalone`." },
-          commentId: { type: "string", description: "Top comment databaseId — REQUIRED for type `review-thread` (used to thread the reply). Absent/empty for `standalone`." },
+          type: { type: "string", description: "`review-thread` (resolvable, threaded), `standalone` (a top-level issue/review comment with no resolve state — a maintainer-named one, or ONE finding of a bot's misfired top-level comment, carrying `finding`), or `ci-failure` (one lane of the head's check rollup, carrying `lane` and `rollup`)." },
+          threadId: { type: "string", description: "GraphQL review-thread node id — REQUIRED for type `review-thread` (used to resolve). Absent/empty for `standalone` and `ci-failure`." },
+          commentId: { type: "string", description: "Top comment databaseId — REQUIRED for type `review-thread` (used to thread the reply). Absent/empty for `standalone` and `ci-failure`." },
+          finding: { type: "string", description: "A misfired finding's ORDINAL within its comment, exactly `N of M`, counted in the order the body presents them — REQUIRED on a `standalone` item taken from a bot's misfired top-level comment, absent on a maintainer-named standalone item. Every finding one body holds shares the one `url`, so the identity such an item is covered and recorded by is the url PLUS this ordinal; on the url alone the entries for two findings of one comment would read as covering each other." },
+          lane: { type: "string", description: "A CI lane's IDENTITY, REQUIRED on a `ci-failure` item and its whole identity: `<workflowName> / <name>` for a GitHub Actions `CheckRun`, `<checkSuite.app.slug> / <name>` for an external app's (it has no `workflowName`; the slug is read through GraphQL `statusCheckRollup.contexts`, since `gh pr view` does not carry it, so two apps emitting one check name stay two lanes), the `context` of a `StatusContext`. A rollup carrying that identity more than once — one workflow fired by several events on the head — is ONE lane here, failing while any instance is. The details URL is NOT the identity: it names one head's run and the next push replaces it, so it is the lane's permalink (`url`) and replay matches a recorded lane to the new head's rollup by THIS field." },
+          rollup: { type: "string", description: "The lane's state on the reconciled head, on a `ci-failure` item: `failing` (its verdict is none of `SUCCESS`/`NEUTRAL`/`SKIPPED`, the ordinary reason a lane is an item), or — ONLY for a lane a prior disposition record holds an entry for — `green`, `running` or `absent` — green or still running on this head, or NO lane of this head's rollup carrying the recorded identity at all (the workflow or check renamed or removed since, or not fired for this head by a path filter) — the three states in which nothing re-gathers a lane on its own and the item exists so the recorded cause and disposition replay into this run's Summary comment rather than being dropped." },
           path: { type: "string" },
           line: { type: "integer" },
-          author: { type: "string", description: "Comment author login. REQUIRED — `ping-contributing` attributes a round's new findings to specific bots by substring-matching this login (codex/copilot/claude), so an empty/absent author silently drops a contributing bot from the re-ping set. Derive it from the same GraphQL `author{ login __typename }` that yields `authorIsBot`; if the author is unavailable (e.g. deleted account) use an empty string — a deleted account is never a live reviewer bot to re-ping, so no attribution is the correct outcome." },
-          authorIsBot: { type: "boolean", description: "True if the comment author is a bot / GitHub App. Derive from GraphQL author `__typename` (`Bot`) — NOT from guessing the login; if the author is unavailable (e.g. deleted account), use false, the safe value that keeps the thread open. Drives whether a push-back or deferred thread may be auto-resolved." },
-          body: { type: "string", description: "Comment text, verbatim." },
-          url: { type: "string", description: "Permalink to the comment (the stable reference for a standalone item, which has no threadId)." },
+          author: { type: "string", description: "Comment author login. REQUIRED — `ping-contributing` attributes a round's new findings to specific bots by substring-matching this login (codex/copilot/claude), so an empty/absent author silently drops a contributing bot from the re-ping set. Derive it from the same GraphQL `author{ login __typename }` that yields `authorIsBot`; if the author is unavailable (e.g. deleted account) use an empty string — a deleted account is never a live reviewer bot to re-ping, so no attribution is the correct outcome. A `ci-failure` item has no author: the empty string, which attributes it to no bot, is the correct value there." },
+          authorIsBot: { type: "boolean", description: "True if the comment author is a bot / GitHub App. Derive from GraphQL author `__typename` (`Bot`) — NOT from guessing the login; if the author is unavailable (e.g. deleted account), use false, the safe value that keeps the thread open. Drives whether a push-back or deferred thread may be auto-resolved. `false` on a `ci-failure` item." },
+          body: { type: "string", description: "Comment text, verbatim — for a misfired finding, that ONE finding's text as the comment presents it; for a `ci-failure` item, the EVIDENCE the disposition is judged from: the bounded failed-log tail of an Actions lane, or, for a lane with no workflow run, the statement that logs and re-runs are unavailable through `gh run` beside whatever its details URL showed." },
+          url: { type: "string", description: "Permalink to the comment (the stable reference for a standalone item, which has no threadId — with `finding` beside it for a misfired finding); for a `ci-failure` item, the lane's details URL (`detailsUrl` of a `CheckRun`, `targetUrl` of a `StatusContext`), its permalink rather than its identity." },
+          instances: { type: "array", items: { type: "string" }, description: "On a `ci-failure` item whose identity the rollup carried more than once: the details URL of EVERY failing instance (the one in `url` included). One workflow fired by several events on the head is one lane but several workflow runs, each with its own run id, and a flake re-run that reached only `url`'s run would leave the others red. Absent for a lane with one instance." },
         },
         required: ["type", "body", "author", "authorIsBot", "url"],
       },
     },
+    detail: { type: "string", description: "What the gather left OUT and why, for the run's report — a recorded standalone comment that is gone, a misfired finding whose freshness was only ambiguous (taken as none, per the brief), a lane still in progress. Empty or absent when nothing was left out." },
   },
   required: ["ok", "items"],
 };
@@ -272,11 +290,15 @@ const PUBLISH_SCHEMA = {
         type: "object",
         properties: {
           threadId: { type: "string", description: "The thread's GraphQL node id, MANDATORY on a `review-thread` item's entry: it is the key this entry is matched to its disposition by, echoed VERBATIM from that disposition." },
-          url: { type: "string", description: "The item's url, MANDATORY on a `standalone` item's entry (where it is that item's whole identity, echoed VERBATIM); the thread's permalink on a `review-thread` entry, which is keyed by `threadId` instead." },
+          url: { type: "string", description: "The item's url, MANDATORY on a `standalone` item's entry (where it is that item's identity, echoed VERBATIM — with `finding` beside it for a misfired finding, the two together being the identity); the thread's permalink on a `review-thread` entry, which is keyed by `threadId` instead, and the details URL on a `ci-failure` entry, which is keyed by `lane` instead." },
+          finding: { type: "string", description: "A misfired finding's `N of M` ordinal, MANDATORY on the entry for a `standalone` item that carries one, echoed VERBATIM from its disposition: the url alone is shared by every finding of that comment." },
+          lane: { type: "string", description: "The lane identity, MANDATORY on a `ci-failure` item's entry and its whole identity, echoed VERBATIM from its disposition." },
           ref: { type: "string", description: "file:line + author, for a human reading the record. NOT an identity: two threads a re-review left on the same line by the same author share it, so it can key nothing — `threadId`/`url` above is what does." },
           outcome: { type: "string" },
           replied: { type: "boolean", description: "True ONLY if the reply is ON THE PR when your turn ends. Never what you intended or attempted — and never a record of your API calls either: a reply you skipped under step 4's duplicate rule, an equivalent one of yours already being there, is on the PR, and reporting it false would have the caller read a complete publication as still owing that reply and a later turn post it twice." },
           resolved: { type: "boolean", description: "True ONLY if the thread is RESOLVED on the PR when your turn ends. Never what you intended or attempted, and true likewise for a thread you found already resolved rather than resolving yourself." },
+          rerun: { type: "boolean", description: "On a `ci-failure` entry whose disposition is `flake-rerun`, after a NO-OP push: true ONLY if every distinct run id the lane names (its url's and every one in its instances) is ACCEPTED — by a `gh run rerun` of yours that exited 0, or by an earlier turn's, named as already ordered in the disposition's `detail`. False when any request was rejected or failed, or none was issued. Left out on a push that advanced the branch, where nothing is ordered, and on every other entry. That re-run is the one action the disposition promises, so a completion claim over a flake-rerun lane reporting it false or absent after a no-op push is refused exactly as one over an owed reply that never posted — and the caller reads it BESIDE `rerunAccepted`: true over a list that does not name every run id the lane names is read as the lane still owed on the missing ids, never as accepted." },
+          rerunAccepted: { type: "array", items: { type: "string" }, description: "Beside `rerun` on that same entry: every run id of the lane's that is accepted when your turn ends — the ids whose `gh run rerun` exited 0 this turn PLUS the ids an earlier turn had already ordered — as the bare `<run-id>` digits. The caller records these per id, so a later turn re-orders only the ids still owed rather than meeting an accepted run already re-running; with `rerun` false, this list is what tells the two apart. Empty or absent where none was accepted." },
         },
         required: ["ref", "outcome", "replied", "resolved"],
       },
@@ -370,6 +392,30 @@ function botKindOf(login, authorIsBot) {
   return null;
 }
 
+// The IDENTITY of a gathered item, and of the disposition and the publisher's
+// outcome entry that speak for it — the one key every per-item check routes
+// on. Three shapes, by the item's kind: a `review-thread` is its `threadId`; a
+// `ci-failure` is its `lane` (the details URL names one head's run and the
+// next push replaces it, so the lane's identity is what a recorded entry is
+// matched to the new head's rollup by); a `standalone` is its `url`, PLUS its
+// `finding` ordinal where it is one finding of a bot's misfired top-level
+// comment — every finding one body holds shares the one permalink, so on the
+// url alone the entries for two of them would each read as covering both.
+// One function for all three consumers (coverage, the publishability check,
+// the publisher's account) so they cannot key differently; the key strings
+// are shaped so no two kinds can collide on a value.
+function findingOrdinal(x) {
+  return x && typeof x.finding === "string" && x.finding.trim() ? x.finding.trim() : "";
+}
+function itemKeyOf(x) {
+  if (!x) return "";
+  if (x.type === "review-thread") return String(x.threadId || "").trim();
+  if (x.type === "ci-failure") return String(x.lane || "").trim();
+  const url = String(x.url || "").trim();
+  const finding = findingOrdinal(x);
+  return url && finding ? `${url} (finding ${finding})` : url;
+}
+
 // What an agent this script spawns may run, and what it may not. A reviewer
 // subagent authorized to verify a claim empirically once ran `rm -rf ./*` in a
 // shared main checkout: its setup clone had failed invisibly inside a pipeline
@@ -446,9 +492,11 @@ Rebase NOTHING here, whatever the request asked for. Report \`pr.base = baseRefN
 Gather feedback into \`items\` (each verbatim):
 - UNRESOLVED review threads — PRIMARY: use the baked \`gh-review-threads\` helper. \`gh-review-threads <PR#>\` prints the unresolved threads as a JSON array (each thread \`id isResolved isOutdated path line\` and \`comments[]\` with \`databaseId author{ login __typename } body diffHunk url\`); it already pages with fresh SINGLE-SHOT queries (never \`gh api graphql --paginate\`), does the nested comment fetch-up, and applies the scope check below, failing closed with exit 3 and no stdout on a contaminated response. FALLBACK, only when \`command -v gh-review-threads\` fails (a container built from an older image — the same graceful-degradation used for the gh-version-gated Copilot ping): run the GraphQL \`reviewThreads\` query by hand as SINGLE-SHOT queries, never \`gh api graphql --paginate\` (run concurrently with other gh GraphQL calls it has returned ANOTHER PR's threads); include \`totalCount\` + \`pageInfo{ hasNextPage endCursor }\` and page past 100 threads by passing the returned cursor to a fresh call. Either way SCOPE-CHECK the result (the helper does this for you): every comment \`url\` must match the exact repo-qualified PR path for this PR (\`https://github.com/<owner>/<repo>/pull/<number>\` followed by \`#\`, \`/\`, \`?\`, or end); do not use a plain substring check such as \`/pull/<number>\`. On any mismatch, discard the entire response, retry once with a fresh single-shot query, and if it repeats fail closed; never emit an item whose \`url\` points at a different PR. Keep only \`isResolved == false\`. Emit each as \`type: "review-thread"\` with \`threadId\` (the thread node \`id\`), \`commentId\` (the top comment's \`databaseId\`), \`path\`, \`line\`, \`author\` (the top comment's \`author.login\`), \`authorIsBot\` (true when that comment's \`author.__typename\` is \`Bot\` — from the helper's output or the GraphQL \`author{ login __typename }\`; do not guess from the login), \`body\`, \`url\`. \`threadId\` and \`commentId\` are mandatory for these — they are how publication resolves and replies.
 - Top-level context — ALWAYS fetch every review summary (\`gh pr view --json reviews\`) and every issue comment (\`gh api --paginate repos/<owner>/<repo>/issues/<PR>/comments\`, repository-qualified from the PR's OWN URL exactly as the base fetch above is: \`{owner}\`/\`{repo}\` expand to the repository of the current directory, which on a cross-repository PR is the head fork, where this PR's comments — and any prior record below — are not), even when the request names no standalone item: this sweep is how maintainer replies and decision comments are discovered. A maintainer reply on an unresolved thread is authoritative — fold it into that thread's context. So is a top-level maintainer comment recording per-item verdicts (often titled "Maintainer Decisions" or similar) — fold each decision into the relevant thread's context as its binding disposition (including "defer to a follow-up task" and "keep as-is"). One kind of issue comment is NEITHER of those: a DISPOSITION RECORD left by an earlier run of this workflow, recognized by the marker \`<!-- address-review:disposition-record -->\` as its FIRST LINE, byte for byte, rather than by its prose (a comment that merely quotes the marker is an ordinary comment). It is this workflow's own output, so it is never an item and carries no maintainer authority — do not fold its drafted replies into a thread as a decision. Report the most recent one as \`priorRecord\`: its permalink, and its body VERBATIM and WHOLE, since the drafted replies and the ready-to-post Summary body in it are the parts no later run can re-derive. The fix step below is handed exactly that text and told to re-judge every disposition it names against the branch as it now stands (its SHAs are provenance, not a promise: the recorded tip is local-only and a rebase since then may have rewritten every one of them), so an excerpt or a summary of it costs precisely the judgment the record exists to carry. Leave the comment itself alone — the record phase below is what supersedes it.
-- A standalone issue comment or review summary becomes its own item if the request explicitly identifies it as outstanding — OR if the prior record above already holds a \`standalone\` disposition for it, which is an earlier run's request having identified it and is why this is not a second way in. Without that, the record's account of such an item cannot be replayed AT ALL: the fix step must emit exactly one disposition per gathered item, and publication rejects a \`standalone\` disposition whose url was never gathered, so the recorded judgment and the Summary text drafted for it are dropped in silence by the very run that read the record. So for each \`standalone\` entry the record names, re-fetch that url and emit the comment as an item where it is still there — the fix step then re-judges it against the branch exactly as it re-judges a thread's disposition, rather than replaying it on the record's word. Where the comment is gone (deleted, or the url no longer resolves), emit no item and say so in \`detail\`: an item that no longer exists is not outstanding work. Emit each as \`type: "standalone"\` with \`author\`, \`authorIsBot\`, \`body\`, and \`url\` (its permalink is the stable reference; it has no threadId and is never resolved as a thread).
+- A standalone issue comment or review summary becomes its own item if the request explicitly identifies it as outstanding — OR if the prior record above already holds a \`standalone\` disposition for it, which is an earlier run having gathered it, by the request that identified it or as a misfired finding that qualified on its own under the next bullet, and is why this is not a second way in. Without that, the record's account of such an item cannot be replayed AT ALL: the fix step must emit exactly one disposition per gathered item, and publication rejects a \`standalone\` disposition whose url was never gathered, so the recorded judgment and the Summary text drafted for it are dropped in silence by the very run that read the record. So for each \`standalone\` entry the record names, re-fetch that url and emit the comment as an item where it is still there — the fix step then re-judges it against the branch exactly as it re-judges a thread's disposition, rather than replaying it on the record's word. A recorded misfired finding is reintroduced by its recorded ordinal (\`finding N of M\`), checked against the finding's text the record's entry carries on its \`finding:\` line — a one-line JSON string literal, which you decode (\`JSON.parse\`) before comparing, since the text is placed there with its newlines and quotes escaped so a multi-paragraph or fenced finding stays one unambiguous line — the record carries it for exactly this, since the ordinal alone cannot tell the recorded finding from whatever text a later edit puts at N: where the comment now holds fewer than M findings, or the text at N differs from the recorded text beyond whitespace, the body was edited or reordered since and that entry is unsettleable, so emit no item for it and say so in \`detail\` for the maintainer, rather than matching it to whichever finding now sits at N. Where the comment is gone (deleted, or the url no longer resolves), emit no item and say so in \`detail\`: an item that no longer exists is not outstanding work. Emit each as \`type: "standalone"\` with \`author\`, \`authorIsBot\`, \`body\`, and \`url\` (its permalink is the stable reference; it has no threadId and is never resolved as a thread), plus \`finding\` where it is one finding of a misfired comment. ONE ROUTE PER COMMENT, never both: a bot reviewer's misfired top-level comment — one holding findings, the next bullet's source — is NEVER emitted whole under this bullet, even where the request names it or the record holds a whole-comment entry for it; it is split into one item per finding under the next bullet, the request's naming settling that its findings ARE taken (a maintainer who names a comment has judged it outstanding, so that bullet's freshness test is not re-applied to override them, and its \`detail\` says the request named it). A whole-comment item on the url alone beside per-finding items on the url plus ordinal would pass coverage twice for one comment — the two identities differ — and let the fixer and the Summary dispose of the same finding twice, or contradictorily. Only a comment holding no findings of a bot reviewer's (a maintainer's own note, a human's summary) is emitted whole here.
+- One more source qualifies on its own: a bot reviewer that misfired and posted findings into a top-level review summary or issue comment instead of threads. Such a finding cannot be replied to or resolved, but it is still the review this run was summoned to address, so take each one as a \`standalone\` item where it is **fresh and applicable** — ALL of: the review's \`commit_id\` — read from the REST review object, \`gh api --paginate repos/<owner>/<repo>/pulls/<PR>/reviews\`, which also carries the \`html_url\` permalink and the \`user.type\` the Summary comment and the disposition record need (\`gh pr view --json reviews\` names the commit \`commit.oid\` and carries neither, so a test written against \`commit_id\` there matches nothing and misfiles every such finding as stale) — or for an issue comment the head its body names (a bot usually states the commit it reviewed; one naming no head is the ambiguous case below, and \`created_at\` cannot stand in for it: a review begun against the previous head lands after the push that replaced it and still describes the old code), is the current head, so it was written against the code you are addressing; no thread on this PR, resolved or unresolved, already raises it — a comparison that needs the resolved threads too, so fetch them for it alone (\`gh-review-threads --all\`, or the GraphQL query without dropping \`isResolved == true\`) while the work items stay the unresolved set gathered above; no maintainer reply dismisses it and the review's own \`state\` is not \`DISMISSED\` (a dismissed review keeps its body, its \`commit_id\` and the code it names, so nothing else here trips on it, and that dismissal is the maintainer discarding every finding in it); and the code it names still exists on the branch. A finding failing any of those is stale context and stays out. Where it is only ambiguous which of the bot's comments are fresh, take NONE of them and say so in \`detail\`, so the Summary comment can say it too, rather than re-addressing a round that is done. A comment of this kind the request names, or the record holds entries for, is taken HERE and split the same way whatever that test says — the previous bullet's one-route rule. Emit each qualifying finding as its own \`type: "standalone"\` item — \`author\`/\`authorIsBot\` from the comment's author, \`body\` that ONE finding's text, \`url\` the comment's permalink (\`html_url\`), and \`finding\` its ordinal within that comment, exactly \`N of M\`, counted in the order the body presents them: every finding one body holds shares the one permalink, so the url alone could carry only one of them into the disposition record and would collapse the rest. Nothing replies on the bot's comment; such an item's disposition rides the Summary comment's "Top-level findings" section alone.
+- CI on the PR head (\`gh pr view <PR#> --repo <owner>/<repo> --json headRefOid,statusCheckRollup\`, read the way README's *Contributing* reads it — by \`__typename\`, terminal values tested positively: a \`CheckRun\` has settled once its \`status\` is \`COMPLETED\` and its verdict is \`conclusion\`; a \`StatusContext\` has settled once its \`state\` is \`SUCCESS\`, \`FAILURE\` or \`ERROR\`, and its verdict is that \`state\`): every lane whose verdict is not \`SUCCESS\`/\`NEUTRAL\`/\`SKIPPED\` is a review item too, emitted as \`type: "ci-failure"\` with \`rollup: "failing"\` and gathered with its identity in \`lane\` — the \`workflowName\` and \`name\` of a \`CheckRun\`, as \`<workflowName> / <name>\`; an external app's has no \`workflowName\`, so its \`checkSuite.app.slug\` fills that slot, read through GraphQL's \`statusCheckRollup.contexts\` since \`gh pr view\` does not carry it, and two apps emitting one check name stay two lanes; the \`context\` of a \`StatusContext\`; a rollup carrying that identity more than once, one workflow fired by several events on the head, holds ONE lane there, failing while any instance is — its details URL in \`url\` (\`detailsUrl\`, or a \`StatusContext\`'s \`targetUrl\`; for such a repeated identity, a failing instance's, with the details URL of EVERY failing instance in \`instances\`, since each is its own workflow run and a re-run of one leaves the others red), and in \`body\` the evidence: for a GitHub Actions \`CheckRun\`, whose \`detailsUrl\` carries the segment \`/<owner>/<repo>/actions/runs/<run-id>\` (usually followed by \`/job/<job-id>\`), the failing job's log tail — \`gh run view --repo <owner>/<repo> --job <job-id> --log-failed | tail -n 200\` where the URL names the job, else \`gh run view <run-id> --repo <owner>/<repo> --log-failed | tail -n 200\` for the run as a whole — under \`set -o pipefail\`: the pipeline otherwise reports \`tail\`'s zero status, so a \`gh\` that failed (a stale job id, an expired token) hands back an empty tail that reads as evidence, where it is a failed gather to stop on with \`ok: false\` — the \`tail\` doing the bounding that \`--log-failed\` does not: it prints every failed step's log whole, and a large one fills the context before the failure it ends with is read — with \`<owner>/<repo>\` taken from that URL rather than left to the checkout's default: a fork PR's \`pull_request\` workflow runs in the base repository, where an unqualified call resolves against the fork and returns the wrong run or a 404. A \`StatusContext\` or an external app's \`CheckRun\` has no workflow run at all, so \`gh run\` can neither read nor re-run it: gather it with its \`targetUrl\`/\`detailsUrl\` as the only details mechanism, and state in \`body\` that logs and re-runs are unavailable through \`gh run\`, beside whatever that URL showed. A lane still in progress on the current head is NOT an item: note it in \`detail\` and let the push, or the publisher's re-run, settle it. A rollup describing a head other than the one you reconciled against (\`headRefOid\` not \`R\`) says nothing about this branch: gather no lane from it and say so in \`detail\`; the next round reads it after the push. Then the prior record's CI entries: a recorded lane — matched to this head's rollup by its \`lane\` identity, the new head's run carrying a new details URL — that is STILL failing is simply the item above, gathered as such; one that has since gone green (the push that recorded it re-ran it) or is still running is emitted anyway as a \`ci-failure\` item with \`rollup: "green"\` or \`"running"\`, and one whose identity NO lane of this head's rollup carries — the workflow or check renamed or removed since, or not fired for this head by a path filter — is emitted the same way with \`rollup: "absent"\`; in each of those states its \`body\` names the state found and the recorded cause, so the entry's recorded cause and disposition replay into this run's Summary comment rather than being dropped — a green lane on the new head is the outcome the entry claimed, an absent one is a state the maintainer has to read for themselves, and either account is what is still owed. No state of the rollup drops a recorded lane: an otherwise clean PR carries the record's CI account out through this item rather than taking the terminal no-op over it.
 
-If there are no unresolved threads and no included standalone item, return \`ok: true\` with an empty \`items\` array — plus everything a CONTINUING run consumes: \`rebaseTarget\` as above, the three tips, and (on the \`no-rebase\` arm above) \`pr.baseOid\` where the tips disagree. The caller decides between the two zero-item outcomes exactly as \`address-review\` step 3 does, by comparing \`pr.finalHead\`, \`pr.startingHead\`, and the recorded \`pr.headOid\`: all three the same commit and the run finishes as a successful TERMINAL no-op; anything else takes the ZERO-ITEM PATH, continuing through the normal fresh review and, unless \`no-push\`, publication — a tip ahead of the recorded head carries work the PR head does not (an unpublished commit an earlier run left), a tip that moved under this one leaves no attested no-op to report, and "nothing to address — nothing was pushed" would cover either while reading exactly like a genuinely clean PR.
+If there are no unresolved threads and no included standalone item — a misfired finding taken on its own is one — and no CI lane gathered above, failing or replayed from the record — a red lane is an item like any other, so a run that gathered one never takes this exit — return \`ok: true\` with an empty \`items\` array — plus everything a CONTINUING run consumes: \`rebaseTarget\` as above, the three tips, and (on the \`no-rebase\` arm above) \`pr.baseOid\` where the tips disagree. The caller decides between the two zero-item outcomes exactly as \`address-review\` step 3 does, by comparing \`pr.finalHead\`, \`pr.startingHead\`, and the recorded \`pr.headOid\`: all three the same commit and the run finishes as a successful TERMINAL no-op; anything else takes the ZERO-ITEM PATH, continuing through the normal fresh review and, unless \`no-push\`, publication — a tip ahead of the recorded head carries work the PR head does not (an unpublished commit an earlier run left), a tip that moved under this one leaves no attested no-op to report, and "nothing to address — nothing was pushed" would cover either while reading exactly like a genuinely clean PR.
 
 Last, AFTER all gathering, read \`git rev-parse HEAD\` in the working location once more and report it as \`pr.finalHead\` — on every packet you return with \`ok: true\`. It is ordinarily the same commit as \`pr.startingHead\`, since this step commits nothing; reporting both anyway is what lets the caller adopt a terminal no-op on tips it was shown rather than on the item count alone.
 
@@ -582,7 +630,7 @@ That comment${url} is an earlier run of this workflow's own output: not feedback
 1. **Patch-id first, as a probe and never a gate.** With \`F\` the \`final HEAD\` the record cites and \`B\` the branch tip now, run \`git rev-list --right-only --cherry-pick B...F\`. Printing NOTHING means every recorded commit is represented and the record replays as written.
 2. **A non-empty result rejects nothing.** A rebase that resolved a conflict, or split or squashed a commit, rewrites the resulting patch-ids while keeping the work — this run's own pre-fix rebase may have just done it — and it could not decide the question even if it were the gate: a fix that survived a conflict resolution and one that was later reverted both print the recorded commit as unrepresented. Neither can a probe that cannot run at all: \`F\` may no longer be a local object (a fresh clone, a pruned repository), and an absent recorded commit is not an absent fix. Fall through to the tree in every one of those cases, and assert nothing about \`F\` equalling \`B\`.
 3. **Then judge per thread, against the tree rather than the record.** Is the fix that disposition claims present in the branch as it now stands — for a \`deferred-to-task\` disposition, is its task file still committed there? Present → carry the disposition and its drafted reply forward, and RE-DERIVE the \`Fixed in <sha>\` citation from the branch as it now stands instead of copying the recorded SHA. Genuinely gone → that thread loses its disposition: triage it from scratch this round, and never report it as fixed on the record's word. Unsettleable from the tree → \`ambiguous-skipped\`, carrying the record's account of it in \`detail\`, rather than discarded because a probe was inconclusive.
-4. Say which of those three happened in that item's \`detail\` — replayed, re-triaged because the fix was gone, or handed back as unsettleable. A thread the record does not name is ordinary untriaged work. A record naming threads that are no longer unresolved replays to nothing, which is the right answer rather than a conflict: it is only ever the account of the run that wrote it. A \`standalone\` disposition it names was re-fetched and gathered as a work item for exactly this reason, so it is in your items and takes a disposition like any other; where the comment behind one is gone it was not gathered, and that entry replays to nothing too.
+4. Say which of those three happened in that item's \`detail\` — replayed, re-triaged because the fix was gone, or handed back as unsettleable. A thread the record does not name is ordinary untriaged work. A record naming threads that are no longer unresolved replays to nothing, which is the right answer rather than a conflict: it is only ever the account of the run that wrote it. A \`standalone\` disposition it names was re-fetched and gathered as a work item for exactly this reason, so it is in your items and takes a disposition like any other — a misfired finding by its recorded \`finding\` ordinal, and one the comment no longer holds as recorded was not gathered and goes to the maintainer through the gather's \`detail\`; where the comment behind one is gone it was not gathered, and that entry replays to nothing too. A recorded CI lane is re-gathered in the same spirit, matched by its \`lane\` identity: where it is still failing on this head it is an ordinary \`ci-failure\` item, judged against the tree like any other — and where its recorded entry is a \`flake-rerun\` whose standing line names run ids ALREADY ORDERED and accepted, and the head is the same one those runs belong to, carry that line's accepted run ids into the entry's \`detail\`, since publication orders only the rest and a second request meets a run already re-running; where it has since gone green or is still running it is in your items with \`rollup\` saying so, and its entry replays as the recorded cause and disposition (\`already-addressed\`, per the CI paragraph above) into this run's Summary comment rather than being dropped.
 
 ### The prior record, verbatim
 
@@ -606,15 +654,20 @@ Triage each work item into exactly one kind and act:
 - \`push-back\` (should be rare) — the comment is wrong/misunderstands context. Do NOT implement; draft a respectful, specific rationale. Never implement a fix you believe is wrong just to clear a comment.
 - \`deferred-to-task\` — the concern is real but fixing it here would expand the PR's scope considerably while the branch is defendable as it stands (builds, covers its main paths), or a maintainer reply/decision comment defers it. Do NOT implement; write a standalone follow-up task file instead, per the write-tasks skill conventions: place it in the repo's task folder (commonly \`tasks/\`; parked work in its deferred subfolder, e.g. \`tasks/deferred/\` — follow the repo's existing layout), number it to continue the existing sequence, restate the concern and link the PR thread — that link permanently anchors the exact line under review, so the task body anchors code references to named symbols per those conventions and stays true after the branch moves — and commit it on this branch SEPARATELY from code-fix commits. Never use this to dodge a cheap fix.
 - \`ambiguous-skipped\` — needs an authoritative decision you cannot make here.
+- \`flake-rerun\` — a \`ci-failure\` item ONLY, and only one whose \`url\` names a workflow run (the \`/<owner>/<repo>/actions/runs/<run-id>\` segment): an evidenced flake, to be re-run rather than fixed (the publisher re-runs it, and only where its push moves nothing — a push that advanced the branch re-ran every lane anyway). A lane with no workflow run — a \`StatusContext\`, an external app's check — cannot be re-run from here, so an evidenced flake on one is \`ambiguous-skipped\` with the cause and its evidence in \`detail\`: the maintainer re-runs it.
+
+A \`ci-failure\` item is one lane of the head's check rollup, and its disposition is by CAUSE. Judge the cause from the evidence the item carries in \`body\` — the log tail for an Actions lane, the details URL and whatever it showed for a lane that has no workflow run, marked as such — never from the lane's name. Caused by this branch and within the PR's scope → \`actionable-fixed\`: fix it like any other item, and the push re-runs every lane. Not caused by this branch, or caused by it but structural or sprawling to fix (a shared fixture, a toolchain pin, a suite that fails on the base too) → \`ambiguous-skipped\`: the maintainer chooses between fixing here, a follow-up task, or accepting the red lane — this hands-off run records the lane, the cause you found, and that choice unmade in \`detail\`, and pushes nothing for it. A flake needs EVIDENCE, not a hunch: the same lane green on the base at a commit carrying the same relevant files, or an earlier re-run of this same head having gone green — and \`detail\` names that evidence. A log that names only files the diff does not touch is NOT that evidence: a branch change that breaks an unchanged test names that test, its fixture, or a generated artifact rather than anything in the diff, and reading it as a flake re-runs a deterministic regression and leaves the PR red — so find the cause, or compare against an equivalent base run, before calling it one. An evidenced flake is \`flake-rerun\` where the lane's \`url\` names a workflow run, and \`ambiguous-skipped\` with the evidence in \`detail\` where it does not, since nothing here can re-run such a lane; a flake that has bitten before ALSO earns a follow-up task to fix the flake itself, which on this unattended run is offered in \`detail\` rather than written — deliberately, not as drift from the skill's hands-off rule that commits a scope-expanding follow-up — that rule governs a concern with this branch's code, which a flaky lane is not: a lane holds ONE disposition, and every \`workReport\` entry names a gathered item, so a second entry for the flake-fix task would name none and be rejected as untriaged work. A lane has nobody to push back to, so \`push-back\` is not a disposition it can take — a lane this branch did not cause is \`ambiguous-skipped\` with the cause found. A lane the item reports as \`rollup: "green"\`, \`"running"\` or \`"absent"\` is a REPLAYED one — an earlier run's record holds its cause and disposition, and this head's rollup no longer shows it failing, or no longer carries its identity at all (renamed, removed, or path-filtered off this head) — so it is not judged against the tree: dispose of it as \`already-addressed\`, with \`detail\` carrying the recorded cause and disposition and the state this head's rollup shows, so the Summary comment's "CI" section lists it as the record owed. A \`flake-rerun\` on such a lane would have the publisher re-run a lane that is not failing. And \`already-addressed\` is THAT replay's disposition alone, never a failing lane's: a lane failing on this head is judged by cause and takes \`actionable-fixed\`, \`ambiguous-skipped\` or \`flake-rerun\` — a fix the tree already carries for it (this branch's from an earlier turn, or the base's after a rebase) is \`actionable-fixed\` with where the fix lives, since only the push re-runs the lane, and \`already-addressed\` on it would have a no-op push publish a completed Summary over a head still red.
+
+A \`standalone\` item carrying \`finding\` is ONE finding of a bot's misfired top-level comment, fresh and applicable by the gather's test; triage it exactly like a thread's finding, and echo its \`finding\` ordinal beside its \`url\` — the two together are its identity, since every finding of that comment shares the permalink. Nothing replies on the bot's comment: its disposition reaches the PR through the Summary comment's "Top-level findings" section alone.
 
 A thread asking you to DOCUMENT some behavior is satisfied by a minimal why-comment under the cycle's comment rule (\`actionable-fixed\`), or — where no comment would earn its keep — by \`push-back\`; never by adjacent code re-implemented in prose. There is no reply-only kind: the fuller rationale rides the \`detail\` whichever kind you chose already replies with, so pick the kind that is true of the committed code rather than the one that suits the reply. Where such a push-back is sustained, that rule's carve-out for a standing overruled decision is worth the comment precisely here: an external reviewer re-raises the same point across PR rounds and runs, and this run's replies are not in front of it next time.
 
 Preclude repeat comments: for each pattern you fix, grep the PR's changed files and closely related code for the SAME offending pattern and fix those too; report them in \`proactive\`.
 Do NOT push, reply, resolve, or comment on the PR — publication is a separate, later step.
 
-Per-item report contract: return EXACTLY ONE \`workReport\` entry per work item — never a second entry for a thread you already reported, since publication would post both replies and resolve on whichever it routed first. Each entry carries: \`type\` (echoed from the item, so \`review-thread\` or \`standalone\`; publication can route no other value, and an entry typed anything else is rejected before publication); \`threadId\` and \`commentId\` (MANDATORY for \`review-thread\` items; publication cannot reply/resolve without them); \`url\` (a \`standalone\` entry's identity, MANDATORY there — echo the gathered item's url VERBATIM; an entry naming a url that was never gathered is untriaged work and is rejected before publication. On a \`review-thread\` entry it is the thread's permalink, for the record); \`ref\` (file:line + author, human-readable); \`kind\` (the disposition kind above); \`detail\` (for fixed: one line + commit sha; for already-addressed: where it's handled; for push-back: the rationale; for deferred: the committed task file path + one-line scope, and whether the deferral was maintainer-directed or agent-proposed; for ambiguous: what decision is needed); \`authorIsBot\` (echoed VERBATIM from the gathered item; MANDATORY — publication uses it to decide whether a push-back/deferred thread may be auto-resolved, so never omit it; if the gathered item lacked it, use false, the safe human default); \`author\` (the comment author's login, echoed VERBATIM — include it for \`standalone\` items too); and \`newFinding\` — true ONLY when the item surfaces a real concern not previously raised on this PR (typically an \`actionable-fixed\`, or a genuinely new \`deferred-to-task\`/\`already-addressed\`); false for a \`push-back\` (the comment was wrong), a re-raise of a concern already deferred to a committed task file, or a bot re-arguing a push-back it already lost — UNLESS the thread carries a genuinely new angle this round. (\`newFinding\` drives the \`ping-contributing\` flag, which re-pings a bot only when it brought a new finding this round; set it honestly even if no ping was requested.)
+Per-item report contract: return EXACTLY ONE \`workReport\` entry per work item — never a second entry for a thread you already reported, since publication would post both replies and resolve on whichever it routed first. Each entry carries: \`type\` (echoed from the item, so \`review-thread\`, \`standalone\` or \`ci-failure\`; publication can route no other value, and an entry typed anything else is rejected before publication); \`threadId\` and \`commentId\` (MANDATORY for \`review-thread\` items; publication cannot reply/resolve without them); \`url\` (a \`standalone\` entry's identity, MANDATORY there — echo the gathered item's url VERBATIM, and its \`finding\` ordinal beside it where the item carries one, the pair being the identity; an entry naming a url, or a url-plus-ordinal, that was never gathered is untriaged work and is rejected before publication. On a \`review-thread\` entry it is the thread's permalink, for the record; on a \`ci-failure\` entry the lane's details URL, echoed from the item — its \`instances\` are NOT echoed: publication attaches them from the gathered item itself); \`lane\` (a \`ci-failure\` entry's identity, MANDATORY there — echo the gathered item's lane VERBATIM; an entry naming a lane that was never gathered is rejected before publication); \`ref\` (file:line + author, human-readable — for a lane, its identity); \`kind\` (the disposition kind above); \`detail\` (for fixed: one line + commit sha; for already-addressed: where it's handled; for push-back: the rationale; for deferred: the committed task file path + one-line scope, and whether the deferral was maintainer-directed or agent-proposed; for ambiguous: what decision is needed; for a \`ci-failure\` entry, ALWAYS the cause found first, whichever kind follows, since it is the Summary comment's "CI" line for that lane, and for \`flake-rerun\` the evidence); \`authorIsBot\` (echoed VERBATIM from the gathered item; MANDATORY — publication uses it to decide whether a push-back/deferred thread may be auto-resolved, so never omit it; if the gathered item lacked it, use false, the safe human default); \`author\` (the comment author's login, echoed VERBATIM — include it for \`standalone\` items too); and \`newFinding\` — true ONLY when the item surfaces a real concern not previously raised on this PR (typically an \`actionable-fixed\`, or a genuinely new \`deferred-to-task\`/\`already-addressed\`); false for a \`push-back\` (the comment was wrong), a re-raise of a concern already deferred to a committed task file, or a bot re-arguing a push-back it already lost — UNLESS the thread carries a genuinely new angle this round. (\`newFinding\` drives the \`ping-contributing\` flag, which re-pings a bot only when it brought a new finding this round; set it honestly even if no ping was requested.)
 
-Which of those fields are structurally enforced: every field publication acts on is re-checked before anything is pushed, and one bad entry aborts the whole publication — \`type\`, \`kind\`, \`detail\`, \`author\`, \`authorIsBot\`, \`newFinding\`, a \`review-thread\` entry's \`threadId\`/\`commentId\`, and a \`standalone\` entry's \`url\`. The identifying ids are matched against the gathered items, and the two echoed fields (\`author\`, \`authorIsBot\`) are compared against the item they came from — so echo what you were handed rather than what you judge to be more accurate. \`ref\` is not required at all, and neither is a \`review-thread\` entry's \`url\` nor a \`standalone\` entry's \`threadId\` — those two are only checked for not naming some OTHER gathered item, which would make one entry read as covering two. Write them anyway: \`ref\` is what names an entry in the run's own report, including when some other field gets that entry rejected.${priorRecordSection(priorRecord)}`;
+Which of those fields are structurally enforced: every field publication acts on is re-checked before anything is pushed, and one bad entry aborts the whole publication — \`type\`, \`kind\`, \`detail\`, \`author\`, \`authorIsBot\`, \`newFinding\`, a \`review-thread\` entry's \`threadId\`/\`commentId\`, a \`standalone\` entry's \`url\` (with its \`finding\` where the item carries one), and a \`ci-failure\` entry's \`lane\` — and \`flake-rerun\` is accepted on a \`ci-failure\` entry alone, \`push-back\` and \`deferred-to-task\` on every kind but that one. The identifying ids are matched against the gathered items, and the two echoed fields (\`author\`, \`authorIsBot\`) are compared against the item they came from — so echo what you were handed rather than what you judge to be more accurate. \`ref\` is not required at all, and neither is a \`review-thread\` entry's \`url\`, a \`standalone\` entry's \`threadId\`, nor a \`ci-failure\` entry's \`url\` — those are only checked for not naming some OTHER gathered item, which would make one entry read as covering two. Write them anyway: \`ref\` is what names an entry in the run's own report, including when some other field gets that entry rejected.${priorRecordSection(priorRecord)}`;
 }
 
 // After the PRE-PUSH rebase replayed something, the verdict that just passed
@@ -724,12 +777,13 @@ ${JSON.stringify(standing, null, 2)}`;
 }
 
 function reviewCriteria() {
-  return `The work items are unresolved PR review threads (plus any explicitly included standalone items), and the fixer's \`workReport\` proposes a disposition \`kind\` per item. Independently confirm each:
+  return `The work items are unresolved PR review threads, standalone items (ones the request named, and a bot's findings misfired into a top-level comment where fresh and applicable, each carrying its \`finding\` ordinal), and failing CI lanes on the PR head (\`ci-failure\` items, each carrying its \`lane\` identity and the evidence it was judged from), and the fixer's \`workReport\` proposes a disposition \`kind\` per item. Independently confirm each:
 - \`actionable-fixed\` / \`already-addressed\` claims must actually hold in the committed code.
 - \`push-back\` must be technically justified, not a convenient dismissal.
 - \`deferred-to-task\` must point at a committed task file that genuinely covers the concern, with the deferral itself justified (maintainer-directed, or genuinely scope-expanding while the branch builds and covers its main paths) — not an evasion of a cheap fix.
 - \`ambiguous-skipped\` must genuinely require an authoritative decision.
-Every gathered work item must have EXACTLY ONE \`workReport\` entry (a \`review-thread\` matched by its \`threadId\`, a \`standalone\` by its \`url\`): an item with none was silently dropped, and an item named by two entries carries dispositions publication cannot choose between — it would post a reply per entry and resolve on whichever it routed first. Either is a blocking issue. So is one entry naming TWO gathered items — a \`review-thread\` entry that also carries a gathered standalone's \`url\`, or a \`standalone\` entry that also carries a gathered \`threadId\` — since that reads as covering both while publication only ever serves one.
+- A \`ci-failure\` entry's disposition is by CAUSE, judged from the item's evidence and never from the lane's name: \`actionable-fixed\` only where this branch caused it and the fix is committed; \`ambiguous-skipped\` where the cause is not this branch's or is structural to fix, with the cause found stated; \`flake-rerun\` only on EVIDENCE named in \`detail\` — the same lane green on the base at a commit carrying the same relevant files, or an earlier re-run of this head gone green — and never on a log that merely names files the diff does not touch, which is a deterministic regression read as a flake — and only on a lane whose \`url\` names a workflow run: an evidenced flake on a lane with none is \`ambiguous-skipped\` with the evidence carried, since nothing here re-runs it. A lane gathered as \`rollup: "green"\`, \`"running"\` or \`"absent"\` is a replayed record, \`already-addressed\` with the recorded cause and disposition carried, never \`flake-rerun\`; a lane gathered \`failing\` never takes \`already-addressed\` — a fix the tree carries for it is \`actionable-fixed\` with where it lives, since only the push re-runs the lane. A lane takes neither \`push-back\` nor \`deferred-to-task\`: a structural or sprawling cause is \`ambiguous-skipped\` with the follow-up offered in \`detail\`, and a task committed for a lane is a blocking issue.
+Every gathered work item must have EXACTLY ONE \`workReport\` entry (a \`review-thread\` matched by its \`threadId\`, a \`standalone\` by its \`url\` — plus its \`finding\` ordinal where it carries one, since every finding of one misfired comment shares the url — a \`ci-failure\` by its \`lane\`): an item with none was silently dropped, and an item named by two entries carries dispositions publication cannot choose between — it would post a reply per entry and resolve on whichever it routed first. Either is a blocking issue. So is one entry naming TWO gathered items — a \`review-thread\` entry that also carries a gathered standalone's \`url\` or a gathered \`lane\`, or a \`standalone\` or \`ci-failure\` entry that also carries a gathered \`threadId\` — since that reads as covering both while publication only ever serves one.
 Each entry's \`author\` and \`authorIsBot\` must match the gathered item they are echoed from — they decide which bot is re-pinged and whether a thread may be auto-resolved, so a "corrected" value is a blocking issue even when it looks more accurate.
 A disposition the fixer REPLAYED from an earlier run's disposition record is confirmed against the tree exactly like a fresh one — the record is provenance, not evidence — and its \`Fixed in <sha>\` citation must name a commit the branch carries NOW: a replayed SHA that the tree does not carry is a blocking issue, since publication would post it into the thread.
 You may reclassify any item.`;
@@ -797,6 +851,9 @@ You may reclassify any item.`;
 // 390156a declined, and items 3 and 4 are pre-merge check polling and
 // `gh pr merge --delete-branch`, which nothing in this pipeline performs.
 function publishPrompt(packet, dispositions, flags, deviations, deviationAssessments, recordOnly, preRebaseRecordOnly) {
+  // What the gather left out and why, per its `detail`: it reaches the PR
+  // through the Summary comment alone, so the brief hands it over verbatim.
+  const gatherLeftOut = typeof packet.detail === "string" ? packet.detail.trim() : "";
   // The zero-item arm below states WHICH tip disagreement continued the run,
   // read from the tips the gather reported and trimmed exactly as the caller's
   // zero-item decision reads them — and states it as the GATHER-TIME reading
@@ -886,7 +943,7 @@ Report a STRUCTURED result: set \`published: true\` ONLY if the push and every r
    - OTHERWISE — every remaining state, whether or not this run rewrote history (rebased: ${packet.pr.rebased ? "yes" : "no"}) — use an exact lease: \`git push <remote> --force-with-lease=refs/heads/${shq(packet.pr.branch)}:${shq(packet.pr.headOid)} HEAD:refs/heads/${shq(packet.pr.branch)}\`. The remainder is deliberately not "history was rewritten": a tip carrying the expected head by patch-id without having it as an ancestor is the ordinary result of a rebase, and it reaches this same instruction whether that rebase happened in this run or before it. If the lease is rejected, NEVER escalate to bare \`--force\`; set \`published: false\`, \`aborted: "lease rejected"\`, and stop.
 
    Then, whichever push ran, confirm what actually LANDED against the ref itself rather than from \`gh pr view --json headRefOid\`, which can still report the pre-push head for a while after the push returns: run one \`git ls-remote "<url>" refs/heads/${shq(packet.pr.branch)}\` for each URL \`git remote get-url --push --all <remote>\` lists, and require every one of them to come back with the HEAD you pushed. Read those push URLs back one at a time rather than the remote NAME: \`git push\` writes to EVERY configured push URL, plain \`--push\` names only the first, and where a remote carries a distinct \`pushurl\` the name reads a repository the push never wrote to. \`git ls-remote\` is observational and exits 0 even when it prints nothing, so an absent ref, a disagreeing OID, or a URL you could not reach is a stop rather than a pass: set \`published: false\` and \`aborted: "${PUSH_UNCONFIRMED_ABORT}: <what each URL returned>"\` — the phrase LEADS that field and the per-URL evidence rides after it in the SAME one, which is the only field this schema has for the reason: the record this run leaves quotes this field verbatim, and its status line is required to say what each push URL returned. Report \`pushed\`/\`pushedNewCommits\` as what your push COMMAND itself reported and nothing more: whether the ref MOVED is exactly the fact this read-back failed to establish, so do not set either flag to stand for it in either direction — that abort is what says it is unestablished, and it is read ahead of both.
-3. Re-read unresolved threads after the push. Do not mutate newly-arrived feedback that was not triaged this run — leave it open and call it out.
+3. Re-read unresolved threads after the push. Do not mutate newly-arrived feedback that was not triaged this run — leave it open and call it out. Then the \`flake-rerun\` lanes among the dispositions below, ONLY where the push was a no-op (\`Everything up-to-date\`): a push that advanced the branch already re-ran every lane, so re-run nothing then. For each, take \`<owner>/<repo>\` and \`<run-id>\` from the lane's details URL (its \`url\`, the \`/<owner>/<repo>/actions/runs/<run-id>\` segment) and from EVERY URL in its \`instances\` where it carries them (attached to the disposition from the gathered lane, so it is the rollup's own list) — a lane the rollup held more than once is one item but several workflow runs, and a re-run of \`url\`'s alone leaves the others red — the repository from the URL, never the checkout's default, since a fork PR's workflow runs in the base repository — and run \`gh run rerun <run-id> --repo <owner>/<repo> --failed\` ONCE PER RUN ID, every distinct id the lane names: several failed jobs of one run share its id and \`--failed\` re-runs them all, and a second request meets a run already re-running. SKIP an id the disposition's \`detail\` names as ALREADY ORDERED — the account of an earlier turn's accepted re-run, replayed from its record — since that run is re-running or has re-run, and a second request meets it; such an id counts as accepted below without a request of yours. Issue the request for EVERY remaining id before judging any: a rejection on one id does not leave the ids after it unordered and unreported. Every \`flake-rerun\` below names such a run: the publishability check admits the kind on no other lane. This run does not wait on the fresh rollup: CI gates the merge, and the next round reads it. Each of those requests is part of this publication's SUCCESS CONTRACT, reported STRUCTURALLY rather than in prose, PER RUN ID: on that lane's \`threadOutcomes\` entry set \`rerunAccepted\` to the list of every run id of the lane's that is accepted — each id whose \`gh run rerun\` exited 0 this turn, plus each already ordered by an earlier turn — as the bare \`<run-id>\` digits, and set \`rerun\` to true ONLY if that list covers EVERY distinct run id the lane names — one request GitHub rejected or that failed (a deleted workflow, a run too old to re-run, an expired token) makes it false, and so does a request you never issued. The caller checks that coverage itself against the ids the gathered lane names, so \`rerun: true\` beside a \`rerunAccepted\` that leaves an id out is read as the lane still owed on that id, not as accepted. Where any request failed, the one action this disposition promised never happened while the lane stays red, so set \`published: false\` and \`aborted: "flake re-run failed: <lane, run id, what gh returned>"\` and STOP here, before step 4: the record this run leaves renders the push as landed and every reply as still owed, and the next turn replays them — ordering only the run ids \`rerunAccepted\` does not carry, which is why an accepted id is reported even beside a rejected one. On a push that ADVANCED the branch nothing is ordered here and both fields are left out: that push re-ran every lane.
 4. Per-item hygiene for each disposition:
    - \`review-thread\` items: reply via REST \`gh api --method POST repos/<owner>/<repo>/pulls/${packet.pr.number}/comments/<commentId>/replies\`, resolve via GraphQL \`resolveReviewThread\` on \`threadId\`. That mutation takes a global node id and has no repository argument to qualify, so what qualifies it is the id's PROVENANCE: every \`threadId\` below was fetched from THIS PR by the gather step, whose scope check required each thread's comment URLs to name this PR in this repository — so pass the id exactly as the disposition hands it to you, and never re-fetch or re-derive a thread id in your own turn, which would resolve threads in whatever repository the working location answers for:
      - actionable-fixed → reply \`Fixed in <sha>: <one line>\` AND resolve.
@@ -894,16 +951,17 @@ Report a STRUCTURED result: set \`published: true\` ONLY if the push and every r
      - push-back → reply with the rationale; resolve ONLY when the disposition's \`authorIsBot\` is true (a bot thread), and leave a thread with \`authorIsBot\` false (human) open unless explicitly authorized. Use that flag, not a guess from the author login.
      - deferred-to-task → reply citing the committed task file (\`Deferred to <task file>: <one line>\`); resolve when the deferral was maintainer-directed or \`authorIsBot\` is true, else leave the human thread open. Never re-implement a deferred thread.
      - ambiguous-skipped → leave open.
-   - \`standalone\` items (no thread to resolve): address them only in the Summary comment below; do NOT call \`resolveReviewThread\`. Record their outcome by \`url\`.
+   - \`standalone\` items (no thread to resolve): address them only in the Summary comment below; do NOT call \`resolveReviewThread\`, and post NOTHING on the comment they came from — a misfired bot finding (one carrying \`finding\`) included. Record their outcome by \`url\`, with the \`finding\` ordinal echoed beside it where the disposition carries one.
+   - \`ci-failure\` items (no thread at all): address them only in the Summary comment's "CI" section below; step 3 is the only action a lane gets. Record their outcome by \`lane\`.
    Avoid duplicate replies (check for an equivalent prior reply by the authed user); resolve only after the reply succeeds.
-5. Summary comment: post a top-level "Summary of Review Fixes" (\`gh pr comment ${packet.pr.number} --repo <owner>/<repo>\`) — ${dev.length ? "opening with the locked-decision deviation section defined below, then " : ""}what was fixed (with proactive same-pattern fixes), a prominent "Pushed back — please re-examine" section, a "Deferred to follow-up tasks" section listing each deferral with its committed task file (agent-proposed deferrals flagged for confirmation), and any ambiguous/skipped or newly-arrived items${recordOnly || preRebaseRecordOnly ? ", plus the delivery-run failure section defined below" : ""}. Write "codex"/"claude"/"copilot" plain (no bare @-mentions) so only the dedicated pings below trigger a re-review. Put its URL in \`summaryCommentUrl\`.${dispositions.length ? "" : ` This is a ZERO-ITEM publication — the run gathered no unresolved thread and no standalone item, and continued because at gather time ${finalTip === recordedTip ? `the tip had moved under the run: it started on \`${startTip}\` and the gather ended on the recorded PR head \`${recordedTip}\`` : `the local tip stood at \`${finalTip}\` while the PR recorded \`${recordedTip}\``} — so the Summary comment STILL POSTS (it is what makes this zero-item run legible on the PR) and says exactly that in place of the per-item sections, naming those tips as the gather-time readings they are. Do NOT assert from them what the push above moved or which tip was reviewed — this run's rebase points may have rewritten the tip after the gather read those OIDs, and what actually landed is already stated by your own step-2 read-back and \`pushedNewCommits\`. Step 4 above has NOTHING to act on: post no reply and resolve no thread — there is no item to serve — and report \`threadOutcomes: []\`, the complete account of a zero-item publication.`}
+5. Summary comment: post a top-level "Summary of Review Fixes" (\`gh pr comment ${packet.pr.number} --repo <owner>/<repo>\`) — ${dev.length ? "opening with the locked-decision deviation section defined below, then " : ""}what was fixed (with proactive same-pattern fixes), a prominent "Pushed back — please re-examine" section, a "Deferred to follow-up tasks" section listing each deferral with its committed task file (agent-proposed deferrals flagged for confirmation), a "Top-level findings" section for every \`standalone\` disposition taken from a bot's misfired top-level comment (one carrying \`finding\`) — each with its disposition and the permalink of the comment it came from plus its \`N of M\` ordinal, since no thread carries the reply — a "CI" section where any \`ci-failure\` disposition is below — each lane named by its identity with the cause found and its disposition (fixed, re-run as an evidenced flake, or left for the maintainer's choice), a replayed lane with its recorded cause and disposition — and any ambiguous/skipped or newly-arrived items${recordOnly || preRebaseRecordOnly ? ", plus the delivery-run failure section defined below" : ""}${gatherLeftOut ? `, and — under a "Left out of this run's gather" heading — what the gather step reported it left out and why, VERBATIM: ${JSON.stringify(gatherLeftOut)} (a lane still in progress, a misfired finding whose freshness was only ambiguous and so was taken as none, a recorded comment that is gone — the maintainer-facing explanation the gather rules require, which reaches the PR through this comment alone)` : ""}. Write "codex"/"claude"/"copilot" plain (no bare @-mentions) so only the dedicated pings below trigger a re-review. Put its URL in \`summaryCommentUrl\`.${dispositions.length ? "" : ` This is a ZERO-ITEM publication — the run gathered no unresolved thread, no standalone item and no failing CI lane, and continued because at gather time ${finalTip === recordedTip ? `the tip had moved under the run: it started on \`${startTip}\` and the gather ended on the recorded PR head \`${recordedTip}\`` : `the local tip stood at \`${finalTip}\` while the PR recorded \`${recordedTip}\``} — so the Summary comment STILL POSTS (it is what makes this zero-item run legible on the PR) and says exactly that in place of the per-item sections, naming those tips as the gather-time readings they are. Do NOT assert from them what the push above moved or which tip was reviewed — this run's rebase points may have rewritten the tip after the gather read those OIDs, and what actually landed is already stated by your own step-2 read-back and \`pushedNewCommits\`. Step 4 above has NOTHING to act on: post no reply and resolve no thread — there is no item to serve — and report \`threadOutcomes: []\`, the complete account of a zero-item publication.`}
 6. Pings (only after push + summary succeeded, AND only when the push ACTUALLY advanced the remote branch with new commits or rewritten history — never on an \`Everything up-to-date\` no-op push): ${flags.pingCodex ? "post a dedicated comment \`@codex review\` with \`gh pr comment <PR#> --repo <owner>/<repo>\`. " : ""}${flags.pingClaude ? "post a dedicated comment \`@claude review\` with \`gh pr comment <PR#> --repo <owner>/<repo>\`. " : ""}${flags.pingCopilot ? "request a fresh Copilot review with \`gh pr edit <PR#> --repo <owner>/<repo> --add-reviewer @copilot\` (the canonical CLI request; needs gh >= 2.88.0). Do NOT post an \`@copilot review\` comment — a bare \`@copilot\` mention drives Copilot's coding agent (it can start editing the branch), not its reviewer. The add-reviewer request re-triggers Copilot's review even on a PR it already reviewed (tested working — not a silent no-op), and never misfires into the coding agent. GUARD: before issuing it, confirm the installed \`gh\` supports the \`@copilot\` reviewer value (gh >= 2.88.0 — e.g. check \`gh --version\`); on an older powbox base image where that request errors, SKIP the Copilot request WITHOUT failing publication — the push and summary already succeeded, so this is non-fatal: keep \`published: true\`, record it in \`pings\` as 'copilot: skipped (gh too old)', and note that the base image needs refreshing (\`agent-update\`) or a one-off manual re-request from the PR's web reviewer menu. CONFIRM the request you issued from the TIMELINE, never from \`gh pr view --json reviewRequests\`: that GraphQL-backed field reads back empty on a request that succeeded, and REST \`gh api repos/<owner>/<repo>/pulls/<PR#>/requested_reviewers\` lists one only while it is still pending, so it can confirm a request but never refute one — the durable evidence is a \`review_requested\` event in \`gh api --paginate repos/<owner>/<repo>/issues/<PR#>/timeline\`. Snapshot the \`id\`s of the events naming that reviewer BEFORE issuing the request and afterwards require one that is NOT in that snapshot, matching by event id rather than against your own clock, and paginate BOTH reads. Where no unseen event appears, record it in \`pings\` as 'copilot: requested, unconfirmed' and carry on with whatever pings remain: do not fail publication, and do NOT issue the request again." : ""}${!flags.pingCodex && !flags.pingClaude && !flags.pingCopilot ? "none requested. " : "If more than one ping was requested, perform each as its own dedicated action (never one comment mentioning several bots). "}If nothing new was pushed this run (the remote ref already pointed at your HEAD — e.g. every disposition was already-addressed/push-back, or the branch was up to date), SKIP all pings even if requested above: re-requesting a review with nothing new to look at would spin the review->address->review loop forever. Set \`pushedNewCommits\` to whether the push advanced the branch, and record which pings (if any) you posted in \`pings\`.${deviationLead}${flakeRecord}
 
 ## Dispositions to publish
 
 ${JSON.stringify(dispositions, null, 2)}
 
-Record each item's outcome in \`threadOutcomes\`, and set that entry's \`replied\` and \`resolved\` to the state of the thread ON THE PR when your turn ends rather than to what you attempted — so a reply you skipped under the duplicate rule above, an equivalent one of yours already being there, is \`replied: true\`, and a thread you found already resolved is \`resolved: true\`. That account is read back against what step 4 above OWES each disposition: a report claiming the publication COMPLETE while its own entries say a thread it owed a reply never got one is a contradiction, and the caller refuses the completion claim over it exactly as it refuses one that accounts for nothing. Each entry carries the item's MACHINE IDENTITY — a \`review-thread\` item's \`threadId\`, a \`standalone\` item's \`url\`, echoed verbatim from its disposition — beside the human \`ref\` (file:line + author), which identifies nothing on its own: two threads a re-review left on the same line by the same author share a \`ref\`, and an account keyed on it cannot say which of them was replied to.
+Record each item's outcome in \`threadOutcomes\`, and set that entry's \`replied\` and \`resolved\` to the state of the thread ON THE PR when your turn ends rather than to what you attempted — so a reply you skipped under the duplicate rule above, an equivalent one of yours already being there, is \`replied: true\`, and a thread you found already resolved is \`resolved: true\`. That account is read back against what step 4 above OWES each disposition: a report claiming the publication COMPLETE while its own entries say a thread it owed a reply never got one is a contradiction, and the caller refuses the completion claim over it exactly as it refuses one that accounts for nothing. Each entry carries the item's MACHINE IDENTITY — a \`review-thread\` item's \`threadId\`, a \`standalone\` item's \`url\` (with its \`finding\` ordinal beside it where the disposition carries one — every finding of a misfired comment shares the url), a \`ci-failure\` item's \`lane\`, echoed verbatim from its disposition — beside the human \`ref\` (file:line + author), which identifies nothing on its own: two threads a re-review left on the same line by the same author share a \`ref\`, and an account keyed on it cannot say which of them was replied to.
 
 Report them even where publication stops part-way, and report EXACTLY ONE entry per item you were given — every item, whether or not you reached it, and never a second entry for one you already reported. Such a run leaves a disposition record, and what it may say about origin is derived from this account as complements: an item your account names once is settled either way, while an item it leaves out, names twice, or names by an identity this run never handed you leaves the record no choice but to say the outcome is UNKNOWN and send the next turn to the PR — because a reply you posted and did not report would be posted twice by a turn that assumed it was owed, and one you never posted would never be posted at all. Where you abort before the push touched anything, report \`[]\` and an empty \`summaryCommentUrl\`: that is the complete account of having acted on nothing, and both fields are required either way.`;
 }
@@ -935,6 +993,13 @@ Report them even where publication stops part-way, and report EXACTLY ONE entry 
 // record, the `PATCH` would address a comment id there, and the create would
 // post this record onto a same-numbered PR in the fork.
 function recordPrompt(packet, dispositions, facts) {
+  // Each misfired finding's text, for the record's `finding:` slot. The
+  // dispositions carry the url and ordinal only; the text lives on the
+  // gathered item, and the record is the one place it survives the run — the
+  // next gather's replay compares the finding now at that ordinal against it.
+  const misfiredFindings = (packet.items || [])
+    .filter((it) => it && it.type === "standalone" && findingOrdinal(it))
+    .map((it) => ({ url: it.url, finding: findingOrdinal(it), text: it.body }));
   const where = packet.pr && packet.pr.worktree
     ? `Your working location is the worktree \`${packet.pr.worktree}\`. Before anything else, \`cd\` into it and verify \`git rev-parse --show-toplevel\` prints exactly that path; if not, STOP and report. Every git read below runs there. Do NOT touch the main checkout: it is on another branch and is none of this run's business.`
     : `You work in the repository's current checkout, which is on the branch this run addressed — do NOT create a worktree and do NOT switch branches.`;
@@ -1101,8 +1166,9 @@ ${unknown
           : "the tips above are LOCAL ONLY — this run pushed nothing, so they are not on origin"}
 
 ## Threads
-[<disposition>] <path>:<line>  <author>  thread=<threadId or url>
+[<disposition>] <path>:<line>  <author>  thread=<threadId, or url (finding N of M) for a standalone item, or lane for a CI lane>
                 url:   <permalink>
+                finding: <a misfired finding only: its text as the gather took it, verbatim, as the one-line JSON string literal listed under "Misfired findings as gathered" below>
                 reply: "<the exact reply body a publishing turn would post, verbatim>"
 
 ## Summary comment (verbatim, ready to post)
@@ -1111,15 +1177,15 @@ ${unknown
 
 ${incomplete
     ? `- This map is INCOMPLETE (${incomplete}), so say so in the \`status:\` line's reason${priorUrl ? ` and name the earlier record that still stands (${priorUrl})` : ""}: a reader must not take this record for the whole account of this PR, and the entries it does carry are a real triage of the items they cover rather than a draft. Every one of them still gets its full entry below.${priorUrl
-      ? ` And leaving the earlier record standing preserves nothing on its own: the next run's gather replays only the MOST RECENT record — this one, once posted — so an entry living only in the record this one displaces is never replayed again, and a \`standalone\` item only that record names is never even re-gathered, for as long as the older comment stands unread. So CARRY the earlier record's orphaned entries into this one: fetch the body of the record this run replayed — the comment at ${priorUrl}, whose comment id is the number its \`#issuecomment-<id>\` fragment ends with: \`gh api repos/<owner>/<repo>/issues/comments/<id> --jq .body\` — and append to this record's \`## Threads\` block, verbatim and whole (kind, reference, permalink, reply body, any task line), every entry of its own \`## Threads\` block whose identity (\`thread=<threadId or url>\`) no disposition below carries${compromised.length
+      ? ` And leaving the earlier record standing preserves nothing on its own: the next run's gather replays only the MOST RECENT record — this one, once posted — so an entry living only in the record this one displaces is never replayed again, and a \`standalone\` item only that record names is never even re-gathered, for as long as the older comment stands unread. So CARRY the earlier record's orphaned entries into this one: fetch the body of the record this run replayed — the comment at ${priorUrl}, whose comment id is the number its \`#issuecomment-<id>\` fragment ends with: \`gh api repos/<owner>/<repo>/issues/comments/<id> --jq .body\` — and append to this record's \`## Threads\` block, verbatim and whole (kind, reference, permalink, reply body, any task line), every entry of its own \`## Threads\` block whose identity (\`thread=<threadId, url (finding N of M), or lane>\`) no disposition below carries${compromised.length
         ? ` — a disposition that is itself part of what makes this map incomplete (one of several naming the same gathered item, or one publication rejected as unpublishable) carrying NOTHING for this test, since the account it gives of its item is the very thing this map cannot publish while the displaced record's entry is the one durable copy of a judged reply for it: the identities so compromised here are ${compromised.map((v) => `\`${v}\``).join(", ")}, so a prior entry keyed to one of them is carried too`
         : ""}, marking each \`carried unchanged from ${priorUrl}\` so a reader knows this run did not re-judge it — the next run's replay re-judges every entry against the tree either way. Where that comment is gone, or is spent and holds no \`## Threads\` block, carry nothing and say so in \`detail\`.`
       : ""}\n`
     : ""}- ${judgedTip
     ? `\`final HEAD\` is given above as \`${judgedTip}\` — write it EXACTLY as given and read no tip for it. It is the tip the reviewer's verdict was rendered over, and the dispositions below are that round's; the tip standing in the working location may be a LATER one a pass committed on top of it, and citing that would hand the next run's replay probe a tree no reviewer ever passed — which, the recorded commits all being its ancestors, prints nothing and so reads as "the record replays as written". Report what \`git rev-parse HEAD\` prints in the working location in \`detail\` instead, as this run's parting tip.`
     : "`final HEAD` is what `git rev-parse HEAD` prints in the working location. Read it there rather than repeating a SHA from this brief."}
-- One \`## Threads\` block entry per disposition below, in that shape, and EVERY entry carries the same field set whatever its kind: the disposition kind, its stable reference (path:line, author, and the \`threadId\` for a review thread or the \`url\` for a standalone item), the permalink, and the reply body VERBATIM — a \`deferred-to-task\` entry adding the committed task file and its queued or deferred placement beside them rather than in place of them, since which thread a follow-up closes is not re-derivable from the PR. The drafted reply bodies and the ready-to-post Summary body are the only parts of this record that cannot be re-derived from the PR later, so they are the parts that must be exact.
-- The \`## Summary comment\` block holds the "Summary of Review Fixes" body a publishing run would have posted — what was fixed, a prominent "Pushed back — please re-examine" section, a "Deferred to follow-up tasks" section naming each committed task file, and any ambiguous/skipped item — ready to post unchanged. Where the cycle recorded locked-decision deviations, that body LEADS with them under a "Deviation from a locked decision" section, since a later turn posts what you wrote here as it stands. Standing deviations for this run: ${JSON.stringify(facts.deviations || [])}.
+- One \`## Threads\` block entry per disposition below, in that shape, and EVERY entry carries the same field set whatever its kind: the disposition kind, its stable reference (path:line, the comment author, and the thread's \`threadId\`; for a standalone item, whose url is its permalink below and is written there once rather than in both slots, the comment author and — for a misfired finding — the finding's ordinal within its comment, \`finding N of M\`, since every finding that comment holds shares the one url — and, on its own \`finding:\` line, that finding's text VERBATIM as the gather took it (its \`body\`, listed under "Misfired findings as gathered" below) — written as the ONE-LINE JSON string literal that list carries, copied byte for byte, never as raw text: a finding is ordinarily several paragraphs, a code fence or a quote, and placed raw its lines would run into the entry's other slots and the next reader could not tell where the finding ends, while the literal keeps every newline and quote escaped on the one line and decodes to the exact text — since the ordinal alone cannot tell the recorded finding from different text a later edit of the comment puts at N, and the next run's gather decodes this literal (\`JSON.parse\`) and compares the finding now at N against it before replaying the entry; for a CI lane, its \`lane\` identity as the gather recorded it — its details URL names one head's run and the next push replaces it, so it is the lane's permalink rather than its identity), the permalink (the thread's, the standalone comment's url, or the lane's details URL), and the reply body VERBATIM — a \`deferred-to-task\` entry adding the committed task file and its queued or deferred placement beside them rather than in place of them, since which thread a follow-up closes is not re-derivable from the PR; a standalone item or CI lane, which has no thread to reply on, carrying in the reply slot the Summary-comment text drafted for it (its cause and disposition, for a lane) rather than a reply nothing will post. The drafted reply bodies and the ready-to-post Summary body are the only parts of this record that cannot be re-derived from the PR later, so they are the parts that must be exact.
+- The \`## Summary comment\` block holds the "Summary of Review Fixes" body a publishing run would have posted — what was fixed, a prominent "Pushed back — please re-examine" section, a "Deferred to follow-up tasks" section naming each committed task file, a "Top-level findings" section for every misfired finding taken as a standalone item (its disposition, the comment's permalink and its \`N of M\` ordinal), a "CI" section naming each \`ci-failure\` lane with the cause found and its disposition, and any ambiguous/skipped item — ready to post unchanged. Where the cycle recorded locked-decision deviations, that body LEADS with them under a "Deviation from a locked decision" section, since a later turn posts what you wrote here as it stands. Standing deviations for this run: ${JSON.stringify(facts.deviations || [])}.
 - The SHAs are PROVENANCE, not a promise. Assert nothing about them holding later: the branch may be rebased before any push, which rewrites every one while changing nothing about whether the work is there. Do not write "the branch tip is <sha>" as a condition a replay must check, and do not omit the header's last line${unknown
     ? " — a reader who takes this record for \"nothing was published\" either re-posts a reply that already landed or never posts one that did not"
     : landed
@@ -1127,7 +1193,7 @@ ${incomplete
       : unconfirmedPush
         ? unconfirmedPush.reader
         : " — a reader who takes those SHAs for origin's goes looking for commits that are not there"}.${perThread.length
-    ? `\n- Every thread keeps its entry and its verbatim reply, this run's stopped publication included — and each entry says WHERE IT STANDS. That standing is NOT yours to derive: the lines below are already matched to the dispositions by the identity publication routes on (\`thread=<threadId or url>\`, never \`ref\` — file:line plus author is shared by two threads a re-review left on one line, so it identifies neither). Copy each line's standing onto the entry it names, above that entry's verbatim reply body, and change nothing else:\n${perThread.map((l) => `  ${l}`).join("\n")}\n  Never drop an entry because its reply landed, and never drop one because its standing is unknown: the difference between the two is the whole reason this rendering exists.${unknown
+    ? `\n- Every thread keeps its entry and its verbatim reply, this run's stopped publication included — and each entry says WHERE IT STANDS. That standing is NOT yours to derive: the lines below are already matched to the dispositions by the identity publication routes on (\`thread=<threadId, url (finding N of M), or lane>\`, never \`ref\` — file:line plus author is shared by two threads a re-review left on one line, so it identifies neither). Copy each line's standing onto the entry it names, above that entry's verbatim reply body, and change nothing else:\n${perThread.map((l) => `  ${l}`).join("\n")}\n  Never drop an entry because its reply landed, and never drop one because its standing is unknown: the difference between the two is the whole reason this rendering exists.${unknown
       ? ` What the publisher DID report is below, for a maintainer's eye and not as a fact to act on — a report that broke the contract these facts are read under is distrusted WHOLE, so no part of its per-thread account is acted on here, an entry that looks complete included: ${JSON.stringify(outcomes)}.`
       : ""}`
     : ""}
@@ -1136,7 +1202,15 @@ Report \`posted\`, \`superseded\` (true when you updated a prior record of your 
 
 ## Dispositions to record
 
-${JSON.stringify(dispositions, null, 2)}`;
+${JSON.stringify(dispositions, null, 2)}${misfiredFindings.length
+    ? `
+
+## Misfired findings as gathered
+
+The text each misfired finding's \`finding:\` line carries, VERBATIM — one per standalone item the gather took from a bot's misfired top-level comment, keyed by its url and ordinal. Each \`text\` below is already the one-line JSON string literal the \`finding:\` line takes: copy it as it stands, quotes and escapes included, rather than decoding it into raw lines.
+
+${JSON.stringify(misfiredFindings, null, 2)}`
+    : ""}`;
 }
 
 // The write that ENDS a record's life, and the only PR write a fully published
@@ -1196,7 +1270,7 @@ The body, marker first (the marker line is mandatory and must be byte-exact: a s
 <!-- address-review:disposition-record -->
 # address-review packet — PR #${packet.pr.number} (${packet.pr.workingBranch})
 status: SPENT — the map this record held has since been published in full by a later run of this workflow${summaryUrl ? `, whose Summary comment is at ${summaryUrl}` : ""}
-nothing here is outstanding: every reply and resolve that publication owed reached the PR, and every standalone item this record named was carried into that run's Summary comment — one it could not settle appearing there as the ambiguous/skipped item it is, which is where a maintainer picks it up, since a spent record hands nothing to a later run. This record is kept, and kept findable by its marker, so a later run reads a SPENT record rather than a live one.
+nothing here is outstanding: every reply and resolve that publication owed reached the PR, and every standalone item and CI lane this record named was carried into that run's Summary comment — one it could not settle appearing there as the ambiguous/skipped item it is, which is where a maintainer picks it up, since a spent record hands nothing to a later run. This record is kept, and kept findable by its marker, so a later run reads a SPENT record rather than a live one.
 \`\`\`
 
 Write NOTHING else into it — no \`## Threads\` block and no \`## Summary comment\` block, and do not carry the old ones forward. Their content is on the PR now, and their ABSENCE is what ends this record: a run REPLAYS a record rather than re-triaging it, and while the review threads a record names self-terminate on having been resolved, a standalone item has no resolved state on the PR at all — so an entry left standing here would be re-gathered as fresh work by every later run, forever.
@@ -1530,7 +1604,8 @@ if (
 // --- The empty-`items` exit: the skill's TWO zero-item outcomes -------------
 // `address-review` step 3 does not end every zero-item run the same way, and
 // the item count alone cannot pick between its two outcomes. A run with no
-// unresolved threads and no included standalone item is a TERMINAL no-op only
+// unresolved threads, no included standalone item and no CI lane (failing on
+// the head, or replayed from a prior record) is a TERMINAL no-op only
 // where `HEAD`, the tip the run started from, and the PR's recorded
 // `headRefOid` are all the same commit — nothing to address AND nothing local
 // the PR does not already carry. Every other zero-item case — a local tip
@@ -1567,6 +1642,15 @@ if (
 // included, and the publish brief's zero-item arm says what that comment
 // carries — with pings under the unchanged rules. A TERMINAL no-op still
 // makes no PR write at all, exactly as before.
+// What the gather left OUT and why — a lane still in progress, a misfired
+// finding whose freshness was only ambiguous, a recorded comment that is gone.
+// The gather contract asks for it so the maintainer learns of it, and until
+// now nothing read it: an otherwise clean PR took the terminal no-op reporting
+// only "nothing to address", and an itemful run's Summary omitted it. It rides
+// on every result a run can reach, in the no-op's own detail, and through the
+// publish brief into the Summary comment.
+const gatherLeftOut = typeof packet.detail === "string" ? packet.detail.trim() : "";
+const gatherCarrier = gatherLeftOut ? { gatherLeftOut } : {};
 let zeroItemRun = null;
 if (!packet.items || packet.items.length === 0) {
   const startTip = typeof packet.pr.startingHead === "string" ? packet.pr.startingHead.trim() : "";
@@ -1589,9 +1673,10 @@ if (!packet.items || packet.items.length === 0) {
     const reclaimed = await reclaimWorktree("nothing to address; the run is a terminal no-op");
     return {
       status: "no-op",
-      detail: `No unresolved threads and no included standalone item, and \`HEAD\`, the tip this run started from, and the recorded PR head are all \`${recordedTip}\` — the terminal no-op: nothing to address and nothing local the PR does not carry (branch reconciliation: ${reconcileOutcome || "none reported"}).${survivingWorktreeNote(reclaimed)}`,
+      detail: `No unresolved threads, no included standalone item, no failing CI lane on the head and none replayed from a prior record, and \`HEAD\`, the tip this run started from, and the recorded PR head are all \`${recordedTip}\` — the terminal no-op: nothing to address and nothing local the PR does not carry (branch reconciliation: ${reconcileOutcome || "none reported"}).${gatherLeftOut ? ` The gather left out: ${gatherLeftOut}` : ""}${survivingWorktreeNote(reclaimed)}`,
       pr: packet.pr,
       reconcile,
+      ...gatherCarrier,
       ...(reclaimed ? { worktreeReclaim: reclaimed } : {}),
     };
   }
@@ -1607,8 +1692,9 @@ if (!packet.items || packet.items.length === 0) {
 }
 // Spread into every result a continuing run can reach, so a zero-item run's
 // result says WHICH of the skill's two zero-item outcomes it took and why —
-// the terminal no-op says it in its own detail above.
-const zeroItemCarrier = zeroItemRun ? { zeroItem: zeroItemRun } : {};
+// the terminal no-op says it in its own detail above — and what the gather
+// left out rides beside it.
+const zeroItemCarrier = { ...(zeroItemRun ? { zeroItem: zeroItemRun } : {}), ...gatherCarrier };
 
 // --- The two rebase points -------------------------------------------------
 // Rebasing onto the freshest base is the DEFAULT here, at two points: now,
@@ -1680,6 +1766,118 @@ if (typeof packet.rebaseTarget !== "string") {
     ...zeroItemCarrier,
     detail: "The gather reported no `rebaseTarget` at all. That field is the run's only record of whether an explicit `rebase on top of <target>` token was given, and an absent one cannot be told apart from a target the caller must honor — on a `no-rebase` run it decides the review base too, so continuing would bound every delegated range at the PR's base ref on a request that may have named another target.",
     note: `Nothing was addressed and nothing was pushed${reconcile && reconcile.outcome === "fast-forwarded" ? ", though this run did fast-forward the local branch to the PR head before stopping" : ""}. Re-run: the gather must report \`rebaseTarget\` whenever the caller can continue on its packet — items to address, and a zero-item packet alike — as the empty string where the request named no target.`,
+  };
+}
+// Every `ci-failure` item's `lane` and `rollup`, validated HERE rather than
+// left to the schema (which cannot require a field of one item type only) or
+// to the publishability check (which reads `rollup` on a `flake-rerun` entry
+// alone). The fixer keys its whole reading of a lane on this field: `failing`
+// is judged against the tree, and `green`/`running`/`absent` is a REPLAYED
+// record entry disposed of as `already-addressed` with the recorded account
+// carried. A lane gathered with the field missing or misspelt reads as
+// neither, so the fixer could judge a replayed lane against the tree, the
+// publishability check would pass any kind but `flake-rerun` on it, and a
+// no-op push would then publish a false account of a lane this head does not
+// show failing — and spend the prior record over it. Unknown is refused, not
+// defaulted: a default of `failing` would have the same lane fixed or skipped
+// as a live failure, and a default of `green` would drop a live one to a
+// replayed account. `lane` is checked beside it since every identity map
+// below keys on it, and a lane without one is an item no entry can cover.
+const CI_ROLLUP_STATES = new Set(["failing", "green", "running", "absent"]);
+const malformedLanes = packet.items
+  .filter((it) => it && it.type === "ci-failure")
+  .map((it) => {
+    const lane = typeof it.lane === "string" ? it.lane.trim() : "";
+    if (!lane) return `a ci-failure item with no lane (url ${JSON.stringify(it.url === undefined ? null : it.url)}): the lane identity is what every disposition, outcome and replay is matched to it by`;
+    if (!CI_ROLLUP_STATES.has(it.rollup)) return `lane ${JSON.stringify(lane)} carries rollup ${JSON.stringify(it.rollup === undefined ? null : it.rollup)}, none of "failing", "green", "running" or "absent" — the fixer cannot tell a live failure to judge from a replayed record entry to carry`;
+    return "";
+  })
+  .filter(Boolean);
+if (malformedLanes.length) {
+  return {
+    status: "gather-contract",
+    pr: packet.pr,
+    reconcile,
+    ...zeroItemCarrier,
+    malformedItems: malformedLanes,
+    detail: `The gather reported ${malformedLanes.length} ci-failure item(s) without the lane identity and rollup state the fix step keys its reading on: ${malformedLanes.join("; ")}.`,
+    note: `Nothing was addressed and nothing was pushed${reconcile && reconcile.outcome === "fast-forwarded" ? ", though this run did fast-forward the local branch to the PR head before stopping" : ""}. Re-run: every ci-failure item must carry its \`lane\` and a \`rollup\` of \`failing\` (a lane failing on this head), or \`green\`, \`running\` or \`absent\` (a lane replayed from a prior record), so a replayed lane is never judged as a live failure nor a live one carried as a record.`,
+  };
+}
+// Every misfired finding's `finding` ordinal, validated to the exact `N of M`
+// form the gather contract names, HERE for the same reason as the lane guard
+// above: `findingOrdinal` reads the ordinal as an opaque key, so a malformed
+// one (`1/2`, `3 of 2`, `0 of 1`) keys an item, is echoed by its disposition,
+// passes coverage and publication under that key — and the record then
+// carries an ordinal the next gather cannot locate in an unchanged comment,
+// so the entry is handed to the maintainer as edited or dropped from replay.
+// Per comment, every finding shares one `M` — two counts of one body cannot
+// both be right — and a whole-comment item on the url alone beside per-finding
+// items is the two-route shape the gather brief forbids: it would pass
+// coverage as a second identity for the same comment.
+const FINDING_ORDINAL = /^(\d+) of (\d+)$/;
+const findingsByUrl = new Map();
+const malformedFindings = packet.items
+  .filter((it) => it && it.type === "standalone")
+  .map((it) => {
+    const url = String(it.url || "").trim();
+    if (it.finding === undefined || it.finding === null) {
+      findingsByUrl.set(url, [...(findingsByUrl.get(url) || []), null]);
+      return "";
+    }
+    const raw = typeof it.finding === "string" ? it.finding.trim() : "";
+    const m = FINDING_ORDINAL.exec(raw);
+    if (!m) return `standalone item ${JSON.stringify(url)} carries finding ${JSON.stringify(it.finding)}, not the exact \`N of M\` ordinal every finding of a misfired comment is keyed by`;
+    const [n, total] = [Number(m[1]), Number(m[2])];
+    if (n < 1 || total < 1 || n > total) return `standalone item ${JSON.stringify(url)} carries finding ${JSON.stringify(raw)}, an ordinal outside its own count — N and M are counted from 1 and N never exceeds M`;
+    findingsByUrl.set(url, [...(findingsByUrl.get(url) || []), total]);
+    return "";
+  })
+  .filter(Boolean);
+for (const [url, totals] of findingsByUrl) {
+  const counts = new Set(totals.filter((t) => t !== null));
+  if (counts.size > 1) malformedFindings.push(`the findings gathered from ${JSON.stringify(url)} disagree on how many that comment holds (M of ${[...counts].join(", ")}) — one body has one count`);
+  if (counts.size && totals.includes(null)) malformedFindings.push(`${JSON.stringify(url)} is gathered whole beside its per-finding items — one route per comment: a bot's misfired comment is split per finding and never also taken whole`);
+}
+if (malformedFindings.length) {
+  return {
+    status: "gather-contract",
+    pr: packet.pr,
+    reconcile,
+    ...zeroItemCarrier,
+    malformedItems: malformedFindings,
+    detail: `The gather reported ${malformedFindings.length} standalone item(s) whose finding ordinal cannot key a misfired finding: ${malformedFindings.join("; ")}.`,
+    note: `Nothing was addressed and nothing was pushed${reconcile && reconcile.outcome === "fast-forwarded" ? ", though this run did fast-forward the local branch to the PR head before stopping" : ""}. Re-run: each finding of a misfired comment is one standalone item carrying \`finding\` as exactly \`N of M\`, counted from 1 in the order the body presents them, every item of one comment agreeing on M, and that comment never also gathered whole.`,
+  };
+}
+// And every gathered identity ONCE. The maps the publishability check keys on
+// and the coverage check both assume one item per identity: two `ci-failure`
+// items carrying one lane — the repeated-event case the gather brief orders
+// consolidated into `instances`, emitted per instance instead — would leave
+// `laneItemById` holding only the last while one entry counts as covering
+// both, so a `flake-rerun` would forward the retained run URL alone and
+// publication report success with the other run still red. The same holds
+// for a thread gathered twice or one finding of a misfired comment emitted
+// twice. Refused here rather than collapsed: which of two items is the real
+// one is the gather's to say, and a run that merged them would report a lane
+// the gather never described.
+const seenIdentities = new Set();
+const duplicateItems = [];
+for (const it of packet.items) {
+  const key = it ? itemKeyOf(it) : "";
+  if (!key) continue;
+  if (seenIdentities.has(key)) duplicateItems.push(`${it.type} ${JSON.stringify(key)}`);
+  seenIdentities.add(key);
+}
+if (duplicateItems.length) {
+  return {
+    status: "gather-contract",
+    pr: packet.pr,
+    reconcile,
+    ...zeroItemCarrier,
+    duplicateItems,
+    detail: `The gather reported ${duplicateItems.length} identity(ies) more than once: ${duplicateItems.join("; ")}. Every per-item check keys one item per identity, so a second item under the same key would be covered by the first's disposition and served by neither.`,
+    note: `Nothing was addressed and nothing was pushed${reconcile && reconcile.outcome === "fast-forwarded" ? ", though this run did fast-forward the local branch to the PR head before stopping" : ""}. Re-run: a lane the rollup holds more than once is ONE ci-failure item with every failing instance's URL in \`instances\`, a thread is one item, and a misfired finding is one item by its url plus ordinal.`,
   };
 }
 const explicitRebaseTarget = packet.rebaseTarget.trim();
@@ -2515,18 +2713,21 @@ const workReport = cycle.workReport || [];
 // named twice with different kinds (say `actionable-fixed` and `push-back`)
 // draws two contradictory replies, and its resolve is decided by whichever
 // entry the publisher happens to route first. Review-threads match by
-// threadId, standalone items by url — keyed off the GATHERED item's identity,
+// threadId, CI lanes by lane, standalone items by url — plus the finding
+// ordinal where the item is one finding of a misfired comment, since every
+// finding of that comment shares the url — keyed off the GATHERED item's
+// identity (`itemKeyOf`, read over the entry AS IF it were the item's kind),
 // never the report entry's own claimed `type`, so a mistyped entry cannot
 // dodge the check. What type-blindness costs is that ONE entry carrying both a
-// gathered thread's threadId and a gathered standalone's url counts for both
-// items while publication routes it to one; `dispositionDefect` below rejects
-// such an entry from either side, so the two checks together still admit
-// exactly one entry per item.
-const entriesForItem = (item) =>
-  item.type === "review-thread"
-    ? workReport.filter((d) => d && d.threadId && d.threadId === item.threadId)
-    : workReport.filter((d) => d && d.url && d.url === item.url);
-const itemRef = (it) => String(it.threadId || it.url || "(item with no threadId or url)");
+// gathered thread's threadId and a gathered standalone's url (or a gathered
+// lane) counts for both items while publication routes it to one;
+// `dispositionDefect` below rejects such an entry from either side, so the
+// two checks together still admit exactly one entry per item.
+const entriesForItem = (item) => {
+  const key = itemKeyOf(item);
+  return key ? workReport.filter((d) => d && itemKeyOf({ ...d, type: item.type }) === key) : [];
+};
+const itemRef = (it) => itemKeyOf(it) || "(item with no threadId, url or lane)";
 const uncoveredItems = packet.items.filter((it) => entriesForItem(it).length === 0);
 const uncoveredRefs = uncoveredItems.map(itemRef);
 const duplicatedItems = packet.items.filter((it) => entriesForItem(it).length > 1);
@@ -2597,26 +2798,62 @@ const duplicatedRefs = duplicatedItems.map(
 // case-insensitively: `botKindOf` already lowercases, so case cannot change
 // any routing, and failing publication over it would be brittle rather than
 // protective.
+// `flake-rerun` is the one kind a `ci-failure` entry alone may take — it is
+// the publisher's order to re-run a lane, which nothing else has — and
+// `push-back` and `deferred-to-task` the two it may not: a lane has nobody to
+// push back to, and the skill's disposition-by-cause gives a lane this branch
+// did not cause, or one structural to fix, to the maintainer as ambiguous with
+// the cause found — the follow-up offered in `detail`, never written, since
+// the choice between fixing here, a task and accepting the red lane is theirs.
+// The one action `flake-rerun` orders is `gh run rerun`, which needs the run
+// id a GitHub Actions details URL carries; a lane whose url names none (a
+// `StatusContext`, an external app's check) would be recorded as re-run while
+// nothing re-ran it, so the kind is admitted on no such lane.
+const ACTIONS_RUN_URL = /\/actions\/runs\/\d+(?:[/?#]|$)/;
 const TRIAGE_KINDS = new Set([
   "actionable-fixed",
   "already-addressed",
   "push-back",
   "deferred-to-task",
   "ambiguous-skipped",
+  "flake-rerun",
 ]);
+// Keyed TRIMMED, like every identity map below — see the cross-kind guard in
+// `dispositionDefect` for why both sides must be.
 const threadItemById = new Map(
-  packet.items.filter((it) => it.type === "review-thread" && it.threadId).map((it) => [it.threadId, it])
+  packet.items.filter((it) => it.type === "review-thread" && it.threadId).map((it) => [String(it.threadId).trim(), it])
 );
-const standaloneItemByUrl = new Map(
-  packet.items.filter((it) => it.type !== "review-thread" && it.url).map((it) => [it.url, it])
+// Standalone items by their identity — the url, plus the finding ordinal for
+// one finding of a misfired comment — and CI lanes by theirs. A lookup on an
+// entry's url ALONE is kept beside the keyed map for the cross-kind checks
+// below: an entry of another kind naming any gathered standalone's url reads
+// as covering it whichever finding it meant.
+const standaloneItemByKey = new Map(
+  packet.items.filter((it) => it.type === "standalone" && itemKeyOf(it)).map((it) => [itemKeyOf(it), it])
+);
+const standaloneUrls = new Set(packet.items.filter((it) => it.type === "standalone" && it.url).map((it) => String(it.url).trim()));
+const laneItemById = new Map(
+  packet.items.filter((it) => it.type === "ci-failure" && itemKeyOf(it)).map((it) => [itemKeyOf(it), it])
 );
 const sameLogin = (a, b) => String(a).trim().toLowerCase() === String(b).trim().toLowerCase();
 function dispositionDefect(d) {
   if (!d) return "the entry is empty";
   // The gathered item this entry speaks for, once identity checks out — the
-  // authority for the echoed fields below. Both branches return a defect when
-  // they cannot name one, so past the routing block it is always set.
+  // authority for the echoed fields below. Every branch returns a defect when
+  // it cannot name one, so past the routing block it is always set.
   let gathered;
+  // The cross-kind naming an entry may not do, whatever its own kind: one entry
+  // reads as covering two items while publication serves one. Each identity is
+  // read TRIMMED on BOTH sides, exactly as the coverage check keys them through
+  // `itemKeyOf`: this guard backs that check, so it must never be narrower than
+  // it — an entry whose padded url coverage counted for a standalone item, or a
+  // gathered standalone whose padded url coverage matched to the entry's, but
+  // which an exact lookup here missed, would pass as covering both while
+  // publication routed it to the thread alone, the standalone silently unaddressed.
+  const entryUrl = typeof d.url === "string" ? d.url.trim() : "";
+  const namesLane = typeof d.lane === "string" && laneItemById.has(d.lane.trim());
+  const namesStandaloneUrl = !!entryUrl && standaloneUrls.has(entryUrl);
+  const namesThread = !!d.threadId && threadItemById.has(String(d.threadId).trim());
   if (d.type === "review-thread") {
     if (!d.threadId || !d.commentId) return "it is a review-thread entry with no threadId/commentId to resolve and reply through";
     if (!threadItemById.has(d.threadId)) return "its threadId was never gathered on this PR, so resolving it would close an unrelated thread";
@@ -2635,16 +2872,59 @@ function dispositionDefect(d) {
     // coverage check exists to prevent. A thread entry's own `url` is the
     // thread's permalink and is otherwise unenforced; it just may not be
     // another gathered item's identity.
-    if (typeof d.url === "string" && standaloneItemByUrl.has(d.url)) return "it is typed review-thread but carries a gathered standalone item's url, so that standalone would read as covered while publication only ever replies to the thread";
+    if (namesStandaloneUrl) return "it is typed review-thread but carries a gathered standalone item's url, so that standalone would read as covered while publication only ever replies to the thread";
+    if (namesLane) return "it is typed review-thread but carries a gathered CI lane, so that lane would read as covered while publication only ever replies to the thread";
   } else if (d.type === "standalone") {
     if (typeof d.url !== "string" || !d.url) return "it is a standalone entry with no url, the only stable reference its outcome can be recorded against";
-    if (d.threadId && threadItemById.has(d.threadId)) return "it is typed standalone but names a gathered review thread, so publication would skip the thread's reply/resolve";
-    if (!standaloneItemByUrl.has(d.url)) return "its url was never gathered on this PR, so it is untriaged work that no reviewer disposition covers — it would still be written up in the summary comment and counted toward the contributing-bot pings";
-    gathered = standaloneItemByUrl.get(d.url);
+    if (namesThread) return "it is typed standalone but names a gathered review thread, so publication would skip the thread's reply/resolve";
+    if (namesLane) return "it is typed standalone but carries a gathered CI lane, so that lane would read as covered while publication addresses the entry as a comment";
+    if (!standaloneItemByKey.has(itemKeyOf(d))) {
+      // Which half of the identity is missing decides what the re-run fixes: a
+      // url no item carries is untriaged work, while a gathered url whose
+      // finding ordinal the entry drops or mis-states is one finding of a
+      // misfired comment standing in for every finding that comment holds.
+      if (standaloneUrls.has(entryUrl)) return `its url is a gathered misfired comment's, but its finding ordinal ${findingOrdinal(d) ? JSON.stringify(findingOrdinal(d)) : "is absent and"} names no finding gathered from it — every finding of that comment shares the url, so on the url alone this entry would stand for all of them`;
+      return "its url was never gathered on this PR, so it is untriaged work that no reviewer disposition covers — it would still be written up in the summary comment and counted toward the contributing-bot pings";
+    }
+    gathered = standaloneItemByKey.get(itemKeyOf(d));
+  } else if (d.type === "ci-failure") {
+    if (typeof d.lane !== "string" || !d.lane.trim()) return "it is a ci-failure entry with no lane, the identity its outcome is recorded against and a later run's replay matches it to the rollup by";
+    if (namesThread) return "it is typed ci-failure but names a gathered review thread, so publication would skip the thread's reply/resolve";
+    if (namesStandaloneUrl) return "it is typed ci-failure but carries a gathered standalone item's url, so that standalone would read as covered while publication addresses the entry as a lane";
+    if (!laneItemById.has(d.lane.trim())) return "its lane was never gathered on this PR's head, so it is a lane no reviewer disposition covers — its cause and disposition would still be written into the summary comment's CI section";
+    gathered = laneItemById.get(d.lane.trim());
+    if (d.kind === "push-back") return "it is a push-back on a CI lane, which has nobody to push back to — a lane this branch did not cause is ambiguous-skipped with the cause found";
+    if (d.kind === "deferred-to-task") return "it defers a CI lane to a task, which a lane's disposition by cause has no place for — a structural or sprawling cause is ambiguous-skipped with the cause found and the follow-up offered in detail, since the maintainer chooses between fixing here, a task and accepting the red lane";
+    // A replayed lane the new head no longer shows failing: the disposition
+    // carries the record's account into the Summary and nothing else, so an
+    // order to re-run it would re-run a lane that is green or still running —
+    // or one the head's rollup does not carry at all (`absent`).
+    if (d.kind === "flake-rerun" && gathered.rollup !== "failing") return `it orders a flake re-run on a lane the gather reports as ${JSON.stringify(gathered.rollup)} on this head — a replayed record entry, whose disposition carries the recorded cause and disposition rather than an action`;
+    if (d.kind === "flake-rerun" && !ACTIONS_RUN_URL.test(String(gathered.url || ""))) return "it orders a flake re-run on a lane whose url names no workflow run, and `gh run rerun` is the only action that kind orders — an evidenced flake on such a lane is ambiguous-skipped with the evidence, left for the maintainer to re-run";
+    // The same lane under every OTHER kind: a replayed entry is disposed of as
+    // `already-addressed` with the recorded account carried, and nothing else.
+    // `actionable-fixed` or `ambiguous-skipped` on it would publish a fix or a
+    // maintainer choice for a lane this head does not show failing — a false
+    // account of the lane, spending the prior record whose entry was the true
+    // one. (`push-back` and `deferred-to-task` are refused on every lane
+    // above.) The gather guard upstream has already
+    // refused a `rollup` outside the four states, so "not failing" here is
+    // exactly the three replayed ones.
+    if (gathered.rollup !== "failing" && d.kind !== "already-addressed") return `it disposes of a lane the gather reports as ${JSON.stringify(gathered.rollup)} on this head as ${d.kind} — a replayed record entry, which is already-addressed with the recorded cause and disposition carried, since this head shows nothing failing on it to fix, skip or defer`;
+    // And the converse: `already-addressed` is THAT replay's disposition and
+    // no failing lane's. A lane red on this head is judged by cause and takes
+    // one of the three live kinds; a fix the tree already carries for it —
+    // this branch's from an earlier turn, or the base's after a rebase — is
+    // `actionable-fixed` with where the fix lives, since only the push re-runs
+    // the lane. Admitted here, `already-addressed` on a red lane had a lane-only
+    // run push nothing, publish a completed Summary and spend the prior record
+    // while the head stayed red, with no action ordered on the lane at all.
+    if (gathered.rollup === "failing" && d.kind === "already-addressed") return "it disposes of a lane failing on this head as already-addressed, the replay disposition of a lane the head shows green, running or absent — a failing lane takes actionable-fixed, ambiguous-skipped or flake-rerun by cause, and a fix the tree already carries for it is actionable-fixed with where the fix lives, since only the push re-runs the lane";
   } else {
-    return `its type ${JSON.stringify(d.type)} is neither review-thread nor standalone, so publication cannot route it`;
+    return `its type ${JSON.stringify(d.type)} is none of review-thread, standalone or ci-failure, so publication cannot route it`;
   }
   if (!TRIAGE_KINDS.has(d.kind)) return `its kind ${JSON.stringify(d.kind)} is not one of the triage kinds, so publication cannot tell what to reply or whether to resolve`;
+  if (d.kind === "flake-rerun" && d.type !== "ci-failure") return "it is a flake-rerun on something that is not a CI lane, and the only action that kind orders is a workflow re-run";
   if (typeof d.detail !== "string" || !d.detail.trim()) return "it carries no detail, which is the body of the reply publication would post";
   if (typeof d.author !== "string") return "it has no author, so a bot that brought a new finding would silently drop out of the ping set";
   if (typeof d.authorIsBot !== "boolean") return "it has no authorIsBot, which decides whether a push-back or deferred thread may be auto-resolved";
@@ -2740,8 +3020,8 @@ const mapIncomplete = uncoveredItems.length
 // no disposition carries its identity, so the base predicate already carries
 // its prior entry.
 const compromisedIdentities = [...new Set([
-  ...duplicatedItems.map((it) => (it.type === "review-thread" ? it.threadId : it.url)),
-  ...workReport.filter((d) => d && dispositionDefect(d)).flatMap((d) => [d.threadId, d.url]),
+  ...duplicatedItems.map(itemKeyOf),
+  ...workReport.filter((d) => d && dispositionDefect(d)).flatMap((d) => [d.threadId, d.url, d.lane, itemKeyOf(d)]),
 ].filter((v) => typeof v === "string" && v))];
 // Spread into every exit below that publishes nothing, so the result says where
 // the map went — or that it went nowhere.
@@ -2933,7 +3213,34 @@ phase("Publish");
 // `cycle` here may be the merged one, whose `preRebaseRecordOnly` is the failed
 // delivery run of the cycle the re-verification replaced. This comment is the
 // only PR-facing surface either record has.
-const publishReport = await agent(publishPrompt(packet, workReport, publishFlags, cycle.deviations, cycle.deviationAssessments, cycle.recordOnly, cycle.preRebaseRecordOnly), {
+// The publisher's input is the map with each `ci-failure` entry carrying its
+// lane's `instances` FROM THE GATHERED ITEM — the authoritative list, attached
+// here rather than echoed by the fixer: the fixer's entry contract never asks
+// for it, so the brief's "every URL in its `instances`" would otherwise read a
+// field no entry carries and re-run only `url`'s run, leaving the repeated
+// lane's other runs red. Every lane below resolves — an entry naming an
+// ungathered lane aborted above — and a one-instance lane attaches nothing.
+// Whatever `instances` the entry itself carried is dropped either way: the
+// gathered list is the only one the publisher may re-run from, so an invented
+// one must not reach the brief on a lane that has no list to replace it.
+// The lane's `url` rides the same way, for the same reason: the entry contract
+// never requires it on a `ci-failure` entry — the publishability check admits
+// `flake-rerun` on the GATHERED url naming a workflow run, not the entry's —
+// so a one-instance lane whose entry carried none would reach the publisher
+// with no run id to extract at all, and the publication would abort after
+// the push for want of a URL the gather held all along. The gathered url is
+// authoritative, so it replaces whatever the entry echoed rather than filling
+// in only where the entry was silent.
+const publishDispositions = workReport.map((d) => {
+  if (!d || d.type !== "ci-failure" || typeof d.lane !== "string") return d;
+  const gathered = laneItemById.get(d.lane.trim());
+  if (!gathered) return d;
+  const instances = Array.isArray(gathered.instances) && gathered.instances.length ? gathered.instances : null;
+  const { instances: _echoed, ...entry } = d;
+  const withUrl = typeof gathered.url === "string" && gathered.url ? { ...entry, url: gathered.url } : entry;
+  return instances ? { ...withUrl, instances } : withUrl;
+});
+const publishReport = await agent(publishPrompt(packet, publishDispositions, publishFlags, cycle.deviations, cycle.deviationAssessments, cycle.recordOnly, cycle.preRebaseRecordOnly), {
   label: "publish",
   schema: PUBLISH_SCHEMA,
 });
@@ -2973,14 +3280,23 @@ const publishClaimed = !!(publishReport && publishReport.published);
 // account cannot carry that weight the record says the outcome is unknown.
 const outcomes = Array.isArray(publishReport && publishReport.threadOutcomes) ? publishReport.threadOutcomes : [];
 // The identity publication itself routes on, and the only thing that can key this
-// account: a `review-thread` by its `threadId`, a `standalone` by its `url`.
-// `ref` is file:line + author, which two threads a re-review left on one line
-// SHARE — keyed on it, one thread's landed reply and another's owed one are the
-// same entry. Every disposition reaching publication has one: `dispositionDefect`
-// above rejects a review-thread entry with no `threadId` and a standalone with no
-// `url` before any push.
-const dispKeyOf = (d) => String((d && (d.type === "review-thread" ? d.threadId : d.url)) || "").trim();
-const outcomeKeyOf = (o) => String((o && (o.threadId || o.url)) || "").trim();
+// account: a `review-thread` by its `threadId`, a `ci-failure` by its `lane`, a
+// `standalone` by its `url` plus the finding ordinal a misfired finding carries
+// (`itemKeyOf`, the one key every per-item check shares). `ref` is file:line +
+// author, which two threads a re-review left on one line SHARE — keyed on it,
+// one thread's landed reply and another's owed one are the same entry. Every
+// disposition reaching publication has one: `dispositionDefect` above rejects
+// a review-thread entry with no `threadId`, a standalone with no `url` (or a
+// misfired finding's with no ordinal), and a lane entry with no `lane` before
+// any push. An outcome entry carries no `type`, so its key is read off which
+// identity field it carries, in the order no two kinds can share.
+const dispKeyOf = (d) => itemKeyOf(d);
+const outcomeKeyOf = (o) => {
+  if (!o) return "";
+  if (o.threadId) return String(o.threadId).trim();
+  if (typeof o.lane === "string" && o.lane.trim()) return o.lane.trim();
+  return itemKeyOf({ ...o, type: "standalone" });
+};
 const dispKeys = workReport.map(dispKeyOf);
 const dispKeySet = new Set(dispKeys);
 const accountByKey = new Map();
@@ -2989,7 +3305,7 @@ const strayKeys = [];
 for (const o of outcomes) {
   const k = outcomeKeyOf(o);
   if (!k || !dispKeySet.has(k)) {
-    strayKeys.push(k || "(an entry carrying neither a threadId nor a url)");
+    strayKeys.push(k || "(an entry carrying no threadId, url or lane)");
     continue;
   }
   if (accountByKey.has(k)) {
@@ -3049,7 +3365,7 @@ const accountDefect = !publishReport
 // count further down, which asks what is left to replay.
 // Two kinds publication never owes a REPLY, and counting them tells the
 // maintainer and the replay turn that a forbidden action is outstanding: step 4
-// of the publish brief posts no reply to a `standalone` item (it is addressed in
+// of the publish brief posts no reply to a `standalone` or `ci-failure` item (it is addressed in
 // the Summary comment alone and is never resolved as a thread) and none to an
 // `ambiguous-skipped` thread (it is deliberately left without one and left
 // open), so both carry `replied: false` on a genuinely COMPLETE publication.
@@ -3070,6 +3386,64 @@ const isReviewThreadOwed = (d) => !!d && d.type === "review-thread" && d.kind !=
 // — no record is written on the path that would carry one — and the gate below
 // names that residual where it names the other thing it cannot see.
 const isResolveOwed = (d) => isReviewThreadOwed(d) && !((d.kind === "push-back" || d.kind === "deferred-to-task") && d.authorIsBot === false);
+// The third thing step 4 owes, on exactly one kind and one push state: a
+// `flake-rerun` lane's re-run — step 3's `gh run rerun`, the only action that
+// disposition orders — after a NO-OP push (`pushed` true, `pushedNewCommits`
+// not true). A push that advanced the branch re-ran every lane itself, and a
+// run that pushed nothing never reached step 3. Without this, a publisher
+// whose `gh run rerun` was rejected reports the ordinary false/false lane
+// entry — a lane owes neither reply nor resolve — and the completion claim is
+// accepted and the prior record spent while the one thing the disposition
+// promised never happened and the lane stays red. The publisher's own
+// contract tells it to abort there; this is the caller's reading of the
+// account it did give, so a report that claims completion over an unaccepted
+// re-run is refused like one over an owed reply that never posted.
+const rerunOwedOnThisPush = !!publishReport && publishReport.pushed === true && publishReport.pushedNewCommits !== true;
+const isRerunOwed = (d) => rerunOwedOnThisPush && !!d && d.type === "ci-failure" && d.kind === "flake-rerun";
+const rerunKeys = workReport.filter(isRerunOwed).map(dispKeyOf);
+// PER RUN ID beneath that lane-level debt: a repeated lane names several
+// workflow runs, and `gh run rerun` accepts one at a time, so an early request
+// accepted and a later one rejected leaves the lane owed while some of its
+// runs are already re-running. The record's standing line names both halves
+// so the next turn orders only the rest — a lane-level "still owed" alone had
+// it order the accepted run again and meet it already re-running. The ids a
+// lane names are read off the GATHERED item (its url and instances, the list
+// the publisher was handed), and the accepted ones off the account.
+const runIdOf = (u) => ((String(u || "").match(/\/actions\/runs\/(\d+)(?:[/?#]|$)/) || [])[1] || "");
+const laneRunIds = (d) => {
+  const gathered = laneItemById.get(String((d && d.lane) || "").trim());
+  if (!gathered) return [];
+  return [...new Set([gathered.url, ...(Array.isArray(gathered.instances) ? gathered.instances : [])].map(runIdOf).filter(Boolean))];
+};
+const acceptedRunIds = (d) => {
+  const o = accountByKey.get(dispKeyOf(d)) || {};
+  const named = new Set(laneRunIds(d));
+  return Array.isArray(o.rerunAccepted) ? [...new Set(o.rerunAccepted.map((x) => String(x).trim()).filter((id) => named.has(id)))] : [];
+};
+// A lane's re-run has LANDED only where the account says so at both levels:
+// `rerun: true` AND `rerunAccepted` naming every run id the gathered lane
+// names. The lane-level flag alone is the publisher's own summary of the list,
+// and a schema-valid report can carry `rerun: true` over a list that leaves a
+// run out — the flag is then read as what the list supports, so the lane is
+// owed on the missing ids rather than the publication completed and the prior
+// record spent while one of the lane's runs was never re-run.
+const rerunLanded = (d) => {
+  if ((accountByKey.get(dispKeyOf(d)) || {}).rerun !== true) return false;
+  const accepted = new Set(acceptedRunIds(d));
+  return laneRunIds(d).every((id) => accepted.has(id));
+};
+const owedReruns = workReport.filter((d) => isRerunOwed(d) && !rerunLanded(d)).length;
+const partialReruns = workReport.filter((d) => isRerunOwed(d) && !rerunLanded(d) && acceptedRunIds(d).length).length;
+// And its complement, over the same keys: the re-runs the account reports
+// ACCEPTED. A re-run is a write to GitHub like a reply is, so where the
+// publication then stopped before any reply or Summary reached the PR it is
+// what LANDED — and the only thing that did, since a no-op push moved nothing.
+// Left out of `landed`, a run in exactly that state rendered the canonical
+// "nothing reached origin" record with NO per-entry standing lines, so the
+// lane's "flake re-run ALREADY ORDERED" line never reached the record, and the
+// next turn — the head's rollup still showing the lane red while GitHub
+// re-runs it — ordered the same run again, meeting a run already re-running.
+const acceptedReruns = rerunKeys.length - owedReruns;
 const owedKeys = workReport.filter(isReviewThreadOwed).map(dispKeyOf);
 const resolveKeys = workReport.filter(isResolveOwed).map(dispKeyOf);
 const owedReplies = owedKeys.filter((k) => !(accountByKey.get(k) || {}).replied).length;
@@ -3125,11 +3499,12 @@ const owedResolves = resolveKeys.filter((k) => !(accountByKey.get(k) || {}).reso
 // and the resolve half can: a missed resolve degrades to the state policy
 // produces for a human thread anyway, which is the maintainer's to close.
 const unpushedClaim = !!publishReport && publishReport.pushed !== true;
-const contradictedByAccount = unpushedClaim || owedReplies || owedResolves
+const contradictedByAccount = unpushedClaim || owedReplies || owedResolves || owedReruns
   ? `its own account contradicts that claim — ${[
       unpushedClaim ? "it reports that no push command succeeded (`pushed: false`), which no complete publication reports: step 2's push is where publication starts, and an `Everything up-to-date` no-op already reports true" : "",
       owedReplies ? `${owedReplies} of ${owedKeys.length} thread(s) publication owes a reply report that none reached the PR` : "",
       owedResolves ? `${owedResolves} of ${resolveKeys.length} it owes a resolve report the thread still unresolved` : "",
+      owedReruns ? `${owedReruns} of ${rerunKeys.length} flake-rerun lane(s) it owes a re-run after its no-op push report no \`gh run rerun\` accepted for every run id the lane names (\`rerun: true\` with \`rerunAccepted\` covering them) — the one action that disposition promises` : "",
     ].filter(Boolean).join(", and ")}`
   : "";
 const publicationDefect = !publishClaimed
@@ -3209,6 +3584,8 @@ const landed = published
       publishReport && publishReport.pushedNewCommits && !pushUnconfirmed ? "the push, which advanced the remote branch" : "",
       repliedCount ? `${repliedCount} thread ${repliedCount === 1 ? "reply" : "replies"}` : "",
       resolvedCount ? `${resolvedCount} thread resolve${resolvedCount === 1 ? "" : "s"}` : "",
+      acceptedReruns ? `${acceptedReruns} flake re-run${acceptedReruns === 1 ? "" : "s"} ordered on the no-op push and accepted by GitHub` : "",
+      partialReruns ? `${partialReruns} flake re-run${partialReruns === 1 ? "" : "s"} ordered on the no-op push and accepted by GitHub for SOME of the lane's run ids only` : "",
       summaryUrl ? `the Summary comment at ${summaryUrl}` : "",
     ].filter(Boolean).join(", ");
 // A push that ran and moved nothing is neither case: the tips ARE on origin
@@ -3216,7 +3593,8 @@ const landed = published
 // One fact, one extra line in the record, rather than a rendering of its own. It
 // keys on `!landed`, which under the end-state reading above is the stronger
 // statement it needs — the PR carries no reply, resolve or Summary of this map at
-// all, so this run certainly posted none of them. The line it renders says no
+// all, and no flake re-run of it was accepted, so this run certainly posted
+// none of them. The line it renders says no
 // reply, resolve or Summary reached the PR, which is a claim an
 // unusable account cannot support — and that is settled in the ONE place named
 // just above rather than a second time here: every consumer reads `accountDefect`
@@ -3235,6 +3613,7 @@ const outstanding = published
   : [
       owedReplies ? `${owedReplies} of ${owedKeys.length} thread(s) still owed their reply` : "",
       owedResolves ? `${owedResolves} of ${resolveKeys.length} not resolved` : "",
+      owedReruns ? `${owedReruns} of ${rerunKeys.length} flake re-run(s) still owed on the no-op push` : "",
       summaryUrl ? "" : "the Summary comment",
     ].filter(Boolean).join(", ") || "no reply, resolve or Summary comment — publication stopped past all of them, so its reason above is what is left to act on";
 // Where each entry stands, one line per disposition, matched to it by key. The
@@ -3245,7 +3624,7 @@ const outstanding = published
 // unusable account, where every entry's standing is unknown.
 const standingLine = (d) => {
   const key = dispKeyOf(d);
-  const label = `thread=${key || "(no threadId or url)"}  ${String((d && d.ref) || "").trim() || "(no ref)"}`;
+  const label = `thread=${key || "(no threadId, url or lane)"}  ${String((d && d.ref) || "").trim() || "(no ref)"}`;
   if (accountDefect) return `${label} — UNKNOWN whether its reply is posted or its thread resolved: check it on the PR before replying, and before resolving.`;
   const o = accountByKey.get(key);
   // The same two kinds the debt counts above exclude, said per entry: a
@@ -3253,9 +3632,21 @@ const standingLine = (d) => {
   // what the publish brief forbids — a thread reply an item has no thread for,
   // or a reply on a thread the run deliberately left silent and open.
   if (!isReviewThreadOwed(d)) {
+    // The one thing a lane CAN owe, on a no-op push: its flake re-run, which
+    // the next turn orders where this account does not report it accepted.
+    if (isRerunOwed(d)) {
+      if (rerunLanded(d)) return `${label} — flake re-run ALREADY ORDERED (every run id the lane names accepted) — do not order it again; nothing else is owed on a lane (no thread to reply on or resolve).`;
+      const accepted = acceptedRunIds(d);
+      const stillOwed = laneRunIds(d).filter((id) => !accepted.includes(id));
+      return accepted.length
+        ? `${label} — its flake re-run is STILL OWED on run id(s) ${stillOwed.join(", ") || "(none the gathered lane names — re-read the lane's rollup)"}: run id(s) ${accepted.join(", ")} are ALREADY ORDERED and accepted, so the next turn orders only the rest — a second request meets a run already re-running; nothing else is owed on a lane (no thread to reply on or resolve).`
+        : `${label} — its flake re-run is STILL OWED: the push was a no-op, so step 3's \`gh run rerun\` on every run id the lane names is the one action this disposition promises, and the account does not report it accepted; nothing else is owed on a lane (no thread to reply on or resolve).`;
+    }
     const why = d && d.type === "standalone"
       ? "a standalone item is addressed in the Summary comment alone, never by a thread reply, and is never resolved as a thread"
-      : "an ambiguous-skipped thread is deliberately left without a reply and left open";
+      : d && d.type === "ci-failure"
+        ? "a CI lane is addressed in the Summary comment's CI section alone — a flake re-run being the one action it gets, on a no-op push — and has no thread to reply on or resolve"
+        : "an ambiguous-skipped thread is deliberately left without a reply and left open";
     return `${label} — NOTHING is owed on it: ${why}.${o && (o.replied || o.resolved) ? " Its account nevertheless reports one, so check the thread on the PR before acting." : ""}`;
   }
   // The reply is owed on every entry that reaches here; the RESOLVE is the half
