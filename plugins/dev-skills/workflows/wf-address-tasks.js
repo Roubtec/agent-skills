@@ -3889,13 +3889,37 @@ function reviewStackMergeable(result) {
 // schema's contract, but the name is built here and `git check-ref-format`
 // decides, so the segment is normalized rather than trusted.
 function reviewStackRefSegment(s) {
+  // The `.lock` repair runs on the TRIMMED segment: `foo.lock-` trims to
+  // `foo.lock`, which git rejects, and a repair applied before the trim would
+  // never see it.
   const out = String(s)
     .replace(/[^A-Za-z0-9._-]+/g, "-")
     .replace(/\.\.+/g, "-")
-    .replace(/\.lock$/i, "-lock")
-    .replace(/^[-.]+|[-.]+$/g, "");
+    .replace(/^[-.]+|[-.]+$/g, "")
+    .replace(/\.lock$/i, "-lock");
   return out || "x";
 }
+
+// The leading task number of a slug, compared numerically so `10-b` follows
+// `2-a` whatever the repository's zero-padding convention; a slug that leads
+// with no number sorts after every numbered one, by its text.
+function reviewStackTaskNumber(slug) {
+  const m = String(slug).match(/^(\d+)([A-Za-z]?)/);
+  return m ? [Number(m[1]), m[2]] : [Infinity, ""];
+}
+function reviewStackSlugCompare(a, b) {
+  const [na, sa] = reviewStackTaskNumber(a);
+  const [nb, sb] = reviewStackTaskNumber(b);
+  return na - nb || sa.localeCompare(sb) || String(a).localeCompare(String(b));
+}
+
+// Every name the stage's briefs hand a deputy — canonical branches, their
+// recorded bases, the batch's default base — reaches a shell command the deputy
+// composes itself and, for the base, the `rebase-stack` chain text, where
+// quoting is not the script's to apply. So a name is admitted only in this
+// shell-inert shape; git accepts `$`, backticks, and `;` in a ref, and one
+// carrying them ends the stage before anything is inspected or created.
+const REVIEW_STACK_SHELL_SAFE = /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/;
 
 // A full object id, as `git rev-parse` prints one; an abbreviation is a prefix
 // a growing repository can make ambiguous, so the stage refuses it.
@@ -3935,7 +3959,7 @@ function reviewStackOrder(plan, results) {
   };
   const placedAt = new Map();
   const order = [];
-  const remaining = [...mergeable].sort((a, b) => a.wave - b.wave || a.slug.localeCompare(b.slug));
+  const remaining = [...mergeable].sort((a, b) => a.wave - b.wave || reviewStackSlugCompare(a.slug, b.slug));
   while (remaining.length) {
     let pick = -1;
     let pickScore = -Infinity;
@@ -4207,8 +4231,8 @@ You stand in the repository's SHARED main checkout (confirm with \`git rev-parse
 1. **Canonical tips unchanged.** For each branch, \`git rev-parse --verify refs/heads/<branch>^{commit}\` must print the object id captured before the guide branches were created:
 ${tipRows}
    Report \`tipsUnchanged\` and every mismatch in \`tipMismatches\`. Move NOTHING to fix one: a moved canonical branch is a finding for the maintainer, and the pre-rebase refs below are its recovery source, which is why step 5 deletes none of them in that case.
-2. **The worktree is idle and clean.** First, \`git worktree list --porcelain\` must list a \`worktree ${worktree}\` line: where it lists none, the guide-branch step stopped before attaching it (or was interrupted before it could), so report \`worktreeRemoved: false\` with \`detail\` saying no worktree is registered there, skip steps 3 and 4, and go on to step 5. \`git -C ${shq(worktree)} status --porcelain\` must print nothing, and no Git operation may be in progress there: no \`rebase-merge\`/\`rebase-apply\` path, and no \`MERGE_HEAD\`, \`CHERRY_PICK_HEAD\`, \`REVERT_HEAD\`, or \`BISECT_LOG\` under its git dir (\`git -C <worktree> rev-parse --git-path <name>\` names each; the last three print empty porcelain). Where \`git rev-parse --show-toplevel\` there does not print exactly \`${worktree}\`, or the branch checked out there — \`git -C <worktree> branch --show-current\`, or mid-rebase the one \`git -C <worktree> rev-parse --git-path rebase-merge/head-name\` or \`rebase-apply/head-name\` names — is not one of the guide branches of step 6, remove NOTHING and report what you saw: a worktree at this path holding any other branch is not this batch's to remove, however clean.
-3. **Abnormal-return recovery, only where step 2 found the tree held.** The restack was told to return clean; where it did not, reset the worktree to the disposable branch's reported pre-rebase ref, clear any untracked leftovers with \`git clean -fd\`, and confirm a clean \`git status\` before removal: identify the guide branch checked out there (\`git -C <worktree> branch --show-current\`; mid-rebase, the branch named by \`git -C <worktree> rev-parse --git-path rebase-merge/head-name\` or \`rebase-apply/head-name\`), find ITS ref in the list of step 5 (\`refs/pre-rebase/<that guide>/<stamp>\`) — where that list holds none for it (a restack that threw reports no list at all), look it up with \`git for-each-ref --format='%(refname)' 'refs/pre-rebase/<that exact guide>/'\`, that one guide's own namespace spelled out in full and never \`refs/pre-rebase/\` itself, and take the newest stamp it prints; a ref found this way is a recovery source only, reported in \`refsNotDeleted\`, and step 5 still deletes nothing beyond its list — abort a rebase still in progress first (\`git -C <worktree> rebase --abort\` — a reset leaves the rebase state behind, and the removal would still refuse), then \`git -C <worktree> reset --hard <that ref>\` and \`git -C <worktree> clean -fd\`, and re-run step 2. Where the checked-out branch is not one of the guide branches below, or no pre-rebase ref of its own is listed or found, recover NOTHING: leave the worktree in place, report why, and skip step 4. The recovery reaches the guide branch only — never a canonical branch, never any other worktree. Report \`recovered: true\` only when this step ran.
+2. **The worktree is idle and clean.** First, \`git worktree list --porcelain\` must list a \`worktree ${worktree}\` line: where it lists none, the guide-branch step stopped before attaching it (or was interrupted before it could), so report \`worktreeRemoved: false\` with \`detail\` saying no worktree is registered there, skip steps 3 and 4, and go on to step 5. \`git -C ${shq(worktree)} status --porcelain\` must print nothing, and no Git operation may be in progress there: no \`rebase-merge\`/\`rebase-apply\` path, and no \`MERGE_HEAD\`, \`CHERRY_PICK_HEAD\`, \`REVERT_HEAD\`, or \`BISECT_LOG\` under its git dir (\`git -C <worktree> rev-parse --git-path <name>\` names each; the last three print empty porcelain). Where \`git rev-parse --show-toplevel\` there does not print exactly \`${worktree}\`, or the branch checked out there — \`git -C <worktree> branch --show-current\`, or, where that prints nothing mid-rebase, the branch recorded in the file \`git -C <worktree> rev-parse --git-path rebase-merge/head-name\` (or \`rebase-apply/head-name\`) names, which spells it in full as \`refs/heads/<branch>\`: strip exactly that \`refs/heads/\` prefix before comparing, and treat a value without it as no guide branch — is not one of the guide branches of step 6, remove NOTHING and report what you saw: a worktree at this path holding any other branch is not this batch's to remove, however clean.
+3. **Abnormal-return recovery, only where step 2 found the tree held.** The restack was told to return clean; where it did not, reset the worktree to the disposable branch's reported pre-rebase ref, clear any untracked leftovers with \`git clean -fd\`, and confirm a clean \`git status\` before removal: identify the guide branch checked out there (\`git -C <worktree> branch --show-current\`; mid-rebase, the \`refs/heads/<branch>\` value in the \`head-name\` file of step 2, with that prefix stripped the same way), find ITS ref in the list of step 5 (\`refs/pre-rebase/<that guide>/<stamp>\`) — where that list holds none for it (a restack that threw reports no list at all), look it up with \`git for-each-ref --format='%(refname)' 'refs/pre-rebase/<that exact guide>/'\`, that one guide's own namespace spelled out in full and never \`refs/pre-rebase/\` itself, and take the newest stamp it prints; a ref found this way is a recovery source only, reported in \`refsNotDeleted\`, and step 5 still deletes nothing beyond its list — abort a rebase still in progress first (\`git -C <worktree> rebase --abort\` — a reset leaves the rebase state behind, and the removal would still refuse), then \`git -C <worktree> reset --hard <that ref>\` and \`git -C <worktree> clean -fd\`, and re-run step 2. Where the checked-out branch is not one of the guide branches below, or no pre-rebase ref of its own is listed or found, recover NOTHING: leave the worktree in place, report why, and skip step 4. The recovery reaches the guide branch only — never a canonical branch, never any other worktree. Report \`recovered: true\` only when this step ran.
 4. **Remove the worktree, refusing rather than forcing.** From this main checkout run \`wt-remove ${shq(slug)}\` — it enforces the step-2 checks itself and refuses over uncommitted work or an in-progress operation; a refusal is the helper working, so report it as \`worktreeRemoved: false\` with its message rather than forcing (\`--force\` never clears those checks; it only clears git's refusal over ignored build artifacts AFTER they pass, which is the one case you may pass it). Where \`command -v wt-remove\` finds no helper, \`git worktree remove ${shq(worktree)}\` after step 2 passed, never with \`--force\`. Then \`git worktree prune\` — the helper's success path removes without pruning — and report \`pruned\`. Removing the worktree never touches a branch.
 5. **Delete exactly these pre-rebase snapshots, and only after step 1 found every canonical tip unchanged** — the unchanged canonical branches are their recovery source; where a tip moved, delete none and list them all in \`refsNotDeleted\`:
 ${refRows}
@@ -4234,6 +4258,10 @@ async function buildReviewStack({ plan, results, wtBase }) {
   }
   if (cycle.length) {
     return { ...report, skipped: true, reason: `the dependency graph among the mergeable branches is not acyclic (${cycle.join(", ")}); no merge order can be emitted` };
+  }
+  const unsafeName = [base, ...order.flatMap((t) => [t.branch, t.base])].find((name) => !REVIEW_STACK_SHELL_SAFE.test(String(name)));
+  if (unsafeName !== undefined) {
+    return { ...report, skipped: true, reason: `the name ${JSON.stringify(String(unsafeName))} is not shell-inert (letters, digits, \`.\`, \`_\`, \`/\`, \`-\`; no leading \`-\`), and the stage's deputies compose shell commands from the names they are briefed with; nothing was inspected or created` };
   }
   const batchLabel = reviewStackBatchLabel(order);
   let mapping = [];

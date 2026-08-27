@@ -31,7 +31,7 @@ if (at < 0) {
   process.exit(1);
 }
 const prefix = src.slice(0, at).replace(/^export const meta/m, "const meta");
-const NAMES = ["reviewStackMergeable", "reviewStackOrder", "reviewStackSafePrefix", "reviewStackBatchLabel", "reviewStackGuideName", "reviewStackRefSegment", "buildReviewStack", "REVIEW_STACK_MERGEABLE", "REVIEW_STACK_INSPECT_SCHEMA"];
+const NAMES = ["reviewStackMergeable", "reviewStackOrder", "reviewStackSafePrefix", "reviewStackBatchLabel", "reviewStackGuideName", "reviewStackRefSegment", "reviewStackTeardownPrompt", "buildReviewStack", "REVIEW_STACK_MERGEABLE", "REVIEW_STACK_INSPECT_SCHEMA"];
 function load({ agent, phase, log }) {
   const body = `"use strict";\n${prefix}\nreturn { ${NAMES.join(", ")} };`;
   // eslint-disable-next-line no-new-func
@@ -98,6 +98,14 @@ const t = (slug, base, dependsOn = []) => ({ slug, branch: `task/${slug}`, base,
   const results = ["045-y", "041-x", "043-w"].map((slug) => ({ slug, branch: `task/${slug}`, status: "done" }));
   const { order } = pure.reviewStackOrder(plan, results);
   check("independent branches fall back to task number", same(order.map((x) => x.slug), ["041-x", "043-w", "045-y"]));
+}
+{
+  // An unpadded numbering convention: the task number is compared as a number,
+  // never as the slug's text, or `10-` would precede `2-`.
+  const plan = { defaultBase: "main", waves: [[t("10-j", "main"), t("2-b", "main"), t("9-i", "main"), t("2a-c", "main"), t("misc", "main")]] };
+  const results = ["10-j", "2-b", "9-i", "2a-c", "misc"].map((slug) => ({ slug, branch: `task/${slug}`, status: "done" }));
+  const { order } = pure.reviewStackOrder(plan, results);
+  check("unpadded task numbers sort numerically, a letter suffix after its number, an unnumbered slug last", same(order.map((x) => x.slug), ["2-b", "2a-c", "9-i", "10-j", "misc"]), JSON.stringify(order.map((x) => x.slug)));
 }
 {
   // Exclusions: failed review, skipped dependents, crashed, held, unreported.
@@ -183,6 +191,12 @@ const oid = (n) => String(n).repeat(40);
   check("guide name follows the skill's form", name === "review-stack/042-to-045-20260827-120000/01-042-widget", name);
   const odd = pure.reviewStackRefSegment("weird slug..with:colons.lock");
   check("ref segments are made ref-safe", odd === "weird-slug-with-colons-lock" && !/\.\.|:/.test(odd), odd);
+  // `.lock` is repaired after the trim that can expose it: `foo.lock-` trims
+  // to `foo.lock`, which git refuses as a ref component.
+  for (const [input, want] of [["foo.lock-", "foo-lock"], ["foo.lock--", "foo-lock"], ["foo.lock", "foo-lock"], ["foo.LOCK.", "foo-lock"], ["-foo.lock..", "foo-lock"]]) {
+    const got = pure.reviewStackRefSegment(input);
+    check(`ref segment ${JSON.stringify(input)} is not left ending in .lock`, got === want && !/\.lock$/i.test(got), got);
+  }
 }
 
 // --- The stage's control flow ----------------------------------------------
@@ -225,6 +239,34 @@ const teardownOk = { tipsUnchanged: true, tipMismatches: [], recovered: false, w
     check("one mergeable branch: skipped with the fewer-than-two reason, nothing run", r.skipped === true && /1 mergeable branch/.test(r.reason) && calls.length === 0, r.reason);
     const zero = await fns.buildReviewStack({ plan: plan3, results: [], wtBase });
     check("zero mergeable branches: skipped, nothing run", zero.skipped === true && /0 mergeable/.test(zero.reason) && calls.length === 0);
+  }
+
+  // A name a shell would interpret ends the stage before any deputy runs: the
+  // briefs hand names to deputies that compose their own commands, and the
+  // restack chain is skill text no quoting reaches.
+  for (const bad of ["task/042-a$b", "task/042-a;rm", "task/042-`a`", "-task/042-a", "task/042 a"]) {
+    const plan = { defaultBase: "main", waves: [[t("042-a", "main"), t("043-b", "main")]] };
+    plan.waves[0][0].branch = bad;
+    const results = [{ slug: "042-a", branch: bad, status: "done" }, { slug: "043-b", branch: "task/043-b", status: "done" }];
+    const { fns, calls } = stage({});
+    const r = await fns.buildReviewStack({ plan, results, wtBase });
+    check(`branch ${JSON.stringify(bad)}: the stage is skipped, nothing run`, r.skipped === true && calls.length === 0 && r.reason.includes(JSON.stringify(bad)), r.reason);
+  }
+  {
+    const plan = { defaultBase: "main$x", waves: [[t("042-a", "main$x"), t("043-b", "main$x")]] };
+    const results = ["042-a", "043-b"].map((slug) => ({ slug, branch: `task/${slug}`, status: "done" }));
+    const { fns, calls } = stage({});
+    const r = await fns.buildReviewStack({ plan, results, wtBase });
+    check("a base that is not shell-inert is skipped too; it would reach the restack chain unquoted", r.skipped === true && calls.length === 0 && /main\$x/.test(r.reason), r.reason);
+    const ok = await stage({ "review-stack:inspect": { ok: false, detail: "n/a" } }).fns.buildReviewStack({ plan: { defaultBase: "release/v1.2_x", waves: plan.waves.map((w) => w.map((x) => ({ ...x, base: "release/v1.2_x" }))) }, results, wtBase });
+    check("an ordinary ref with `/`, `.`, and `_` is admitted", ok.skipped === false, ok.reason);
+  }
+  // Mid-rebase, `branch --show-current` is empty and the head-name file spells
+  // the branch as `refs/heads/...`; the guide list is short names, so the
+  // teardown is told to strip exactly that prefix before its allowlist check.
+  {
+    const p = pure.reviewStackTeardownPrompt({ worktree: `${wtBase}/_review-stack-x`, slug: "_review-stack-x", tips: [], mapping: [{ guide: "review-stack/x/01-a" }], preRebaseRefs: [], restackOutcome: "it did not run" });
+    check("teardown: the head-name value is normalized from refs/heads/ before the guide allowlist comparison", p.includes("spells it in full as `refs/heads/<branch>`: strip exactly that `refs/heads/` prefix before comparing") && p.includes("with that prefix stripped the same way"));
   }
 
   // The success path: inspect -> guides -> restack -> teardown.
