@@ -12,10 +12,10 @@
  * guard — never a delivered, reserved, or outside side — a second scan of the
  * refs decides whether it may deliver, and it is re-reviewed first; a name
  * that must stay identical is held), reserves the numbers it claims through
- * delivery, rebases onto a base a merged sibling advanced, opens its PR, and
- * reclaims its worktree — then, once EVERY task has reached a terminal state,
- * acts on any pushed branch left without a PR, builds the local review stack,
- * and reports. Invoke as
+ * delivery, rebases onto a base a merged sibling advanced, opens its PR,
+ * reclaims its worktree, and acts on a pushed branch it left without a PR
+ * inside that same pipeline — then, once EVERY task has reached a terminal
+ * state, builds the local review stack and reports. Invoke as
  * `/dev-skills:wf-address-tasks <task-numbers-paths-or-globs> [peer-opinions=off]`.
  *
  * Why a workflow rather than a skill
@@ -4567,6 +4567,17 @@ async function runTaskPipeline(task, ctx) {
       if (entry) entry.base = task.base;
     }
 
+    // `advance` is the scan's reading, not a promise about the interval up
+    // to `gh pr create`: a parent that merges in that interval is NOT refreshed
+    // here, deliberately. Its branch still on origin, the PR opens against it
+    // and `baseOk` reads that back — the same state every stacked PR reaches
+    // when its parent merges a minute AFTER delivery, which the review stack
+    // and a restack absorb (GitHub retargets the PR itself when the merged
+    // branch is later deleted). Its branch already gone, `gh pr create` fails,
+    // `settleReservation` orphans the push, and `reconcileOrphan` retries once
+    // and names the survivor. A read at this boundary would leave the same
+    // window one call later; the maintainer's T6 decision on the review-stack
+    // window declines the refresh for the same reason.
     let delivered;
     try {
       delivered = await deliverTask(task, cleared.ready, remote);
