@@ -302,6 +302,11 @@ const teardownOk = { tipsUnchanged: true, tipMismatches: [], recovered: false, w
     check("teardown: a detached, clean, idle worktree at the script's path is the whole-run-restore stop shape, removed rather than refused", p.includes("A DETACHED head there") && p.includes("is this batch's own rather than foreign") && p.includes("and step 4 removes it"));
     check("teardown: a held detached tree names no guide branch, so recovery is skipped rather than guessed", p.includes("where the head is detached (a held detached tree names no guide branch to recover)"));
     check("teardown: snapshots are enumerated per guide namespace, never from the reported list alone and never from `refs/pre-rebase/` itself", p.includes("`git for-each-ref --format='%(refname)' 'refs/pre-rebase/<that exact guide>/'`") && p.includes("the enumeration and not the list is what is deleted") && p.includes("never glob `refs/pre-rebase/`"));
+    // The snapshots are a held worktree's recovery source (step 3 resets to
+    // the newest one), so a worktree the teardown could not reclaim keeps
+    // them: deletion is gated on the worktree being gone, not only on the
+    // canonical tips standing.
+    check("teardown: snapshots are deleted only once the worktree is gone; a refused or unrecoverable worktree keeps them", p.includes("only after step 1 found every canonical tip unchanged AND the worktree is gone") && p.includes("where step 3 could not recover it, or where step 4 refused to remove it, delete none") && p.includes("delete no snapshot in step 5") && p.includes("and step 5 then keeps every snapshot"));
   }
 
   // The success path: inspect -> guides -> restack -> teardown.
