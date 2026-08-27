@@ -166,7 +166,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 297;
+const EXPECTED_CHECKS = 300;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -6406,11 +6406,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // not report the re-run accepted is refused, and the record's standing line
   // says the re-run is still owed; with `rerun: true` it publishes; and on a
   // push that advanced the branch nothing is owed (the default stub above).
-  const account = (rerun) => ({
+  const account = (rerun, rerunAccepted) => ({
     published: true, pushed: true, pushedNewCommits: false, summaryCommentUrl: "https://example.invalid/pr/42#issuecomment-5",
     threadOutcomes: [
       { threadId: "T1", ref: "src/app.ts:12 a-reviewer", outcome: "replied and resolved", replied: true, resolved: true },
-      { lane: ITEM_LANE.lane, ref: ITEM_LANE.lane, outcome: "re-run ordered", replied: false, resolved: false, ...(rerun === undefined ? {} : { rerun }) },
+      { lane: ITEM_LANE.lane, ref: ITEM_LANE.lane, outcome: "re-run ordered", replied: false, resolved: false, ...(rerun === undefined ? {} : { rerun }), ...(rerunAccepted ? { rerunAccepted } : {}) },
       { lane: ITEM_LANE_ABSENT.lane, ref: ITEM_LANE_ABSENT.lane, outcome: "summary only", replied: false, resolved: false },
     ],
   });
@@ -6431,11 +6431,35 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     rejectedRerun.status === "fixed-publish-failed" && /flake-rerun lane\(s\) it owes a re-run/.test(rejectedRerun.result.note || ""),
     `${rejectedRerun.status}: ${(rejectedRerun.result.note || "").slice(0, 200)}`,
   );
-  const withRerun = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], FLAKE_ENTRY, ABSENT_ENTRY)], publish: account(true) });
+  const withRerun = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], FLAKE_ENTRY, ABSENT_ENTRY)], publish: account(true, ["777"]) });
   check(
-    "with the re-run reported accepted, the same no-op-push publication completes",
+    "with the re-run reported accepted — `rerun: true` and `rerunAccepted` naming the lane's run — the same no-op-push publication completes",
     withRerun.status === "fixed-published",
     JSON.stringify(withRerun.result).slice(0, 300),
+  );
+  // The lane-level flag is read as what the per-id list supports: `rerun: true`
+  // over a list naming only one of a repeated lane's two runs — or naming none
+  // — leaves the lane owed on the missing id, the standing line naming it, and
+  // the completion claim refused rather than the prior record spent while one
+  // run was never re-run.
+  const uncoveredRerun = await run(gathered(repeatedPacket), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], FLAKE_ENTRY, ABSENT_ENTRY)], publish: account(true, ["777"]) });
+  const uncoveredRecord = uncoveredRerun.seen.recordPrompts[0] || "";
+  const bareTrue = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], FLAKE_ENTRY, ABSENT_ENTRY)], publish: account(true) });
+  check(
+    "a completion claim over `rerun: true` whose `rerunAccepted` does not cover every run id the lane names is refused as contradicted, the lane's standing line naming the uncovered id as still owed beside the accepted one, and `rerun: true` with no list at all is refused the same way",
+    uncoveredRerun.status === "fixed-publish-failed" &&
+      /1 of 1 flake-rerun lane\(s\) it owes a re-run after its no-op push report no `gh run rerun` accepted for every run id the lane names/.test(uncoveredRerun.result.note || "") &&
+      /thread=tests \/ node {2}tests \/ node — its flake re-run is STILL OWED on run id\(s\) 779: run id\(s\) 777 are ALREADY ORDERED and accepted/.test(uncoveredRecord) &&
+      uncoveredRerun.seen.spendPrompts.length === 0 &&
+      bareTrue.status === "fixed-publish-failed" && /report no `gh run rerun` accepted for every run id/.test(bareTrue.result.note || "") &&
+      /thread=tests \/ node {2}tests \/ node — its flake re-run is STILL OWED: the push was a no-op/.test(bareTrue.seen.recordPrompts[0] || ""),
+    `${uncoveredRerun.status}: ${(uncoveredRerun.result.note || "").slice(0, 200)} | ${uncoveredRecord.split("\n").filter((l) => /thread=tests/.test(l)).join(" | ").slice(0, 300)} | bare: ${bareTrue.status}`,
+  );
+  const coveredRerun = await run(gathered(repeatedPacket), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], FLAKE_ENTRY, ABSENT_ENTRY)], publish: account(true, [" 777 ", "779"]) });
+  check(
+    "the same claim over a list covering both of the repeated lane's runs, read trimmed, completes",
+    coveredRerun.status === "fixed-published",
+    JSON.stringify(coveredRerun.result).slice(0, 300),
   );
   check(
     "on a push that advanced the branch nothing is ordered, so a flake-rerun entry without `rerun` completes",
@@ -6553,6 +6577,19 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       greenSkipped.status === "publish-aborted-incomplete-dispositions" && /on this head as ambiguous-skipped/.test(defectsOf(greenSkipped)),
     `${greenFixed.status}: ${defectsOf(greenFixed).slice(0, 200)} | ${greenSkipped.status}: ${defectsOf(greenSkipped).slice(0, 120)}`,
   );
+  // And the converse: `already-addressed` is that replay's disposition and no
+  // failing lane's — admitted on a red lane, a lane-only run pushed nothing,
+  // published a completed Summary and spent the prior record while the head
+  // stayed red. A fix the tree carries for a red lane is actionable-fixed.
+  const redAddressed = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], { ...LANE_ENTRY, kind: "already-addressed", detail: "main already carries the fixture pin at def5678", newFinding: false }, GREEN_ENTRY)] });
+  check(
+    "a lane the head shows failing disposed of as already-addressed is unpublishable — a failing lane takes actionable-fixed, ambiguous-skipped or flake-rerun by cause, and the fixer and reviewer briefs and both skill mirrors say so",
+    redAddressed.status === "publish-aborted-incomplete-dispositions" && /lane failing on this head as already-addressed, the replay disposition of a lane the head shows green, running or absent/.test(defectsOf(redAddressed)) &&
+      /is THAT replay's disposition alone, never a failing lane's: a lane failing on this head is judged by cause/.test(src) &&
+      /a fix the tree carries for it is .{0,2}actionable-fixed.{0,2} with where it lives, since only the push re-runs the lane/.test(src) &&
+      ["plugins/dev-skills/skills", "codex/dev-skills/skills"].every((mirror) => /Those three are a failing lane's only dispositions — \*\*already-addressed\*\* is the replay disposition of a recorded lane this head shows green, running or absent/.test(readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8"))),
+    `${redAddressed.status}: ${defectsOf(redAddressed).slice(0, 300)}`,
+  );
   // (2) The gathered url reaches the publisher on a lane entry that echoed none
   // — and replaces one that echoed a different URL.
   const noUrlFlake = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], { ...FLAKE_ENTRY, url: undefined }, GREEN_ENTRY)] });
@@ -6575,7 +6612,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     summaryCommentUrl: "",
     threadOutcomes: [
       { threadId: "T1", ref: "src/app.ts:12 a-reviewer", outcome: "reply failed", replied: false, resolved: false },
-      { lane: ITEM_LANE.lane, ref: ITEM_LANE.lane, outcome: rerun ? "re-run accepted" : "re-run rejected", replied: false, resolved: false, rerun },
+      { lane: ITEM_LANE.lane, ref: ITEM_LANE.lane, outcome: rerun ? "re-run accepted" : "re-run rejected", replied: false, resolved: false, rerun, ...(rerun ? { rerunAccepted: ["777"] } : {}) },
       { lane: ITEM_LANE_GREEN.lane, ref: ITEM_LANE_GREEN.lane, outcome: "not reached", replied: false, resolved: false },
     ],
   });
