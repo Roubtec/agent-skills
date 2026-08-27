@@ -458,6 +458,17 @@ const teardownOk = { tipsUnchanged: true, tipMismatches: [], recovered: false, w
     const { fns, calls, logs } = stage({ "review-stack:inspect": inspectionClean, "review-stack:guides": { ok: false, guides: [], worktree: "", blocker: "branch exists" }, "review-stack:teardown": { ...teardownOk, worktreeRemoved: false, detail: "no worktree is registered there" } });
     const r = await fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
     check("guides failure with no worktree: reported, teardown ran, its finding logged", calls.length === 3 && /branch exists/.test(r.reason) && logs.some((m) => /NOT removed/.test(m) && /no worktree is registered/.test(m)));
+    // Step 5 deletes the snapshots on this path, so the log must not claim
+    // they were kept.
+    check("guides failure with no worktree: the not-removed log claims no kept snapshots", !logs.some((m) => /snapshots are kept/.test(m)));
+  }
+  {
+    // The worktree stood but `wt-remove` refused it: the snapshots stay, and
+    // the not-removed log names them.
+    const kept = ["refs/pre-rebase/_review-stack/042-a/20260827-120000"];
+    const { fns, logs } = stage({ "review-stack:inspect": inspectionClean, "review-stack:guides": guidesFor(["042-a", "043-b", "044-c"], "042-to-044"), "review-stack:restack": (prompt) => restackOk(["042-a", "043-b", "044-c"].map((n) => `_review-stack/${n}`), kept), "review-stack:teardown": { ...teardownOk, worktreeRemoved: false, detail: "wt-remove refused: rebase in progress", refsDeleted: [], refsNotDeleted: kept } });
+    await fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
+    check("a refused worktree removal: the not-removed log names the kept snapshots", logs.some((m) => /NOT removed/.test(m) && /wt-remove refused/.test(m) && /snapshots are kept/.test(m) && m.includes(kept[0])));
   }
   {
     // A bad stamp is refused before any name is derived: no guide deputy runs.

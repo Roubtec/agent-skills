@@ -4423,7 +4423,11 @@ async function buildReviewStack({ plan, results, wtBase }) {
         log(`Review stack: a canonical branch tip moved during the restack — ${JSON.stringify(teardown.tipMismatches)}; the guide branches' pre-rebase refs were kept.`);
       }
       if (teardown && teardown.worktreeRemoved !== true) {
-        log(`Review stack: the dedicated worktree ${worktree} was NOT removed: ${teardown.detail || "(no detail)"}; its pre-rebase snapshots are kept as its recovery source — ${JSON.stringify(teardown.refsNotDeleted)}`);
+        // `worktreeRemoved: false` also covers step 2's none-registered path,
+        // where step 5 does delete the snapshots: name kept refs only where
+        // the teardown reported keeping some.
+        const kept = Array.isArray(teardown.refsNotDeleted) && teardown.refsNotDeleted.length > 0 ? `; its pre-rebase snapshots are kept as its recovery source — ${JSON.stringify(teardown.refsNotDeleted)}` : "";
+        log(`Review stack: the dedicated worktree ${worktree} was NOT removed: ${teardown.detail || "(no detail)"}${kept}`);
       }
     } catch (e) {
       report.teardown = { error: `teardown threw: ${e && e.message ? e.message : String(e)}`, worktree };
