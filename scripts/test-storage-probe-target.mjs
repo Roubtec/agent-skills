@@ -163,13 +163,13 @@ const GIB = 1024 ** 3;
 // 5. Call-site properties, asserted against the source: every `df` probe is
 //    handed the VALIDATED base, and no relative fallback survives anywhere.
 {
-  // The declaration `function storageProbePrompt(wtBase)` matches the same
-  // pattern, so exclude it — only CALL sites are the subject here.
   // Task 033 replaced the wave-boundary `df` re-probe with a cap derived ONCE
-  // from the bootstrap reading: no `df` probe brief remains, so the only
-  // measurement that reaches the cap is the bootstrap's, seeded through the
-  // retention rule from the unmeasured 0, and no slot handoff spawns an agent.
-  check("no storage-probe brief remains to be called", !/storageProbePrompt\(/.test(src) && !/STORAGE_PROBE_SCHEMA/.test(src));
+  // from the bootstrap reading: the probe brief and its schema are gone —
+  // declaration and call sites alike, which is why the pattern below is the
+  // bare identifier — so the only measurement that reaches the cap is the
+  // bootstrap's, seeded through the retention rule from the unmeasured 0, and
+  // no slot handoff spawns an agent.
+  check("no storage-probe brief remains, declared or called", !/storageProbePrompt/.test(src) && !/STORAGE_PROBE_SCHEMA/.test(src));
   check("no relative `.worktrees` literal is used as a probe target", !/["'`]\.?\/?\.worktrees["'`]\s*\)/.test(src));
   check("the cap is derived once from the bootstrap reading through nextAvailBytes", /const availBytes = nextAvailBytes\(0, boot\);/.test(src) && /createSlotGate\(widthCapFor\(availBytes\)\)/.test(src));
   check("a slot handoff spawns nothing", /function releaseSlot\(gate\) \{/.test(src) && !/releaseSlot\([^)]*,/.test(src));

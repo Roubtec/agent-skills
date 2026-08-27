@@ -4038,10 +4038,19 @@ async function rebaseOntoAdvancedBase(task, result, advance, remote, peerMode) {
   if (report.ok !== true) return hold(`the rebase onto the advanced base could not be carried out: ${report.detail || "(no detail reported)"}; branch held before delivery`);
   const before = String(report.before || "");
   const after = String(report.after || "");
+  const effectiveBase = String(report.effectiveBase || "");
+  // Both arms retarget the recorded base on the strength of `effectiveBase`,
+  // so both require it in full: a no-op that names no base — or abbreviated
+  // or arbitrary equal strings as its tips — is no evidence that the branch
+  // stands on the target the brief named, and the PR it would open against
+  // that target is exactly what the rebase exists to make honest.
+  if (!TASK_REBASE_OID.test(effectiveBase)) {
+    return hold(`the rebase reported no full effective-base OID (${JSON.stringify(effectiveBase)}); nothing evidences that the branch stands on \`${advance.target}\`, so it is held before delivery — inspect the worktree and re-review`);
+  }
   if (report.noop === true) {
-    if (!before || before !== after) return hold("the rebase reported a no-op without naming two equal tips; the claim is unevidenced, so the branch is held before delivery — inspect the worktree and re-review");
+    if (!TASK_REBASE_OID.test(before) || before !== after) return hold("the rebase reported a no-op without naming two equal full-OID tips; the claim is unevidenced, so the branch is held before delivery — inspect the worktree and re-review");
     if (advance.retarget) task.base = advance.target;
-    return { result };
+    return { result: { ...result, rebasedOnto: effectiveBase } };
   }
   if (!TASK_REBASE_OID.test(after) || report.validationPassed !== true) {
     return hold(`the rebase replayed onto \`${advance.target}\` but ${report.validationPassed === true ? "reported no full post-rebase tip" : "its validation did not pass"}: ${report.detail || "(no detail reported)"}; branch held before delivery — the recovery ref ${report.recoveryRef || "(unreported)"} is the way back`);
@@ -4056,9 +4065,9 @@ async function rebaseOntoAdvancedBase(task, result, advance, remote, peerMode) {
   // that THROWS owes that tier exactly as much as one that comes back failing,
   // so it takes the same exit: held, no PR, the reservation released by the
   // caller. Left to escape, it would reach the pipeline's catch, which settles
-  // the still-held claim as an orphan — and the terminal stage discharges an
-  // orphan by retrying `gh pr create`, which would open the PR on a replayed
-  // tip no delivery-tier pass ever saw.
+  // the still-held claim as an orphan — and an orphan is discharged by
+  // retrying `gh pr create`, which would open the PR on a replayed tip no
+  // delivery-tier pass ever saw.
   let reReview;
   try {
     reReview = await deliveryReReview(task, result, remote, peerMode);
@@ -4067,7 +4076,7 @@ async function rebaseOntoAdvancedBase(task, result, advance, remote, peerMode) {
   }
   const { verdict, reviewed, coverage, freshAssessments } = reReview;
   if (reviewed && !coverage.unassessed.length) {
-    return { result: { ...result, notes: verdict.notes || result.notes, ...freshAssessments, ...collisionReviewedRecord(result), ...collisionReReviewFlakeRecord(result, verdict), rebasedOnto: report.effectiveBase || "" } };
+    return { result: { ...result, notes: verdict.notes || result.notes, ...freshAssessments, ...collisionReviewedRecord(result), ...collisionReReviewFlakeRecord(result, verdict), rebasedOnto: effectiveBase } };
   }
   if (reviewed) {
     return hold("the rebased branch passed fresh re-review but left a deviation from a LOCKED decision unassessed; held before delivery — re-review this branch and record the in-spec route and a RATIFY/CONFORM recommendation for each deviation named below, without conforming, rewording, or dropping it", { unassessedDeviations: coverage.unassessed, ...freshAssessments });
@@ -4116,9 +4125,9 @@ async function withGuardTurn(queue, slug, fn) {
 //   - it may only be DROPPED when delivery failed with no remote write;
 //   - where the push landed but no PR advertises the branch, `origin` carries
 //     the number while it appears in neither the reservation set of a later run
-//     nor its open PR heads, so the reservation PERSISTS for the rest of this
-//     run as an orphan, and the batch's terminal stage owes it an action
-//     (`reconcileOrphanedBranches`).
+//     nor its open PR heads, so the reservation PERSISTS as an orphan, and the
+//     pipeline owes it an action at once (`reconcileOrphan`) — persisting for
+//     the rest of the run only where that action fails.
 function createReservationLedger() {
   return { reserved: new Map(), delivered: new Map(), orphaned: new Map() };
 }
@@ -4166,46 +4175,74 @@ function settleReservation(ledger, slug, delivered, remote) {
 // any of its exits reached `settleReservation`.
 function abortedReservationReport(ledger) {
   return [
-    ...[...ledger.orphaned.values()].map((o) => ({ slug: o.slug, branch: o.branch, taskNumbers: o.taskNumbers, reason: "the batch aborted before the orphan could be reconciled" })),
+    ...[...ledger.orphaned.values()].map((o) => ({ slug: o.slug, branch: o.branch, taskNumbers: o.taskNumbers, reason: o.reason ? `orphan reconciliation left it on origin (${o.reason}) and the batch then aborted` : "the batch aborted before the orphan could be reconciled" })),
     ...[...ledger.reserved.values()].filter((o) => !ledger.orphaned.has(o.slug)).map((o) => ({ slug: o.slug, branch: o.branch, taskNumbers: o.taskNumbers, reason: "the batch aborted while this branch still held its claim; nothing settled it, and its push may have landed, so its remote state is unknown" })),
   ];
 }
 
 // Live worktrees are bounded continuously rather than per wave: a task takes a
 // slot before its worktree is created and gives it back once delivery has
-// reclaimed the worktree (or the task ended holding it for inspection). The cap
-// is derived ONCE, from the same bootstrap `df` measurement the wave loop used,
+// reclaimed the worktree. A worktree the task leaves in place for inspection —
+// a cap-out, a hold, a crash — is still live and still holds its storage, so
+// it KEEPS its slot: the cap is a storage bound, and releasing the slot of a
+// worktree nobody reclaimed would admit one more live worktree per retained
+// one, until the volume the cap was measured against is full. The cap is
+// derived ONCE, from the same bootstrap `df` measurement the wave loop used,
 // and the mount is never re-probed: a handoff runs from a pipeline's `finally`,
 // after that task's own catch, so an agent call there could not fail into any
 // task's terminal state — it would reject the whole batch mid-run with siblings
-// in flight and leave the queued waiters asleep. Release spawns nothing and
-// cannot throw. `Infinity` (no measurement) never waits.
+// in flight and leave the queued waiters asleep. Release and retain spawn
+// nothing and cannot throw. `Infinity` (no measurement) never waits.
+//
+// A retained slot is one no delivery will ever hand back, so a waiter is woken
+// on a retain as well as on a release, and takes the slot only where one can
+// still come free: once every slot under the cap is held by a retained
+// worktree, nothing running will free one, and a waiter that stayed asleep
+// would hold the batch open forever. That waiter is DENIED instead, and ends
+// `storage-throttled` — a terminal state its dependents skip on, named in the
+// summary beside the cap — rather than either waiting on a release that cannot
+// come or being admitted over headroom the retained worktrees still hold.
 function createSlotGate(cap) {
-  return { cap, inFlight: 0, waiters: [] };
+  return { cap, inFlight: 0, retained: 0, waiters: [] };
 }
 async function acquireSlot(gate) {
   let waited = false;
   while (gate.inFlight >= gate.cap) {
+    if (gate.inFlight - gate.retained <= 0) return { waited, denied: true };
     waited = true;
     await new Promise((resolve) => gate.waiters.push(resolve));
   }
   gate.inFlight += 1;
-  return waited;
+  return { waited, denied: false };
+}
+function wakeSlotWaiters(gate) {
+  const waiters = gate.waiters.splice(0);
+  waiters.forEach((resolve) => resolve());
 }
 function releaseSlot(gate) {
   gate.inFlight = Math.max(0, gate.inFlight - 1);
-  const waiters = gate.waiters.splice(0);
-  waiters.forEach((resolve) => resolve());
+  wakeSlotWaiters(gate);
+}
+function retainSlot(gate) {
+  gate.retained = Math.min(gate.inFlight, gate.retained + 1);
+  wakeSlotWaiters(gate);
 }
 
 // ============================================================================
 // Orphaned pushed branches — the terminal-state obligation. A session-local
 // reservation cannot outlive the run, so the batch must not end holding one:
-// every branch whose push landed while its PR creation did not is acted on
-// before the Summary — PR creation retried, or the branch deleted from origin —
-// and any that survives both is named in the summary beside the numbers it
-// still holds, so the next run's guard (which sees the number on neither the
-// base branch nor any open PR head) has something to reclaim it from.
+// every branch whose push landed while its PR creation did not is acted on —
+// PR creation retried, or the branch deleted from origin — and any that
+// survives both is named in the summary beside the numbers it still holds, so
+// the next run's guard (which sees the number on neither the base branch nor
+// any open PR head) has something to reclaim it from.
+//
+// The action runs INSIDE the task's own pipeline, the moment its delivery
+// settles as an orphan and before its terminal state is announced: a
+// dependent reads that state once, and `pushed-no-pr` is not a state it may
+// build on (its PR would have no parent PR). Acted on at the end of the batch
+// instead, a prerequisite recovered to `done` there would find its whole
+// subtree already skipped on the state it held for the minutes in between.
 // ============================================================================
 
 const ORPHAN_SCHEMA = {
@@ -4236,47 +4273,51 @@ You stand in the repository's SHARED main checkout (confirm with \`git rev-parse
 Delete no other branch, touch no other PR, and never force-push anything.`;
 }
 
-async function reconcileOrphanedBranches({ ledger, tasksBySlug, results, statusBySlug, remote }) {
-  const survivors = [];
-  const acted = [];
-  if (!remote || !ledger.orphaned.size) return { acted, survivors };
-  phase("Orphan reconciliation");
-  for (const [slug, entry] of ledger.orphaned) {
-    const task = tasksBySlug.get(slug);
-    const index = results.findIndex((r) => r && r.slug === slug);
-    const prior = index >= 0 ? results[index] : { slug, branch: entry.branch, status: entry.status };
-    let out = null;
-    try {
-      out = await agent(orphanReconcilePrompt(task || { slug, branch: entry.branch, base: entry.base, path: "" }, entry), { label: `orphan:${slug}`, schema: ORPHAN_SCHEMA });
-    } catch (e) {
-      log(`orphan reconciliation for ${slug} threw: ${e && e.message ? e.message : String(e)}`);
-    }
-    const outcome = out && typeof out.outcome === "string" ? out.outcome : "unresolved";
-    let next;
-    if (outcome === "pr-opened" && out.url) {
-      next = out.baseOk === true
-        ? { ...prior, status: "done", prUrl: out.url, lateDelivery: true, reason: "" }
-        : { ...prior, status: "pr-wrong-base", prUrl: out.url, recordedBase: task ? task.base : entry.base, pushed: true, lateDelivery: true, reason: out.reason || "PR base was neither read back nor repaired to the recorded base" };
-      ledger.orphaned.delete(slug);
-      ledger.reserved.delete(slug);
-      ledger.delivered.set(slug, { ...entry, state: "delivered", prUrl: out.url });
-    } else if (outcome === "branch-deleted" || outcome === "not-on-origin") {
-      next = { ...prior, status: "local-only", pushed: false, reason: `${prior.reason ? `${prior.reason}; ` : ""}${outcome === "branch-deleted" ? "the pushed branch was deleted from origin at the end of the batch so its task number is not held unadvertised — push it again once its PR can be opened" : "the push never landed on origin; the branch exists locally only"}` };
-      ledger.orphaned.delete(slug);
-      ledger.reserved.delete(slug);
-      ledger.delivered.set(slug, { ...entry, state: "delivered", prUrl: "" });
-    } else {
-      next = { ...prior, orphaned: true };
-      survivors.push({ slug, branch: entry.branch, taskNumbers: entry.taskNumbers.slice(), reason: (out && out.reason) || "orphan reconciliation returned nothing usable" });
-    }
-    acted.push({ slug, branch: entry.branch, outcome, url: (out && out.url) || "", taskNumbers: entry.taskNumbers.slice() });
-    if (index >= 0) results[index] = next; else results.push(next);
-    statusBySlug.set(slug, next.status);
+// One orphan, acted on where its claim was settled. Returns the task's result
+// as reconciliation leaves it — rewritten to `done`/`pr-wrong-base` where the
+// PR retry opened one, to `local-only` where the branch is off origin, and
+// flagged `orphaned` where it survived both — and records the action on the
+// batch's `orphanReconciliation` list. Never throws: an agent that does is an
+// `unresolved` outcome, and a survivor keeps its ledger entry (with the reason)
+// so a later scan still reads it RESERVED and the summary names it.
+async function reconcileOrphan({ ledger, task, prior, remote, orphanReconciliation }) {
+  const entry = ledger.orphaned.get(task.slug);
+  if (!remote || !entry) return prior;
+  phase(`Orphan reconciliation ${task.slug}`);
+  let out = null;
+  try {
+    out = await agent(orphanReconcilePrompt(task, entry), { label: `orphan:${task.slug}`, schema: ORPHAN_SCHEMA });
+  } catch (e) {
+    log(`orphan reconciliation for ${task.slug} threw: ${e && e.message ? e.message : String(e)}`);
   }
-  if (survivors.length) {
-    log(`Orphaned pushed branch(es) survived reconciliation — reclaim by hand: ${survivors.map((s) => `${s.branch} (task ${s.taskNumbers.join(", ") || s.slug})`).join("; ")}`);
+  const outcome = out && typeof out.outcome === "string" ? out.outcome : "unresolved";
+  let next;
+  if (outcome === "pr-opened" && out.url) {
+    next = out.baseOk === true
+      ? { ...prior, status: "done", prUrl: out.url, lateDelivery: true, reason: "" }
+      : { ...prior, status: "pr-wrong-base", prUrl: out.url, recordedBase: task.base, pushed: true, lateDelivery: true, reason: out.reason || "PR base was neither read back nor repaired to the recorded base" };
+    ledger.orphaned.delete(task.slug);
+    ledger.reserved.delete(task.slug);
+    ledger.delivered.set(task.slug, { ...entry, state: "delivered", prUrl: out.url });
+  } else if (outcome === "branch-deleted" || outcome === "not-on-origin") {
+    next = { ...prior, status: "local-only", pushed: false, reason: `${prior.reason ? `${prior.reason}; ` : ""}${outcome === "branch-deleted" ? "the pushed branch was deleted from origin so its task number is not held unadvertised — push it again once its PR can be opened" : "the push never landed on origin; the branch exists locally only"}` };
+    ledger.orphaned.delete(task.slug);
+    ledger.reserved.delete(task.slug);
+    ledger.delivered.set(task.slug, { ...entry, state: "delivered", prUrl: "" });
+  } else {
+    next = { ...prior, orphaned: true };
+    entry.reason = (out && out.reason) || "orphan reconciliation returned nothing usable";
+    log(`Orphaned pushed branch survived reconciliation — reclaim by hand: ${task.branch} (task ${entry.taskNumbers.join(", ") || task.slug}): ${entry.reason}`);
   }
-  return { acted, survivors };
+  orphanReconciliation.push({ slug: task.slug, branch: task.branch, outcome, url: (out && out.url) || "", taskNumbers: entry.taskNumbers.slice() });
+  return next;
+}
+
+// What the summary names: every orphan still in the ledger once every task is
+// terminal — each one acted on in its own pipeline and survived, or (on an
+// abort) never reached — beside the numbers it still holds. Spawns nothing.
+function orphanSurvivors(ledger) {
+  return [...ledger.orphaned.values()].map((o) => ({ slug: o.slug, branch: o.branch, taskNumbers: o.taskNumbers.slice(), reason: o.reason || "the batch ended before this orphan was reconciled" }));
 }
 
 // ============================================================================
@@ -4299,7 +4340,11 @@ async function reconcileOrphanedBranches({ ledger, tasksBySlug, results, statusB
 // Effective prerequisites = the declared `dependsOn` UNION the one derived from
 // the `base`→`branch` relationship, so the gate holds even if the plan agent
 // omits a `dependsOn` entry it should have listed.
-const DEP_SUCCEEDED = (s) => s === "done" || s === "local-only" || s === "pr-wrong-base";
+// `local-only` unlocks on a no-remote run ONLY: on a remote run it is what a
+// pushed branch becomes once its unadvertised copy was deleted from origin
+// (`reconcileOrphan`), and a dependent stacked on it would open its PR against
+// a base origin no longer carries.
+const DEP_SUCCEEDED = (s, remote) => s === "done" || s === "pr-wrong-base" || (s === "local-only" && !remote);
 function effectiveDeps(task, slugByBranch) {
   const deps = new Set(Array.isArray(task.dependsOn) ? task.dependsOn : []);
   const baseDep = slugByBranch.get(task.base);
@@ -4333,7 +4378,7 @@ function unschedulable(tasks, slugByBranch) {
 }
 
 async function runTaskPipeline(task, ctx) {
-  const { slugByBranch, terminal, statusBySlug, results, ledger, guard, gate, remote, peerMode, defaultBase, throttled, collisions, mergedDuringRun } = ctx;
+  const { slugByBranch, terminal, statusBySlug, results, ledger, guard, gate, remote, peerMode, defaultBase, throttled, collisions, mergedDuringRun, orphanReconciliation } = ctx;
   const finish = (res) => {
     statusBySlug.set(task.slug, res.status);
     results.push(res);
@@ -4344,13 +4389,19 @@ async function runTaskPipeline(task, ctx) {
   if (blocked) return finish({ slug: task.slug, branch: task.branch, status: "skipped-dep", ...blocked });
   for (const dep of effectiveDeps(task, slugByBranch)) {
     await terminal.get(dep).promise;
-    if (!DEP_SUCCEEDED(statusBySlug.get(dep))) {
+    if (!DEP_SUCCEEDED(statusBySlug.get(dep), remote)) {
       return finish({ slug: task.slug, branch: task.branch, status: "skipped-dep", blockedBy: dep, depStatus: statusBySlug.get(dep) || "missing" });
     }
   }
 
-  const waited = await acquireSlot(gate);
-  if (waited) throttled.push({ slug: task.slug, cap: gate.cap });
+  const slot = await acquireSlot(gate);
+  if (slot.waited || slot.denied) throttled.push({ slug: task.slug, cap: gate.cap, ...(slot.denied ? { denied: true } : {}) });
+  if (slot.denied) {
+    return finish({ slug: task.slug, branch: task.branch, status: "storage-throttled", detail: `every one of the ${gate.cap} live-worktree slot(s) the measured storage headroom allows is held by a worktree left in place for inspection, so no delivery can free one; this task never started — reclaim or inspect those worktrees, then rerun it` });
+  }
+  // Set once delivery has reclaimed the worktree; every other exit leaves it
+  // in place, and the slot stays held for it.
+  let reclaimed = false;
   try {
     phase(`Task ${task.slug}`);
     let res;
@@ -4362,9 +4413,7 @@ async function runTaskPipeline(task, ctx) {
     res = res || { slug: task.slug, branch: task.branch, status: "error", detail: "task crashed" };
     if (res.status !== "ready") {
       // Leave the worktree for inspection on a cap-out or an error; commits
-      // are durable. The slot goes back regardless — a worktree nobody works
-      // in is bounded by the cap only approximately, and the cap is a storage
-      // estimate rather than a promise.
+      // are durable. The slot stays held for it (see `createSlotGate`).
       return finish(res);
     }
 
@@ -4432,6 +4481,7 @@ async function runTaskPipeline(task, ctx) {
     let delivered;
     try {
       delivered = await deliverTask(task, cleared.ready, remote);
+      reclaimed = true;
     } catch (e) {
       // The cycle itself completed, so its record is still in hand — carry it
       // rather than losing it with the crash. `pushed` is left UNKNOWN: the
@@ -4440,26 +4490,32 @@ async function runTaskPipeline(task, ctx) {
     }
     delivered = delivered || { slug: task.slug, branch: task.branch, status: "error", detail: "delivery crashed", ...cycleCarried(cleared.ready) };
     // The settlement is the ledger's business, and the ledger is what the
-    // terminal stage and the summary read: `ledger.orphaned` drives the
+    // reconciliation and the summary read: `ledger.orphaned` drives the
     // reconciliation, whose own outcome rewrites this result. Stamping the
     // held-ness onto the result too would only latch — reconciliation spreads
     // the prior result into its `done`/`local-only` rewrite, so a claim that
     // has since been settled and converted would still read as held on a
     // final state that is 025's no-latched-flags case exactly.
-    settleReservation(ledger, task.slug, delivered, remote);
+    if (settleReservation(ledger, task.slug, delivered, remote) === "orphaned") {
+      // Before `finish`: the state a dependent reads is the reconciled one.
+      delivered = await reconcileOrphan({ ledger, task, prior: delivered, remote, orphanReconciliation });
+    }
     if (cleared.scanComplete === false) delivered.guardScanIncomplete = cleared.scanDetail || "the guard's remote enumeration was degraded; see the referenced section's note-and-proceed rule";
     return finish(delivered);
   } catch (e) {
-    const res = { slug: task.slug, branch: task.branch, status: "error", detail: `pipeline crashed: ${e && e.message ? e.message : String(e)}` };
+    let res = { slug: task.slug, branch: task.branch, status: "error", detail: `pipeline crashed: ${e && e.message ? e.message : String(e)}` };
     // The crash may have come AFTER the claim was entered — in the rebase, in
     // its re-review, anywhere under the reservation — so every exit from the
     // reserved state settles it: with the push state unknown, a remote run
-    // keeps it as an orphan the terminal stage acts on and the summary names,
-    // rather than an entry no stage ever reconciles or reports.
-    settleReservation(ledger, task.slug, res, remote);
+    // keeps it as an orphan, acted on here exactly as a delivered one is (the
+    // action never throws) and named by the summary where it survives, rather
+    // than an entry no stage ever reconciles or reports.
+    if (settleReservation(ledger, task.slug, res, remote) === "orphaned") {
+      res = await reconcileOrphan({ ledger, task, prior: res, remote, orphanReconciliation });
+    }
     return finish(res);
   } finally {
-    releaseSlot(gate);
+    if (reclaimed) releaseSlot(gate); else retainSlot(gate);
   }
 }
 
@@ -4510,7 +4566,8 @@ async function runPipelinedBatch({ plan, remote, peerMode, statusBySlug, results
   pipeline.tasksBySlug = new Map(tasks.map((t) => [t.slug, t]));
   pipeline.guardOrder = guard.order;
   pipeline.mergedDuringRun = [];
-  const ctx = { slugByBranch, terminal, statusBySlug, results, ledger, guard, gate, remote, peerMode, defaultBase: plan.defaultBase, throttled, collisions, mergedDuringRun: pipeline.mergedDuringRun, unschedulable: unschedulable(tasks, slugByBranch) };
+  pipeline.orphanReconciliation = [];
+  const ctx = { slugByBranch, terminal, statusBySlug, results, ledger, guard, gate, remote, peerMode, defaultBase: plan.defaultBase, throttled, collisions, mergedDuringRun: pipeline.mergedDuringRun, orphanReconciliation: pipeline.orphanReconciliation, unschedulable: unschedulable(tasks, slugByBranch) };
   await parallel(tasks.map((task) => () => runTaskPipeline(task, ctx)));
   return pipeline;
 }
@@ -5262,7 +5319,7 @@ const results = [];
 const throttled = [];
 const collisions = [];
 const ledger = createReservationLedger();
-const pipeline = { tasksBySlug: new Map(), guardOrder: [], mergedDuringRun: [] };
+const pipeline = { tasksBySlug: new Map(), guardOrder: [], mergedDuringRun: [], orphanReconciliation: [] };
 
 try {
   phase("Resolve batch");
@@ -5331,16 +5388,16 @@ try {
   // this path spawns nothing.
   // A claim still HELD at the abort is named beside them, once each: nothing
   // settled it, its push may have landed, and nothing will settle it now.
-  return { error: `Batch aborted: ${e && e.message ? e.message : String(e)}`, batch: args, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), throttled, collisions, guardOrder: pipeline.guardOrder, mergedDuringRun: pipeline.mergedDuringRun, orphanedBranches: abortedReservationReport(ledger), terminalStates: terminalStates(results), resolution: plan && plan.resolution ? plan.resolution : null, results, mainCheckout: await finalMainCheckoutReport(), reviewStack: { built: false, skipped: true, reason: "the batch aborted, so the integration check did not run; the review stack excludes an aborted batch whatever it delivered, and nothing was created for it" } };
+  return { error: `Batch aborted: ${e && e.message ? e.message : String(e)}`, batch: args, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), throttled, collisions, guardOrder: pipeline.guardOrder, mergedDuringRun: pipeline.mergedDuringRun, orphanReconciliation: pipeline.orphanReconciliation, orphanedBranches: abortedReservationReport(ledger), terminalStates: terminalStates(results), resolution: plan && plan.resolution ? plan.resolution : null, results, mainCheckout: await finalMainCheckoutReport(), reviewStack: { built: false, skipped: true, reason: "the batch aborted, so the integration check did not run; the review stack excludes an aborted batch whatever it delivered, and nothing was created for it" } };
 }
 
 phase("Summary");
-// Every task has reached a terminal state — `parallel()` returned — so the
-// end-of-batch obligations run now, in this order: the orphaned pushed
-// branches first, because a reservation this session holds cannot outlive it
-// and a PR opened here changes a result the stack and the summary then read;
-// the review stack next; the closing main-checkout reading last.
-const orphans = await reconcileOrphanedBranches({ ledger, tasksBySlug: pipeline.tasksBySlug, results, statusBySlug, remote });
+// Every task has reached a terminal state — `parallel()` returned — and every
+// orphaned pushed branch was acted on inside its own pipeline, so what the
+// ledger still holds are the survivors the summary names beside their
+// numbers. The end-of-batch stages then run in this order: the review stack
+// first; the closing main-checkout reading last.
+const orphans = { acted: pipeline.orphanReconciliation, survivors: orphanSurvivors(ledger) };
 // The review stack runs BEFORE the closing main-checkout reading, deliberately:
 // that reading is the batch's last barrier over the shared checkout, and it is
 // only worth its name if it observes everything the batch did — this stage

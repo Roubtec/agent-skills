@@ -42,7 +42,7 @@ function check(name, cond, detail) {
     console.error(`NOT ok - ${name}${detail ? `: ${detail}` : ""}`);
   }
 }
-const EXPECTED_CHECKS = 93;
+const EXPECTED_CHECKS = 125;
 
 async function scenario(name, fn) {
   try {
@@ -52,7 +52,7 @@ async function scenario(name, fn) {
   }
 }
 
-const NAMES = ["runPipelinedBatch", "createReservationLedger", "createSlotGate", "settleReservation", "reconcileOrphanedBranches", "terminalStates", "abortedReservationReport", "reviewStackMergeable", "reviewStackOrder", "unschedulable", "effectiveDeps", "baseAdvance"];
+const NAMES = ["runPipelinedBatch", "createReservationLedger", "createSlotGate", "settleReservation", "orphanSurvivors", "terminalStates", "abortedReservationReport", "reviewStackMergeable", "reviewStackOrder", "unschedulable", "effectiveDeps", "baseAdvance", "DEP_SUCCEEDED"];
 function load(agent, events) {
   const at = src.indexOf(CUT);
   if (at < 0) throw new Error(`cut marker not found: ${JSON.stringify(CUT)}`);
@@ -135,7 +135,7 @@ async function runBatch({ plan, overrides = {}, remote = true, cap = Infinity })
   const gate = fns.createSlotGate(cap);
   // The body's own pre-run default, handed in by reference: the abort catch
   // reads it live, so the suite pins that the batch writes into it.
-  const pipeline = { tasksBySlug: new Map(), guardOrder: [], mergedDuringRun: [] };
+  const pipeline = { tasksBySlug: new Map(), guardOrder: [], mergedDuringRun: [], orphanReconciliation: [] };
   const returned = await fns.runPipelinedBatch({ plan, remote, peerMode: "off", statusBySlug, results, throttled, collisions, ledger, gate, pipeline });
   if (returned !== pipeline) throw new Error("runPipelinedBatch must return the live pipeline object it was handed");
   return { fns, calls, events, statusBySlug, results, throttled, collisions, ledger, gate, pipeline };
@@ -209,15 +209,20 @@ await scenario("a reserved number is visible to the next task in the guard while
   check("the collisions the batch reports carry the guard that found them", out.collisions.length === 1 && out.collisions[0].guard === "002-b");
 });
 
-// 3. ASYMMETRIC RELEASE and the terminal obligation. Four independent tasks:
-//    `p` pushes but its PR creation fails (orphan, reconciled by a PR retry);
-//    `q` pushes without a PR (orphan, reconciled by deleting the branch); `r`
+// 3. ASYMMETRIC RELEASE and the orphan obligation. Independent tasks: `p`
+//    pushes but its PR creation fails (orphan, reconciled by a PR retry); `q`
+//    pushes without a PR (orphan, reconciled by deleting the branch); `r`
 //    pushes without a PR and survives both (named in the summary with its
 //    numbers); `s` fails delivery with NO remote write (reservation dropped,
-//    no orphan step at all). A later task `z` sees the orphans still RESERVED.
-await scenario("orphaned pushed branches persist as reservations and are acted on at the end", async () => {
+//    no orphan step at all); `n` returns no PR packet at all. Each orphan is
+//    acted on INSIDE its own pipeline, before its terminal state is announced:
+//    `dp` depends on `p` and runs on the recovered `done`; `dq` depends on `q`
+//    and is skipped, since a branch deleted from origin is `local-only` on a
+//    remote run and no dependent may stack a PR on it. A later task `z` sees
+//    the survivor still RESERVED and the recovered one DELIVERED with its PR.
+await scenario("orphaned pushed branches are reconciled in their own pipeline, and dependents read the reconciled state", async () => {
   const zReview = deferred();
-  const plan = { defaultBase: "main", waves: [[t("010-p"), t("011-q"), t("012-r"), t("013-s"), t("014-z"), t("015-n")]] };
+  const plan = { defaultBase: "main", waves: [[t("010-p"), t("011-q"), t("012-r"), t("013-s"), t("014-z"), t("015-n")], [t("016-dp", "task/010-p", ["010-p"]), t("017-dq", "task/011-q", ["011-q"])]] };
   const running = runBatch({
     plan,
     overrides: {
@@ -240,29 +245,38 @@ await scenario("orphaned pushed branches persist as reservations and are acted o
   await new Promise((r) => setTimeout(r, 30));
   zReview.resolve({ ...PASS_REVIEW });
   const out = await running;
+  const L = labels(out.calls);
   const zScan = out.calls[at(out.calls, "collision-scan:014-z")].prompt;
-  check("a later guard scan still sees the orphaned branches as RESERVED", /task\/010-p[^\n]*RESERVED/.test(zScan) && /task\/012-r[^\n]*RESERVED/.test(zScan), zScan.slice(0, 600));
+  check("a later guard scan still sees the surviving orphan as RESERVED", /task\/012-r[^\n]*RESERVED/.test(zScan), zScan.slice(0, 600));
+  check("and sees the orphan whose PR retry succeeded as DELIVERED with that PR", /task\/010-p[^\n]*DELIVERED[^\n]*pr\/10/.test(zScan), zScan.slice(0, 600));
   check("and does not see the branch whose delivery made no remote write", !/task\/013-s/.test(zScan));
-  check("a null PR packet leaves the push state unknown: pushed-no-pr with `pushed` undefined, held as an orphan rather than dropped", (() => { const n = by(out.results, "015-n"); return !!n && n.status === "pushed-no-pr" && n.pushed === undefined && /returned nothing/.test(n.reason) && out.ledger.orphaned.has("015-n"); })(), JSON.stringify(by(out.results, "015-n")));
-  check("the orphan step ran for exactly the pushed-without-PR branches, after every task ended", JSON.stringify(labels(out.calls).filter((l) => l.startsWith("orphan:")).sort()) === JSON.stringify([]) , "orphan reconciliation is the batch body's, not the pipeline's — it runs after runPipelinedBatch returns");
-  // The obligation is discharged by the terminal stage the body runs next.
-  const orphans = await out.fns.reconcileOrphanedBranches({ ledger: out.ledger, tasksBySlug: out.pipeline.tasksBySlug, results: out.results, statusBySlug: out.statusBySlug, remote: true });
-  check("the terminal stage acted on exactly the four orphans — the null PR packet among them", JSON.stringify(orphans.acted.map((a) => `${a.slug}:${a.outcome}`).sort()) === JSON.stringify(["010-p:pr-opened", "011-q:branch-deleted", "012-r:unresolved", "015-n:not-on-origin"]), JSON.stringify(orphans.acted));
+  check("a null PR packet leaves the push state unknown: pushed-no-pr, so it was acted on as an orphan rather than dropped", L.includes("orphan:015-n") && by(out.results, "015-n").status === "local-only" && /returned nothing/.test(by(out.results, "015-n").reason) && /never landed/.test(by(out.results, "015-n").reason), JSON.stringify(by(out.results, "015-n")));
+  check("each orphan was acted on inside its own pipeline, right after its delivery", ["010-p", "011-q", "012-r", "015-n"].every((x) => at(out.calls, `orphan:${x}`) > at(out.calls, `cleanup:${x}`)) && at(out.calls, "orphan:010-p") < at(out.calls, "016-dp:fix#1"), JSON.stringify(L));
+  check("the batch records exactly the four actions", JSON.stringify(out.pipeline.orphanReconciliation.map((a) => `${a.slug}:${a.outcome}`).sort()) === JSON.stringify(["010-p:pr-opened", "011-q:branch-deleted", "012-r:unresolved", "015-n:not-on-origin"]), JSON.stringify(out.pipeline.orphanReconciliation));
   check("a PR retried successfully converts the result to done, marked late", by(out.results, "010-p").status === "done" && by(out.results, "010-p").prUrl === "https://example.invalid/pr/10" && by(out.results, "010-p").lateDelivery === true);
+  check("its dependent ran on that recovered state and delivered", by(out.results, "016-dp").status === "done" && at(out.calls, "016-dp:fix#1") > at(out.calls, "orphan:010-p"));
   check("a deleted branch reads as local-only with the reason", by(out.results, "011-q").status === "local-only" && /deleted from origin/.test(by(out.results, "011-q").reason));
-  check("a survivor is named beside the numbers it still holds", JSON.stringify(orphans.survivors) === JSON.stringify([{ slug: "012-r", branch: "task/012-r", taskNumbers: ["012", "012a"], reason: "gh unreachable; delete refused" }]), JSON.stringify(orphans.survivors));
-  // Held-ness lives in the ledger, which is what the terminal stage and the
+  check("its dependent is skipped: local-only on a remote run is a branch origin no longer carries", by(out.results, "017-dq").status === "skipped-dep" && by(out.results, "017-dq").depStatus === "local-only" && !L.some((l) => l.startsWith("017-dq:")));
+  check("the dependency gate reads local-only as success on a no-remote run only", out.fns.DEP_SUCCEEDED("local-only", false) && !out.fns.DEP_SUCCEEDED("local-only", true) && out.fns.DEP_SUCCEEDED("done", true) && !out.fns.DEP_SUCCEEDED("pushed-no-pr", true));
+  const survivors = out.fns.orphanSurvivors(out.ledger);
+  check("a survivor is named beside the numbers it still holds, with the reason its action reported", JSON.stringify(survivors) === JSON.stringify([{ slug: "012-r", branch: "task/012-r", taskNumbers: ["012", "012a"], reason: "gh unreachable; delete refused" }]), JSON.stringify(survivors));
+  // Held-ness lives in the ledger, which is what the reconciliation and the
   // summary read. A copy on the result would only latch: reconciliation spreads
   // the prior result into its `done`/`local-only` rewrite, so a claim since
   // settled and converted would still read as held on a final state — 025's
   // no-latched-flags case exactly.
   check("no result carries a held-the-claim flag for the reconciliation to latch onto a settled final state", !out.results.some((r) => "reservationHeld" in r), JSON.stringify(out.results.map((r) => ({ slug: r.slug, status: r.status, reservationHeld: r.reservationHeld }))));
   check("the survivor's result is flagged orphaned and stays pushed-no-pr", by(out.results, "012-r").status === "pushed-no-pr" && by(out.results, "012-r").orphaned === true);
-  check("the no-remote-write failure dropped its reservation and got no orphan step", !out.ledger.orphaned.has("013-s") && !out.ledger.reserved.has("013-s") && !orphans.acted.some((a) => a.slug === "013-s"));
-  check("the census reads the mixed terminal states", JSON.stringify(out.fns.terminalStates(out.results)) === JSON.stringify({ done: 2, "local-only": 2, "pushed-no-pr": 2 }), JSON.stringify(out.fns.terminalStates(out.results)));
+  check("the no-remote-write failure dropped its reservation and got no orphan step", !out.ledger.orphaned.has("013-s") && !out.ledger.reserved.has("013-s") && !L.includes("orphan:013-s"));
+  check("the census reads the mixed terminal states", (() => { const c = out.fns.terminalStates(out.results); return c.done === 3 && c["local-only"] === 2 && c["pushed-no-pr"] === 2 && c["skipped-dep"] === 1 && Object.keys(c).length === 4; })(), JSON.stringify(out.fns.terminalStates(out.results)));
   check("the orphan brief spells out the PR retry and the guarded delete, and names the numbers", (() => { const p = out.calls.find((c) => c.label === "orphan:012-r").prompt; return /Retry PR creation ONCE/.test(p) && /git push origin --delete 'task\/012-r'/.test(p) && /`012`, `012a`/.test(p); })());
   check("a no-remote ledger never orphans", (() => { const l = out.fns.createReservationLedger(); l.reserved.set("x", { slug: "x", branch: "task/x", base: "main", state: "reserved", taskNumbers: [] }); return out.fns.settleReservation(l, "x", { status: "pushed-no-pr", pushed: true }, false) === "dropped"; })());
   check("a crashed delivery with unknown push state is kept as an orphan on a remote run", (() => { const l = out.fns.createReservationLedger(); l.reserved.set("x", { slug: "x", branch: "task/x", base: "main", state: "reserved", taskNumbers: [] }); return out.fns.settleReservation(l, "x", { status: "error" }, true) === "orphaned" && l.orphaned.has("x"); })());
+  // An orphan step that THROWS is an unresolved survivor, never a batch abort.
+  {
+    const o = await runBatch({ plan: { defaultBase: "main", waves: [[t("001-a")]] }, overrides: { "collision-scan:001-a": { ...CLEAN_SCAN, taskNumbers: ["001"] }, "pr:001-a": { opened: false, pushed: true, reason: "API error" }, "orphan:001-a": new Error("orphan agent exploded") } });
+    check("an orphan action that throws leaves the orphan a named survivor rather than aborting the batch", by(o.results, "001-a").status === "pushed-no-pr" && by(o.results, "001-a").orphaned === true && JSON.stringify(o.fns.orphanSurvivors(o.ledger)) === JSON.stringify([{ slug: "001-a", branch: "task/001-a", taskNumbers: ["001"], reason: "orphan reconciliation returned nothing usable" }]), JSON.stringify(o.fns.orphanSurvivors(o.ledger)));
+  }
 });
 
 // 4. THE DEPENDENCY GATE survives the removal of waves: a failed prerequisite
@@ -312,6 +326,7 @@ await scenario("merged sibling: rebase onto the advanced base before delivery", 
   const rebaseBrief = out.calls[at(out.calls, "rebase:002-b")].prompt;
   check("the rebase brief names the reason, refreshes the target with an explicit refspec, and spells out the lease push", /sibling `task\/001-a` merged into its base `main`/.test(rebaseBrief) && /git fetch origin '\+refs\/heads\/main:refs\/remotes\/origin\/main'/.test(rebaseBrief) && /git push --force-with-lease='task\/002-b':"\$before" origin 'task\/002-b'/.test(rebaseBrief) && /"The delegated rebase step"/.test(rebaseBrief));
   check("c's base was retargeted from the merged branch to main, and its no-op rebase cost no re-review", by(out.results, "003-c").status === "done" && out.pipeline.tasksBySlug.get("003-c").base === "main" && !labels(out.calls).includes("re-review:003-c"));
+  check("c's no-op still carries the full base OID the deputy pinned", by(out.results, "003-c").rebasedOnto === "9".repeat(40), JSON.stringify(by(out.results, "003-c")));
   check("c's PR was opened against the retargeted base", /against base `main`/.test(out.calls[at(out.calls, "pr:003-c")].prompt));
   check("c's ledger entry followed the retarget, so a sibling's scan reads the member by its new base", out.ledger.delivered.get("003-c").base === "main");
   // The rebase runs OUTSIDE the guard turn, under the reservation: a sibling
@@ -356,7 +371,11 @@ await scenario("merged sibling: rebase onto the advanced base before delivery", 
     ["halted", { ok: true, halted: true, noop: false, question: "src/a.ts: both sides changed the export", recoveryRef: "refs/pre-rebase/task/002-b/x", detail: "aborted" }, (r) => r.status === "rebase-hold" && r.openQuestions.length === 1 && r.openQuestions[0].origin === "rebase" && /both sides changed/.test(r.openQuestions[0].question)],
     ["validation failed", { ok: true, halted: false, noop: false, effectiveBase: "9".repeat(40), before: "1".repeat(40), after: "2".repeat(40), validationPassed: false, pushed: false, detail: "tests failed" }, (r) => r.status === "rebase-hold" && /validation did not pass/.test(r.detail)],
     ["not ok", { ok: false, halted: false, noop: false, detail: "dirty tree" }, (r) => r.status === "rebase-hold" && /could not be carried out/.test(r.detail)],
-    ["unevidenced no-op", { ok: true, halted: false, noop: true, before: "1".repeat(40), after: "2".repeat(40), detail: "" }, (r) => r.status === "rebase-hold" && /unevidenced/.test(r.detail)],
+    ["unevidenced no-op", { ok: true, halted: false, noop: true, effectiveBase: "9".repeat(40), before: "1".repeat(40), after: "2".repeat(40), detail: "" }, (r) => r.status === "rebase-hold" && /unevidenced/.test(r.detail)],
+    ["no-op with abbreviated tips", { ok: true, halted: false, noop: true, effectiveBase: "9".repeat(40), before: "abc1234", after: "abc1234", detail: "" }, (r) => r.status === "rebase-hold" && /two equal full-OID tips/.test(r.detail)],
+    ["no-op without an effective base", { ok: true, halted: false, noop: true, before: "3".repeat(40), after: "3".repeat(40), detail: "" }, (r) => r.status === "rebase-hold" && /no full effective-base OID/.test(r.detail)],
+    ["no-op with an abbreviated effective base", { ok: true, halted: false, noop: true, effectiveBase: "main", before: "3".repeat(40), after: "3".repeat(40), detail: "" }, (r) => r.status === "rebase-hold" && /no full effective-base OID/.test(r.detail)],
+    ["replay without an effective base", { ok: true, halted: false, noop: false, before: "1".repeat(40), after: "2".repeat(40), validationPassed: true, pushed: true, detail: "replayed" }, (r) => r.status === "rebase-hold" && /no full effective-base OID/.test(r.detail)],
     ["replayed but unpushed", { ok: true, halted: false, noop: false, effectiveBase: "9".repeat(40), before: "1".repeat(40), after: "2".repeat(40), validationPassed: true, pushed: false, detail: "lease refused" }, (r) => r.status === "rebase-hold" && /not pushed/.test(r.detail)],
     ["returned nothing", null, (r) => r.status === "rebase-hold" && /nothing usable/.test(r.detail)],
     ["re-review failed", { ok: true, halted: false, noop: false, effectiveBase: "9".repeat(40), before: "1".repeat(40), after: "2".repeat(40), validationPassed: true, pushed: true, detail: "replayed" }, (r) => r.status === "rebase-hold" && /did not pass fresh re-review/.test(r.detail)],
@@ -369,6 +388,7 @@ await scenario("merged sibling: rebase onto the advanced base before delivery", 
     const o = await running;
     check(`${name} rebase → holds as rebase-hold with the right record`, test(by(o.results, "002-b")), JSON.stringify(by(o.results, "002-b")));
     check(`${name} rebase → no PR and no reservation for the held branch`, !labels(o.calls).includes("pr:002-b") && !o.ledger.reserved.has("002-b") && !o.ledger.delivered.has("002-b") && !o.ledger.orphaned.has("002-b"));
+    check(`${name} rebase → the retarget did not move the recorded base`, o.pipeline.tasksBySlug.get("002-b").base === "main");
   }
 
   // The post-rebase re-review is the tier the replay owes, and a re-review that
@@ -417,9 +437,8 @@ await scenario("merged sibling: rebase onto the advanced base before delivery", 
     rb.resolve({ ...PASS_REVIEW });
     const o = await running;
     const b = by(o.results, "002-b");
-    check("a delivery that throws past the gate ends the task `error` with its claim settled as an orphan, not stranded in `reserved`", !!b && b.status === "error" && /delivery crashed: gh pr create crashed/.test(b.detail) && b.pushed === undefined && o.ledger.orphaned.has("002-b") && o.ledger.reserved.has("002-b") && !o.ledger.delivered.has("002-b"), JSON.stringify({ b, orphaned: [...o.ledger.orphaned.keys()], reserved: [...o.ledger.reserved.keys()] }));
-    const orphans = await o.fns.reconcileOrphanedBranches({ ledger: o.ledger, tasksBySlug: o.pipeline.tasksBySlug, results: o.results, statusBySlug: o.statusBySlug, remote: true });
-    check("the terminal stage acted on that orphan and the summary names it with its number", orphans.acted.some((a) => a.slug === "002-b") && JSON.stringify(orphans.survivors) === JSON.stringify([{ slug: "002-b", branch: "task/002-b", taskNumbers: ["002"], reason: "gh unreachable; delete refused" }]) && by(o.results, "002-b").orphaned === true, JSON.stringify(orphans));
+    check("a delivery that throws past the gate ends the task `error` with its claim settled as an orphan and acted on at once, not stranded in `reserved`", !!b && b.status === "error" && /delivery crashed: gh pr create crashed/.test(b.detail) && b.pushed === undefined && b.orphaned === true && o.ledger.orphaned.has("002-b") && o.ledger.reserved.has("002-b") && !o.ledger.delivered.has("002-b") && at(o.calls, "orphan:002-b") > at(o.calls, "pr:002-b"), JSON.stringify({ b, orphaned: [...o.ledger.orphaned.keys()], reserved: [...o.ledger.reserved.keys()], labels: labels(o.calls) }));
+    check("the summary names the survivor with its number", o.pipeline.orphanReconciliation.some((a) => a.slug === "002-b") && JSON.stringify(o.fns.orphanSurvivors(o.ledger)) === JSON.stringify([{ slug: "002-b", branch: "task/002-b", taskNumbers: ["002"], reason: "gh unreachable; delete refused" }]), JSON.stringify(o.fns.orphanSurvivors(o.ledger)));
   }
 });
 
@@ -438,6 +457,24 @@ await scenario("storage-derived slot gate", async () => {
   check("cap 1 → all three delivered and the gate is idle", capped.results.every((r) => r.status === "done") && capped.results.length === 3 && capped.gate.inFlight === 0 && capped.gate.waiters.length === 0);
   const open = await runBatch({ plan, cap: Infinity });
   check("no cap → nothing waited, and the cycles started together", open.throttled.length === 0 && at(open.calls, "002-b:fix#1") < at(open.calls, "001-a:packet#1"));
+  // A worktree left in place for inspection is still live: its slot stays
+  // held. Cap 1 with a capped-out first task leaves no slot any delivery can
+  // free, so the two waiters end `storage-throttled` without spending an agent
+  // (and a dependent of one skips on that state) rather than either sleeping
+  // forever or being admitted over headroom the retained worktree still holds.
+  const capOut = { "001-a:review#*": { pass: false, issues: [{ category: "logic", location: "x", problem: "p", fix: "f" }], notes: "" }, "001-a:fix#*": { ...PASS_PACKET } };
+  const retained = await runBatch({ plan: { defaultBase: "main", waves: [[t("001-a"), t("002-b"), t("003-c")], [t("004-d", "task/002-b", ["002-b"])]] }, cap: 1, overrides: capOut });
+  check("cap 1, first task retained → the rest end storage-throttled, terminal, with no agent spent", by(retained.results, "001-a").status === "review-cap" && ["002-b", "003-c"].every((x) => by(retained.results, x).status === "storage-throttled" && /held by a worktree left in place/.test(by(retained.results, x).detail)) && !labels(retained.calls).some((l) => /^(002-b|003-c):/.test(l)), JSON.stringify(retained.results.map((r) => `${r.slug}:${r.status}`)));
+  check("cap 1, first task retained → each denial is recorded as throttled, and the retained worktree still holds the slot", retained.throttled.filter((x) => x.denied).length === 2 && retained.gate.inFlight === 1 && retained.gate.retained === 1 && retained.gate.waiters.length === 0, JSON.stringify({ throttled: retained.throttled, gate: retained.gate }));
+  check("cap 1, first task retained → a dependent of a throttled task skips on that state", by(retained.results, "004-d").status === "skipped-dep" && by(retained.results, "004-d").depStatus === "storage-throttled");
+  check("the census names the throttled state", JSON.stringify(retained.fns.terminalStates(retained.results)) === JSON.stringify({ "review-cap": 1, "storage-throttled": 2, "skipped-dep": 1 }), JSON.stringify(retained.fns.terminalStates(retained.results)));
+  // Cap 2 with one retained: the one slot left serializes the rest, and
+  // nothing is denied while a delivery can still free it.
+  const half = await runBatch({ plan, cap: 2, overrides: capOut });
+  check("cap 2, one retained → the remaining slot serializes the rest and nothing is denied", by(half.results, "002-b").status === "done" && by(half.results, "003-c").status === "done" && !half.throttled.some((x) => x.denied) && at(half.calls, "003-c:fix#1") > at(half.calls, "cleanup:002-b") && half.gate.inFlight === 1 && half.gate.retained === 1, JSON.stringify({ throttled: half.throttled, labels: labels(half.calls) }));
+  // A delivery that throws before the reclaim leaves its worktree too.
+  const crashed = await runBatch({ plan: { defaultBase: "main", waves: [[t("001-a"), t("002-b")]] }, cap: 1, overrides: { "pr:001-a": new Error("gh exploded"), "orphan:001-a": { outcome: "branch-deleted", reason: "deleted" } } });
+  check("a delivery that threw before the reclaim keeps its slot (its orphan action then settled the branch off origin)", by(crashed.results, "001-a").status === "local-only" && /delivery crashed/.test(by(crashed.results, "001-a").detail) && by(crashed.results, "002-b").status === "storage-throttled" && crashed.gate.retained === 1, JSON.stringify(crashed.results));
 });
 
 // 7. MIXED TERMINAL STATES all reach the barrier: a crash, a cap-out, a
@@ -499,13 +536,14 @@ await scenario("a held branch releases the guard queue", async () => {
 // 9. The batch body composes it all: source-level pins the scenarios cannot see.
 {
   const body = src.slice(src.indexOf(CUT));
-  check("the batch body runs the pipeline with the shared ledger, the gate, and the live pipeline object the abort catch reads", /await runPipelinedBatch\(\{ plan, remote, peerMode, statusBySlug, results, throttled, collisions, ledger, gate, pipeline \}\);/.test(body) && /const pipeline = \{ tasksBySlug: new Map\(\), guardOrder: \[\], mergedDuringRun: \[\] \};/.test(body));
+  check("the batch body runs the pipeline with the shared ledger, the gate, and the live pipeline object the abort catch reads", /await runPipelinedBatch\(\{ plan, remote, peerMode, statusBySlug, results, throttled, collisions, ledger, gate, pipeline \}\);/.test(body) && /const pipeline = \{ tasksBySlug: new Map\(\), guardOrder: \[\], mergedDuringRun: \[\], orphanReconciliation: \[\] \};/.test(body));
   check("no df re-probe remains anywhere in the workflow", !/storageProbePrompt|STORAGE_PROBE_SCHEMA|reprobe/.test(src));
   const summaryAt = body.lastIndexOf('phase("Summary");');
   const summary = body.slice(summaryAt);
-  check("the orphan obligation runs under Summary before the review stack and the closing reading", summary.indexOf("await reconcileOrphanedBranches(") !== -1 && summary.indexOf("await reconcileOrphanedBranches(") < summary.indexOf("buildReviewStack(") && summary.indexOf("buildReviewStack(") < summary.indexOf("await finalMainCheckoutReport()"));
+  check("the Summary spawns nothing for orphans: it names the ledger's survivors and the pipeline's actions, then the review stack, then the closing reading", /const orphans = \{ acted: pipeline\.orphanReconciliation, survivors: orphanSurvivors\(ledger\) \};/.test(summary) && !/await agent\([^\n]*orphan/.test(summary) && summary.indexOf("orphanSurvivors(ledger)") < summary.indexOf("buildReviewStack(") && summary.indexOf("buildReviewStack(") < summary.indexOf("await finalMainCheckoutReport()"));
+  check("the pipeline acts on an orphan on both settlement paths — the delivered one and the crash one — before finishing", (() => { const pipe = src.slice(src.indexOf("async function runTaskPipeline("), src.indexOf("function terminalStates(")); return (pipe.match(/=== "orphaned"\) \{\n\s*(?:\/\/[^\n]*\n\s*)?\w+ = await reconcileOrphan\(/g) || []).length === 2; })());
   check("the summary names the surviving orphans, the merges, the guard order, and the census", /orphanedBranches: orphans\.survivors/.test(summary) && /mergedDuringRun: pipeline\.mergedDuringRun/.test(summary) && /guardOrder: pipeline\.guardOrder/.test(summary) && /terminalStates: terminalStates\(results\)/.test(summary));
-  check("the abort catch names the ledger's orphans and held reservations through the report helper, rather than spawning anything", /orphanedBranches: abortedReservationReport\(ledger\)/.test(body));
+  check("the abort catch names the ledger's orphans and held reservations through the report helper, rather than spawning anything", /orphanReconciliation: pipeline\.orphanReconciliation, orphanedBranches: abortedReservationReport\(ledger\)/.test(body));
   check("an orphan settled before the abort is named once, under the orphan reason; a claim nothing settled at all is named under the other", (() => { const fns = load(async () => { throw new Error("no agent"); }, []); const l = fns.createReservationLedger(); const x = { slug: "x", branch: "task/x", base: "main", state: "reserved", taskNumbers: ["001"] }; l.reserved.set("x", x); fns.settleReservation(l, "x", { status: "pushed-no-pr", pushed: true }, true); l.reserved.set("y", { slug: "y", branch: "task/y", base: "main", state: "reserved", taskNumbers: ["002"] }); const r = fns.abortedReservationReport(l); return r.length === 2 && r.filter((o) => o.slug === "x").length === 1 && /before the orphan could be reconciled/.test(r.find((o) => o.slug === "x").reason) && /still held its claim/.test(r.find((o) => o.slug === "y").reason); })());
   check("no wave loop remains in the body", !/for \(let w = 0; w < plan\.waves\.length; w\+\+\)/.test(body) && !/phase\(`Wave/.test(body));
   check("the peer throttle is the one shared object every cycle gets", /peerThrottle: batchPeerThrottle,/.test(src) && /const batchPeerThrottle = createCyclePeerThrottle\(\);/.test(src));
