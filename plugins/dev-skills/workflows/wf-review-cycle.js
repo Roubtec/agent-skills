@@ -76,32 +76,28 @@
  * every outcome that is not passed/issues all land as a recorded non-blocking
  * round outcome. The peer is never required for the cycle to conclude.
  *
- * The peer's baseline interface is powbox's `peer-review-run` helper (result
- * schema powbox.peer-review-run/v1) — but NOT YET, for TWO prerequisites. On
- * strength, the effort half already works: the helper takes `--model` and
- * `--effort`, defaults effort to `high` for BOTH providers, re-injects
- * `-c model_reasoning_effort=<effort>` in its codex adapter specifically to
- * survive that adapter's own `--ignore-user-config`, and reports the strength
- * it actually applied as `model`/`effort` in its result — which is the
- * reporting half this stage asked for. What it still cannot carry is the codex
- * peer's CONFIGURED high-capability model: `--ignore-user-config` discards
- * ~/.codex/config.toml, the source of that model, and the helper's own
- * `--model` default (`opus`) applies to claude only, so a codex peer launched
- * through it runs on the CLI's bare default; naming a concrete codex ID instead
- * is barred by the never-dated-model-IDs rule. Until powbox carries that
- * configured model through (https://github.com/Roubtec/powbox/issues/145), AND
- * until the schema exposes the full provider-neutral review through a
- * documented `reviewFile` or `reviewText` field rather than only an
- * `artifactDir`, the stage's subagent runs the PINNED RAW LAUNCH
- * (codex exec with `-c model_reasoning_effort=medium`; the model stays the
- * peer's configured high-capability default from ~/.codex/config.toml). When it
- * BOTH land, the swap to `peer-review-run --provider codex --worktree ...
- * --prompt-file ... --artifact-root ... --timeout N --effort medium` (flag
- * spelling transcribed from the shipped helper, with --timeout sized under the
- * subagent's own Bash-tool limit, and --effort stated explicitly because the
- * helper's own default is `high`) is task 015's; the outcome vocabulary below
- * already matches the helper's, so the swap is a prompt change, not a
- * control-flow change.
+ * The peer's primary interface is powbox's `peer-review-run` helper (result
+ * schema powbox.peer-review-run/v1): the stage's subagent runs
+ * `peer-review-run --provider codex --worktree ... --prompt-file ...
+ * --artifact-root ... --timeout 260 --effort medium` once in the foreground
+ * (flag spelling transcribed from the shipped helper; --timeout sized under the
+ * subagent's own Bash-tool limit; --effort stated explicitly because the
+ * helper's own default is `high`; and no --model, because codex exposes no
+ * stable non-dated alias to pin and naming a concrete id is barred by the
+ * never-dated-model-IDs rule — the helper passes the root `model` of
+ * ${CODEX_HOME:-~/.codex}/config.toml through instead, and reports the strength it actually
+ * applied as `model`/`effort`, which the stage records as the round's strength
+ * note). The peer's full review is read from the result's `reviewFile` and
+ * relayed verbatim; nothing below `artifactDir` is guessed at and no provider
+ * envelope is parsed. The hardened raw launch (codex exec with
+ * `-c model_reasoning_effort=medium`) survives as the fallback, taken when the
+ * helper is absent from PATH and when a passed/issues result carries no usable
+ * `reviewFile` — a result the stage cannot relay verbatim, whatever produced
+ * it (an older helper is only one of the things absence can mean). A result's
+ * `model: null` is NOT a fallback trigger: the helper reports it for causes
+ * the result cannot tell apart, and on most of them the raw launch inherits
+ * the same bare default. The outcome vocabulary below is the helper's, so a
+ * result carries straight into the stage's contract.
  *
  * Peer concurrency follows the canonical optimistic session-local adaptive
  * throttle below: unbounded until a qualifying trouble outcome, then queued
@@ -387,8 +383,15 @@ function cycleDeviationVerdict(recommendation) {
 }
 
 // Peer-stage result. `outcome` uses the peer-review-run vocabulary
-// (powbox.peer-review-run/v1) so the eventual helper swap changes the prompt,
-// not this contract.
+// (powbox.peer-review-run/v1), so a helper result carries straight into this
+// contract and the fallback launch is normalized into the same words.
+//
+// `strength` and `fallbackReason` are notes, not control flow: the first is
+// what the helper says it actually reviewed with, the second the one-line
+// reason a round took the manual fallback (helper absent, or a passed/issues
+// result with no usable `reviewFile`). Neither is required, and neither
+// decides anything — in particular a reported `model: null` is a strength note
+// and never a fallback trigger.
 //
 // `reason` and `teardownFailure` are REQUIRED rather than optional because both
 // drive control flow rather than diagnostics. `cyclePeerTrouble` classifies the
@@ -416,6 +419,8 @@ const CYCLE_PEER_SCHEMA = {
     },
     notes: { type: "string", description: "Only valid bullets from the optional bounded NOTES section, preserved verbatim; empty when no valid advisory bullets survive (including a clean pass) and for every outcome that is not passed/issues, which reaches no verdict and so has no NOTES section to copy." },
     detail: { type: "string", description: "For a non-passed/issues outcome: why (logged out, timed out after retry, empty output, provider crash...)." },
+    strength: { type: "string", description: "Helper path only: `model=<model> effort=<effort>` exactly as the result reports them (a null written as `null`); empty on the fallback path." },
+    fallbackReason: { type: "string", description: "Empty on the helper path. When this round took the manual fallback, the one-line reason: the helper was absent from PATH, or its passed/issues result carried no usable `reviewFile`." },
     reason: { type: "string", description: "The provider/helper reason verbatim; distinguishes empty/garbled forfeitures for the adaptive throttle. Always emit it: an empty string where the outcome carries no reason, never an omitted field." },
     teardownFailure: { type: "boolean", description: "The ONE result that is not non-blocking: true ONLY when a provider process this stage launched could not be proven dead after the bounded TERM/KILL sequence. The cycle stops on it for operator intervention. False on every ordinary path, including this stage's own failures." },
   },
@@ -806,15 +811,15 @@ Return \`pass: true\` only if everything holds and no material issue remains; el
 }
 
 // The peer invocation happens INSIDE this subagent prompt, never in the
-// script (a workflow cannot shell out). Baseline destination: the
-// `peer-review-run` helper (schema powbox.peer-review-run/v1) — retained
-// pinned raw launch until that helper can carry the codex peer's CONFIGURED
-// high-capability model AND expose a documented provider-neutral full-review
-// payload (`reviewFile` or `reviewText`) rather than only `artifactDir`. See
-// the header comment. The launch pins review strength per invocation
-// (-c model_reasoning_effort=medium; the model stays the peer's configured
-// high-capability default from ~/.codex/config.toml) and never writes back to
-// saved configuration.
+// script (a workflow cannot shell out). Primary: the `peer-review-run` helper
+// (schema powbox.peer-review-run/v1), run once in the foreground, its review
+// read from the result's `reviewFile`. Fallback: the hardened raw launch, taken
+// only when the helper is absent or its passed/issues result carries no usable
+// `reviewFile`. See the header comment. Both pin review effort per invocation
+// (`--effort medium` / `-c model_reasoning_effort=medium`); the model is the
+// peer's configured high-capability default from ${CODEX_HOME:-~/.codex}/config.toml, which
+// the helper passes through and the raw launch reads directly. Neither writes
+// back to saved configuration.
 function cyclePeerPrompt(cycle, state) {
   const evidence = {
     branch: cycle.branch,
@@ -841,14 +846,15 @@ ${CYCLE_DESTROY_BOUNDARY}
 
 The peer examines this worktree READ-ONLY; you edit nothing either. The cycle's fresh reviewer is examining the same committed state concurrently — two readers are safe, and the reviewer alone owns builds/execution.
 
-${CYCLE_FINISH_IN_TURN} The retained manual path therefore launches a supervised background peer, waits or times it out, and reaps it inside this turn: you return its outcome, never a promise to report the peer's result later.
+${CYCLE_FINISH_IN_TURN} The primary path runs the helper in the foreground and returns when it does; the fallback path launches a supervised background peer, waits or times it out, and reaps it inside this turn. Either way you return the peer's outcome, never a promise to report it later.
 
 ## Steps
 
 ${preflightStep}
-2. Prepare unique per-attempt paths under this cycle's artifact directory: \`round_dir=${cycleShq(`${state.artifactDir}/round-${state.round}`)}\`, \`mkdir -p "$round_dir"\`, with \`prompt_file\`, \`outfile\`, \`stderr_file\`, and \`pid_file\` inside it (suffix \`-attempt2\` on a retry; never reuse a path).
+2. Prepare unique per-attempt paths under this cycle's artifact directory: \`round_dir=${cycleShq(`${state.artifactDir}/round-${state.round}`)}\`, \`mkdir -p "$round_dir"\`, with \`prompt_file\` and \`artifact_root\` (a directory of your own beneath \`$round_dir\` — outside the reviewed worktree by construction, and the helper creates its private per-invocation session directory under it) inside it, plus, for the fallback only, \`outfile\`, \`stderr_file\`, and \`pid_file\` (suffix \`-attempt2\` on a fallback retry; never reuse a path).
 3. Write the peer prompt below VERBATIM to \`$prompt_file\` with a quoted heredoc (\`<<'PEER_PROMPT'\`) — never assemble it through shell interpolation.
-4. Two powbox prerequisites remain: the helper's Codex provider still discards the configured high-capability model ([powbox issue #145](https://github.com/Roubtec/powbox/issues/145)), and schema v1 exposes only \`artifactDir\`, not a documented provider-neutral \`reviewFile\` or \`reviewText\` from which every finding can be relayed verbatim. This task-015 rendering therefore retains the pinned raw launch even when the helper is installed; never guess a private artifact filename or parse a provider-specific envelope. Once BOTH prerequisites land, first establish \`artifact_root\` as a unique, private, session-scoped directory outside the reviewed worktree, then run \`peer-review-run --provider codex --worktree "$worktree" --prompt-file "$prompt_file" --artifact-root "$artifact_root" --timeout 260 --effort medium\` once in the foreground inside this Peer stage. Set the caller-side Bash/tool wait to at least 570 seconds but strictly below its roughly 600-second cap: the helper may make two 260-second attempts and spend roughly five seconds reaping each one, leaving at least 40 seconds for setup, parsing, and result emission. Read the documented full-review payload before applying verdict logic. Then keep the hardened manual launch below only as the fallback when \`command -v peer-review-run\` fails. For now launch it with \`nohup\` and record the peer PID directly:
+4. Primary launch, when \`command -v peer-review-run\` succeeds: run \`peer-review-run --provider codex --worktree "$worktree" --prompt-file "$prompt_file" --artifact-root "$artifact_root" --timeout 260 --effort medium\` exactly once, in the foreground, inside this Peer stage. Set the caller-side Bash/tool wait to at least 570 seconds but strictly below its roughly 600-second cap: the helper may make two 260-second attempts and spend roughly five seconds reaping each one, leaving at least 40 seconds for setup, parsing, and result emission. Pass \`--effort medium\` explicitly (the helper's own default is \`high\`) and no \`--model\`: codex exposes no stable non-dated alias to pin and a concrete id is barred, so the helper passes the root \`model\` of \`\${CODEX_HOME:-~/.codex}/config.toml\` through instead. Do not background, poll, retry, or signal it; the helper owns timeout, transient-only retry, provider-tree reaping, and the final one-line JSON result. Read ONLY the final stdout line, require \`schema\` \`powbox.peer-review-run/v1\`, and carry its \`outcome\` and \`reason\` exactly. Set \`strength\` to \`model=<model> effort=<effort>\` exactly as the result reports them, a null written as \`null\`: a reported \`model: null\` is a strength note and never a fallback trigger, because the helper reports it for causes the result cannot tell apart (a config with no root \`model\`, or one whose root \`profile\`/\`model_provider\` made the model unsafe to forward) and the fallback launch inherits the same bare default on most of them. For a \`passed\` or \`issues\` result, \`reviewFile\` is the peer's complete review as plain text: it must be non-null and name a readable file, and you read that file in full and apply step 6 to its bytes. A \`passed\`/\`issues\` result whose \`reviewFile\` is null or names a file that is not there is a result this stage cannot relay verbatim, whatever produced it: take the fallback in step 5 for this round with \`fallbackReason\` exactly \`helper result carried no usable reviewFile\`. Never enumerate \`artifactDir\`, guess a filename below it, or parse a provider-specific envelope. Every other helper outcome (\`unavailable\`, \`timeout\`, \`forfeited\`, \`failed\`) is returned as reported, with its \`reason\` verbatim and \`fallbackReason\` empty.
+5. Fallback launch, ONLY when \`command -v peer-review-run\` fails (\`fallbackReason\` exactly \`peer-review-run absent from PATH\`) or step 4 found no usable \`reviewFile\`: launch the provider directly with \`nohup\` and record the peer PID:
 
    \`\`\`bash
    worktree="<the worktree path from the contract above>"
@@ -881,7 +887,7 @@ ${preflightStep}
    \`\`\`
 
    Ordinary stdout is detached to \`/dev/null\`, never merged into \`$outfile\` or \`$stderr_file\`; the \`-o\` artifact remains authoritative. The handoff records the peer PID plus Linux \`/proc/<pid>/stat\` fields 22 (start time), 5 (process group), and 6 (session). In every later Bash call, parse the stat record by stripping everything through its final closing parenthesis plus following space before counting fields (the comm field may contain spaces or \`)\`), require exactly those four positive-decimal handoff values, and compare all three current fields with the persisted values before every \`kill -0\`, TERM, or KILL. Missing or mismatched identity means the original peer is dead; never probe or signal the reused number. On the loose roughly 12-minute timeout, TERM the identity-checked direct provider PID, poll for at most ten seconds, KILL only if the identity still matches, then poll for at most ten more seconds. If it survives, do not retry, do not decide the round, and do not advance: return immediately with \`teardownFailure\` true, outcome \`failed\`, and a \`detail\` naming the surviving PID and the probe that still answered. The cycle stops on that flag for operator intervention; a non-blocking outcome alone would let it keep fixing and publishing while the provider is still alive. Retry ONCE with fresh paths only after confirmed death. Never infer a process group from plain \`nohup … &\`, signal a wait supervisor, use \`pkill -f\`, or replace this with a capped foreground call. If recovering by the unique \`-o\` path is unavoidable, disambiguate \`pgrep -f\` to the codex peer binary after excluding the probing shell and every ancestor: one survivor is alive, none dead, more than one indeterminate and signals nothing; persist that PID's complete identity before handing it to another shell. The identity-checked probe target is the only signal target. Auth/usage errors are \`unavailable\` without retry.
-5. Read \`$outfile\` even when the liveness probe has just gone dead: a non-empty artifact with a \`VERDICT:\` line is authoritative. A \`VERDICT: PASS\` line → outcome \`passed\`. A \`VERDICT: ISSUES\` line → outcome \`issues\`, with every numbered finding mapped verbatim into \`findings\` (severity from its \`blocking\`/\`minor\` tag — default \`blocking\` when untagged — plus its \`file:line\` as \`location\` and the finding text as \`claim\`; do not summarize, merge, or rewrite). For either verdict, copy into \`notes\` ONLY valid bullets immediately below the exact \`NOTES (advisory; not necessarily fixes)\` heading: at most three \`- path:line — note\` lines whose note is at most 15 words. Preserve those bullets verbatim; ignore malformed, surplus, or over-budget entries and all other prose, including the verification line and findings. With no valid bullets, return empty \`notes\`. Once the prerequisite-bound helper path is active, apply the same extraction to its documented \`reviewFile\`/\`reviewText\` payload only; never enumerate \`artifactDir\`, guess a filename, or parse a provider-specific envelope. No verdict line, or empty/unintelligible output → \`forfeited\`, with \`reason\` exactly identifying \`empty output\` or \`garbled output\` where that is what happened. A timeout after retry is \`timeout\`; a provider crash or exhausted non-auth retry is \`failed\`. Every outcome carries \`reason\`: the provider diagnostic verbatim where one exists, otherwise the empty string — never omitted, and never invented.
+6. Read the review — the bytes of \`$reviewFile\` on the helper path, or \`$outfile\` on the fallback, even when the liveness probe has just gone dead: a non-empty review with a \`VERDICT:\` line is authoritative. A \`VERDICT: PASS\` line → outcome \`passed\`. A \`VERDICT: ISSUES\` line → outcome \`issues\`, with every numbered finding mapped verbatim into \`findings\` (severity from its \`blocking\`/\`minor\` tag — default \`blocking\` when untagged — plus its \`file:line\` as \`location\` and the finding text as \`claim\`; do not summarize, merge, or rewrite). For either verdict, copy into \`notes\` ONLY valid bullets immediately below the exact \`NOTES (advisory; not necessarily fixes)\` heading: at most three \`- path:line — note\` lines whose note is at most 15 words. Preserve those bullets verbatim; ignore malformed, surplus, or over-budget entries and all other prose, including the verification line and findings. With no valid bullets, return empty \`notes\`. The same extraction applies to both sources — the documented \`reviewFile\` payload only on the helper path; never enumerate \`artifactDir\`, guess a filename, or parse a provider-specific envelope. No verdict line, or empty/unintelligible output → \`forfeited\`, with \`reason\` exactly identifying \`empty output\` or \`garbled output\` where that is what happened. A timeout after retry is \`timeout\`; a provider crash or exhausted non-auth retry is \`failed\`. Every outcome carries \`reason\`: the provider diagnostic verbatim where one exists, otherwise the empty string — never omitted, and never invented.
 
 ## Peer prompt (write this text to the prompt file verbatim, filling only the placeholders)
 
@@ -893,7 +899,7 @@ Reason as deeply as needed, then keep the final output compact. Put exactly \`VE
 
 ## Output
 
-Return the structured result: \`outcome\`, \`findings\` (verbatim, tagged), \`notes\`, \`detail\`, \`reason\` copied exactly from the provider/helper reason (the empty string when there is none — never an omitted field), and \`teardownFailure\` (\`false\` on every ordinary path, \`true\` only for the surviving-provider stop above).`;
+Return the structured result: \`outcome\`, \`findings\` (verbatim, tagged), \`notes\`, \`detail\`, \`reason\` copied exactly from the provider/helper reason (the empty string when there is none — never an omitted field), \`strength\` and \`fallbackReason\` as steps 4 and 5 define them (empty where they do not apply), and \`teardownFailure\` (\`false\` on every ordinary path, \`true\` only for the surviving-provider stop above).`;
 }
 
 function cyclePeerPreflightPrompt() {
@@ -948,6 +954,8 @@ function normalizeCyclePeerResult(res) {
     findings: outcome === "issues" && Array.isArray(res.findings) ? res.findings : [],
     notes: gating ? normalizeCyclePeerNotes(res.notes) : "",
     reason: typeof res.reason === "string" ? res.reason : "",
+    strength: typeof res.strength === "string" ? res.strength : "",
+    fallbackReason: typeof res.fallbackReason === "string" ? res.fallbackReason : "",
     teardownFailure: res.teardownFailure === true,
     detail: typeof res.detail === "string" && res.detail
       ? res.detail
@@ -1030,7 +1038,7 @@ function cyclePeerTrouble(result) {
   // deliberately a separate exact mapping: helper diagnostics are a documented
   // wire contract, while broad matches on words such as "empty" or "garbled"
   // can throttle on unrelated forfeitures. The two short forms are emitted only
-  // by the retained raw path after it observes the corresponding condition.
+  // by the fallback launch after it observes the corresponding condition.
   const reasonClass = new Map([
     ["empty output", "empty"],
     ["garbled output", "garbled"],
@@ -1432,6 +1440,8 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //   proactive, finalSha, notes, reviewerNotes,
 //   peerRounds ({ round, outcome, detail, reason } entries, where `detail`
 //     appends only the peer prompt's bounded advisory bullets when present,
+//     plus `strength` (the model/effort the helper result reports) and
+//     `fallbackReason` (why the round took the manual launch) where set,
 //     plus teardownFailure on the one round that carried it — a provider the
 //     peer stage could not prove dead, which ends the cycle as an `error`
 //     rather than degrading to a non-blocking outcome), peerThrottle,
@@ -2077,7 +2087,14 @@ async function runReviewCycle(cycle) {
     // cycle's `disabled` outcome is not helper vocabulary, so carry it as-is.
     const peer = rawPeer && rawPeer.outcome === "disabled" ? rawPeer : normalizeCyclePeerResult(rawPeer);
     const peerRoundDetail = [peer.detail, peer.notes ? `advisory notes:\n${peer.notes}` : ""].filter(Boolean).join("\n");
-    peerRounds.push({ round: rounds, outcome: peer.outcome, detail: peerRoundDetail, reason: peer.reason || "", ...(peer.teardownFailure ? { teardownFailure: true } : {}) });
+    peerRounds.push({ round: rounds, outcome: peer.outcome, detail: peerRoundDetail, reason: peer.reason || "", ...(peer.strength ? { strength: peer.strength } : {}), ...(peer.fallbackReason ? { fallbackReason: peer.fallbackReason } : {}), ...(peer.teardownFailure ? { teardownFailure: true } : {}) });
+    // A round that took the manual fallback says why ONCE per run (per batch,
+    // under a shared peerState), not once per round: the reason is a property
+    // of the installed helper, not of the round.
+    if (peer.fallbackReason && !peerState.fallbackReason) {
+      peerState.fallbackReason = peer.fallbackReason;
+      log(`peer round ${rounds}: manual fallback taken — ${peer.fallbackReason}`);
+    }
     // The one peer condition that is not non-blocking, checked before anything
     // else this round produced. A provider nobody could prove dead may still be
     // reading the worktree the next fixer would write to, so the cycle stops for
