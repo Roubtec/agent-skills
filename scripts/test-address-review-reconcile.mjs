@@ -166,7 +166,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 269;
+const EXPECTED_CHECKS = 279;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -509,7 +509,7 @@ const ITEM = {
 // location pair is written the same way: `locationMode` defaults to the inline
 // mode every reconciliation scenario runs in, and passing `null` omits the
 // field, which the working-location gate below rejects.
-function gathered({ workingBranch = "feature/x", items = [], reconcile, locationMode = "inline", worktree, baseOid = GATHERED_BASE_OID, priorRecord, startingHead = "deadbeef", finalHead = "deadbeef", rebased = false }) {
+function gathered({ workingBranch = "feature/x", items = [], reconcile, locationMode = "inline", worktree, baseOid = GATHERED_BASE_OID, priorRecord, startingHead = "deadbeef", finalHead = "deadbeef", rebased = false, detail }) {
   const packet = {
     ok: true,
     // Every `ok: true` gather the caller can CONTINUE on owes this echo —
@@ -537,6 +537,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     items,
   };
   if (baseOid !== null) packet.pr.baseOid = baseOid;
+  if (detail !== undefined) packet.detail = detail;
   if (locationMode !== null) packet.pr.locationMode = locationMode;
   if (worktree !== undefined) packet.pr.worktree = worktree;
   if (reconcile !== undefined) packet.reconcile = reconcile;
@@ -6118,7 +6119,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /every `workReport` entry names a gathered item, so a second entry for the flake-fix task would name none/.test(fixer) &&
       /An evidenced flake is `flake-rerun` where the lane's `url` names a workflow run, and `ambiguous-skipped` with the evidence in `detail` where it does not/.test(fixer) &&
       /`push-back` is not a disposition it can take/.test(fixer) &&
-      /A lane the item reports as `rollup: "green"` or `"running"` is a REPLAYED one/.test(fixer) &&
+      /A lane the item reports as `rollup: "green"`, `"running"` or `"absent"` is a REPLAYED one/.test(fixer) &&
+      /no longer carries its identity at all \(renamed, removed, or path-filtered off this head\)/.test(fixer) &&
       /A `standalone` item carrying `finding` is ONE finding of a bot's misfired top-level comment/.test(fixer),
     fixer.slice(0, 200),
   );
@@ -6154,7 +6156,9 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /A lane still in progress on the current head is NOT an item/.test(ciPara) &&
       /A rollup describing a head other than the one you reconciled against/.test(ciPara) &&
       /matched to this head's rollup by its `lane` identity, the new head's run carrying a new details URL/.test(ciPara) &&
-      /emitted anyway as a `ci-failure` item with `rollup: "green"` or `"running"`/.test(ciPara),
+      /emitted anyway as a `ci-failure` item with `rollup: "green"` or `"running"`/.test(ciPara) &&
+      /one whose identity NO lane of this head's rollup carries — the workflow or check renamed or removed since, or not fired for this head by a path filter — is emitted the same way with `rollup: "absent"`/.test(ciPara) &&
+      /No state of the rollup drops a recorded lane/.test(ciPara),
     ciPara ? ciPara.slice(0, 240) : "the gather brief has no CI bullet",
   );
   const misfiredPara = brief.split("\n").find((l) => l.startsWith("- One more source qualifies on its own")) || "";
@@ -6193,7 +6197,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     ["step 3's misfired-findings rule", "**One more source qualifies on its own: a bot reviewer that misfired", [/where it is \*\*fresh and applicable\*\*/, /is the current head/, /no thread on this PR, resolved or unresolved, already raises it/, /the review's own `state` is not `DISMISSED`/, /the code it names still exists on the branch/, /take none and say so in the Summary comment/, /\*\*plus its ordinal within that comment\*\*/]],
     ["step 4's CI disposition", "- **CI failure** — one of the lanes step 3 gathered.", [/never from the lane's name/, /→ \*\*actionable\*\*/, /→ \*\*ambiguous\*\*/, /A \*\*flake\*\* — evidence, not a hunch/, /only where the run pushes nothing new/]],
     ["step 7's Summary sections", "5. **Summary comment** — post a top-level", [/a \*\*"Top-level findings"\*\* section for every standalone item taken from a bot's misfired top-level comment/, /a \*\*"CI"\*\* section where step 3 gathered a failing lane or a replayed record carried one/]],
-    ["step 7's flake re-run on a no-op push", "3. **Re-read unresolved threads after the push.**", [/Re-run any lane step 4 judged a flake only where the push was a no-op/]],
+    ["step 7's flake re-run on a no-op push", "3. **Re-read unresolved threads after the push.**", [/Re-run any lane step 4 judged a flake only where the push was a no-op/, /Each re-run request is part of the publication's success contract/]],
+    ["the replayed-lane rule", "A recorded CI lane is re-gathered in the same spirit", [/no lane of the current head's rollup carries the recorded identity at all/, /no state of the rollup drops a recorded lane/]],
   ];
   const missing = [];
   for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
@@ -6221,6 +6226,111 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "both skill mirrors state step 3's \"CI on the PR head\" bullet and \"fresh and applicable\" misfired-findings rule, step 4's CI disposition by cause, and step 7's \"Top-level findings\" and \"CI\" sections — and the workflow's gather brief carries the same two step-3 phrases beside them",
     missing.length === 0,
     missing.join("; "),
+  );
+}
+
+// --- 049 review round: the three gaps codex named on PR #120 -----------------
+// (1) A recorded lane the new head's rollup no longer carries at all is
+// replayed as `rollup: "absent"` — one more state in which a lane is an item
+// so its recorded account rides out, never an order to re-run anything.
+// (2) A flake re-run on a no-op push is part of the completion contract: the
+// publisher reports it structurally (`rerun` on the lane's entry) and the
+// caller refuses a completion claim that does not carry it accepted.
+// (3) What the gather left out (`packet.detail`) reaches the run's result, the
+// terminal no-op's detail, and the publish brief's Summary section.
+{
+  const ITEM_LANE = { type: "ci-failure", lane: "tests / node", rollup: "failing", author: "", authorIsBot: false, body: "FAIL scripts/test-x.mjs (log tail)", url: "https://example.invalid/owner/repo/actions/runs/777/job/888" };
+  const ITEM_LANE_ABSENT = { ...ITEM_LANE, lane: "lint / markdown", rollup: "absent", body: "no lane of this head's rollup carries `lint / markdown` (renamed or path-filtered); recorded cause: a shared fixture pin", url: "https://example.invalid/owner/repo/actions/runs/778/job/889" };
+  const LANE_ENTRY = { type: "ci-failure", lane: ITEM_LANE.lane, url: ITEM_LANE.url, ref: ITEM_LANE.lane, kind: "actionable-fixed", detail: "cause: the new guard changed the count; fixed in abc1234", author: "", authorIsBot: false, newFinding: true };
+  const ABSENT_ENTRY = { ...LANE_ENTRY, lane: ITEM_LANE_ABSENT.lane, url: ITEM_LANE_ABSENT.url, ref: ITEM_LANE_ABSENT.lane, kind: "already-addressed", detail: "replayed: recorded cause a shared fixture pin, left for the maintainer; the lane is absent from this head's rollup", newFinding: false };
+  const FLAKE_ENTRY = { ...LANE_ENTRY, kind: "flake-rerun", detail: "cause: the same lane went green on the base at a commit carrying the same files; evidence run 700" };
+  const packet = { reconcile: { outcome: "work" }, items: [ITEM, ITEM_LANE, ITEM_LANE_ABSENT] };
+  const withReport = (...entries) => ({ ...CYCLE_PASS, workReport: entries });
+  const absent = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], LANE_ENTRY, ABSENT_ENTRY)] });
+  check(
+    "a recorded lane the new head's rollup no longer carries replays as an `absent` item disposed of as already-addressed, and publishes",
+    absent.status === "fixed-published",
+    JSON.stringify(absent.result).slice(0, 300),
+  );
+  const absentRerun = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], LANE_ENTRY, { ...ABSENT_ENTRY, kind: "flake-rerun", detail: "evidence: green on base" })] });
+  check(
+    "a flake re-run ordered on a replayed lane the head's rollup does not carry is unpublishable — there is no run of it to re-run",
+    absentRerun.status === "publish-aborted-incomplete-dispositions" && /flake re-run on a lane the gather reports as \\"absent\\"/.test(JSON.stringify(absentRerun.result.malformedDispositions || [])),
+    JSON.stringify(absentRerun.result).slice(0, 300),
+  );
+  // The publisher's contract for the re-run: structural, and part of success.
+  const flake = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], FLAKE_ENTRY, ABSENT_ENTRY)] });
+  const flakeBrief = flake.seen.publishPrompts[0] || "";
+  check(
+    "the publish brief makes each ordered re-run part of the success contract — `rerun` reported on the lane's entry, a rejected request an abort before the replies — and the schema carries the field",
+    /on that lane's `threadOutcomes` entry set `rerun` to true ONLY if `gh run rerun` exited 0 for EVERY distinct run id the lane names/.test(flakeBrief) &&
+      /set `published: false` and `aborted: "flake re-run failed: <lane, run id, what gh returned>"` and STOP here, before step 4/.test(flakeBrief) &&
+      /On a push that ADVANCED the branch nothing is ordered here and the field is left out/.test(flakeBrief) &&
+      /rerun: \{ type: "boolean", description: "On a `ci-failure` entry whose disposition is `flake-rerun`, after a NO-OP push/.test(src),
+    flakeBrief.slice(0, 200),
+  );
+  // The caller's half: a completion claim over a no-op push whose account does
+  // not report the re-run accepted is refused, and the record's standing line
+  // says the re-run is still owed; with `rerun: true` it publishes; and on a
+  // push that advanced the branch nothing is owed (the default stub above).
+  const account = (rerun) => ({
+    published: true, pushed: true, pushedNewCommits: false, summaryCommentUrl: "https://example.invalid/pr/42#issuecomment-5",
+    threadOutcomes: [
+      { threadId: "T1", ref: "src/app.ts:12 a-reviewer", outcome: "replied and resolved", replied: true, resolved: true },
+      { lane: ITEM_LANE.lane, ref: ITEM_LANE.lane, outcome: "re-run ordered", replied: false, resolved: false, ...(rerun === undefined ? {} : { rerun }) },
+      { lane: ITEM_LANE_ABSENT.lane, ref: ITEM_LANE_ABSENT.lane, outcome: "summary only", replied: false, resolved: false },
+    ],
+  });
+  const noRerun = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], FLAKE_ENTRY, ABSENT_ENTRY)], publish: account(undefined) });
+  const noRerunRecord = noRerun.seen.recordPrompts[0] || "";
+  check(
+    "a completion claim over a no-op push whose account does not report the flake re-run accepted is refused as contradicted, the record written, and the lane's standing line says the re-run is still owed",
+    noRerun.status === "fixed-publish-failed" &&
+      /1 of 1 flake-rerun lane\(s\) it owes a re-run after its no-op push report no `gh run rerun` accepted/.test(noRerun.result.note || "") &&
+      /thread=tests \/ node {2}tests \/ node — its flake re-run is STILL OWED/.test(noRerunRecord) &&
+      /thread=lint \/ markdown {2}lint \/ markdown — NOTHING is owed on it/.test(noRerunRecord) &&
+      noRerun.seen.spendPrompts.length === 0,
+    `${noRerun.status}: ${(noRerun.result.note || "").slice(0, 300)} | ${noRerunRecord.split("\n").filter((l) => /thread=/.test(l)).join(" | ").slice(0, 400)}`,
+  );
+  const rejectedRerun = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], FLAKE_ENTRY, ABSENT_ENTRY)], publish: account(false) });
+  check(
+    "the same claim over `rerun: false` is refused the same way",
+    rejectedRerun.status === "fixed-publish-failed" && /flake-rerun lane\(s\) it owes a re-run/.test(rejectedRerun.result.note || ""),
+    `${rejectedRerun.status}: ${(rejectedRerun.result.note || "").slice(0, 200)}`,
+  );
+  const withRerun = await run(gathered(packet), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], FLAKE_ENTRY, ABSENT_ENTRY)], publish: account(true) });
+  check(
+    "with the re-run reported accepted, the same no-op-push publication completes",
+    withRerun.status === "fixed-published",
+    JSON.stringify(withRerun.result).slice(0, 300),
+  );
+  check(
+    "on a push that advanced the branch nothing is ordered, so a flake-rerun entry without `rerun` completes",
+    flake.status === "fixed-published",
+    JSON.stringify(flake.result).slice(0, 300),
+  );
+  // What the gather left out is surfaced rather than discarded.
+  const LEFT_OUT = "lane `deploy / preview` still in progress on this head; the misfired review at .../pullrequestreview-9 names no head, so its findings were taken as none";
+  const noop = await run(gathered({ items: [], reconcile: { outcome: "work" }, detail: LEFT_OUT }), { args: "push no-rebase" });
+  check(
+    "a terminal no-op carries what the gather left out in its detail and result rather than reporting only \"nothing to address\"",
+    noop.status === "no-op" && (noop.result.detail || "").includes(`The gather left out: ${LEFT_OUT}`) && noop.result.gatherLeftOut === LEFT_OUT,
+    JSON.stringify(noop.result).slice(0, 400),
+  );
+  const itemful = await run(gathered({ ...packet, detail: LEFT_OUT }), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], LANE_ENTRY, ABSENT_ENTRY)] });
+  const itemfulBrief = itemful.seen.publishPrompts[0] || "";
+  check(
+    "an itemful run's publish brief puts what the gather left out into the Summary comment verbatim, and its result carries it",
+    itemful.status === "fixed-published" &&
+      /under a "Left out of this run's gather" heading — what the gather step reported it left out and why, VERBATIM:/.test(itemfulBrief) &&
+      itemfulBrief.includes(JSON.stringify(LEFT_OUT)) &&
+      itemful.result.gatherLeftOut === LEFT_OUT,
+    `${itemful.status}: ${itemfulBrief.includes(LEFT_OUT)}`,
+  );
+  check(
+    "a gather that left nothing out adds no section and no result field",
+    !/Left out of this run's gather/.test(flakeBrief) && !("gatherLeftOut" in (flake.result || {})),
+    flakeBrief.slice(0, 100),
   );
 }
 
