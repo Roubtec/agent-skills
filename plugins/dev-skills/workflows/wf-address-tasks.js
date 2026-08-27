@@ -4385,17 +4385,27 @@ async function buildReviewStack({ plan, results, wtBase }) {
         emptyGuides: restack.emptyGuides,
         detail: restack.detail || "",
       };
-      report.built = restack.ok === true;
+      // `built` is derived from the packet as a whole, never from `ok` alone:
+      // the schema admits `ok: true` beside a nonempty `stoppedAt`, and the
+      // terminal summary suppresses its not-completed log on `built`, so a
+      // stop point wins over the flag, and a completion must account for
+      // every guide in the mapping before it counts.
+      const outcomes = Array.isArray(restack.outcomes) ? restack.outcomes : [];
+      const unaccounted = mapping.filter((m) => !outcomes.some((o) => o && o.guide === m.guide)).map((m) => m.guide);
       if (restack.stoppedAt) {
         const at = mapping.findIndex((m) => m.guide === restack.stoppedAt);
         report.integrationCheckedPrefix = at > 0 ? mapping.slice(0, at).map((m) => m.branch) : [];
         report.firstUnstacked = at >= 0 ? mapping[at].branch : restack.stoppedAt;
         report.remainingSuffix = at >= 0 ? mapping.slice(at).map((m) => m.branch) : [];
         restackOutcome = `it stopped cleanly at ${restack.stoppedAt}`;
-        report.reason = `the restack stopped at \`${restack.stoppedAt}\`: ${restack.stopReason || "(no reason reported)"}; the canonical order remains the recommendation, and only the completed prefix was integration-checked`;
-      } else if (restack.ok === true) {
+        report.reason = `the restack stopped at \`${restack.stoppedAt}\`: ${restack.stopReason || "(no reason reported)"}; the canonical order remains the recommendation, and only the completed prefix was integration-checked${restack.ok === true ? " (the restack reported ok beside that stop point; the stop point is what counts)" : ""}`;
+      } else if (restack.ok === true && unaccounted.length === 0) {
+        report.built = true;
         report.integrationCheckedPrefix = mapping.map((m) => m.branch);
         restackOutcome = "it completed";
+      } else if (restack.ok === true) {
+        restackOutcome = "it reported ok without an outcome for every guide";
+        report.reason = `the restack reported ok but no outcome for ${unaccounted.map((g) => `\`${g}\``).join(", ")}, so the stack is not taken as built`;
       } else {
         restackOutcome = "it reported a failure without a stop point";
         report.reason = `the restack did not complete: ${restack.detail || "(no detail reported)"}`;
@@ -4540,6 +4550,10 @@ async function finalMainCheckoutReport() {
 // than rethrows. What the report needs from the body is declared out here: a
 // crash mid-batch still has terminal statuses worth returning.
 let plan = null;
+// Every resolver-failure exit below creates no stack either, so it says so in
+// the same field the delivering return carries rather than leaving the batch
+// response without one.
+const reviewStackSkippedUnresolved = () => ({ built: false, skipped: true, reason: "the task pointers were not resolved, so no task ran and there is no branch to stack; the integration check did not run" });
 const statusBySlug = new Map();
 const results = [];
 const throttled = [];
@@ -4563,22 +4577,22 @@ try {
     // A batch that resolves no task is still a batch that terminated with the
     // baseline already taken, so it owes the same report as a delivering one.
     phase("Summary");
-    return { error: "Could not resolve task pointers from the argument.", args, resolution: plan && plan.resolution ? plan.resolution : null, mainCheckout: await finalMainCheckoutReport() };
+    return { error: "Could not resolve task pointers from the argument.", args, resolution: plan && plan.resolution ? plan.resolution : null, mainCheckout: await finalMainCheckoutReport(), reviewStack: reviewStackSkippedUnresolved() };
   }
   if (!resolutionAccountsForInputs(plan.resolution, batchPointers)) {
     // The packet dropped or invented a raw pointer relative to the argument
     // itself; an internally consistent partial packet is still lost work.
     phase("Summary");
-    return { error: "Could not resolve task pointers from the argument.", args, resolution: plan.resolution, mainCheckout: await finalMainCheckoutReport() };
+    return { error: "Could not resolve task pointers from the argument.", args, resolution: plan.resolution, mainCheckout: await finalMainCheckoutReport(), reviewStack: reviewStackSkippedUnresolved() };
   }
   if (!planResolutionIsExact(plan)) {
     phase("Summary");
-    return { error: "Could not resolve task pointers from the argument.", args, resolution: plan.resolution, mainCheckout: await finalMainCheckoutReport() };
+    return { error: "Could not resolve task pointers from the argument.", args, resolution: plan.resolution, mainCheckout: await finalMainCheckoutReport(), reviewStack: reviewStackSkippedUnresolved() };
   }
   if (plan.waves.length === 0) {
     phase("Summary");
     if (!emptyPlanIsExplained(plan)) {
-      return { error: "Could not resolve task pointers from the argument.", args, resolution: plan.resolution, mainCheckout: await finalMainCheckoutReport() };
+      return { error: "Could not resolve task pointers from the argument.", args, resolution: plan.resolution, mainCheckout: await finalMainCheckoutReport(), reviewStack: reviewStackSkippedUnresolved() };
     }
     return { batch: args, defaultBase: plan.defaultBase, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), waves: 0, throttled: [], collisions: [], resolution: plan.resolution, mainCheckout: await finalMainCheckoutReport(), reviewStack: { built: false, skipped: true, reason: "the batch resolved no task, so there is no branch to stack" }, openQuestions: [], deviations: [], deviationAssessments: [], results: [] };
   }

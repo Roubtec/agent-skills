@@ -381,6 +381,23 @@ const teardownOk = { tipsUnchanged: true, tipMismatches: [], recovered: false, w
     check("restack throw: the teardown enumerates the guide namespaces rather than deleting nothing", calls.at(-1).prompt.includes("A restack that threw or was interrupted reports no list at all") && guides.guides.every((g) => calls.at(-1).prompt.includes(`- \`${g.guide}\``)));
   }
 
+  // A contradictory packet: `ok: true` beside a stop point is a stop, and an
+  // `ok: true` that accounts for fewer guides than the mapping is not built.
+  {
+    const label = "042-to-044";
+    const guides = guidesFor(["042-a", "043-b", "044-c"], label);
+    const g = guides.guides.map((x) => x.guide);
+    const contradictory = { ...restackOk(g, []), stoppedAt: g[2], stopReason: "non-trivial conflict; restored g3" };
+    const { fns, calls } = stage({ "review-stack:inspect": inspectionClean, "review-stack:guides": guides, "review-stack:restack": contradictory, "review-stack:teardown": teardownOk });
+    const r = await fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
+    check("ok beside a stop point: not built, the stop point rides the report, teardown still ran", r.built === false && r.skipped === false && r.firstUnstacked === "task/044-c" && same(r.integrationCheckedPrefix, ["task/042-a", "task/043-b"]) && /reported ok beside that stop point/.test(r.reason) && calls.at(-1).label === "review-stack:teardown", r.reason);
+    const short = { ...restackOk(g.slice(0, 2), []) };
+    const partial = stage({ "review-stack:inspect": inspectionClean, "review-stack:guides": guides, "review-stack:restack": short, "review-stack:teardown": teardownOk });
+    const p = await partial.fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
+    check("ok without an outcome for every guide: not built, the unaccounted guide named, teardown still ran", p.built === false && p.skipped === false && p.reason.includes(`\`${g[2]}\``) && !(p.integrationCheckedPrefix || []).length && partial.calls.at(-1).label === "review-stack:teardown", p.reason);
+    check("the source derives `built` from the stop point and the outcomes, never from `ok` alone", !/report\.built = restack\.ok === true/.test(src));
+  }
+
   // A merge commit mid-order: the safe prefix is built, the rest reported.
   {
     const label = "042-to-044";
@@ -510,6 +527,9 @@ const teardownOk = { tipsUnchanged: true, tipMismatches: [], recovered: false, w
     check("abort catch excludes the batch with a stated reason", /Batch aborted[\s\S]*reviewStack: \{ built: false, skipped: true, reason: "the batch aborted/.test(body));
     check("abort catch creates nothing: no stage call and no agent between its catch and its return", abortPath !== null && !/buildReviewStack\(|\bagent\(/.test(abortPath));
     check("the normal return carries reviewStack beside mainCheckout", /mainCheckout, reviewStack, openQuestions/.test(body));
+    const resolverExits = body.match(/return \{ error: "Could not resolve task pointers from the argument\.".*\n/g) || [];
+    check("every resolver-failure exit carries the skipped review-stack result", resolverExits.length === 4 && resolverExits.every((line) => /reviewStack: reviewStackSkippedUnresolved\(\)/.test(line)), `${resolverExits.length} exits`);
+    check("the resolver-failure result is skipped with a stated reason", /reviewStackSkippedUnresolved = \(\) => \(\{ built: false, skipped: true, reason: "the task pointers were not resolved/.test(body));
     const summaryAt = body.lastIndexOf('phase("Summary");');
     const summary = body.slice(summaryAt);
     check("the stage renders under Summary: no undeclared phase() call inside it", !/phase\("Review stack"\)/.test(src) && !/title: "Review stack"/.test(src));
