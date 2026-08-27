@@ -171,6 +171,7 @@ const oid = (n) => String(n).repeat(40);
   const noField = pure.reviewStackSafePrefix(order, [{ branch: "task/001-a", tip: oid(1), mergeCommits: [] }, { branch: "task/002-b", tip: oid(2), rangeTaken: true, mergeCommits: [] }, { branch: "task/003-c", tip: oid(3), rangeTaken: true, mergeCommits: [] }]);
   check("a reading with no rangeTaken at all is not a clean one", noField.prefix.length === 0 && noField.guard.branch === "task/001-a");
   check("the inspection schema requires rangeTaken", same(pure.REVIEW_STACK_INSPECT_SCHEMA.properties.branches.items.required, ["branch", "tip", "rangeTaken", "mergeCommits"]));
+  check("the inspection schema requires the stamp: every name is derived from it before anything is created", pure.REVIEW_STACK_INSPECT_SCHEMA.required.includes("stamp"));
 }
 
 // --- Naming -----------------------------------------------------------------
@@ -207,10 +208,9 @@ const plan3 = { defaultBase: "main", waves: [[t("042-a", "main")], [t("043-b", "
 const results3 = ["042-a", "043-b", "044-c"].map((slug) => ({ slug, branch: `task/${slug}`, status: "local-only" }));
 const wtBase = "/repo/.worktrees/c";
 const STAMP = "20260827-120000";
-const inspectionClean = { ok: true, branches: ["042-a", "043-b", "044-c"].map((s, i) => ({ branch: `task/${s}`, tip: oid(i + 1), rangeTaken: true, mergeCommits: [] })) };
+const inspectionClean = { ok: true, stamp: STAMP, branches: ["042-a", "043-b", "044-c"].map((s, i) => ({ branch: `task/${s}`, tip: oid(i + 1), rangeTaken: true, mergeCommits: [] })) };
 const guidesFor = (prefixSlugs, label) => ({
   ok: true,
-  stamp: STAMP,
   guides: prefixSlugs.map((s, i) => ({ branch: `task/${s}`, guide: `review-stack/${label}-${STAMP}/0${i + 1}-${s}`, tip: oid(i + 1) })),
   worktree: `${wtBase}/_review-stack-${label}-${STAMP}`,
 });
@@ -248,8 +248,9 @@ const teardownOk = { tipsUnchanged: true, tipMismatches: [], recovered: false, w
     check("restack brief carries the explicit chain onto the batch's base", restackPrompt.includes(`chain ${guides.guides.map((g) => g.guide).join(" ")} onto main`));
     check("restack brief names the dedicated worktree and g1", restackPrompt.includes(guides.worktree) && restackPrompt.includes(`\`git branch --show-current\` prints \`${guides.guides[0].guide}\``));
     const guidesPrompt = calls[1].prompt;
-    check("guides brief lists each captured tip and the stamped name template", guidesPrompt.includes(oid(3)) && guidesPrompt.includes(`review-stack/${label}-<STAMP>/03-044-c`) && guidesPrompt.includes(`${wtBase}/_review-stack-${label}-<STAMP>`));
-    check("guides brief has the agent derive the stamp, not the script", guidesPrompt.includes("date -u +%Y%m%d-%H%M%S") && !/Date\.now|Math\.random|new Date\(\)/.test(src));
+    check("guides brief lists each captured tip and the final stamped names, the script's own", guidesPrompt.includes(oid(3)) && guidesPrompt.includes(`review-stack/${label}-${STAMP}/03-044-c`) && guidesPrompt.includes(`${wtBase}/_review-stack-${label}-${STAMP}`) && !guidesPrompt.includes("<STAMP>") && !guidesPrompt.includes("date -u"));
+    check("the inspection brief has the agent read the clock, not the script, before anything is created", calls[0].prompt.includes("date -u +%Y%m%d-%H%M%S") && !/Date\.now|Math\.random|new Date\(\)/.test(src));
+    check("the stamp rides the report", r.stamp === STAMP);
     const teardownPrompt = calls[3].prompt;
     check("teardown deletes exactly the batch's own pre-rebase refs; a foreign one is neither listed nor deleted", own.every((ref) => teardownPrompt.includes(`\`${ref}\``)) && !teardownPrompt.includes(foreign) && same(r.preRebaseRefs, own) && same(r.preRebaseRefsNotOwned, [foreign]));
     check("teardown carries every canonical tip captured before the guides were created", ["042-a", "043-b", "044-c"].every((s, i) => teardownPrompt.includes(`\`task/${s}\` must still be \`${oid(i + 1)}\``)));
@@ -298,7 +299,7 @@ const teardownOk = { tipsUnchanged: true, tipMismatches: [], recovered: false, w
   {
     const label = "042-to-044";
     const guides = guidesFor(["042-a", "043-b"], label);
-    const inspection = { ok: true, branches: [
+    const inspection = { ok: true, stamp: STAMP, branches: [
       { branch: "task/042-a", tip: oid(1), rangeTaken: true, mergeCommits: [] },
       { branch: "task/043-b", tip: oid(2), rangeTaken: true, mergeCommits: [] },
       { branch: "task/044-c", tip: oid(3), rangeTaken: true, mergeCommits: ["f".repeat(40)] },
@@ -312,11 +313,11 @@ const teardownOk = { tipsUnchanged: true, tipMismatches: [], recovered: false, w
     const r = await fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
     check("merge guard: only the safe prefix is stacked", r.built === true && same(r.safePrefix, ["task/042-a", "task/043-b"]) && same(r.notIntegrationChecked, ["task/044-c"]) && r.mergeGuard.branch === "task/044-c");
     check("merge guard: the chain handed to the restack holds two guides", calls[2].prompt.includes(`chain ${guides.guides.map((x) => x.guide).join(" ")} onto main`) && !calls[2].prompt.includes("03-044-c"));
-    check("merge guard: the batch label still spans the whole canonical order", guides.guides[0].guide.startsWith(`review-stack/${label}-`) && calls[1].prompt.includes(`review-stack/${label}-<STAMP>/01-042-a`));
+    check("merge guard: the batch label still spans the whole canonical order", guides.guides[0].guide.startsWith(`review-stack/${label}-`) && calls[1].prompt.includes(`review-stack/${label}-${STAMP}/01-042-a`));
   }
   {
     // A merge on b2 of three leaves a one-branch prefix: nothing to stack.
-    const inspection = { ok: true, branches: [
+    const inspection = { ok: true, stamp: STAMP, branches: [
       { branch: "task/042-a", tip: oid(1), rangeTaken: true, mergeCommits: [] },
       { branch: "task/043-b", tip: oid(2), rangeTaken: true, mergeCommits: ["f".repeat(40)] },
       { branch: "task/044-c", tip: oid(3), rangeTaken: true, mergeCommits: [] },
@@ -326,55 +327,57 @@ const teardownOk = { tipsUnchanged: true, tipMismatches: [], recovered: false, w
     check("merge guard on b2: no guide is created, the reason names the guard", calls.length === 1 && r.built === false && /043-b/.test(r.reason) && same(r.notIntegrationChecked, ["task/043-b", "task/044-c"]));
   }
 
-  // Guide-branch drift: the restack does not run, the worktree is reclaimed.
+  // Guide-branch drift: the restack does not run; the teardown is briefed with
+  // the script's names, never the deputy's misreported ones.
   {
     const label = "042-to-044";
     const guides = guidesFor(["042-a", "043-b", "044-c"], label);
+    const own = guides.guides[1].guide;
     guides.guides[1].guide = "review-stack/oops";
     const { fns, calls } = stage({ "review-stack:inspect": inspectionClean, "review-stack:guides": guides, "review-stack:teardown": teardownOk });
     const r = await fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
     check("the teardown brief refuses removal over a worktree holding a non-guide branch", calls[2].prompt.includes("is not one of the guide branches of step 6, remove NOTHING"));
-    check("guide drift: restack not run, reason names the drift, teardown reclaims the reported worktree", same(calls.map((c) => c.label), ["review-stack:inspect", "review-stack:guides", "review-stack:teardown"]) && /oops/.test(r.reason) && calls[2].prompt.includes(guides.worktree));
+    check("guide drift: restack not run, reason names the drift, teardown reclaims the worktree", same(calls.map((c) => c.label), ["review-stack:inspect", "review-stack:guides", "review-stack:teardown"]) && /oops/.test(r.reason) && calls[2].prompt.includes(guides.worktree));
+    check("guide drift: the teardown's guide list is the script's, not the deputy's", calls[2].prompt.includes(`\`${own}\``) && !calls[2].prompt.includes("review-stack/oops") && same(r.mapping.map((m) => m.guide), [guides.guides[0].guide, own, guides.guides[2].guide]));
   }
   // Worktree-path drift: the deputy's path is nobody's to remove on its word
-  // alone, so no teardown is scheduled over it; it is reported and logged.
+  // alone; the teardown runs over the path the script named and no other.
   {
     const guides = guidesFor(["042-a", "043-b", "044-c"], "042-to-044");
+    const named = guides.worktree;
     guides.worktree = `${wtBase}/_some-other-worktree`;
-    const { fns, calls, logs } = stage({ "review-stack:inspect": inspectionClean, "review-stack:guides": guides, "review-stack:teardown": teardownOk });
+    const { fns, calls } = stage({ "review-stack:inspect": inspectionClean, "review-stack:guides": guides, "review-stack:teardown": teardownOk });
     const r = await fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
-    check("worktree drift: restack not run, no teardown over the unverified path", same(calls.map((c) => c.label), ["review-stack:inspect", "review-stack:guides"]) && /rather than/.test(r.reason) && !r.teardown);
-    check("worktree drift: the path is reported as not reclaimed, with the expected path, and logged", r.worktreeNotReclaimed && r.worktreeNotReclaimed.path === guides.worktree && r.worktreeNotReclaimed.reason.includes(`${wtBase}/_review-stack-042-to-044-${STAMP}`) && logs.some((m) => /NOT reclaimed/.test(m) && m.includes(guides.worktree)));
+    check("worktree drift: restack not run, reason names both paths", same(calls.map((c) => c.label), ["review-stack:inspect", "review-stack:guides", "review-stack:teardown"]) && r.reason.includes(`"${guides.worktree}" rather than "${named}"`));
+    check("worktree drift: the teardown is over the script's path, and the deputy's path is nowhere in its brief", calls[2].prompt.includes(`wt-remove '_review-stack-042-to-044-${STAMP}'`) && calls[2].prompt.includes(named) && !calls[2].prompt.includes("_some-other-worktree") && r.worktree === named);
   }
-  // The guides deputy failed AFTER attaching the worktree, at the path the
-  // batch named: that one is still torn down.
+  // The guides deputy failed AFTER attaching the worktree: still torn down.
   {
     const guides = { ...guidesFor(["042-a", "043-b"], "042-to-044"), ok: false, blocker: "g3 exists" };
     const { fns, calls } = stage({ "review-stack:inspect": inspectionClean, "review-stack:guides": guides, "review-stack:teardown": teardownOk });
     const r = await fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
-    check("guides failure with the expected worktree: reported, teardown reclaims it", /g3 exists/.test(r.reason) && calls.at(-1).label === "review-stack:teardown" && calls.at(-1).prompt.includes(guides.worktree) && !r.worktreeNotReclaimed);
+    check("guides failure with the worktree attached: reported, teardown reclaims it", /g3 exists/.test(r.reason) && calls.at(-1).label === "review-stack:teardown" && calls.at(-1).prompt.includes(guides.worktree));
   }
-  // The guides deputy threw after it may have attached the worktree: nothing
-  // can name the path, so it is reported with the stamp unfilled, not torn down.
+  // The guides deputy threw after it may have attached the worktree: the path
+  // is the script's, so the teardown runs over it and finds out.
   {
-    const { fns, calls, logs } = stage({ "review-stack:inspect": inspectionClean, "review-stack:guides": new Error("deputy interrupted") });
+    const { fns, calls } = stage({ "review-stack:inspect": inspectionClean, "review-stack:guides": new Error("deputy interrupted"), "review-stack:teardown": { ...teardownOk, worktreeRemoved: false, detail: "no worktree is registered there" } });
     const r = await fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
-    check("guides throw: reported, no teardown", calls.length === 2 && /deputy interrupted/.test(r.error) && !r.teardown);
-    check("guides throw: the possibly-registered worktree is reported by the batch's naming and logged", r.worktreeNotReclaimed && r.worktreeNotReclaimed.path === `${wtBase}/_review-stack-042-to-044-<stamp>` && /threw before reporting/.test(r.worktreeNotReclaimed.reason) && logs.some((m) => /NOT reclaimed/.test(m)));
-  }
-  {
-    // The guides agent failed before creating a worktree: nothing to tear down.
-    const { fns, calls } = stage({ "review-stack:inspect": inspectionClean, "review-stack:guides": { ok: false, stamp: "", guides: [], worktree: "", blocker: "branch exists" } });
-    const r = await fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
-    check("guides failure with no worktree: reported, no teardown, nothing left unreclaimed", calls.length === 2 && /branch exists/.test(r.reason) && !r.worktreeNotReclaimed);
+    check("guides throw: reported, teardown still runs over the named path", /deputy interrupted/.test(r.error) && calls.at(-1).label === "review-stack:teardown" && calls.at(-1).prompt.includes(`${wtBase}/_review-stack-042-to-044-${STAMP}`));
+    check("the teardown brief treats an unregistered path as nothing to remove, and lists no pre-rebase ref", calls.at(-1).prompt.includes("lists none, the guide-branch step stopped before attaching it") && calls.at(-1).prompt.includes("(none reported)"));
   }
   {
-    // A bad stamp is refused before any name is adopted.
-    const guides = { ...guidesFor(["042-a", "043-b", "044-c"], "042-to-044"), stamp: "2026-08-27T12:00:00" };
-    const { fns } = stage({ "review-stack:inspect": inspectionClean, "review-stack:guides": guides, "review-stack:teardown": teardownOk });
+    // The guides agent failed before creating a worktree: the teardown still
+    // runs — the deputy's negative is checked at the path, not taken as read.
+    const { fns, calls, logs } = stage({ "review-stack:inspect": inspectionClean, "review-stack:guides": { ok: false, guides: [], worktree: "", blocker: "branch exists" }, "review-stack:teardown": { ...teardownOk, worktreeRemoved: false, detail: "no worktree is registered there" } });
     const r = await fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
-    check("a stamp that is not YYYYMMDD-HHMMSS stops the stage", /YYYYMMDD-HHMMSS/.test(r.reason) && r.built === false);
-    check("a bad stamp leaves the reported worktree unreclaimed rather than torn down: no expected path to prove it by", !r.teardown && r.worktreeNotReclaimed && /no valid stamp/.test(r.worktreeNotReclaimed.reason));
+    check("guides failure with no worktree: reported, teardown ran, its finding logged", calls.length === 3 && /branch exists/.test(r.reason) && logs.some((m) => /NOT removed/.test(m) && /no worktree is registered/.test(m)));
+  }
+  {
+    // A bad stamp is refused before any name is derived: no guide deputy runs.
+    const { fns, calls } = stage({ "review-stack:inspect": { ...inspectionClean, stamp: "2026-08-27T12:00:00" }, "review-stack:guides": guidesFor(["042-a", "043-b", "044-c"], "042-to-044"), "review-stack:teardown": teardownOk });
+    const r = await fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
+    check("a stamp that is not YYYYMMDD-HHMMSS stops the stage before the guide deputy", /YYYYMMDD-HHMMSS/.test(r.reason) && r.built === false && calls.length === 1 && !r.teardown);
   }
 
   // Inspection failure: nothing created, nothing to tear down, no throw.

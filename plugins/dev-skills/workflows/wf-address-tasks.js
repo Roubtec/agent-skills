@@ -3995,9 +3995,11 @@ function reviewStackSafePrefix(order, inspection) {
 }
 
 // `<batch>` in the skill's `review-stack/<batch>-<YYYYMMDD-HHMMSS>/NN-<slug>`
-// form: the task numbers the canonical order spans. The stamp is the agent's
-// (see `reviewStackGuidesPrompt`), so the name is a template here and a
-// function of the stamp once one is reported.
+// form: the task numbers the canonical order spans. The stamp is the
+// inspection deputy's (see `reviewStackInspectPrompt`): the runtime rejects
+// clocks, so a shell derives it, but it is reported BEFORE anything is created,
+// so every name below — guide branches and the worktree alike — is the
+// script's own before the deputy that creates them is asked to.
 function reviewStackBatchLabel(order) {
   const numbers = order.map((t) => (String(t.slug).match(/^\d+[A-Za-z]?/) || [reviewStackRefSegment(t.slug)])[0]);
   return numbers.length > 1 ? `${numbers[0]}-to-${numbers[numbers.length - 1]}` : numbers[0] || "batch";
@@ -4029,16 +4031,16 @@ const REVIEW_STACK_INSPECT_SCHEMA = {
         required: ["branch", "tip", "rangeTaken", "mergeCommits"],
       },
     },
+    stamp: { type: "string", description: "`date -u +%Y%m%d-%H%M%S`, read once in the shell: the `YYYYMMDD-HHMMSS` UTC stamp every name the stage creates will carry." },
     detail: { type: "string" },
   },
-  required: ["ok", "branches"],
+  required: ["ok", "branches", "stamp"],
 };
 
 const REVIEW_STACK_GUIDES_SCHEMA = {
   type: "object",
   properties: {
     ok: { type: "boolean" },
-    stamp: { type: "string", description: "The `YYYYMMDD-HHMMSS` UTC stamp every name this step created carries." },
     guides: {
       type: "array",
       items: {
@@ -4051,7 +4053,7 @@ const REVIEW_STACK_GUIDES_SCHEMA = {
         required: ["branch", "guide", "tip"],
       },
     },
-    worktree: { type: "string", description: "The absolute path of the dedicated worktree attached to g1; empty when none was created." },
+    worktree: { type: "string", description: "The absolute path of the dedicated worktree attached to g1, exactly as the brief named it; empty when none was created." },
     detail: { type: "string" },
     blocker: { type: "string" },
   },
@@ -4136,13 +4138,14 @@ For EACH branch, in that order, report one entry:
 1. \`tip\`: \`git rev-parse --verify refs/heads/<branch>^{commit}\` — the FULL object id it prints, never an abbreviation; the stage refuses a short id, since a prefix is what a growing repository can make ambiguous. Where the branch does not resolve, report an empty \`tip\` and say so in \`detail\`.
 2. \`rangeTaken\` and \`mergeCommits\`: run \`git rev-list --merges <recorded PR base>..<branch>\`. Where it exits 0, report \`rangeTaken: true\` and every object id it printed in \`mergeCommits\` — empty when it printed nothing. Where the recorded base or the branch does not resolve locally, or the command fails, report \`rangeTaken: false\` with an empty \`mergeCommits\` and say why in \`detail\`; the stage reads \`rangeTaken\`, not \`detail\`, and treats an untaken range as a reason not to stack that branch, never as a clean one.
 
+Then, once, read the clock: \`date -u +%Y%m%d-%H%M%S\` — the ref-safe \`YYYYMMDD-HHMMSS\` UTC form \`rebase-stack\` uses for its pre-rebase refs (digits and dashes only; ISO-8601 colons are invalid in ref names) — and report it as \`stamp\`. The script cannot read a clock (the workflow runtime rejects one), and it is what keeps the stage's guide-branch and worktree names collision-free across repeated batches; nothing is created in this step, the names are derived from it afterwards.
+
 Report \`ok: true\` when every branch got a reading (a branch that does not resolve is still a reading), and \`ok: false\` with \`detail\` when git itself could not be run here.`;
 }
 
-function reviewStackGuidesPrompt(prefix, batchLabel, wtBase) {
-  const rows = prefix.map((t, i) => `- b${i + 1}: \`${t.branch}\` at \`${t.tip}\` → g${i + 1}: \`${reviewStackGuideName(batchLabel, "<STAMP>", i, t.slug)}\``).join("\n");
-  const worktree = `${wtBase}/${reviewStackWorktreeSlug(batchLabel, "<STAMP>")}`;
-  return `Create the disposable guide branches for the batch's local review stack, and the one dedicated worktree the restack runs in. This step creates exactly the ${prefix.length} branches and the one worktree named below and nothing else: no canonical branch is checked out, moved, or rewritten, nothing is fetched, and nothing is pushed.
+function reviewStackGuidesPrompt(mapping, worktree) {
+  const rows = mapping.map((m, i) => `- b${i + 1}: \`${m.branch}\` at \`${m.tip}\` → g${i + 1}: \`${m.guide}\``).join("\n");
+  return `Create the disposable guide branches for the batch's local review stack, and the one dedicated worktree the restack runs in. This step creates exactly the ${mapping.length} branches and the one worktree named below and nothing else: no canonical branch is checked out, moved, or rewritten, nothing is fetched, and nothing is pushed.
 
 ${DEPUTY_FINISH_IN_TURN}
 
@@ -4150,12 +4153,12 @@ ${DESTROY_BOUNDARY}
 
 You stand in the repository's SHARED main checkout (confirm with \`git rev-parse --show-toplevel\`; do not \`cd\` into any \`.worktrees/...\` worktree). The branch creations and the worktree add below are the specific mutations this assignment spells out.
 
-1. Derive the stamp ONCE, in your shell, and use it in every name: \`STAMP="$(date -u +%Y%m%d-%H%M%S)"\` — the ref-safe \`YYYYMMDD-HHMMSS\` UTC form \`rebase-stack\` uses for its pre-rebase refs (digits and dashes only; ISO-8601 colons are invalid in ref names). Report it as \`stamp\`. The script cannot derive it — the workflow runtime rejects clocks — and it is what keeps names collision-free across repeated batches.
-2. Create each guide branch at EXACTLY the captured tip listed for its canonical branch, with \`git branch <guide> <tip>\` (a create, never \`-f\`: an existing name is a collision to report as \`ok: false\`, not to overwrite). Substitute \`$STAMP\` for \`<STAMP>\` in every name; change nothing else about them. Before creating anything, re-read each canonical branch's tip — \`git rev-parse --verify refs/heads/<branch>^{commit}\` — and require it to equal the tip listed here; a branch that moved since the inspection is \`ok: false\` with the mismatch in \`blocker\`, and you create NOTHING in that case. Do not point a guide at the branch NAME: the tip is what was inspected.
+1. The names below are final — the stamp in them was read by the inspection step, and the teardown will look for exactly these — so use each one as written and derive nothing.
+2. Create each guide branch at EXACTLY the captured tip listed for its canonical branch, with \`git branch <guide> <tip>\` (a create, never \`-f\`: an existing name is a collision to report as \`ok: false\`, not to overwrite). Before creating anything, re-read each canonical branch's tip — \`git rev-parse --verify refs/heads/<branch>^{commit}\` — and require it to equal the tip listed here; a branch that moved since the inspection is \`ok: false\` with the mismatch in \`blocker\`, and you create NOTHING in that case. Do not point a guide at the branch NAME: the tip is what was inspected.
 ${rows}
 3. Read every guide back — \`git rev-parse --verify refs/heads/<guide>^{commit}\` — and report the full object id as that entry's \`tip\`; it must equal the listed one.
-4. Attach the dedicated worktree to g1, and to g1 only: \`git worktree add ${shq(worktree)} <g1>\` with \`$STAMP\` substituted for \`<STAMP>\` — \`g1\` already exists, so this attaches it without creating any branch — and report the absolute path you created as \`worktree\`. Run it from the main checkout so the path lands under the batch's worktree base as written; do not choose another location.
-5. Nothing else: no dependency install, no build, no push, no fetch, no checkout in the main checkout. Report \`ok: true\` with \`stamp\`, the \`guides\` list (one entry per canonical branch, in order: \`branch\`, \`guide\`, \`tip\`), and \`worktree\`. On any failure after a guide was created, report \`ok: false\`, list in \`guides\` exactly the branches that DO exist, report \`worktree\` empty or as created, and say in \`blocker\` what failed — delete nothing on the way out.`;
+4. Attach the dedicated worktree to g1, and to g1 only: \`git worktree add ${shq(worktree)} ${shq(mapping[0].guide)}\` — \`g1\` already exists, so this attaches it without creating any branch — and report the absolute path you created as \`worktree\`. Run it from the main checkout so the path lands exactly as written; do not choose another location, since the teardown reclaims that path and no other.
+5. Nothing else: no dependency install, no build, no push, no fetch, no checkout in the main checkout. Report \`ok: true\` with the \`guides\` list (one entry per canonical branch, in order: \`branch\`, \`guide\`, \`tip\`), and \`worktree\`. On any failure after a guide was created, report \`ok: false\`, list in \`guides\` exactly the branches that DO exist, report \`worktree\` empty or as created, and say in \`blocker\` what failed — delete nothing on the way out.`;
 }
 
 function reviewStackRestackPrompt({ mapping, base, worktree, slug }) {
@@ -4204,7 +4207,7 @@ You stand in the repository's SHARED main checkout (confirm with \`git rev-parse
 1. **Canonical tips unchanged.** For each branch, \`git rev-parse --verify refs/heads/<branch>^{commit}\` must print the object id captured before the guide branches were created:
 ${tipRows}
    Report \`tipsUnchanged\` and every mismatch in \`tipMismatches\`. Move NOTHING to fix one: a moved canonical branch is a finding for the maintainer, and the pre-rebase refs below are its recovery source, which is why step 5 deletes none of them in that case.
-2. **The worktree is idle and clean.** \`git -C ${shq(worktree)} status --porcelain\` must print nothing, and no Git operation may be in progress there: no \`rebase-merge\`/\`rebase-apply\` path, and no \`MERGE_HEAD\`, \`CHERRY_PICK_HEAD\`, \`REVERT_HEAD\`, or \`BISECT_LOG\` under its git dir (\`git -C <worktree> rev-parse --git-path <name>\` names each; the last three print empty porcelain). Where \`git rev-parse --show-toplevel\` there does not print exactly \`${worktree}\`, or the branch checked out there — \`git -C <worktree> branch --show-current\`, or mid-rebase the one \`git -C <worktree> rev-parse --git-path rebase-merge/head-name\` or \`rebase-apply/head-name\` names — is not one of the guide branches of step 6, remove NOTHING and report what you saw: a worktree at this path holding any other branch is not this batch's to remove, however clean.
+2. **The worktree is idle and clean.** First, \`git worktree list --porcelain\` must list a \`worktree ${worktree}\` line: where it lists none, the guide-branch step stopped before attaching it (or was interrupted before it could), so report \`worktreeRemoved: false\` with \`detail\` saying no worktree is registered there, skip steps 3 and 4, and go on to step 5. \`git -C ${shq(worktree)} status --porcelain\` must print nothing, and no Git operation may be in progress there: no \`rebase-merge\`/\`rebase-apply\` path, and no \`MERGE_HEAD\`, \`CHERRY_PICK_HEAD\`, \`REVERT_HEAD\`, or \`BISECT_LOG\` under its git dir (\`git -C <worktree> rev-parse --git-path <name>\` names each; the last three print empty porcelain). Where \`git rev-parse --show-toplevel\` there does not print exactly \`${worktree}\`, or the branch checked out there — \`git -C <worktree> branch --show-current\`, or mid-rebase the one \`git -C <worktree> rev-parse --git-path rebase-merge/head-name\` or \`rebase-apply/head-name\` names — is not one of the guide branches of step 6, remove NOTHING and report what you saw: a worktree at this path holding any other branch is not this batch's to remove, however clean.
 3. **Abnormal-return recovery, only where step 2 found the tree held.** The restack was told to return clean; where it did not, reset the worktree to the disposable branch's reported pre-rebase ref, clear any untracked leftovers with \`git clean -fd\`, and confirm a clean \`git status\` before removal: identify the guide branch checked out there (\`git -C <worktree> branch --show-current\`; mid-rebase, the branch named by \`git -C <worktree> rev-parse --git-path rebase-merge/head-name\` or \`rebase-apply/head-name\`), find ITS ref in the list of step 5 (\`refs/pre-rebase/<that guide>/<stamp>\`) — where that list holds none for it (a restack that threw reports no list at all), look it up with \`git for-each-ref --format='%(refname)' 'refs/pre-rebase/<that exact guide>/'\`, that one guide's own namespace spelled out in full and never \`refs/pre-rebase/\` itself, and take the newest stamp it prints; a ref found this way is a recovery source only, reported in \`refsNotDeleted\`, and step 5 still deletes nothing beyond its list — abort a rebase still in progress first (\`git -C <worktree> rebase --abort\` — a reset leaves the rebase state behind, and the removal would still refuse), then \`git -C <worktree> reset --hard <that ref>\` and \`git -C <worktree> clean -fd\`, and re-run step 2. Where the checked-out branch is not one of the guide branches below, or no pre-rebase ref of its own is listed or found, recover NOTHING: leave the worktree in place, report why, and skip step 4. The recovery reaches the guide branch only — never a canonical branch, never any other worktree. Report \`recovered: true\` only when this step ran.
 4. **Remove the worktree, refusing rather than forcing.** From this main checkout run \`wt-remove ${shq(slug)}\` — it enforces the step-2 checks itself and refuses over uncommitted work or an in-progress operation; a refusal is the helper working, so report it as \`worktreeRemoved: false\` with its message rather than forcing (\`--force\` never clears those checks; it only clears git's refusal over ignored build artifacts AFTER they pass, which is the one case you may pass it). Where \`command -v wt-remove\` finds no helper, \`git worktree remove ${shq(worktree)}\` after step 2 passed, never with \`--force\`. Then \`git worktree prune\` — the helper's success path removes without pruning — and report \`pruned\`. Removing the worktree never touches a branch.
 5. **Delete exactly these pre-rebase snapshots, and only after step 1 found every canonical tip unchanged** — the unchanged canonical branches are their recovery source; where a tip moved, delete none and list them all in \`refsNotDeleted\`:
@@ -4238,22 +4241,16 @@ async function buildReviewStack({ plan, results, wtBase }) {
   let slug = "";
   let preRebaseRefs = [];
   let restackOutcome = "";
-  let created = false;
-  // Set around the guide-branch deputy's call: a throw between the two (the
-  // deputy interrupted after its `git worktree add`, before it reported) is
-  // the one path where a worktree may exist that nothing here can name.
+  // Set just before the guide-branch deputy is called, and what owes the
+  // teardown: from that call on, a worktree may stand at the path the script
+  // named — the deputy reported it, failed after attaching it, or was
+  // interrupted before it could report — and the teardown is the one place
+  // that finds out which, refusing over anything but this batch's own guide
+  // branch at exactly that path, and reporting an unattached path as nothing
+  // to remove. Every name is the script's, derived from the inspection's
+  // stamp before the deputy runs, so nothing the deputy reports is ever the
+  // path or the branch list the teardown is handed.
   let guidesStarted = false;
-  let guidesReturned = false;
-  // A worktree this stage will not tear down but which may be registered, with
-  // why: reported and logged rather than reclaimed, since the only way to find
-  // it is to glob the shared worktree base, which the destroy boundary forbids
-  // a deputy and the script may not run git for. `path` is the exact path the
-  // deputy reported, or the batch's own naming with `<stamp>` unfilled where
-  // the deputy never reported one.
-  const leaveUnreclaimed = (path, reason) => {
-    report.worktreeNotReclaimed = { path, reason };
-    log(`Review stack: a dedicated worktree may be registered at ${path} and was NOT reclaimed: ${reason}. Check \`git worktree list\` and, once verified as this batch's, remove it with \`wt-remove\`.`);
-  };
   // The stage's own steps, as a function whose early returns all land on the
   // teardown below: a guide-branch step that created the worktree and then
   // reported a drift has still created it, and a `return` out of a `try`
@@ -4274,54 +4271,40 @@ async function buildReviewStack({ plan, results, wtBase }) {
         : "the safe prefix holds fewer than two branches";
       return;
     }
+    const stamp = typeof inspection.stamp === "string" ? inspection.stamp : "";
+    report.stamp = stamp;
+    if (!REVIEW_STACK_STAMP.test(stamp)) {
+      report.reason = `the inspection reported stamp ${JSON.stringify(stamp)}, not the YYYYMMDD-HHMMSS form; no guide branch was named, so none was created`;
+      return;
+    }
     tips = prefix.map((t) => ({ branch: t.branch, tip: t.tip }));
+    mapping = prefix.map((t, i) => ({ branch: t.branch, guide: reviewStackGuideName(batchLabel, stamp, i, t.slug), tip: t.tip }));
+    slug = reviewStackWorktreeSlug(batchLabel, stamp);
+    worktree = `${wtBase}/${slug}`;
+    report.mapping = mapping;
+    report.worktree = worktree;
 
     guidesStarted = true;
-    const guides = await agent(reviewStackGuidesPrompt(prefix, batchLabel, wtBase), { label: "review-stack:guides", schema: REVIEW_STACK_GUIDES_SCHEMA });
-    guidesReturned = true;
-    const reported = guides && Array.isArray(guides.guides) ? guides.guides : [];
-    const stamp = guides && typeof guides.stamp === "string" ? guides.stamp : "";
-    // The worktree is what the teardown reclaims, so its existence — as the
-    // agent reported it, whatever else went wrong — is what owes one. Guide
-    // branches alone owe nothing: they are kept on every path. But the path
-    // is the deputy's word, and the teardown runs `wt-remove` over whatever
-    // path it is handed once that tree is clean: only the exact path this
-    // batch asked for — its own naming over the reported stamp — is scheduled,
-    // and any other nonempty answer is reported as unreclaimed rather than
-    // torn down, since a clean worktree at a path this batch never named is
-    // somebody else's.
-    worktree = guides && typeof guides.worktree === "string" ? guides.worktree : "";
-    const expectedWorktree = REVIEW_STACK_STAMP.test(stamp) ? `${wtBase}/${reviewStackWorktreeSlug(batchLabel, stamp)}` : "";
-    created = worktree !== "" && worktree === expectedWorktree;
-    slug = created ? reviewStackWorktreeSlug(batchLabel, stamp) : "";
-    report.stamp = stamp;
-    report.mapping = reported;
-    report.worktree = worktree;
-    if (worktree && !created) {
-      leaveUnreclaimed(worktree, expectedWorktree ? `it is not the path this batch requested (${expectedWorktree}), so nothing here may prove it is this batch's worktree` : "the guide-branch step reported no valid stamp, so the path this batch requested cannot be derived to compare it against");
-    }
+    const guides = await agent(reviewStackGuidesPrompt(mapping, worktree), { label: "review-stack:guides", schema: REVIEW_STACK_GUIDES_SCHEMA });
     if (!guides || guides.ok !== true) {
       report.reason = `the guide branches were not created: ${guides ? guides.blocker || guides.detail || "(no reason reported)" : "(agent returned nothing usable)"}`;
       return;
     }
-    if (!expectedWorktree) {
-      report.reason = `the guide-branch step reported stamp ${JSON.stringify(stamp)}, not the YYYYMMDD-HHMMSS form; the restack did not run`;
-      return;
-    }
-    // The names are a function of the stamp, so the agent's list is checked
-    // against what the script would have named rather than adopted.
-    const expected = prefix.map((t, i) => ({ branch: t.branch, guide: reviewStackGuideName(batchLabel, stamp, i, t.slug), tip: t.tip }));
-    const drift = expected.findIndex((e, i) => !reported[i] || reported[i].branch !== e.branch || reported[i].guide !== e.guide || reported[i].tip !== e.tip);
-    if (drift >= 0 || reported.length !== expected.length || worktree !== expectedWorktree) {
+    // The deputy's word is checked against the names it was handed rather
+    // than adopted: the restack is briefed with the script's names either way,
+    // so a deputy that created something else must not be followed there.
+    const reported = Array.isArray(guides.guides) ? guides.guides : [];
+    const reportedWorktree = typeof guides.worktree === "string" ? guides.worktree : "";
+    const drift = mapping.findIndex((e, i) => !reported[i] || reported[i].branch !== e.branch || reported[i].guide !== e.guide || reported[i].tip !== e.tip);
+    if (drift >= 0 || reported.length !== mapping.length || reportedWorktree !== worktree) {
       const what = drift >= 0
-        ? `expected \`${expected[drift].guide}\` at \`${expected[drift].tip}\` for \`${expected[drift].branch}\`, got ${reported[drift] ? `\`${reported[drift].guide}\` at \`${reported[drift].tip}\` for \`${reported[drift].branch}\`` : "nothing"}`
-        : reported.length !== expected.length
-          ? `${reported.length} guides reported for ${expected.length} requested`
-          : `worktree ${JSON.stringify(worktree)} rather than ${JSON.stringify(expectedWorktree)}`;
+        ? `expected \`${mapping[drift].guide}\` at \`${mapping[drift].tip}\` for \`${mapping[drift].branch}\`, got ${reported[drift] ? `\`${reported[drift].guide}\` at \`${reported[drift].tip}\` for \`${reported[drift].branch}\`` : "nothing"}`
+        : reported.length !== mapping.length
+          ? `${reported.length} guides reported for ${mapping.length} requested`
+          : `worktree ${JSON.stringify(reportedWorktree)} rather than ${JSON.stringify(worktree)}`;
       report.reason = `the guide-branch step reported names, tips, or a worktree that do not match what was requested (${what}); the restack did not run`;
       return;
     }
-    mapping = expected;
 
     const restack = await agent(reviewStackRestackPrompt({ mapping, base, worktree, slug }), { label: "review-stack:restack", schema: REVIEW_STACK_RESTACK_SCHEMA });
     const guideNames = new Set(mapping.map((m) => m.guide));
@@ -4367,17 +4350,16 @@ async function buildReviewStack({ plan, results, wtBase }) {
   } catch (e) {
     report.error = `review-stack stage threw: ${e && e.message ? e.message : String(e)}`;
     restackOutcome = restackOutcome || "the stage threw before or during the restack";
-    if (guidesStarted && !guidesReturned) {
-      leaveUnreclaimed(`${wtBase}/${reviewStackWorktreeSlug(batchLabel, "<stamp>")}`, "the guide-branch step threw before reporting, after it may already have run its `git worktree add`; the stamp in the path is the deputy's and was never reported");
-    }
   }
-  if (created) {
+  if (guidesStarted) {
     // Its own agent, never the restack agent's last act and never the script's:
     // the tips-unchanged verification is a check on the restack's work, and the
-    // script may not do Git work. Runs on the success path and the clean-stop
-    // path alike — a stopped restack leaves the same worktree registered.
+    // script may not do Git work. Runs on the success path, the clean-stop
+    // path, and every failure past the guide-branch call alike — a stopped
+    // restack leaves the same worktree registered, and a guide-branch deputy
+    // that failed or threw after its `git worktree add` leaves it too.
     try {
-      const teardown = await agent(reviewStackTeardownPrompt({ worktree, slug, tips, mapping: mapping.length ? mapping : report.mapping, preRebaseRefs, restackOutcome: restackOutcome || "it did not run" }), { label: "review-stack:teardown", schema: REVIEW_STACK_TEARDOWN_SCHEMA });
+      const teardown = await agent(reviewStackTeardownPrompt({ worktree, slug, tips, mapping, preRebaseRefs, restackOutcome: restackOutcome || "it did not run" }), { label: "review-stack:teardown", schema: REVIEW_STACK_TEARDOWN_SCHEMA });
       report.teardown = teardown || { detail: "teardown agent returned nothing" };
       report.canonicalTipsUnchanged = !!teardown && teardown.tipsUnchanged === true;
       if (teardown && teardown.tipsUnchanged !== true) {
