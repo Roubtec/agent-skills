@@ -18,11 +18,12 @@ Included:
 - **The skill's skip and exclusion rules, inherited rather than restated:** skip on a batch with 0 or 1 mergeable branch; exclude branches that failed review or were skipped; build the guide stack even for an already-linear chain.
 - **The merge-commit safety check** the skill states: inspect each canonical branch's unique history against its recorded PR base, and where `git rev-list --merges <pr-base>..<branch>` is non-empty, build and report the safe prefix rather than linearizing away merge-only conflict resolutions, reporting the remaining canonical order as not integration-checked.
 - **The stage's result joins the batch return value**: the canonical merge order, the `bN → gN` mapping, each guide branch's outcome, any stop point with its conflict files and resolution or abort reason, and the exact `refs/pre-rebase/...` snapshots created. It is reported, never thrown — a failed integration check must not lose a batch's delivery results.
+- **The post-return teardown, inherited rather than restated:** once the subagent returns and that result is captured, verify the canonical `bN` tips still equal the SHAs captured before the guide branches were created and that the dedicated worktree is clean with no rebase in progress, then reclaim that worktree — the same guarded `wt-remove` removal the batch already uses for a task's worktree, which refuses rather than forces over uncommitted state — and delete only the exact `refs/pre-rebase/...` snapshots the subagent reported. This runs on the clean-stop path as well as the success path: a stopped restack leaves the same worktree registered with `g1` checked out, so a stage that only reclaims on success is the one that accumulates them. The guide branches are never deleted; they are the artifact the maintainer inspects.
 - **The stage is skipped, with a reason, on any batch that reached no mergeable branch**, including a batch that aborted, so the existing thrown-stage catch keeps returning what it returns today.
 
 Out of scope:
 
-- Pushing anything, rewriting or moving any canonical task branch `bN`, or touching any remote ref. The guide branches and their worktree are the entire footprint.
+- Pushing anything, rewriting or moving any canonical task branch `bN`, or touching any remote ref. The guide branches are the stage's only surviving footprint; its dedicated worktree is transient and reclaimed before the stage returns.
 - Changing `rebase-stack` itself, which stays a skill: its value is sequential conflict judgment, not fan-out.
 - Restructuring the wave loop or the delivery path — that is task 033, which adapts this stage rather than being blocked by it.
 - Building the same stage for `wf-address-review.js`, which is the single-PR pipeline and has no batch to stack.
@@ -54,16 +55,17 @@ Task 050 reaches the same primary file in a disjoint region — the embedded `re
 - A batch delivering three or more mergeable branches ends by reporting a canonical merge order, a `bN → gN` mapping, and a per-guide-branch outcome, with no canonical branch moved and nothing pushed.
 - A batch with 0 or 1 mergeable branch reports the stage as skipped with its reason and does nothing else.
 - A canonical branch carrying a merge commit in `<pr-base>..<branch>` is not linearized: the safe prefix is built, and the remainder is reported as not integration-checked.
-- A non-trivial conflict stops the stage cleanly with the documented restore behavior, leaves the restack worktree clean, and still returns the batch's delivery results and final main-checkout report.
+- A non-trivial conflict stops the stage cleanly with the documented restore behavior, leaves the restack worktree clean so the teardown's checks pass, and still returns the batch's delivery results and final main-checkout report.
+- The dedicated restack worktree is gone when the stage returns — on the success path and the clean-stop path alike — with `git worktree list` carrying no `_review-stack-...` entry and the `refs/pre-rebase/...` snapshots the stage created deleted, while every guide branch remains.
 - The main-checkout cleanliness comparison is unaffected by the guide refs and the restack worktree.
 - `plugins/dev-skills/workflows/README.md` no longer states that the workflow omits the review stack.
 
 ## Validation
 
-- Run a three-task batch end to end and inspect the resulting guide branches, their worktree, and the reported order; confirm every canonical branch tip is where delivery left it and `origin` is untouched.
+- Run a three-task batch end to end and inspect the resulting guide branches and the reported order; confirm every canonical branch tip is where delivery left it, that `origin` is untouched, and that `git worktree list` carries no leftover restack worktree.
 - Force the non-trivial-conflict path on a scratch batch and confirm the stop, the restore, and that the batch summary still arrives intact.
 - Run `node scripts/test-subagent-destroy-boundary.mjs` after adding the new subagent brief, and `node scripts/test-checkout-cleanliness-report.mjs` after touching anything near the final report. The full `tests.yml` set must stay green.
 
 ## Review plan
 
-Reviewer checks that no canonical task branch or remote ref is written on any path including the failure paths, that the stage's rules are the skill's rather than a second rendering of them, that no `Date.now()`/`Math.random()`/`new Date()` reached the script, that the new subagent brief carries the output-destination rule and the disposable-clone bullet the boundary suite asserts, that a stage failure is reported rather than thrown so the batch's results survive it, and that the placement relative to `finalMainCheckoutReport` is justified in a comment rather than incidental.
+Reviewer checks that no canonical task branch or remote ref is written on any path including the failure paths, that the stage's rules are the skill's rather than a second rendering of them, that no `Date.now()`/`Math.random()`/`new Date()` reached the script, that the new subagent brief carries the output-destination rule and the disposable-clone bullet the boundary suite asserts, that a stage failure is reported rather than thrown so the batch's results survive it, that the dedicated worktree is reclaimed on every path that created it with the guide branches surviving it, and that the placement relative to `finalMainCheckoutReport` is justified in a comment rather than incidental.
