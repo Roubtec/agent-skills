@@ -3914,14 +3914,16 @@ function reviewStackTaskNumber(slug) {
   return m ? { prefix: m[1] || "", number: Number(m[2]), suffix: m[3], label: m[0] } : null;
 }
 // The order between two numbered slugs is decided segment by segment over the
-// whole slug — a digit run as a number, a letter run as text, a separator run
-// before either — rather than by a parsed task number, so that a task number
-// behind any phase, letter (`A-2` before `A-10`) or numeric (`02-3` before
-// `02-12`), compares as a number without the parser having to decide which
-// leading digits are the phase. A digit run sorts before a letter run, which
-// keeps a number's bare form ahead of its suffixed one (`2-b` before `2a-c`).
+// whole slug — a digit run as a number, a letter run as text — rather than by
+// a parsed task number, so that a task number behind any phase, letter (`A-2`
+// before `A-10`) or numeric (`02-3` before `02-12`), compares as a number
+// without the parser having to decide which leading digits are the phase.
+// Where the runs differ in kind, a separator run sorts first, then a digit
+// run, then a letter run: that keeps a number's bare form ahead of its suffixed
+// one (`2-b` before `2a-c`) and a shorter segment ahead of a longer one that
+// extends it (`2-a-3` before `2-a3`).
 const REVIEW_STACK_SLUG_RUNS = /\d+|[A-Za-z]+|[^\dA-Za-z]+/g;
-const reviewStackRunKind = (run) => (/^\d/.test(run) ? 0 : /^[A-Za-z]/.test(run) ? 2 : 1);
+const reviewStackRunKind = (run) => (/^\d/.test(run) ? 1 : /^[A-Za-z]/.test(run) ? 2 : 0);
 function reviewStackSlugCompare(a, b) {
   const ta = reviewStackTaskNumber(a);
   const tb = reviewStackTaskNumber(b);
@@ -3931,7 +3933,7 @@ function reviewStackSlugCompare(a, b) {
   for (let i = 0; i < ra.length && i < rb.length; i++) {
     const ka = reviewStackRunKind(ra[i]);
     const kb = reviewStackRunKind(rb[i]);
-    const d = ka !== kb ? ka - kb : ka === 0 ? Number(ra[i]) - Number(rb[i]) : ra[i].localeCompare(rb[i]);
+    const d = ka !== kb ? ka - kb : ka === 1 ? Number(ra[i]) - Number(rb[i]) : ra[i].localeCompare(rb[i]);
     if (d) return d;
   }
   return ra.length - rb.length || String(a).localeCompare(String(b));

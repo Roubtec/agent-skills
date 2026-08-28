@@ -106,6 +106,11 @@ const t = (slug, base, dependsOn = []) => ({ slug, branch: `task/${slug}`, base,
   const results = ["10-j", "2-b", "9-i", "2a-c", "misc"].map((slug) => ({ slug, branch: `task/${slug}`, status: "done" }));
   const { order } = pure.reviewStackOrder(plan, results);
   check("unpadded task numbers sort numerically, a letter suffix after its number, an unnumbered slug last", same(order.map((x) => x.slug), ["2-b", "2a-c", "9-i", "10-j", "misc"]), JSON.stringify(order.map((x) => x.slug)));
+  // A separator run sorts before a digit run, so a segment that ends where
+  // the other's is still being extended comes first (`2-a-3` before `2-a3`).
+  const sep = ["2-a3", "2-a-3"].map((s) => t(s, "main"));
+  const sepOrder = pure.reviewStackOrder({ defaultBase: "main", waves: [sep] }, sep.map((x) => ({ slug: x.slug, branch: `task/${x.slug}`, status: "done" }))).order;
+  check("a separator run sorts before a digit run", same(sepOrder.map((x) => x.slug), ["2-a-3", "2-a3"]), JSON.stringify(sepOrder.map((x) => x.slug)));
 }
 {
   // The `write-tasks` phase-prefixed fallback (`A-01-...`): the number behind
