@@ -120,20 +120,24 @@ const t = (slug, base, dependsOn = []) => ({ slug, branch: `task/${slug}`, base,
   check("batch label spans phase-prefixed task numbers", label === "A-2-to-A-10", label);
 }
 {
-  // The bound of that parser: a numeric phase (`write-tasks`' `02-12-...`
-  // example) is read as the task number itself, so within one phase the
-  // slugs keep whole-slug text order — `12` before `2` before `3` — and the
-  // label names the phase. Widening the prefix to digits would misread a
-  // plain-numbered `042-3d-model` as phase 042, task 3, so this is pinned as
-  // the accepted shape rather than repaired.
+  // `write-tasks`' other fallback, a numeric phase (`02-12-...`): the task
+  // number behind the phase compares as a number too — `2` before `3` before
+  // `12` — because the order is decided segment by segment over the whole
+  // slug rather than by which leading digits the parser takes for the phase.
+  // The label still names the phase, and a plain-numbered slug whose name
+  // starts with a digit (`042-3d-model`) is neither read as a phase nor
+  // displaced from its number.
   const slugs = ["02-12-hook", "02-3-x", "01-9-y", "02-2-z"];
   const plan = { defaultBase: "main", waves: [slugs.map((s) => t(s, "main"))] };
   const results = slugs.map((slug) => ({ slug, branch: `task/${slug}`, status: "done" }));
   const { order } = pure.reviewStackOrder(plan, results);
-  check("numeric-phase slugs sort by phase as the number, then whole-slug text within it", same(order.map((x) => x.slug), ["01-9-y", "02-12-hook", "02-2-z", "02-3-x"]), JSON.stringify(order.map((x) => x.slug)));
+  check("numeric-phase slugs sort by phase, then by task number as a number within it", same(order.map((x) => x.slug), ["01-9-y", "02-2-z", "02-3-x", "02-12-hook"]), JSON.stringify(order.map((x) => x.slug)));
   check("batch label of a numeric-phase batch names the phase", pure.reviewStackBatchLabel(order.slice(1)) === "02-to-02", pure.reviewStackBatchLabel(order.slice(1)));
   const plain = pure.reviewStackTaskNumber("042-3d-model");
   check("a plain-numbered slug whose name starts with a digit is not read as a phase", plain && plain.prefix === "" && plain.number === 42, JSON.stringify(plain));
+  const mixed = ["045-y", "041-x", "043-w", "042-3d-model", "042-widget"].map((s) => t(s, "main"));
+  const mixedOrder = pure.reviewStackOrder({ defaultBase: "main", waves: [mixed] }, mixed.map((x) => ({ slug: x.slug, branch: x.branch, status: "done" }))).order;
+  check("a digit-led name segment keeps its task number's place", same(mixedOrder.map((x) => x.slug), ["041-x", "042-3d-model", "042-widget", "043-w", "045-y"]), JSON.stringify(mixedOrder.map((x) => x.slug)));
 }
 {
   // Exclusions: failed review, skipped dependents, crashed, held, unreported.
@@ -273,6 +277,11 @@ const teardownOk = { tipsUnchanged: true, tipMismatches: [], recovered: false, w
     check("one mergeable branch: skipped with the fewer-than-two reason, nothing run", r.skipped === true && /1 mergeable branch/.test(r.reason) && calls.length === 0, r.reason);
     const zero = await fns.buildReviewStack({ plan: plan3, results: [], wtBase });
     check("zero mergeable branches: skipped, nothing run", zero.skipped === true && /0 mergeable/.test(zero.reason) && calls.length === 0);
+    // A cycle leaves its members out of the order: two mergeable branches in
+    // one are the cycle diagnostic, never "the batch reached 0 mergeable".
+    const cyclic = { defaultBase: "main", waves: [[t("042-a", "main", ["043-b"]), t("043-b", "main", ["042-a"])]] };
+    const c = await fns.buildReviewStack({ plan: cyclic, results: results3.slice(0, 2), wtBase });
+    check("a dependency cycle among mergeable branches: skipped naming the cycle, not the count, nothing run", c.skipped === true && /not acyclic \(042-a, 043-b\)/.test(c.reason) && !/reached \d+ mergeable/.test(c.reason) && calls.length === 0, c.reason);
   }
 
   // A name a shell would interpret ends the stage before any deputy runs: the
@@ -401,6 +410,20 @@ const teardownOk = { tipsUnchanged: true, tipMismatches: [], recovered: false, w
     const partial = stage({ "review-stack:inspect": inspectionClean, "review-stack:guides": guides, "review-stack:restack": short, "review-stack:teardown": teardownOk });
     const p = await partial.fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
     check("ok without an outcome for every guide: not built, the unaccounted guide named, teardown still ran", p.built === false && p.skipped === false && p.reason.includes(`\`${g[2]}\``) && !(p.integrationCheckedPrefix || []).length && partial.calls.at(-1).label === "review-stack:teardown", p.reason);
+    // An outcome entry for every guide is not a completion for every guide:
+    // `not reached` beside `ok: true` and no stop point is still not built.
+    for (const outcome of ["not reached", "stopped at this branch", "restored to snapshot"]) {
+      const notDone = restackOk(g, []);
+      notDone.outcomes[2].outcome = outcome;
+      const run = stage({ "review-stack:inspect": inspectionClean, "review-stack:guides": guides, "review-stack:restack": notDone, "review-stack:teardown": teardownOk });
+      const n = await run.fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
+      check(`ok with a \`${outcome}\` outcome: not built, the guide named as not completed, teardown still ran`, n.built === false && n.skipped === false && n.reason.includes(`\`${g[2]}\``) && /no completed/.test(n.reason) && !(n.integrationCheckedPrefix || []).length && run.calls.at(-1).label === "review-stack:teardown", n.reason);
+    }
+    const validated = restackOk(g, []);
+    validated.outcomes[1].outcome = "rebased + validation passed";
+    validated.outcomes[2].outcome = "Rebased with conflicts (resolved)";
+    const v = await stage({ "review-stack:inspect": inspectionClean, "review-stack:guides": guides, "review-stack:restack": validated, "review-stack:teardown": teardownOk }).fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
+    check("every `rebased …` shape of the vocabulary counts as completed", v.built === true, v.reason);
     check("the source derives `built` from the stop point and the outcomes, never from `ok` alone", !/report\.built = restack\.ok === true/.test(src));
   }
 
@@ -429,15 +452,32 @@ const teardownOk = { tipsUnchanged: true, tipMismatches: [], recovered: false, w
     check("merge guard: the teardown still verifies the guarded branch's tip beyond the safe prefix", calls[3].prompt.includes(`\`task/044-c\` must still be \`${oid(3)}\``) && calls[3].prompt.includes(`\`task/043-b\` must still be \`${oid(2)}\``));
   }
   {
-    // A merge on b2 of three leaves a one-branch prefix: nothing to stack.
+    // A merge on b2 of three leaves a one-branch safe prefix, and the skill
+    // says to build the safe prefix: the batch reached two mergeable
+    // branches, so the skip below two does not apply, and g1 alone is
+    // rebased onto the base — that is b1's check against the local base.
     const inspection = { ok: true, stamp: STAMP, branches: [
       { branch: "task/042-a", tip: oid(1), rangeTaken: true, mergeCommits: [] },
       { branch: "task/043-b", tip: oid(2), rangeTaken: true, mergeCommits: ["f".repeat(40)] },
       { branch: "task/044-c", tip: oid(3), rangeTaken: true, mergeCommits: [] },
     ] };
+    const guides = guidesFor(["042-a"], "042-to-044");
+    const { fns, calls } = stage({ "review-stack:inspect": inspection, "review-stack:guides": guides, "review-stack:restack": restackOk([guides.guides[0].guide], []), "review-stack:teardown": teardownOk });
+    const r = await fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
+    check("merge guard on b2: the one-branch safe prefix is built, the rest reported as not integration-checked", same(calls.map((c) => c.label), ["review-stack:inspect", "review-stack:guides", "review-stack:restack", "review-stack:teardown"]) && r.built === true && same(r.safePrefix, ["task/042-a"]) && same(r.integrationCheckedPrefix, ["task/042-a"]) && same(r.notIntegrationChecked, ["task/043-b", "task/044-c"]) && r.mergeGuard.branch === "task/043-b", r.reason);
+    check("merge guard on b2: the restack chain names the one guide, onto the base", calls[2].prompt.includes(`chain ${guides.guides[0].guide} onto main`));
+    check("merge guard on b2: the teardown still verifies every inspected tip", calls[3].prompt.includes(`\`task/043-b\` must still be \`${oid(2)}\``) && calls[3].prompt.includes(`\`task/044-c\` must still be \`${oid(3)}\``));
+  }
+  {
+    // A merge on b1 leaves an empty prefix: nothing to stack, no guide created.
+    const inspection = { ok: true, stamp: STAMP, branches: [
+      { branch: "task/042-a", tip: oid(1), rangeTaken: true, mergeCommits: ["f".repeat(40)] },
+      { branch: "task/043-b", tip: oid(2), rangeTaken: true, mergeCommits: [] },
+      { branch: "task/044-c", tip: oid(3), rangeTaken: true, mergeCommits: [] },
+    ] };
     const { fns, calls } = stage({ "review-stack:inspect": inspection });
     const r = await fns.buildReviewStack({ plan: plan3, results: results3, wtBase });
-    check("merge guard on b2: no guide is created, the reason names the guard", calls.length === 1 && r.built === false && /043-b/.test(r.reason) && same(r.notIntegrationChecked, ["task/043-b", "task/044-c"]));
+    check("merge guard on b1: no guide is created, the reason names the guard", calls.length === 1 && r.built === false && r.skipped === false && /prefix is empty: `task\/042-a`/.test(r.reason) && same(r.notIntegrationChecked, ["task/042-a", "task/043-b", "task/044-c"]), r.reason);
   }
 
   // Guide-branch drift: the restack does not run; the teardown is briefed with

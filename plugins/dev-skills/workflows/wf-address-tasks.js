@@ -3903,25 +3903,38 @@ function reviewStackRefSegment(s) {
 // The task number of a slug, under the conventions `resolve-tasks` admits: a
 // leading number with an optional letter suffix (`2-b`, `015b-x`), or the
 // same behind a letter phase prefix as in `write-tasks`' `A-01-...` fallback
-// (`A-2-x`, `A-10-y`). The number is compared as a number so `10-` follows
-// `2-` whatever the zero-padding, within its phase; a slug carrying no such
-// number parses to null and sorts after every numbered one, by its text.
-// Only a letter phase prefix is parsed. `write-tasks`' other fallback shape,
-// a numeric phase (`02-12-x`), reads as task number 2 with no prefix, so such
-// slugs keep whole-slug text order within their phase (`02-12-x` before
-// `02-3-x`) and the batch label names the phase. Admitting digits in the
-// prefix would misread a plain-numbered slug whose name starts with a digit
-// (`042-3d-model` as phase 042, task 3), so the narrower bound is kept.
+// (`A-2-x`, `A-10-y`). It names the batch (the label) and tells a numbered
+// slug from one carrying no number, which sorts after every numbered one.
+// A numeric phase (`write-tasks`' `02-12-x`) reads as task 2 with no prefix,
+// which is the right label for a batch of that phase; widening the prefix to
+// digits would misread a plain-numbered `042-3d-model` as phase 042, task 3.
 const REVIEW_STACK_TASK_NUMBER = /^(?:([A-Za-z]+)-)?(\d+)([A-Za-z]?)/;
 function reviewStackTaskNumber(slug) {
   const m = String(slug).match(REVIEW_STACK_TASK_NUMBER);
   return m ? { prefix: m[1] || "", number: Number(m[2]), suffix: m[3], label: m[0] } : null;
 }
+// The order between two numbered slugs is decided segment by segment over the
+// whole slug — a digit run as a number, a letter run as text, a separator run
+// before either — rather than by a parsed task number, so that a task number
+// behind any phase, letter (`A-2` before `A-10`) or numeric (`02-3` before
+// `02-12`), compares as a number without the parser having to decide which
+// leading digits are the phase. A digit run sorts before a letter run, which
+// keeps a number's bare form ahead of its suffixed one (`2-b` before `2a-c`).
+const REVIEW_STACK_SLUG_RUNS = /\d+|[A-Za-z]+|[^\dA-Za-z]+/g;
+const reviewStackRunKind = (run) => (/^\d/.test(run) ? 0 : /^[A-Za-z]/.test(run) ? 2 : 1);
 function reviewStackSlugCompare(a, b) {
   const ta = reviewStackTaskNumber(a);
   const tb = reviewStackTaskNumber(b);
   if (!ta || !tb) return (ta ? -1 : tb ? 1 : 0) || String(a).localeCompare(String(b));
-  return ta.prefix.localeCompare(tb.prefix) || ta.number - tb.number || ta.suffix.localeCompare(tb.suffix) || String(a).localeCompare(String(b));
+  const ra = String(a).match(REVIEW_STACK_SLUG_RUNS) || [];
+  const rb = String(b).match(REVIEW_STACK_SLUG_RUNS) || [];
+  for (let i = 0; i < ra.length && i < rb.length; i++) {
+    const ka = reviewStackRunKind(ra[i]);
+    const kb = reviewStackRunKind(rb[i]);
+    const d = ka !== kb ? ka - kb : ka === 0 ? Number(ra[i]) - Number(rb[i]) : ra[i].localeCompare(rb[i]);
+    if (d) return d;
+  }
+  return ra.length - rb.length || String(a).localeCompare(String(b));
 }
 
 // Every name the stage's briefs hand a deputy — canonical branches, their
@@ -4278,11 +4291,13 @@ async function buildReviewStack({ plan, results, wtBase }) {
   const canonicalOrder = order.map((t) => t.branch);
   const base = plan.defaultBase;
   const report = { built: false, skipped: false, reason: "", base, canonicalOrder, excluded };
-  if (order.length < 2) {
-    return { ...report, skipped: true, reason: `the batch reached ${order.length} mergeable branch${order.length === 1 ? "" : "es"}; the skill skips the stack below two` };
-  }
+  // A cycle leaves its members out of `order`, so it is judged before the
+  // count is, or a cyclic pair would read as a batch that reached too few.
   if (cycle.length) {
     return { ...report, skipped: true, reason: `the dependency graph among the mergeable branches is not acyclic (${cycle.join(", ")}); no merge order can be emitted` };
+  }
+  if (order.length < 2) {
+    return { ...report, skipped: true, reason: `the batch reached ${order.length} mergeable branch${order.length === 1 ? "" : "es"}; the skill skips the stack below two` };
   }
   const unsafeName = [base, ...order.flatMap((t) => [t.branch, t.base])].find((name) => !REVIEW_STACK_SHELL_SAFE.test(String(name)));
   if (unsafeName !== undefined) {
@@ -4332,10 +4347,13 @@ async function buildReviewStack({ plan, results, wtBase }) {
     report.safePrefix = prefix.map((t) => t.branch);
     report.notIntegrationChecked = unchecked;
     report.mergeGuard = guard;
-    if (prefix.length < 2) {
+    // The skill skips below two MERGEABLE branches, judged above; a safe prefix
+    // of one is still built, since its guide is what checks that branch
+    // against the local base. Only an empty prefix leaves nothing to stack.
+    if (prefix.length === 0) {
       report.reason = guard
-        ? `the safe prefix holds ${prefix.length} branch${prefix.length === 1 ? "" : "es"}: \`${guard.branch}\` ends it (${guard.reason}), so there is nothing to stack; the canonical order stands as the recommendation, not integration-checked`
-        : "the safe prefix holds fewer than two branches";
+        ? `the safe prefix is empty: \`${guard.branch}\` ends it (${guard.reason}), so there is nothing to stack; the canonical order stands as the recommendation, not integration-checked`
+        : "the safe prefix is empty";
       return;
     }
     const stamp = typeof inspection.stamp === "string" ? inspection.stamp : "";
@@ -4402,10 +4420,12 @@ async function buildReviewStack({ plan, results, wtBase }) {
       // `built` is derived from the packet as a whole, never from `ok` alone:
       // the schema admits `ok: true` beside a nonempty `stoppedAt`, and the
       // terminal summary suppresses its not-completed log on `built`, so a
-      // stop point wins over the flag, and a completion must account for
-      // every guide in the mapping before it counts.
+      // stop point wins over the flag, and a completion must report a
+      // `rebased …` outcome — the vocabulary's completed shapes — for every
+      // guide in the mapping before it counts; `not reached`, `stopped at
+      // this branch`, and `restored to snapshot` are not completions.
       const outcomes = Array.isArray(restack.outcomes) ? restack.outcomes : [];
-      const unaccounted = mapping.filter((m) => !outcomes.some((o) => o && o.guide === m.guide)).map((m) => m.guide);
+      const unaccounted = mapping.filter((m) => !outcomes.some((o) => o && o.guide === m.guide && /^rebased\b/i.test(String(o.outcome)))).map((m) => m.guide);
       if (restack.stoppedAt) {
         const at = mapping.findIndex((m) => m.guide === restack.stoppedAt);
         report.integrationCheckedPrefix = at > 0 ? mapping.slice(0, at).map((m) => m.branch) : [];
@@ -4418,8 +4438,8 @@ async function buildReviewStack({ plan, results, wtBase }) {
         report.integrationCheckedPrefix = mapping.map((m) => m.branch);
         restackOutcome = "it completed";
       } else if (restack.ok === true) {
-        restackOutcome = "it reported ok without an outcome for every guide";
-        report.reason = `the restack reported ok but no outcome for ${unaccounted.map((g) => `\`${g}\``).join(", ")}, so the stack is not taken as built`;
+        restackOutcome = "it reported ok without a completed outcome for every guide";
+        report.reason = `the restack reported ok but no completed (\`rebased …\`) outcome for ${unaccounted.map((g) => `\`${g}\``).join(", ")}, so the stack is not taken as built`;
       } else {
         restackOutcome = "it reported a failure without a stop point";
         report.reason = `the restack did not complete: ${restack.detail || "(no detail reported)"}`;
