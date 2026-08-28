@@ -32,7 +32,7 @@ The first probe is doing the real work: `--cherry-pick` drops commits that have 
 Behaviour was verified against a scratch repository for each case below.
 
 | Situation | `S` | `H` ancestor of `R` | Outcome |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Identical | empty | yes | work |
 | Local ahead by an unpushed commit | empty | no | work |
 | Rebased onto a newer base | empty | no | work |

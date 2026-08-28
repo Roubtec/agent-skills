@@ -7,7 +7,7 @@ Fourteen shipped skill files — seven under `plugins/dev-skills/skills/` and th
 Provenance was measured twice, and the second measurement is why this task shipped when it did. The table below is the current one; the row that moved is `Codex on powbox`, and what moved it was `Roubtec/powbox` task 061 landing and a rebuilt image carrying its output.
 
 | Consumer | `dc-enter` on PATH? | Why |
-|---|---|---|
+| --- | --- | --- |
 | Claude on powbox | yes | Claude's plugin runtime puts `plugins/dev-skills/bin/` on PATH — *not* powbox |
 | Claude off powbox | yes | the same plugin runtime, and the helpers ship in that tree |
 | Codex on powbox | yes | powbox bakes both helpers into `/usr/local/bin` from this repository's `plugins/dev-skills/bin/`, through the same pipe that bakes `gh-review-threads` |

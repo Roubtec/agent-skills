@@ -235,11 +235,11 @@ Parse-check any changed dynamic workflow under `plugins/dev-skills/workflows/`. 
 
 ## Consumers
 
-| Consumer                        | Channel                                                               |
-|---------------------------------|-----------------------------------------------------------------------|
-| Claude Code users (any machine) | plugin install from this marketplace                                  |
-| powbox containers (Claude)      | same plugin channel, pre-installed at image build                     |
-| powbox containers (Codex)       | `codex/` tree synced at start from the marketplace clone              |
+| Consumer | Channel |
+| --------------------------------- | ----------------------------------------------------------------------- |
+| Claude Code users (any machine) | plugin install from this marketplace |
+| powbox containers (Claude) | same plugin channel, pre-installed at image build |
+| powbox containers (Codex) | `codex/` tree synced at start from the marketplace clone |
 
 The `enable-worktrees`, `declare-shadows`, and `session-learnings` skills intentionally describe powbox facilities but live here so both harness flavors refresh through the shared plugin channel. Container implementation details such as helper binaries, mount setup, and skill-sync machinery remain in the `Roubtec/powbox` repo.
 
