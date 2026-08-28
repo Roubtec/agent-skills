@@ -910,6 +910,9 @@ const FIXTURES = {
       // The pipelined guard's arm: the other sides are delivered, reserved, or
       // outside the run, so the side to change is decided and listed read-only.
       ["resolveCollisionsPrompt (fixed sides)", (f) => f.resolveCollisionsPrompt([task], [{ kind: "task-number", name: "042", branches: [task.branch], external: true, member: "#7" }], true, [{ branch: "task/043-x", state: "reserved" }, { member: "#7", state: "outside this run" }]), COLLISION_TEMP_DIRECTORY],
+      // A same-path clash left to the rebase onto an advanced base: the file is
+      // named as kept, and the kept text orders no path or temp dir of its own.
+      ["resolveCollisionsPrompt (kept for the rebase)", (f) => f.resolveCollisionsPrompt([task], [{ kind: "symbol", name: "helper", branches: [task.branch, "task/043-x"], path: "src/a.ts" }], true, [{ branch: "task/043-x", state: "delivered" }], ["src/a.ts"]), COLLISION_TEMP_DIRECTORY],
     ],
     // The rebase onto a base a merged sibling advanced (task 033): the remote
     // arm carries the lease push, the no-remote arm pins the local ref.
