@@ -4720,15 +4720,18 @@ async function runTaskPipeline(task, ctx) {
     // in-flight task owes it. What a sibling's scan reads of this member is
     // its adds against the merge-base of its ref and its recorded base, so a
     // ref the deputy has replayed but not yet reported — it validates and
-    // pushes after the replay — reads exactly the same where the merged parent
-    // is an ancestor of the target (a merge or rebase-merge), and over-lists
-    // the parent's own files, which the target already holds, only where the
-    // parent was squash-merged. That read is the same under either recorded
-    // base for an interval either side of the replay — moving the ledger copy
-    // first would over-list the unreplayed ref the same way — so no ordering
-    // closes it; only publishing the ref and the ledger copy in one step
-    // would, and its worst case is a false hold on the sibling, which owes
-    // the same names to the target at its own advance. A hold here is
+    // pushes after the replay — reads its own adds exactly only where the
+    // target added nothing after the parent's tip; otherwise it over-lists
+    // the target's later adds, which the target already holds, and where the
+    // parent's tip is not an ancestor of the target (a squash, or a
+    // rebase-and-merge that rewrote it) the merge-base falls back to the fork
+    // point and the parent's own merged files are over-listed too. That read
+    // is the same under either recorded base for an interval either side of
+    // the replay — moving the ledger copy first would over-list the
+    // unreplayed ref the same way — so no ordering closes it; only publishing
+    // the ref and the ledger copy in one step would, and its worst case is a
+    // false hold on the sibling, which owes the same names to the target at
+    // its own advance, never a wrong delivery. A hold here is
     // not a delivery outcome: the branch is held for inspection with the
     // cycle's push in place, as every hold is, so the reservation is released
     // rather than settled — nothing was orphaned by a delivery that never ran.
