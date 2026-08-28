@@ -4717,9 +4717,18 @@ async function runTaskPipeline(task, ctx) {
     // The rebase onto an advanced base runs OUTSIDE the turn, under the
     // reservation: it replays, builds, tests, and re-reviews — the expensive
     // work the guard must not serialize, since after one sibling merges every
-    // in-flight task owes it — and it changes nothing a sibling's scan reads
-    // (the branch ref moves only when the rebase completes, and the files it
-    // adds relative to its base are the same before and after). A hold here is
+    // in-flight task owes it. What a sibling's scan reads of this member is
+    // its adds against the merge-base of its ref and its recorded base, so a
+    // ref the deputy has replayed but not yet reported — it validates and
+    // pushes after the replay — reads exactly the same where the merged parent
+    // is an ancestor of the target (a merge or rebase-merge), and over-lists
+    // the parent's own files, which the target already holds, only where the
+    // parent was squash-merged. That read is the same under either recorded
+    // base for an interval either side of the replay — moving the ledger copy
+    // first would over-list the unreplayed ref the same way — so no ordering
+    // closes it; only publishing the ref and the ledger copy in one step
+    // would, and its worst case is a false hold on the sibling, which owes
+    // the same names to the target at its own advance. A hold here is
     // not a delivery outcome: the branch is held for inspection with the
     // cycle's push in place, as every hold is, so the reservation is released
     // rather than settled — nothing was orphaned by a delivery that never ran.
