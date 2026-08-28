@@ -3450,7 +3450,7 @@ async function discoverGuardCollisions({ ready, members, defaultBase }) {
 // the clash is blocked. The judgment survives only for a clash among several
 // held branches, which the guard's one-at-a-time serialization never produces
 // but the brief still states so the deputy is never left without a rule.
-function resolveCollisionsPrompt(tasks, collisions, remote, fixed = []) {
+function resolveCollisionsPrompt(tasks, collisions, remote, fixed = [], kept = []) {
   const taskList = tasks
     .map(
       (t) =>
@@ -3459,6 +3459,9 @@ function resolveCollisionsPrompt(tasks, collisions, remote, fixed = []) {
     .join("\n");
   const fixedList = fixed.length
     ? `\nRead-only sides — delivered, reserved by a task still delivering, or outside this run; NEVER rename, edit, or enter these, whatever the clash:\n${fixed.map((f) => `- ${f.branch ? `branch ${JSON.stringify(f.branch)}` : `outside member ${JSON.stringify(f.member || "")}`}${f.state ? ` (${f.state})` : ""}`).join("\n")}\n`
+    : "";
+  const keptList = kept.length
+    ? `\nFiles LEFT IN PLACE for the rebase — each is also added by a member the held branch's advanced base has absorbed, and the rebase onto that base owes the maintainer the add/add conflict on it. NEVER rename, move, or delete these on the held branch, whatever other clash names them; a symbol clash inside one is settled by renaming the symbol within the file, never the file:\n${kept.map((k) => `- ${JSON.stringify(k)}`).join("\n")}\n`
     : "";
   const collisionList = JSON.stringify(collisions, null, 2);
   const pushLine = remote
@@ -3479,7 +3482,7 @@ ${DESTROY_BOUNDARY}
 
 Held branches:
 ${taskList}
-${fixedList}
+${fixedList}${keptList}
 Collisions to resolve (from the read-only guard scan; \`name\` is the colliding value — a path, a basename, a symbol, or a full task number):
 ${collisionList}
 
@@ -3847,7 +3850,7 @@ async function deliveryReReview(task, result, remote, peerMode) {
 // in it can excuse one from the fresh re-review: "which branches did you touch"
 // is a self-report this stage cannot check, so every held branch of a cleared
 // clash is re-reviewed before it delivers.
-async function settleGuardCollisions({ heldTasks, members = [], collisions, label, defaultBase, remote, peerMode }) {
+async function settleGuardCollisions({ heldTasks, members = [], collisions, leftToRebase = [], label, defaultBase, remote, peerMode }) {
   const deliverable = [];
   const held = [];
   if (!heldTasks.length) return { deliverable, held };
@@ -3876,7 +3879,8 @@ async function settleGuardCollisions({ heldTasks, members = [], collisions, labe
       heldTasks.map(({ task }) => ({ slug: task.slug, branch: task.branch, base: task.base || defaultBase })),
       collisions,
       remote,
-      fixed
+      fixed,
+      leftToRebase.map((c) => c.name)
     ),
     { label: `collision-resolve:${label}`, schema: RESOLUTION_SCHEMA }
   );
@@ -3918,7 +3922,15 @@ async function settleGuardCollisions({ heldTasks, members = [], collisions, labe
   // clashed with an outside holder or with itself is re-scanned against exactly
   // the side it clashed with — a scan withheld there would hold a renumbering
   // that succeeded, forever. The re-scan's `taskNumbers` are the claims as they
-  // stand AFTER the rename, and are what the guard reserves.
+  // stand AFTER the rename, and are what the guard reserves. A clash
+  // `leftToRebase` (a same-path clash with a member the advanced base absorbed,
+  // see `collisionsForRebase`) is NOT the resolver's, and the re-scan is
+  // expected to report it again with the file still in place: it is read out of
+  // `stillColliding` — the resolver was never asked to clear it — and its
+  // ABSENCE holds the branch, because the file being gone from the clash is the
+  // resolver having renamed it away to settle another clash on it (a symbol
+  // clash inside the same file is the ordinary shape), after which the rebase
+  // would replay clean over the add/add it owed the maintainer.
   let rescanned = null;
   let taskNumbers = null;
   if (resolutions) {
@@ -3945,7 +3957,10 @@ async function settleGuardCollisions({ heldTasks, members = [], collisions, labe
 
   for (const { task, result } of heldTasks) {
     const related = relatedFor(task);
-    const stillColliding = rescanned ? rescanned.filter((c) => involves(c, task)).map((c) => ({ ...c, guard: label })) : null;
+    const sameClash = (a, b) => a.kind === b.kind && a.name === b.name;
+    const owedToRebase = leftToRebase.filter((c) => involves(c, task));
+    const stillColliding = rescanned ? rescanned.filter((c) => involves(c, task) && !owedToRebase.some((d) => sameClash(c, d))).map((c) => ({ ...c, guard: label })) : null;
+    const movedFromRebase = rescanned ? owedToRebase.filter((d) => !rescanned.some((c) => involves(c, task) && sameClash(c, d))) : [];
 
     if (!resolutions) {
       held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision resolver returned no usable result (no packet at all, or one with no resolution entries); branch held before delivery — deconflict manually and re-review", collisions: related, ...cycleCarried(result) });
@@ -3955,6 +3970,8 @@ async function settleGuardCollisions({ heldTasks, members = [], collisions, labe
       held.push({ slug: task.slug, branch: task.branch, status: "collision-blocked", detail: "shared name must stay identical (imperative); resolver could not deconflict — needs a human/design decision", collisions: related, ...cycleCarried(result) });
     } else if (!stillColliding) {
       held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "post-resolution collision re-scan established nothing (it failed, returned no usable result, could not attribute every named branch, attributed a clash to no second holder, named a clash involving no held branch, or nothing was in hand to compare the branch against); branch held before delivery — re-scan this branch by hand, deconflict what remains, and re-review", collisions: related, ...cycleCarried(result) });
+    } else if (movedFromRebase.length) {
+      held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: `the resolver moved a file the rebase onto the advanced base owed a conflict on (${movedFromRebase.map((c) => c.name).join(", ")}): the post-resolution re-scan no longer reports the same-path clash the guard left to the rebase; branch held before delivery — restore the file at its original path (the rebase surfaces the add/add for the maintainer), settle the other clash without moving it, and re-review`, collisions: [...owedToRebase, ...stillColliding], ...cycleCarried(result) });
     } else if (stillColliding.length) {
       held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "the clash is still in the refs after the resolver ran; branch held before delivery — rename or renumber this branch's side so that no delivered, reserved, or outside holder shares the value, regenerate whatever derives from it, and re-review", collisions: stillColliding, ...cycleCarried(result) });
     } else {
@@ -4056,17 +4073,19 @@ function baseAdvance(task, merged) {
 // is not in this branch's way, and the rename is the only tool left.
 function collisionsForRebase(task, collisions, merged, advance) {
   if (!advance) return { settle: collisions.slice(), deferred: [] };
-  const into = (m) => (m && typeof m.mergedInto === "string" ? m.mergedInto.trim() : "");
+  const into = (m) => (m && typeof m.mergedInto === "string" ? normalizeBranchName(m.mergedInto) : "");
+  const target = normalizeBranchName(advance.target);
   const absorbed = new Set();
   for (let grew = true; grew; ) {
     grew = false;
     for (const m of merged) {
-      if (typeof m.branch !== "string" || absorbed.has(m.branch)) continue;
-      if (into(m) === advance.target || absorbed.has(into(m))) { absorbed.add(m.branch); grew = true; }
+      const branch = m && typeof m.branch === "string" ? normalizeBranchName(m.branch) : "";
+      if (!branch || absorbed.has(branch)) continue;
+      if (into(m) === target || absorbed.has(into(m))) { absorbed.add(branch); grew = true; }
     }
   }
-  const own = new Set([task.branch, task.slug]);
-  const deferred = collisions.filter((c) => c && c.kind === "path" && c.external !== true && Array.isArray(c.branches) && c.branches.some((b) => !own.has(b)) && c.branches.every((b) => own.has(b) || absorbed.has(b)));
+  const own = new Set([normalizeBranchName(task.branch), normalizeBranchName(task.slug)]);
+  const deferred = collisions.filter((c) => c && c.kind === "path" && c.external !== true && collisionBranchNames(c).some((b) => !own.has(b)) && collisionBranchNames(c).every((b) => own.has(b) || absorbed.has(b)));
   return { settle: collisions.filter((c) => !deferred.includes(c)), deferred };
 }
 
@@ -4117,7 +4136,7 @@ The \`git update-ref refs/pre-rebase/...\` snapshot of step 3, the rebase of ste
 2. **Pin the base.** The target is \`${advance.target}\`. ${targetPin} Report that full OID as \`effectiveBase\` and rebase onto THAT OID, never onto the name and never an abbreviation of it.
 3. **Save the recovery ref, then read it back.** \`ts="$(date -u +%Y%m%d-%H%M%S)"\`, \`before="$(git rev-parse --verify HEAD)"\`, then \`git update-ref ${shq(`refs/pre-rebase/${task.branch}/`)}"$ts" "$before"\` and prove it resolves to \`$before\`. Report the ref in full as \`recoveryRef\`, the read-back OID as \`recoveryTip\`, and the pre-rebase tip as \`before\`.
 4. **Rebase — merges in the range first.** \`git rev-list --merges <effectiveBase>..HEAD\`: a merge carrying its own content (\`git show --remerge-diff <it>\` prints a delta; an octopus merge is treated as content-bearing unprobed) halts the step unrebased — report \`halted: true\` with a \`question\` naming it. Otherwise \`git rebase --no-update-refs --no-rebase-merges <effectiveBase>\`. Nothing replayed and the tip unchanged is the expected no-op: report \`noop: true\` with \`before\` equal to \`after\`, run no validation, push nothing, and you are done.
-5. **Conflicts — by hunk, in place.** Resolve only what the skill classifies as TRIVIAL (import/whitespace/formatting collisions, pure additions, a patch the new base already represents — \`git rebase --skip\` for that one). Anything beyond that — a genuine semantic dilemma, which is what a clash with an already-merged sibling looks like from here — is \`git rebase --abort\`, then CONFIRM the tree is clean and idle by step 1's checks, and \`halted: true\` with a \`question\` naming the conflicting files, the offending commit, and what the judgment turns on. Never leave the tree mid-rebase and never guess a resolution: this run is unattended.
+5. **Conflicts — by hunk, in place.** Resolve only what the skill classifies as TRIVIAL (import/whitespace/formatting collisions, pure additions, a patch the new base already represents — \`git rebase --skip\` for that one). One narrowing of that recipe: a commit that ADDS a file the new base already holds is "already represented" only when the two adds are byte-identical (\`git diff --quiet REBASE_HEAD <effectiveBase> -- <path>\` for every such file) — the recipe's existence test is not a content test, and a same-path add on both sides with different content is the duplicate-or-different question this rebase exists to surface, so it is a halt, never a \`--skip\`. Anything beyond that — a genuine semantic dilemma, which is what a clash with an already-merged sibling looks like from here — is \`git rebase --abort\`, then CONFIRM the tree is clean and idle by step 1's checks, and \`halted: true\` with a \`question\` naming the conflicting files, the offending commit, and what the judgment turns on. Never leave the tree mid-rebase and never guess a resolution: this run is unattended.
 6. **Validate a rebase that replayed something** — the project's build AND its test suite, discovered from \`AGENTS.md\`/\`CLAUDE.md\`, then \`package.json\` scripts, then ecosystem signals. Report \`validationPassed\` and what you ran in \`detail\`; a failure holds the branch rather than being fixed here, so report it and name the recovery ref. If you redirect any build output to a file, create a UNIQUE directory for it first, OUTSIDE every worktree (\`mktemp -d "\${TMPDIR:-/tmp}/task-rebase.XXXXXX"\`) — never a fixed shared scratchpad name, since one session's agents share that directory, and never inside this worktree, whose tree the delivery step reads.
 ${pushLine}
 
@@ -4656,11 +4675,12 @@ async function runTaskPipeline(task, ctx) {
       // with a member that base has absorbed is the rebase's to surface as a
       // conflict, so it is kept out of the resolver's hands (see
       // `collisionsForRebase`).
-      const advance = baseAdvance(task, discovery.readings.merged.filter((m) => [...ledger.delivered.values()].some((d) => d.branch === m.branch)));
-      const { settle, deferred } = collisionsForRebase(task, discovery.collisions, discovery.readings.merged, advance);
+      const mergedDelivered = discovery.readings.merged.filter((m) => [...ledger.delivered.values()].some((d) => d.branch === m.branch));
+      const advance = baseAdvance(task, mergedDelivered);
+      const { settle, deferred } = collisionsForRebase(task, discovery.collisions, mergedDelivered, advance);
       for (const c of deferred) {
         c.settledBy = "rebase";
-        log(`Collision guard ${task.slug}: \`${c.name}\` is added by a member the advanced base \`${advance.target}\` has absorbed; left to the rebase onto it, where it surfaces as a conflict, rather than renamed away`);
+        log(`Collision guard ${task.slug}: \`${c.name}\` is added by a member the advanced base \`${advance.target}\` has absorbed; left to the rebase onto it, where git surfaces it as a conflict unless both sides added the same bytes, rather than renamed away`);
       }
       if (settle.length) {
         // Settled INSIDE the turn, deliberately: the resolver renumbers the
@@ -4671,7 +4691,7 @@ async function runTaskPipeline(task, ctx) {
         // number the rename is moving to before this branch re-scans, and both
         // would publish it. A clash is the rare case; the common case pays only
         // for the scan.
-        const settled = await settleGuardCollisions({ heldTasks: [{ task, result: res }], members, collisions: settle, label: task.slug, defaultBase, remote, peerMode });
+        const settled = await settleGuardCollisions({ heldTasks: [{ task, result: res }], members, collisions: settle, leftToRebase: deferred, label: task.slug, defaultBase, remote, peerMode });
         if (settled.held.length) return { held: heldWithNumbers(settled.held[0], settled.taskNumbers || taskNumbers) };
         ready = settled.deliverable[0].result;
         if (settled.taskNumbers) taskNumbers = settled.taskNumbers;

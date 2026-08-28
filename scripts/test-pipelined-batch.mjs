@@ -42,7 +42,7 @@ function check(name, cond, detail) {
     console.error(`NOT ok - ${name}${detail ? `: ${detail}` : ""}`);
   }
 }
-const EXPECTED_CHECKS = 183;
+const EXPECTED_CHECKS = 186;
 
 async function scenario(name, fn) {
   try {
@@ -616,6 +616,20 @@ await scenario("a path clash with an absorbed member is left to the rebase, not 
   check("a same-basename clash with the absorbed member still goes to the resolver", labels(basename.calls).includes("collision-resolve:002-b") && labels(basename.calls).includes("collision-rescan:002-b") && labels(basename.calls).includes("rebase:002-b") && by(basename.results, "002-b").status === "rebase-hold", JSON.stringify(labels(basename.calls)));
   const elsewhere = await run({ collisions: [pathClash], taskNumbers: [], merged: [{ branch: "task/001-a", mergedInto: "dev" }], scanComplete: true }, new Error("no rebase is owed"));
   check("a path clash with a member merged where no rebase will go still goes to the resolver", labels(elsewhere.calls).includes("collision-resolve:002-b") && !labels(elsewhere.calls).includes("rebase:002-b") && by(elsewhere.results, "002-b").status === "collision-blocked", JSON.stringify(labels(elsewhere.calls)));
+  // A MIXED packet: the same file reported as a path clash (the rebase's) AND as
+  // a symbol clash (the resolver's). The resolver is briefed with the symbol
+  // clash only and told to leave the file in place; the re-scan that still
+  // reports the path clash is read as the file still there, and the branch
+  // rides to the rebase. A re-scan that no longer reports it is the resolver
+  // having moved the file — a hold, since the rebase would then replay clean.
+  const symbolClash = { kind: "symbol", name: "Foo", branches: ["task/002-b", "task/001-a"] };
+  const mixedScan = { collisions: [pathClash, symbolClash], taskNumbers: [], merged: [{ branch: "task/001-a", mergedInto: "main" }], scanComplete: true };
+  const mixed = await run(mixedScan, halt, { "collision-resolve:002-b": { resolutions: [{ collision: "Foo", action: "renamed", changedBranches: ["task/002-b"], from: "Foo", to: "FooB" }] }, "collision-rescan:002-b": { collisions: [pathClash], taskNumbers: [], merged: [], scanComplete: true } });
+  const mixedResolve = mixed.calls.find((c) => c.label === "collision-resolve:002-b");
+  check("mixed packet: the resolver is briefed with the symbol clash only, and told to leave the deferred file in place", mixedResolve && /"name": "Foo"/.test(mixedResolve.prompt) && !/"name": "src\/x\.ts"/.test(mixedResolve.prompt) && /LEFT IN PLACE for the rebase[\s\S]*- "src\/x\.ts"/.test(mixedResolve.prompt), mixedResolve && mixedResolve.prompt.slice(0, 400));
+  check("mixed packet: a re-scan that still reports the deferred path clash does not hold the branch — it rides to the rebase and halts there", labels(mixed.calls).includes("collision-rescan:002-b") && labels(mixed.calls).includes("rebase:002-b") && by(mixed.results, "002-b").status === "rebase-hold" && mixed.collisions.some((c) => c.name === "src/x.ts" && c.settledBy === "rebase"), JSON.stringify({ labels: labels(mixed.calls), b: by(mixed.results, "002-b") }));
+  const moved = await run(mixedScan, new Error("no rebase may run"), { "collision-resolve:002-b": { resolutions: [{ collision: "Foo", action: "renamed", changedBranches: ["task/002-b"], from: "src/x.ts", to: "src/x-b.ts" }] }, "collision-rescan:002-b": { collisions: [], taskNumbers: [], merged: [], scanComplete: true } });
+  check("mixed packet: a re-scan that no longer reports the deferred path clash holds the branch as the resolver having moved the file, and no rebase runs", !labels(moved.calls).includes("rebase:002-b") && by(moved.results, "002-b").status === "collision-hold" && /moved a file the rebase onto the advanced base owed a conflict on \(src\/x\.ts\)/.test(by(moved.results, "002-b").detail), JSON.stringify(by(moved.results, "002-b")));
   const fns = absorbed.fns;
   const chain = fns.collisionsForRebase({ branch: "task/c", slug: "003-c", base: "task/b" }, [pathClash, { kind: "path", name: "src/y.ts", branches: ["task/c", "task/a"] }, { kind: "path", name: "src/z.ts", branches: ["task/c", "task/q"] }, { kind: "task-number", name: "042", branches: ["task/c", "task/a"] }], [{ branch: "task/a", mergedInto: "main" }, { branch: "task/b", mergedInto: "task/a" }, { branch: "task/q", mergedInto: "dev" }], { target: "main", retarget: true });
   check("collisionsForRebase: absorption follows the merge chain to the target, and only path clashes whose every other side is absorbed are deferred", JSON.stringify(chain.deferred.map((c) => c.name)) === JSON.stringify(["src/y.ts"]) && JSON.stringify(chain.settle.map((c) => c.name)) === JSON.stringify(["src/x.ts", "src/z.ts", "042"]) && fns.collisionsForRebase({ branch: "task/c", slug: "003-c" }, [pathClash], [{ branch: "task/001-a", mergedInto: "main" }], null).deferred.length === 0, JSON.stringify(chain));
