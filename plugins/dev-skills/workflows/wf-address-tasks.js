@@ -3957,7 +3957,13 @@ async function settleGuardCollisions({ heldTasks, members = [], collisions, left
 
   for (const { task, result } of heldTasks) {
     const related = relatedFor(task);
-    const sameClash = (a, b) => a.kind === b.kind && a.name === b.name;
+    // The deferred clash is matched by its holders as well as by its value: a
+    // re-scan that reports the same path against a DIFFERENT holder — an
+    // outside PR that added it in the resolver's window — is a live clash the
+    // rebase does not own, and read as the deferred one it would be suppressed
+    // out of `stillColliding` and deliver over it.
+    const holders = (c) => [String(c.external === true), String(c.member || "").trim(), ...collisionBranchNames(c).sort()].join("\u0000");
+    const sameClash = (a, b) => a.kind === b.kind && a.name === b.name && holders(a) === holders(b);
     const owedToRebase = leftToRebase.filter((c) => involves(c, task));
     const stillColliding = rescanned ? rescanned.filter((c) => involves(c, task) && !owedToRebase.some((d) => sameClash(c, d))).map((c) => ({ ...c, guard: label })) : null;
     const movedFromRebase = rescanned ? owedToRebase.filter((d) => !rescanned.some((c) => involves(c, task) && sameClash(c, d))) : [];
@@ -4151,8 +4157,14 @@ const TASK_REBASE_OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 // base), or `{ held }` — a `rebase-hold` result carrying the rebase's open
 // question where it halted, and the reason where it failed or the replay did
 // not validate. A no-op costs no re-review: the two tips it names being equal
-// is what the no-op claim is accepted on.
-async function rebaseOntoAdvancedBase(task, result, advance, remote, peerMode) {
+// is what the no-op claim is accepted on. `onRetarget` runs the moment a
+// retarget moves the recorded base — on the no-op arm, and on the replay arm
+// as soon as the replay is accepted and BEFORE the re-review it then owes: the
+// branch ref has already moved by then, and a sibling's scan diffs a member
+// from the base its ledger entry records, so a copy left on the old base for
+// the length of a re-review would read the rebased ref against a base the
+// merge has absorbed.
+async function rebaseOntoAdvancedBase(task, result, advance, remote, peerMode, onRetarget = () => {}) {
   phase("Rebase onto advanced base");
   let report = null;
   try {
@@ -4194,7 +4206,7 @@ async function rebaseOntoAdvancedBase(task, result, advance, remote, peerMode) {
   }
   if (report.noop === true) {
     if (!TASK_REBASE_OID.test(before) || before !== after) return hold("the rebase reported a no-op without naming two equal full-OID tips; the claim is unevidenced, so the branch is held before delivery — inspect the worktree and re-review");
-    if (advance.retarget) task.base = advance.target;
+    if (advance.retarget) { task.base = advance.target; onRetarget(); }
     return { result: { ...result, rebasedOnto: effectiveBase } };
   }
   // A replay is a rewrite — on a remote run a force-pushed one — so it is
@@ -4217,7 +4229,7 @@ async function rebaseOntoAdvancedBase(task, result, advance, remote, peerMode) {
   if (remote && report.pushed !== true) {
     return hold(`the rebase replayed and validated but the rebased tip was not pushed (${report.detail || "no detail"}); branch held before delivery so the remote copy is not left behind the reviewed tree`);
   }
-  if (advance.retarget) task.base = advance.target;
+  if (advance.retarget) { task.base = advance.target; onRetarget(); }
   // The replay changed the tree after the cycle's delivery-tier pass, so the
   // branch owes that tier again before it opens a PR — the same fresh pass a
   // deconfliction rename earns, under the same deviation gate. A re-review
@@ -4716,16 +4728,20 @@ async function runTaskPipeline(task, ctx) {
     // result: the summary names them beside the branch, as it does an orphan's,
     // since its durability push sits on origin holding them with no PR.
     if (cleared.advance) {
-      const rebased = await rebaseOntoAdvancedBase(task, cleared.ready, cleared.advance, remote, peerMode);
+      // A retarget moves the recorded base; the reservation's copy, which a
+      // sibling's scan reads the member by, moves with it — at the moment the
+      // rebase is accepted, not after the re-review it goes on to (see
+      // `rebaseOntoAdvancedBase`).
+      const followRetarget = () => {
+        const entry = ledger.reserved.get(task.slug);
+        if (entry) entry.base = task.base;
+      };
+      const rebased = await rebaseOntoAdvancedBase(task, cleared.ready, cleared.advance, remote, peerMode, followRetarget);
       if (rebased.held) {
         const claim = releaseReservation(ledger, task.slug);
         return finish({ ...rebased.held, ...(claim ? { taskNumbers: claim.taskNumbers.slice() } : {}) });
       }
       cleared.ready = rebased.result;
-      // A retarget moved the recorded base; the reservation's copy, which a
-      // sibling's scan reads the member by, moves with it.
-      const entry = ledger.reserved.get(task.slug);
-      if (entry) entry.base = task.base;
     }
 
     // `advance` is the scan's reading, not a promise about the interval up
