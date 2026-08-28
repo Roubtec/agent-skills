@@ -42,7 +42,7 @@ function check(name, cond, detail) {
     console.error(`NOT ok - ${name}${detail ? `: ${detail}` : ""}`);
   }
 }
-const EXPECTED_CHECKS = 178;
+const EXPECTED_CHECKS = 183;
 
 async function scenario(name, fn) {
   try {
@@ -52,7 +52,7 @@ async function scenario(name, fn) {
   }
 }
 
-const NAMES = ["runPipelinedBatch", "createReservationLedger", "createSlotGate", "settleReservation", "orphanSurvivors", "terminalStates", "abortedReservationReport", "reviewStackMergeable", "reviewStackOrder", "unschedulable", "effectiveDeps", "baseAdvance", "DEP_SUCCEEDED", "prPrompt", "orphanReconcilePrompt"];
+const NAMES = ["runPipelinedBatch", "createReservationLedger", "createSlotGate", "settleReservation", "orphanSurvivors", "terminalStates", "abortedReservationReport", "reviewStackMergeable", "reviewStackOrder", "unschedulable", "effectiveDeps", "baseAdvance", "DEP_SUCCEEDED", "prPrompt", "orphanReconcilePrompt", "collisionsForRebase"];
 function load(agent, events) {
   const at = src.indexOf(CUT);
   if (at < 0) throw new Error(`cut marker not found: ${JSON.stringify(CUT)}`);
@@ -593,6 +593,32 @@ await scenario("mixed terminal states", async () => {
   check("the crashed task's dependent was skipped with the crash named", by(out.results, "006-f").status === "skipped-dep" && by(out.results, "006-f").depStatus === "error");
   check("held and errored branches reserve nothing", out.ledger.reserved.size === 0 && out.ledger.delivered.size === 1);
   check("a held branch keeps its worktree (no cleanup) while a delivered one is reclaimed", !labels(out.calls).includes("cleanup:005-e") && labels(out.calls).includes("cleanup:001-a"));
+});
+
+// 7b. A same-path clash with a member the ADVANCED BASE has absorbed is the
+//     rebase's to surface, not the resolver's to rename away (PR #121 thread):
+//     the scan that reports the merge and the clash in one packet sends the
+//     branch to the rebase with the file still in place, where git refuses the
+//     add/add and the deputy halts for the maintainer. A same-basename clash,
+//     and a path clash with a member merged somewhere the rebase will not go,
+//     still take the resolver — the rename is the only tool for those.
+await scenario("a path clash with an absorbed member is left to the rebase, not renamed", async () => {
+  const plan = { defaultBase: "main", waves: [[t("001-a"), t("002-b")]] };
+  const RECOVERY = { recoveryRef: "refs/pre-rebase/task/002-b/20260827-120000", recoveryTip: "1".repeat(40) };
+  const halt = { ok: true, halted: true, noop: false, question: "src/x.ts: added on both sides", detail: "aborted on add/add", before: "1".repeat(40), after: "1".repeat(40), ...RECOVERY };
+  // b's review is held until a has delivered, so b's scan reads a as a DELIVERED member whose merge the base absorbed.
+  const run = async (scan, rebase, extra = {}) => { const reviewB = deferred(); const running = runBatch({ plan, overrides: { "002-b:review#1": reviewB, "collision-scan:002-b": scan, "rebase:002-b": rebase, "collision-resolve:002-b": { resolutions: [{ collision: "src/x.ts", action: "blocked", changedBranches: [], reason: "resolver ran" }] }, "collision-rescan:002-b": { collisions: [], taskNumbers: [], merged: [], scanComplete: true }, "re-review:002-b": { pass: true, issues: [], notes: "", flakeRecord: "" }, ...extra } }); await new Promise((r) => setTimeout(r, 20)); reviewB.resolve({ ...PASS_REVIEW }); return running; };
+  const pathClash = { kind: "path", name: "src/x.ts", branches: ["task/002-b", "task/001-a"] };
+  const absorbed = await run({ collisions: [pathClash], taskNumbers: [], merged: [{ branch: "task/001-a", mergedInto: "main" }], scanComplete: true }, halt);
+  check("the resolver never ran for the absorbed path clash; the rebase did, and its halt holds the branch with the conflict as the open question", !labels(absorbed.calls).includes("collision-resolve:002-b") && labels(absorbed.calls).includes("rebase:002-b") && by(absorbed.results, "002-b").status === "rebase-hold" && /src\/x\.ts: added on both sides/.test(JSON.stringify(by(absorbed.results, "002-b"))), JSON.stringify({ labels: labels(absorbed.calls), b: by(absorbed.results, "002-b") }));
+  check("the deferred clash is still in the batch's collision report, marked as the rebase's", absorbed.collisions.some((c) => c.name === "src/x.ts" && c.settledBy === "rebase"), JSON.stringify(absorbed.collisions));
+  const basename = await run({ collisions: [{ kind: "filename", name: "x.ts", branches: ["task/002-b", "task/001-a"] }], taskNumbers: [], merged: [{ branch: "task/001-a", mergedInto: "main" }], scanComplete: true }, halt);
+  check("a same-basename clash with the absorbed member still goes to the resolver", labels(basename.calls).includes("collision-resolve:002-b") && labels(basename.calls).includes("collision-rescan:002-b") && labels(basename.calls).includes("rebase:002-b") && by(basename.results, "002-b").status === "rebase-hold", JSON.stringify(labels(basename.calls)));
+  const elsewhere = await run({ collisions: [pathClash], taskNumbers: [], merged: [{ branch: "task/001-a", mergedInto: "dev" }], scanComplete: true }, new Error("no rebase is owed"));
+  check("a path clash with a member merged where no rebase will go still goes to the resolver", labels(elsewhere.calls).includes("collision-resolve:002-b") && !labels(elsewhere.calls).includes("rebase:002-b") && by(elsewhere.results, "002-b").status === "collision-blocked", JSON.stringify(labels(elsewhere.calls)));
+  const fns = absorbed.fns;
+  const chain = fns.collisionsForRebase({ branch: "task/c", slug: "003-c", base: "task/b" }, [pathClash, { kind: "path", name: "src/y.ts", branches: ["task/c", "task/a"] }, { kind: "path", name: "src/z.ts", branches: ["task/c", "task/q"] }, { kind: "task-number", name: "042", branches: ["task/c", "task/a"] }], [{ branch: "task/a", mergedInto: "main" }, { branch: "task/b", mergedInto: "task/a" }, { branch: "task/q", mergedInto: "dev" }], { target: "main", retarget: true });
+  check("collisionsForRebase: absorption follows the merge chain to the target, and only path clashes whose every other side is absorbed are deferred", JSON.stringify(chain.deferred.map((c) => c.name)) === JSON.stringify(["src/y.ts"]) && JSON.stringify(chain.settle.map((c) => c.name)) === JSON.stringify(["src/x.ts", "src/z.ts", "042"]) && fns.collisionsForRebase({ branch: "task/c", slug: "003-c" }, [pathClash], [{ branch: "task/001-a", mergedInto: "main" }], null).deferred.length === 0, JSON.stringify(chain));
 });
 
 // 8a. A lone first branch that clashes with an OUTSIDE holder (an open PR head,

@@ -4040,6 +4040,36 @@ function baseAdvance(task, merged) {
   return null;
 }
 
+// Which of the scan's clashes the resolver may settle, and which the rebase
+// onto the advanced base owns. A `path` clash with a member whose merge the
+// advance target has absorbed (directly, or through the chain `baseAdvance`
+// chased) is the add/add the header above promises will surface as an honest
+// conflict at that rebase: the same file, added on both sides, is exactly what
+// git refuses to replay silently, and the deputy halts on it for the
+// maintainer's judgment — a duplicate implementation to drop, or a genuinely
+// different file to rename. Settled first, the resolver would rename the file
+// away before the rebase ran, and the replay would then go clean over the very
+// clash the maintainer was owed. The other kinds stay with the resolver: a
+// same-basename-elsewhere or same-symbol clash is no git conflict, and a task
+// number now on the base is a number the branch must still give up. Nothing
+// is deferred where no rebase will run: a member merged into some other branch
+// is not in this branch's way, and the rename is the only tool left.
+function collisionsForRebase(task, collisions, merged, advance) {
+  if (!advance) return { settle: collisions.slice(), deferred: [] };
+  const into = (m) => (m && typeof m.mergedInto === "string" ? m.mergedInto.trim() : "");
+  const absorbed = new Set();
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const m of merged) {
+      if (typeof m.branch !== "string" || absorbed.has(m.branch)) continue;
+      if (into(m) === advance.target || absorbed.has(into(m))) { absorbed.add(m.branch); grew = true; }
+    }
+  }
+  const own = new Set([task.branch, task.slug]);
+  const deferred = collisions.filter((c) => c && c.kind === "path" && c.external !== true && Array.isArray(c.branches) && c.branches.some((b) => !own.has(b)) && c.branches.every((b) => own.has(b) || absorbed.has(b)));
+  return { settle: collisions.filter((c) => !deferred.includes(c)), deferred };
+}
+
 const TASK_REBASE_SCHEMA = {
   type: "object",
   properties: {
@@ -4621,7 +4651,18 @@ async function runTaskPipeline(task, ctx) {
       if (discovery.held) return { held: heldWithNumbers(discovery.held, discovery.readings.taskNumbers) };
       let ready = res;
       let taskNumbers = discovery.readings.taskNumbers;
-      if (discovery.collisions.length) {
+      // The advanced base is read from the same packet BEFORE the settlement,
+      // because it decides what the resolver may settle: a same-path clash
+      // with a member that base has absorbed is the rebase's to surface as a
+      // conflict, so it is kept out of the resolver's hands (see
+      // `collisionsForRebase`).
+      const advance = baseAdvance(task, discovery.readings.merged.filter((m) => [...ledger.delivered.values()].some((d) => d.branch === m.branch)));
+      const { settle, deferred } = collisionsForRebase(task, discovery.collisions, discovery.readings.merged, advance);
+      for (const c of deferred) {
+        c.settledBy = "rebase";
+        log(`Collision guard ${task.slug}: \`${c.name}\` is added by a member the advanced base \`${advance.target}\` has absorbed; left to the rebase onto it, where it surfaces as a conflict, rather than renamed away`);
+      }
+      if (settle.length) {
         // Settled INSIDE the turn, deliberately: the resolver renumbers the
         // branch against the members the scan compared it with, the re-scan
         // re-derives the rule against those same members, and the claim entered
@@ -4630,14 +4671,13 @@ async function runTaskPipeline(task, ctx) {
         // number the rename is moving to before this branch re-scans, and both
         // would publish it. A clash is the rare case; the common case pays only
         // for the scan.
-        const settled = await settleGuardCollisions({ heldTasks: [{ task, result: res }], members, collisions: discovery.collisions, label: task.slug, defaultBase, remote, peerMode });
+        const settled = await settleGuardCollisions({ heldTasks: [{ task, result: res }], members, collisions: settle, label: task.slug, defaultBase, remote, peerMode });
         if (settled.held.length) return { held: heldWithNumbers(settled.held[0], settled.taskNumbers || taskNumbers) };
         ready = settled.deliverable[0].result;
         if (settled.taskNumbers) taskNumbers = settled.taskNumbers;
       }
       // The claim, entered before the turn ends and the next scan can run.
       reserveNumbers(ledger, task, taskNumbers);
-      const advance = baseAdvance(task, discovery.readings.merged.filter((m) => [...ledger.delivered.values()].some((d) => d.branch === m.branch)));
       return { ready, advance, scanComplete: discovery.readings.scanComplete, scanDetail: discovery.readings.detail };
     });
     if (cleared.held) return finish(cleared.held);
