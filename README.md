@@ -129,6 +129,12 @@ Settled is not green, so test the verdicts positively in the same spirit: merge 
 
 Merge with `gh pr merge <PR#> --merge --match-head-commit <the polled headRefOid>`, so a head that advanced while you waited on the checks fails the merge instead of landing unchecked — an unpinned merge takes whatever the head is by then, which is not the commit whose rollup you read. Treat deleting the branch as its own step whenever a worktree still has it checked out: `--delete-branch` merges, deletes the remote branch, and only then fails the local delete with "used by worktree", so the non-zero exit says nothing about the merge, which already succeeded. Remove the worktree before merging, or omit the flag and delete the branch yourself afterwards; if you do meet that error, re-read the PR's merge state before retrying anything.
 
+## Markdown formatting
+
+Markdown style is owned by markdownlint: `.markdownlint.jsonc` pins the house rules (asterisk emphasis, compact tables, fenced code blocks), the nested config under each mirror's `skills/` directory relaxes the heading-title rules SKILL.md files deliberately break, and CI runs the same pinned `markdownlint-cli2` over every Markdown file.
+
+The editor is wired to the identical answer: the committed `.vscode/settings.json` makes the markdownlint extension the Markdown formatter and fixes on save, and `.prettierignore` keeps Prettier — whose Markdown style (aligned tables, underscore emphasis) fights the house rules — away from Markdown entirely. So the IDE, the CLI, agents, and CI all produce the same bytes, and saving an already-clean file changes nothing.
+
 ## Focused tests
 
 Each subsection leads with the command and the change that obliges you to run it. What a suite pins, and the measured trade-offs behind how each of its checks is drawn, live in that script's own comments.

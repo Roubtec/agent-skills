@@ -1,0 +1,42 @@
+{
+  "default": true,
+
+  // Line length: disabled. Lines are intentionally unwrapped.
+  // One logical line = one diff line.
+  "MD013": false,
+
+  // Allow duplicate headings within different sections.
+  "MD024": { "siblings_only": true },
+
+  // Ordered lists must use incrementing numbers, not all 1s.
+  "MD029": { "style": "ordered" },
+
+  // Enforce fenced code blocks (backtick style).
+  "MD046": { "style": "fenced" },
+  "MD048": { "style": "backtick" },
+
+  // Allow trailing punctuation in headings (e.g. "Why?", "Note:").
+  "MD026": false,
+
+  // Allow bare URLs; useful in technical docs and inline references.
+  "MD034": false,
+
+  // Emphasis and strong: pinned to asterisk. Both rules default to "consistent",
+  // which only asks that a file match its own first marker — so the repository had
+  // no house style, conformance was a per-file accident, and CI's "Expected:
+  // asterisk" was an inference from that file rather than a rule anyone could
+  // configure an editor against. Asterisk is what the corpus overwhelmingly
+  // already uses for both, so pinning it is close to a no-op on existing files.
+  // `.vscode/settings.json` points the editor extensions at the same answer.
+  "MD049": { "style": "asterisk" },
+  "MD050": { "style": "asterisk" },
+
+  // Tables: compact, never aligned. "compact" is one space either side of each
+  // cell — `| Y | Yes |` — as opposed to "aligned", which pads every cell out to
+  // the widest one in its column. Alignment is what makes a table hostile to
+  // diffs: widening one cell rewrites every row. The rule is auto-fixable, so
+  // the markdownlint extension's formatter (Format Document / format-on-save)
+  // normalizes tables to this on its own; the default "any" accepts whatever a
+  // file already has, which is why nothing enforced it before.
+  "MD060": { "style": "compact" },
+}

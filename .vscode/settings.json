@@ -1,0 +1,14 @@
+{
+  // Markdown formatting is owned by the markdownlint extension — the same
+  // engine and .markdownlint.jsonc config that `markdownlint-cli2 "**/*.md"`
+  // runs in CI — so a format-on-save can never disagree with the lint gate.
+  // Prettier styles Markdown differently (aligned tables, underscore
+  // emphasis), so .prettierignore keeps it away from Markdown entirely.
+  "[markdown]": {
+    "editor.defaultFormatter": "DavidAnson.vscode-markdownlint",
+    "editor.formatOnSave": true,
+    "editor.codeActionsOnSave": {
+      "source.fixAll.markdownlint": "explicit"
+    }
+  }
+}

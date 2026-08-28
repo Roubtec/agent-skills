@@ -1,0 +1,18 @@
+{
+  // SKILL.md files deliberately open with prose rather than an H1 title, and
+  // their heading levels serve the skill's structure rather than a document
+  // outline — so the title/hierarchy rules are relaxed here, and only here.
+  // Both markdownlint-cli2 and the VS Code markdownlint extension resolve this
+  // nearest-directory config the same way, so the CLI, CI, and the editor all
+  // read the identical answer for everything under skills/.
+  "extends": "../../../.markdownlint.jsonc",
+
+  // No H1 required on the first line.
+  "MD041": false,
+
+  // Heading levels may be entered at any depth and need not increment by one.
+  "MD001": false,
+
+  // More than one top-level heading is fine (there is usually none at all).
+  "MD025": false,
+}
