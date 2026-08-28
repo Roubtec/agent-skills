@@ -32,6 +32,7 @@ scripts/
   test-resolve-tasks-contract.mjs       # pins the shared task-pointer packet, consumer policies, mirror parity, and workflow hands-off exclusions
   test-skill-mirror-parity.mjs          # asserts the two skill mirrors agree in structure — skill presence, heading sequence, per-section list-item counts — with legitimate deltas pinned in skill-mirror-parity-allowlist.json
   skill-mirror-parity-allowlist.json    # the pinned structural deltas the parity suite excuses, one harness reason each
+  test-review-stack-plan.mjs            # behavior coverage for the batch workflow's post-batch review stack: mergeable predicate, merge order, safe prefix, and the stage's reclaim-on-every-path control flow
   verify-014-peer-strength-pin.md       # harness-neutral prompt: observe the peer step's pinned review strength (task 014)
   verify-015-peer-review-run.md         # harness-neutral prompt: exercise the peer-review-run primary launch, its reviewFile relay, the stub-helper degradation route, strength, and evidence (tasks 015, 050)
 ```
@@ -209,6 +210,12 @@ Run `node scripts/test-resolve-tasks-contract.mjs` after changing `resolve-tasks
 Run `node scripts/test-skill-mirror-parity.mjs` after adding, removing, or editing any `SKILL.md` in either mirror — `plugins/dev-skills/skills/` or `codex/dev-skills/skills/` — or after editing `scripts/skill-mirror-parity-allowlist.json`.
 
 The mirrors are hand-edited in lockstep and legitimately differ in prose, so this suite compares structure only: every skill exists in both trees, the ordered sequence of ATX headings (level and text, fenced blocks excluded) matches, and each shared section holds the same number of ordered-list items and top-level bullets. It replaces the divergence count a PR summary used to recite, which no check ever depended on. A legitimate structural difference is pinned in the allowlist as an exact delta — the skill, the heading, and the one-sided heading or both mirrors' counts — with a one-line harness reason; an unlisted divergence, a divergence that drifted from its entry, and an entry whose divergence has vanished all fail, and a failure names the skill, the heading, the element, and the side. Each entry excuses exactly one divergence, so a pinned one-sided heading duplicated within its mirror fails, and a one-sided section's list items are counted against an empty counterpart, so the heading entry excuses the heading alone and each item beneath it is a delta of its own. The three clause-scoped suites above keep pinning what they pin; this one only notices a whole step, bullet, or section arriving on one side.
+
+### `test-review-stack-plan.mjs`
+
+Run `node scripts/test-review-stack-plan.mjs` after changing `wf-address-tasks.js`'s post-batch review stack (task 052): the mergeable predicate, the canonical merge order, the merge-commit safe prefix, the guide-branch naming, or `buildReviewStack`'s control flow — or the terminal `Summary` stage and abort catch that place it.
+
+It evaluates the shipped declaration prefix with scripted agents and drives the stage through its success, clean-stop, merge-guard, drift, and throw paths, pinning that the stage reports rather than throws, that the teardown runs on every path that created the dedicated worktree, and that only the batch's own `refs/pre-rebase/...` snapshots reach the teardown's delete list. A full `Workflow` run of a real batch is outside what a script can do; the Git recipes the four briefs prescribe were exercised by hand in a disposable clone when the stage landed, and the placement of the stage before the closing main-checkout reading is asserted here so it cannot drift back behind it.
 
 ### Dynamic workflow parse check
 

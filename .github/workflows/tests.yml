@@ -23,3 +23,4 @@ jobs:
       - run: node scripts/test-skill-worktree-base-exclude.mjs
       - run: node scripts/test-resolve-tasks-contract.mjs
       - run: node scripts/test-skill-mirror-parity.mjs
+      - run: node scripts/test-review-stack-plan.mjs
