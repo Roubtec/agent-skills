@@ -7,11 +7,11 @@ Address the review feedback on a single pull request, end to end.
 
 **Arguments:** `[PR#] [rebase on top of <target>] [no-rebase] [inline] [off-shoot] [no-push] [push] [hands-off] [peer-opinions=off] [ping-codex] [ping-claude] [ping-copilot] [ping-contributing]`
 
-A maintainer triggers this skill once a PR has been reviewed (by bots like `@codex`/`@claude`/`@copilot` and/or humans) and they have decided the outstanding feedback is ready to be acted upon.
-Your job is to work through every **unresolved** review thread — fix what is right, push back on what is wrong, confirm what is already handled, and capture what is real but out of scope in a committed follow-up task — plus every failing CI lane on the PR head, keep the thread state tidy, and publish the result and summon a fresh review round — by default, unless `no-push` keeps the run local.
-
-The maintainer signals intent through GitHub's own resolved/unresolved state, not a custom marker.
-They resolve threads they want dropped (or reply with their own push-back) **before** triggering you, so the rule is simply: **unresolved = actionable, resolved = leave alone.**
+A PR has been reviewed (by bots like `@codex`/`@claude`/`@copilot` and/or humans) and it has unresolved review threads that require addressing.
+The rule is simple: **unresolved = actionable, resolved = leave alone.**
+Work through every **unresolved** review thread: fix what is in fact wrong, push back on incorrect feedback, confirm and resolve what is already handled, and capture what is real but out of scope in a committed follow-up task.
+Also investigate every failing CI lane on the PR head.
+Push the fix commits, reply to and resolve any addressed threads, publish a summary comment, and summon a fresh review round by default, unless the supplied arguments require otherwise.
 Because you resolve the threads you address (on push runs), running this skill repeatedly is self-cleaning — each run only re-examines what truly remains open.
 
 ## Arguments
@@ -27,13 +27,13 @@ Trust yourself to extract intent, then sanity-check against the PR.
 | `inline` | Force **inline** working on the **target branch** — do the work in the current checkout rather than in a worktree, checking that branch out there when the checkout is not already on it. Requires that checkout to be clean, and the run ends on that branch. Unnecessary when you already stand on it (that is mode 1 anyway); to work in this checkout on a *different* branch — a local off-shoot of the PR — pass `off-shoot` instead, which is the only thing that selects one. See "Working location". It composes with `no-push` and the ping flags without interacting with either. |
 | `off-shoot` | The checkout stands on a local **off-shoot** of this PR's branch (the `PR#` row's case) and you are saying so, so the run works inline on **that** branch rather than the PR's head ref: fixes land there, `headRefName`/`headRefOid` stay publication metadata, and step 1's reconciliation is skipped — a tip behind the head is this case's normal state. Needs an explicit `PR#` and a named branch, and requires the current checkout clean like any inline run. It is inline working by construction, so `inline` beside it is redundant rather than contradictory. Nothing else selects an off-shoot: no test on your history's shape may conclude one, because none can — see "Working location". |
 | `no-push` | **Local-only run** — make commits, but perform no PR-side communication: no push, no replies/resolves, no summary comment, no ping. It makes **exactly one** PR write, the single documented exception: the disposition record comment of "The durable disposition record" below, which is what keeps a local run's mapping from dying with the session. Nothing about the branch, the thread state, or the reviewer set is touched by it. This was the default until now; it is now the explicit way to ask for a dry run / inspect-only pass. The final report still captures every disposition so a later push turn can replay it. |
-| `push` | Push the branch to the PR's actual head repository/ref and perform all PR-side communication (replies, resolves, summary comment) — but **ping no reviewer**. Use it to publish fixes quietly, without summoning a fresh review round. (Normal push for a fast-forward; an explicit `--force-with-lease=<ref>:<expected-oid>` for every other state that pushes at all.) |
+| `push` | Push the branch to the PR's actual head repository/ref and perform all PR-side communication (replies, resolves, summary comment) — but **ping no reviewer**. Use it to publish fixes without summoning a fresh review round. (Normal push for a fast-forward; an explicit `--force-with-lease=<ref>:<expected-oid>` for every other state that pushes at all.) |
 | `hands-off` | Run with no user interaction — best-effort to completion, documenting every skipped/blocked item in the final report. See "Hands-off mode". Typically how a parallel review orchestrator invokes this skill in a subagent. |
 | `peer-opinions=off` | Disable the best-effort `codex` second opinion for this run. By default it runs beside every fresh Reviewer round while the peer remains available. |
 | `ping-codex` | After a push that advances the PR branch, post a dedicated top-level `@codex review` comment to summon a fresh review round. |
 | `ping-claude` | After a push that advances the PR branch, post a dedicated top-level `@claude review` comment. |
 | `ping-copilot` | After a push that advances the PR branch, request a fresh Copilot review via `gh pr edit <PR#> --repo <owner>/<repo> --add-reviewer @copilot` (the canonical CLI request; needs gh ≥ 2.88.0) — **never** an `@copilot review` comment, which drives Copilot's coding agent (it can start editing the branch) rather than its reviewer. Tested working: the add-reviewer request re-triggers Copilot's review even on a PR it already reviewed, and never misfires into the coding agent. |
-| `ping-contributing` | **The default** — a bare run behaves exactly as if you passed this. As a **modifier** on the ping set: re-ping a bot only if it **brought a new finding this round.** Combined with explicit `ping-codex`/`ping-claude`/`ping-copilot`, it filters that named set down to the contributors; supplied **alone** (or as the bare default), it falls back to every known bot (codex/claude/copilot) that reviewed this round. The point: keep one fixed reviewer set across rounds and let a bot that has gone quiet drop out of the ping cycle on its own, so a multi-bot review→address loop winds down bot-by-bot instead of pinging everyone forever. *Brought a new finding* = authored ≥1 thread this round that surfaces a real concern not raised before on this PR (typically `actionable-fixed`, or a genuinely new `follow-up-task`/`already-addressed`); it does **not** count a `push-back` (the comment was wrong), a re-raise of a concern already captured in a committed task, or a bot re-arguing a push-back it already lost — **unless** that thread carries a genuinely new angle this round. |
+| `ping-contributing` | **The default** — a bare run behaves exactly as if the user passed this. As a **modifier** on the ping set: re-ping a bot only if it **brought a new, material finding this round.** Combined with explicit `ping-codex`/`ping-claude`/`ping-copilot`, it filters that named set down to the contributors; supplied **alone** (or as the bare default), it falls back to every known bot (codex/claude/copilot) that reviewed this round. The point: keep one fixed reviewer set across rounds and let a bot that has gone quiet drop out of the ping cycle on its own, so a multi-bot review→address loop winds down bot-by-bot instead of pinging everyone forever. *Brought a new finding* = authored ≥1 thread this round that surfaces a real concern not raised before on this PR (typically `actionable-fixed`, or a genuinely new `follow-up-task`/`already-addressed`); it does **not** count a `push-back` (the comment was wrong), a re-raise of a concern already captured in a committed task, or a bot re-arguing a push-back it already lost — **unless** that thread carries a genuinely new angle this round. |
 
 ### Flag interactions
 
@@ -41,24 +41,22 @@ Trust yourself to extract intent, then sanity-check against the PR.
 A run with **no** push/ping argument pushes the branch, performs all PR-side communication, **and** re-pings every bot that brought a new finding this round — i.e. a bare run behaves exactly like `ping-contributing`.
 The flags only adjust that default:
 
-| You pass… | Push? | Who gets pinged |
+| When passed… | Push? | Who gets pinged |
 | --- | --- | --- |
 | *(nothing)* | yes | contributing bots — every bot with a new finding this round |
 | `ping-contributing` | yes | contributing bots — the explicit (redundant) spelling of the default |
-| `push` | yes | **nobody** — publish quietly, summon no fresh review |
+| `push` | yes | **nobody** — publish but summon no fresh review |
 | `ping-codex` / `ping-claude` / `ping-copilot` | yes | exactly the bot(s) you name; this **overrides** the contributing default (add `ping-contributing` to instead filter the named set down to its contributors) |
-| `no-push` | **no** | nobody — local-only dry run (the pre-change default); its one PR write is the disposition record |
+| `no-push` | **no** | nobody — a local-only run; its one PR write is the disposition record |
 
 - **Resolution order — `no-push` wins.**
-  If `no-push` is present it forces a local-only run — its one PR write being the disposition record, per its argument-table row; if it is somehow combined with `push`/`ping-*` (a contradiction), honor `no-push` and note the ignored flag.
-  Otherwise push is always on; the ping set is then: the named bots if any were named (filtered to contributors when `ping-contributing` is also present), else **nobody** when `push` was spelled out, else the **contributing** set (the bare default, or `ping-contributing`).
+  If `no-push` is present it forces a local-only run; if it is somehow combined with `push`/`ping-*` (a contradiction), honor `no-push` and note the ignored flag.
 - **`ping-*` implies `push`.**
   A named `ping-codex`/`ping-claude`/`ping-copilot` or `ping-contributing` always publishes — a re-review of unpushed work is meaningless.
   Only `no-push` suppresses the push.
 - **A ping fires only when the push actually advanced the branch.**
   A ping summons a *fresh* review, which is only meaningful if new commits (or a rewritten history) were just pushed.
-  If this run produces nothing new to push — every disposition was already-addressed or push-back, or the branch was already up to date — **skip the pings.**
-  Re-requesting a review with nothing new to look at would spin the review → address → review cycle forever; the resolved threads and Summary comment already record the outcome.
+  **Skip the pings if nothing new landed.**
 - **`ping-contributing` prunes the ping set per this round's triage** (its table row defines what counts as a new finding).
   It never adds a bot you did not name, and a round in which no candidate bot brought a new finding pings no bot — even while the push itself advanced (e.g. you fixed a human's thread) — which, like the no-op-push skip, lets an automated multi-bot loop wind down reviewer-by-reviewer.
 - **Multiple pings present** → perform each as its own dedicated action (a separate comment per named bot; the `gh pr edit --add-reviewer @copilot` request for Copilot), never a single comment mentioning several.

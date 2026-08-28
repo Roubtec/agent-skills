@@ -5,7 +5,7 @@ description: Task pointers - numbers, file paths, globs - need to be turned into
 
 # Resolve task pointers
 
-Resolve task pointers before a consumer plans work, without changing the repository.
+Resolve task pointers before a consumer plans work, without changing the repository. Use a cheap model for the subagent to save cost and time on this trivial task.
 
 **Arguments:** `<mixed-list of task numbers, task-file paths, and globs>`
 
