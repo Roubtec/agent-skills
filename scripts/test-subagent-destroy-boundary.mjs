@@ -718,6 +718,15 @@ const REBASE_DESTINATION_STEM =
 const rebaseTempDirectory = (point) =>
   destinationPins(`${REBASE_DESTINATION_STEM}${point}.XXXXXX"\`) — never a fixed shared scratchpad name`);
 
+// The batch's rebase onto an advanced base (task 033) validates the task
+// worktree it stands in — the tree the delivery step then reads — so, like the
+// collision resolver, it is sent outside every worktree, and its directory is
+// named for the step so it cannot collide with a review-addressing rebase's.
+const TASK_REBASE_TEMP_DIRECTORY = destinationPins(
+  'If you redirect any build output to a file, create a UNIQUE directory for it first, OUTSIDE every worktree (`mktemp -d "${TMPDIR:-/tmp}/task-rebase.XXXXXX"`) — never a fixed shared scratchpad name',
+  "and never inside this worktree, whose tree the delivery step reads.",
+);
+
 // The delegated restack's clause is the `address-tasks` skill's own prompt
 // contract line, rendered verbatim rather than paraphrased — the same sentence
 // the prose half below anchors in both skill mirrors — so the pin is the whole
@@ -744,6 +753,7 @@ const BESPOKE_DESTINATIONS = [
   ["COLLISION_TEMP_DIRECTORY", COLLISION_TEMP_DIRECTORY.pins[0]],
   ["rebaseTempDirectory", REBASE_DESTINATION_STEM],
   ["RESTACK_TEMP_DIRECTORY", RESTACK_TEMP_DIRECTORY.pins[0]],
+  ["TASK_REBASE_TEMP_DIRECTORY", TASK_REBASE_TEMP_DIRECTORY.pins[0]],
 ];
 
 // --- Fixtures -------------------------------------------------------------
@@ -875,7 +885,6 @@ const FIXTURES = {
   "wf-address-tasks.js": {
     ...cycleCases,
     bootstrapPrompt: [["bootstrapPrompt", (f) => f.bootstrapPrompt(), NO_BUILD]],
-    storageProbePrompt: [["storageProbePrompt", (f) => f.storageProbePrompt(".worktrees"), NO_BUILD]],
     mainCheckoutStatusPrompt: [
       ["mainCheckoutStatusPrompt (baseline)", (f) => f.mainCheckoutStatusPrompt("pre-batch baseline"), NO_BUILD],
       ["mainCheckoutStatusPrompt (post-batch)", (f) => f.mainCheckoutStatusPrompt("post-batch"), NO_BUILD],
@@ -889,11 +898,31 @@ const FIXTURES = {
       ["prPrompt (remote, deviation, cycle recorded no assessment)", (f) => f.prPrompt(task, { notes: "", deviations, deviationAssessments: [] }, true), NO_BUILD],
     ],
     cleanupNote: [["cleanupNote", (f) => f.cleanupNote(task), NO_BUILD]],
-    collisionScanPrompt: [["collisionScanPrompt", (f) => f.collisionScanPrompt([{ slug: task.slug, branch: task.branch, base: task.base }]), NO_BUILD]],
+    // The pipelined guard's scan (task 033) branches on whether the run has
+    // delivered or reserved anything yet; both arms are read-only ref diffs.
+    guardScanPrompt: [
+      ["guardScanPrompt (first branch, no members)", (f) => f.guardScanPrompt({ slug: task.slug, branch: task.branch, base: task.base }, []), NO_BUILD],
+      ["guardScanPrompt (delivered and reserved members)", (f) => f.guardScanPrompt({ slug: task.slug, branch: task.branch, base: task.base }, [{ slug: "041-a", branch: "task/041-a", base: "main", state: "delivered", prUrl: "https://example.invalid/pr/1" }, { slug: "043-x", branch: "task/043-x", base: "main", state: "reserved", prUrl: "" }]), NO_BUILD],
+    ],
     resolveCollisionsPrompt: [
       ["resolveCollisionsPrompt (remote)", (f) => f.resolveCollisionsPrompt([task], [{ kind: "path", name: "src/a.ts", branches: [task.branch, "task/043-x"] }], true), COLLISION_TEMP_DIRECTORY],
       ["resolveCollisionsPrompt (no remote)", (f) => f.resolveCollisionsPrompt([task], [{ kind: "path", name: "src/a.ts", branches: [task.branch, "task/043-x"] }], false), COLLISION_TEMP_DIRECTORY],
+      // The pipelined guard's arm: the other sides are delivered, reserved, or
+      // outside the run, so the side to change is decided and listed read-only.
+      ["resolveCollisionsPrompt (fixed sides)", (f) => f.resolveCollisionsPrompt([task], [{ kind: "task-number", name: "042", branches: [task.branch], external: true, member: "#7" }], true, [{ branch: "task/043-x", state: "reserved" }, { member: "#7", state: "outside this run" }]), COLLISION_TEMP_DIRECTORY],
+      // A same-path clash left to the rebase onto an advanced base: the file is
+      // named as kept, and the kept text orders no path or temp dir of its own.
+      ["resolveCollisionsPrompt (kept for the rebase)", (f) => f.resolveCollisionsPrompt([task], [{ kind: "symbol", name: "helper", branches: [task.branch, "task/043-x"], path: "src/a.ts" }], true, [{ branch: "task/043-x", state: "delivered" }], ["src/a.ts"]), COLLISION_TEMP_DIRECTORY],
     ],
+    // The rebase onto a base a merged sibling advanced (task 033): the remote
+    // arm carries the lease push, the no-remote arm pins the local ref.
+    taskRebasePrompt: [
+      ["taskRebasePrompt (remote)", (f) => f.taskRebasePrompt(task, { reason: "sibling `task/041-a` merged into its base `main`", target: "main", retarget: false }, true), TASK_REBASE_TEMP_DIRECTORY],
+      ["taskRebasePrompt (no remote)", (f) => f.taskRebasePrompt(task, { reason: "its recorded base `task/041-a` merged into `main`", target: "main", retarget: true }, false), TASK_REBASE_TEMP_DIRECTORY],
+    ],
+    // The terminal obligation on a pushed branch left without a PR: a PR retry
+    // and a guarded remote delete, no build.
+    orphanReconcilePrompt: [["orphanReconcilePrompt", (f) => f.orphanReconcilePrompt(task, { slug: task.slug, branch: task.branch, base: task.base, status: "pushed-no-pr", taskNumbers: ["042"] }), NO_BUILD]],
     collisionReReviewPrompt: [
       ["collisionReReviewPrompt (remote)", (f) => f.collisionReReviewPrompt(task, true, "on"), REREVIEW_TEMP_DIRECTORY],
       ["collisionReReviewPrompt (no remote)", (f) => f.collisionReReviewPrompt(task, false, "on"), REREVIEW_TEMP_DIRECTORY],
@@ -1068,7 +1097,7 @@ for (const file of Object.keys(CUT)) {
     // failure of the constant, reported once as such below, not of thirty-three
     // briefs — the measured count, taken by emptying `CYCLE_REDIRECTED_OUTPUT`
     // and dropping this guard: the NO_BUILD renders of the two files that declare
-    // it, 11 in `wf-review-cycle.js` and 22 in `wf-address-tasks.js`, out of 40
+    // it, 11 in `wf-review-cycle.js` and 21 in `wf-address-tasks.js`, out of 39
     // NO_BUILD renders overall. An emptied BESPOKE_DESTINATIONS span is dropped
     // here for the same reason and reported once by the declared-tables check.
   ].filter(([, span]) => span);

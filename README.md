@@ -151,13 +151,13 @@ Run `node scripts/test-storage-probe-target.mjs` after changing where the batch 
 
 ### `test-collision-discovery.mjs`
 
-Run `node scripts/test-collision-discovery.mjs` after changing how the batch workflow partitions a discovery scan before collision resolution; it drives the shipped discovery helper with scripted scan packets.
+Run `node scripts/test-collision-discovery.mjs` after changing how the batch workflow's pre-delivery guard partitions its scan before collision resolution; it drives the shipped discovery helper with scripted scan packets.
 
 ### `test-collision-dispatch.mjs`
 
-Run `node scripts/test-collision-dispatch.mjs` after changing how the batch workflow settles a wave's held branches after its collision resolver has run.
+Run `node scripts/test-collision-dispatch.mjs` after changing how the batch workflow settles a branch its guard held after the collision resolver has run.
 
-The property the stage exists for is that a held branch delivers only where a second read-only scan of the refs no longer names it. Which degraded paths are covered, and what the check costs a wave that collided with nothing, are enumerated in the script's own header comment.
+The property the stage exists for is that a held branch delivers only where a second read-only scan of the refs no longer names it. Which degraded paths are covered, and what the check costs a guard step that collided with nothing, are enumerated in the script's own header comment.
 
 ### `test-review-cycle-retirement.mjs`
 
@@ -203,7 +203,7 @@ Two exclusions are pinned as decisions rather than left to a later audit, each a
 
 ### `test-resolve-tasks-contract.mjs`
 
-Run `node scripts/test-resolve-tasks-contract.mjs` after changing `resolve-tasks`, any task consumer's pointer preflight, or `wf-address-tasks`' resolve stage.
+Run `node scripts/test-resolve-tasks-contract.mjs` after changing `resolve-tasks`, any task consumer's pointer preflight, or `wf-address-tasks`' resolve stage (its exact-plan gate also fails a wave entry closed whose `slug`/`branch` identity is missing or duplicated, rather than letting the pipeline drop it).
 
 ### `test-skill-mirror-parity.mjs`
 
@@ -216,6 +216,12 @@ The mirrors are hand-edited in lockstep and legitimately differ in prose, so thi
 Run `node scripts/test-review-stack-plan.mjs` after changing `wf-address-tasks.js`'s post-batch review stack (task 052): the mergeable predicate, the canonical merge order, the merge-commit safe prefix, the guide-branch naming, or `buildReviewStack`'s control flow — or the terminal `Summary` stage and abort catch that place it.
 
 It evaluates the shipped declaration prefix with scripted agents and drives the stage through its success, clean-stop, merge-guard, drift, and throw paths, pinning that the stage reports rather than throws, that the teardown runs on every path that created the dedicated worktree, and that only the batch's own `refs/pre-rebase/...` snapshots reach the teardown's delete list. A full `Workflow` run of a real batch is outside what a script can do; the Git recipes the four briefs prescribe were exercised by hand in a disposable clone when the stage landed, and the placement of the stage before the closing main-checkout reading is asserted here so it cannot drift back behind it.
+
+### `test-pipelined-batch.mjs`
+
+Run `node scripts/test-pipelined-batch.mjs` after changing the batch workflow's per-task pipeline (task 033): how a task waits for its prerequisites, the serialized first-ready-wins guard and the reservation it holds through delivery, the rebase onto a base a merged sibling advanced (chased through merged ancestors, and adopted only with its recovery proof), the storage-derived slot gate and the slot a worktree left in place keeps (the review stack's worktree takes one too, and a reclaim waits for the task's settled, delivered state — which releases the task's dependents before the reclaim, a merge observed mid-reclaim still landing on the result), the numbers a held branch's result names, the in-pipeline reconciliation of pushed branches left without a PR and the PR body its retry carries, or the terminal-state census the summary reads.
+
+It drives the shipped pipeline with scripted agents, some deferred so the suite can observe order rather than only outcomes. A live multi-task workflow run is outside what a script can do; what it establishes, and the perturbations it was checked against, are in `plugins/dev-skills/workflows/README.md`'s Validation section.
 
 ### Dynamic workflow parse check
 

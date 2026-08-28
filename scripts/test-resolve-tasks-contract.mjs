@@ -173,17 +173,27 @@ if (planValidationMatch) {
 
   const active = path("active", ["number"]);
   const activePacket = (waves) => packet({ paths: [active], numbers: [numberView("active", [active.path])], waves });
-  check("valid nonempty plan covers its executable hard path", planResolutionIsExact(activePacket([[{ path: active.path, dependsOn: [] }]])) === true);
+  // A wave entry with the identity the pipeline keys on; `extra` overrides it.
+  const entry = (p, extra = {}) => ({ slug: "001-example", branch: "task/001-example", path: p, dependsOn: [], ...extra });
+  check("valid nonempty plan covers its executable hard path", planResolutionIsExact(activePacket([[entry(active.path)]])) === true);
   check("nonempty plan cannot omit an executable hard path", planResolutionIsExact(activePacket([])) === false);
-  check("nonempty plan cannot include an excluded hard path", planResolutionIsExact({ ...doneNoOp, waves: [[{ path: donePath.path, dependsOn: [] }]] }) === false);
-  check("nonempty plan cannot duplicate an executable hard path", planResolutionIsExact(activePacket([[{ path: active.path, dependsOn: [] }], [{ path: active.path, dependsOn: [] }]])) === false);
-  check("nonempty plan cannot include an unknown path", planResolutionIsExact(activePacket([[{ path: "tasks/999-unknown.md", dependsOn: [] }]])) === false);
-  check("wave validation preserves dependency metadata", planResolutionIsExact(activePacket([[{ path: active.path, dependsOn: ["upstream"] }]])) === true);
+  check("nonempty plan cannot include an excluded hard path", planResolutionIsExact({ ...doneNoOp, waves: [[entry(donePath.path)]] }) === false);
+  check("nonempty plan cannot duplicate an executable hard path", planResolutionIsExact(activePacket([[entry(active.path)], [entry(active.path, { slug: "001-dup", branch: "task/001-dup" })]])) === false);
+  check("nonempty plan cannot include an unknown path", planResolutionIsExact(activePacket([[entry("tasks/999-unknown.md")]])) === false);
+  check("wave validation preserves dependency metadata", planResolutionIsExact(activePacket([[entry(active.path, { dependsOn: ["upstream"] })]])) === true);
+  // The identity the fan-out keys on is validated with the path, so a task
+  // the pipeline could not key fails the plan closed instead of being dropped.
+  check("a wave entry without a slug fails closed", planResolutionIsExact(activePacket([[entry(active.path, { slug: undefined })]])) === false && planResolutionIsExact(activePacket([[entry(active.path, { slug: "" })]])) === false);
+  check("a wave entry without a branch fails closed", planResolutionIsExact(activePacket([[entry(active.path, { branch: undefined })]])) === false && planResolutionIsExact(activePacket([[entry(active.path, { branch: 7 })]])) === false);
+  const second = { ...path("active", ["number"], "tasks/002-second.md", "002"), number: "002" };
+  const twoPacket = (a, b) => packet({ paths: [active, second], numbers: [numberView("active", [active.path]), { ...numberView("active", [second.path]), number: "002" }], waves: [[a, b]] });
+  check("two wave entries carrying distinct identities pass", planResolutionIsExact(twoPacket(entry(active.path), entry(second.path, { slug: "002-second", branch: "task/002-second" }))) === true);
+  check("two wave entries sharing a slug or a branch fail closed", planResolutionIsExact(twoPacket(entry(active.path), entry(second.path, { branch: "task/002-second" }))) === false && planResolutionIsExact(twoPacket(entry(active.path), entry(second.path, { slug: "002-second" }))) === false);
 
   const mixed = path("done", ["number", "path"]);
-  check("explicit provenance wins while the number selection remains accounted", planResolutionIsExact(packet({ paths: [mixed], numbers: [numberView("done", [mixed.path])], exclusions: [numberExclusion("done", [mixed.path])], waves: [[{ path: mixed.path, dependsOn: [] }]] })) === true);
+  check("explicit provenance wins while the number selection remains accounted", planResolutionIsExact(packet({ paths: [mixed], numbers: [numberView("done", [mixed.path])], exclusions: [numberExclusion("done", [mixed.path])], waves: [[entry(mixed.path)]] })) === true);
   const outside = path("outside-subtree", ["glob"], "plans/A-01-example.md");
-  check("an explicit outside-subtree task is executable", planResolutionIsExact(packet({ paths: [outside], waves: [[{ path: outside.path, dependsOn: [] }]] })) === true);
+  check("an explicit outside-subtree task is executable", planResolutionIsExact(packet({ paths: [outside], waves: [[entry(outside.path)]] })) === true);
   // Well-formed on purpose: without the `numbers` entry this inside-subtree
   // path makes the packet malformed, and the assertion below would pass on
   // that branch instead of the wave-coverage one it exists to exercise.

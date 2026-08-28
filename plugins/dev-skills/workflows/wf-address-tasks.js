@@ -1,32 +1,43 @@
 /**
  * wf-address-tasks — dynamic-workflow form of the `address-tasks` skill.
  *
- * Resolve a batch of pre-planned task pointers into dependency waves, then run
- * each task through the shared review cycle — implement -> fresh-eyes review
- * plus a best-effort cross-harness codex peer review -> fix, bounded by the
- * cycle's canonical round cap — scan reviewed sibling branches for add/add
- * collisions before delivery and deconflict them (an orchestrator-deputy agent
- * renames one side, regenerates derived files, a second scan of the refs decides
- * which sides may deliver, and every branch a cleared clash covered is
- * re-reviewed first) — or hold a name that must stay identical — then open PRs
- * for the delivered tasks and report. Invoke as
+ * Resolve a batch of pre-planned task pointers into a dependency graph, then
+ * run each task as its own end-to-end pipeline the moment its prerequisites
+ * have delivered (task 033): the shared review cycle — implement -> fresh-eyes
+ * review plus a best-effort cross-harness codex peer review -> fix, bounded by
+ * the cycle's canonical round cap — then ONE serialized pre-delivery guard,
+ * first-ready-wins, that compares the branch against what the run has already
+ * delivered or reserved and against the same-number guard's remote members
+ * (an orchestrator-deputy agent renames or renumbers the branch under the
+ * guard — never a delivered, reserved, or outside side — a second scan of the
+ * refs decides whether it may deliver, and it is re-reviewed first; a name
+ * that must stay identical is held), reserves the numbers it claims through
+ * delivery, rebases onto a base a merged sibling advanced, opens its PR,
+ * reclaims its worktree, and acts on a pushed branch it left without a PR
+ * inside that same pipeline — then, once EVERY task has reached a terminal
+ * state, builds the local review stack and reports. Invoke as
  * `/dev-skills:wf-address-tasks <task-numbers-paths-or-globs> [peer-opinions=off]`.
  *
  * Why a workflow rather than a skill
  * ----------------------------------
- * The control flow the skill spells out in prose — dependency waves, the
- * bounded implement -> review -> fix loop, dependent waves gated on their
- * prerequisites, "the implementer finishes before its reviewer starts" —
- * becomes ordinary JavaScript here, run deterministically instead of relying
- * on the model to follow it. Independent tasks fan out via `parallel()`.
+ * The control flow the skill spells out in prose — per-task readiness on a
+ * dependency graph, the bounded implement -> review -> fix loop, dependents
+ * gated on their specific prerequisites, "the implementer finishes before its
+ * reviewer starts", one serialized guard with a reservation held through
+ * delivery — becomes ordinary JavaScript here, run deterministically instead
+ * of relying on the model to follow it. Every task's pipeline fans out via
+ * `parallel()`; the dependency gate, the guard queue, the reservation ledger,
+ * and the storage-derived slot gate are plain objects on this one flat script.
  *
  * The per-task loop itself is NOT stated here: it is a synthesized copy of the
  * canonical wf-review-cycle's marked embeddable section (see the section
  * header below). EMBEDDED rather than nested deliberately: this script owns
  * the task fan-out, so every peer launch must be made by this one flat script,
  * whose module state is shared across the parallel() fan-out — the place
- * where task 015's session-local peer throttle lives beside the wave
- * throttling below and sees every launch. A nested child would hold its own
+ * where task 015's session-local peer throttle lives beside the slot gate
+ * below and sees every launch — pipelining removes the wave boundary's
+ * natural pacing, so that throttle is the one global semaphore around every
+ * peer step in the batch. A nested child would hold its own
  * state, and a throttle there would count one peer, never see a sibling's,
  * and cap nothing. The embedded canonical section owns the exact policy; this
  * fan-out owner supplies its one shared state object and reports its steps.
@@ -75,22 +86,24 @@
 // The runtime requires `export const meta = {...}` (a pure literal) as the
 // FIRST statement: it is how the script registers as the
 // `/dev-skills:wf-address-tasks` command and what the pre-run approval prompt
-// shows. Wave phases are dynamic (`Wave N (...)`), so only the fixed phases
+// shows. Per-task phases are dynamic (`Task <slug>`), so only the fixed phases
 // are declared here; undeclared phase() titles still get their own progress
 // group. The "Peer review (codex)" title must stay byte-identical to
 // CYCLE_PEER_PHASE in the embedded review-cycle-core section below — a
 // mismatch silently splits the progress display into an extra group.
 export const meta = {
   name: "wf-address-tasks",
-  description: "Implement a batch selected by task numbers, paths, or globs: dependency waves, per-task worktree, and the shared review cycle per task — implement -> fresh-eyes review plus a best-effort cross-harness codex peer review -> fix (review is cross-harness; peer outcomes never block; bounded round cap) — with a pre-PR collision guard that deconflicts add/add clashes (rename one side + re-review) or holds an imperative name, one PR per delivered task.",
+  description: "Implement a batch selected by task numbers, paths, or globs as per-task pipelines on a dependency graph: each task starts when its prerequisites deliver, runs in its own worktree through the shared review cycle — implement -> fresh-eyes review plus a best-effort cross-harness codex peer review -> fix (review is cross-harness; peer outcomes never block; bounded round cap) — then a serialized first-ready-wins pre-delivery guard that deconflicts add/add and same-number clashes against delivered and reserved siblings (rename the branch under the guard + re-review) or holds an imperative name, reserves its numbers through delivery, opens its PR without waiting for the batch, and acts on a pushed branch it left without a PR inside that same pipeline.",
   whenToUse: "Execute numbers, paths, or globs for pre-planned task files end to end with per-task worktree isolation and cross-harness review (a best-effort codex peer beside each task's fresh reviewer). Not for one-off coding requests or planning new tasks.",
   phases: [
     { title: "Bootstrap", detail: "wt-bootstrap: root-safety checks, orphan prune, remote probe; then the worktree base's ignore rule" },
-    { title: "Resolve batch", detail: "read task files, derive dependency waves and branches" },
+    { title: "Resolve batch", detail: "read task files, derive the dependency graph and branches" },
     { title: "Peer review (codex)", detail: "best-effort cross-harness second opinion beside each task's reviewer rounds; its outcome never blocks" },
-    { title: "Collision scan", detail: "diff added files across sibling branches for add/add clashes" },
-    { title: "Collision resolve", detail: "rename one side of each clash, regen, commit" },
-    { title: "Collision re-scan", detail: "re-derive the clashes from the refs; a branch the re-scan clears delivers only after a fresh re-review" },
+    { title: "Collision guard", detail: "one branch at a time, first-ready-wins: diff its added files and task numbers against delivered and reserved siblings and the same-number guard's remote members" },
+    { title: "Collision resolve", detail: "rename or renumber the branch under the guard, regen, commit" },
+    { title: "Collision re-scan", detail: "re-derive the clash from the refs; a branch the re-scan clears delivers only after a fresh re-review" },
+    { title: "Rebase onto advanced base", detail: "a sibling merged mid-run: rebase the branch under the guard onto the base it advanced, then re-review" },
+    { title: "Orphan reconciliation", detail: "a pushed branch left without a PR gets its PR retried or is deleted from origin inside its own pipeline, before its state reaches its dependents" },
     { title: "Summary" },
   ],
 };
@@ -108,18 +121,20 @@ const BOOTSTRAP_SCHEMA = {
     blocker: { type: "string", description: "Why the batch cannot proceed (worktree roots unsafe, CONTAINER_NAME unset, wt-bootstrap missing, the in-repo worktree base still unignored after the append). Empty when ok." },
     wtBase: { type: "string", description: "Absolute path to this container's worktree base, `<repo>/.worktrees/$CONTAINER_NAME`. Mandatory whenever `ok` is true: the batch aborts rather than probe an unknown filesystem. `ok` also asserts that base is IGNORED — `wt-bootstrap` establishes no ignore rule, so the bootstrap agent's own probe/append/re-probe is what backs that half." },
     remote: { type: "boolean", description: "True if push/PR is available (remote reachable); false means local-branch-only fallback." },
-    availBytes: { type: "number", description: "Free bytes on the .worktrees mount, verbatim from wt-bootstrap (drives wave-width throttling)." },
+    availBytes: { type: "number", description: "Free bytes on the .worktrees mount, verbatim from wt-bootstrap (derives the live-worktree concurrency cap)." },
   },
   required: ["ok"],
 };
 
-// `wtBase` is the path every later `df` probe is pointed at, and each probe is a
-// fresh agent with its own working directory — so an empty or relative base
-// measures whatever filesystem that agent happened to start in rather than the
-// `.worktrees` mount, and the storage throttle silently guards the wrong thing.
-// `wt-bootstrap` reports an absolute path by contract, so an `ok` bootstrap that
-// does not is a broken contract: refuse the batch instead of guessing a path
-// from the workflow's or an agent's working directory.
+// `wtBase` is the mount the bootstrap's `df` reading (`availBytes`, the one
+// measurement the concurrency cap is derived from) describes, and the path the
+// review stack's worktree is later added under by a fresh agent with its own
+// working directory — so an empty or relative base names whatever filesystem
+// that agent happened to start in rather than the `.worktrees` mount, and the
+// storage throttle silently guards the wrong thing. `wt-bootstrap` reports an
+// absolute path by contract, so an `ok` bootstrap that does not is a broken
+// contract: refuse the batch instead of guessing a path from the workflow's or
+// an agent's working directory.
 //
 // This is deliberately the ONLY gate on the property, rather than also adding
 // `wtBase` to BOOTSTRAP_SCHEMA's `required`: an `ok: false` bootstrap has no
@@ -213,7 +228,7 @@ const PLAN_SCHEMA = {
     },
     waves: {
       type: "array",
-      description: "Tasks grouped into dependency waves; wave N runs only after wave N-1 has finished.",
+      description: "Tasks grouped into dependency levels: level N depends only on earlier levels. The levels are the plan's scheduling order (they seed the review stack's merge order); execution is per task — each starts the moment its own prerequisites have delivered, never waiting for the rest of its level.",
       items: {
         type: "array",
         items: {
@@ -257,16 +272,33 @@ const COLLISION_SCHEMA = {
       items: {
         type: "object",
         properties: {
-          kind: { type: "string", description: "path | filename | symbol — a duplicated repo-relative path, a duplicated basename at different paths, or a duplicated exported top-level name (class/function/const/interface/type/enum)." },
-          name: { type: "string", description: "The colliding value: the repo-relative path, the basename, or the symbol name." },
-          branches: { type: "array", items: { type: "string" }, description: "The two or more branches that each independently added it." },
+          kind: { type: "string", description: "path | filename | symbol | task-number — a duplicated repo-relative path, a duplicated basename at different paths, a duplicated exported top-level name (class/function/const/interface/type/enum), or a full task number two task files claim (the same-number guard the brief references)." },
+          name: { type: "string", description: "The colliding value: the repo-relative path, the basename, the symbol name, or the full task number." },
+          branches: { type: "array", items: { type: "string" }, description: "The two or more branches that each independently added it — or, for a clash whose other holder is outside this run (`external: true`), the one run branch that added it." },
+          external: { type: "boolean", description: "True ONLY when the other holder is a member the same-number guard draws from outside this run — an open PR head, or the base branch — which is no ref this run holds; `member` then names it. False or absent for a clash among this run's branches." },
+          member: { type: "string", description: "When `external` is true: the outside holder — the PR number, or the base branch. Empty otherwise." },
           detail: { type: "string", description: "One actionable line for the integrator (e.g. 'both define class PaymentReconciliationController — rename one side and regen contracts')." },
         },
         required: ["kind", "name", "branches"],
       },
     },
+    taskNumbers: { type: "array", items: { type: "string" }, description: "Every full task number the branch under the guard CLAIMS — its unpaired task-file additions relative to its own base under the referenced guard's relocation pairing (e.g. `028`, `028a`). Empty when it adds no task file. The run reserves these for the branch once it clears the guard." },
+    merged: {
+      type: "array",
+      description: "Run-local DELIVERED members whose PR has merged since delivery, each with the branch it merged into. Empty when none has — and always present: the run reads an omitted reading as a failed scan, never as none merged.",
+      items: {
+        type: "object",
+        properties: {
+          branch: { type: "string", description: "The member's branch, exactly as listed." },
+          mergedInto: { type: "string", description: "The PR's base branch the merge landed on (`baseRefName`)." },
+        },
+        required: ["branch", "mergedInto"],
+      },
+    },
+    scanComplete: { type: "boolean", description: "False when the referenced guard's remote enumeration was degraded or incomplete under its note-and-proceed rule; say how in `detail`. True when every member it names was read." },
+    detail: { type: "string" },
   },
-  required: ["collisions"],
+  required: ["collisions", "merged"],
 };
 
 const RESOLUTION_SCHEMA = {
@@ -343,27 +375,13 @@ ${DESTROY_BOUNDARY}
 5. On \`ok: false\` from the script, return its \`blocker\` verbatim (typical remedies it names: set CONTAINER_NAME, run \`enable-worktrees\`, rebuild/relaunch). Step 2 does not apply there either, for the same reason.`;
 }
 
-const STORAGE_PROBE_SCHEMA = {
-  type: "object",
-  properties: {
-    availBytes: { type: "number", description: "Free bytes on the .worktrees mount right now, from `df`; 0 when the probe could not measure." },
-  },
-  required: ["availBytes"],
-};
-
-function storageProbePrompt(wtBase) {
-  return `Measure free storage for wave-width throttling. This is measurement only — edit nothing, create nothing.
-
-${DESTROY_BOUNDARY}
-
-Run \`df -B1 --output=avail ${shq(wtBase)}\` (POSIX fallback: \`df -kP\`, avail column, times 1024) and return the mount's free bytes as \`availBytes\`. Measure that exact path — do not substitute a relative path or one derived from your working directory. If the path is missing or \`df\` fails, return \`availBytes: 0\`.`;
-}
-
-// The storage throttle's retention rule, in one place so no probe site can relax
-// it: a reading counts only when it is a positive number, and anything else — no
-// result at all, a `df` that could not measure (0), a non-numeric or negative
-// value — keeps the previous reading. Stale-but-conservative beats dropping the
-// cap mid-batch, which is the ENOSPC the throttle exists to prevent.
+// The storage throttle's retention rule, in one place: a reading counts only
+// when it is a positive number, and anything else — no result at all, a `df`
+// that could not measure (0), a non-numeric or negative value — keeps the
+// previous reading. The bootstrap's `availBytes` is the ONE measurement the run
+// takes (task 033 replaced the wave-boundary re-probe with a cap derived from
+// it once), so the previous reading there is the unmeasured 0: no cap, rather
+// than a cap invented from a reading nobody took.
 function nextAvailBytes(previous, reading) {
   const bytes = reading && typeof reading.availBytes === "number" ? reading.availBytes : 0;
   return bytes > 0 ? bytes : previous;
@@ -823,6 +841,12 @@ function resolutionAccountsForInputs(resolution, required) {
 // Every executable hard-list path must occur exactly once in the waves, and no
 // other path may occur. This applies to non-empty plans too: the executor never
 // trusts a structurally valid plan that silently dropped or invented work.
+// Each task's identity is validated here too — a non-empty `slug` and `branch`,
+// each unique across the plan — because the pipeline keys its terminal
+// promises by slug and derives prerequisites by branch: a task the fan-out
+// could not key would have to be dropped, and a dropped task is requested work
+// the batch then completes without, reporting neither a result nor an error.
+// The plan fails closed instead, like a dropped or invented path.
 function planResolutionIsExact(plan) {
   if (!plan || typeof plan !== "object" || !Array.isArray(plan.waves)) return false;
   const resolution = plan.resolution;
@@ -837,11 +861,16 @@ function planResolutionIsExact(plan) {
   }
 
   const planned = new Set();
+  const slugs = new Set();
+  const branches = new Set();
   for (const wave of plan.waves) {
     if (!Array.isArray(wave) || wave.length === 0) return false;
     for (const task of wave) {
       if (!task || typeof task !== "object" || !nonEmptyString(task.path) || !executable.has(task.path) || planned.has(task.path)) return false;
+      if (!nonEmptyString(task.slug) || !nonEmptyString(task.branch) || slugs.has(task.slug) || branches.has(task.branch)) return false;
       planned.add(task.path);
+      slugs.add(task.slug);
+      branches.add(task.branch);
     }
   }
   if (planned.size !== executable.size) return false;
@@ -3151,21 +3180,18 @@ function taskCycleConfig(task, remote, peerMode) {
 // Reading the fields off the whole ready result rather than taking each as its
 // own parameter is what keeps that list one edit long the next time the cycle
 // grows a record worth publishing.
-function prPrompt(task, ready, remote) {
+// The PR body sections the reviewed result owes the maintainer — a locked-
+// decision deviation and its assessment, a delivery-run failure recorded but
+// not reviewed, the reviewer's caveats. ONE rendering, shared by the delivery
+// brief and the orphan retry: the retry is the call that opens the PR when the
+// first attempt failed after the push, and a PR opened from a generic summary
+// there would end `done` without the information delivery requires the
+// maintainer to see before merging.
+function prBodySections(ready) {
   const dev = Array.isArray(ready && ready.deviations) ? ready.deviations : [];
   const assessments = Array.isArray(ready && ready.deviationAssessments) ? ready.deviationAssessments : [];
   const notes = (ready && ready.notes) || "";
   const rec = (ready && ready.recordOnly) || null;
-  // No-remote arm: `git -C "$WT"` rather than a `cd`, and left unguarded on
-  // purpose. Git skips the chdir outright for an empty `-C`, so an empty `$WT`
-  // runs the log in the main checkout — the same repository, answering a
-  // ref-to-ref range that resolves identically there. Nothing is misreported,
-  // and a guard here would be a case added for a failure that cannot show.
-  if (!remote) {
-    return `Remote push/PR is unavailable this run. Verify branch \`${task.branch}\` and its commits are intact: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && git -C "$WT" log --oneline ${shq(task.base)}..${shq(task.branch)}\` shows the work. Return \`opened: false\`, \`pushed: false\`, \`reason: "no remote auth this run"\`. Do not fail.
-
-${DESTROY_BOUNDARY}`;
-  }
   const caveats = notes ? `\n\nReviewer caveats to surface in the PR body:\n${notes}` : "";
   const deviationLead = dev.length
     ? `\n\nLEAD the PR body with a "Deviation from a locked decision" section, above everything else, carrying these verbatim — each is the maintainer's to ratify or ask conformance on, so neither correct nor soften one:\n${JSON.stringify(dev, null, 2)}${
@@ -3177,6 +3203,20 @@ ${DESTROY_BOUNDARY}`;
   const flakeRecord = rec
     ? `\n\nThe cycle concluded over a FAILED delivery run, on the flake rule's evidenced-unrelated disposition${rec.range ? `, and over a final commit (\`${rec.range}\`) no fresh reviewer saw — the diagnosis-only follow-up task that failure earned` : ", and over no post-run commit this record points you at, so cite none"}. Carry a "Delivery-run failure — recorded, not reviewed" section in the body with these verbatim, so the maintainer sees the gap here and decides how to absorb it; do not re-diagnose, soften, or omit it:\n${JSON.stringify({ note: rec.note || "", ...(rec.range ? { rangeCheck: rec.verified || "" } : {}) }, null, 2)}`
     : "";
+  return `${deviationLead}${flakeRecord}${caveats}`;
+}
+
+function prPrompt(task, ready, remote) {
+  // No-remote arm: `git -C "$WT"` rather than a `cd`, and left unguarded on
+  // purpose. Git skips the chdir outright for an empty `-C`, so an empty `$WT`
+  // runs the log in the main checkout — the same repository, answering a
+  // ref-to-ref range that resolves identically there. Nothing is misreported,
+  // and a guard here would be a case added for a failure that cannot show.
+  if (!remote) {
+    return `Remote push/PR is unavailable this run. Verify branch \`${task.branch}\` and its commits are intact: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && git -C "$WT" log --oneline ${shq(task.base)}..${shq(task.branch)}\` shows the work. Return \`opened: false\`, \`pushed: false\`, \`reason: "no remote auth this run"\`. Do not fail.
+
+${DESTROY_BOUNDARY}`;
+  }
   return `Open a pull request for branch \`${task.branch}\` against base \`${task.base}\`. Work from this task's worktree: \`WT="$(wt-enter ${shq(task.slug)} ${shq(task.branch)})" && cd -- "\${WT:?wt-enter returned no path — see its error above}"\` (rerun-safe resolve of the existing worktree; if it errors, STOP and report).
 
 ${DEPUTY_FINISH_IN_TURN}
@@ -3188,48 +3228,89 @@ ${DESTROY_BOUNDARY}
    - Reference the task file (${task.path}); don't restate the whole task unless it adds review value.
    - Note tradeoffs / intentional divergences / uncertainties.
 3. Capture the URL step 2 printed and assert THAT PR's base by URL: \`gh pr view <pr-url> --json baseRefName\` must report \`${task.base}\`. Address the PR by its URL, never by whatever branch you are standing on — the check must follow the PR you just created. Every read in this step reads the same eventually-consistent API the creation and the repair just wrote, so a base that disagrees once is not proof the repair failed — and is not yet a mismatch to repair: re-read until the answer reports \`${task.base}\` or repeats the same other base — a bounded budget of a few re-reads, held briefly apart, an errored read spending it like a stale one — and set \`baseOk: true\` only from a read that reported \`${task.base}\`. A read still unsettled when that budget is spent, before any repair as much as after one, returns \`opened: false\` WITH the \`url\` and \`baseOk: false\`, with \`reason\` naming the read that did not settle and what it last returned. On a mismatch that settled, repair it in the same breath, \`gh pr edit <pr-url> --base ${shq(task.base)}\`, re-read it under the same rule, and return the base it carried before the repair in \`baseRepaired\`. If the repair command itself fails, the failure alone decides nothing — a \`gh pr edit\` failure can arrive after the server applied the change — so rest the verdict on a read settled AFTER the failure, under the same rule: a settled \`${task.base}\` means the repair landed, so return \`baseOk: true\` with \`baseRepaired\` as above; the same other base settled again means that PR is delivered with the wrong base, not delivered — return \`opened: false\` WITH the \`url\`, \`baseOk: false\`, and a \`reason\` naming the settled base it still carries. If the read-back after a repair — failed or succeeded — kept disagreeing without settling, return \`opened: false\` WITH the \`url\` and \`baseOk: false\` the same way, with \`reason\` naming the read that did not settle and the base it last reported — an unsettled read, not a proven wrong base; a repair the server confirmed makes even a repeated old-base answer that unsettled read, never the wrong-base verdict.
-4. If \`gh pr create\` fails BEFORE printing a URL, the PR may exist server-side anyway. If the failure itself names an existing PR's URL (an "already exists" error does), take that URL to step 3 rather than looking anything up. Otherwise, before retrying creation, look it up by the head branch you pushed, in the repository that OWNS the PR — the base repository the creation targeted, never the head repository, where a fork's PR does not live: \`gh pr list --repo <base-repo> --head ${shq(task.branch)} --state open --json url,headRepositoryOwner\`. \`--head\` cannot carry an \`<owner>:<branch>\` form, so require the returned PR's head repository owner to match the head you pushed before trusting the match; then assert its base per step 3. This lookup reads the same eventually-consistent API the creation just wrote, so a lookup that finds nothing is not proof no PR exists — retrying on an answer that merely has not converged is how one branch gets two PRs. Retry creation ONLY on a lookup that finds nothing where nothing-found is trustworthy: the creation failure did not claim the PR exists, AND a re-run of the lookup, held briefly rather than immediate, still finds nothing. Even that held pair closes only the unconverged-lookup window — no answer here proves the failed creation did not open a PR whose success report was lost — so the license is for ONE retry: a retry that fails naming an existing PR's URL goes to step 3 like the first attempt's failure would, and a spent retry that still captured no URL and found no match ends this step at \`opened: false\`, \`pushed: true\`, and \`reason\`, not at another attempt. Where those do not both hold, do not retry — return \`opened: false\`, \`pushed: true\`, and a \`reason\` naming the read that did not settle and what each answer said.${deviationLead}${flakeRecord}${caveats}
+4. If \`gh pr create\` fails BEFORE printing a URL, the PR may exist server-side anyway. If the failure itself names an existing PR's URL (an "already exists" error does), take that URL to step 3 rather than looking anything up. Otherwise, before retrying creation, look it up by the head branch you pushed, in the repository that OWNS the PR — the base repository the creation targeted, never the head repository, where a fork's PR does not live: \`gh pr list --repo <base-repo> --head ${shq(task.branch)} --state open --json url,headRepositoryOwner\`. \`--head\` cannot carry an \`<owner>:<branch>\` form, so require the returned PR's head repository owner to match the head you pushed before trusting the match; then assert its base per step 3. This lookup reads the same eventually-consistent API the creation just wrote, so a lookup that finds nothing is not proof no PR exists — retrying on an answer that merely has not converged is how one branch gets two PRs. Retry creation ONLY on a lookup that finds nothing where nothing-found is trustworthy: the creation failure did not claim the PR exists, AND a re-run of the lookup, held briefly rather than immediate, still finds nothing. Even that held pair closes only the unconverged-lookup window — no answer here proves the failed creation did not open a PR whose success report was lost — so the license is for ONE retry: a retry that fails naming an existing PR's URL goes to step 3 like the first attempt's failure would, and a spent retry that still captured no URL and found no match ends this step at \`opened: false\`, \`pushed: true\`, and \`reason\`, not at another attempt. Where those do not both hold, do not retry — return \`opened: false\`, \`pushed: true\`, and a \`reason\` naming the read that did not settle and what each answer said.${prBodySections(ready)}
 
 Return \`opened: true\` with the \`url\` ONLY if a PR URL exists — from step 2 or step 4's lookup — AND step 3's read-back confirmed its base is \`${task.base}\`, after any repair; set \`baseOk\` to that same fact. If the push succeeded but no PR could be created or found (auth, API, or base-branch error), return \`opened: false\`, \`pushed: true\`, and \`reason\`; ending with neither a captured URL nor a lookup match is that failure, not a delivery. Do not claim a PR that was not created, and do not claim one whose base you did not read back.`;
 }
 
+const CLEANUP_SCHEMA = {
+  type: "object",
+  properties: {
+    removed: { type: "boolean", description: "True ONLY when `wt-remove` reported the worktree removed. False on a refusal, a missing helper, or any failure — the worktree is then still live." },
+    reason: { type: "string", description: "What `wt-remove` said; REQUIRED when `removed` is false." },
+  },
+  required: ["removed"],
+};
+
 function cleanupNote(task) {
-  // Best-effort worktree removal is requested after delivery; commits and the
-  // branch persist in shared `.git` and on the remote, so removal is safe.
-  return `Remove this task's worktree to reclaim space — the branch and commits persist. From the repo root (not inside the worktree) run \`wt-remove ${shq(task.slug)}\`. It refuses to delete uncommitted work; if it refuses, report why instead of forcing (\`--force\` only clears git's refusal over ignored build artifacts — the clean checks still apply). It never deletes the branch \`${task.branch}\`. Report done.
+  // Best-effort worktree removal is requested after a DELIVERED task's terminal
+  // state is settled (see `reclaimWorktree`); commits and the branch persist in
+  // shared `.git` and on the remote, so removal is safe.
+  return `Remove this task's worktree to reclaim space — the branch and commits persist. From the repo root (not inside the worktree) run \`wt-remove ${shq(task.slug)}\`. It refuses to delete uncommitted work; if it refuses, report why instead of forcing (\`--force\` only clears git's refusal over ignored build artifacts — the clean checks still apply). It never deletes the branch \`${task.branch}\`. Report \`removed: true\` ONLY when the helper reported the worktree removed; on a refusal or any failure report \`removed: false\` with what it said in \`reason\`.
 
 ${DESTROY_BOUNDARY}
 
 \`wt-remove\` is the ONLY removal this assignment spells out, and the repo root is the one place you run it from: you are standing in the SHARED main checkout, outside every worktree, so nothing here is yours to delete by hand. A refusal is the helper working — report it.`;
 }
 
-function collisionScanPrompt(branches) {
-  const list = branches
-    .map(
-      (b) =>
-        `- slug ${JSON.stringify(b.slug)}: branch ${JSON.stringify(b.branch)} diverged from base ${JSON.stringify(b.base)}\n      list its added files with: git diff --diff-filter=A --name-only ${shq(b.base)}...${shq(b.branch)}`
-    )
-    .join("\n");
-  return `You are a read-only PRE-PR COLLISION GUARD for a batch of sibling task branches implemented in parallel, each reviewed and ready for its own PR. Edit, stage, commit, or push NOTHING. Work from the repo ROOT; do not enter or create any worktree — these branches live in the shared \`.git\` and you compare them by ref.
+// ============================================================================
+// The incremental collision guard — task 033's one serialized step.
+//
+// Tasks no longer wait for a wave: each one runs its own implement -> review
+// -> fix cycle and, the moment that cycle passes, is run through THIS guard,
+// one branch at a time in the order branches become ready (first-ready-wins),
+// before it delivers. The guard compares the branch under it against what the
+// run has DELIVERED or RESERVED so far and against the remote members the
+// same-number guard of `address-tasks-serialized` draws from; a branch that
+// clears it reserves the task numbers it claims until its delivery settles.
+// The comparison set itself is that skill section's to define — "Task-number
+// collisions across in-flight branches" — and is referenced from the brief
+// rather than restated: the run-local members listed there are the members of
+// that definition this run tracks, not a second membership rule.
+//
+// Kept cheap on purpose: the turn is the ref-only scan from the repo root, no
+// worktree entry, plus the reservation — and, only where the scan found a
+// clash, the settlement of that clash (its rename is judged against the
+// members it renamed against, so it cannot leave the turn; see the turn). The
+// rebase onto a base a merged sibling advanced, with its build, tests, and
+// re-review, runs after the turn under the reservation, so the one new
+// synchronization point never becomes the new barrier.
+// ============================================================================
+
+function guardScanPrompt(ready, members) {
+  const branchLine = (b) => `list its added files with: git diff --diff-filter=A --name-only ${shq(b.base)}...${shq(b.branch)}`;
+  const readyLine = `- slug ${JSON.stringify(ready.slug)}: branch ${JSON.stringify(ready.branch)} diverged from base ${JSON.stringify(ready.base)}\n      ${branchLine(ready)}`;
+  const memberList = members.length
+    ? members
+        .map((m) => {
+          const role = m.state === "reserved"
+            ? "RESERVED — cleared this guard and is still delivering; its PR may not exist yet, and its ref is a member whatever the PR side says"
+            : m.state === "held"
+              ? "HELD beside the branch under the guard by this same guard step; compare it by ref like any member"
+              : `DELIVERED earlier this run${m.prUrl ? ` (PR ${m.prUrl})` : " (no PR: local branch only)"}`;
+          return `- slug ${JSON.stringify(m.slug)}: branch ${JSON.stringify(m.branch)} diverged from base ${JSON.stringify(m.base)} — ${role}\n      ${branchLine(m)}`;
+        })
+        .join("\n")
+    : "- (none yet: this is the first branch to reach the guard this run)";
+  return `You are the read-only PRE-DELIVERY COLLISION GUARD for ONE reviewed task branch in a pipelined batch. Edit, stage, commit, or push NOTHING. Work from the repo ROOT; do not enter or create any worktree — every branch here lives in the shared \`.git\` and you compare them by ref, which is what keeps this step cheap.
 
 ${DESTROY_BOUNDARY}
 
-Why this exists: independent siblings never conflict while they are implemented (each in its own worktree), so two of them can each ADD the same new file path — or a file with the same basename, or a file that exports the same top-level class/symbol — with no warning. The clash only surfaces later, when the branches linearize or merge (an add/add conflict, or a duplicate definition). Find those overlaps now so they can be reconciled before merge.
+Why this exists: tasks in this batch are implemented in separate worktrees and deliver the moment each passes review, so two of them can each ADD the same new file path — or a file with the same basename, or a file exporting the same top-level symbol, or a task file claiming the same task number — with no warning until the branches linearize or merge. Branches are run through this guard one at a time, in the order they became ready, so the branch under the guard is compared against what the run has already delivered or reserved; the one that got here first keeps its names and numbers, and the branch under the guard is the side that changes.
 
-Branches:
-${list}
+The branch under the guard:
+${readyLine}
+
+Run-local members this run tracks (branches delivered earlier in this run, and numbers reserved by a task that cleared this guard but has not finished delivering):
+${memberList}
 
 Method:
-1. For each branch, list ONLY the files it ADDED relative to its OWN base by running the exact, ready-to-run command listed for that branch under "Branches" above — its base and branch are already shell-quoted there because a generated/task-derived ref can contain shell metacharacters (\`$\`, backticks, \`;\`); never hand-substitute a raw \`<branch>\` into the command. It has the form:
-       git diff --diff-filter=A --name-only <base>...<branch>
-   The three-dot form compares against the merge-base, so a dependent branch built on a sibling will NOT re-list that sibling's files and legitimate stacking is never flagged.
-2. Report a collision when, across two or more DIFFERENT branches:
-   - the same repo-relative path was added (kind \`path\`), OR
-   - the same basename was added at different paths (kind \`filename\`), OR
-   - two added source files (sharing a basename, or clearly the same kind of module) declare the same exported top-level name — class/function/const/interface/type/enum (kind \`symbol\`). Open ONLY those candidate files to confirm; keep it cheap.
-3. For each collision give the colliding value, the 2+ branches that added it, and a one-line reconciliation hint. In \`branches\`, use the exact branch strings from the Branches list without shell quote characters.
+1. Added files, by ref. For the branch under the guard and for each run-local member, list ONLY the files it ADDED relative to its OWN base with the exact, ready-to-run command listed beside it above — its base and branch are already shell-quoted there because a generated/task-derived ref can contain shell metacharacters; never hand-substitute a raw \`<branch>\` into the command. The three-dot form compares against the merge-base, so a dependent branch built on a sibling never re-lists that sibling's files and legitimate stacking is never flagged. Report a collision between the branch under the guard and a member when the same repo-relative path was added (kind \`path\`), the same basename was added at different paths (kind \`filename\`), or two added source files (sharing a basename, or clearly the same kind of module) declare the same exported top-level name — class/function/const/interface/type/enum (kind \`symbol\`; open ONLY those candidate files to confirm, and keep it cheap). A clash among members alone is not this branch's and is not reported here. In \`branches\`, use the exact branch strings from the lists above without shell quote characters.
+2. Task numbers. Apply the \`address-tasks-serialized\` skill's "Task-number collisions across in-flight branches" section to the branch under the guard, as written there. That section OWNS the comparison set and defines what each member contributes; nothing here restates it, and the run-local list above is NOT that set: it is the run-tracked members of that definition, handed to you so you can read them by ref, while the members the definition draws from outside this run — the base branch and every open PR head — you enumerate exactly as the section says, its note-and-proceed degradations included. Report each collision the section finds with kind \`task-number\` and the full number as \`name\`: where the other holder is a run-local member, name its branch in \`branches\` beside the branch under the guard; where it is outside this run, set \`external: true\`, name only the branch under the guard in \`branches\`, and put the holder in \`member\` (the PR number, or the base branch). Report every full task number the branch under the guard CLAIMS in \`taskNumbers\` — its unpaired task-file additions under that section's relocation pairing — even when nothing collides: the run reserves those numbers for the branch once it clears.
+3. Merged members. For each DELIVERED member listed with a PR, read \`gh pr view <url> --json state,mergedAt,baseRefName\` and report the ones whose PR is MERGED in \`merged\`, each with the branch it merged into. A member without a PR is skipped here. Merged siblings move the base the run builds on; the workflow acts on that, you only report it.
+4. Report \`scanComplete: false\` with a \`detail\` whenever the section's remote enumeration was degraded or incomplete (the pinned limit reached, a head skipped, \`gh\` or the remote unavailable); \`true\` when every member the section names was read.
 
-Flag only genuine overlaps between independently-based branches; never flag a file a branch merely inherited from its base. If nothing overlaps, return an empty \`collisions\` array.`;
+Flag only genuine overlaps; never flag a file a branch merely inherited from its base, and never report a clash that does not involve the branch under the guard. If nothing overlaps, return an empty \`collisions\` array — with \`taskNumbers\` and \`merged\` still filled in.`;
 }
 
 // A qualified local ref and its ordinary branch name identify the same ref.
@@ -3258,6 +3339,15 @@ function collisionInvolvesTask(collision, task) {
   return names.includes(normalizeBranchName(task.branch)) || names.includes(normalizeBranchName(task.slug));
 }
 
+// A clash is evidence only when every name it reports is a branch this guard
+// step holds — the branch under the guard or a run-local member — and it names
+// two or more distinct branches identifying two or more distinct entries.
+// The one widening the pipelined guard adds: a clash with a holder OUTSIDE the
+// run (an open PR head, or the base branch — members the referenced section
+// draws from and this script never holds) reports `external: true` and names
+// that holder in `member` instead of in `branches`; it then needs one known
+// branch plus a non-empty `member`, because the holder is not a ref this run
+// can attribute. A malformed or foreign name still voids the entry either way.
 function collisionIsAttributable(collision, taskEntries) {
   const names = collisionBranchNames(collision);
   const reportedNameCount = Array.isArray(collision.branches) ? collision.branches.length : 0;
@@ -3269,95 +3359,118 @@ function collisionIsAttributable(collision, taskEntries) {
   // a two-distinct-task count from one reported string; count distinct names
   // separately so that alias coincidence can't stand in for a second branch.
   const distinctNameCount = new Set(names).size;
+  const wellFormed = names.length === reportedNameCount && names.every((name) => knownNames.has(name));
+  if (collision.external === true) {
+    const member = typeof collision.member === "string" ? collision.member.trim() : "";
+    return wellFormed && distinctNameCount >= 1 && member.length > 0 && taskEntries.some(({ task }) => collisionInvolvesTask(collision, task));
+  }
   return (
-    names.length === reportedNameCount &&
-    names.every((name) => knownNames.has(name)) &&
+    wellFormed &&
     distinctNameCount >= 2 &&
     taskEntries.filter(({ task }) => collisionInvolvesTask(collision, task)).length >= 2
   );
 }
 
-// A non-empty discovery packet is usable only when every reported name belongs
-// to this reviewed wave and every entry identifies at least two distinct tasks.
-// One malformed or foreign name voids the whole packet and holds the whole wave:
-// partial attribution could otherwise deliver an omitted side of a live clash.
-// A genuinely empty packet remains the ordinary clean-wave path.
-async function discoverWaveCollisions({ ready, wave, defaultBase }) {
+// The guard's discovery half for ONE ready branch. `members` are the run-local
+// entries the scan may name beside it — delivered and reserved siblings, each
+// `{ slug, branch, base, state, prUrl }`. A non-empty collision list is usable
+// only when every entry involves the ready branch and attributes through the
+// shared rule over the ready entry plus those members; one malformed or foreign
+// entry voids the whole packet and holds the branch, since partial attribution
+// could otherwise deliver a side of a live clash. A scan that returns nothing
+// usable holds the branch too — a packet with no `merged` reading included:
+// the pipeline retargets and rebases a dependent off that reading, so an
+// omission silently read as "none merged" would walk it onto a parent branch
+// the base has since absorbed or deleted. The packet's other readings — the
+// numbers the branch claims, and the delivered members whose PR has merged —
+// ride back untouched for the pipeline to act on.
+async function discoverGuardCollisions({ ready, members, defaultBase }) {
+  const { task, result } = ready;
+  const entries = [{ task }, ...members.map((m) => ({ task: { slug: m.slug, branch: m.branch } }))];
+  phase("Collision guard");
   let scanError = "";
-  let waveCollisions = [];
-  if (ready.length >= 2) {
-    phase(`Collision scan (wave ${wave})`);
-    const scan = await agent(
-      collisionScanPrompt(ready.map(({ task }) => ({ slug: task.slug, branch: task.branch, base: task.base || defaultBase }))),
-      { label: `collision-scan:w${wave}`, schema: COLLISION_SCHEMA }
+  let collisions = [];
+  let scan = null;
+  try {
+    scan = await agent(
+      guardScanPrompt({ slug: task.slug, branch: task.branch, base: task.base || defaultBase }, members.map((m) => ({ slug: m.slug, branch: m.branch, base: m.base || defaultBase, state: m.state, prUrl: m.prUrl || "" }))),
+      { label: `collision-scan:${task.slug}`, schema: COLLISION_SCHEMA }
     );
-    if (!scan || !Array.isArray(scan.collisions)) {
-      scanError = `collision scan failed for wave ${wave}; holding reviewed branches before PR delivery`;
+  } catch (e) {
+    log(`collision guard scan threw for ${task.slug}: ${e && e.message ? e.message : String(e)}`);
+  }
+  if (!scan || !Array.isArray(scan.collisions)) {
+    scanError = `collision guard scan failed for ${task.slug}; holding the reviewed branch before delivery`;
+    log(scanError);
+  } else if (!Array.isArray(scan.merged)) {
+    scanError = `collision guard scan for ${task.slug} carried no \`merged\` reading; an omitted reading is not "none merged" — a delivered parent whose PR merged before this scan would go unreported, and this branch would proceed against a base the merge has absorbed — so the reviewed branch is held before delivery; re-run the scan with every delivered member's PR state read back, then deliver`;
+    log(scanError);
+  } else if (scan.collisions.length) {
+    collisions = scan.collisions.map((c) => ({ ...c, guard: task.slug }));
+    if (!scan.collisions.every((c) => collisionIsAttributable(c, entries) && collisionInvolvesTask(c, task))) {
+      scanError = `collision guard scan for ${task.slug} reported a clash with an unknown branch, one not involving the branch under the guard, or one attributable to no second holder; holding the reviewed branch before delivery — re-run the scan with the exact branch strings from its prompt, then deconflict and re-review`;
       log(scanError);
-    } else if (scan.collisions.length) {
-      waveCollisions = scan.collisions.map((c) => ({ ...c, wave }));
-      if (!scan.collisions.every((c) => collisionIsAttributable(c, ready))) {
-        scanError = `collision scan for wave ${wave} reported a clash with an unknown branch or attributable to fewer than two reviewed branches; holding every reviewed branch before PR delivery — re-run the scan with the exact branch strings from its prompt, then deconflict and re-review`;
-        log(scanError);
-      } else {
-        const heldCount = ready.filter(({ task }) => scan.collisions.some((c) => collisionInvolvesTask(c, task))).length;
-        log(`${scan.collisions.length} cross-branch naming collision(s) in wave ${wave}; holding ${heldCount} branch(es) before PR delivery.`);
-      }
+    } else {
+      log(`${scan.collisions.length} collision(s) between ${task.branch} and a delivered, reserved, or outside member; holding it before delivery.`);
     }
   }
-
-  const deliverable = [];
-  const heldTasks = [];
-  const held = [];
-  ready.forEach(({ task, result }) => {
-    if (scanError) {
-      held.push({
-        slug: task.slug,
-        branch: task.branch,
-        status: "collision-scan-error",
-        detail: scanError,
-        ...cycleCarried(result),
-      });
-    } else if (waveCollisions.some((c) => collisionInvolvesTask(c, task))) {
-      heldTasks.push({ task, result });
-    } else {
-      deliverable.push({ task, result });
-    }
-  });
-
-  return { deliverable, heldTasks, held, waveCollisions };
+  const readings = {
+    taskNumbers: scan && Array.isArray(scan.taskNumbers) ? scan.taskNumbers.filter((n) => typeof n === "string" && n.trim()).map((n) => n.trim()) : [],
+    merged: scan && Array.isArray(scan.merged) ? scan.merged.filter((m) => m && typeof m.branch === "string") : [],
+    scanComplete: !!scan && Array.isArray(scan.collisions) && Array.isArray(scan.merged) && scan.scanComplete !== false,
+    detail: scan && typeof scan.detail === "string" ? scan.detail : "",
+  };
+  if (scanError) {
+    return { held: { slug: task.slug, branch: task.branch, status: "collision-scan-error", detail: scanError, ...cycleCarried(result) }, collisions, readings };
+  }
+  return { held: null, collisions, readings };
 }
 
 // This deputy is ordered to run the project build, so it needs a destination
 // for that build's output for the same reason the cycle's roles do: a role left
 // to pick its own path picks the session scratchpad, and that scratchpad is
-// shared per session rather than per batch — so "one deputy per wave" does not
-// make it safe from the reviewer, peer, or later run beside it. The sentence is
-// written out here rather than shared with the cycle's CYCLE_REDIRECTED_OUTPUT,
-// which sits INSIDE the byte-identical `review-cycle-core` section and cannot
-// be reached from out here, and which names a different destination anyway: the
-// cycle's roles write into a round directory they keep, while this deputy needs
-// its log out of the worktree it is about to `git add` and commit.
+// shared per session rather than per batch — so "one deputy per guard step"
+// does not make it safe from the reviewer, peer, or later run beside it. The
+// sentence is written out here rather than shared with the cycle's
+// CYCLE_REDIRECTED_OUTPUT, which sits INSIDE the byte-identical
+// `review-cycle-core` section and cannot be reached from out here, and which
+// names a different destination anyway: the cycle's roles write into a round
+// directory they keep, while this deputy needs its log out of the worktree it
+// is about to `git add` and commit.
 // The listed `wt-enter` command keeps the bare `cd "$WT"`, like
 // `worktreeContract`'s: the brief below makes the deputy verify
 // `git rev-parse --show-toplevel` and `git branch --show-current` against the
 // branch it is about to edit, which is what fails closed when an empty `$WT`
-// leaves it wherever it already stood. That is the main checkout only for the
-// FIRST branch it enters; for every branch after it, the tree it never left is
-// the previously entered sibling's worktree — the one thing the same brief
-// forbids it to touch, and the stronger reason the check is there.
-function resolveCollisionsPrompt(tasks, waveCollisions, remote) {
+// leaves it wherever it already stood.
+//
+// `fixed` lists the sides that may NOT change: delivered or reserved run-local
+// members, and holders outside the run. Under the pipelined guard that is every
+// side but the branch under it, which removes the "least disruptive side"
+// judgment: the branch under the guard renames, or the name is imperative and
+// the clash is blocked. The judgment survives only for a clash among several
+// held branches, which the guard's one-at-a-time serialization never produces
+// but the brief still states so the deputy is never left without a rule.
+function resolveCollisionsPrompt(tasks, collisions, remote, fixed = [], kept = []) {
   const taskList = tasks
     .map(
       (t) =>
         `- slug ${JSON.stringify(t.slug)}: branch ${JSON.stringify(t.branch)} (base ${JSON.stringify(t.base)})\n      enter its worktree with: WT="$(wt-enter ${shq(t.slug)} ${shq(t.branch)})" && cd "$WT"`
     )
     .join("\n");
-  const collisionList = JSON.stringify(waveCollisions, null, 2);
+  const fixedList = fixed.length
+    ? `\nRead-only sides — delivered, reserved by a task still delivering, or outside this run; NEVER rename, edit, or enter these, whatever the clash:\n${fixed.map((f) => `- ${f.branch ? `branch ${JSON.stringify(f.branch)}` : `outside member ${JSON.stringify(f.member || "")}`}${f.state ? ` (${f.state})` : ""}`).join("\n")}\n`
+    : "";
+  const keptList = kept.length
+    ? `\nFiles LEFT IN PLACE for the rebase — each is also added by a member the held branch's advanced base has absorbed, and the rebase onto that base owes the maintainer the add/add conflict on it. NEVER rename, move, or delete these on the held branch, whatever other clash names them; a symbol clash inside one is settled by renaming the symbol within the file, never the file:\n${kept.map((k) => `- ${JSON.stringify(k)}`).join("\n")}\n`
+    : "";
+  const collisionList = JSON.stringify(collisions, null, 2);
   const pushLine = remote
     ? "Push each rename for durability and so the PR carries it: `git push` (the implement loop already set the upstream)."
     : "Remote push is unavailable this run; commit locally — the shared `.git` persists.";
-  return `You are the orchestrator's deputy DECONFLICTING add/add naming collisions between sibling task branches built in parallel. Each branch already passed review on its own, but the pre-PR scan found that two or more INDEPENDENTLY added the same new file path, basename, or exported top-level symbol — which will clash (an add/add conflict, or a duplicate definition) when the branches merge. You decide how to deconflict, and you carry it out.
+  const pickRule = fixed.length
+    ? `1. The side to change is decided already: the held branch under the guard renames, and the read-only sides above keep the original value untouched — a delivered or reserved claimant is never rewritten, and a holder outside this run is not yours at all. Read the colliding files on the held branch first. Where several held branches are listed (they never are under the one-at-a-time guard; the rule is stated so you are never without one), rename enough of THEM that at most one branch keeps the value.`
+    : `1. Pick the side(s) to change. There is no inherent "first", so choose the LEAST disruptive rename(s): branches with fewer references, not a path a framework mandates, not a name a task file pins. Read the colliding files on each branch first. Rename enough sides that AT MOST ONE branch keeps the original colliding path/basename/symbol. With a two-branch collision, renaming one side is normally enough and the other then delivers unchanged; with three or more branches, you may need to rename multiple sides.`;
+  return `You are the orchestrator's deputy DECONFLICTING naming collisions between a reviewed task branch and its siblings. Each branch already passed review on its own, but the pre-delivery guard found that two INDEPENDENT sides added the same new file path, basename, or exported top-level symbol — which will clash (an add/add conflict, or a duplicate definition) when the branches merge — or that a task file on the held branch claims a full task number another member already holds. You decide how to deconflict within the rules below, and you carry it out.
 
 Each held branch's commits persist in the shared \`.git\`; its worktree may have been reclaimed after review to bound disk use. For each branch you CHANGE, \`cd\` into its worktree using the exact, ready-to-run \`wt-enter\` command listed for that branch under "Held branches" below — its slug and branch are already shell-quoted there because a generated/task-derived branch name can contain shell metacharacters (\`$\`, backticks, \`;\`). NEVER hand-substitute a raw \`<branch>\` into \`wt-enter\` — copy the listed command verbatim. No base argument is needed: the branch already exists and \`wt-enter\` is rerun-safe, re-attaching the worktree if it was reclaimed.
 
@@ -3369,14 +3482,14 @@ ${DESTROY_BOUNDARY}
 
 Held branches:
 ${taskList}
-
-Collisions to resolve (from the read-only scan; \`name\` is the colliding value):
+${fixedList}${keptList}
+Collisions to resolve (from the read-only guard scan; \`name\` is the colliding value — a path, a basename, a symbol, or a full task number):
 ${collisionList}
 
 For each collision:
-1. Pick the side(s) to change. There is no inherent "first", so choose the LEAST disruptive rename(s): branches with fewer references, not a path a framework mandates, not a name a task file pins. Read the colliding files on each branch first. Rename enough sides that AT MOST ONE branch keeps the original colliding path/basename/symbol. With a two-branch collision, renaming one side is normally enough and the other then delivers unchanged; with three or more branches, you may need to rename multiple sides.
-2. If the name is genuinely IMPERATIVE — it MUST stay identical (a framework-required filename, an external/published contract, or a name a task file explicitly mandates) — do NOT invent a divergent name. Mark the collision \`blocked\` with the reason and leave those branches untouched; a human decides. Blocking a real conflict beats shipping a wrong rename.
-3. Otherwise, on EACH branch you chose to change, rename the file and/or exported symbol plus every in-branch reference to it, to a clear name that is distinct from the original AND from any other renamed side — so two renamed branches cannot themselves re-collide on the new name. Regenerate anything derived from it (e.g. contracts). Run the project build / type-check — it MUST pass; if you redirect its output to a file, create a UNIQUE directory for that first, OUTSIDE every worktree (\`mktemp -d "\${TMPDIR:-/tmp}/collision-resolve.XXXXXX"\`), and write there — never a fixed shared scratchpad name (one session's agents share that directory, and two that both wrote \`<scratchpad>/verify.log\` once crossed results between worktrees), and never inside the worktree, which you are about to commit. Commit with a clear message. ${pushLine}
+${pickRule}
+2. If the name is genuinely IMPERATIVE — it MUST stay identical (a framework-required filename, an external/published contract, a name a task file explicitly mandates, or a task number a maintainer pinned) — do NOT invent a divergent name. Mark the collision \`blocked\` with the reason and leave those branches untouched; a human decides. Blocking a real conflict beats shipping a wrong rename.
+3. Otherwise, on EACH branch you chose to change, rename the file and/or exported symbol plus every in-branch reference to it, to a clear name that is distinct from the original AND from any other renamed side — so two renamed branches cannot themselves re-collide on the new name. For a \`task-number\` collision, renumber the flagged NEW claimant on the held branch to the next free full number — a fresh task file, never a copy under \`tasks/done/\` or \`tasks/deferred/\`, whose stable number is part of the historical reference — and update every in-branch reference to the old number. Regenerate anything derived from it (e.g. contracts). Run the project build / type-check — it MUST pass; if you redirect its output to a file, create a UNIQUE directory for that first, OUTSIDE every worktree (\`mktemp -d "\${TMPDIR:-/tmp}/collision-resolve.XXXXXX"\`), and write there — never a fixed shared scratchpad name (one session's agents share that directory, and two that both wrote \`<scratchpad>/verify.log\` once crossed results between worktrees), and never inside the worktree, which you are about to commit. Commit with a clear message. ${pushLine}
 4. Record the outcome with \`collision\` set to the exact \`name\` from the list above: \`renamed\` (with \`changedBranches\`, \`from\`, \`to\`, what you \`regenerated\`, and why that side) or \`blocked\` (with the reason; empty \`changedBranches\`).
 
 Do NOT open any PR and do NOT remove any worktree — the workflow re-scans the refs, re-reviews the branches that re-scan clears, and handles delivery. Return one resolution entry per collision: an empty packet is read as no result at all and holds every branch.`;
@@ -3459,7 +3572,7 @@ function cycleCarried(result) {
 // the record-only exit, correctly: no round of its own follows that exit.
 //
 // This workflow then adds a stage the cycle has no view of. When the pre-PR
-// collision guard's resolver has run over a wave's already-reviewed branches, the
+// collision guard's resolver has run over an already-reviewed branch, the
 // re-review arm runs a fresh DELIVERY-tier reviewer over the CUMULATIVE range
 // (`base...HEAD` — the reviewer brief fixes that scope), so a pass there has
 // seen every commit on the branch, the tolerated post-run one included. That
@@ -3593,20 +3706,47 @@ async function implementTask(task, remote, peerMode) {
     // Leave the worktree for inspection on a cap-out; commits are durable.
     return { slug: task.slug, branch: task.branch, status: "review-cap", outstanding: result.outstanding || null, ...carried };
   }
-  // Reviewed and ready, but not delivered yet: the wave-level collision guard
+  // Reviewed and ready, but not delivered yet: the serialized collision guard
   // runs before any PR is opened or worktree is cleaned up.
   return { slug: task.slug, branch: task.branch, status: "ready", notes: result.reviewerNotes || "", ...carried };
 }
 
+// The reclaim of a DELIVERED task's worktree, run by the pipeline once the
+// task's terminal state is settled — after the orphan action where delivery
+// left one, since a `pushed-no-pr` that the retry converts to `done` is
+// delivered only then, and one that survives the retry is stopped short of
+// delivery and keeps its worktree for inspection, as the skill's Cleanup says
+// every stopped task does. "Delivered" here is `DEP_SUCCEEDED`, the one reading
+// the ledger and the dependency gate already take: a PR that is open (on its
+// recorded base or, as `pr-wrong-base`, not — the skill's Cleanup removes the
+// worktree once the PR is open, and a wrong base is repaired on the PR with
+// `gh pr edit --base`, nothing in the worktree to inspect), or the branch that
+// IS the run's delivery where no remote is written this run. On a remote run
+// `local-only` is a push taken back off origin, a task stopped short of
+// delivery, which neither gate accepts. The reclaim's outcome is read, not
+// assumed: a `wt-remove` refusal (or a cleanup agent that crashes) leaves the
+// worktree live, and the pipeline's slot gate must keep its slot for it
+// (`retainSlot`) — the worktree is reported retained on the result, whatever
+// the delivery itself reported, and never turns a delivered PR into an error.
+async function reclaimWorktree(task) {
+  let cleanup;
+  try {
+    cleanup = await agent(cleanupNote(task), { label: `cleanup:${task.slug}`, schema: CLEANUP_SCHEMA });
+  } catch (e) {
+    cleanup = { removed: false, reason: `cleanup agent crashed: ${e && e.message ? e.message : String(e)}` };
+  }
+  return cleanup && cleanup.removed === true ? {} : { worktreeRetained: (cleanup && cleanup.reason) || "cleanup agent reported no removal" };
+}
 async function deliverTask(task, ready, remote) {
   const pr = await agent(prPrompt(task, ready, remote), {
     label: `pr:${task.slug}`,
     schema: PR_SCHEMA,
   });
 
-  await agent(cleanupNote(task), { label: `cleanup:${task.slug}` });
-
-  const carried = cycleCarried(ready);
+  // The base a merged sibling advanced this branch onto rides beside the
+  // cycle's record: it is the guard's doing, not the cycle's, so the carrier
+  // does not know it.
+  const carried = { ...cycleCarried(ready), ...(ready.rebasedOnto ? { rebasedOnto: ready.rebasedOnto } : {}) };
   // A PR that exists but whose base was neither verified nor repaired to the
   // recorded one is its own outcome, not a landed delivery: the diff it shows
   // and the review it collects belong to another branch's work. Tested before
@@ -3629,72 +3769,120 @@ async function deliverTask(task, ready, remote) {
     return { slug: task.slug, branch: task.branch, status: "done", prUrl: pr.url, ...(pr.baseRepaired ? { baseRepaired: pr.baseRepaired } : {}), ...carried };
   }
   // Reviewed and (usually) pushed, but no PR — do NOT count this as a landed PR.
+  // A PR agent that returned nothing leaves `pushed` UNKNOWN, as a crash does:
+  // it may have pushed before it lost its packet, and only `false` — a reported
+  // no-remote-write — lets `settleReservation` drop the number it holds.
   return {
     slug: task.slug,
     branch: task.branch,
     status: remote ? "pushed-no-pr" : "local-only",
-    pushed: pr ? pr.pushed : false,
+    pushed: pr ? pr.pushed : undefined,
     reason: pr ? pr.reason : "PR agent returned nothing",
     ...carried,
   };
 }
 
-// Post-resolution settlement of one wave's held branches: resolve the clashes,
-// re-verify, and hand back who may deliver and who stays held.
+// The fresh delivery-tier re-review a branch owes once something changed it
+// AFTER its cycle's own delivery-tier pass — the collision deputy's rename, or
+// the replay of a rebase onto a base a merged sibling advanced. ONE pass of the
+// cycle's reviewer brief, with no fixer loop and no peer stage: the branch
+// already cleared the complete cycle (peer included), the check is scoped to
+// what the post-cycle change did to it, and the address-tasks skill specifies
+// exactly this — "re-review each changed task with fresh eyes" — a single
+// reviewer pass. A failure holds rather than loops.
 //
-// Neither side of an add/add clash is inherently "first", so a single
-// orchestrator-deputy agent — seeing every held branch and its worktree, still in
-// place — decides which side to rename and does it: rename the file/symbol,
-// regenerate derived files, commit, push. A name that MUST stay identical
-// (framework-mandated, externally fixed, or pinned by a task file) is reported
-// `blocked` instead of getting an invented divergent name.
+// At the DELIVERY tier, stated rather than inherited: this is the last check
+// before the PR opens, the post-run change voids the earlier pass and owes the
+// tier again, and this reviewer is the only remaining pass able to run it. The
+// brief, its stated tier, and the `flakeRecord` recording delta live in
+// `collisionReReviewPrompt` / `COLLISION_RE_REVIEW_SCHEMA`.
 //
-// Delivery is then decided from a SECOND read-only scan of the refs rather than
-// from the resolver's report, because a rename can be reported and only partly
-// applied — the file moved but the duplicate export left behind, or one branch
-// renamed and its regenerated mirror forgotten. Believing the report would let
-// both sides open PRs carrying the very clash this guard exists to stop, against
-// the guard's own bias that holding a real conflict beats shipping a wrong
-// delivery. The re-scan also re-derives 027's 3+ branch rule at no cost: a scan
-// reports a value only where two or more branches still carry it, so a three-way
-// clash with one side renamed still names the other two and holds them both.
+// The deviations still standing on the cycle result go with it, and the
+// assessments come back replacing the carried ones: those were formed against
+// the tree as it stood before the change, and `prPrompt` leads the PR body with
+// them. The verdict reaches the coverage only through `reviewed`, which is
+// `runReviewCycle`'s own rule for the same field: it records the reviewer's
+// half on a PASSING round alone. So a failing re-review supplies no assessments
+// here either, whatever it returned. The replacement rides EVERY exit — the
+// batch Summary flattens every result's `deviationAssessments`, held records
+// included, so a hold naming a deviation unassessed while still carrying the
+// pre-change verdict would put an obsolete RATIFY/CONFORM in front of the
+// maintainer under the very deviation nobody has judged since. Guarded on there
+// being standing deviations at all, so a branch with none keeps what it carried
+// untouched by a stage that asked about nothing.
+async function deliveryReReview(task, result, remote, peerMode) {
+  const standingDeviations = Array.isArray(result.deviations) ? result.deviations : [];
+  const verdict = await agent(collisionReReviewPrompt(task, remote, peerMode, standingDeviations), { label: `re-review:${task.slug}`, schema: COLLISION_RE_REVIEW_SCHEMA });
+  const reviewed = !!(verdict && verdict.pass && !verdict.emptyDiffFlag);
+  const coverage = collisionDeviationCoverage(standingDeviations, reviewed ? verdict : null);
+  const freshAssessments = standingDeviations.length ? { deviationAssessments: coverage.assessments } : {};
+  return { verdict, reviewed, coverage, freshAssessments };
+}
+
+// Settlement of the branches the guard held for a clash: resolve, re-verify,
+// and hand back who may deliver and who stays held.
+//
+// Under the pipelined guard `heldTasks` is the one branch under it, and
+// `members` are the delivered and reserved run-local sides the scan compared it
+// against — the sides the resolver may not touch. A holder outside the run (an
+// open PR head, the base branch) is never a ref this script holds; it reaches
+// the resolver as the collision's `member` and is read-only by the same rule.
+// The branch under the guard is therefore always the side that renames, or the
+// name is imperative and the clash is `blocked`; the function still settles a
+// several-branch hold by the older any-side rule, so a caller that holds more
+// than one is never without an answer.
+//
+// Delivery is then decided from a SECOND read-only scan of the refs rather
+// than from the resolver's report, because a rename can be reported and only
+// partly applied — the file moved but the duplicate export left behind, or one
+// branch renamed and its regenerated mirror forgotten. Believing the report
+// would let the branch deliver carrying the very clash this guard exists to
+// stop, against the guard's own bias that holding a real conflict beats
+// shipping a wrong delivery. The re-scan is the guard's own scan again, over
+// the same held branch and members, so it re-derives 027's rule at no cost: a
+// value is reported only where a second holder still carries it.
 //
 // The resolver's packet is HOLD-ONLY evidence, and that is the whole of what
 // this stage reads from it. An absent or empty one holds every branch; a
 // `blocked` entry holds the branches its collision covers — the one judgment no
 // scan can re-derive, since an imperative name is a fact about the world rather
 // than about the refs. Nothing in the packet can release a branch, and nothing
-// in it can excuse one from the fresh re-review.
-//
-// It used to also select WHO owed that re-review, from its own
-// `changedBranches`. Three review rounds each found one more decision still
-// resting on the packet's self-report, and this one cannot be checked from here
-// at all: a resolver that renamed on two branches and named one leaves the
-// omitted branch reading as untouched, and a resolver that renamed and reported
-// nothing leaves every branch reading that way. So the dispatch stops asking.
-// Every branch a cleared clash covered is re-reviewed before it delivers, which
-// costs one extra pass per untouched side of a real clash and removes the last
-// claim this stage took on trust. The two checks on a held branch stay separate
-// and both must pass; the re-review runs the ordinary per-task reviewer brief,
-// which carries no cross-branch context and so cannot stand in for collision
-// proof, exactly as the re-scan carries no per-branch judgment and cannot stand
-// in for the review.
-async function settleWaveCollisions({ heldTasks, waveCollisions, wave, defaultBase, remote, peerMode }) {
+// in it can excuse one from the fresh re-review: "which branches did you touch"
+// is a self-report this stage cannot check, so every held branch of a cleared
+// clash is re-reviewed before it delivers.
+async function settleGuardCollisions({ heldTasks, members = [], collisions, leftToRebase = [], label, defaultBase, remote, peerMode }) {
   const deliverable = [];
   const held = [];
   if (!heldTasks.length) return { deliverable, held };
 
   const involves = collisionInvolvesTask;
-  const relatedFor = (task) => waveCollisions.filter((c) => involves(c, task));
+  const relatedFor = (task) => collisions.filter((c) => involves(c, task));
+  const memberEntries = members.map((m) => ({ task: { slug: m.slug, branch: m.branch } }));
+  const heldNames = new Set(heldTasks.flatMap(({ task }) => [normalizeBranchName(task.branch), normalizeBranchName(task.slug)]));
+  // The read-only sides handed to the resolver: every member a clash names, and
+  // every outside holder, each once.
+  const fixed = [];
+  for (const c of collisions) {
+    for (const name of collisionBranchNames(c)) {
+      if (heldNames.has(name)) continue;
+      const m = members.find((x) => normalizeBranchName(x.branch) === name || normalizeBranchName(x.slug) === name);
+      if (m && !fixed.some((f) => f.branch === m.branch)) fixed.push({ branch: m.branch, state: m.state });
+    }
+    if (c.external === true && typeof c.member === "string" && c.member.trim() && !fixed.some((f) => f.member === c.member.trim())) {
+      fixed.push({ member: c.member.trim(), state: "outside this run" });
+    }
+  }
 
-  phase(`Collision resolve (wave ${wave})`);
+  phase("Collision resolve");
   const resolution = await agent(
     resolveCollisionsPrompt(
       heldTasks.map(({ task }) => ({ slug: task.slug, branch: task.branch, base: task.base || defaultBase })),
-      waveCollisions,
-      remote
+      collisions,
+      remote,
+      fixed,
+      leftToRebase.map((c) => c.name)
     ),
-    { label: `collision-resolve:w${wave}`, schema: RESOLUTION_SCHEMA }
+    { label: `collision-resolve:${label}`, schema: RESOLUTION_SCHEMA }
   );
   // An EMPTY array answers exactly as no packet at all, deliberately rather than
   // by the accident that `[]` is truthy: the resolver's brief is "one entry per
@@ -3714,122 +3902,103 @@ async function settleWaveCollisions({ heldTasks, waveCollisions, wave, defaultBa
   }
   const collisionBlocked = (c) => blockedNames.has(c.name);
 
-  // The re-derived state, scoped to the branches this wave actually held so the
-  // extra agent costs only what the clash costs. Two of them at minimum: a scan
-  // over a single branch has no sibling to compare against and returns an empty
-  // set for want of one, which would read as "clash gone" on no evidence at all.
-  //
-  // Two further shapes read as unusable rather than as proof of absence, because
-  // each would otherwise clear every held branch off a packet that just reported
-  // a surviving clash. A THROW is caught here, unlike the wave-boundary storage
-  // probe whose abort widens nothing: an abort at this point discards the
-  // deliveries this wave's uncontested branches already earned and leaves the
-  // held ones with no result to act on, while this task's degraded path owes
-  // them an actionable hold. And an entry naming fewer than TWO of the held
-  // branches — `branches: []`, a lone name, or a name this wave cannot attribute
-  // to one of its held tasks — is not a clash as COLLISION_SCHEMA defines one,
-  // "the two or more branches that each independently added it", so the whole
-  // packet is evidence about nobody. Qualified local refs are deliberately
-  // attributable here through the shared `normalizeBranchName`; unknown names
-  // still void the packet even when the same entry also names two held tasks.
-  // Two rather than one is what 027's 3+ branch rule costs: a three-way clash
-  // malformed down to a single name leaves the two branches it omits with an
-  // empty still-colliding set, and both would deliver still carrying the value.
+  // The re-derived state. A THROW is caught here: an abort at this point would
+  // discard nothing this branch has earned yet, but it would end the batch for
+  // every sibling still in flight, while this branch's degraded path owes it an
+  // actionable hold. An entry the re-scan cannot attribute through the shared
+  // rule — a foreign name, a lone name with no second holder — is not a clash as
+  // COLLISION_SCHEMA defines one, so the whole packet is evidence about nobody
+  // and every held branch stays held. So is an entry that involves no held
+  // branch at all — a clash the re-scan reports among delivered or reserved
+  // members only: the scan's brief is the held branch against those members,
+  // as the discovery scan's is, and a packet reporting on the members'
+  // clashes with one another has left the brief and may have omitted the held
+  // branch's own; read as usable, it would leave `stillColliding` empty for
+  // the held branch and deliver it on a packet that established nothing
+  // about it. The scan runs over ONE held branch with
+  // nothing run-local beside it too: the referenced section's comparison set
+  // always holds the base branch and every open PR head, and the branch's own
+  // unpaired additions are compared with one another, so a lone branch that
+  // clashed with an outside holder or with itself is re-scanned against exactly
+  // the side it clashed with — a scan withheld there would hold a renumbering
+  // that succeeded, forever. The re-scan's `taskNumbers` are the claims as they
+  // stand AFTER the rename, and are what the guard reserves. A clash
+  // `leftToRebase` (a same-path clash with a member the advanced base absorbed,
+  // see `collisionsForRebase`) is NOT the resolver's, and the re-scan is
+  // expected to report it again with the file still in place: it is read out of
+  // `stillColliding` — the resolver was never asked to clear it — and its
+  // ABSENCE holds the branch, because the file being gone from the clash is the
+  // resolver having renamed it away to settle another clash on it (a symbol
+  // clash inside the same file is the ordinary shape), after which the rebase
+  // would replay clean over the add/add it owed the maintainer.
   let rescanned = null;
-  if (resolutions && heldTasks.length >= 2) {
-    phase(`Collision re-scan (wave ${wave})`);
+  let taskNumbers = null;
+  if (resolutions) {
+    phase("Collision re-scan");
     let rescan = null;
     try {
+      const [first, ...rest] = heldTasks;
+      const scanMembers = [
+        ...rest.map(({ task }) => ({ slug: task.slug, branch: task.branch, base: task.base || defaultBase, state: "held", prUrl: "" })),
+        ...members.map((m) => ({ slug: m.slug, branch: m.branch, base: m.base || defaultBase, state: m.state, prUrl: m.prUrl || "" })),
+      ];
       rescan = await agent(
-        collisionScanPrompt(heldTasks.map(({ task }) => ({ slug: task.slug, branch: task.branch, base: task.base || defaultBase }))),
-        { label: `collision-rescan:w${wave}`, schema: COLLISION_SCHEMA }
+        guardScanPrompt({ slug: first.task.slug, branch: first.task.branch, base: first.task.base || defaultBase }, scanMembers),
+        { label: `collision-rescan:${label}`, schema: COLLISION_SCHEMA }
       );
     } catch (e) {
-      log(`collision re-scan failed for wave ${wave}: ${e && e.message ? e.message : String(e)}`);
+      log(`collision re-scan failed for ${label}: ${e && e.message ? e.message : String(e)}`);
     }
-    if (rescan && Array.isArray(rescan.collisions) && rescan.collisions.every((c) => collisionIsAttributable(c, heldTasks))) {
+    if (rescan && Array.isArray(rescan.collisions) && rescan.collisions.every((c) => collisionIsAttributable(c, [...heldTasks, ...memberEntries]) && heldTasks.some(({ task }) => involves(c, task)))) {
       rescanned = rescan.collisions;
+      taskNumbers = Array.isArray(rescan.taskNumbers) ? rescan.taskNumbers.filter((n) => typeof n === "string" && n.trim()).map((n) => n.trim()) : [];
     }
   }
 
   for (const { task, result } of heldTasks) {
     const related = relatedFor(task);
-    const stillColliding = rescanned ? rescanned.filter((c) => involves(c, task)).map((c) => ({ ...c, wave })) : null;
+    // The deferred clash is matched by its holders as well as by its value: a
+    // re-scan that reports the same path against a DIFFERENT holder — an
+    // outside PR that added it in the resolver's window — is a live clash the
+    // rebase does not own, and read as the deferred one it would be suppressed
+    // out of `stillColliding` and deliver over it.
+    const holders = (c) => [String(c.external === true), String(c.member || "").trim(), ...collisionBranchNames(c).sort()].join("\u0000");
+    const sameClash = (a, b) => a.kind === b.kind && a.name === b.name && holders(a) === holders(b);
+    const owedToRebase = leftToRebase.filter((c) => involves(c, task));
+    const stillColliding = rescanned ? rescanned.filter((c) => involves(c, task) && !owedToRebase.some((d) => sameClash(c, d))).map((c) => ({ ...c, guard: label })) : null;
+    const movedFromRebase = rescanned ? owedToRebase.filter((d) => !rescanned.some((c) => involves(c, task) && sameClash(c, d))) : [];
 
     if (!resolutions) {
-      held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision resolver returned no usable result (no packet at all, or one with no resolution entries); branch held before PR delivery — deconflict manually and re-review", collisions: related, ...cycleCarried(result) });
+      held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "collision resolver returned no usable result (no packet at all, or one with no resolution entries); branch held before delivery — deconflict manually and re-review", collisions: related, ...cycleCarried(result) });
     } else if (related.some(collisionBlocked)) {
       // An imperative shared name still clashes even if this branch was also
       // touched — keep it held for a human/design decision.
       held.push({ slug: task.slug, branch: task.branch, status: "collision-blocked", detail: "shared name must stay identical (imperative); resolver could not deconflict — needs a human/design decision", collisions: related, ...cycleCarried(result) });
     } else if (!stillColliding) {
-      held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "post-resolution collision re-scan established nothing (it failed, returned no usable result, could not attribute every named branch, attributed a clash to fewer than two of the held branches, or fewer than two of the colliding branches were in hand to compare); branch held before PR delivery — re-scan these branches by hand, deconflict what remains, and re-review", collisions: related, ...cycleCarried(result) });
+      held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "post-resolution collision re-scan established nothing (it failed, returned no usable result, could not attribute every named branch, attributed a clash to no second holder, named a clash involving no held branch, or nothing was in hand to compare the branch against); branch held before delivery — re-scan this branch by hand, deconflict what remains, and re-review", collisions: related, ...cycleCarried(result) });
+    } else if (movedFromRebase.length) {
+      held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: `the resolver moved a file the rebase onto the advanced base owed a conflict on (${movedFromRebase.map((c) => c.name).join(", ")}): the post-resolution re-scan no longer reports the same-path clash the guard left to the rebase; branch held before delivery — restore the file at its original path (the rebase surfaces the add/add for the maintainer), settle the other clash without moving it, and re-review`, collisions: [...owedToRebase, ...stillColliding], ...cycleCarried(result) });
     } else if (stillColliding.length) {
-      held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "the clash is still in the refs after the resolver ran; branch held before PR delivery — rename enough sides that at most one branch keeps the name, regenerate whatever derives from it, and re-review", collisions: stillColliding, ...cycleCarried(result) });
+      held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "the clash is still in the refs after the resolver ran; branch held before delivery — rename or renumber this branch's side so that no delivered, reserved, or outside holder shares the value, regenerate whatever derives from it, and re-review", collisions: stillColliding, ...cycleCarried(result) });
     } else {
       // The clash this branch was held for is gone from the refs. Fresh
-      // re-review before it delivers — ONE pass of the cycle's reviewer brief,
-      // with no fixer loop and no peer stage. This is deliberately not another
-      // full cycle: the branch already cleared the complete cycle (peer
-      // included) before the collision guard ran, the check is scoped to what
-      // the deconfliction did to this branch, and the address-tasks skill
-      // specifies exactly this — "re-review each changed task with fresh eyes" —
-      // a single-reviewer pass that predates the shared cycle. Hold on failure
-      // rather than loop.
-      //
-      // Every held branch of a cleared clash reaches here, not only the ones the
-      // resolver said it changed, because "changed" is a claim this stage cannot
-      // check: the resolver had write access to every held worktree, and the
-      // clash's disappearance proves only that SOMETHING moved. The skill's
-      // "each changed task" is read as the set the resolver could have changed,
-      // which is the set it was handed.
-      //
-      // At the DELIVERY tier, stated rather than inherited. The resolver renamed
-      // files and regenerated artifacts AFTER the cycle's own delivery-tier
-      // pass, and this is the last check before the PR opens: that post-run
-      // change voids the earlier pass and owes the tier again, which this
-      // reviewer is the only remaining pass able to run. (An unstated tier
-      // renders the delivery tier anyway — that is the fail-safe default — but a
-      // gate this load-bearing says so.) The brief, its stated tier, and the
-      // `flakeRecord` recording delta live in `collisionReReviewPrompt` /
-      // `COLLISION_RE_REVIEW_SCHEMA`.
-      //
-      // The deviations still standing on the cycle result go with it, and the
-      // assessments come back replacing the carried ones: those were formed
-      // against the pre-rename tree, and `prPrompt` leads the PR body with them.
-      // A deviation the reviewer leaves unassessed holds the branch — the gate
-      // its own brief states (`collisionDeviationCoverage`).
-      const standingDeviations = Array.isArray(result.deviations) ? result.deviations : [];
-      const verdict = await agent(collisionReReviewPrompt(task, remote, peerMode, standingDeviations), { label: `re-review:${task.slug}`, schema: COLLISION_RE_REVIEW_SCHEMA });
-      const reviewed = !!(verdict && verdict.pass && !verdict.emptyDiffFlag);
-      // The verdict reaches the coverage only through `reviewed`, which is
-      // `runReviewCycle`'s own rule for the same field: it records the
-      // reviewer's half on a PASSING round alone, "an assessment from a round
-      // that failed judged a packet the fixer has since changed". So a failing
-      // re-review supplies no assessments here either, whatever it returned.
-      const coverage = collisionDeviationCoverage(standingDeviations, reviewed ? verdict : null);
-      // The replacement rides EVERY exit past the re-scan, not the delivering
-      // one alone: the batch Summary flattens EVERY result's
-      // `deviationAssessments` — held records included — into the one list the
-      // maintainer reads. So a record naming a deviation unassessed, or handing
-      // one back under the reviewer's findings, while still carrying the
-      // pre-rename cycle's assessment of it would put an obsolete
-      // RATIFY/CONFORM in that list under the very deviation nobody has judged
-      // since the rename. Past the re-scan every exit runs on the same
-      // conservative bias the re-review above does: which branch the resolver
-      // renamed is a claim this stage cannot check, so every branch of a
-      // cleared clash is treated as changed and none of them ships a pre-rename
-      // in-spec-route judgment and recommendation. Not `runReviewCycle`'s
-      // ground for emptying its own — there the fixer demonstrably changed the
-      // tree. The hold arms BEFORE that point keep what they carried, no
-      // post-rename tree having been established for them.
-      // Carrying this pass's usable assessments is what the partial-coverage
-      // case needs anyway: the deviations it DID assess get their fresh half,
-      // and the rest get none — as does every deviation on a failed pass, left
-      // standing and unjudged rather than judged against a tree that is gone.
-      // Guarded on there being standing deviations at all, so a branch with none
-      // keeps what it carried untouched by a stage that asked about nothing.
-      const freshAssessments = standingDeviations.length ? { deviationAssessments: coverage.assessments } : {};
+      // delivery-tier re-review before it delivers (`deliveryReReview`); a
+      // deviation the reviewer leaves unassessed holds the branch — the gate
+      // its own brief states. A re-review that THROWS is a hold too, caught
+      // here as the rebase path catches its own: under the pipelined guard
+      // this stage runs inside the guard turn before any reservation exists,
+      // so a throw left to escape reaches the pipeline's catch with nothing
+      // to settle and returns a generic `error` carrying no cycle record, no
+      // collision context, and no claimed numbers — while the resolver's
+      // durability push already sits on origin holding them with no PR.
+      let reReview;
+      try {
+        reReview = await deliveryReReview(task, result, remote, peerMode);
+      } catch (e) {
+        held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: `the deconflicted branch's fresh re-review crashed (${e && e.message ? e.message : String(e)}); held before delivery — the tier the rename owes is unpaid, so no PR is opened; re-review this branch by hand`, collisions: related, ...cycleCarried(result) });
+        continue;
+      }
+      const { verdict, reviewed, coverage, freshAssessments } = reReview;
       if (reviewed && !coverage.unassessed.length) {
         // A pass here is a fresh reviewer's read of the whole branch, so it
         // settles the one claim the cycle's `recordOnly` can no longer make —
@@ -3842,14 +4011,880 @@ async function settleWaveCollisions({ heldTasks, waveCollisions, wave, defaultBa
         // `freshAssessments` is spread AFTER the carried record on both hold
         // arms, so what a record reports assessed and what it reports
         // unassessed always speak for the same pass.
-        held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "the deconflicted branch passed fresh re-review but left a deviation from a LOCKED decision unassessed, so the PR would lead with the implementer's half of it alone; held before PR delivery — re-review this branch and record the in-spec route and a RATIFY/CONFORM recommendation for each deviation named below, without conforming, rewording, or dropping it", unassessedDeviations: coverage.unassessed, collisions: related, ...cycleCarried(result), ...freshAssessments });
+        held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "the deconflicted branch passed fresh re-review but left a deviation from a LOCKED decision unassessed, so the PR would lead with the implementer's half of it alone; held before delivery — re-review this branch and record the in-spec route and a RATIFY/CONFORM recommendation for each deviation named below, without conforming, rewording, or dropping it", unassessedDeviations: coverage.unassessed, collisions: related, ...cycleCarried(result), ...freshAssessments });
       } else {
-        held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "the deconflicted branch did not pass fresh re-review; held before PR delivery", outstanding: verdict ? verdict.issues : null, collisions: related, ...cycleCarried(result), ...freshAssessments });
+        held.push({ slug: task.slug, branch: task.branch, status: "collision-hold", detail: "the deconflicted branch did not pass fresh re-review; held before delivery", outstanding: verdict ? verdict.issues : null, collisions: related, ...cycleCarried(result), ...freshAssessments });
       }
     }
   }
 
-  return { deliverable, held };
+  return { deliverable, held, taskNumbers };
+}
+
+// ============================================================================
+// Early merges move the base. When the guard scan reports that a delivered
+// sibling's PR has MERGED, a branch still on its way to delivery may be
+// standing on history the base has since absorbed — its recorded base was that
+// sibling's branch, or it shares the base the sibling merged into. The branch
+// is rebased onto the advanced base through the `review-cycle` skill's
+// delegated rebase step, before its final (delivery-tier) review, so a clash
+// with an already-merged sibling surfaces as an honest conflict at that rebase
+// rather than as an invisible add/add at merge time.
+// ============================================================================
+
+// Which base the branch under the guard should now stand on, given the merged
+// members the scan reported: the branch it merged into where the recorded base
+// IS the merged branch (the PR is retargeted with it — a stacked PR whose parent
+// merged has no parent PR to stack on), or the recorded base itself where a
+// sibling merged into it. Null when no merge touched this branch's base.
+//
+// The merged-into relation is chased to its end: a stack whose ancestors
+// merged one into the next before this branch reached the guard (`B` into
+// `A`, then `A` into `main`) is reported as two merges in one scan, and the
+// branch belongs on the first base that did NOT merge, not on `A` — a base
+// that is itself merged and possibly deleted, where the rebase would hold or
+// the PR would open against an obsolete branch.
+function baseAdvance(task, merged) {
+  const into = (m) => (m && typeof m.mergedInto === "string" && m.mergedInto.trim() ? m.mergedInto.trim() : "");
+  const mergedInto = (branch) => into(merged.find((m) => m.branch === branch && into(m)));
+  if (mergedInto(task.base)) {
+    const chain = [task.base];
+    const seen = new Set(chain);
+    for (let next = mergedInto(task.base); next && !seen.has(next); next = mergedInto(next)) {
+      seen.add(next);
+      chain.push(next);
+    }
+    const hops = chain.slice(1).map((b, i) => `${i ? ", which merged into" : "merged into"} \`${b}\``).join("");
+    return { reason: `its recorded base \`${task.base}\` ${hops}`, target: chain[chain.length - 1], retarget: true };
+  }
+  for (const m of merged) {
+    if (into(m) === task.base) return { reason: `sibling \`${m.branch}\` merged into its base \`${task.base}\``, target: task.base, retarget: false };
+  }
+  return null;
+}
+
+// Which of the scan's clashes the resolver may settle, and which the rebase
+// onto the advanced base owns. A `path` clash with a member whose merge the
+// advance target has absorbed (directly, or through the chain `baseAdvance`
+// chased) is the add/add the header above promises will surface as an honest
+// conflict at that rebase: the same file, added on both sides, is exactly what
+// git refuses to replay silently, and the deputy halts on it for the
+// maintainer's judgment — a duplicate implementation to drop, or a genuinely
+// different file to rename. Settled first, the resolver would rename the file
+// away before the rebase ran, and the replay would then go clean over the very
+// clash the maintainer was owed. The other kinds stay with the resolver: a
+// same-basename-elsewhere or same-symbol clash is no git conflict, and a task
+// number now on the base is a number the branch must still give up. Nothing
+// is deferred where no rebase will run: a member merged into some other branch
+// is not in this branch's way, and the rename is the only tool left.
+function collisionsForRebase(task, collisions, merged, advance) {
+  if (!advance) return { settle: collisions.slice(), deferred: [] };
+  const into = (m) => (m && typeof m.mergedInto === "string" ? normalizeBranchName(m.mergedInto) : "");
+  const target = normalizeBranchName(advance.target);
+  const absorbed = new Set();
+  for (let grew = true; grew; ) {
+    grew = false;
+    for (const m of merged) {
+      const branch = m && typeof m.branch === "string" ? normalizeBranchName(m.branch) : "";
+      if (!branch || absorbed.has(branch)) continue;
+      if (into(m) === target || absorbed.has(into(m))) { absorbed.add(branch); grew = true; }
+    }
+  }
+  const own = new Set([normalizeBranchName(task.branch), normalizeBranchName(task.slug)]);
+  const deferred = collisions.filter((c) => c && c.kind === "path" && c.external !== true && collisionBranchNames(c).some((b) => !own.has(b)) && collisionBranchNames(c).every((b) => own.has(b) || absorbed.has(b)));
+  return { settle: collisions.filter((c) => !deferred.includes(c)), deferred };
+}
+
+const TASK_REBASE_SCHEMA = {
+  type: "object",
+  properties: {
+    ok: { type: "boolean", description: "False when the rebase could not be carried out at all — dirty or mid-operation tree, a target that does not resolve, a git failure. The branch is held; nothing is delivered on the strength of it." },
+    halted: { type: "boolean", description: "True when the step stopped for a decision beyond its competence — a conflict met mid-rebase, where the rebase was ABORTED, or a merge carrying its own content found in the range before any replay, where no rebase was started. Either way the tree is left clean and idle and `question` carries what the maintainer has to decide." },
+    question: { type: "string", description: "REQUIRED when halted: the offending commit, the files at issue, and what the judgment turns on — written for the maintainer, since it becomes this task's open question." },
+    effectiveBase: { type: "string", description: "The full OID actually rebased onto, as `git rev-parse --verify` printed it — a commit, never a ref name and never an abbreviation. REQUIRED whenever ok is true." },
+    noop: { type: "boolean", description: "True when the rebase replayed nothing and the tip is unchanged. Accepted only where `before` and `after` are both reported and equal." },
+    before: { type: "string", description: "Tip SHA before the rebase — the pre-rebase tip the recovery ref saved. REQUIRED whenever ok is true." },
+    after: { type: "string", description: "Tip SHA after it. REQUIRED whenever ok is true." },
+    recoveryRef: { type: "string", description: "The recovery ref saved before the first replay, in full: `refs/pre-rebase/<branch>/<UTC stamp>`. REQUIRED whenever ok is true." },
+    recoveryTip: { type: "string", description: "The OID `recoveryRef` resolves to, read back after the `update-ref`. REQUIRED whenever ok is true, and equal to `before`." },
+    validationPassed: { type: "boolean", description: "Whether the post-rebase build/tests passed. `true` for a no-op, which runs none. A replay must report `true` here to go on; `false` and an absent field hold the branch alike." },
+    pushed: { type: "boolean", description: "Whether the rebased tip was pushed over the branch's remote copy with the lease this brief spells out. False on a no-op, on a no-remote run, and where the push failed (say why in `detail`)." },
+    detail: { type: "string", description: "One line: the target, what was replayed, skipped or resolved, what validation ran, and the push outcome." },
+  },
+  required: ["ok", "halted", "noop", "detail"],
+};
+
+// The brief spells the step out — the recovery ref and its read-back, the
+// `--no-update-refs --no-rebase-merges` form, the lease push — rather than
+// relying on the deputy to find the flags in the skill, because the suite pins
+// exactly those and a brief that only named the skill would pin nothing; what
+// it does NOT restate (hunk-level conflict handling, the merge classification's
+// finer cases) it defers to the `review-cycle` skill's "The delegated rebase
+// step" by name, the way this file's other briefs defer to their skills.
+function taskRebasePrompt(task, advance, remote) {
+  const targetPin = remote
+    ? `Refresh it first with an explicit refspec, moving no local branch — \`git fetch origin ${shq(`+refs/heads/${advance.target}:refs/remotes/origin/${advance.target}`)}\` — then pin \`git rev-parse --verify ${shq(`refs/remotes/origin/${advance.target}^{commit}`)}\`.`
+    : `Remote access is unavailable this run, so pin the local ref as it stands: \`git rev-parse --verify ${shq(`refs/heads/${advance.target}^{commit}`)}\`.`;
+  const pushLine = remote
+    ? `7. **Push the replayed tip over the branch's remote copy — with the lease, and only after validation passed.** The cycle pushed this branch for durability, so its remote copy now diverges from the rebased tip and delivery's ordinary \`git push\` would be refused. Run exactly \`git push --force-with-lease=${shq(task.branch)}:"$before" origin ${shq(task.branch)}\` with \`$before\` the pre-rebase tip from step 3 — the one force-push this assignment spells out, on this task's own branch, which no PR advertises yet; a lease that fails means the remote moved under you, so report \`pushed: false\` with what it said and push nothing else. A no-op rebase pushes nothing.`
+    : `7. Remote push is unavailable this run; commit nothing further and report \`pushed: false\`.`;
+  return `Rebase one task branch onto its ADVANCED base, and nothing else: ${advance.reason} while this branch was in review, so it now stands on history the base has absorbed. Follow the \`review-cycle\` skill's "The delegated rebase step" for everything this brief does not state.
+
+${DEPUTY_FINISH_IN_TURN}
+
+${DESTROY_BOUNDARY}
+
+${worktreeContract(task)}
+
+The \`git update-ref refs/pre-rebase/...\` snapshot of step 3, the rebase of step 4 on this branch, and the lease push of step 7 are the mutations this assignment spells out. Nothing else is: no other ref, no other branch, no other worktree.
+
+1. **Preflight.** \`git status --porcelain\` must print nothing AND no Git operation may be in progress — \`git rev-parse --git-path rebase-merge\` and \`rebase-apply\` for an existing path, plus \`MERGE_HEAD\`, \`CHERRY_PICK_HEAD\`, \`REVERT_HEAD\`, \`BISECT_LOG\`. Either failing is \`ok: false\` with what you found in \`detail\`. Stash nothing, clean nothing, force nothing.
+2. **Pin the base.** The target is \`${advance.target}\`. ${targetPin} Report that full OID as \`effectiveBase\` and rebase onto THAT OID, never onto the name and never an abbreviation of it.
+3. **Save the recovery ref, then read it back.** \`ts="$(date -u +%Y%m%d-%H%M%S)"\`, \`before="$(git rev-parse --verify HEAD)"\`, then \`git update-ref ${shq(`refs/pre-rebase/${task.branch}/`)}"$ts" "$before"\` and prove it resolves to \`$before\`. Report the ref in full as \`recoveryRef\`, the read-back OID as \`recoveryTip\`, and the pre-rebase tip as \`before\`.
+4. **Rebase — merges in the range first.** \`git rev-list --merges <effectiveBase>..HEAD\`: a merge carrying its own content (\`git show --remerge-diff <it>\` prints a delta; an octopus merge is treated as content-bearing unprobed) halts the step unrebased — report \`halted: true\` with a \`question\` naming it. Otherwise \`git rebase --no-update-refs --no-rebase-merges <effectiveBase>\`. Nothing replayed and the tip unchanged is the expected no-op: report \`noop: true\` with \`before\` equal to \`after\`, run no validation, push nothing, and you are done.
+5. **Conflicts — by hunk, in place.** Resolve only what the skill classifies as TRIVIAL (import/whitespace/formatting collisions, pure additions, a patch the new base already represents — \`git rebase --skip\` for that one). One narrowing of that recipe: a commit that ADDS a file the new base already holds is "already represented" only when the two adds are byte-identical (\`git diff --quiet REBASE_HEAD <effectiveBase> -- <path>\` for every such file) — the recipe's existence test is not a content test, and a same-path add on both sides with different content is the duplicate-or-different question this rebase exists to surface, so it is a halt, never a \`--skip\`. Anything beyond that — a genuine semantic dilemma, which is what a clash with an already-merged sibling looks like from here — is \`git rebase --abort\`, then CONFIRM the tree is clean and idle by step 1's checks, and \`halted: true\` with a \`question\` naming the conflicting files, the offending commit, and what the judgment turns on. Never leave the tree mid-rebase and never guess a resolution: this run is unattended.
+6. **Validate a rebase that replayed something** — the project's build AND its test suite, discovered from \`AGENTS.md\`/\`CLAUDE.md\`, then \`package.json\` scripts, then ecosystem signals. Report \`validationPassed\` and what you ran in \`detail\`; a failure holds the branch rather than being fixed here, so report it and name the recovery ref. If you redirect any build output to a file, create a UNIQUE directory for it first, OUTSIDE every worktree (\`mktemp -d "\${TMPDIR:-/tmp}/task-rebase.XXXXXX"\`) — never a fixed shared scratchpad name, since one session's agents share that directory, and never inside this worktree, whose tree the delivery step reads.
+${pushLine}
+
+Change nothing else: no commits of your own, no PR mutation, no branch creation or deletion. Report \`ok\`, \`halted\`, \`noop\`, \`effectiveBase\`, \`before\`, \`after\`, \`recoveryRef\`, \`recoveryTip\`, \`validationPassed\`, \`pushed\`, \`detail\`, and \`question\` when you halted.`;
+}
+
+const TASK_REBASE_OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
+
+// Rebase the branch under the guard onto its advanced base and re-review it at
+// the delivery tier where the replay changed the tree. Returns `{ result }` to
+// go on with (the recorded base retargeted where the merged branch WAS the
+// base), or `{ held }` — a `rebase-hold` result carrying the rebase's open
+// question where it halted, and the reason where it failed or the replay did
+// not validate. A no-op costs no re-review: the two tips it names being equal
+// is what the no-op claim is accepted on. `onRetarget` runs the moment a
+// retarget moves the recorded base — on the no-op arm, and on the replay arm
+// as soon as the replay is accepted and BEFORE the re-review it then owes: the
+// branch ref has already moved by then, and a sibling's scan diffs a member
+// from the base its ledger entry records, so a copy left on the old base for
+// the length of a re-review would read the rebased ref against a base the
+// merge has absorbed.
+async function rebaseOntoAdvancedBase(task, result, advance, remote, peerMode, onRetarget = () => {}) {
+  phase("Rebase onto advanced base");
+  let report = null;
+  try {
+    report = await agent(taskRebasePrompt(task, advance, remote), { label: `rebase:${task.slug}`, schema: TASK_REBASE_SCHEMA });
+  } catch (e) {
+    log(`rebase of ${task.slug} threw: ${e && e.message ? e.message : String(e)}`);
+  }
+  const carried = cycleCarried(result);
+  const hold = (detail, extra) => ({ held: { slug: task.slug, branch: task.branch, status: "rebase-hold", detail, rebase: report, ...carried, ...(extra || {}) } });
+  if (!report || typeof report !== "object") return hold(`the rebase onto the advanced base (${advance.reason}) returned nothing usable; branch held before delivery — rebase it by hand onto \`${advance.target}\` and re-review`);
+  if (report.halted === true) {
+    const question = {
+      id: `${cycleSlugSegment(task.slug)}-rebase`,
+      question: String(report.question || `the rebase of ${task.branch} onto ${advance.target} halted on a conflict beyond the delegated step's competence`),
+      origin: "rebase",
+      originRound: 0,
+      blocking: true,
+      artifacts: [task.branch, advance.target, ...(report.recoveryRef ? [report.recoveryRef] : [])],
+      trigger: advance.reason,
+      reachability: "live",
+      reachabilityCondition: "",
+      options: [],
+      recommendation: "",
+      coupledWith: [],
+    };
+    return hold(`the rebase onto the advanced base halted (${advance.reason}); the tree was left clean and the branch is held before delivery — resolve the conflict by hand, then re-review`, { openQuestions: [...(Array.isArray(carried.openQuestions) ? carried.openQuestions : []), question] });
+  }
+  if (report.ok !== true) return hold(`the rebase onto the advanced base could not be carried out: ${report.detail || "(no detail reported)"}; branch held before delivery`);
+  const before = String(report.before || "");
+  const after = String(report.after || "");
+  const effectiveBase = String(report.effectiveBase || "");
+  // Both arms retarget the recorded base on the strength of `effectiveBase`,
+  // so both require it in full: a no-op that names no base — or abbreviated
+  // or arbitrary equal strings as its tips — is no evidence that the branch
+  // stands on the target the brief named, and the PR it would open against
+  // that target is exactly what the rebase exists to make honest.
+  if (!TASK_REBASE_OID.test(effectiveBase)) {
+    return hold(`the rebase reported no full effective-base OID (${JSON.stringify(effectiveBase)}); nothing evidences that the branch stands on \`${advance.target}\`, so it is held before delivery — inspect the worktree and re-review`);
+  }
+  if (report.noop === true) {
+    if (!TASK_REBASE_OID.test(before) || before !== after) return hold("the rebase reported a no-op without naming two equal full-OID tips; the claim is unevidenced, so the branch is held before delivery — inspect the worktree and re-review");
+    if (advance.retarget) { task.base = advance.target; onRetarget(); }
+    return { result: { ...result, rebasedOnto: effectiveBase } };
+  }
+  // A replay is a rewrite — on a remote run a force-pushed one — so it is
+  // accepted only with its way back in evidence: a full pre-rebase tip, the
+  // recovery ref named in full under THIS branch's prefix with the stamp the
+  // brief writes, and that ref read back resolving to that tip. The schema
+  // marks the three required whenever `ok` is true, but a schema cannot make
+  // a deputy fill them, and a replay reported without them has no proven
+  // backup of the tip it rewrote — the same report the standalone rebase
+  // (`wf-address-review.js`) refuses to adopt.
+  const recoveryRef = String(report.recoveryRef || "").trim();
+  const recoveryPrefix = `refs/pre-rebase/${task.branch}/`;
+  const recoveryNamed = recoveryRef.startsWith(recoveryPrefix) && /^\d{8}-\d{6}$/.test(recoveryRef.slice(recoveryPrefix.length));
+  if (!TASK_REBASE_OID.test(before) || !recoveryNamed || String(report.recoveryTip || "").trim() !== before) {
+    return hold(`the rebase replayed onto \`${advance.target}\` without proving its way back: it reported ${JSON.stringify(report.before === undefined ? null : report.before)} as the pre-rebase tip, ${JSON.stringify(report.recoveryRef === undefined ? null : report.recoveryRef)} as the recovery ref (expected \`${recoveryPrefix}<YYYYmmdd-HHMMSS>\`), and ${JSON.stringify(report.recoveryTip === undefined ? null : report.recoveryTip)} as what that ref resolves to; a replayed tip is accepted only with the saved tip it rewrote in evidence, so the branch is held before delivery — check the pre-rebase refs under \`${recoveryPrefix}\` yourself before treating any as this branch's way back`);
+  }
+  if (!TASK_REBASE_OID.test(after) || report.validationPassed !== true) {
+    return hold(`the rebase replayed onto \`${advance.target}\` but ${report.validationPassed === true ? "reported no full post-rebase tip" : "its validation did not pass"}: ${report.detail || "(no detail reported)"}; branch held before delivery — the recovery ref ${recoveryRef} is the way back`);
+  }
+  if (remote && report.pushed !== true) {
+    return hold(`the rebase replayed and validated but the rebased tip was not pushed (${report.detail || "no detail"}); branch held before delivery so the remote copy is not left behind the reviewed tree`);
+  }
+  if (advance.retarget) { task.base = advance.target; onRetarget(); }
+  // The replay changed the tree after the cycle's delivery-tier pass, so the
+  // branch owes that tier again before it opens a PR — the same fresh pass a
+  // deconfliction rename earns, under the same deviation gate. A re-review
+  // that THROWS owes that tier exactly as much as one that comes back failing,
+  // so it takes the same exit: held, no PR, the reservation released by the
+  // caller. Left to escape, it would reach the pipeline's catch, which settles
+  // the still-held claim as an orphan — and an orphan is discharged by
+  // retrying `gh pr create`, which would open the PR on a replayed tip no
+  // delivery-tier pass ever saw.
+  let reReview;
+  try {
+    reReview = await deliveryReReview(task, result, remote, peerMode);
+  } catch (e) {
+    return hold(`the rebased branch's fresh re-review crashed (${e && e.message ? e.message : String(e)}); held before delivery — the tier the replay owes is unpaid, so no PR is opened`);
+  }
+  const { verdict, reviewed, coverage, freshAssessments } = reReview;
+  if (reviewed && !coverage.unassessed.length) {
+    return { result: { ...result, notes: verdict.notes || result.notes, ...freshAssessments, ...collisionReviewedRecord(result), ...collisionReReviewFlakeRecord(result, verdict), rebasedOnto: effectiveBase } };
+  }
+  if (reviewed) {
+    return hold("the rebased branch passed fresh re-review but left a deviation from a LOCKED decision unassessed; held before delivery — re-review this branch and record the in-spec route and a RATIFY/CONFORM recommendation for each deviation named below, without conforming, rewording, or dropping it", { unassessedDeviations: coverage.unassessed, ...freshAssessments });
+  }
+  return hold("the rebased branch did not pass fresh re-review; held before delivery", { outstanding: verdict ? verdict.issues : null, ...freshAssessments });
+}
+
+// ============================================================================
+// The pipeline's shared state: the guard queue, the reservation ledger, and
+// the concurrency gate. All three are plain objects on this one flat script,
+// which is what makes them real across the `parallel()` fan-out — a nested
+// child would hold its own and serialize nothing.
+// ============================================================================
+
+// First-ready-wins, literally: a task takes its guard turn in the order its
+// cycle passed. The chain is a promise tail, so a task that is still in the
+// guard holds every later arrival behind it, and a task that leaves — by
+// clearing, by holding, or by throwing — releases the next one unconditionally.
+// Nothing inside a turn awaits another task's turn, which is why the queue
+// cannot deadlock with held branches: a hold is a result, not a wait.
+function createGuardQueue() {
+  return { tail: Promise.resolve(), order: [] };
+}
+async function withGuardTurn(queue, slug, fn) {
+  const previous = queue.tail;
+  let release;
+  queue.tail = new Promise((resolve) => { release = resolve; });
+  await previous;
+  queue.order.push(slug);
+  try {
+    return await fn();
+  } finally {
+    release();
+  }
+}
+
+// The reservation is what makes the guard's serialization real. Clearing the
+// guard claims the branch's task numbers (and its ref, for the add/add scan)
+// atomically — the claim is entered inside the guard turn, before the next
+// task's scan can run — and the claim is held through delivery, a network-bound
+// push/PR step during which the task is neither delivered nor a currently-ready
+// sibling. Release is asymmetric, because delivery is not atomic:
+//   - a reservation CONVERTS to delivered once the PR exists (or the branch is
+//     the run's local delivery on a no-remote run, or the PR exists on a base
+//     the maintainer retargets in one command);
+//   - it may only be DROPPED when delivery failed with no remote write — at
+//     once where the delivery reported none, or once the orphan action below
+//     found the push never landed or took the branch back off origin;
+//   - where the push landed but no PR advertises the branch, `origin` carries
+//     the number while it appears in neither the reservation set of a later run
+//     nor its open PR heads, so the reservation PERSISTS as an orphan, and the
+//     pipeline owes it an action at once (`reconcileOrphan`) — persisting for
+//     the rest of the run only where that action fails.
+function createReservationLedger() {
+  return { reserved: new Map(), delivered: new Map(), orphaned: new Map() };
+}
+function ledgerMembers(ledger) {
+  return [...ledger.delivered.values(), ...ledger.reserved.values()];
+}
+function reserveNumbers(ledger, task, taskNumbers) {
+  ledger.reserved.set(task.slug, { slug: task.slug, branch: task.branch, base: task.base, state: "reserved", taskNumbers: taskNumbers.slice(), prUrl: "", merged: false });
+}
+// A hold between the guard and delivery (the rebase onto an advanced base) is
+// not a delivery outcome, so the asymmetric release below does not apply: the
+// branch is held for inspection exactly as one held inside the turn is, with
+// the cycle's push in place and no reservation, and delivery never ran to
+// orphan anything.
+function releaseReservation(ledger, slug) {
+  const entry = ledger.reserved.get(slug);
+  ledger.reserved.delete(slug);
+  return entry || null;
+}
+// `remote` decides the remote-write question for the ambiguous outcomes: on a
+// no-remote run nothing was ever written to origin, so nothing can be orphaned.
+function settleReservation(ledger, slug, delivered, remote) {
+  const entry = ledger.reserved.get(slug);
+  if (!entry) return "none";
+  const status = delivered ? delivered.status : "error";
+  if (status === "done" || status === "pr-wrong-base" || status === "local-only") {
+    ledger.reserved.delete(slug);
+    ledger.delivered.set(slug, { ...entry, state: "delivered", prUrl: (delivered && delivered.prUrl) || "" });
+    return "delivered";
+  }
+  // A push that landed with no PR, or a delivery whose remote state is unknown
+  // (it crashed: the push may have landed before it did) — the number may be on
+  // origin unadvertised, and only a read of origin can say. Held for the run.
+  const pushed = delivered ? delivered.pushed : undefined;
+  if (remote && pushed !== false) {
+    ledger.orphaned.set(slug, { ...entry, status });
+    return "orphaned";
+  }
+  ledger.reserved.delete(slug);
+  return "dropped";
+}
+// The abort catch's report of what the ledger still holds. An orphan keeps its
+// `reserved` entry on purpose (a later scan must still read it RESERVED), so
+// it is named ONCE, under the orphan reason: its claim was settled, whatever
+// the exit reported and whether or not its push landed. The second reason is
+// for a claim nothing settled at all — the abort cut across that task before
+// any of its exits reached `settleReservation`.
+function abortedReservationReport(ledger) {
+  return [
+    ...[...ledger.orphaned.values()].map((o) => ({ slug: o.slug, branch: o.branch, taskNumbers: o.taskNumbers, reason: o.reason ? `orphan reconciliation left it on origin (${o.reason}) and the batch then aborted` : "the batch aborted before the orphan could be reconciled" })),
+    ...[...ledger.reserved.values()].filter((o) => !ledger.orphaned.has(o.slug)).map((o) => ({ slug: o.slug, branch: o.branch, taskNumbers: o.taskNumbers, reason: "the batch aborted while this branch still held its claim; nothing settled it, and its push may have landed, so its remote state is unknown" })),
+  ];
+}
+
+// Live worktrees are bounded continuously rather than per wave: a task takes a
+// slot before its worktree is created and gives it back once delivery has
+// reclaimed the worktree. A worktree the task leaves in place for inspection —
+// a cap-out, a hold, a crash — is still live and still holds its storage, so
+// it KEEPS its slot: the cap is a storage bound, and releasing the slot of a
+// worktree nobody reclaimed would admit one more live worktree per retained
+// one, until the volume the cap was measured against is full. The cap is
+// derived ONCE, from the same bootstrap `df` measurement the wave loop used,
+// and the mount is never re-probed: a handoff runs from a pipeline's `finally`,
+// after that task's own catch, so an agent call there could not fail into any
+// task's terminal state — it would reject the whole batch mid-run with siblings
+// in flight and leave the queued waiters asleep. Release and retain spawn
+// nothing and cannot throw. `Infinity` (no measurement) never waits.
+//
+// A retained slot is one no delivery will ever hand back, so a waiter is woken
+// on a retain as well as on a release, and takes the slot only where one can
+// still come free: once every slot under the cap is held by a retained
+// worktree, nothing running will free one, and a waiter that stayed asleep
+// would hold the batch open forever. That waiter is DENIED instead, and ends
+// `storage-throttled` — a terminal state its dependents skip on, named in the
+// summary beside the cap — rather than either waiting on a release that cannot
+// come or being admitted over headroom the retained worktrees still hold.
+function createSlotGate(cap) {
+  return { cap, inFlight: 0, retained: 0, retainedBy: [], waiters: [] };
+}
+async function acquireSlot(gate) {
+  let waited = false;
+  while (gate.inFlight >= gate.cap) {
+    // Denied, and told by whom: the script cannot see the worktrees (every
+    // Git read is a deputy's), so the retainers are named for the reader to
+    // reclaim or inspect rather than found for them.
+    if (gate.inFlight - gate.retained <= 0) return { waited, denied: true, retainedBy: gate.retainedBy.slice() };
+    waited = true;
+    await new Promise((resolve) => gate.waiters.push(resolve));
+  }
+  gate.inFlight += 1;
+  return { waited, denied: false };
+}
+function wakeSlotWaiters(gate) {
+  const waiters = gate.waiters.splice(0);
+  waiters.forEach((resolve) => resolve());
+}
+const slotHolders = (holders) => (Array.isArray(holders) && holders.length ? holders.map((h) => `\`${h}\``).join(", ") : "(unnamed)");
+function releaseSlot(gate) {
+  gate.inFlight = Math.max(0, gate.inFlight - 1);
+  wakeSlotWaiters(gate);
+}
+function retainSlot(gate, holder) {
+  if (gate.retained < gate.inFlight) gate.retainedBy.push(holder);
+  gate.retained = Math.min(gate.inFlight, gate.retained + 1);
+  wakeSlotWaiters(gate);
+}
+
+// ============================================================================
+// Orphaned pushed branches — the terminal-state obligation. A session-local
+// reservation cannot outlive the run, so the batch must not end holding one:
+// every branch whose push landed while its PR creation did not is acted on —
+// PR creation retried, or the branch deleted from origin — and any that
+// survives both is named in the summary beside the numbers it still holds, so
+// the next run's guard (which sees the number on neither the base branch nor
+// any open PR head) has something to reclaim it from.
+//
+// The action runs INSIDE the task's own pipeline, the moment its delivery
+// settles as an orphan and before its terminal state is announced: a
+// dependent reads that state once, and `pushed-no-pr` is not a state it may
+// build on (its PR would have no parent PR). Acted on at the end of the batch
+// instead, a prerequisite recovered to `done` there would find its whole
+// subtree already skipped on the state it held for the minutes in between.
+// ============================================================================
+
+const ORPHAN_SCHEMA = {
+  type: "object",
+  properties: {
+    outcome: { type: "string", description: "pr-opened | branch-deleted | not-on-origin | unresolved. `pr-opened` ONLY when a PR URL exists and its base was read back per the brief; `branch-deleted` ONLY when the delete followed a no-match the brief's two held re-lookups settled and `git ls-remote --exit-code --heads origin <branch>` EXITED 2 AFTER it; `not-on-origin` ONLY when that same command exited 2 before anything was attempted (the push had not landed); `unresolved` for everything else — a probe or lookup that failed rather than answered included." },
+    url: { type: "string", description: "The PR URL when one exists — including when its base could not be verified." },
+    baseOk: { type: "boolean", description: "True ONLY if the PR named by `url` was read back and its base equals the recorded base." },
+    reason: { type: "string", description: "What was attempted and what each step reported; REQUIRED when unresolved." },
+  },
+  required: ["outcome", "reason"],
+};
+
+function orphanReconcilePrompt(task, entry, ready) {
+  const numbers = entry.taskNumbers.length ? entry.taskNumbers.map((n) => `\`${n}\``).join(", ") : "(none recorded)";
+  // The retry may be the call that opens the PR, so the body it writes owes
+  // the maintainer the same sections the first attempt was briefed with.
+  const sections = prBodySections(ready);
+  return `Reconcile ONE orphaned pushed branch while a task batch is still running (sibling tasks may be mid-delivery; touch nothing of theirs): \`${task.branch}\` was pushed to origin while this run was delivering it, but no PR advertises it (the delivery step reported \`${entry.status}\`). It holds task number(s) ${numbers}: while it sits on origin with no PR, the next run's same-number guard sees that number on neither the base branch nor any open PR head, and the collision this run caught reappears there. So this branch must not survive this run in that state: open its PR, or delete it from origin.
+
+${DEPUTY_FINISH_IN_TURN}
+
+${DESTROY_BOUNDARY}
+
+You stand in the repository's SHARED main checkout (confirm with \`git rev-parse --show-toplevel\`; do not \`cd\` into any \`.worktrees/...\` worktree — the branch's commits are in the shared \`.git\` and on origin, and nothing here needs its tree). The \`gh pr create\` of step 2 and the \`git push origin --delete\` of step 3 — on THIS branch only — are the mutations this assignment spells out.
+
+1. **Establish what origin holds — from an answer, never from silence.** \`git ls-remote --exit-code --heads origin ${shq(task.branch)}\`, and read its EXIT STATUS rather than its stdout: \`2\` is origin answering that no such ref exists, \`0\` (the ref listed) is origin answering that the push landed, and anything else — \`128\` for a transport or authentication failure — is no answer at all, and prints nothing just as a no-match does. Only a \`2\` means the push never landed: report \`not-on-origin\` and stop — there is nothing to reconcile and nothing to delete. On any other non-zero status retry the probe once after a short hold, and where it still answers neither \`0\` nor \`2\`, report \`unresolved\` with what it printed: the reservation stays and the summary names the branch, which is the right outcome for a branch that may well still sit on origin. Then look for a PR the earlier attempt may have opened without reporting it: \`gh pr list --head ${shq(task.branch)} --state open --json url,baseRefName,headRepositoryOwner\` in the repository that owns the PR (the base repository), requiring the head repository owner to match the one you pushed to. A lookup that FAILS (non-zero exit, no JSON) is an unsettled read, not an empty one: retry it once after a short hold, and where it still fails report \`unresolved\` — nothing below may act on a read that did not settle. A match goes to step 2's read-back rather than to creation.
+2. **Retry PR creation ONCE.** \`gh pr create --base ${shq(task.base)} --head ${shq(task.branch)} --title "<concise title>" --body "<summary referencing ${task.path}>"\`, then read the PR back BY URL — \`gh pr view <url> --json baseRefName\` must report \`${task.base}\`; on a settled mismatch repair it with \`gh pr edit <url> --base ${shq(task.base)}\` and re-read. Report \`pr-opened\` with the \`url\` and \`baseOk\` from that read-back. A creation that fails naming an existing PR's URL takes that URL to the read-back. A creation that fails any other way is not retried again — but it is not proof that no PR exists either: \`gh pr create\` promises a URL only on success, so a failure may be a creation (this one, or the original) that opened the PR and lost its response. A single lookup cannot settle that either — a PR opened moments ago may be missing from one read of an eventually consistent listing — so before deleting anything, re-run step 1's lookup TWICE, each held briefly (several seconds) so the API it reads has had time to converge: a match on either goes to the read-back; a lookup that fails is \`unresolved\`; only two consecutive lookups that each ran and found nothing settle the no-match, and only a no-match settled that way goes to step 3.
+3. **Otherwise delete the branch from origin.** \`git push origin --delete ${shq(task.branch)}\` — the local branch and its commits stay in the shared \`.git\` for a later run to push again, so nothing reviewed is lost; only the unadvertised remote copy goes. Confirm with \`git ls-remote --exit-code --heads origin ${shq(task.branch)}\` EXITING 2, and report \`branch-deleted\`. Where the delete fails, the ref is still listed (status \`0\`), or the probe answers neither way, report \`unresolved\` with everything each step said in \`reason\`: the batch summary names this branch beside its task number(s) so the next run can reclaim it by hand.${sections ? `\n\nThe PR body step 2 writes carries what the reviewed branch owes the maintainer, exactly as the first creation attempt was briefed:${sections}` : ""}
+
+Delete no other branch, touch no other PR, and never force-push anything.`;
+}
+
+// One orphan, acted on where its claim was settled. Returns the task's result
+// as reconciliation leaves it — rewritten to `done`/`pr-wrong-base` where the
+// PR retry opened one, to `local-only` where the branch is off origin, and
+// flagged `orphaned` where it survived both — and records the action on the
+// batch's `orphanReconciliation` list. Never throws: an agent that does is an
+// `unresolved` outcome, and a survivor keeps its ledger entry (with the reason)
+// so a later scan still reads it RESERVED and the summary names it. `ready` is
+// the reviewed result the delivery was briefed with (null where the pipeline
+// crashed before it had one), for the PR body the retry writes.
+async function reconcileOrphan({ ledger, task, prior, ready, remote, orphanReconciliation }) {
+  const entry = ledger.orphaned.get(task.slug);
+  if (!remote || !entry) return prior;
+  phase(`Orphan reconciliation ${task.slug}`);
+  let out = null;
+  try {
+    out = await agent(orphanReconcilePrompt(task, entry, ready), { label: `orphan:${task.slug}`, schema: ORPHAN_SCHEMA });
+  } catch (e) {
+    log(`orphan reconciliation for ${task.slug} threw: ${e && e.message ? e.message : String(e)}`);
+  }
+  const outcome = out && typeof out.outcome === "string" ? out.outcome : "unresolved";
+  let next;
+  if (outcome === "pr-opened" && out.url) {
+    next = out.baseOk === true
+      ? { ...prior, status: "done", prUrl: out.url, lateDelivery: true, reason: "" }
+      : { ...prior, status: "pr-wrong-base", prUrl: out.url, recordedBase: task.base, pushed: true, lateDelivery: true, reason: out.reason || "PR base was neither read back nor repaired to the recorded base" };
+    ledger.orphaned.delete(task.slug);
+    ledger.reserved.delete(task.slug);
+    ledger.delivered.set(task.slug, { ...entry, state: "delivered", prUrl: out.url });
+  } else if (outcome === "branch-deleted" || outcome === "not-on-origin") {
+    // Origin carries nothing of this branch now, so the claim is DROPPED, as a
+    // delivery that reported no remote write drops it at settlement: the
+    // branch is no member for a later scan to compare against — kept as a
+    // DELIVERED member, it would hold its numbers and added paths over a
+    // sibling for a collision origin no longer carries. Its own re-push, in a
+    // later run, meets that run's same-number guard like any other branch.
+    next = { ...prior, status: "local-only", pushed: false, reason: `${prior.reason ? `${prior.reason}; ` : ""}${outcome === "branch-deleted" ? "the pushed branch was deleted from origin so its task number is not held unadvertised — push it again once its PR can be opened" : "the push never landed on origin; the branch exists locally only"}` };
+    ledger.orphaned.delete(task.slug);
+    ledger.reserved.delete(task.slug);
+  } else {
+    next = { ...prior, orphaned: true };
+    entry.reason = (out && out.reason) || "orphan reconciliation returned nothing usable";
+    log(`Orphaned pushed branch survived reconciliation — reclaim by hand: ${task.branch} (task ${entry.taskNumbers.join(", ") || task.slug}): ${entry.reason}`);
+  }
+  orphanReconciliation.push({ slug: task.slug, branch: task.branch, outcome, url: (out && out.url) || "", taskNumbers: entry.taskNumbers.slice() });
+  return next;
+}
+
+// What the summary names: every orphan still in the ledger once every task is
+// terminal — each one acted on in its own pipeline and survived, or (on an
+// abort) never reached — beside the numbers it still holds. Spawns nothing.
+function orphanSurvivors(ledger) {
+  return [...ledger.orphaned.values()].map((o) => ({ slug: o.slug, branch: o.branch, taskNumbers: o.taskNumbers.slice(), reason: o.reason || "the batch ended before this orphan was reconciled" }));
+}
+
+// ============================================================================
+// One task's pipeline, end to end: wait for its prerequisites, take a slot,
+// implement -> review -> fix, the serialized guard (scan, deconflict, reserve),
+// the rebase onto an advanced base under the reservation, deliver, reclaim.
+// Every exit — including a throw — resolves the task's terminal promise, so a
+// dependent never waits on a task that is already over.
+// ============================================================================
+
+// The dependency gate, kept whole from the wave loop: a task whose in-batch
+// prerequisite did not finish successfully must NOT run — it would branch from
+// a missing/partial/rejected prerequisite. A prerequisite "succeeded" if it
+// landed a PR (`done`) OR, on a no-remote run, was implemented and reviewed
+// locally (`local-only`): its branch and commits persist in the shared `.git`,
+// so dependents can still build on it. `pr-wrong-base` unlocks too: what that
+// outcome reports is wrong on the PR, not on the branch — the branch is pushed
+// and a dependent stacks on THAT, so holding its whole subtree over a base a
+// maintainer retargets in one command would fail work that is fine.
+// Effective prerequisites = the declared `dependsOn` UNION the one derived from
+// the `base`→`branch` relationship, so the gate holds even if the plan agent
+// omits a `dependsOn` entry it should have listed.
+// `local-only` unlocks on a no-remote run ONLY: on a remote run it is what a
+// pushed branch becomes once its unadvertised copy was deleted from origin
+// (`reconcileOrphan`), and a dependent stacked on it would open its PR against
+// a base origin no longer carries.
+const DEP_SUCCEEDED = (s, remote) => s === "done" || s === "pr-wrong-base" || (s === "local-only" && !remote);
+function effectiveDeps(task, slugByBranch) {
+  const deps = new Set(Array.isArray(task.dependsOn) ? task.dependsOn : []);
+  const baseDep = slugByBranch.get(task.base);
+  if (baseDep && baseDep !== task.slug) deps.add(baseDep);
+  return [...deps];
+}
+
+// Tasks whose prerequisite graph never resolves — a cycle, or a dependency on a
+// slug the plan does not hold — are found before anything starts: a pipeline
+// awaiting them would wait forever, and the Summary barrier with it. A task
+// downstream of one is unschedulable too, but by the state its prerequisite
+// ends in, `skipped-dep` — what the runtime gate would report had it awaited
+// the terminal — never as a cycle member: only a task that reaches itself
+// through the unresolved tasks is one, so the summary sends the maintainer to
+// the missing task or the cycle rather than to a cycle that is not there.
+function unschedulable(tasks, slugByBranch) {
+  const bySlug = new Map(tasks.map((t) => [t.slug, t]));
+  const deps = new Map(tasks.map((t) => [t.slug, effectiveDeps(t, slugByBranch)]));
+  const out = new Map();
+  for (const t of tasks) {
+    const missing = deps.get(t.slug).find((d) => !bySlug.has(d));
+    if (missing) out.set(t.slug, { blockedBy: missing, depStatus: "missing" });
+  }
+  const settled = new Set();
+  const propagate = () => {
+    let progressed = true;
+    while (progressed) {
+      progressed = false;
+      for (const t of tasks) {
+        if (settled.has(t.slug) || out.has(t.slug)) continue;
+        const blocked = deps.get(t.slug).find((d) => out.has(d));
+        if (blocked) { out.set(t.slug, { blockedBy: blocked, depStatus: "skipped-dep" }); progressed = true; continue; }
+        if (deps.get(t.slug).every((d) => settled.has(d))) { settled.add(t.slug); progressed = true; }
+      }
+    }
+  };
+  propagate();
+  const unresolved = new Set(tasks.map((t) => t.slug).filter((s) => !settled.has(s) && !out.has(s)));
+  const reachesItself = (start) => {
+    const seen = new Set();
+    const stack = [start];
+    while (stack.length) {
+      for (const d of deps.get(stack.pop())) {
+        if (d === start) return true;
+        if (unresolved.has(d) && !seen.has(d)) { seen.add(d); stack.push(d); }
+      }
+    }
+    return false;
+  };
+  const members = new Set([...unresolved].filter(reachesItself));
+  for (const s of members) out.set(s, { blockedBy: deps.get(s).find((d) => members.has(d)) || s, depStatus: "dependency cycle" });
+  propagate();
+  return out;
+}
+
+async function runTaskPipeline(task, ctx) {
+  const { slugByBranch, terminal, statusBySlug, results, ledger, guard, gate, remote, peerMode, defaultBase, throttled, collisions, mergedDuringRun, orphanReconciliation } = ctx;
+  // The dependency-visible terminal state, settled ONCE: `statusBySlug` and
+  // the terminal promise a dependent awaits. A delivered task settles it
+  // before its worktree is reclaimed — the reclaim adds only
+  // `worktreeRetained`, never a status — so a dependent starts on the
+  // delivery rather than on a cleanup deputy that may be slow or hung; the
+  // slot the reclaim frees is the gate's to hand over, and the dependent's own
+  // `acquireSlot` waits for it where the cap binds. Every other exit settles
+  // through `finish`.
+  const settle = (res) => {
+    if (statusBySlug.has(task.slug)) return;
+    statusBySlug.set(task.slug, res.status);
+    terminal.get(task.slug).resolve(res);
+  };
+  const finish = (res) => {
+    // A merge the guard observed while this task was between its settlement
+    // and here (its reclaim still running) was recorded on the ledger entry
+    // and could not be stamped on a result that did not exist yet: read it
+    // back now, so the review stack excludes the merged branch.
+    const entry = ledger.delivered.get(task.slug);
+    if (entry && entry.merged === true && res.merged !== true) {
+      res.merged = true;
+      res.mergedInto = entry.mergedInto;
+    }
+    settle(res);
+    results.push(res);
+    return res;
+  };
+  const blocked = ctx.unschedulable.get(task.slug);
+  if (blocked) return finish({ slug: task.slug, branch: task.branch, status: "skipped-dep", ...blocked });
+  for (const dep of effectiveDeps(task, slugByBranch)) {
+    await terminal.get(dep).promise;
+    if (!DEP_SUCCEEDED(statusBySlug.get(dep), remote)) {
+      return finish({ slug: task.slug, branch: task.branch, status: "skipped-dep", blockedBy: dep, depStatus: statusBySlug.get(dep) || "missing" });
+    }
+  }
+
+  const slot = await acquireSlot(gate);
+  if (slot.waited || slot.denied) throttled.push({ slug: task.slug, cap: gate.cap, ...(slot.denied ? { denied: true, retainedBy: slot.retainedBy } : {}) });
+  if (slot.denied) {
+    return finish({ slug: task.slug, branch: task.branch, status: "storage-throttled", detail: `every one of the ${gate.cap} live-worktree slot(s) the measured storage headroom allows is held by a worktree left in place for inspection (${slotHolders(slot.retainedBy)}), so no delivery can free one; this task never started — reclaim or inspect those worktrees, then rerun it` });
+  }
+  // Set once the reclaim REPORTED the worktree removed; every other exit — a
+  // hold, a crash, a delivery stopped short (`pushed-no-pr`, a push refused or
+  // taken back off origin), a `wt-remove` refusal carried as
+  // `worktreeRetained` — leaves it in place, and the slot stays held for it.
+  let reclaimed = false;
+  // The reviewed result delivery was briefed with, kept in the pipeline's own
+  // scope so the crash path's orphan action can brief its PR retry with it.
+  let reviewed = null;
+  try {
+    phase(`Task ${task.slug}`);
+    let res;
+    try {
+      res = await implementTask(task, remote, peerMode);
+    } catch (e) {
+      res = { slug: task.slug, branch: task.branch, status: "error", detail: `task crashed: ${e && e.message ? e.message : String(e)}` };
+    }
+    res = res || { slug: task.slug, branch: task.branch, status: "error", detail: "task crashed" };
+    if (res.status !== "ready") {
+      // Leave the worktree for inspection on a cap-out or an error; commits
+      // are durable. The slot stays held for it (see `createSlotGate`).
+      return finish(res);
+    }
+
+    // The serialized guard: one task at a time, in the order they became ready.
+    const cleared = await withGuardTurn(guard, task.slug, async () => {
+      const members = ledgerMembers(ledger);
+      const discovery = await discoverGuardCollisions({ ready: { task, result: res }, members, defaultBase });
+      collisions.push(...discovery.collisions);
+      for (const m of discovery.readings.merged) {
+        const entry = [...ledger.delivered.values()].find((d) => d.branch === m.branch);
+        if (entry && !entry.merged) {
+          entry.merged = true;
+          entry.mergedInto = typeof m.mergedInto === "string" ? m.mergedInto : "";
+          mergedDuringRun.push({ slug: entry.slug, branch: entry.branch, mergedInto: entry.mergedInto });
+          const r = results.find((x) => x && x.slug === entry.slug);
+          if (r) { r.merged = true; r.mergedInto = entry.mergedInto; }
+        }
+      }
+      // A hold is outside the guard's comparison set by the skill's definition,
+      // and the branch's durability push sits on origin holding the numbers the
+      // guard read with no PR to advertise them — so the held result names
+      // them, as the rebase-hold arm below names its released claim's, and the
+      // summary shows the maintainer what the unadvertised branch holds. The
+      // numbers are the latest the guard read: the re-scan's where it was
+      // usable (the claim as it stands after a rename), else the discovery's.
+      const heldWithNumbers = (h, numbers) => (Array.isArray(numbers) && numbers.length ? { ...h, taskNumbers: numbers.slice() } : h);
+      if (discovery.held) return { held: heldWithNumbers(discovery.held, discovery.readings.taskNumbers) };
+      let ready = res;
+      let taskNumbers = discovery.readings.taskNumbers;
+      // The advanced base is read from the same packet BEFORE the settlement,
+      // because it decides what the resolver may settle: a same-path clash
+      // with a member that base has absorbed is the rebase's to surface as a
+      // conflict, so it is kept out of the resolver's hands (see
+      // `collisionsForRebase`).
+      const mergedDelivered = discovery.readings.merged.filter((m) => [...ledger.delivered.values()].some((d) => d.branch === m.branch));
+      const advance = baseAdvance(task, mergedDelivered);
+      const { settle, deferred } = collisionsForRebase(task, discovery.collisions, mergedDelivered, advance);
+      for (const c of deferred) {
+        c.settledBy = "rebase";
+        log(`Collision guard ${task.slug}: \`${c.name}\` is added by a member the advanced base \`${advance.target}\` has absorbed; left to the rebase onto it, where git surfaces it as a conflict unless both sides added the same bytes, rather than renamed away`);
+      }
+      if (settle.length) {
+        // Settled INSIDE the turn, deliberately: the resolver renumbers the
+        // branch against the members the scan compared it with, the re-scan
+        // re-derives the rule against those same members, and the claim entered
+        // below is the re-scan's — the numbers as they stand after the rename.
+        // Run outside the turn, a sibling could clear the guard on the very
+        // number the rename is moving to before this branch re-scans, and both
+        // would publish it. A clash is the rare case; the common case pays only
+        // for the scan.
+        const settled = await settleGuardCollisions({ heldTasks: [{ task, result: res }], members, collisions: settle, leftToRebase: deferred, label: task.slug, defaultBase, remote, peerMode });
+        if (settled.held.length) return { held: heldWithNumbers(settled.held[0], settled.taskNumbers || taskNumbers) };
+        ready = settled.deliverable[0].result;
+        if (settled.taskNumbers) taskNumbers = settled.taskNumbers;
+      }
+      // The claim, entered before the turn ends and the next scan can run.
+      reserveNumbers(ledger, task, taskNumbers);
+      return { ready, advance, scanComplete: discovery.readings.scanComplete, scanDetail: discovery.readings.detail };
+    });
+    if (cleared.held) return finish(cleared.held);
+
+    // The rebase onto an advanced base runs OUTSIDE the turn, under the
+    // reservation: it replays, builds, tests, and re-reviews — the expensive
+    // work the guard must not serialize, since after one sibling merges every
+    // in-flight task owes it. What a sibling's scan reads of this member is
+    // its adds against the merge-base of its ref and its recorded base, so a
+    // ref the deputy has replayed but not yet reported — it validates and
+    // pushes after the replay — reads its own adds exactly only where the
+    // target added nothing after the parent's tip; otherwise it over-lists
+    // the target's later adds, which the target already holds, and where the
+    // parent's tip is not an ancestor of the target (a squash, or a
+    // rebase-and-merge that rewrote it) the merge-base falls back to the fork
+    // point and the parent's own merged files are over-listed too. That read
+    // is the same under either recorded base for an interval either side of
+    // the replay — moving the ledger copy first would over-list the
+    // unreplayed ref the same way — so no ordering closes it; only publishing
+    // the ref and the ledger copy in one step would, and its worst case is a
+    // false hold on the sibling, which owes the same names to the target at
+    // its own advance, never a wrong delivery. A hold here is
+    // not a delivery outcome: the branch is held for inspection with the
+    // cycle's push in place, as every hold is, so the reservation is released
+    // rather than settled — nothing was orphaned by a delivery that never ran.
+    // Held branches are outside the guard's comparison set by the skill's
+    // definition, so the numbers the released claim held ride on the held
+    // result: the summary names them beside the branch, as it does an orphan's,
+    // since its durability push sits on origin holding them with no PR.
+    if (cleared.advance) {
+      // A retarget moves the recorded base; the reservation's copy, which a
+      // sibling's scan reads the member by, moves with it — at the moment the
+      // rebase is accepted, not after the re-review it goes on to (see
+      // `rebaseOntoAdvancedBase`).
+      const followRetarget = () => {
+        const entry = ledger.reserved.get(task.slug);
+        if (entry) entry.base = task.base;
+      };
+      const rebased = await rebaseOntoAdvancedBase(task, cleared.ready, cleared.advance, remote, peerMode, followRetarget);
+      if (rebased.held) {
+        const claim = releaseReservation(ledger, task.slug);
+        return finish({ ...rebased.held, ...(claim ? { taskNumbers: claim.taskNumbers.slice() } : {}) });
+      }
+      cleared.ready = rebased.result;
+    }
+
+    // `advance` is the scan's reading, not a promise about the interval up
+    // to `gh pr create`: a parent that merges in that interval is NOT refreshed
+    // here, deliberately. Its branch still on origin, the PR opens against it
+    // and `baseOk` reads that back — the same state every stacked PR reaches
+    // when its parent merges a minute AFTER delivery, which a restack absorbs
+    // (the local review stack drops the merged member; it repairs no remote
+    // base). GitHub's retarget is keyed to the DELETION of a merged branch,
+    // not to the merge: every open PR based on it is moved to the merged PR's
+    // base at that moment, whenever it was created, so a PR opened in this
+    // window is retargeted like one opened before the merge; a branch never
+    // deleted leaves the PR on a merged base for the restack, exactly as
+    // after delivery. Its branch already gone before `gh pr create`, creation
+    // fails, `settleReservation` orphans the push, and `reconcileOrphan`
+    // retries once and then deletes it from origin (`local-only`, with a
+    // push-again reason; on a remote run its dependents are skipped), naming
+    // a branch that survives both. A read at this boundary would leave the
+    // same window one call later; the maintainer's T6 decision on the
+    // review-stack window declines the refresh for the same reason.
+    reviewed = cleared.ready;
+    let delivered;
+    try {
+      delivered = await deliverTask(task, cleared.ready, remote);
+    } catch (e) {
+      // The cycle itself completed, so its record is still in hand — carry it
+      // rather than losing it with the crash. `pushed` is left UNKNOWN: the
+      // push may have landed before the crash, which is the orphan case.
+      delivered = { slug: task.slug, branch: task.branch, status: "error", detail: `delivery crashed: ${e && e.message ? e.message : String(e)}`, ...cycleCarried(cleared.ready) };
+    }
+    delivered = delivered || { slug: task.slug, branch: task.branch, status: "error", detail: "delivery crashed", ...cycleCarried(cleared.ready) };
+    // The settlement is the ledger's business, and the ledger is what the
+    // reconciliation and the summary read: `ledger.orphaned` drives the
+    // reconciliation, whose own outcome rewrites this result. Stamping the
+    // held-ness onto the result too would only latch — reconciliation spreads
+    // the prior result into its `done`/`local-only` rewrite, so a claim that
+    // has since been settled and converted would still read as held on a
+    // final state that is 025's no-latched-flags case exactly.
+    if (settleReservation(ledger, task.slug, delivered, remote) === "orphaned") {
+      // Before `finish`: the state a dependent reads is the reconciled one.
+      delivered = await reconcileOrphan({ ledger, task, prior: delivered, ready: reviewed, remote, orphanReconciliation });
+    }
+    // The reclaim comes AFTER the settlement, and only for a task that ended
+    // delivered — the same reading the gate below takes when it lets a
+    // dependent start: the orphan action above can turn a `pushed-no-pr` into
+    // a delivered PR, and the one it leaves unresolved is stopped short of
+    // delivery, whose worktree the skill's Cleanup keeps in place. Dependents
+    // are released before the reclaim (see `settle`).
+    settle(delivered);
+    if (DEP_SUCCEEDED(delivered.status, remote)) {
+      Object.assign(delivered, await reclaimWorktree(task));
+      reclaimed = !delivered.worktreeRetained;
+    }
+    if (cleared.scanComplete === false) delivered.guardScanIncomplete = cleared.scanDetail || "the guard's remote enumeration was degraded; see the referenced section's note-and-proceed rule";
+    return finish(delivered);
+  } catch (e) {
+    let res = { slug: task.slug, branch: task.branch, status: "error", detail: `pipeline crashed: ${e && e.message ? e.message : String(e)}` };
+    // The crash may have come AFTER the claim was entered — in the rebase, in
+    // its re-review, anywhere under the reservation — so every exit from the
+    // reserved state settles it: with the push state unknown, a remote run
+    // keeps it as an orphan, acted on here exactly as a delivered one is (the
+    // action never throws) and named by the summary where it survives, rather
+    // than an entry no stage ever reconciles or reports.
+    if (settleReservation(ledger, task.slug, res, remote) === "orphaned") {
+      res = await reconcileOrphan({ ledger, task, prior: res, ready: reviewed, remote, orphanReconciliation });
+      // A PR the retry opened is a delivery like any other; its worktree is
+      // reclaimed on the same terms as the delivered path's.
+      settle(res);
+      if (DEP_SUCCEEDED(res.status, remote)) {
+        Object.assign(res, await reclaimWorktree(task));
+        reclaimed = !res.worktreeRetained;
+      }
+    }
+    return finish(res);
+  } finally {
+    if (reclaimed) releaseSlot(gate); else retainSlot(gate, task.slug);
+  }
+}
+
+// One terminal-state census, shared by every exit that reports results: the
+// summary's reader wants to see mixed terminal states at a glance — delivered,
+// merged during the run, pushed without a PR, held, capped, skipped — rather
+// than count them out of the list.
+function terminalStates(list) {
+  const counts = {};
+  for (const r of list) {
+    const key = r && r.status === "done" && r.merged ? "merged-during-run" : (r && r.status) || "unreported";
+    counts[key] = (counts[key] || 0) + 1;
+  }
+  return counts;
+}
+
+// The batch: every task's pipeline launched at once through `parallel()`, each
+// gated on its own prerequisites' terminal promises rather than on a wave. The
+// only true end-of-batch barriers left are the ones after this returns — the
+// review stack, the Summary and its main-checkout comparison (an orphan is
+// reconciled inside its own pipeline, not here) — and `parallel()` returns
+// only once EVERY task has reached some
+// terminal state (delivered, blocked, failed, skipped), so a batch in which
+// every task fails still reaches them.
+async function runPipelinedBatch({ plan, remote, peerMode, statusBySlug, results, throttled, collisions, ledger, gate, pipeline }) {
+  const tasks = [];
+  const slugByBranch = new Map();
+  // Every task carries a unique slug and branch: `planResolutionIsExact`
+  // refused the plan otherwise, so nothing is filtered (and so dropped) here.
+  for (const wave of plan.waves) {
+    for (const task of wave) {
+      tasks.push(task);
+      // A dependent task's `base` IS its prerequisite's `branch` (stacked PRs),
+      // so the gate derives the prerequisite structurally instead of trusting
+      // only the plan agent's `dependsOn` list.
+      slugByBranch.set(task.branch, task.slug);
+    }
+  }
+  const terminal = new Map();
+  for (const task of tasks) {
+    let resolve;
+    const promise = new Promise((r) => { resolve = r; });
+    terminal.set(task.slug, { promise, resolve });
+  }
+  const guard = createGuardQueue();
+  // The batch's live state is written into the caller's `pipeline` object
+  // BEFORE the fan-out, by reference: the abort catch reads it, and an abort is
+  // exactly the exit on which a value returned here never arrives.
+  pipeline.tasksBySlug = new Map(tasks.map((t) => [t.slug, t]));
+  pipeline.guardOrder = guard.order;
+  pipeline.mergedDuringRun = [];
+  pipeline.orphanReconciliation = [];
+  const ctx = { slugByBranch, terminal, statusBySlug, results, ledger, guard, gate, remote, peerMode, defaultBase: plan.defaultBase, throttled, collisions, mergedDuringRun: pipeline.mergedDuringRun, orphanReconciliation: pipeline.orphanReconciliation, unschedulable: unschedulable(tasks, slugByBranch) };
+  await parallel(tasks.map((task) => () => runTaskPipeline(task, ctx)));
+  return pipeline;
 }
 
 // ============================================================================
@@ -3875,14 +4910,18 @@ async function settleWaveCollisions({ heldTasks, waveCollisions, wave, defaultBa
 // which only a branch that passed its review cycle and the collision guard
 // reaches, so each names a reviewed branch that exists; they differ only in
 // what became of the PR. `done` alone would withhold the stack from a whole
-// no-remote batch, whose reviewed tasks all end `local-only`. The wave loop's
-// `succeeded` gate is NOT this predicate: it asks whether a dependent may
+// no-remote batch, whose reviewed tasks all end `local-only`. The pipeline's
+// `DEP_SUCCEEDED` gate is NOT this predicate: it asks whether a dependent may
 // build on a branch, and leaves out `pushed-no-pr` because a stacked PR would
 // have no parent PR — which says nothing about whether the branch was
 // reviewed, which is the only question the merge order asks.
+// A delivered branch whose PR MERGED during the run is not stacked: its
+// content is on the base already, and a guide snapshot of it would rebase to
+// an empty branch or replay conflicts the base has resolved. It is reported
+// among the exclusions as `merged` so the reader sees why it is absent.
 const REVIEW_STACK_MERGEABLE = ["done", "local-only", "pushed-no-pr", "pr-wrong-base"];
 function reviewStackMergeable(result) {
-  return !!result && REVIEW_STACK_MERGEABLE.includes(result.status);
+  return !!result && REVIEW_STACK_MERGEABLE.includes(result.status) && result.merged !== true;
 }
 
 // One path segment of a guide-branch name. Task slugs are ref-safe by the plan
@@ -3952,9 +4991,9 @@ const REVIEW_STACK_SHELL_SAFE = /^[A-Za-z0-9][A-Za-z0-9._\/-]*$/;
 const REVIEW_STACK_OID = /^[0-9a-f]{40}(?:[0-9a-f]{24})?$/;
 
 // The canonical merge order, from the dependency graph the batch already
-// holds: `plan.waves` (wave N depends only on earlier waves), each task's
-// declared `dependsOn`, and the `base` → `branch` prerequisite the wave gate
-// derives the same way. Dependency edges are binding. Between independent
+// holds: `plan.waves` (dependency levels — level N depends only on earlier
+// levels), each task's declared `dependsOn`, and the `base` → `branch`
+// prerequisite the pipeline's dependency gate derives the same way. Dependency edges are binding. Between independent
 // branches the order is the skill's advisory tie-break rendered for a script
 // that cannot judge "closely related areas": a dependent follows the branch
 // it extends as directly as the graph allows (the one relatedness the graph
@@ -3965,9 +5004,7 @@ function reviewStackOrder(plan, results) {
   const tasks = [];
   const slugByBranch = new Map();
   (Array.isArray(plan.waves) ? plan.waves : []).forEach((wave, w) => {
-    if (!Array.isArray(wave)) return;
     for (const t of wave) {
-      if (!t || typeof t.slug !== "string" || typeof t.branch !== "string") continue;
       tasks.push({ slug: t.slug, branch: t.branch, base: t.base, wave: w + 1, dependsOn: Array.isArray(t.dependsOn) ? t.dependsOn : [] });
       slugByBranch.set(t.branch, t.slug);
     }
@@ -3976,7 +5013,7 @@ function reviewStackOrder(plan, results) {
   const inSet = new Set(mergeable.map((t) => t.slug));
   const excluded = tasks
     .filter((t) => !inSet.has(t.slug))
-    .map((t) => ({ slug: t.slug, branch: t.branch, status: statusBySlug.has(t.slug) ? statusBySlug.get(t.slug).status : "unreported" }));
+    .map((t) => ({ slug: t.slug, branch: t.branch, status: statusBySlug.has(t.slug) ? (statusBySlug.get(t.slug).merged === true ? "merged" : statusBySlug.get(t.slug).status) : "unreported" }));
   const depsOf = (t) => {
     const d = new Set(t.dependsOn);
     const baseDep = slugByBranch.get(t.base);
@@ -4519,8 +5556,8 @@ if (!boot || !boot.ok) {
 const remote = boot.remote === true;
 
 // Before any task work starts, not at the first probe: an unusable worktree base
-// is a bootstrap failure, and discovering it three waves in would waste the whole
-// batch. `wtBase` is the only path the storage probes may measure.
+// is a bootstrap failure, and discovering it mid-batch would waste the whole
+// run. `wtBase` is the only path the storage probes may measure.
 const bootWtBase = validateBootstrapWtBase(boot);
 if (!bootWtBase.ok) {
   return { error: "Worktree bootstrap returned no usable absolute worktree base; batch not started.", blocker: bootWtBase.blocker };
@@ -4594,6 +5631,11 @@ const statusBySlug = new Map();
 const results = [];
 const throttled = [];
 const collisions = [];
+const ledger = createReservationLedger();
+// Sized inside the try below from the bootstrap reading; declared here because
+// the review stack, past the batch, takes a slot from the same gate.
+let gate = createSlotGate(Infinity);
+const pipeline = { tasksBySlug: new Map(), guardOrder: [], mergedDuringRun: [], orphanReconciliation: [] };
 
 try {
   phase("Resolve batch");
@@ -4630,169 +5672,23 @@ try {
     if (!emptyPlanIsExplained(plan)) {
       return { error: "Could not resolve task pointers from the argument.", args, resolution: plan.resolution, mainCheckout: await finalMainCheckoutReport(), reviewStack: reviewStackSkippedUnresolved() };
     }
-    return { batch: args, defaultBase: plan.defaultBase, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), waves: 0, throttled: [], collisions: [], resolution: plan.resolution, mainCheckout: await finalMainCheckoutReport(), reviewStack: { built: false, skipped: true, reason: "the batch resolved no task, so there is no branch to stack" }, openQuestions: [], deviations: [], deviationAssessments: [], results: [] };
+    return { batch: args, defaultBase: plan.defaultBase, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), waves: 0, tasks: 0, guardOrder: [], mergedDuringRun: [], orphanedBranches: [], terminalStates: {}, throttled: [], collisions: [], resolution: plan.resolution, mainCheckout: await finalMainCheckoutReport(), reviewStack: { built: false, skipped: true, reason: "the batch resolved no task, so there is no branch to stack" }, openQuestions: [], deviations: [], deviationAssessments: [], results: [] };
   }
 
-  // Map every in-batch branch to the slug that produces it. A dependent task's
-  // `base` IS its prerequisite's `branch` (stacked PRs), so this lets the gate
-  // derive the prerequisite structurally instead of trusting only the plan
-  // agent's `dependsOn` list — a forgotten entry can no longer slip a dependent
-  // past a failed prerequisite and have it build on known-bad work. Independent
-  // tasks base off `defaultBase` / the current branch, which no in-batch task
-  // produces, so they pick up no spurious dependency.
-  const slugByBranch = new Map();
-  for (const wave of plan.waves) {
-    if (!Array.isArray(wave)) continue;
-    for (const task of wave) {
-      if (task && typeof task.branch === "string" && typeof task.slug === "string") {
-        slugByBranch.set(task.branch, task.slug);
-      }
-    }
-  }
-
-  // Wave width: run every dependency-ready task unless measured storage headroom
-  // requires sub-batching. The workflow runtime/provider owns its own active-agent
-  // ceiling and rate limiting; do not impose an arbitrary smaller policy cap here.
-  // An unmeasured reading (0) yields `Infinity` — no storage cap — which behaves
-  // correctly at both use sites (`slice(i, i + Infinity)` takes the rest of the
-  // wave; `runnable.length > widthCap` never fires). Bootstrap's reading serves
-  // only the first wave: later waves run against headroom already consumed by
-  // earlier waves' pnpm-store growth, ccache, and build artifacts that worktree
-  // reclaim does not return, so each subsequent wave boundary re-probes `df`
-  // through a cheap agent and recomputes the cap from the fresh reading.
-  let availBytes = nextAvailBytes(0, boot);
+  // Concurrency: every dependency-ready task runs unless measured storage
+  // headroom requires fewer live worktrees. The workflow runtime/provider owns
+  // its own active-agent ceiling and rate limiting; no arbitrary smaller policy
+  // cap is imposed here. An unmeasured reading (0) yields `Infinity` — no
+  // storage cap — and the gate never waits. The cap is derived ONCE, from the
+  // bootstrap measurement (`nextAvailBytes` owns what an unmeasurable reading
+  // does with the unmeasured 0), and deliver-then-reclaim per task bounds live
+  // worktrees continuously under it; no `df` re-probe runs mid-batch — see
+  // `createSlotGate` for why a slot handoff may spawn nothing.
+  const availBytes = nextAvailBytes(0, boot);
   const widthCapFor = (bytes) => (bytes > 0 ? Math.max(1, Math.floor(bytes / PER_WORKTREE_BYTES)) : Infinity);
+  gate = createSlotGate(widthCapFor(availBytes));
 
-  for (let w = 0; w < plan.waves.length; w++) {
-    const wave = plan.waves[w];
-    if (!Array.isArray(wave) || wave.length === 0) continue;
-
-    // Dependency gating: a task whose in-batch dependency did not finish
-    // successfully must NOT run — it would branch from a missing/partial/rejected
-    // prerequisite. A dependency is "succeeded" if it landed a PR (`done`) OR, on a
-    // no-remote run, was implemented and reviewed locally (`local-only`): its base
-    // branch and commits persist in the shared `.git`, so dependents can still
-    // build on it. `pr-wrong-base` unlocks too: what that outcome reports is
-    // wrong on the PR, not on the branch — the branch is pushed and a dependent
-    // stacks on THAT, so holding its whole subtree over a base a maintainer
-    // retargets in one command would fail work that is fine.
-    // Effective deps = the declared `dependsOn` UNION the prerequisite derived from
-    // the `base`→`branch` relationship, so the gate holds even if the plan agent
-    // omits a `dependsOn` entry it should have listed.
-    const succeeded = (s) => s === "done" || s === "local-only" || s === "pr-wrong-base";
-    const runnable = [];
-    for (const task of wave) {
-      const deps = new Set(Array.isArray(task.dependsOn) ? task.dependsOn : []);
-      const baseDep = slugByBranch.get(task.base);
-      if (baseDep && baseDep !== task.slug) deps.add(baseDep);
-      const failedDep = [...deps].find((d) => !succeeded(statusBySlug.get(d)));
-      if (failedDep) {
-        const r = { slug: task.slug, branch: task.branch, status: "skipped-dep", blockedBy: failedDep, depStatus: statusBySlug.get(failedDep) || "missing" };
-        statusBySlug.set(task.slug, "skipped-dep");
-        results.push(r);
-      } else {
-        runnable.push(task);
-      }
-    }
-    if (runnable.length === 0) continue;
-
-    phase(`Wave ${w + 1} (${runnable.length} task${runnable.length === 1 ? "" : "s"})`);
-    // Re-probe free space at each wave boundary after the first (see the wave-width
-    // comment above); `nextAvailBytes` owns what a failed or unmeasurable probe
-    // does with the previous reading. A 1-task wave skips the probe: its cap can
-    // never throttle (widthCap >= 1).
-    //
-    // This probe carries no local catch, unlike the two agent stages in this file
-    // that do (`runCyclePeerStage`, `finalMainCheckoutReport`) and state their
-    // non-blocking warrant; a merely failed probe is not a throw, and is handled
-    // above. Why `agent()` throws is not something this repository establishes, so
-    // nothing here rests on it: a throw unwinds to the batch-body catch, which
-    // returns the terminal statuses reached so far plus the closing cleanliness
-    // report, and widens nothing — no wave launches, no worktree is created — so
-    // the ENOSPC the throttle exists to prevent stays unreachable by that path.
-    if (w > 0 && runnable.length > 1) {
-      const probe = await agent(storageProbePrompt(wtBase), { label: `storage-probe:w${w + 1}`, schema: STORAGE_PROBE_SCHEMA, effort: "low" });
-      availBytes = nextAvailBytes(availBytes, probe);
-    }
-    const widthCap = widthCapFor(availBytes);
-    if (runnable.length > widthCap) {
-      log(`Throttling wave ${w + 1} to ${widthCap} concurrent task(s) to fit measured storage headroom (~1 GiB per worktree).`);
-      throttled.push({ wave: w + 1, tasks: runnable.length, width: widthCap });
-    }
-    // Sub-batch the wave at the width cap: a wave that exhausts the .worktrees
-    // mount mid-flight delivers nothing. But the pre-PR collision scan must compare
-    // EVERY reviewed branch before any delivery, so — unlike the old per-task flow
-    // that delivered and `wt-remove`d each task as it finished — delivery is now
-    // deferred to after the whole wave is scanned. Left unmanaged, that would let
-    // reviewed worktrees from earlier slices pile up while later slices run,
-    // re-introducing the ENOSPC the sub-batching exists to prevent. So reclaim each
-    // finished slice's reviewed worktrees right here: the branch refs persist in
-    // the shared `.git`, the scan compares by ref (it never enters a worktree), and
-    // the resolver, re-review, and delivery each re-attach on demand via `wt-enter`
-    // — keeping the live worktree count bounded by the cap. Only when the wave is
-    // actually sub-batched; a single-slice wave already fits the cap, so reclaiming
-    // it just to re-attach for delivery would be pure churn.
-    const ready = [];
-    const subBatched = runnable.length > widthCap;
-    for (let i = 0; i < runnable.length; i += widthCap) {
-      const slice = runnable.slice(i, i + widthCap);
-      const sliceResults = await parallel(slice.map((task) => () => implementTask(task, remote, peerMode)));
-      const sliceReady = [];
-      sliceResults.forEach((r, j) => {
-        const res = r || { slug: slice[j].slug, branch: slice[j].branch, status: "error", detail: "task crashed" };
-        if (res.status === "ready") {
-          const entry = { task: slice[j], result: res };
-          ready.push(entry);
-          sliceReady.push(entry);
-        } else {
-          statusBySlug.set(res.slug, res.status);
-          results.push(res);
-        }
-      });
-      if (subBatched && sliceReady.length) {
-        await parallel(sliceReady.map(({ task }) => () => agent(cleanupNote(task), { label: `reclaim:${task.slug}` })));
-      }
-    }
-
-    // Pre-PR collision guard. Independent sibling branches in this wave each live
-    // in their own worktree, so two can ADD the same new file or exported symbol
-    // with no in-worktree conflict. Scan reviewed branches before delivery so a
-    // known clash does not become a fresh PR that immediately needs a rename.
-    const discovery = await discoverWaveCollisions({ ready, wave: w + 1, defaultBase: plan.defaultBase });
-    collisions.push(...discovery.waveCollisions);
-    const deliverable = discovery.deliverable;
-    const heldTasks = discovery.heldTasks;
-    for (const held of discovery.held) {
-      statusBySlug.set(held.slug, held.status);
-      results.push(held);
-    }
-
-    const settled = await settleWaveCollisions({
-      heldTasks,
-      waveCollisions: collisions.filter((c) => c.wave === w + 1),
-      wave: w + 1,
-      defaultBase: plan.defaultBase,
-      remote,
-      peerMode,
-    });
-    deliverable.push(...settled.deliverable);
-    for (const h of settled.held) {
-      statusBySlug.set(h.slug, h.status);
-      results.push(h);
-    }
-
-    for (let i = 0; i < deliverable.length; i += widthCap) {
-      const slice = deliverable.slice(i, i + widthCap);
-      const delivered = await parallel(slice.map(({ task, result }) => () => deliverTask(task, result, remote)));
-      delivered.forEach((r, j) => {
-        // Even on a delivery crash the cycle itself completed, so its record is
-        // still in hand — carry it rather than losing it with the crash.
-        const res = r || { slug: slice[j].task.slug, branch: slice[j].task.branch, status: "error", detail: "delivery crashed", ...cycleCarried(slice[j].result) };
-        statusBySlug.set(res.slug, res.status);
-        results.push(res);
-      });
-    }
-  }
+  await runPipelinedBatch({ plan, remote, peerMode, statusBySlug, results, throttled, collisions, ledger, gate, pipeline });
 } catch (e) {
   // Reported, not rethrown: the batch is over either way, and the closing
   // comparison plus whatever terminal statuses were reached are more use to the
@@ -4803,11 +5699,21 @@ try {
   // delivered — this catch is the batch's guaranteed report path, and it
   // creates nothing on the way out: no guide branch, no worktree, no
   // pre-rebase ref, so no teardown is reached from here. The reason is stated
-  // so the absence is never read as the fewer-than-two skip.
-  return { error: `Batch aborted: ${e && e.message ? e.message : String(e)}`, batch: args, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), throttled, collisions, resolution: plan && plan.resolution ? plan.resolution : null, results, mainCheckout: await finalMainCheckoutReport(), reviewStack: { built: false, skipped: true, reason: "the batch aborted, so the integration check did not run; the review stack excludes an aborted batch whatever it delivered, and nothing was created for it" } };
+  // so the absence is never read as the fewer-than-two skip. An orphaned
+  // reservation an abort leaves behind is named here rather than acted on:
+  // this path spawns nothing.
+  // A claim still HELD at the abort is named beside them, once each: nothing
+  // settled it, its push may have landed, and nothing will settle it now.
+  return { error: `Batch aborted: ${e && e.message ? e.message : String(e)}`, batch: args, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), throttled, collisions, guardOrder: pipeline.guardOrder, mergedDuringRun: pipeline.mergedDuringRun, orphanReconciliation: pipeline.orphanReconciliation, orphanedBranches: abortedReservationReport(ledger), terminalStates: terminalStates(results), resolution: plan && plan.resolution ? plan.resolution : null, results, mainCheckout: await finalMainCheckoutReport(), reviewStack: { built: false, skipped: true, reason: "the batch aborted, so the integration check did not run; the review stack excludes an aborted batch whatever it delivered, and nothing was created for it" } };
 }
 
 phase("Summary");
+// Every task has reached a terminal state — `parallel()` returned — and every
+// orphaned pushed branch was acted on inside its own pipeline, so what the
+// ledger still holds are the survivors the summary names beside their
+// numbers. The end-of-batch stages then run in this order: the review stack
+// first; the closing main-checkout reading last.
+const orphans = { acted: pipeline.orphanReconciliation, survivors: orphanSurvivors(ledger) };
 // The review stack runs BEFORE the closing main-checkout reading, deliberately:
 // that reading is the batch's last barrier over the shared checkout, and it is
 // only worth its name if it observes everything the batch did — this stage
@@ -4818,7 +5724,25 @@ phase("Summary");
 // restack that dirtied the main checkout is then a finding in `mainCheckout`
 // rather than one made after the comparison closed. The stage reports and
 // never throws, so the reading below still runs on every one of its paths.
-const reviewStack = await buildReviewStack({ plan, results, wtBase });
+// A member that merged during the run is excluded from the stack by
+// `reviewStackMergeable`: its content is on the base already, and a dependent
+// that was rebased onto that base carries its retargeted recorded base.
+// The stack's dedicated worktree is one more live worktree under the cap the
+// headroom was measured against, so it takes a slot from the gate like a
+// task's does. Every pipeline is terminal here, so the gate holds nothing but
+// retained worktrees: a slot is free at once or never — a wait cannot be
+// answered — and a denial skips the stack rather than creating a worktree
+// over the headroom the retained trees still hold. The slot goes back only
+// where the teardown reported the worktree removed; nothing after this draws
+// on the gate, but its count stays what the summary can read as true.
+const stackSlot = await acquireSlot(gate);
+let reviewStack;
+if (stackSlot.denied) {
+  reviewStack = { built: false, skipped: true, reason: `every one of the ${gate.cap} live-worktree slot(s) the measured storage headroom allows is held by a worktree left in place for inspection (${slotHolders(stackSlot.retainedBy)}); the stack's dedicated worktree would stand over that headroom, so the integration check did not run and nothing was created — the canonical order is unavailable until those worktrees are reclaimed` };
+} else {
+  reviewStack = await buildReviewStack({ plan, results, wtBase });
+  if (reviewStack.worktree && !(reviewStack.teardown && reviewStack.teardown.worktreeRemoved === true)) retainSlot(gate, "review-stack"); else releaseSlot(gate);
+}
 if (reviewStack.skipped) {
   log(`Review stack skipped: ${reviewStack.reason}`);
 } else if (!reviewStack.built) {
@@ -4833,11 +5757,12 @@ const landed = results.filter((r) => r.status === "done").length;
 // count rather than folded into it: it needs a retarget before its review is
 // worth reading, and the count of landed PRs would otherwise hide that.
 const wrongBase = results.filter((r) => r.status === "pr-wrong-base").length;
-log(`Batch complete: ${landed}/${results.length} tasks landed a PR.${wrongBase ? ` ${wrongBase} opened against an unverified/wrong base — retarget before reviewing.` : ""}`);
+const merged = pipeline.mergedDuringRun.length;
+log(`Batch complete: ${landed}/${results.length} tasks landed a PR${merged ? ` (${merged} merged during the run)` : ""}.${wrongBase ? ` ${wrongBase} opened against an unverified/wrong base — retarget before reviewing.` : ""}${orphans.survivors.length ? ` ${orphans.survivors.length} pushed branch(es) survived orphan reconciliation and still hold a task number — see orphanedBranches.` : ""}`);
 const openQuestions = results.flatMap((r) => (Array.isArray(r.openQuestions) ? r.openQuestions : []));
 const deviations = results.flatMap((r) => (Array.isArray(r.deviations) ? r.deviations : []));
 // The reviewer's half bubbles up with them, never apart from them: a deviation
 // read here without it is one the maintainer would rule on knowing only what
 // the implementer said.
 const deviationAssessments = results.flatMap((r) => (Array.isArray(r.deviationAssessments) ? r.deviationAssessments : []));
-return { batch: args, defaultBase: plan.defaultBase, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), waves: plan.waves.length, throttled, collisions, resolution: plan.resolution, mainCheckout, reviewStack, openQuestions, deviations, deviationAssessments, results };
+return { batch: args, defaultBase: plan.defaultBase, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), waves: plan.waves.length, tasks: results.length, guardOrder: pipeline.guardOrder, mergedDuringRun: pipeline.mergedDuringRun, orphanReconciliation: orphans.acted, orphanedBranches: orphans.survivors, terminalStates: terminalStates(results), throttled, collisions, resolution: plan.resolution, mainCheckout, reviewStack, openQuestions, deviations, deviationAssessments, results };

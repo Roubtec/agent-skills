@@ -91,48 +91,48 @@ Your responsibilities:
 
 1. Consume the **Task-pointer preflight** packet as the hard list of task files and the resolution context to report.
 2. Run the **Session Bootstrap** above.
-3. Build a **dependency graph** across the tasks and group them into **waves** (see Scheduling).
-4. For each wave, create one worktree per task on the right base branch, then drive each task's implement→review→fix loop — fanning the loop's same-phase subagents out **concurrently** across the wave's tasks.
-5. Push branches, open PRs against the resolved base, and track progress.
-6. Clean up finished worktrees.
+3. Build a **dependency graph** across the tasks; readiness is per task — a task starts the moment its specific prerequisites have delivered (see Scheduling).
+4. For each task, the moment it is ready: create its worktree on the right base branch and drive its implement→review→fix loop to a pass — every ready task's loop runs **concurrently** with its siblings', each task one end-to-end pipeline.
+5. Run each passing task through the **serialized pre-delivery guard**, then push its branch, open its PR against the resolved base, and reclaim its worktree — without waiting for any sibling (see Per-task pipeline and Delivery).
+6. Clean up each finished worktree as its task delivers; act on a pushed branch left without a PR the moment its delivery settles, inside that task's own pipeline and before its terminal state reaches its dependents (see Delivery).
 7. Build a **local review stack** from disposable copies of the mergeable branches — delegated to the `rebase-stack` skill in a subagent, never pushed and never rewriting the PR branches (see Post-batch restack).
 8. Produce the final batch summary.
 
 **Trivial-task escape hatch:** for a genuinely trivial task (single obvious change, unambiguous criteria) you may implement it directly in its worktree without an implementer subagent — but still spawn a fresh reviewer.
 No task skips review.
 
-## Scheduling: dependency waves
+## Scheduling: per-task readiness on the dependency graph
 
 True parallelism only helps for tasks that don't depend on each other.
 Determine dependencies from the task files (an explicit "Depends on" field, shared infrastructure, or files/modules two tasks both create or migrate).
 When in doubt, treat tasks that touch the same files or migrations as dependent.
 
-- **Wave** = the set of tasks whose dependencies are all already complete. All tasks in a wave run **concurrently**.
-- Tasks with **no** unmet dependencies form wave 1; tasks depending on them form wave 2; etc.
+- **Ready** = a task whose in-batch prerequisites have all **delivered** (their PR is open — or, in a local-only run, their branch is reviewed). Every ready task runs **concurrently**; there is no wave barrier, and a task never waits for a sibling it does not depend on.
+- Tasks with **no** in-batch dependencies are ready at once; a dependent becomes ready the moment its specific prerequisite delivers, however many other tasks are still iterating.
 - **Base branch per task.** A PR's base must be the ref its branch actually builds on, so the PR shows the honest diff of that branch's own contribution and nothing else; that is what routes each review comment to the PR that owns the code it is about. A dependent PR opened against `main` instead presents its parent's commits as its own work and collects the comments its parent's PR should have had.
-  - Independent task (wave 1, or no dependency in-batch) → branch from and PR against the user's chosen base (default `main`, or an explicit override).
+  - Independent task (no dependency in-batch) → branch from and PR against the user's chosen base (default `main`, or an explicit override).
   - Dependent task → branch from and PR against its **dependency's branch** (stacked PRs), so it builds on work that may not be merged yet.
   - If a task depends on *several* tasks, branch from an integration branch that merges them, or from the single dependency it most directly extends — pick the simplest base that contains the code it needs and note the choice.
-  - **Building a multi-parent integration branch is the orchestrator's job** — a bounded exception to "the orchestrator does not implement." Creating the branch and resolving its merge conflicts is small, mechanical, and a prerequisite for the wave rather than task work, so do it yourself rather than delegating. Keep the merge minimal, build/lint the result before branching any task off it, and record any non-trivial conflict resolutions (in the batch summary or a short merge-advice note) so they can be reproduced when the stack later lands on `main`.
-- Start a wave only after every task it depends on has **passed review** (its branch is stable enough to build on).
+  - **Building a multi-parent integration branch is the orchestrator's job** — a bounded exception to "the orchestrator does not implement." Creating the branch and resolving its merge conflicts is small, mechanical, and a prerequisite for the dependent rather than task work, so do it yourself rather than delegating. Keep the merge minimal, build/lint the result before branching any task off it, and record any non-trivial conflict resolutions (in the batch summary or a short merge-advice note) so they can be reproduced when the stack later lands on `main`.
+- Start a dependent only after every task it depends on has **delivered** (its branch is stable enough to build on). A prerequisite that ends any other way — failed review, held by the guard, crashed — skips its dependents with that reason rather than building them on known-bad work.
 
-If the whole batch is a linear dependency chain, this degrades gracefully to one task per wave — i.e. effectively sequential, like `address-tasks-serialized`, but still worktree-isolated.
+If the whole batch is a linear dependency chain, this degrades gracefully to one task at a time — i.e. effectively sequential, like `address-tasks-serialized`, but still worktree-isolated.
 
 ## Adaptive throttling (width from real constraints)
 
-Default to the wave's full dependency-derived width, bounded only by resources actually available to the run.
+Default to running every ready task, bounded only by resources actually available to the run.
 If nine independent tasks are ready and nine worker slots plus their worktrees are supportable, launch nine implementers; do not impose an arbitrary small starting width merely because the run is unattended.
 
 Throttle only for an objective constraint or a concrete reason to anticipate one: unavailable agent/process slots, measured storage headroom, shared exclusive resources, or observed provider pressure.
 If breadth causes failures, preserve completed and viable in-flight work, then reduce subsequent implement/review phases enough to avoid repeating the same failure rather than restarting partially completed tasks.
-Concretely, before and during each wave:
+Concretely, before a task starts and while tasks run:
 
-- **Storage headroom.** Before launching a wave, measure free space on the worktree base's filesystem (`df -k "$WT_BASE"`, re-measured mid-run as needed; if you used the `wt-bootstrap` helper, it already reported this as `availBytes`). Estimate `per_worktree_need`, then cap width at `max_concurrent = max(1, floor(free_bytes / per_worktree_need))`; if that is below the wave's task count, run the wave in **sub-batches** of `max_concurrent` rather than all at once. When the package store hardlinks into worktrees (same filesystem), `per_worktree_need` is mainly build artifacts plus package metadata; otherwise, measure one representative install and add its full package-copy cost. When unsure, measure one install before fanning out.
-- **`ENOSPC` mid-wave.** Stop adding concurrency, let viable in-flight tasks finish, and reclaim only worktrees whose changes are committed and pushed. Then retry the failed and remaining tasks in smaller sub-batches — ultimately one at a time. Never force-remove a worktree with uncommitted changes just to free space, and never abandon a task because the parallel attempt failed.
-- **Shared exclusive resources.** Some validation cannot run two-at-once even in separate worktrees because it contends for a single host-wide resource: a fixed listen port, one shared dev database on one port, or a build/e2e server that infers the workspace root from the repo-root lockfile (see below). Run such phases **serially** regardless of wave width — give each task exclusive use, then move on.
+- **Storage headroom.** Measure free space on the worktree base's filesystem at Bootstrap (`df -k "$WT_BASE"`; if you used the `wt-bootstrap` helper, it already reported this as `availBytes`). Estimate `per_worktree_need`, then cap the number of **live worktrees** at `max_concurrent = max(1, floor(free_bytes / per_worktree_need))`: a ready task waits for a slot while that many are live, and each delivery's reclaimed worktree frees one — deliver-then-reclaim per task bounds live worktrees continuously, which is what replaces the old wave-boundary re-measure. A worktree left in place for inspection (a cap-out, a hold, a crash, or a delivery whose reclaim `wt-remove` refused — read the reclaim's outcome rather than assuming it) is still live and keeps its slot: headroom it holds does not return, and releasing its slot would admit one more live worktree per retained one over the headroom the cap was measured against. Once every slot is held by a retained worktree, no delivery can free one, so a ready task that would wait on it ends **storage-throttled** instead — a terminal state its dependents skip on, named in the summary beside the cap — rather than waiting forever or being admitted over that headroom. When the package store hardlinks into worktrees (same filesystem), `per_worktree_need` is mainly build artifacts plus package metadata; otherwise, measure one representative install and add its full package-copy cost. When unsure, measure one install before fanning out.
+- **`ENOSPC` mid-run.** Stop adding concurrency, let viable in-flight tasks finish, and reclaim only worktrees whose changes are committed and pushed. Then retry the failed and remaining tasks under a smaller live-worktree cap — ultimately one at a time. Never force-remove a worktree with uncommitted changes just to free space, and never abandon a task because the parallel attempt failed.
+- **Shared exclusive resources.** Some validation cannot run two-at-once even in separate worktrees because it contends for a single host-wide resource: a fixed listen port, one shared dev database on one port, or a build/e2e server that infers the workspace root from the repo-root lockfile (see below). Run such phases **serially** however many tasks are live — give each task exclusive use, then move on.
 - **Provider rate-limiting.** Repeated rate-limit / overload errors when spawning many subagents at once are a signal to fan out less. Reduce the number of concurrent subagents per phase and proceed.
 
-Record in the final summary whenever you throttled below the dependency-derived width, and why — it tells the user whether the run was storage-bound, provider-bound, resource-serialized, or genuinely serial by dependency.
+Record in the final summary whenever you throttled below the ready set, and why — it tells the user whether the run was storage-bound, provider-bound, resource-serialized, or genuinely serial by dependency.
 
 ### App-server / e2e validation in a worktree
 
@@ -144,11 +144,11 @@ Validation that boots a *built* app server is the most common thing that won't r
 
 Treat a task whose acceptance hinges on app-server e2e as a **serialize-this-phase** task per the shared-resource rule above, and say so in the summary. (Browser availability itself is fine in-worktree: `npx playwright install chromium`, or point Playwright at a system Chromium if your environment provides one via `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH` — the worktree problem is the server path, not the browser.)
 
-## Per-wave execution
+## Per-task pipeline
 
-For a wave of tasks `T1..Tn`:
+For each task `T`, the moment it is ready:
 
-1. **Create a worktree per task** from the main tree (orchestrator calls; safe to run while other waves' subagents are active — they touch only their own worktrees):
+1. **Create the task's worktree** from the main tree (orchestrator calls; safe to run while other tasks' subagents are active — they touch only their own worktrees):
 
    ```bash
    task_slug="001-short-name"
@@ -167,52 +167,53 @@ For a wave of tasks `T1..Tn`:
    Use a stable, collision-free slug per task (e.g. the task number + short name).
    The worktree's absolute path is what you hand to that task's subagents.
 
-2. **Run each task's loop, fanned out by phase.** Each task runs its own implement→review→fix loop, but you advance all of the wave's tasks **in lockstep by phase** so that same-phase subagents (which live in different worktrees) can be spawned **together in one natural-language turn or tool-call batch and run concurrently**:
+2. **Run the task's loop.** Each task runs its own implement→review→fix loop to a pass, independently of every sibling: the phases below are one task's, and same-phase subagents of different ready tasks (which live in different worktrees) simply overlap in time — spawn them **together in one natural-language turn or tool-call batch** when several tasks reach the same phase together, but never hold one task's phase for another's:
 
-   - **Phase A — implement:** spawn one `worker` per still-unfinished task in the wave, each pointed at its own worktree path, all together. Wait until every implementer has completed, then close the finished implementer threads.
+   - **Phase A — implement:** spawn the task's `worker`, pointed at its own worktree path — beside whatever sibling implementers are running. Wait until it has completed, then close the finished implementer thread.
    - Adopt each returned implementation packet only under `review-cycle`'s packet hard-check: `git -C <worktree> status --porcelain` empty **and** no Git operation in progress (`rebase-merge`/`rebase-apply` paths, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG` — a tree left mid-rebase prints empty porcelain). Either failing means redrive or resume that task's Phase A rather than handing Phase B a worktree nobody can build on. The rest of that skill's *The loop and its gates* binds this loop whole too, later additions included.
-   - **Phase B — review:** spawn one fresh `explorer` reviewer per task only once that task's implementer's commits are on disk — its packet returned and adopted under the hard-check above — each in its task's worktree, all together; waiting for and closing *all* Phase-A implementers is the proxy for that committed state in this lockstep loop, not the rule. At the same moment, unless `peer-opinions=off`, launch one background peer per task while the peer remains available. Every rule the `review-cycle` skill states under *The peer step* binds this batch whole, later additions included. Share that section's one session-local adaptive throttle across every task and round, queue launches it holds, and surface every step-down in the batch summary. Before triage, wait for every task's own reviewer and for every peer actually launched; then close the finished own-reviewer threads.
+   - **Phase B — review:** spawn the task's fresh `explorer` reviewer only once its implementer's commits are on disk — its packet returned and adopted under the hard-check above — in its worktree; nothing about a sibling's phase enters into it. At the same moment, unless `peer-opinions=off`, launch the task's background peer while the peer remains available. Every rule the `review-cycle` skill states under *The peer step* binds this batch whole, later additions included. Share that section's one session-local adaptive throttle across every task and round — with no wave boundary to pace launches, it is the one global semaphore around the peer step — queue launches it holds, and surface every step-down in the batch summary. Before triage, wait for this task's own reviewer and for its peer if one was launched; then close the finished own-reviewer thread.
    - A task exits the loop only when its round passes the `review-cycle` gate; tasks with issues carry both reports verbatim as separately labeled blocks into the next round's Phase A, under that skill's grounding, blocking-and-minor gating, dispute, timeout/retry, and forfeit rules — never re-summarized.
    - Repeat A→B until each task converges or hits the `review-cycle` round cap; a task still failing at the cap does **not** get a PR — surface its outstanding findings to the user.
 
-   > The per-task discipline is committed state: a task's reviewer never starts until that task's implementer's commits are on disk. Phase ordering is the proxy that keeps them there — waiting out every sibling implementer as well is more than the rule needs, and it is what buys cross-task parallelism without ever running a task's own implementer and reviewer at the same time.
+   > The per-task discipline is committed state: a task's reviewer never starts until that task's implementer's commits are on disk. Nothing about a sibling's phase enters into it — that is what buys cross-task parallelism without ever running a task's own implementer and reviewer at the same time.
 
    Concurrency is safe here **only because each subagent has its own worktree**.
    If for any reason a task is not running in its own worktree, fall back to serializing that task as in `address-tasks-serialized`.
 
-3. **Before delivery, run the pre-PR collision guards below** across the wave's reviewed-passing branches.
-   For non-colliding tasks, push and open a PR (see Delivery), then remove the task's worktree per Cleanup to reclaim storage (the branch and its commits persist in `.git` and on the remote).
-   For colliding tasks, do **not** open the PR yet; leave the worktree in place, reconcile the naming/path, symbol, or task-number conflict, regenerate derived files, and re-review that task before delivery.
+3. **When the loop passes, run the task through the serialized pre-delivery guard below** — one task at a time, in the order tasks pass (first-ready-wins).
+   A task that clears it delivers at once: push and open its PR (see Delivery), then remove its worktree per Cleanup to reclaim storage (the branch and its commits persist in `.git` and on the remote).
+   A task the guard holds does **not** open its PR yet; leave its worktree in place, reconcile the naming/path, symbol, or task-number conflict on the side the guard names, regenerate derived files, and re-review that task before delivery.
 
-4. When the wave is fully resolved, unlock the next wave (dependents can now branch from these stable branches).
-   A branch held for a collision is not resolved and must not unlock its dependents.
+4. A task's delivery unlocks its dependents immediately (they branch from its now-stable branch) — never wait for the rest of the batch.
+   A branch held by the guard is not delivered and must not unlock its dependents.
 
 ### Guarding against pre-PR collisions
 
-Independent tasks in the same wave run in **separate worktrees**, so two of them can each *add* the same new file — or a file exporting the same top-level class/symbol — with no conflict at implementation time.
+Independent tasks run in **separate worktrees**, so two of them can each *add* the same new file — or a file exporting the same top-level class/symbol — with no conflict at implementation time.
 The clash only surfaces later, when the branches linearize or merge (an add/add conflict, or a duplicate definition).
-It is rare, but it has happened; the preventive and wave-level checks below keep those clashes from costing a fix-up round.
+It is rare, but it has happened; the preventive check and the serialized guard below keep those clashes from costing a fix-up round.
 The task-number guard that follows extends the pre-PR check to task-number claims across the wider in-flight comparison set.
 
 - **Prevent it up front.** When you fan out two independent tasks that both introduce the same *kind* of new surface (a "reconciliation controller", a "work-list endpoint", a migration helper), assign each a **distinct file and class name** in its implementer prompt.
   The implementers can't see each other, so the disambiguation has to come from you.
-- **Catch it before the PRs.** After a wave's tasks pass review but **before** opening their PRs, compare what each sibling branch newly added:
+- **Catch it before the PR — one task at a time.** The moment a task passes review and **before** its PR, run it through the guard, serialized so that only one branch is ever under it (first-ready-wins, in the order tasks pass): compare what it newly added against every branch the run has **delivered or reserved** so far, by ref and from the main checkout — the scan enters no worktree, so it never becomes the new barrier:
 
   ```bash
-  wave_branches=("task/001-first" "task/002-second")
+  # The branch under the guard, plus every branch this run has delivered or reserved.
+  guard_branches=("task/001-first" "task/002-second")
   declare -A branch_bases=(
     ["task/001-first"]="main"
     ["task/002-second"]="main"
   )
 
   # Exact same new path.
-  for branch in "${wave_branches[@]}"; do
+  for branch in "${guard_branches[@]}"; do
     base="${branch_bases[$branch]}"
     git diff --diff-filter=A --name-only "$base...$branch"
   done | sort | uniq -d
 
   # Same new basename at any path; inspect repeated first columns.
-  for branch in "${wave_branches[@]}"; do
+  for branch in "${guard_branches[@]}"; do
     base="${branch_bases[$branch]}"
     git diff --diff-filter=A --name-only "$base...$branch" |
       awk -v branch="$branch" '{ n=split($0, p, "/"); print p[n] "\t" branch "\t" $0 }'
@@ -220,13 +221,17 @@ The task-number guard that follows extends the pre-PR check to task-number claim
   ```
 
   A duplicated path (or basename, or a shared exported top-level class/function/const/interface/type/enum name across two added files) is a collision.
-  Hold the colliding branch(es) before PR delivery, then **deconflict — that call is yours to make** (a bounded exception to "the orchestrator doesn't implement", like building an integration branch): there is no inherent "first", so pick the side(s) whose rename is least disruptive, rename enough files and/or symbols that at most one branch keeps the original colliding value, regenerate anything derived (e.g. contracts), and **re-review each changed task with fresh eyes at the delivery tier** before its PR (the rename and the regeneration are a post-run change, so they void that task's own delivery-tier pass and owe it again); any unchanged non-colliding side then delivers unchanged.
-  If the shared name is **imperative** — a framework-mandated path, an external/published contract, or a name a task file explicitly pins — do **not** invent a divergent name: keep those branches held and surface it as a design decision for a human.
+  Hold the branch under the guard before PR delivery, then **deconflict — that call is yours to make** (a bounded exception to "the orchestrator doesn't implement", like building an integration branch): the branch under the guard is the side that changes — a delivered or reserved sibling is never rewritten, which is what removes the "least disruptive side" judgment for the common case — so rename enough files and/or symbols on it that no other holder shares the original colliding value, regenerate anything derived (e.g. contracts), and **re-review it with fresh eyes at the delivery tier** before its PR (the rename and the regeneration are a post-run change, so they void that task's own delivery-tier pass and owe it again); the sibling it clashed with is untouched and delivers, or has delivered, unchanged.
+  If the shared name is **imperative** — a framework-mandated path, an external/published contract, or a name a task file explicitly pins — do **not** invent a divergent name: keep that branch held and surface it as a design decision for a human; a held branch holds only itself, and the pipeline keeps flowing around it.
   Diff each branch against **its own base** with the three-dot form so a dependent branch that legitimately builds on a sibling isn't flagged — it never re-lists an inherited file.
+
+**Clearing the guard is a claim, held through delivery.** A branch that clears the guard reserves what it claims — its added surfaces and every task number its new task files claim — and the reservation stands until its delivery settles, because delivery is not atomic: a task that has left the guard but is still in its network-bound push/PR step is neither delivered nor a currently-ready sibling, and without the reservation the next branch through the guard would clear on the same value and both would publish. Release is asymmetric. The reservation **converts to delivered** once the PR exists (or, in a local-only run, once the reviewed branch is the delivery); it may be **dropped** only when delivery failed with no remote write; and where the push landed but PR creation did not, `origin` carries the branch while no PR advertises it, so the reservation **persists for the rest of the run** — see Delivery for what the batch owes such a branch before it ends.
+
+**Early merges move the base.** A sibling's PR can merge while the batch is still running; the guard's scan is where the run notices (read each delivered sibling's PR state as you compare against it). A branch still on its way to delivery whose recorded base was that sibling's branch, or that shares the base the sibling merged into, is rebased onto the advanced base through `review-cycle`'s delegated rebase step before its final delivery-tier review — a dependent's PR base moves with it — so a clash with an already-merged sibling surfaces as an honest conflict at that rebase, never as an invisible add/add at merge time. A halted rebase holds only that branch, with its conflict as an open question. Per the no-latched-flags rule, the task's result describes its final state after any rebase, with the history in its artifact directory.
 
 #### Task-number collisions across in-flight branches
 
-Run this guard before opening any PR that adds task files. It is defined once, in `address-tasks-serialized` → "Task-number collisions across in-flight branches", and is deliberately not restated here: the full-number parsing, the comparison set and what each member contributes, the base-refresh and PR-head enumeration recipes with their note-and-proceed degradations, the same-branch relocation pairing, the renumber-the-flagged-new-claimant rule, and the bounded-snapshot caveat with its `reap-tasks` backstop all apply verbatim. The one reading specific to this skill: where that definition establishes the first claimant in the *run's* deterministic delivery order, use this skill's **wave** order (dependency or scheduling order, then task number).
+Run this guard before opening any PR that adds task files. It is defined once, in `address-tasks-serialized` → "Task-number collisions across in-flight branches", and is deliberately not restated here: the full-number parsing, the comparison set and what each member contributes, the base-refresh and PR-head enumeration recipes with their note-and-proceed degradations, the same-branch relocation pairing, the renumber-the-flagged-new-claimant rule, and the bounded-snapshot caveat with its `reap-tasks` backstop all apply verbatim. The one reading specific to this skill: where that definition establishes the first claimant in the *run's* deterministic delivery order, use the order in which tasks pass review and reach the serialized guard — first-ready-wins, which the one-at-a-time guard makes deterministic. A branch that cleared the guard but is still delivering is a *reserved* member of that definition, a delivered one a *delivered* member, and the branch under the guard is the second claimant that renumbers; the definition's rule that a delivered or reserved claimant is never rewritten decides every such case.
 
 ## Diagnosis discipline
 
@@ -245,7 +250,7 @@ State this in every subagent prompt this skill composes. A reviewer subagent aut
 ## Implementer Agent
 
 Same contract as `address-tasks-serialized`, plus a **worktree isolation contract** and **push-every-commit**.
-Launch implementers as `worker` subagents described in per-wave Phase A.
+Launch implementers as `worker` subagents described in the per-task pipeline's Phase A.
 
 Include in each implementer prompt:
 
@@ -270,7 +275,7 @@ On a fix-up round, spawn a fresh `worker` implementer for the task; do not conti
 ## Reviewer Agent
 
 Same fresh-eyes contract and code-quality checklist as `address-tasks-serialized`.
-A reviewer is always a **fresh** `explorer` subagent spawn, never a `send_input` continuation of the implementer, launched only once that task's implementer's commits are on disk — wait for its completion notification and close it. In this lockstep loop that means **after** every Phase-A implementer in the wave has returned, which is the proxy for the commits being there rather than the rule itself.
+A reviewer is always a **fresh** `explorer` subagent spawn, never a `send_input` continuation of the implementer, launched only once that task's implementer's commits are on disk — wait for its completion notification and close it; no sibling's implementer has any bearing on it.
 
 Include in each reviewer prompt, beyond that inherited contract — which binds whole, later additions to it included:
 
@@ -284,7 +289,7 @@ Include in each reviewer prompt, beyond that inherited contract — which binds 
 
 ## Delivery (push + PR, per task)
 
-Default behavior, matching the existing workflow: each task that passes review gets **pushed and a PR opened** against its resolved base.
+Default behavior: each task that passes review and clears the guard gets **pushed and a PR opened** against its resolved base **the moment it does** — delivery is per task, never held for the batch, so a simple PR can be under review, or merged, while a hard sibling is still iterating.
 
 1. **While the remote is available** (per Bootstrap's probe), ensure the final state is pushed — the implementer already pushed its branch during the loop: `git -C <worktree> push`. In a known local-only run (Bootstrap's probe failed), there is nothing to push; skip to the local-branch fallback in step 3.
 2. Open the PR against the recorded base branch (the chosen base for independent tasks; the dependency's branch for dependent tasks → stacked PR). **If the recorded base exists only locally — a synthetic multi-parent integration branch, or a dependency branch not yet pushed — push it to the remote first** (`git push -u origin <base-branch>`); otherwise `gh pr create --base <base-branch>` fails because GitHub has no such base ref:
@@ -302,11 +307,13 @@ Default behavior, matching the existing workflow: each task that passes review g
 After the PR is open, remove the task's worktree per Cleanup to reclaim storage.
 Do not delete the branch — the PR and any dependents need it (removing a worktree never touches branches).
 
+**A pushed branch left without a PR is a terminal-state obligation.** A push that landed while PR creation failed leaves the branch on `origin` advertised by no PR, holding a task number the next run's same-number guard sees on neither the base branch nor any open PR head — so the collision this run caught would reappear there, and a session-local reservation cannot outlive the run to prevent it. Act on such a branch the moment its delivery settles, before its terminal state reaches its dependents: retry PR creation once (looking first for a PR the failed attempt may have opened, and reading the base back), and where that fails delete the branch from `origin` (its commits stay in the shared `.git` for a later push). Acted on only at the end of the batch, a prerequisite whose retry opened its PR would find its dependents already skipped on the state it held in between; acted on at once, a retry that succeeds delivers it and unlocks them, while a branch deleted from origin is local-only and — on a run with a remote — unlocks nothing, since a dependent stacked on it would open its PR against a base `origin` no longer carries. Name any branch that survives both attempts in the final summary beside the task number it still holds, so the next run can reclaim it by hand.
+
 ## Cleanup
 
-- Remove each task's worktree once its PR is open (or once you've decided to stop on it). First verify it is safe: `git -C <worktree> status --porcelain` must be empty and no Git operation may be in progress (no `rebase-merge`/`rebase-apply` paths, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, or `BISECT_LOG` under its git dir — the same six the packet hard-check names, and for the same reason: the last three can print empty porcelain, so a porcelain-plus-rebase-only check clears a tree nobody should remove). Then `git worktree remove <path>`. **Never force-remove a worktree with uncommitted changes or an in-progress Git operation** — `git worktree remove --force` destroys that work; if the checks fail, leave the worktree in place and report why rather than deleting evidence. Use `--force` only to clear git's refusal over leftovers like ignored build artifacts *after* the clean checks pass. If a `wt-remove` helper is on PATH, prefer it — it enforces the full set itself (even with `--force`), so the enumerated list is the helper-absent fallback.
+- Remove a task's worktree once its PR is open — a **delivered** task's only. A task that stopped short of delivery (a review cap-out, a guard hold, a crash) keeps its worktree in place for inspection and keeps its live-worktree slot (see Storage headroom above): report it as retained, with the state it stopped in, rather than removing it. First verify a delivered worktree is safe to remove: `git -C <worktree> status --porcelain` must be empty and no Git operation may be in progress (no `rebase-merge`/`rebase-apply` paths, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, or `BISECT_LOG` under its git dir — the same six the packet hard-check names, and for the same reason: the last three can print empty porcelain, so a porcelain-plus-rebase-only check clears a tree nobody should remove). Then `git worktree remove <path>`. **Never force-remove a worktree with uncommitted changes or an in-progress Git operation** — `git worktree remove --force` destroys that work; if the checks fail, leave the worktree in place and report why rather than deleting evidence. Use `--force` only to clear git's refusal over leftovers like ignored build artifacts *after* the clean checks pass. If a `wt-remove` helper is on PATH, prefer it — it enforces the full set itself (even with `--force`), so the enumerated list is the helper-absent fallback.
 - After removing a worktree, run `git worktree prune` to clear its stale registration.
-- Removing a worktree does not delete its branch; future dependent waves can still branch from that ref after the worktree is gone.
+- Removing a worktree does not delete its branch; a dependent can still branch from that ref after the worktree is gone.
 
 ## Post-batch restack: a local review stack (never pushed)
 
@@ -319,7 +326,7 @@ Instead, create disposable `review-stack/...` branches that snapshot the canonic
 The guide refs persist in the repo's `.git`, while the PR branches and remote PRs remain unchanged.
 
 **Skip it when** the batch produced **0 or 1** mergeable branch.
-Exclude branches that failed review or that the user asked to skip.
+Exclude branches that failed review, that the user asked to skip, or whose PR merged during the run — its content is on the base already, so a guide snapshot of it would rebase to nothing; report it as merged rather than stacking it.
 If the batch was already a linear dependency chain, still build the guide stack: it verifies the chain against the current local base without risking the PR refs.
 
 **Compute the order yourself.**
@@ -375,10 +382,11 @@ State the claim as narrowly as it is. The report says what its reading could see
 
 After the batch, provide a concise summary:
 
-- Each task: its PR link (or "local branch only" if PRs were skipped) and which wave it ran in.
+- Each task: its PR link (or "local branch only" if PRs were skipped) and its terminal state — delivered, merged during the run, pushed without a PR, held by the guard, capped, crashed, storage-throttled, or skipped for a failed prerequisite.
 - How many review rounds each task needed, and any task that hit the `review-cycle` round cap without passing (with its outstanding findings).
 - Whether the peer participated; if it was unavailable or forfeited any rounds, note the reason once without treating it as a failure.
-- The dependency/wave structure actually used, and any base-branch/stacking choices worth flagging.
+- The dependency graph actually used, the order in which tasks reached the guard, any base a merged sibling advanced (and the rebases it caused), and any base-branch/stacking choices worth flagging.
 - The **recommended merge order** using canonical PR branch names — `b1 → … → bN`, merge `b1` first — plus the corresponding local `review-stack/...` guide refs, the integration-checked prefix, any stop point or merge-history guard, reproducible conflict notes, and any empty guide branch. Make clear the guide stack is local only and not pushed; the canonical PR branches were not rewritten, and independent-branch tie ordering is advisory.
 - The main-checkout cleanliness report: what appeared, what disappeared, and what was pre-existing — carried with the claim bound that section states, never as an assurance the batch left the tree untouched.
+- Any pushed branch that survived its orphan reconciliation, and any held branch whose durability push sits on origin without a PR, each named beside the task numbers it still holds — a held branch is outside the same-number comparison set, so the maintainer is the one who sees its number.
 - Any blockers, local branches that still need pushing, or uncertainties that remain.
