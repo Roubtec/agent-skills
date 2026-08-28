@@ -143,6 +143,69 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
+// SKILL.md prose is one sentence per line (AGENTS.md), so a clause that reads as
+// one paragraph is spread over several lines. Read the file as LOGICAL lines — a
+// line plus the continuation lines belonging to the same paragraph, joined with a
+// space — so an anchor still selects the whole clause and the phrases pinned to it
+// are tested against all of it. A list item starts a run of its own and never
+// continues the run above it, which is what keeps neighbouring steps and bullets
+// isolated the way matching raw lines used to; blank lines, headings, table rows,
+// HTML comments and fences stand alone. There is no indented-code case: MD046 pins
+// fenced style so the corpus has none, while a 4-space indent IS how a nested list
+// item continues.
+const TAB = String.fromCharCode(9);
+
+const trimLeft = (line) => {
+  let i = 0;
+  while (i < line.length && (line[i] === ' ' || line[i] === TAB)) i++;
+  return line.slice(i);
+};
+
+const withoutQuoteMarkers = (line) => {
+  let i = 0;
+  while (i < line.length && (line[i] === ' ' || line[i] === TAB || line[i] === '>')) i++;
+  return line.slice(i);
+};
+
+function isListItem(line) {
+  const t = trimLeft(line);
+  if (t.startsWith('- ') || t.startsWith('* ') || t.startsWith('+ ')) return true;
+  let i = 0;
+  while (i < t.length && t[i] >= '0' && t[i] <= '9') i++;
+  return i > 0 && (t[i] === '.' || t[i] === ')') && t[i + 1] === ' ';
+}
+
+function standsAlone(line) {
+  if (withoutQuoteMarkers(line).trim() === '') return true;
+  const t = trimLeft(line);
+  return ['#', '|', '<!--', '```', '~~~'].some((opener) => t.startsWith(opener));
+}
+
+function logicalLines(text) {
+  const lines = text.split(String.fromCharCode(10));
+  const out = [];
+  let fence = null;
+  for (let i = 0; i < lines.length; i++) {
+    const t = trimLeft(lines[i]);
+    const opener = t.startsWith('```') ? '`' : t.startsWith('~~~') ? '~' : null;
+    if (opener) {
+      fence = fence === opener ? null : fence || opener;
+      out.push(lines[i]);
+      continue;
+    }
+    if (fence || standsAlone(lines[i])) {
+      out.push(lines[i]);
+      continue;
+    }
+    let joined = lines[i];
+    while (i + 1 < lines.length && !standsAlone(lines[i + 1]) && !isListItem(lines[i + 1])) {
+      joined += ' ' + lines[++i].trim();
+    }
+    out.push(joined);
+  }
+  return out;
+}
+
 const here = dirname(fileURLToPath(import.meta.url));
 const workflows = join(here, "..", "plugins", "dev-skills", "workflows");
 const SOURCE = "wf-address-review.js";
@@ -2071,7 +2134,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       }
       const lines = text.split("\n");
       for (const [what, anchor, phrases] of wanted) {
-        const line = lines.find((l) => l.includes(anchor));
+        const line = logicalLines(text).find((l) => l.includes(anchor));
         if (!line) {
           missing.push(`${path} states nothing for ${what}`);
           continue;
@@ -2341,7 +2404,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       continue;
     }
     for (const [what, anchor, phrases] of wanted) {
-      const line = text.split("\n").find((l) => l.includes(anchor));
+      const line = logicalLines(text).find((l) => l.includes(anchor));
       if (!line) {
         missing.push(`${path} states nothing for ${what}`);
         continue;
@@ -6298,7 +6361,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     }
     const lines = text.split("\n");
     for (const [what, anchor, phrases] of wanted) {
-      const line = lines.find((l) => l.includes(anchor));
+      const line = logicalLines(text).find((l) => l.includes(anchor));
       if (!line) {
         missing.push(`${path} states nothing for ${what}`);
         continue;
@@ -6647,7 +6710,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   const standalonePara = brief.split("\n").find((l) => l.startsWith("- A standalone issue comment or review summary becomes its own item")) || "";
   const misfiredPara = brief.split("\n").find((l) => l.startsWith("- One more source qualifies on its own")) || "";
   const mirrorsState = ["plugins/dev-skills/skills", "codex/dev-skills/skills"].map((mirror) => {
-    const line = readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8").split("\n").find((l) => l.includes("**One more source qualifies on its own: a bot reviewer that misfired")) || "";
+    const line = logicalLines(readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8")).find((l) => l.includes("**One more source qualifies on its own: a bot reviewer that misfired")) || "";
     return /One route per comment, never both: such a comment is never taken whole under the rule above, even where the maintainer names it/.test(line);
   });
   check(

@@ -70,6 +70,69 @@ import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
 
+// SKILL.md prose is one sentence per line (AGENTS.md), so a clause that reads as
+// one paragraph is spread over several lines. Read the file as LOGICAL lines — a
+// line plus the continuation lines belonging to the same paragraph, joined with a
+// space — so an anchor still selects the whole clause and the phrases pinned to it
+// are tested against all of it. A list item starts a run of its own and never
+// continues the run above it, which is what keeps neighbouring steps and bullets
+// isolated the way matching raw lines used to; blank lines, headings, table rows,
+// HTML comments and fences stand alone. There is no indented-code case: MD046 pins
+// fenced style so the corpus has none, while a 4-space indent IS how a nested list
+// item continues.
+const TAB = String.fromCharCode(9);
+
+const trimLeft = (line) => {
+  let i = 0;
+  while (i < line.length && (line[i] === ' ' || line[i] === TAB)) i++;
+  return line.slice(i);
+};
+
+const withoutQuoteMarkers = (line) => {
+  let i = 0;
+  while (i < line.length && (line[i] === ' ' || line[i] === TAB || line[i] === '>')) i++;
+  return line.slice(i);
+};
+
+function isListItem(line) {
+  const t = trimLeft(line);
+  if (t.startsWith('- ') || t.startsWith('* ') || t.startsWith('+ ')) return true;
+  let i = 0;
+  while (i < t.length && t[i] >= '0' && t[i] <= '9') i++;
+  return i > 0 && (t[i] === '.' || t[i] === ')') && t[i + 1] === ' ';
+}
+
+function standsAlone(line) {
+  if (withoutQuoteMarkers(line).trim() === '') return true;
+  const t = trimLeft(line);
+  return ['#', '|', '<!--', '```', '~~~'].some((opener) => t.startsWith(opener));
+}
+
+function logicalLines(text) {
+  const lines = text.split(String.fromCharCode(10));
+  const out = [];
+  let fence = null;
+  for (let i = 0; i < lines.length; i++) {
+    const t = trimLeft(lines[i]);
+    const opener = t.startsWith('```') ? '`' : t.startsWith('~~~') ? '~' : null;
+    if (opener) {
+      fence = fence === opener ? null : fence || opener;
+      out.push(lines[i]);
+      continue;
+    }
+    if (fence || standsAlone(lines[i])) {
+      out.push(lines[i]);
+      continue;
+    }
+    let joined = lines[i];
+    while (i + 1 < lines.length && !standsAlone(lines[i + 1]) && !isListItem(lines[i + 1])) {
+      joined += ' ' + lines[++i].trim();
+    }
+    out.push(joined);
+  }
+  return out;
+}
+
 const here = dirname(fileURLToPath(import.meta.url));
 const WORKFLOWS = ["wf-review-cycle.js", "wf-address-tasks.js"];
 
@@ -2200,12 +2263,16 @@ const PEER_LIFECYCLE_CHECKS = 22;
     "confirmation/pass-note boundary",
   );
   check("the direct Codex provider gets bounded TERM, death verification, safe KILL, and a survivor stop", /send TERM[\s\S]*at most ten seconds[\s\S]*send KILL only if[\s\S]*ten more seconds[\s\S]*stop the cycle and escalate/.test(pluginsProse), "raw Codex lifecycle prose");
+  // The envelope's phrases were written against a one-line paragraph, so they carry
+  // literal spaces where the prose now breaks lines. Rejoin paragraphs rather than
+  // flattening the file: the negative pin inside is line-scoped.
+  const pluginsProseRejoined = logicalLines(pluginsProse).join(String.fromCharCode(10));
   check(
     "the Codex helper launch is primary in the Claude mirror, at medium effort, with no model flag, from a private session artifact root, with a caller wait that covers retry plus reaping",
-    /\*\*Primary launch through `peer-review-run`\.\*\* First establish `artifact_root` as a unique, private, session-scoped directory outside the reviewed worktree[\s\S]*peer-review-run --provider codex --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --effort medium`[\s\S]*caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(pluginsProse) &&
-      !/peer-review-run --provider codex[^\n]*--model/.test(pluginsProse) &&
-      /`reviewFile` is the peer's full review as plain text: read that file in full before applying verdict logic/.test(pluginsProse) &&
-      /A reported `model: null` is that note and never a fallback trigger/.test(pluginsProse),
+    /\*\*Primary launch through `peer-review-run`\.\*\* First establish `artifact_root` as a unique, private, session-scoped directory outside the reviewed worktree[\s\S]*peer-review-run --provider codex --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --effort medium`[\s\S]*caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(pluginsProseRejoined) &&
+      !/peer-review-run --provider codex[^\n]*--model/.test(pluginsProseRejoined) &&
+      /`reviewFile` is the peer's full review as plain text: read that file in full before applying verdict logic/.test(pluginsProseRejoined) &&
+      /A reported `model: null` is that note and never a fallback trigger/.test(pluginsProseRejoined),
     "primary Codex helper envelope",
   );
   const primaryHelperStart = prose.indexOf("**Primary launch through `peer-review-run`.**");
@@ -2271,7 +2338,7 @@ const PEER_LIFECYCLE_CHECKS = 22;
       !/native read-only tools may read the one absolute out-of-worktree evidence path/.test(prose),
     "embedded evidence contract",
   );
-  const evidenceContractLine = prose.split("\n").find((line) => line.startsWith("After the PID is dead")) || "";
+  const evidenceContractLine = logicalLines(prose).find((line) => line.startsWith("After the PID is dead")) || "";
   const passedContract = evidenceContractLine.match(/Missing or mismatched OID\/token proof changes `([^`]+)` to `([^`]+)` with reason exactly `([^`]+)`/);
   const issuesContract = evidenceContractLine.match(/for `([^`]+)`, keep the `([^`]+)` outcome and every finding verbatim[\s\S]*attaching that exact reason and an evidence-failure note/);
   const parsedEvidenceContract = passedContract && issuesContract
