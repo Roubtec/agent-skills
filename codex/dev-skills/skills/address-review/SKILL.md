@@ -21,7 +21,7 @@ Because you resolve the threads you address (on push runs), running this skill r
 All arguments are optional and parsing is **lenient** — accept commas, `&`, and free word order, mirroring the example prompts. Trust yourself to extract intent, then sanity-check against the PR.
 
 | Argument | Meaning |
-|---|---|
+| --- | --- |
 | `PR#` (e.g. `#38`) | The PR to address. Takes precedence over auto-detection — useful when the current branch is a local off-shoot of a merge-pending branch or otherwise disjoint from the PR head; pass `off-shoot` too when you want the run to work on that branch rather than on the PR's head ref. Always sanity-check that it really relates to this branch. |
 | `rebase on top of <target>` | Rebase the **working location's branch** onto `<target>` — a branch name or an exact commit — rather than onto the PR's own base, which is what step 2 rebases onto by default. Single-branch rebase only. |
 | `no-rebase` | Opt out of the default rebase entirely — **both** of step 2's points, so the branch is addressed and pushed on the base it already sits on. Use it when the base is known to be moving under you, or when a rebase would obscure what a reviewer is being asked to look at. It wins over `rebase on top of <target>` if both arrive — for the REBASE only: the token is not discarded, and a still-standing target is what step 6 pins as this run's effective review base. In `delegated-fix` it is also how the batch orchestrator says the two points are its own rather than this entry's (see "Delegated modes for the worktree orchestrator"). |
@@ -41,7 +41,7 @@ All arguments are optional and parsing is **lenient** — accept commas, `&`, an
 **The default is now to publish.** A run with **no** push/ping argument pushes the branch, performs all PR-side communication, **and** re-pings every bot that brought a new finding this round — i.e. a bare run behaves exactly like `ping-contributing`. The flags only adjust that default:
 
 | You pass… | Push? | Who gets pinged |
-|---|---|---|
+| --- | --- | --- |
 | *(nothing)* | yes | contributing bots — every bot with a new finding this round |
 | `ping-contributing` | yes | contributing bots — the explicit (redundant) spelling of the default |
 | `push` | yes | **nobody** — publish quietly, summon no fresh review |

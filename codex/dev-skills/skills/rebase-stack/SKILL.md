@@ -40,7 +40,7 @@ All forms route through the same logic.
 Be lenient about parsing: trust the agent to extract source, target, and (optionally) explicit chain, then rely on the confirmation listing as the safety net.
 
 | Form | Meaning |
-|---|---|
+| --- | --- |
 | `$rebase-stack` | Current branch onto `main`; chain auto-detected |
 | `$rebase-stack onto <target>` | Current branch onto `<target>`; chain auto-detected |
 | `$rebase-stack <source>` | `<source>` onto `main`; chain auto-detected |
@@ -131,6 +131,7 @@ mb = git merge-base X <source>
 ```
 
 Include `X` as a chain candidate if all of these hold:
+
 - `mb` is a descendant of `EF`: `git merge-base --is-ancestor <EF> mb` (and `mb != EF`)
 - `mb` is an ancestor of `<source>`: `git merge-base --is-ancestor mb <source>`
 - `X != <target>` and `X != <source>`
@@ -164,6 +165,7 @@ Include for each branch in the proposed chain:
 Also state that any qualifying contiguous linear run may be replayed once with `--update-refs`, moving exactly that run's listed branch refs together, while every run that fails the exact-ref, topology, or worktree checks falls back to branch-at-a-time replay.
 
 Also report **target divergence info** as a non-blocking courtesy:
+
 - Local target SHA.
 - Cached `origin/<target>` SHA (read from local cache; do not fetch).
 - Approximate time since last fetch (from the cached ref's mtime, if available).
@@ -306,6 +308,7 @@ The combined replay must first be aborted and every run ref restored, then the p
 
 Run validation **only for branches whose rebase had at least one in-file conflict to resolve** (trivial in-file or non-trivial).
 Skip validation entirely for:
+
 - Clean rebases (no conflicts at all).
 - `--skip`-only resolutions (the "patch already represented in HEAD" trivial subtype). These don't introduce semantic change — the new base already represents the dropped commit's content — so there's nothing to validate that wasn't already validated when the predecessor branch was built.
 
@@ -337,6 +340,7 @@ If no validation commands can be discovered, mention that fact and continue with
 ### Step 7 — Stopping cleanly
 
 The skill can stop at three points:
+
 - During confirmation (user declines).
 - On non-trivial conflict the user rejects, or one the agent cannot resolve.
 - On validation failure that cannot be auto-fixed.
@@ -345,6 +349,7 @@ A combined fast-path replay is never left as the stopped state.
 On a rejected or indeterminate conflict it is aborted and restored before the per-branch fallback reaches the actual stop branch; on an ambiguous or failed validation repair the entire run is restored before the skill stops.
 
 In normal interactive mode:
+
 - Earlier branches that completed are left **rebased and checked-in locally**, not pushed.
 - A per-branch current branch is left in whatever state stopped progress (rebase in progress, or rebased-but-failing-validation); the restored fast-path validation case instead stops with every branch in that run at its snapshot.
 - Subsequent chain branches are completely untouched.
@@ -355,6 +360,7 @@ In delegated unattended mode, a stop after a combined-replay validation failure 
 **Note on detached HEAD during in-progress rebase**: while a `git rebase` is paused mid-flight, the working tree is on a detached HEAD — `git branch --show-current` returns empty, which can be disorienting. Use `git status` (which reports the in-progress rebase, the branch being rebased, and the conflicted files) for orientation when resuming.
 
 The user can resume by:
+
 - Manually completing or aborting the in-progress rebase.
 - Re-invoking `$rebase-stack` from the source (or any descendant of where things stopped). The new invocation will re-detect a fresh, smaller chain starting from the current state of the world.
 
@@ -363,10 +369,12 @@ The skill itself is **not re-entrant** in the formal sense — it does not persi
 ### Step 8 — Final summary
 
 Output:
+
 - The chain that was processed, in order, with one-line outcome per branch (`rebased clean`, `rebased with conflicts (resolved silently / with confirmation)`, `rebased + validation passed`, `stopped at this branch`).
 - Any branches that ended up empty (no unique commits relative to their new base) — flagged for the user to delete or close as appropriate.
   In delegated unattended mode, report emptiness as an integration result only; do not recommend closing a canonical branch without inspection.
 - The list of pre-rebase refs created, with **inspection** and **cleanup** hints. Pre-rebase refs live in a custom git ref namespace (`refs/pre-rebase/...`), not under `refs/heads/`, so they are **invisible to most git GUIs** (GitKraken, GitHub Desktop, Sourcetree). Use the CLI:
+
   ```sh
   # Inspect — see all pre-rebase refs and the SHAs they preserve:
   git for-each-ref refs/pre-rebase/
@@ -379,6 +387,7 @@ Output:
   # from other branches and earlier runs:
   git for-each-ref --format='%(refname)' refs/pre-rebase/ | grep '/<timestamp>$' | while IFS= read -r ref; do git update-ref -d "$ref"; done
   ```
+
 - A reminder that nothing has been pushed.
 - Any divergence between local target and cached `origin/<target>` (still a non-blocking note).
 
