@@ -9,14 +9,14 @@ jobs:
   markdown:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Same pinned version the dev container bakes, so a file that formats
       # clean locally can never fail here (and vice versa).
       - run: npx --yes markdownlint-cli2@0.23.2 "**/*.md"
   scripts:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: bash scripts/test-gh-review-threads.sh
       - run: bash scripts/test-dc-helpers.sh
       - run: node scripts/test-checkout-cleanliness-report.mjs
