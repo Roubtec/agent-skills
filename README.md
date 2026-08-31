@@ -18,6 +18,7 @@ codex/
   dev-skills/                     # Codex flavors of the same skills (SKILL.md + agents/openai.yaml)
     skills/<name>/...
 scripts/
+  lib/logical-lines.mjs                 # shared Markdown paragraph-rejoining reader for the suites that pin skill prose by its words rather than its wrapping
   test-gh-review-threads.sh             # hermetic contract coverage for the review-thread helper
   test-dc-helpers.sh                    # hermetic contract coverage for the disposable-clone helpers
   test-checkout-cleanliness-report.mjs  # regression coverage for the batch workflow's checkout report
