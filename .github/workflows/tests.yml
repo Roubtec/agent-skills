@@ -10,8 +10,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      # Same pinned version the dev container bakes, so a file that formats
-      # clean locally can never fail here (and vice versa).
+      # Same pinned version README's "Markdown formatting" section gives every
+      # local setup, so a file that formats clean locally can never fail here
+      # (and vice versa). Bump the pin here and there together.
       - run: npx --yes markdownlint-cli2@0.23.2 "**/*.md"
   scripts:
     runs-on: ubuntu-latest

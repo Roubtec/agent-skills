@@ -136,6 +136,8 @@ Markdown style is owned by markdownlint: `.markdownlint.jsonc` pins the house ru
 
 The editor is wired to the identical answer: the committed `.vscode/settings.json` makes the markdownlint extension the Markdown formatter and fixes on save, and `.prettierignore` keeps Prettier — whose Markdown style (aligned tables, underscore emphasis) fights the house rules — away from Markdown entirely. So the IDE, the CLI, agents, and CI all produce the same bytes, and saving an already-clean file changes nothing.
 
+Anywhere without the editor extension — agents, terminals, hooks — the same answer is one command, no repo dependencies needed: `npx --yes markdownlint-cli2@0.23.2 --fix "**/*.md"` (drop `--fix` to check without rewriting). The version is pinned to the one CI runs in `tests.yml`, which is also what the extension bundles; when the extension's bundled `markdownlint-cli2` moves on, bump the pin here and in `tests.yml` together — the extension leads, the pin follows. Not every rule is auto-fixable, so a fix pass can still leave violations that need a hand edit; CI names them.
+
 ## Focused tests
 
 Each subsection leads with the command and the change that obliges you to run it. What a suite pins, and the measured trade-offs behind how each of its checks is drawn, live in that script's own comments.
