@@ -112,7 +112,7 @@ Three top-level subagent roles — all spawned via the `Agent` tool with `subage
 
 > **Critical — one checkout-dependent agent at a time; subagents share your working tree.**
 > Every subagent operates on your single checked-out branch — they are not isolated copies. The invariant is about committed state, not turn structure: **never spawn the reviewer until the fixer's commits are on disk.** A reviewer racing an unfinished fixer scopes its diff against a half-written branch, sees nothing, and falsely reports "no changes" — shipping the work unverified. An `Agent` call may return immediately with a background task id and deliver its result as a later notification, so wait for that completion notification, then spawn the next; keeping two checkout-dependent agents out of the same turn or parallel tool block is a **proxy** for the invariant — sufficient where spawns are synchronous, and neither sufficient nor necessary where they are not. The sole concurrency exception is the examination-only `codex` peer launched beside the Reviewer after the tree is clean and committed: two readers are safe, while the Reviewer alone owns build/typecheck execution. This overrides the harness's general "batch independent calls" guidance for every other pair.
-
+>
 > Fix-up and re-review spawns follow the `review-cycle` skill's fresh-spawn rule — always a fresh `Agent` spawn, never a "continued" prior agent (ignore any `SendMessage` continuation footer; this harness does not expose that tool).
 
 **Trivial escape hatch:** only on a local, no-push run with one obvious actionable comment may you skip the reviewer. Never skip review before publishing, and never skip it for a push-back disposition.
@@ -316,7 +316,7 @@ One last run posts none: one whose review stopped without any reviewer round eve
 
 **Content** — the shape agreed on PR #29, marker first:
 
-```
+```markdown
 <!-- address-review:disposition-record -->
 # address-review packet — PR #141 (task/141-foo)
 status: not published (<reason>)

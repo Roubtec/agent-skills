@@ -23,7 +23,7 @@ Included:
 - **`wf-review-cycle` workflow** (`plugins/dev-skills/workflows/`), the same protocol as a self-contained script taking `{worktree, branch, base, scope, artifactType, maxRounds, peer, mode}`, where `maxRounds` may only **lower** the canonical 12-round cap, and only to a positive whole number of rounds — a caller asking for more gets 12, while `0`, a negative, or a fractional value is rejected outright rather than yielding a cycle that reviews nothing — so the convergence safeguard stays a property of the protocol rather than of each consumer's configuration, and no two consumers can quietly acquire different cap semantics. Its result contract is the information-flow backbone:
   - lean structured return: final verdict, per-finding dispositions (an `escalated` disposition names the question `id` it raised), `openQuestions[]` in the PINNED wire format below, and an `artifactDir` path holding the full per-round prose (reviewer reports, peer output, fixer packets) for anyone who needs the unabridged history. The format maps one-to-one onto the four-part brief `resolve-open-questions` serves (grounded context, concrete trigger, distinct options, recommendation) so a bare `resolve-open-questions` invocation consumes it without re-derivation — while its step-2 grounding still applies: every carried claim is re-verified against current state before serving, per item 5 of 019.
 
-    ```
+    ```js
     openQuestions: [{
       id,                     // stable within the run (e.g. "<cycle-slug>-q1"); referenced by dispositions and coupledWith
       question,               // the decision itself, phrased as the fork — not a narrative

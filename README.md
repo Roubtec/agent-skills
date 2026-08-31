@@ -4,7 +4,7 @@ Roubtec's shared agent skills, distributed as a [Claude Code plugin marketplace]
 
 ## Layout
 
-```
+```text
 .claude-plugin/marketplace.json   # the marketplace manifest (marketplace name: roubtec — "agent-skills" is CLI-reserved for anthropics repos)
 plugins/
   dev-skills/                     # Claude Code plugin: software development workflow skills
@@ -69,7 +69,7 @@ A session off powbox, or on an image built before that bake, installs them itsel
 
 ## Installing (Claude Code Users)
 
-```
+```sh
 claude plugin marketplace add Roubtec/agent-skills
 claude plugin install dev-skills@roubtec
 ```
@@ -99,7 +99,7 @@ Merging to `main` **is** the release: the plugin manifests intentionally carry n
 
 To stay current, either enable auto-update for this marketplace (`/plugin` → Marketplaces → `roubtec` → Enable auto-update; updates apply at session start) or refresh manually:
 
-```
+```sh
 claude plugin marketplace update roubtec
 ```
 

@@ -125,7 +125,7 @@ This single rule handles the otherwise-awkward geometries without special cases:
 
 For each local branch `X` (excluding `source` and `target`):
 
-```
+```text
 mb = git merge-base X <source>
 ```
 
@@ -175,7 +175,7 @@ The user may pull manually while the confirmation prompt is open; on "go" the sk
 
 Example listing:
 
-```
+```text
 The following branches will be rebased on top of `main` (a03ab1f), in order:
 
   feature/03   1 commit  ahead of feature/04   tip: 0b34e10  fixes 03

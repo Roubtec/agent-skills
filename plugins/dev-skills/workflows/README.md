@@ -50,7 +50,7 @@ It also rebases by default, at two delegated points — before the fixing and ag
 
 Parse-check the shipped workflow sources — `plugins/dev-skills/workflows/wf-review-cycle.js`, `wf-address-review.js`, and `wf-address-tasks.js` — with powbox's `wf-check`, which is normally on PATH: it is built against the runtime's own loading, which nothing in this repo can speak for, so it is the check to run whenever `command -v wf-check` finds it. It is baked into the powbox image rather than shipped from here, so skills refreshed into a container running an older image can still find it absent; only then, stand in for it with the hand-rolled wrapper below — from the repository root, once per file:
 
-```
+```sh
 D="$(mktemp -d "${TMPDIR:-/tmp}/wf-check.XXXXXX")" \
   && sed '1,/^export const meta/s/^export const meta/const meta/' <file> > "$D/body.js" \
   && { echo '(async function(args, agent, phase, workflow, parallel, pipeline, log){"use strict";'; cat "$D/body.js"; echo '});'; } > "$D/w.cjs" \
@@ -74,7 +74,7 @@ A pass is not a promise that the runtime will accept the file: this wrapper stan
 
 Check the embedded `review-cycle-core` section for byte-identity after changing it in either file. `wf-address-tasks.js` carries a copy of `wf-review-cycle.js`'s marked section, and the copy is maintained by hand — from the repository root, under `bash` (the process substitutions are not POSIX `sh`):
 
-```
+```sh
 A=$(awk '/BEGIN EMBEDDABLE SECTION: review-cycle-core/,/END EMBEDDABLE SECTION: review-cycle-core/' plugins/dev-skills/workflows/wf-review-cycle.js) \
   && B=$(awk '/BEGIN EMBEDDABLE SECTION: review-cycle-core/,/END EMBEDDABLE SECTION: review-cycle-core/' plugins/dev-skills/workflows/wf-address-tasks.js) \
   && { [ -n "$A" ] && [ -n "$B" ] || { echo 'MARKERS MISSING — one or both extractions are empty'; false; }; } \
