@@ -69,6 +69,7 @@ import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
 import { execFileSync } from "node:child_process";
+import { logicalLines } from "./lib/logical-lines.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const WORKFLOWS = ["wf-review-cycle.js", "wf-address-tasks.js"];
@@ -2200,12 +2201,16 @@ const PEER_LIFECYCLE_CHECKS = 22;
     "confirmation/pass-note boundary",
   );
   check("the direct Codex provider gets bounded TERM, death verification, safe KILL, and a survivor stop", /send TERM[\s\S]*at most ten seconds[\s\S]*send KILL only if[\s\S]*ten more seconds[\s\S]*stop the cycle and escalate/.test(pluginsProse), "raw Codex lifecycle prose");
+  // The envelope's phrases were written against a one-line paragraph, so they carry
+  // literal spaces where the prose now breaks lines. Rejoin paragraphs rather than
+  // flattening the file: the negative pin inside is line-scoped.
+  const pluginsProseRejoined = logicalLines(pluginsProse).join(String.fromCharCode(10));
   check(
     "the Codex helper launch is primary in the Claude mirror, at medium effort, with no model flag, from a private session artifact root, with a caller wait that covers retry plus reaping",
-    /\*\*Primary launch through `peer-review-run`\.\*\* First establish `artifact_root` as a unique, private, session-scoped directory outside the reviewed worktree[\s\S]*peer-review-run --provider codex --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --effort medium`[\s\S]*caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(pluginsProse) &&
-      !/peer-review-run --provider codex[^\n]*--model/.test(pluginsProse) &&
-      /`reviewFile` is the peer's full review as plain text: read that file in full before applying verdict logic/.test(pluginsProse) &&
-      /A reported `model: null` is that note and never a fallback trigger/.test(pluginsProse),
+    /\*\*Primary launch through `peer-review-run`\.\*\* First establish `artifact_root` as a unique, private, session-scoped directory outside the reviewed worktree[\s\S]*peer-review-run --provider codex --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --effort medium`[\s\S]*caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(pluginsProseRejoined) &&
+      !/peer-review-run --provider codex[^\n]*--model/.test(pluginsProseRejoined) &&
+      /`reviewFile` is the peer's full review as plain text: read that file in full before applying verdict logic/.test(pluginsProseRejoined) &&
+      /A reported `model: null` is that note and never a fallback trigger/.test(pluginsProseRejoined),
     "primary Codex helper envelope",
   );
   const primaryHelperStart = prose.indexOf("**Primary launch through `peer-review-run`.**");
@@ -2271,7 +2276,7 @@ const PEER_LIFECYCLE_CHECKS = 22;
       !/native read-only tools may read the one absolute out-of-worktree evidence path/.test(prose),
     "embedded evidence contract",
   );
-  const evidenceContractLine = prose.split("\n").find((line) => line.startsWith("After the PID is dead")) || "";
+  const evidenceContractLine = logicalLines(prose).find((line) => line.startsWith("After the PID is dead")) || "";
   const passedContract = evidenceContractLine.match(/Missing or mismatched OID\/token proof changes `([^`]+)` to `([^`]+)` with reason exactly `([^`]+)`/);
   const issuesContract = evidenceContractLine.match(/for `([^`]+)`, keep the `([^`]+)` outcome and every finding verbatim[\s\S]*attaching that exact reason and an evidence-failure note/);
   const parsedEvidenceContract = passedContract && issuesContract

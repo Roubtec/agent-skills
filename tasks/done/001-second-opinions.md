@@ -59,7 +59,7 @@ The same topology applies symmetrically when a Codex orchestrator invokes a `cla
 ## Decomposition (disjoint file ownership; two scheduling waves)
 
 | Task | Tree | Files owned |
-|------|------|-------------|
+| ------ | ------ | ------------- |
 | 001a | Claude (`plugins/dev-skills`) | `address-tasks-serialized/SKILL.md`, `address-tasks/SKILL.md` |
 | 001b | Claude (`plugins/dev-skills`) | `address-review/SKILL.md`, `address-reviews/SKILL.md` |
 | 001c | Claude (`plugins/dev-skills`) | `resolve-open-questions/SKILL.md` |

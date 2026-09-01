@@ -376,6 +376,14 @@ import { readFileSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 
+// SKILL.md prose is one sentence per line (AGENTS.md), so a clause spans several
+// lines and its line breaks move whenever it is reworded. Match anchors against a
+// whitespace-flattened view of the file, flattening each anchor the same way, so
+// a pin holds the WORDS of a clause rather than the shape it happens to be
+// wrapped in: a one-line anchor and one written across lines both select, and a
+// reflow of the prose is not a deletion.
+const flat = (s) => s.replace(/\s+/g, " ");
+
 const root = join(dirname(fileURLToPath(import.meta.url)), "..");
 const workflows = join(root, "plugins/dev-skills/workflows");
 
@@ -1610,7 +1618,7 @@ for (const mirror of PROSE_MIRRORS) {
   for (const skill of readdirSync(dir).sort()) {
     let text;
     try {
-      text = readFileSync(join(dir, skill, "SKILL.md"), "utf8");
+      text = flat(readFileSync(join(dir, skill, "SKILL.md"), "utf8"));
     } catch {
       continue;
     }
@@ -1635,7 +1643,7 @@ for (const mirror of PROSE_MIRRORS) {
     const path = `${mirror}/${skill}/SKILL.md`;
     let text;
     try {
-      text = readFileSync(join(dir, skill, "SKILL.md"), "utf8");
+      text = flat(readFileSync(join(dir, skill, "SKILL.md"), "utf8"));
     } catch (err) {
       failures++;
       rows.push([path, "prose clauses", "FAIL", `cannot read: ${err.message}`]);
@@ -1655,7 +1663,7 @@ for (const mirror of PROSE_MIRRORS) {
     const byReference = entry.byReference || [];
     const destroyBoundary = entry.destroyBoundary || [];
     const guarded = [...anchors, ...byReference, ...destroyBoundary];
-    const wrong = guarded.map((anchor) => [anchor, text.split(anchor).length - 1]).filter(([, n]) => n !== 1);
+    const wrong = guarded.map((anchor) => [anchor, text.split(flat(anchor)).length - 1]).filter(([, n]) => n !== 1);
     const { counted = 0, byRefCounted = 0, destroyCounted = 0 } = census.get(skill) || {};
     // A skill listed here with no anchors of any kind claims to be guarded and
     // asserts nothing — the same vacuum an empty pin list is on the rendered side

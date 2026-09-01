@@ -57,6 +57,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { logicalLines } from "./lib/logical-lines.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const workflows = join(here, "..", "plugins", "dev-skills", "workflows");
@@ -385,7 +386,7 @@ const cycleResult = (extra) => ({
       continue;
     }
     for (const [what, anchor, phrases] of wanted) {
-      const line = text.split("\n").find((l) => l.includes(anchor));
+      const line = logicalLines(text).find((l) => l.includes(anchor));
       if (!line) {
         mirrorMissing.push(`${path} states nothing for ${what}`);
         continue;

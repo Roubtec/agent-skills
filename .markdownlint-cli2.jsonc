@@ -1,0 +1,14 @@
+{
+  // markdownlint-cli2 reads rule config from .markdownlint.jsonc (plus the
+  // nearest-directory overrides under each skills/ tree); this file only
+  // scopes which files are linted. The VS Code markdownlint extension lints
+  // the open document through the same engine and applies these `ignores` to
+  // it too, so the editor, the CLI, and CI always read the same answer.
+  "ignores": [
+    "**/node_modules/**",
+
+    // Container-local worktree storage may hold full sibling checkouts of
+    // this repository; each of those lints itself.
+    ".worktrees/**",
+  ],
+}

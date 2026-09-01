@@ -142,6 +142,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { logicalLines } from "./lib/logical-lines.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const workflows = join(here, "..", "plugins", "dev-skills", "workflows");
@@ -2071,7 +2072,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       }
       const lines = text.split("\n");
       for (const [what, anchor, phrases] of wanted) {
-        const line = lines.find((l) => l.includes(anchor));
+        const line = logicalLines(text).find((l) => l.includes(anchor));
         if (!line) {
           missing.push(`${path} states nothing for ${what}`);
           continue;
@@ -2341,7 +2342,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       continue;
     }
     for (const [what, anchor, phrases] of wanted) {
-      const line = text.split("\n").find((l) => l.includes(anchor));
+      const line = logicalLines(text).find((l) => l.includes(anchor));
       if (!line) {
         missing.push(`${path} states nothing for ${what}`);
         continue;
@@ -6298,7 +6299,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     }
     const lines = text.split("\n");
     for (const [what, anchor, phrases] of wanted) {
-      const line = lines.find((l) => l.includes(anchor));
+      const line = logicalLines(text).find((l) => l.includes(anchor));
       if (!line) {
         missing.push(`${path} states nothing for ${what}`);
         continue;
@@ -6647,7 +6648,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   const standalonePara = brief.split("\n").find((l) => l.startsWith("- A standalone issue comment or review summary becomes its own item")) || "";
   const misfiredPara = brief.split("\n").find((l) => l.startsWith("- One more source qualifies on its own")) || "";
   const mirrorsState = ["plugins/dev-skills/skills", "codex/dev-skills/skills"].map((mirror) => {
-    const line = readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8").split("\n").find((l) => l.includes("**One more source qualifies on its own: a bot reviewer that misfired")) || "";
+    const line = logicalLines(readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8")).find((l) => l.includes("**One more source qualifies on its own: a bot reviewer that misfired")) || "";
     return /One route per comment, never both: such a comment is never taken whole under the rule above, even where the maintainer names it/.test(line);
   });
   check(

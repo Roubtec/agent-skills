@@ -22,7 +22,7 @@ Included:
 
 - Define the record's **content** once, in `address-review`, and reference it from the other callers rather than restating it. Step 8 already enumerates most of it; the record adds only the drafted reply bodies and the ready-to-post Summary body, which are the parts that cannot be re-derived. Shape agreed on PR #29:
 
-  ```
+  ```markdown
   # address-review packet — PR #141 (task/141-foo)
   status: not published (<reason>)
   starting HEAD 9f3a1c2 | final HEAD abc1234 | recorded headRefOid 9f3a1c2

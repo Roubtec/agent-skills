@@ -27,6 +27,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
+import { logicalLines } from "./lib/logical-lines.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repo = join(here, "..");
@@ -41,13 +42,12 @@ function check(name, cond, detail) {
   }
 }
 
-// The step is a one-line paragraph in every mirror (AGENTS.md: one line per
-// paragraph). Locate it by its stable anchor and fail loudly if the anchor no
-// longer selects exactly one line, so the test cannot silently pass against a
+// Locate the step by its stable anchor and fail loudly if the anchor no longer
+// selects exactly one logical line, so the test cannot silently pass against a
 // file it did not find.
 function stepLine(tree, skill, anchor) {
   const path = join(repo, tree, "dev-skills", "skills", skill, "SKILL.md");
-  const hits = readFileSync(path, "utf8").split("\n").filter((l) => l.includes(anchor));
+  const hits = logicalLines(readFileSync(path, "utf8")).filter((l) => l.includes(anchor));
   if (hits.length !== 1) {
     console.error(`FAIL: ${path} has ${hits.length} lines containing ${JSON.stringify(anchor)}; expected 1.`);
     process.exit(1);
@@ -318,9 +318,9 @@ check(
 // single disclaimed mention would otherwise camouflage.
 for (const tree of ["plugins", "codex"]) {
   const path = join(repo, tree, "dev-skills", "skills", "declare-shadows", "SKILL.md");
-  const mentions = readFileSync(path, "utf8")
-    .split("\n")
-    .flatMap((line) => [...line.matchAll(EXCLUDE_LITERAL)].map(() => line));
+  const mentions = logicalLines(readFileSync(path, "utf8")).flatMap((line) =>
+    [...line.matchAll(EXCLUDE_LITERAL)].map(() => line),
+  );
   check(
     `${tree}/declare-shadows names the exclude exactly once`,
     mentions.length === 1,

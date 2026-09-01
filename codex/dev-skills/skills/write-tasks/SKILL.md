@@ -15,11 +15,16 @@ The output should help a worker understand what to build, why it matters, what c
 
 ## Version control — commit on the current branch, never branch or push
 
-Writing the task files and committing them on the **current branch** is the entire working-tree and deliverable footprint of this skill. Number allocation may query GitHub and fetch PR refs for read-only inspection, updating only Git metadata such as `FETCH_HEAD` or remote-tracking refs; it never changes another branch or adds another deliverable. Whatever branch is checked out right now is where the task files land.
+Writing the task files and committing them on the **current branch** is the entire working-tree and deliverable footprint of this skill.
+Number allocation may query GitHub and fetch PR refs for read-only inspection, updating only Git metadata such as `FETCH_HEAD` or remote-tracking refs; it never changes another branch or adds another deliverable.
+Whatever branch is checked out right now is where the task files land.
 
 - **Never create a new branch** for the tasks — stay on the branch that is already checked out.
-- Follow-up tasks recorded for in-flight work (review follow-ups, decision records) belong **on the branch that prompted them** — being on a PR or task branch when invoked is intended, not a mistake: merging that branch then also lands the record of its loose ends. Do not relocate such tasks to a fresh branch off `main`; they would only need manual re-homing onto the real branch later.
-- **Never push.** Do not run `git push` for any reason, and most emphatically never push to `main` or the repository's default branch. Task files are local artifacts an implementer picks up later; publishing them is a separate, explicit decision the user makes, not part of this skill.
+- Follow-up tasks recorded for in-flight work (review follow-ups, decision records) belong **on the branch that prompted them** — being on a PR or task branch when invoked is intended, not a mistake: merging that branch then also lands the record of its loose ends.
+  Do not relocate such tasks to a fresh branch off `main`; they would only need manual re-homing onto the real branch later.
+- **Never push.**
+  Do not run `git push` for any reason, and most emphatically never push to `main` or the repository's default branch.
+  Task files are local artifacts an implementer picks up later; publishing them is a separate, explicit decision the user makes, not part of this skill.
 - If the checked-out branch happens to **be** `main` or the default branch, still commit locally only — committing task files onto a local `main` is fine, pushing them is not.
 - Commit only the task files you wrote — a focused commit with a clear message; do not sweep unrelated working-tree changes into it.
 
@@ -58,7 +63,8 @@ Keep work together when splitting would force brittle interfaces or excessive co
 
 ## File naming and ordering
 
-Honor any explicit target folder and/or numbering supplied by the user or invoking skill. Otherwise, default to the repo's task folder (commonly `tasks/`), create it if missing, and follow the repo's documented numbering house style (for example, `tasks/AGENTS.md`) when continuing the sequence.
+Honor any explicit target folder and/or numbering supplied by the user or invoking skill.
+Otherwise, default to the repo's task folder (commonly `tasks/`), create it if missing, and follow the repo's documented numbering house style (for example, `tasks/AGENTS.md`) when continuing the sequence.
 
 When the repo has no documented numbering style, number files as `{phase}-{taskNo}-{brief-kebab-name}.md` to make execution order obvious.
 Examples: `A-01-scaffold-project.md`, `02-12-hook-keyboard-shortcuts.md`.
@@ -66,7 +72,8 @@ Examples: `A-01-scaffold-project.md`, `02-12-hook-keyboard-shortcuts.md`.
 If there are existing task files in the target folder, continue the numbering sequence.
 Use numbering to reflect intended order, even if some tasks could later be parallelized.
 
-Before allocating a number, resolve the repository's task folder (commonly `tasks/`), then recursively inventory task filenames across that entire working-tree subtree, including its `done/`, `deferred/`, and any future nested folders, and across every open PR head. Enumerate the heads, fetch each through the base repository's PR namespace, and read the exact enumerated OID as a recursive whole tree:
+Before allocating a number, resolve the repository's task folder (commonly `tasks/`), then recursively inventory task filenames across that entire working-tree subtree, including its `done/`, `deferred/`, and any future nested folders, and across every open PR head.
+Enumerate the heads, fetch each through the base repository's PR namespace, and read the exact enumerated OID as a recursive whole tree:
 
 ```bash
 gh pr list --state open --limit 200 --json number,headRefOid
@@ -74,52 +81,50 @@ git fetch origin "refs/pull/${number}/head"
 git ls-tree -r --name-only "${headRefOid}" -- "${task_folder}/"
 ```
 
-Do not replace the PR-ref fetch with a bare head branch name: fork heads and heads that exist only on the remote may not resolve locally. If the enumeration returns as many entries as its pinned limit, report the returned count and mark the allocation scan incomplete because additional unreturned heads cannot be named. If the enumeration or a head fetch is unavailable, likewise report that allocation could not be checked completely instead of silently treating the missing heads as free.
+Do not replace the PR-ref fetch with a bare head branch name: fork heads and heads that exist only on the remote may not resolve locally.
+If the enumeration returns as many entries as its pinned limit, report the returned count and mark the allocation scan incomplete because additional unreturned heads cannot be named.
+If the enumeration or a head fetch is unavailable, likewise report that allocation could not be checked completely instead of silently treating the missing heads as free.
 
-Two aspects of allocation deliberately differ from the pre-PR guard. In a repository with the documented three-digit convention, the allocator compares the three-digit **numeric slot**, so a suffix such as `001a` occupies slot `001` when choosing the next primary; the guard compares full numbers and correctly allows `001` and `001a` to coexist. For another documented numbering style, apply the same principle to that style's primary allocation unit rather than imposing three digits. The allocator also reads every open head's **whole recursive task tree**, including inherited files, because it must avoid any number standing on that head; the guard reads a non-base head's additions only because it asks which numbers that head newly claims. Do not normalize either difference.
+Two aspects of allocation deliberately differ from the pre-PR guard.
+In a repository with the documented three-digit convention, the allocator compares the three-digit **numeric slot**, so a suffix such as `001a` occupies slot `001` when choosing the next primary; the guard compares full numbers and correctly allows `001` and `001a` to coexist.
+For another documented numbering style, apply the same principle to that style's primary allocation unit rather than imposing three digits.
+The allocator also reads every open head's **whole recursive task tree**, including inherited files, because it must avoid any number standing on that head; the guard reads a non-base head's additions only because it asks which numbers that head newly claims.
+Do not normalize either difference.
 
-When a collision risk is visible, or multiple task-bearing PRs are in flight, prefer the next allocation unit clear across all of these trees. If that requires skipping the otherwise-next number, record the deliberate skip and its collision reason in the task-writing commit message so the next allocator understands that the gap is intentional.
+When a collision risk is visible, or multiple task-bearing PRs are in flight, prefer the next allocation unit clear across all of these trees.
+If that requires skipping the otherwise-next number, record the deliberate skip and its collision reason in the task-writing commit message so the next allocator understands that the gap is intentional.
 
 ## Task file content
 
 Each task file must include:
 
-1. **Title**
-   Use a clear imperative statement focused on the deliverable.
+1. **Title** Use a clear imperative statement focused on the deliverable.
 
-2. **Why this task exists**
-   Briefly explain the goal and its place in the broader effort.
+2. **Why this task exists** Briefly explain the goal and its place in the broader effort.
 
-3. **Scope**
-   State what is included.
+3. **Scope** State what is included.
    If useful, also state what is out of scope so the task stays bounded.
 
-4. **Context and references**
-   Provide enough background to start work confidently.
+4. **Context and references** Provide enough background to start work confidently.
    Cite the relevant plan sections, design docs, tickets, or files instead of repeating large amounts of source material.
 
-5. **Target files or areas**
-   Point to the expected modules, pages, services, folders, or systems involved.
+5. **Target files or areas** Point to the expected modules, pages, services, folders, or systems involved.
    This helps establish a practical ownership boundary.
 
-6. **Implementation notes**
-   Include important constraints, assumptions, dependencies, or interface expectations.
+6. **Implementation notes** Include important constraints, assumptions, dependencies, or interface expectations.
    If another task must land first, say so explicitly.
 
-7. **Acceptance criteria**
-   Define what done looks like in concrete, observable terms.
+7. **Acceptance criteria** Define what done looks like in concrete, observable terms.
    Include both behavior and structural expectations when relevant.
 
-8. **Validation**
-   State how the implementer should verify the work.
+8. **Validation** State how the implementer should verify the work.
    Prefer measurable goals such as:
    - build passes
    - relevant tests pass
    - the target flow works manually end to end
    - the output matches the referenced contract or design
 
-9. **Review plan**
-   Add a short sentence or checklist describing how a reviewer should inspect the completed work.
+9. **Review plan** Add a short sentence or checklist describing how a reviewer should inspect the completed work.
 
 ## Writing guidance
 
@@ -141,8 +146,12 @@ Avoid:
 - acceptance criteria that are too vague to review
 - instructions that force the implementer to rediscover key decisions
 
-**Anchor code references to named symbols.** When a task cites existing code, name the symbol and the scope holding it — function, class, namespace, module, exported constant — within a named file or folder, and let the reader grep for it: the reference's job is to survive the code moving, and a line number rots on the next rebase or on any edit above it. Where one file holds several same-named symbols, disambiguate the way that file's own language does (`v1::parseInput()`, `V1Api.prototype.parseInput`, an enclosing class or namespace path) rather than by position. Cite a line number only when the thing referenced has no stable name — a data row, a region of a generated file, a specific literal — and then state that reason in the task and stamp the reference frame the numbers are as of (the commit, PR, or task that produced them), so a later reader knows to re-derive them.
-This rule governs durable task files. Ephemeral same-round artifacts — reviewer findings, the peer verdict's `file:line`, open-question artifact pointers, review replies — are read against the tip that produced them and stay maximally precise in their own formats.
+**Anchor code references to named symbols.**
+When a task cites existing code, name the symbol and the scope holding it — function, class, namespace, module, exported constant — within a named file or folder, and let the reader grep for it: the reference's job is to survive the code moving, and a line number rots on the next rebase or on any edit above it.
+Where one file holds several same-named symbols, disambiguate the way that file's own language does (`v1::parseInput()`, `V1Api.prototype.parseInput`, an enclosing class or namespace path) rather than by position.
+Cite a line number only when the thing referenced has no stable name — a data row, a region of a generated file, a specific literal — and then state that reason in the task and stamp the reference frame the numbers are as of (the commit, PR, or task that produced them), so a later reader knows to re-derive them.
+This rule governs durable task files.
+Ephemeral same-round artifacts — reviewer findings, the peer verdict's `file:line`, open-question artifact pointers, review replies — are read against the tip that produced them and stay maximally precise in their own formats.
 
 ## Quality guidance
 
@@ -158,7 +167,8 @@ Encourage:
 
 By default, after the task files are drafted and committed, run the `review-cycle` skill on them with artifact type `prose` — a fresh-eyes self-review plus that skill's best-effort cross-harness peer — checking verbiage, scoping, self-containedness, code references anchored to named symbols rather than line numbers, and the repo's documented numbering house style against the sections this skill requires.
 Findings follow the cycle's disposition rule; commit the fixes on the current branch so the reviewed text is what an implementer picks up.
-Suppress the cycle per invocation in prose — `no-review`, or any clear request to skip it — and pass `peer-opinions=off` through to the cycle when given. Skipping is the exception for throwaway drafts, not the default.
+Suppress the cycle per invocation in prose — `no-review`, or any clear request to skip it — and pass `peer-opinions=off` through to the cycle when given.
+Skipping is the exception for throwaway drafts, not the default.
 
 ## Output expectations
 

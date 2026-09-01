@@ -19,17 +19,20 @@ Do **not** spawn worker or explorer subagents.
 A declared path gets a fresh **tmpfs** mounted over it at container start, so writes there stay container-local and never reach the host bind mount.
 Two consequences drive every decision below:
 
-- **The win: no host/container mixing.** Build output is frequently platform- and path-specific.
+- **The win: no host/container mixing.**
+  Build output is frequently platform- and path-specific.
   Native `node_modules` binaries built for Linux break a Windows host's own install; MSBuild bakes absolute paths like `/home/node/.nuget/packages/` into `obj/`, which a host Visual Studio build then trips over.
   Shadowing keeps the two worlds apart.
-- **The cost: it is RAM, and it is ephemeral.** Each shadow is its own tmpfs (2 GB cap by default, `SHADOW_TMPFS_SIZE`), allocated lazily.
+- **The cost: it is RAM, and it is ephemeral.**
+  Each shadow is its own tmpfs (2 GB cap by default, `SHADOW_TMPFS_SIZE`), allocated lazily.
   Everything in it is gone on container recreation.
 
 So the test is not "is this directory gitignored?" — it is **"is this directory cheap to regenerate, and harmful to share with the host?"**
 
 ## What to shadow, and what to leave alone
 
-**Shadow — disposable output.** Regenerated from source by an ordinary build, no cross-run value:
+**Shadow — disposable output.**
+Regenerated from source by an ordinary build, no cross-run value:
 
 - Compiled/bundled output: `dist/`, `build/`, `out/`, `lib/` (when generated)
 - Generated code that a codegen step recreates: Prisma/GraphQL/OpenAPI client dirs
@@ -38,24 +41,29 @@ So the test is not "is this directory gitignored?" — it is **"is this director
 These are illustrations, not a catalogue.
 Judge each directory from what you know about this repo's toolchains: a build tree that also holds the compiler's incremental state is the mixed case below, not disposable output.
 
-**Do not shadow — caches.** Their entire value is surviving between runs. Shadowing one trades a real, repeated build slowdown for cleanliness you did not need, because a cache is already private-by-design and rarely host-incompatible:
+**Do not shadow — caches.**
+Their entire value is surviving between runs.
+Shadowing one trades a real, repeated build slowdown for cleanliness you did not need, because a cache is already private-by-design and rarely host-incompatible:
 
 - Task/build caches: `.turbo/`, `.gradle/`, `.nx/`, `.mypy_cache/`, `.ruff_cache/`, `.pytest_cache/`
 - Mixed directories — output and cache in one tree, such as `.next/` holding its build alongside `.next/cache/`.
   Prefer shadowing nothing here, or the output subpath only — never blanket-shadow the parent and silently discard the cache on every recreate.
 
-**Do not shadow — anything another mechanism already handles.** Redundant entries are noise that future readers must re-derive:
+**Do not shadow — anything another mechanism already handles.**
+Redundant entries are noise that future readers must re-derive:
 
 - Any workspace package's `node_modules` (from `pnpm-workspace.yaml` / `package.json` `workspaces`)
 - Any `bin`/`obj` beside a `*.csproj`/`*.fsproj`/`*.vbproj`
 - The root `node_modules` (the launcher mounts a Docker volume there)
 - `.worktrees`, `.claude/worktrees`, `.git/worktrees` (declared by `enable-worktrees` itself, not derived by the auto-detection)
 
-**Do not shadow — anything with content a human might want.** Shadowing makes it invisible from the host and destroys it on recreate:
+**Do not shadow — anything with content a human might want.**
+Shadowing makes it invisible from the host and destroys it on recreate:
 
 - Artifacts someone opens on the host: coverage reports, Playwright `test-results/`, screenshots, profiling output
 - Local state: SQLite databases, uploads, seeded fixtures, `.env` files
-- Anything **tracked by git** — a shadow would mask committed files. Verify before declaring.
+- Anything **tracked by git** — a shadow would mask committed files.
+  Verify before declaring.
 
 When a directory is genuinely borderline, leave it undeclared and say so in your report.
 A missing shadow is a minor inefficiency; a wrong one silently deletes something on every container recreate.
@@ -76,11 +84,21 @@ Enumerate the projects.
 Operate on the current repository only.
 Every step is idempotent and surgical — preserve unrelated content, comments, and formatting, and remove an entry you did not add only after the user confirms it in step 5.
 
-1. **Locate the repo root.** `ROOT="$(git rev-parse --show-toplevel)"`. If this is not a git repository, stop and tell the user.
+1. **Locate the repo root.**
+   `ROOT="$(git rev-parse --show-toplevel)"`.
+   If this is not a git repository, stop and tell the user.
 
-2. **Check for a local override first.** If `$ROOT/.powbox.local.yml` exists and has a top-level `shadow:` key, it **replaces the committed `.powbox.yml` list wholesale** — the override's list, not the committed one, is what this container mounts. powbox bakes `detect-shadows.sh` onto `PATH` in its containers, so it is the authority for how the effective shadow list is derived and every claim here can be checked against the script itself. Use powbox's own test, not a variant of it, and keep both of its halves: the override counts only when `[ -f "$ROOT/.powbox.local.yml" ]` holds **and** `yq -r 'has("shadow")' "$ROOT/.powbox.local.yml" 2>/dev/null` prints `true`. Guard the `yq` call on that existence test rather than running it unconditionally — the `2>/dev/null` above already silences the error a missing file raises, and the answer is the same either way, so the guard is hygiene rather than a behaviour fix — and treat a parse failure on a file that is there as no override either, because powbox does: it falls back to `.powbox.yml`, which is then genuinely the effective list. Presence alone is not enough: a local file with only `ctx:` overrides nothing, so the committed list stays the effective one and the sweep below proceeds normally.
+2. **Check for a local override first.**
+   If `$ROOT/.powbox.local.yml` exists and has a top-level `shadow:` key, it **replaces the committed `.powbox.yml` list wholesale** — the override's list, not the committed one, is what this container mounts. powbox bakes `detect-shadows.sh` onto `PATH` in its containers, so it is the authority for how the effective shadow list is derived and every claim here can be checked against the script itself.
+   Use powbox's own test, not a variant of it, and keep both of its halves: the override counts only when `[ -f "$ROOT/.powbox.local.yml" ]` holds **and** `yq -r 'has("shadow")' "$ROOT/.powbox.local.yml" 2>/dev/null` prints `true`.
+   Guard the `yq` call on that existence test rather than running it unconditionally — the `2>/dev/null` above already silences the error a missing file raises, and the answer is the same either way, so the guard is hygiene rather than a behaviour fix — and treat a parse failure on a file that is there as no override either, because powbox does: it falls back to `.powbox.yml`, which is then genuinely the effective list.
+   Presence alone is not enough: a local file with only `ctx:` overrides nothing, so the committed list stays the effective one and the sweep below proceeds normally.
 
-   An active `shadow:` still has to be a list of non-empty string paths before you can act on it: null, a scalar, a mapping, or a list containing a null, collection, or empty string is malformed, so stop and report rather than coercing a pathname or editing a list you would have to invent — the same fail-closed rule step 6 applies to `.powbox.yml`. That is a different condition from the parse failure above, with the opposite outcome: an unparseable file is no override and the sweep continues on `.powbox.yml`, while a file that parses but carries a malformed `shadow:` value stops the run. An empty list is well-formed, and deliberately so: it disables the committed declarations. Audit it: a cache or database declared there is exactly as live as one in `.powbox.yml`, so carry its entries into step 3 as candidates too. Say so and confirm how to proceed before editing — the committed file stays the durable record of the agreed set, but nothing you write there takes effect while the override stands, so the user has to either retire the override or accept the same change in it.
+   An active `shadow:` still has to be a list of non-empty string paths before you can act on it: null, a scalar, a mapping, or a list containing a null, collection, or empty string is malformed, so stop and report rather than coercing a pathname or editing a list you would have to invent — the same fail-closed rule step 6 applies to `.powbox.yml`.
+   That is a different condition from the parse failure above, with the opposite outcome: an unparseable file is no override and the sweep continues on `.powbox.yml`, while a file that parses but carries a malformed `shadow:` value stops the run.
+   An empty list is well-formed, and deliberately so: it disables the committed declarations.
+   Audit it: a cache or database declared there is exactly as live as one in `.powbox.yml`, so carry its entries into step 3 as candidates too.
+   Say so and confirm how to proceed before editing — the committed file stays the durable record of the agreed set, but nothing you write there takes effect while the override stands, so the user has to either retire the override or accept the same change in it.
 
 3. **Enumerate candidates.**
 
@@ -99,8 +117,7 @@ Every step is idempotent and surgical — preserve unrelated content, comments, 
    Apply the ignored-path check to already-declared entries too: apart from the three exact pre-authorized `enable-worktrees` roots below, a declaration whose ignore rule was removed is a finding and must not be approved or retained.
 
    Before trusting those root-index checks, do not approve a glob as one literal path.
-   Expand every directory it currently matches and apply the ignored-path check, tracked-content check, and ownership guard to each concrete match; surface the glob even when every match passes and propose replacing it with those audited literals in step 5.
-   A glob with no current matches is unverifiable, so surface it too.
+   Expand every directory it currently matches and apply the ignored-path check, tracked-content check, and ownership guard to each concrete match; surface the glob even when every match passes and propose replacing it with those audited literals in step 5. A glob with no current matches is unverifiable, so surface it too.
 
    Apply the fail-closed ownership guard to every literal candidate and concrete glob match.
    Require its path, after resolving `.` and `..` lexically without following symlinks, to remain beneath `$ROOT`; inspect every materialized path component below `$ROOT` (including a dangling symlink), require every materialized non-leaf component to be a real directory, and reject a symlink component, a candidate at or below a mode-`160000` gitlink boundary from `git -C "$ROOT" ls-files --stage`, an existing component that is named `.git` or has its own `.git` file or directory, or an existing leaf with a descendant `.git` boundary.
@@ -117,11 +134,15 @@ Every step is idempotent and surgical — preserve unrelated content, comments, 
    Judge an already-declared path by the same lists — one that now lands in a "do not shadow" list is a finding, not a fixture.
    Treat only the exact, already-declared `enable-worktrees` roots (`.worktrees`, `.claude/worktrees`, and `.git/worktrees`) as pre-authorized guard outcomes: preserve them exactly even when their worktree metadata trips the VCS-boundary check, and never propose removing them from either list in this audit.
 
-5. **Confirm the judgment calls with the user.** List what you propose to shadow, what you are deliberately leaving alone, and any existing declaration you propose to drop, each with a one-line reason.
+5. **Confirm the judgment calls with the user.**
+   List what you propose to shadow, what you are deliberately leaving alone, and any existing declaration you propose to drop, each with a one-line reason.
    Caches and human-facing output are the entries most worth naming explicitly — a user who wants `.turbo/` shadowed anyway should get to say so.
    Never remove an existing entry without that confirmation; it may be deliberate.
 
-6. **Write `.powbox.yml`.** Add the agreed literal paths to the `shadow:` list, creating the file with a `shadow:` key if absent. Keep every existing entry that survived step 5, and drop only the ones the user agreed to remove. Give each new entry a short trailing comment saying what regenerates it, so the next reader does not have to re-derive the decision:
+6. **Write `.powbox.yml`.**
+   Add the agreed literal paths to the `shadow:` list, creating the file with a `shadow:` key if absent.
+   Keep every existing entry that survived step 5, and drop only the ones the user agreed to remove.
+   Give each new entry a short trailing comment saying what regenerates it, so the next reader does not have to re-derive the decision:
 
    ```yaml
    shadow:
@@ -131,9 +152,12 @@ Every step is idempotent and surgical — preserve unrelated content, comments, 
 
    If the file has a `shadow:` key that is not a list of non-empty string paths, stop and report rather than coercing or rewriting it; the same invalid element types named in step 2 are malformed here too.
 
-   When step 2 found an active override, follow the resolution the user chose there. If they kept it, apply the same agreed additions and removals to `$ROOT/.powbox.local.yml` as well, or the fix stays theoretical; if they retired it, drop that file's `shadow:` key — leaving its other keys alone — so the committed list is what takes effect. Either way, never stage `.powbox.local.yml` in step 8: it is user-local, and powbox's launcher only *warns* when `git -C "$ROOT" check-ignore -q -- .powbox.local.yml` does not ignore it, so run that check yourself and surface the gap to the user when the file is not ignored.
+   When step 2 found an active override, follow the resolution the user chose there.
+   If they kept it, apply the same agreed additions and removals to `$ROOT/.powbox.local.yml` as well, or the fix stays theoretical; if they retired it, drop that file's `shadow:` key — leaving its other keys alone — so the committed list is what takes effect.
+   Either way, never stage `.powbox.local.yml` in step 8: it is user-local, and powbox's launcher only *warns* when `git -C "$ROOT" check-ignore -q -- .powbox.local.yml` does not ignore it, so run that check yourself and surface the gap to the user when the file is not ignored.
 
-7. **(Optional) Apply immediately in this session.** Committed declarations take effect at the next container start; to shadow the new paths now, without relaunching:
+7. **(Optional) Apply immediately in this session.**
+   Committed declarations take effect at the next container start; to shadow the new paths now, without relaunching:
 
    ```bash
    shadow-refresh.sh "$ROOT"
@@ -146,9 +170,16 @@ Every step is idempotent and surgical — preserve unrelated content, comments, 
    A path that was non-empty before shadowing will appear **empty** afterwards — the tmpfs hides the previous host content, which is the intent.
    Warn the user before running this if any candidate held something they had not regenerated.
 
-   Removal is not symmetrical, and this part applies even when you skip the refresh above. `shadow-refresh.sh` only adds mounts, and an unprivileged shell cannot unmount one, so a path that step 6 leaves undeclared — whether you dropped it from a list or it fell out when the override carrying it was retired — keeps its tmpfs for the rest of the session. Run the same `findmnt` on every such path: while it still reports `tmpfs`, writes there still land in the ephemeral mount and stay invisible from the host — which, for the database or upload directory that made the declaration unsafe in the first place, is the whole problem. A removed **glob** has to be expanded first — `findmnt` takes a mountpoint, not a pattern, so testing `apps/*/dist` itself just exits non-zero and reads as a false all-clear while the concrete mounts powbox created from it stay live. Enumerate the directories it matched, or list every live mount under the repo with `findmnt -lno TARGET,FSTYPE | grep -F "$ROOT/"`. Copy out anything that has to survive, and tell the user plainly that the removal itself only takes effect at the next container start.
+   Removal is not symmetrical, and this part applies even when you skip the refresh above.
+   `shadow-refresh.sh` only adds mounts, and an unprivileged shell cannot unmount one, so a path that step 6 leaves undeclared — whether you dropped it from a list or it fell out when the override carrying it was retired — keeps its tmpfs for the rest of the session.
+   Run the same `findmnt` on every such path: while it still reports `tmpfs`, writes there still land in the ephemeral mount and stay invisible from the host — which, for the database or upload directory that made the declaration unsafe in the first place, is the whole problem.
+   A removed **glob** has to be expanded first — `findmnt` takes a mountpoint, not a pattern, so testing `apps/*/dist` itself just exits non-zero and reads as a false all-clear while the concrete mounts powbox created from it stay live.
+   Enumerate the directories it matched, or list every live mount under the repo with `findmnt -lno TARGET,FSTYPE | grep -F "$ROOT/"`.
+   Copy out anything that has to survive, and tell the user plainly that the removal itself only takes effect at the next container start.
 
-8. **Commit the config.** `.powbox.yml` belongs in version control so every teammate and future container inherits it. Stage and commit only this change — not unrelated edits the file may already carry — following the repo's conventions, or leave it staged and say so if the user prefers to review.
+8. **Commit the config.**
+   `.powbox.yml` belongs in version control so every teammate and future container inherits it.
+   Stage and commit only this change — not unrelated edits the file may already carry — following the repo's conventions, or leave it staged and say so if the user prefers to review.
 
 ## Report
 

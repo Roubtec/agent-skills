@@ -20,7 +20,7 @@ The workflow is meant to be the *efficient* path for happy-path situations, with
 
 Let `H` be the checked-out tip and `R` the PR's `headRefOid`.
 
-```
+```text
 S = git rev-list --right-only --cherry-pick H...R    # remote work not represented in local
 if S is empty                          -> work on H as it stands
 elif git merge-base --is-ancestor H R  -> git merge --ff-only R, then work
@@ -32,7 +32,7 @@ The first probe is doing the real work: `--cherry-pick` drops commits that have 
 Behaviour was verified against a scratch repository for each case below.
 
 | Situation | `S` | `H` ancestor of `R` | Outcome |
-|---|---|---|---|
+| --- | --- | --- | --- |
 | Identical | empty | yes | work |
 | Local ahead by an unpushed commit | empty | no | work |
 | Rebased onto a newer base | empty | no | work |

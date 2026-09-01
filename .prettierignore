@@ -1,0 +1,5 @@
+# Markdown formatting is owned by markdownlint (see .markdownlint.jsonc and
+# .vscode/settings.json). Prettier's Markdown style — aligned tables,
+# underscore emphasis — fights that config, so Prettier never touches
+# Markdown here, whether run from the editor or the CLI.
+*.md

@@ -7,34 +7,54 @@ Implement the given task or a set of tasks using a delegated subagent workflow.
 
 **Arguments:** `<mixed-list of task numbers, task-file paths, and globs to implement> [peer-opinions=off]`
 
-`peer-opinions=off` is the only accepted explicit peer-opinion setting. Omit it to use the default, which enables best-effort peer opinions.
+`peer-opinions=off` is the only accepted explicit peer-opinion setting.
+Omit it to use the default, which enables best-effort peer opinions.
 
 ## Task-pointer preflight
 
-Before reading task dependencies, run `resolve-tasks` in a fresh resolution subagent with its own context window. Hand it the complete raw task-pointer list, have it follow the shared resolver contract, and consume its task-resolution packet; do not scavenge or re-resolve task filenames in the orchestrator's context. Reconcile the returned packet against the list you handed it: every deduplicated raw pointer must appear either in some path's `selectedBy` or as a `not-found` diagnostic, and a pointer the packet accounts for nowhere is a resolution failure to report, never a silently smaller batch; and no `selectedBy` or `not-found` raw value may name a pointer you never handed it — a packet that invents an input is the same resolution failure to report, never extra work to admit.
+Before reading task dependencies, run `resolve-tasks` in a fresh resolution subagent with its own context window.
+Hand it the complete raw task-pointer list, have it follow the shared resolver contract, and consume its task-resolution packet; do not scavenge or re-resolve task filenames in the orchestrator's context.
+Reconcile the returned packet against the list you handed it: every deduplicated raw pointer must appear either in some path's `selectedBy` or as a `not-found` diagnostic, and a pointer the packet accounts for nowhere is a resolution failure to report, never a silently smaller batch; and no `selectedBy` or `not-found` raw value may name a pointer you never handed it — a packet that invents an input is the same resolution failure to report, never extra work to admit.
 
-Use the packet's `selectedBy` provenance to apply policy. A path selected by an explicit path or glob executes exactly as it did before this additive preflight, whether its report context is `active`, `done`, `deferred`, `ambiguous`, or `outside-subtree`; if both explicit and number provenance selected it, explicit selection wins. A number-selected unambiguous `active` path executes normally. An unmatched number, path, or glob never executes and its `not-found` diagnostic is always surfaced.
+Use the packet's `selectedBy` provenance to apply policy.
+A path selected by an explicit path or glob executes exactly as it did before this additive preflight, whether its report context is `active`, `done`, `deferred`, `ambiguous`, or `outside-subtree`; if both explicit and number provenance selected it, explicit selection wins.
+A number-selected unambiguous `active` path executes normally.
+An unmatched number, path, or glob never executes and its `not-found` diagnostic is always surfaced.
 
-Mode selection is part of the invocation, not an inference from the task mapping: a direct skill invocation defaults to interactive whenever the maintainer can answer in the current session. Use hands-off only when the maintainer explicitly requests it or the invoking runtime cannot accept mid-run input; a dynamic workflow that cannot pause for a decision uses the same hands-off policy.
+Mode selection is part of the invocation, not an inference from the task mapping: a direct skill invocation defaults to interactive whenever the maintainer can answer in the current session.
+Use hands-off only when the maintainer explicitly requests it or the invoking runtime cannot accept mid-run input; a dynamic workflow that cannot pause for a decision uses the same hands-off policy.
 
-In an interactive run, show the resolved mapping whenever the invocation contains any number input, including a number mixed with otherwise clean explicit pointers. Also show the mapping whenever any input form produces a non-`active` classification or `not-found` anomaly. Require an explicit continue decision when any number-selected full number is `done`, `deferred`, or `ambiguous`, or when any input is `not-found`: `done` means already delivered and is skipped unless the maintainer explicitly includes it; `deferred` means deliberately unscheduled and needs explicit inclusion; for each `ambiguous` number, ask the maintainer to select exactly one candidate or exclude that number — a blanket continue must never include every candidate. Explicit path/glob selections remain executable while this decision is made.
+In an interactive run, show the resolved mapping whenever the invocation contains any number input, including a number mixed with otherwise clean explicit pointers.
+Also show the mapping whenever any input form produces a non-`active` classification or `not-found` anomaly.
+Require an explicit continue decision when any number-selected full number is `done`, `deferred`, or `ambiguous`, or when any input is `not-found`: `done` means already delivered and is skipped unless the maintainer explicitly includes it; `deferred` means deliberately unscheduled and needs explicit inclusion; for each `ambiguous` number, ask the maintainer to select exactly one candidate or exclude that number — a blanket continue must never include every candidate.
+Explicit path/glob selections remain executable while this decision is made.
 
-In a hands-off run, execute only the number-selected unambiguous `active` paths plus every explicit path/glob selection. Exclude and document every number-selected `done`, `deferred`, or `ambiguous` classification and every `not-found` input; never guess an ambiguous number. Carry the complete mapping and exclusions into the run summary.
+In a hands-off run, execute only the number-selected unambiguous `active` paths plus every explicit path/glob selection.
+Exclude and document every number-selected `done`, `deferred`, or `ambiguous` classification and every `not-found` input; never guess an ambiguous number.
+Carry the complete mapping and exclusions into the run summary.
 
 ## Architecture
 
 You are the **orchestrator**.
 Your job is to sequence tasks, manage branches and PRs, and coordinate two specialized subagent roles per task:
 
-- **Orchestrator** (you) — sequencing, branching, PR creation, progress tracking. Runs as the top-level agent.
-- **Implementer** — deep implementation work for a single task. Spawned via the `Agent` tool with `subagent_type: "general-purpose"`.
-- **Reviewer** — fresh-eyes acceptance check against the task definition. Spawned via the `Agent` tool with `subagent_type: "general-purpose"`.
+- **Orchestrator** (you) — sequencing, branching, PR creation, progress tracking.
+  Runs as the top-level agent.
+- **Implementer** — deep implementation work for a single task.
+  Spawned via the `Agent` tool with `subagent_type: "general-purpose"`.
+- **Reviewer** — fresh-eyes acceptance check against the task definition.
+  Spawned via the `Agent` tool with `subagent_type: "general-purpose"`.
 
 This separation keeps your context window clean across long batches and ensures the reviewer evaluates the work without implementation bias.
 
 > **Critical — one agent at a time; subagents share your working tree.**
-> Every subagent operates on your single checked-out branch and working tree — they are **not** isolated copies of the repo. Two checkout-dependent agents running at once corrupt each other. The most common failure: a reviewer spawned alongside its implementer scopes `git diff <base>...HEAD` against a branch the implementer has not finished committing to, sees nothing, and falsely reports "no implementation" — so the work ships **unreviewed**.
-> The invariant is about committed state, not about turn structure: **a reviewer may not start until its implementer's commits are on disk.** A harness may run spawns asynchronously — an `Agent` call can return immediately with a background task id and deliver its result as a later notification — so your obligation is to wait for that completion notification before spawning the reviewer. Keeping the two out of the same turn or parallel tool block is a **proxy** for that invariant: sufficient where spawns are synchronous, and neither sufficient nor necessary where they are not. The harness's general "batch independent tool calls together" guidance does **not** apply to these spawns: the implementer and its reviewer are *not* independent — they contend for the same working tree.
+> Every subagent operates on your single checked-out branch and working tree — they are **not** isolated copies of the repo.
+> Two checkout-dependent agents running at once corrupt each other.
+> The most common failure: a reviewer spawned alongside its implementer scopes `git diff <base>...HEAD` against a branch the implementer has not finished committing to, sees nothing, and falsely reports "no implementation" — so the work ships **unreviewed**.
+> The invariant is about committed state, not about turn structure: **a reviewer may not start until its implementer's commits are on disk.**
+> A harness may run spawns asynchronously — an `Agent` call can return immediately with a background task id and deliver its result as a later notification — so your obligation is to wait for that completion notification before spawning the reviewer.
+> Keeping the two out of the same turn or parallel tool block is a **proxy** for that invariant: sufficient where spawns are synchronous, and neither sufficient nor necessary where they are not.
+> The harness's general "batch independent tool calls together" guidance does **not** apply to these spawns: the implementer and its reviewer are *not* independent — they contend for the same working tree.
 > The examination-only peer CLI described below is the sole exception: launch it alongside the reviewer only after the implementation is committed, and forbid it from running builds or tests, so it remains a concurrent reader while the own reviewer may build.
 
 **Trivial-task escape hatch:** for genuinely trivial tasks (a single obvious change with unambiguous criteria), you may implement directly without delegating.
@@ -50,27 +70,42 @@ Your responsibilities are:
 1. Consume the **Task-pointer preflight** packet as the hard list of task files and the resolution context to report.
 2. Read each task file enough to understand dependencies and sequencing — do not deeply analyze implementation details.
 3. Manage branch creation and PR base determination.
-4. Construct focused prompts and spawn subagents **one at a time** — implementer, await its result, then a fresh reviewer — for each task. The rule is that the reviewer does not start until its implementer's commits are on disk, so wait for the completion notification; keeping the two out of one turn is the **proxy** for that, not the rule (see the shared-working-tree rule above).
+4. Construct focused prompts and spawn subagents **one at a time** — implementer, await its result, then a fresh reviewer — for each task.
+   The rule is that the reviewer does not start until its implementer's commits are on disk, so wait for the completion notification; keeping the two out of one turn is the **proxy** for that, not the rule (see the shared-working-tree rule above).
 5. Handle the review feedback loop.
 6. Open PRs once a task passes review.
 7. Advance to the next task or stop on blockers.
 8. Produce the final batch summary.
 
-Before the first task's branch is created, read the main checkout's working-tree state as the baseline the closing cleanliness report compares against (see "Main-checkout cleanliness report"). Observe only; never "fix" a checkout that is already dirty.
+Before the first task's branch is created, read the main checkout's working-tree state as the baseline the closing cleanliness report compares against (see "Main-checkout cleanliness report").
+Observe only; never "fix" a checkout that is already dirty.
 
 ## Diagnosis discipline
 
-A subagent's environment or infrastructure diagnosis is a **hypothesis, not a finding**. Verify it against **observable state** — the reflog, the refs, the working tree, file contents, the output of a command you run yourself — before propagating any mitigation into sibling prompts: that observes the effect rather than the claim. A bounded grep of that subagent's own transcript is a fallback, and only where the harness exposes a greppable one — some hand back the transcript path with an instruction not to read or tail it, because it is full JSONL that will overflow your context. A scratch-filename collision was once misdiagnosed as a working-directory bug, and the wrong mitigation rode into roughly ten later subagent prompts before anyone checked.
+A subagent's environment or infrastructure diagnosis is a **hypothesis, not a finding**.
+Verify it against **observable state** — the reflog, the refs, the working tree, file contents, the output of a command you run yourself — before propagating any mitigation into sibling prompts: that observes the effect rather than the claim.
+A bounded grep of that subagent's own transcript is a fallback, and only where the harness exposes a greppable one — some hand back the transcript path with an instruction not to read or tail it, because it is full JSONL that will overflow your context.
+A scratch-filename collision was once misdiagnosed as a working-directory bug, and the wrong mitigation rode into roughly ten later subagent prompts before anyone checked.
 
 ## Subagent destroy boundary
 
-State this in every subagent prompt this skill composes. A reviewer subagent authorized to verify a claim empirically once ran `rm -rf ./*` in a shared main checkout: its setup `git clone … | tail` had failed invisibly under `set -e` (a pipeline's status is its last command), so it deleted tracked files and moved a branch ref while believing it stood inside a clone.
+State this in every subagent prompt this skill composes.
+A reviewer subagent authorized to verify a claim empirically once ran `rm -rf ./*` in a shared main checkout: its setup `git clone … | tail` had failed invisibly under `set -e` (a pipeline's status is its last command), so it deleted tracked files and moved a branch ref while believing it stood inside a clone.
 
 - **Permitted:** reading, searching, and read-only `git`/`gh` queries — plus, for an implementer, edits, commits, and pushes confined to the task branch you checked out for it.
-- **Forbidden, named outright:** `rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`, and force-pushing — each of them beyond what the prompt itself spells out, whether as an exact command or as a skill it names to invoke. A subagent may not self-authorize one by putting itself somewhere it believes is safe — forbidden **not in a clone, not in a temp directory, not "safely"**. What you spelled out, and the disposable location below, are the only exemptions — and only because you named them.
-- **A worktree is not a blast radius, and here there is not even one.** A worktree isolates the working tree, not the repository: `branch -f`, `reset`, `update-ref`, and `gc` all reach every sibling worktree through the shared `.git` — and this skill's subagents share your single working tree outright.
-- **Any repository other than the subagent's own checkout is addressed by path.** `git -C <absolute path>`: never derive a working directory from a glob, and never chain a state-changing git command after a `cd` whose success you have not checked. A fix-up subagent ran `cd "$(ls -d <scratchpad>/tmp.*)" ; git commit …` where concurrent siblings had created scratch directories of their own — the glob expanded to three paths, the `cd` failed, and the `;`-chained commands landed in the shared main checkout, putting a commit on `main`.
-- **Empirical verification that could change state goes where you send it.** Send the subagent to `DC="$(dc-enter <slug>)"` — one absolute path on stdout, dropped again with `dc-remove <slug>`; a reused slug is refused rather than re-derived, so anything that may run twice passes `--replace` or removes the slug first. Where that command is not found at all, install the helpers from the dev-skills plugin `bin/` rather than improvising a destination. Never leave the choice to the subagent. Give it the guarded `cd` too: `cd ""` returns 0 and moves nowhere, so checking the status catches nothing and a failed lookup leaves the subagent in the shared checkout — the form is `cd -- "${DC:?dc-enter returned no path — see its error above; if it is not installed, install it from the dev-skills plugin bin/}"`, with `pwd` confirmed before the first command that writes.
+- **Forbidden, named outright:** `rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`, and force-pushing — each of them beyond what the prompt itself spells out, whether as an exact command or as a skill it names to invoke.
+  A subagent may not self-authorize one by putting itself somewhere it believes is safe — forbidden **not in a clone, not in a temp directory, not "safely"**.
+  What you spelled out, and the disposable location below, are the only exemptions — and only because you named them.
+- **A worktree is not a blast radius, and here there is not even one.**
+  A worktree isolates the working tree, not the repository: `branch -f`, `reset`, `update-ref`, and `gc` all reach every sibling worktree through the shared `.git` — and this skill's subagents share your single working tree outright.
+- **Any repository other than the subagent's own checkout is addressed by path.**
+  `git -C <absolute path>`: never derive a working directory from a glob, and never chain a state-changing git command after a `cd` whose success you have not checked.
+  A fix-up subagent ran `cd "$(ls -d <scratchpad>/tmp.*)" ; git commit …` where concurrent siblings had created scratch directories of their own — the glob expanded to three paths, the `cd` failed, and the `;`-chained commands landed in the shared main checkout, putting a commit on `main`.
+- **Empirical verification that could change state goes where you send it.**
+  Send the subagent to `DC="$(dc-enter <slug>)"` — one absolute path on stdout, dropped again with `dc-remove <slug>`; a reused slug is refused rather than re-derived, so anything that may run twice passes `--replace` or removes the slug first.
+  Where that command is not found at all, install the helpers from the dev-skills plugin `bin/` rather than improvising a destination.
+  Never leave the choice to the subagent.
+  Give it the guarded `cd` too: `cd ""` returns 0 and moves nowhere, so checking the status catches nothing and a failed lookup leaves the subagent in the shared checkout — the form is `cd -- "${DC:?dc-enter returned no path — see its error above; if it is not installed, install it from the dev-skills plugin bin/}"`, with `pwd` confirmed before the first command that writes.
 
 ## Implementer Agent
 
@@ -81,21 +116,31 @@ It is spawned **on its own**: the reviewer may not start until this implementer'
 
 Construct a prompt that contains:
 
-- **The full task file content** — paste it into the prompt. Do not assume the agent has prior context.
+- **The full task file content** — paste it into the prompt.
+  Do not assume the agent has prior context.
 - **The branch name** it should be working on, and instruction to verify it is on the correct branch.
 - **Instruction to read `AGENTS.md`** at the start for full project context and conventions.
 - **Relevant upstream context** — if this task depends on a previous task in the batch, briefly describe what the previous task introduced so the implementer can build on it.
 - **Commit and validation instructions:**
   - Commit at logical milestones, keeping each commit buildable when practical.
-  - **An absolute path for validation output**, which you allocate — namespaced by this task's number or created with `mktemp -d`, and outside the working tree the implementer commits from. Any build or lint output that must land in a file goes there, never a fixed shared scratchpad name: one session's agents share that directory. Never leave the choice to the implementer.
+  - **An absolute path for validation output**, which you allocate — namespaced by this task's number or created with `mktemp -d`, and outside the working tree the implementer commits from.
+    Any build or lint output that must land in a file goes there, never a fixed shared scratchpad name: one session's agents share that directory.
+    Never leave the choice to the implementer.
 - **Coordination instructions** — remind the implementer that it is not alone in the codebase, must not revert unrelated edits made by others, and should accommodate concurrent changes.
-- **Finish inside your own turn.** Nothing resumes a subagent, so tell the implementer never to end its turn waiting for a notification or for a child it launched: it bounds and waits on anything it starts and reaps it before returning, leaving no process of its own running. It launches no peer review of its own either — the loop's peer step is the sanctioned second opinion (see `review-cycle`).
-- **No shared task-tracker.** Tell the implementer not to use the `TaskCreate`/`TaskUpdate`/`TaskList` tools. A subagent's entries leak into the orchestrator's task view and linger there as stale, misleading items (e.g. a child's `in_progress` step that has already finished), adding noise to every later turn without helping the orchestrator spot a struggling task — that signal comes from the implement→review→fix result, not from a child's micro-steps. The implementer should track its own steps however it likes and surface progress only in its final report.
+- **Finish inside your own turn.**
+  Nothing resumes a subagent, so tell the implementer never to end its turn waiting for a notification or for a child it launched: it bounds and waits on anything it starts and reaps it before returning, leaving no process of its own running.
+  It launches no peer review of its own either — the loop's peer step is the sanctioned second opinion (see `review-cycle`).
+- **No shared task-tracker.**
+  Tell the implementer not to use the `TaskCreate`/`TaskUpdate`/`TaskList` tools.
+  A subagent's entries leak into the orchestrator's task view and linger there as stale, misleading items (e.g. a child's `in_progress` step that has already finished), adding noise to every later turn without helping the orchestrator spot a struggling task — that signal comes from the implement→review→fix result, not from a child's micro-steps.
+  The implementer should track its own steps however it likes and surface progress only in its final report.
 - **Reporting instructions** — when done, report back with:
   - A concise summary of what was implemented.
   - Any decisions, tradeoffs, or deviations from the task description.
   - Any uncertainties or areas that may need focused review.
-- **The `review-cycle` Fixer contract, whole** — the implementer is that cycle's Fixer on round 1, so every rule that skill states for a Fixer binds here, later additions included; the bullets above are this loop's deltas, not a closed list. It carries the deviation protocol, and a task-implementation loop is exactly where that was broken: where the task hands down a decision the maintainer LOCKED and the implementer must deliver something else, it reports what it delivered instead and the constraint that forced it rather than conforming the deviation away — report, don't correct; the maintainer ratifies it or asks for conformance, and has ratified one and reversed their own earlier decision. It buys no slack meanwhile: completeness, tests, and regressions are graded exactly as strictly.
+- **The `review-cycle` Fixer contract, whole** — the implementer is that cycle's Fixer on round 1, so every rule that skill states for a Fixer binds here, later additions included; the bullets above are this loop's deltas, not a closed list.
+  It carries the deviation protocol, and a task-implementation loop is exactly where that was broken: where the task hands down a decision the maintainer LOCKED and the implementer must deliver something else, it reports what it delivered instead and the constraint that forced it rather than conforming the deviation away — report, don't correct; the maintainer ratifies it or asks for conformance, and has ratified one and reversed their own earlier decision.
+  It buys no slack meanwhile: completeness, tests, and regressions are graded exactly as strictly.
 
 ### What the implementer should NOT receive
 
@@ -134,43 +179,62 @@ Read `AGENTS.md` first for project conventions.
 
 The reviewer is a **fresh** subagent with no knowledge of the implementation process.
 It evaluates the current codebase state against two orthogonal dimensions: acceptance criteria compliance and implementation quality.
-It must be a **new** `Agent` invocation — a fresh-eyes agent with no implementation context, never a continuation of the implementer. Ignore any `SendMessage` continuation footer from earlier `Agent` results; this harness does not expose that tool.
-Spawn it only **after** the implementer's commits are on disk — wait for that completion notification; keeping it out of the implementer's turn or parallel tool block is only a proxy for the same thing. You share one working tree, so a concurrent reviewer scans an empty or half-finished branch and wrongly reports "no implementation" (see the shared-working-tree rule in Architecture).
+It must be a **new** `Agent` invocation — a fresh-eyes agent with no implementation context, never a continuation of the implementer.
+Ignore any `SendMessage` continuation footer from earlier `Agent` results; this harness does not expose that tool.
+Spawn it only **after** the implementer's commits are on disk — wait for that completion notification; keeping it out of the implementer's turn or parallel tool block is only a proxy for the same thing.
+You share one working tree, so a concurrent reviewer scans an empty or half-finished branch and wrongly reports "no implementation" (see the shared-working-tree rule in Architecture).
 Wait for its result before advancing branches or starting the next task — the feedback loop must complete first.
 
 ### What to include in the reviewer prompt
 
 - **The full task file content** — same source of truth the implementer received.
-- **The PR base branch name** (the branch this task will be merged into). The reviewer uses this to scope its review by listing files touched on the task branch versus the base. If the orchestrator omits this, the reviewer should fall back to `main` and note the fallback in its report.
+- **The PR base branch name** (the branch this task will be merged into).
+  The reviewer uses this to scope its review by listing files touched on the task branch versus the base.
+  If the orchestrator omits this, the reviewer should fall back to `main` and note the fallback in its report.
 - **Instruction to read the relevant areas of the codebase** and check each acceptance criterion against the actual code.
 - **A note that the implementation is already committed on the current branch** — the reviewer must read the actual files, and must NOT conclude "no implementation" without first confirming the diff is genuinely empty (an empty diff at this stage is far more likely an orchestration error than real absence; the reviewer should say so rather than spend its budget reviewing nothing).
 - **Instruction to perform a code quality pass** (see dimensions below) orthogonal to the criteria check.
-- **Scoping guidance** — the reviewer may run `git diff --name-only <base>...HEAD` to identify the set of touched files and prioritize quality review there. It must still read each touched file in full (not just the diff) and may follow references into untouched files when needed to evaluate consistency or call sites.
-- **An absolute path for validation output**, which you allocate — namespaced by this task's number or created with `mktemp -d`. Any build or check output that must land in a file goes there, never a fixed shared scratchpad name: one session's agents share that directory, and two of them redirecting to `<scratchpad>/verify.log` once had one reading the other's results and returning a verdict for the wrong branch. This batch runs serially, but the session around it does not. Never leave the choice to the reviewer.
+- **Scoping guidance** — the reviewer may run `git diff --name-only <base>...HEAD` to identify the set of touched files and prioritize quality review there.
+  It must still read each touched file in full (not just the diff) and may follow references into untouched files when needed to evaluate consistency or call sites.
+- **An absolute path for validation output**, which you allocate — namespaced by this task's number or created with `mktemp -d`.
+  Any build or check output that must land in a file goes there, never a fixed shared scratchpad name: one session's agents share that directory, and two of them redirecting to `<scratchpad>/verify.log` once had one reading the other's results and returning a verdict for the wrong branch.
+  This batch runs serially, but the session around it does not.
+  Never leave the choice to the reviewer.
 - **Reporting format:**
-  - **Pass** — all acceptance criteria are met, build passes, and no material quality issues found. State this clearly.
-  - **Issues** — a numbered list of specific, actionable findings. Each finding must include: the category (criteria gap vs. quality), where in the code the gap is, and what needs to change.
+  - **Pass** — all acceptance criteria are met, build passes, and no material quality issues found.
+    State this clearly.
+  - **Issues** — a numbered list of specific, actionable findings.
+    Each finding must include: the category (criteria gap vs. quality), where in the code the gap is, and what needs to change.
 - **Instruction to be strict but fair** — flag genuine gaps and functional problems, not style preferences or minor nitpicks.
-- **Instruction NOT to edit any files** — the reviewer only reads and reports. It must not create, update, or delete follow-up task files; any suggested follow-up work belongs in the review report only.
-- **The `review-cycle` Reviewer contract, whole** — every rule that skill states for a Reviewer binds here, later additions included; the bullets above are this loop's deltas, not a closed list. It carries the lifecycle rule this prompt states outright: nothing resumes a subagent, so the reviewer never ends its turn waiting for a notification, a callback, or a child it launched, it bounds and reaps anything it starts before reporting, and it launches no review of its own beside the loop's sanctioned peer step.
+- **Instruction NOT to edit any files** — the reviewer only reads and reports.
+  It must not create, update, or delete follow-up task files; any suggested follow-up work belongs in the review report only.
+- **The `review-cycle` Reviewer contract, whole** — every rule that skill states for a Reviewer binds here, later additions included; the bullets above are this loop's deltas, not a closed list.
+  It carries the lifecycle rule this prompt states outright: nothing resumes a subagent, so the reviewer never ends its turn waiting for a notification, a callback, or a child it launched, it bounds and reaps anything it starts before reporting, and it launches no review of its own beside the loop's sanctioned peer step.
 - **Instruction not to use the shared task-tracker** — like the implementer, tell the reviewer not to use the `TaskCreate`/`TaskUpdate`/`TaskList` tools; a subagent's task entries bleed into the orchestrator's view.
 
 #### Code quality dimensions to check
 
 These are checked **in addition to** the acceptance criteria, not instead of them.
 
-- **Logic correctness** — control flow, conditionals, and branching produce the right outcomes. Look for off-by-one errors, inverted conditions, incorrect operator precedence, or logic that silently produces wrong results.
-- **Error handling** — errors are caught where they can occur, propagated with meaningful context, and never silently swallowed. Return types and thrown types are accurate.
+- **Logic correctness** — control flow, conditionals, and branching produce the right outcomes.
+  Look for off-by-one errors, inverted conditions, incorrect operator precedence, or logic that silently produces wrong results.
+- **Error handling** — errors are caught where they can occur, propagated with meaningful context, and never silently swallowed.
+  Return types and thrown types are accurate.
 - **Edge cases** — null/undefined inputs, empty collections, zero/negative numbers, and boundary values are handled gracefully or explicitly rejected with a clear error.
-- **Dead code and unreachable paths** — branches, parameters, or exported symbols that can never be reached or used should be flagged. Defensive code for conditions that cannot occur should be questioned.
-- **Code consistency** — naming, patterns, and idioms are consistent with the surrounding codebase. New abstractions follow the same conventions as existing ones.
+- **Dead code and unreachable paths** — branches, parameters, or exported symbols that can never be reached or used should be flagged.
+  Defensive code for conditions that cannot occur should be questioned.
+- **Code consistency** — naming, patterns, and idioms are consistent with the surrounding codebase.
+  New abstractions follow the same conventions as existing ones.
 - **Avoid code duplication** — Reused patterns should ideally be implemented once and shared rather than duplicated (if practical) to reduce maintenance overhead and improve readability.
-- **Type safety** — types are precise and not widened unnecessarily. Casts, `any`, or `as unknown` that could hide real type errors should be flagged.
+- **Type safety** — types are precise and not widened unnecessarily.
+  Casts, `any`, or `as unknown` that could hide real type errors should be flagged.
 
 ### What the reviewer should NOT receive
 
 - The implementer's summary, reasoning, or notes.
-- Instruction to read commit messages or diffs. The reviewer may use git to list touched files (for scoping), but it should not read commit messages or `git diff` output, since both anchor the reviewer to the implementer's intent and to a line-by-line view that hides issues spanning the boundary between changed and unchanged code. Read whole files instead.
+- Instruction to read commit messages or diffs.
+  The reviewer may use git to list touched files (for scoping), but it should not read commit messages or `git diff` output, since both anchor the reviewer to the implementer's intent and to a line-by-line view that hides issues spanning the boundary between changed and unchanged code.
+  Read whole files instead.
 
 ### Example reviewer prompt structure
 
@@ -215,11 +279,13 @@ Each task is its own delivery unit, but stack later task branches on top of earl
 
 ### Determining the PR base
 
-A PR's base must be the ref its branch actually builds on, so the PR shows the honest diff of that branch's own contribution and nothing else; that is what routes each review comment to the PR that owns the code it is about. A branch stacked on an earlier task but targeted at `main` instead presents that earlier task's commits as its own work and collects the comments its PR should have had.
+A PR's base must be the ref its branch actually builds on, so the PR shows the honest diff of that branch's own contribution and nothing else; that is what routes each review comment to the PR that owns the code it is about.
+A branch stacked on an earlier task but targeted at `main` instead presents that earlier task's commits as its own work and collects the comments its PR should have had.
 
 Use the following precedence:
 
-1. **Explicit override** — if the user specifies a base branch (e.g. "make a PR against `main`"), use that for every task in the batch. If the user asks for no PR, skip PR creation entirely.
+1. **Explicit override** — if the user specifies a base branch (e.g. "make a PR against `main`"), use that for every task in the batch.
+   If the user asks for no PR, skip PR creation entirely.
 2. **Previous task branch** — for the second task onward in a serialized batch, branch from and target the previous task branch when the work depends on earlier changes.
 3. **Current branch** — if neither of the above applies, the branch you are on when the batch starts is the PR base for the first task.
 
@@ -229,38 +295,71 @@ For each task file in the input set:
 
 1. **Record the PR base branch** for this task (see precedence rules above).
 2. **Create a dedicated implementation branch** for the task.
-3. **Read the task file** enough to construct a good implementer prompt. Identify the acceptance criteria so you can later evaluate the reviewer's report.
-4. **Spawn the implementer agent** with a well-structured prompt (see Implementer Agent section). Wait for its completion notification — the reviewer comes only once this implementer's commits exist on disk, and spawning nothing else in this turn is the **proxy** that keeps it there, not the rule itself.
-5. **Evaluate the implementer's packet.** Apply `review-cycle`'s packet hard-check before adopting it: `git status --porcelain` empty **and** no Git operation in progress — check `git rev-parse --git-path rebase-merge` and `rebase-apply` for an existing path, plus `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`, since a tree left mid-rebase or mid-cherry-pick prints empty porcelain. Either condition failing means redrive or resume that implementer, never silent adoption. If the implementer hit a blocker it could not resolve, stop and surface it to the user before spawning a reviewer.
-6. **Only after step 5, spawn the reviewer agent** with a fresh prompt (see Reviewer Agent section) and launch the peer second opinion in the background at the same moment (unless unavailable or `peer-opinions=off`). Always wait for the reviewer before triage, and also wait for the peer when one was launched. The gate is the implementer's commits being on disk — you share one working tree, so a reviewer started before the commit reviews an unfinished branch; keeping it out of the implementer's turn or parallel tool block is only the **proxy** for that gate.
+3. **Read the task file** enough to construct a good implementer prompt.
+   Identify the acceptance criteria so you can later evaluate the reviewer's report.
+4. **Spawn the implementer agent** with a well-structured prompt (see Implementer Agent section).
+   Wait for its completion notification — the reviewer comes only once this implementer's commits exist on disk, and spawning nothing else in this turn is the **proxy** that keeps it there, not the rule itself.
+5. **Evaluate the implementer's packet.**
+   Apply `review-cycle`'s packet hard-check before adopting it: `git status --porcelain` empty **and** no Git operation in progress — check `git rev-parse --git-path rebase-merge` and `rebase-apply` for an existing path, plus `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`, since a tree left mid-rebase or mid-cherry-pick prints empty porcelain.
+   Either condition failing means redrive or resume that implementer, never silent adoption.
+   If the implementer hit a blocker it could not resolve, stop and surface it to the user before spawning a reviewer.
+6. **Only after step 5, spawn the reviewer agent** with a fresh prompt (see Reviewer Agent section) and launch the peer second opinion in the background at the same moment (unless unavailable or `peer-opinions=off`).
+   Always wait for the reviewer before triage, and also wait for the peer when one was launched.
+   The gate is the implementer's commits being on disk — you share one working tree, so a reviewer started before the commit reviews an unfinished branch; keeping it out of the implementer's turn or parallel tool block is only the **proxy** for that gate.
 7. **Evaluate the reviewer's report:**
-   - If the report says the branch is **empty / has no implementation / shows an empty diff**, do not trust it at face value — that is the signature of a race (reviewer started before the implementer committed) or a wrong-branch checkout, not a real gap. Verify with `git diff --name-only <base>...HEAD`; if the work is actually present, spawn a fresh reviewer and use that verdict instead.
+   - If the report says the branch is **empty / has no implementation / shows an empty diff**, do not trust it at face value — that is the signature of a race (reviewer started before the implementer committed) or a wrong-branch checkout, not a real gap.
+     Verify with `git diff --name-only <base>...HEAD`; if the work is actually present, spawn a fresh reviewer and use that verdict instead.
    - If the own reviewer **passes** and the peer has no unaddressed grounded findings under the protocol below: proceed to step 8.
    - If either feedback source has issues: enter the feedback loop (see below).
-8. **Run the pre-PR collision guard below.** If this branch collides, do not open its PR; deconflict the flagged new claimant and send the changed branch through fresh review again. A held branch is not delivered and does not become the base of the next task.
+8. **Run the pre-PR collision guard below.**
+   If this branch collides, do not open its PR; deconflict the flagged new claimant and send the changed branch through fresh review again.
+   A held branch is not delivered and does not become the base of the next task.
 9. **Open a PR** against the recorded base branch.
-   - **First push the task branch** (`git push -u origin HEAD`), and push the recorded base too if it exists only locally (e.g. a dependency's not-yet-pushed branch). `gh pr create` on an unpushed branch prompts interactively for a push target, which hangs a delegated/no-TTY run. If the remote is unavailable (see the local-only fallback), skip the PR and record the branch as pending push instead.
+   - **First push the task branch** (`git push -u origin HEAD`), and push the recorded base too if it exists only locally (e.g. a dependency's not-yet-pushed branch).
+     `gh pr create` on an unpushed branch prompts interactively for a push target, which hangs a delegated/no-TTY run.
+     If the remote is unavailable (see the local-only fallback), skip the PR and record the branch as pending push instead.
    - Reference the task file in the PR description for context.
    - Include any reviewer-relevant caveats (tradeoffs, intentional divergences, uncertainties surfaced by the implementer or reviewer).
    - Do not restate the entire task unless doing so adds real review value.
-   - **Assert the base on the PR you just created:** capture the URL `gh pr create` printed and read *that* PR back — `gh pr view <pr-url> --json baseRefName` — requiring it to equal the recorded base. Address it by URL rather than letting the current branch pick the PR, so a later change to where creation runs cannot redirect the check at some other PR. On a mismatch, repair it in the same breath (`gh pr edit <pr-url> --base <recorded-base>`) and record in the final summary which PR was repaired and what base it carried, so a genuinely wrong determination stays visible instead of being silently corrected; if the repair fails, report that PR as **delivered with the wrong base** rather than as delivered.
-   - **If a creation attempt fails before printing a URL, the PR may exist server-side anyway.** Before retrying creation, look it up by the recorded head branch in the repository that owns the PR — the base repository the creation targeted, never the head repository, where a fork's PR does not live: `gh pr list --repo <base-repo> --head <branch-name> --state open --json url,headRepositoryOwner`. `--head` cannot carry an `<owner>:<branch>` form, so require the returned PR's head repository owner to match the recorded head before trusting the match, then assert its base as above. Only a lookup that finds nothing licenses the retry, and a delivery ending with neither a captured URL nor a lookup match is reported as that distinct failure, never as an opened PR.
+   - **Assert the base on the PR you just created:** capture the URL `gh pr create` printed and read *that* PR back — `gh pr view <pr-url> --json baseRefName` — requiring it to equal the recorded base.
+     Address it by URL rather than letting the current branch pick the PR, so a later change to where creation runs cannot redirect the check at some other PR.
+     On a mismatch, repair it in the same breath (`gh pr edit <pr-url> --base <recorded-base>`) and record in the final summary which PR was repaired and what base it carried, so a genuinely wrong determination stays visible instead of being silently corrected; if the repair fails, report that PR as **delivered with the wrong base** rather than as delivered.
+   - **If a creation attempt fails before printing a URL, the PR may exist server-side anyway.**
+     Before retrying creation, look it up by the recorded head branch in the repository that owns the PR — the base repository the creation targeted, never the head repository, where a fork's PR does not live: `gh pr list --repo <base-repo> --head <branch-name> --state open --json url,headRepositoryOwner`.
+     `--head` cannot carry an `<owner>:<branch>` form, so require the returned PR's head repository owner to match the recorded head before trusting the match, then assert its base as above.
+     Only a lookup that finds nothing licenses the retry, and a delivery ending with neither a captured URL nor a lookup match is reported as that distinct failure, never as an opened PR.
 10. **Continue to the next task** or, if this was the last one, produce the final summary.
-   If you hit a blocker that prevents responsible progress, stop and ask the user for clarification.
+    If you hit a blocker that prevents responsible progress, stop and ask the user for clarification.
 
 ## Pre-PR collision guard
 
-The task-number guard below can surface an identical-path add/add clash between task files. Hand only that already-identified case to this plain add/add procedure: hold the scanning branch, rename the flagged new claimant, regenerate derived files, and run fresh review again. If the task path is imperative, hold the branch and ask the maintainer instead of inventing an invalid alternative. The serialized flow does not add a second repo-wide scan of every open PR's other added paths, basenames, or exported symbols; the parallel skill retains its separate wave-local check for those surfaces.
+The task-number guard below can surface an identical-path add/add clash between task files.
+Hand only that already-identified case to this plain add/add procedure: hold the scanning branch, rename the flagged new claimant, regenerate derived files, and run fresh review again.
+If the task path is imperative, hold the branch and ask the maintainer instead of inventing an invalid alternative.
+The serialized flow does not add a second repo-wide scan of every open PR's other added paths, basenames, or exported symbols; the parallel skill retains its separate wave-local check for those surfaces.
 
 ### Task-number collisions across in-flight branches
 
-Run this guard before opening any PR that adds task files. Parse the basename of every task file as a **full task number** (three digits plus an optional lowercase letter suffix, such as `001`, `001a`, or `042b`) followed by its slug. Two files collide whenever their full task numbers are identical, regardless of slug; `001`, `001a`, and `001b` are distinct and do not collide. Compare the scanning branch's unpaired additions with one another as well as with the comparison set, so two new files on that branch cannot claim one number before either reaches another member.
+Run this guard before opening any PR that adds task files.
+Parse the basename of every task file as a **full task number** (three digits plus an optional lowercase letter suffix, such as `001`, `001a`, or `042b`) followed by its slug.
+Two files collide whenever their full task numbers are identical, regardless of slug; `001`, `001a`, and `001b` are distinct and do not collide.
+Compare the scanning branch's unpaired additions with one another as well as with the comparison set, so two new files on that branch cannot claim one number before either reaches another member.
 
-Resolve the repository's task folder before scanning. The commands and examples below use the conventional `tasks/` folder required by this workflow; if the repository documents another task folder, substitute that resolved folder for **every** `tasks/` pathspec and folder reference in this guard. Never interpret an empty result from the conventional path as a clean scan when the resolved folder is elsewhere.
+Resolve the repository's task folder before scanning.
+The commands and examples below use the conventional `tasks/` folder required by this workflow; if the repository documents another task folder, substitute that resolved folder for **every** `tasks/` pathspec and folder reference in this guard.
+Never interpret an empty result from the conventional path as a clean scan when the resolved folder is elsewhere.
 
-The comparison set is defined here, once, as the union of two groups. **Always:** the base branch and every open PR head. **In a pipelined run, additionally:** branches delivered earlier in the same run, anything merged since the run started, numbers reserved by a task that cleared this guard but has not finished delivering, and currently-ready siblings awaiting the guard. Track these run-local members as the pipeline advances. First claimant wins; the second claimant renumbers, and never rewrite a delivered or reserved claimant. When two currently-ready siblings are both still unguarded, establish the first claimant in the run's deterministic delivery order (dependency or scheduling order, then task number) and reserve it before evaluating the other; the delivered-or-reserved rule decides every asymmetric case.
+The comparison set is defined here, once, as the union of two groups.
+**Always:** the base branch and every open PR head.
+**In a pipelined run, additionally:** branches delivered earlier in the same run, anything merged since the run started, numbers reserved by a task that cleared this guard but has not finished delivering, and currently-ready siblings awaiting the guard.
+Track these run-local members as the pipeline advances.
+First claimant wins; the second claimant renumbers, and never rewrite a delivered or reserved claimant.
+When two currently-ready siblings are both still unguarded, establish the first claimant in the run's deterministic delivery order (dependency or scheduling order, then task number) and reserve it before evaluating the other; the delivered-or-reserved rule decides every asymmetric case.
 
-What a member contributes is determined only by its kind, not by re-enumerating that membership list: the base branch contributes its entire recursive `tasks/` tree; any other tree-bearing member contributes only task files it adds relative to **its own** base; and a member already represented as a reserved number contributes that number directly. Never read a non-base head as a whole tree. It inherits its base's files without claiming them, and a whole-tree read would turn routine stacked work and task relocations into false collisions. Likewise, compute the scanning branch's additions and removals only against its own recorded base, never by diffing it against another head.
+What a member contributes is determined only by its kind, not by re-enumerating that membership list: the base branch contributes its entire recursive `tasks/` tree; any other tree-bearing member contributes only task files it adds relative to **its own** base; and a member already represented as a reserved number contributes that number directly.
+Never read a non-base head as a whole tree.
+It inherits its base's files without claiming them, and a whole-tree read would turn routine stacked work and task relocations into false collisions.
+Likewise, compute the scanning branch's additions and removals only against its own recorded base, never by diffing it against another head.
 
 Refresh the scanning branch's recorded base before reading it, with an explicit refspec, and use the remote-tracking name in every subsequent command; a bare local base name or `git fetch origin "$base"` can remain stale in a narrow clone:
 
@@ -271,25 +370,49 @@ git diff --no-renames --diff-filter=A --name-only "origin/${base}...${branch}" -
 git diff --no-renames --diff-filter=D --name-only "origin/${base}...${branch}" -- tasks/
 ```
 
-The recursive `ls-tree` is load-bearing: `tasks/done/`, `tasks/deferred/`, and any future nested folder retain their numbers. `--no-renames` is load-bearing on both diffs: a move must decompose into one removal and one addition, and a renumbering rename must expose its destination as a fresh claim.
+The recursive `ls-tree` is load-bearing: `tasks/done/`, `tasks/deferred/`, and any future nested folder retain their numbers.
+`--no-renames` is load-bearing on both diffs: a move must decompose into one removal and one addition, and a renumbering rename must expose its destination as a fresh claim.
 
-The explicit remote refresh remains the normal and required path. The only fallback is a recorded base that the remote cannot represent because it exists only locally (an unpushed dependency base) or the run is already known to be local-only: resolve that local base to an exact commit OID, use the OID — not the bare branch name — for the recursive tree read and both diffs, and report the base read as degraded under the note-and-proceed rule. Never turn a failed refresh into an empty additions list or a silent pass.
+The explicit remote refresh remains the normal and required path.
+The only fallback is a recorded base that the remote cannot represent because it exists only locally (an unpushed dependency base) or the run is already known to be local-only: resolve that local base to an exact commit OID, use the OID — not the bare branch name — for the recursive tree read and both diffs, and report the base read as degraded under the note-and-proceed rule.
+Never turn a failed refresh into an empty additions list or a silent pass.
 
-Enumerate the point-in-time remote comparison data once with `gh pr list --state open --limit 200 --json number,headRefOid,baseRefName,baseRefOid`. The pinned bound avoids the CLI's silent default of 30; if the enumeration returns as many entries as the pinned limit, report the returned count (the limit), explain that any additional unreturned heads cannot be named, and mark the scan incomplete, then continue under the note-and-proceed rule rather than claiming a complete result. Do not add pagination to disguise that bound.
+Enumerate the point-in-time remote comparison data once with `gh pr list --state open --limit 200 --json number,headRefOid,baseRefName,baseRefOid`.
+The pinned bound avoids the CLI's silent default of 30; if the enumeration returns as many entries as the pinned limit, report the returned count (the limit), explain that any additional unreturned heads cannot be named, and mark the scan incomplete, then continue under the note-and-proceed rule rather than claiming a complete result.
+Do not add pagination to disguise that bound.
 
-Before diffing an enumerated head, fetch it from the base repository with `git fetch origin "refs/pull/${number}/head"`, then read the exact enumerated `headRefOid`, not a guessed local or fork branch name. Also collect each distinct `baseRefName` and refresh it **unconditionally once per name** with `git fetch origin "+refs/heads/${pr_base}:refs/remotes/origin/${pr_base}"` before any head uses it; mere ref presence says nothing about freshness. Take that head's contribution with `git diff --no-renames --diff-filter=A --name-only "origin/${pr_base}...${headRefOid}" -- tasks/`. The three-dot form uses the fetched history's merge base and prevents a stacked PR from claiming files inherited from its sibling base.
+Before diffing an enumerated head, fetch it from the base repository with `git fetch origin "refs/pull/${number}/head"`, then read the exact enumerated `headRefOid`, not a guessed local or fork branch name.
+Also collect each distinct `baseRefName` and refresh it **unconditionally once per name** with `git fetch origin "+refs/heads/${pr_base}:refs/remotes/origin/${pr_base}"` before any head uses it; mere ref presence says nothing about freshness.
+Take that head's contribution with `git diff --no-renames --diff-filter=A --name-only "origin/${pr_base}...${headRefOid}" -- tasks/`.
+The three-dot form uses the fetched history's merge base and prevents a stacked PR from claiming files inherited from its sibling base.
 
-If a PR's base no longer resolves by `baseRefName`, use its enumerated `baseRefOid` when that object is reachable; if neither base object can be read, or the exact enumerated head OID cannot be read after the PR-ref fetch, note that the named head (or at least PR number when that is all the enumeration supplied) was skipped and proceed without substituting a wrong base. Apply the same note-and-proceed behavior when the remote or `gh` is unavailable. Report every skipped head and the limit condition explicitly; a local-only run may still use its readable run-local members, but must not describe the remote scan as complete.
+If a PR's base no longer resolves by `baseRefName`, use its enumerated `baseRefOid` when that object is reachable; if neither base object can be read, or the exact enumerated head OID cannot be read after the PR-ref fetch, note that the named head (or at least PR number when that is all the enumeration supplied) was skipped and proceed without substituting a wrong base.
+Apply the same note-and-proceed behavior when the remote or `gh` is unavailable.
+Report every skipped head and the limit condition explicitly; a local-only run may still use its readable run-local members, but must not describe the remote scan as complete.
 
-Before comparing claims, exempt only relocations made by the scanning branch itself. Within each full-number group, pair each removed file with at most one added file and always consume an available same-number removal. Prefer an addition with the same slug as the removal; otherwise use the closest rename match only to choose among multiple same-number candidates. The slug or similarity heuristic never permits cross-number pairing. This makes an archive, deferral, promotion, or in-place slug rename a net-zero claim, and it also clears a two-file number swap; a single removal cannot exempt both a relocation and a second new claimant. Because the pairing uses only removals against this branch's own base, it never releases a number genuinely claimed by another member.
+Before comparing claims, exempt only relocations made by the scanning branch itself.
+Within each full-number group, pair each removed file with at most one added file and always consume an available same-number removal.
+Prefer an addition with the same slug as the removal; otherwise use the closest rename match only to choose among multiple same-number candidates.
+The slug or similarity heuristic never permits cross-number pairing.
+This makes an archive, deferral, promotion, or in-place slug rename a net-zero claim, and it also clears a two-file number swap; a single removal cannot exempt both a relocation and a second new claimant.
+Because the pairing uses only removals against this branch's own base, it never releases a number genuinely claimed by another member.
 
-For every unpaired addition, an identical full number is a collision. A differing slug is the cross-branch case this guard exists to catch. The same slug at a different path is also a collision: `tasks/done/024-foo.md` or `tasks/deferred/024-foo.md` still holds `024`, and the identical-path add/add guard cannot see that pair. Only an identical path may be handed to the existing add/add procedure. Otherwise hold the second claimant, renumber the **flagged new claimant**, and run fresh review again; never renumber a copy in `tasks/done/` or `tasks/deferred/`, because its stable number is part of the historical reference. If the new number is imperative, keep the branch held and ask the maintainer instead.
+For every unpaired addition, an identical full number is a collision.
+A differing slug is the cross-branch case this guard exists to catch.
+The same slug at a different path is also a collision: `tasks/done/024-foo.md` or `tasks/deferred/024-foo.md` still holds `024`, and the identical-path add/add guard cannot see that pair.
+Only an identical path may be handed to the existing add/add procedure.
+Otherwise hold the second claimant, renumber the **flagged new claimant**, and run fresh review again; never renumber a copy in `tasks/done/` or `tasks/deferred/`, because its stable number is part of the historical reference.
+If the new number is imperative, keep the branch held and ask the maintainer instead.
 
-This is a bounded snapshot, not a total guarantee. It establishes that no collision existed among heads at the OIDs returned by the single enumeration. A head can advance after that enumeration — before or after its fetch, or while this branch's own PR is being opened — and land a concurrent duplicate. Do not re-query or compare `FETCH_HEAD` in an attempt to close an unclosable race; the `reap-tasks` recursive duplicate-number sweep is the backstop for that residual.
+This is a bounded snapshot, not a total guarantee.
+It establishes that no collision existed among heads at the OIDs returned by the single enumeration.
+A head can advance after that enumeration — before or after its fetch, or while this branch's own PR is being opened — and land a concurrent duplicate.
+Do not re-query or compare `FETCH_HEAD` in an attempt to close an unclosable race; the `reap-tasks` recursive duplicate-number sweep is the backstop for that residual.
 
 ## Peer second opinion (best-effort)
 
-Unless `peer-opinions=off`, run the `review-cycle` skill's peer step beside every review round. Every rule that skill states under *The peer step* binds here whole, later additions included.
+Unless `peer-opinions=off`, run the `review-cycle` skill's peer step beside every review round.
+Every rule that skill states under *The peer step* binds here whole, later additions included.
 
 Deltas for this serialized skill:
 
@@ -302,7 +425,9 @@ This loop is `review-cycle`'s: every rule that skill states under *The loop and 
 
 When either reviewer reports material issues:
 
-> **Fix-ups always use a fresh `Agent` spawn — never a "continued" prior implementer.** If an `Agent` result prints a `SendMessage` continuation footer, ignore it; this harness does not expose that tool. A fresh spawn is the preferred path: the fix-up agent reads the already-committed branch plus the reviewer's verbatim findings with no attachment to its earlier choices.
+> **Fix-ups always use a fresh `Agent` spawn — never a "continued" prior implementer.**
+> If an `Agent` result prints a `SendMessage` continuation footer, ignore it; this harness does not expose that tool.
+> A fresh spawn is the preferred path: the fix-up agent reads the already-committed branch plus the reviewer's verbatim findings with no attachment to its earlier choices.
 
 1. **Spawn a new implementer agent** (on its own, as in step 4) with:
    - The original task file content.
@@ -312,7 +437,9 @@ When either reviewer reports material issues:
    - The same project context and validation instructions as the original implementer prompt.
 2. Once the fix-up implementer's commits are on disk — wait for its completion, and only then, in a later turn as the **proxy** for that — **spawn a new reviewer agent** and launch the peer per the protocol above to re-check (same fresh prompt structure as before; never concurrent with the fix-up implementer).
 3. Repeat until the own reviewer passes and the peer has no unaddressed grounded findings under the protocol above.
-4. **Cap the feedback loop at the `review-cycle` skill's round cap.** If issues persist at the cap, stop iterating and do not open a PR for this task. Surface the outstanding findings clearly to the user in the final summary and ask for guidance on how to proceed.
+4. **Cap the feedback loop at the `review-cycle` skill's round cap.**
+   If issues persist at the cap, stop iterating and do not open a PR for this task.
+   Surface the outstanding findings clearly to the user in the final summary and ask for guidance on how to proceed.
 
 ## Hints
 
@@ -327,13 +454,25 @@ The completed task branch and final PR should be clean and pass validation.
 
 ## Main-checkout cleanliness report
 
-This batch runs on the repository's main checkout, which is shared — with the maintainer, and with any peer harness running in the same container. Take a reading of its working-tree state before the first task's branch is created, and take the same reading again once **every** batch entry has reached a terminal state. Trigger it on batch termination, not on "the last task delivers": a batch in which every task blocks, fails, or aborts never reaches a delivery, and a failed implementer is at least as likely to have leaked strays as a successful one — so gating on a delivery skips the check exactly when it matters most. Because the flow works in that very tree, the reading is about uncommitted and untracked residue left behind rather than about staying out of it — a stray is still a stray.
+This batch runs on the repository's main checkout, which is shared — with the maintainer, and with any peer harness running in the same container.
+Take a reading of its working-tree state before the first task's branch is created, and take the same reading again once **every** batch entry has reached a terminal state.
+Trigger it on batch termination, not on "the last task delivers": a batch in which every task blocks, fails, or aborts never reaches a delivery, and a failed implementer is at least as likely to have leaked strays as a successful one — so gating on a delivery skips the check exactly when it matters most.
+Because the flow works in that very tree, the reading is about uncommitted and untracked residue left behind rather than about staying out of it — a stray is still a stray.
 
-Compare the two **by path**, so a path whose status code changed reads as a re-classification — a co-tenant staging their own work — rather than as one path vanishing and another appearing. Paths that appeared are a finding in the final report; paths that **disappeared** are a louder one, because a stray `checkout` or `clean` in the shared tree eating a co-tenant's uncommitted work is the hazard only a baseline can see. Report a vanished path as something to check against co-tenant commits, the reflog, and the stash rather than as established loss: a maintainer who committed their own work mid-run also removes a baseline path, with nothing gone. Everything else is pre-existing. Take a baseline rather than testing for emptiness — the maintainer's own work-in-progress is deliberately permitted in that checkout, so an unconditional non-empty rule would both blame the batch for work it never touched and destroy the one signal separating a real stray from the tree's starting state.
+Compare the two **by path**, so a path whose status code changed reads as a re-classification — a co-tenant staging their own work — rather than as one path vanishing and another appearing.
+Paths that appeared are a finding in the final report; paths that **disappeared** are a louder one, because a stray `checkout` or `clean` in the shared tree eating a co-tenant's uncommitted work is the hazard only a baseline can see.
+Report a vanished path as something to check against co-tenant commits, the reflog, and the stash rather than as established loss: a maintainer who committed their own work mid-run also removes a baseline path, with nothing gone.
+Everything else is pre-existing.
+Take a baseline rather than testing for emptiness — the maintainer's own work-in-progress is deliberately permitted in that checkout, so an unconditional non-empty rule would both blame the batch for work it never touched and destroy the one signal separating a real stray from the tree's starting state.
 
-**Report, never clean.** Do not `git clean`, `checkout`, `reset`, or `stash` the shared main checkout on the strength of this report — another agent's uncommitted work is not yours to delete — and diff any stray against the delivered branches before touching it at all.
+**Report, never clean.**
+Do not `git clean`, `checkout`, `reset`, or `stash` the shared main checkout on the strength of this report — another agent's uncommitted work is not yours to delete — and diff any stray against the delivered branches before touching it at all.
 
-State the claim as narrowly as it is. The report says what its reading could see change; it claims nothing about what was **written into** paths already present in the baseline, nor about anything its reading does not surface. That is an exclusion rather than a list of blind spots, because the list is open: widening what the reading sees improves the report and leaves the claim exactly this narrow. What it does surface is a report to verify, not a conclusion — the same reading cannot tell a stray from a co-tenant's ordinary progress. It is never a proof that the batch wrote nothing, and must not be delivered as one.
+State the claim as narrowly as it is.
+The report says what its reading could see change; it claims nothing about what was **written into** paths already present in the baseline, nor about anything its reading does not surface.
+That is an exclusion rather than a list of blind spots, because the list is open: widening what the reading sees improves the report and leaves the claim exactly this narrow.
+What it does surface is a report to verify, not a conclusion — the same reading cannot tell a stray from a co-tenant's ordinary progress.
+It is never a proof that the batch wrote nothing, and must not be delivered as one.
 
 ## Final Output
 

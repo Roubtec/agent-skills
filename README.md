@@ -4,7 +4,7 @@ Roubtec's shared agent skills, distributed as a [Claude Code plugin marketplace]
 
 ## Layout
 
-```
+```text
 .claude-plugin/marketplace.json   # the marketplace manifest (marketplace name: roubtec — "agent-skills" is CLI-reserved for anthropics repos)
 plugins/
   dev-skills/                     # Claude Code plugin: software development workflow skills
@@ -18,6 +18,7 @@ codex/
   dev-skills/                     # Codex flavors of the same skills (SKILL.md + agents/openai.yaml)
     skills/<name>/...
 scripts/
+  lib/logical-lines.mjs                 # shared Markdown paragraph-rejoining reader for the suites that pin skill prose by its words rather than its wrapping
   test-gh-review-threads.sh             # hermetic contract coverage for the review-thread helper
   test-dc-helpers.sh                    # hermetic contract coverage for the disposable-clone helpers
   test-checkout-cleanliness-report.mjs  # regression coverage for the batch workflow's checkout report
@@ -69,7 +70,7 @@ A session off powbox, or on an image built before that bake, installs them itsel
 
 ## Installing (Claude Code Users)
 
-```
+```sh
 claude plugin marketplace add Roubtec/agent-skills
 claude plugin install dev-skills@roubtec
 ```
@@ -99,7 +100,7 @@ Merging to `main` **is** the release: the plugin manifests intentionally carry n
 
 To stay current, either enable auto-update for this marketplace (`/plugin` → Marketplaces → `roubtec` → Enable auto-update; updates apply at session start) or refresh manually:
 
-```
+```sh
 claude plugin marketplace update roubtec
 ```
 
@@ -128,6 +129,16 @@ Read the pre-merge check rollup by `__typename`, and test for the terminal value
 Settled is not green, so test the verdicts positively in the same spirit: merge only once every `CheckRun` conclusion is `SUCCESS`, `NEUTRAL`, or `SKIPPED` and every `StatusContext` state is `SUCCESS`, and stop on anything else — a `CheckRun` conclusion of `FAILURE`, `TIMED_OUT`, `CANCELLED`, `ACTION_REQUIRED`, `STARTUP_FAILURE` or `STALE`, and a `StatusContext` state of `FAILURE` or `ERROR`, all report as settled, so a poll that only waits for settlement happily lands a known-red head. Nothing downstream re-checks this for you: `--match-head-commit` pins the commit, not its verdicts, and branch protection blocks only the checks it has actually been configured to require.
 
 Merge with `gh pr merge <PR#> --merge --match-head-commit <the polled headRefOid>`, so a head that advanced while you waited on the checks fails the merge instead of landing unchecked — an unpinned merge takes whatever the head is by then, which is not the commit whose rollup you read. Treat deleting the branch as its own step whenever a worktree still has it checked out: `--delete-branch` merges, deletes the remote branch, and only then fails the local delete with "used by worktree", so the non-zero exit says nothing about the merge, which already succeeded. Remove the worktree before merging, or omit the flag and delete the branch yourself afterwards; if you do meet that error, re-read the PR's merge state before retrying anything.
+
+## Markdown formatting
+
+Markdown style is owned by markdownlint: `.markdownlint.jsonc` pins the house rules (asterisk emphasis, compact tables, fenced code blocks), the nested config under each mirror's `skills/` directory relaxes the heading-title rules SKILL.md files deliberately break, and CI runs the same pinned `markdownlint-cli2` over every Markdown file.
+
+The editor is wired to the identical answer: the committed `.vscode/settings.json` makes the markdownlint extension the Markdown formatter and fixes on save, and `.prettierignore` keeps Prettier — whose Markdown style (aligned tables, underscore emphasis) fights the house rules — away from Markdown entirely. So the IDE, the CLI, agents, and CI all produce the same bytes, and saving an already-clean file changes nothing.
+
+Anywhere without the editor extension — agents, terminals, hooks — the same answer is one command, no repo dependencies needed: `npx --yes markdownlint-cli2@0.23.2 --fix "**/*.md"` (drop `--fix` to check without rewriting). The version is pinned to the one CI runs in `tests.yml`, which is also what the extension bundles; when the extension's bundled `markdownlint-cli2` moves on, bump the pin here and in `tests.yml` together — the extension leads, the pin follows. Not every rule is auto-fixable, so a fix pass can still leave violations that need a hand edit; CI names them.
+
+One editor-side trap is worth knowing: VS Code's built-in prompt-file support opens `SKILL.md` (and `*.prompt.md`, `*.instructions.md`, `copilot-instructions.md`, `*.agent.md`, `*.chatmode.md`, and Markdown under `.claude/rules`, `.claude/agents`, `.github/agents`) in a language mode of its own rather than `markdown`, and the markdownlint extension formats only `markdown` documents — so without intervention those files silently get no formatting at all while CI still lints them. The committed `files.associations` in `.vscode/settings.json` pins them back to Markdown; the trade is VS Code's dedicated tooling for those files (frontmatter completions, the status-bar label), not highlighting.
 
 ## Focused tests
 
@@ -229,11 +240,11 @@ Parse-check any changed dynamic workflow under `plugins/dev-skills/workflows/`. 
 
 ## Consumers
 
-| Consumer                        | Channel                                                               |
-|---------------------------------|-----------------------------------------------------------------------|
-| Claude Code users (any machine) | plugin install from this marketplace                                  |
-| powbox containers (Claude)      | same plugin channel, pre-installed at image build                     |
-| powbox containers (Codex)       | `codex/` tree synced at start from the marketplace clone              |
+| Consumer | Channel |
+| --------------------------------- | ----------------------------------------------------------------------- |
+| Claude Code users (any machine) | plugin install from this marketplace |
+| powbox containers (Claude) | same plugin channel, pre-installed at image build |
+| powbox containers (Codex) | `codex/` tree synced at start from the marketplace clone |
 
 The `enable-worktrees`, `declare-shadows`, and `session-learnings` skills intentionally describe powbox facilities but live here so both harness flavors refresh through the shared plugin channel. Container implementation details such as helper binaries, mount setup, and skill-sync machinery remain in the `Roubtec/powbox` repo.
 
