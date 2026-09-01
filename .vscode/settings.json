@@ -10,5 +10,27 @@
     "editor.codeActionsOnSave": {
       "source.fixAll.markdownlint": "explicit"
     }
+  },
+
+  // VS Code's built-in prompt-file support opens agent-customization files in
+  // their own language modes — `skill` for SKILL.md, and `prompt`,
+  // `instructions`, `chatagent` for the rest — instead of `markdown`. The
+  // markdownlint extension lints and formats only `markdown` documents, and
+  // the `[markdown]` block above is keyed on that id too, so those files would
+  // silently get no formatting while CI still lints them. These associations
+  // outrank the built-in ones and pin the files back to Markdown; the patterns
+  // mirror VS Code's own registration. Highlighting is unchanged (those
+  // languages reuse the Markdown grammar); what is given up is their dedicated
+  // tooling, such as frontmatter completions and the status-bar label.
+  "files.associations": {
+    "SKILL.md": "markdown",
+    "*.prompt.md": "markdown",
+    "*.instructions.md": "markdown",
+    "copilot-instructions.md": "markdown",
+    "*.agent.md": "markdown",
+    "*.chatmode.md": "markdown",
+    "**/.claude/rules/**/*.md": "markdown",
+    "**/.claude/agents/*.md": "markdown",
+    "**/.github/agents/*.md": "markdown"
   }
 }

@@ -138,6 +138,8 @@ The editor is wired to the identical answer: the committed `.vscode/settings.jso
 
 Anywhere without the editor extension — agents, terminals, hooks — the same answer is one command, no repo dependencies needed: `npx --yes markdownlint-cli2@0.23.2 --fix "**/*.md"` (drop `--fix` to check without rewriting). The version is pinned to the one CI runs in `tests.yml`, which is also what the extension bundles; when the extension's bundled `markdownlint-cli2` moves on, bump the pin here and in `tests.yml` together — the extension leads, the pin follows. Not every rule is auto-fixable, so a fix pass can still leave violations that need a hand edit; CI names them.
 
+One editor-side trap is worth knowing: VS Code's built-in prompt-file support opens `SKILL.md` (and `*.prompt.md`, `*.instructions.md`, `copilot-instructions.md`, `*.agent.md`, `*.chatmode.md`, and Markdown under `.claude/rules`, `.claude/agents`, `.github/agents`) in a language mode of its own rather than `markdown`, and the markdownlint extension formats only `markdown` documents — so without intervention those files silently get no formatting at all while CI still lints them. The committed `files.associations` in `.vscode/settings.json` pins them back to Markdown; the trade is VS Code's dedicated tooling for those files (frontmatter completions, the status-bar label), not highlighting.
+
 ## Focused tests
 
 Each subsection leads with the command and the change that obliges you to run it. What a suite pins, and the measured trade-offs behind how each of its checks is drawn, live in that script's own comments.
