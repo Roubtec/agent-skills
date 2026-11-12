@@ -20,7 +20,7 @@ Carry every such note through the run.
 
 - **Merge mechanics.**
   Fetch, rebase the PR onto the latest `origin/main`, push with `--force-with-lease=<branch>:<the exact sha you rebased from>`, then `gh pr merge <N> --merge --match-head-commit <pushed sha>`.
-  The sha you rebase from must be the `headRefOid` whose rollup you read: if the fetched `origin/<branch>` is anything else, someone pushed, so put the PR back under watch instead of rebasing.
+  The fetched `origin/<branch>` must be the `headRefOid` whose rollup you read, whether or not a rebase follows: if it is anything else, someone pushed, so put the PR back under watch instead of rebasing or merging it.
   Never squash, never merge a PR that is not on the current `origin/main`, and never merge one whose base branch is not `main`: a merge into a parent PR's branch reports success and lands nothing on `main`.
   Never bypass what the repository enforces (`--admin`, `bypass_rules`): a merge the rules refuse is a human call.
   Leave `--delete-branch` off, because your worktree still holds the branch: the merge succeeds, the local delete fails, and the non-zero exit says nothing about the merge.
@@ -88,7 +88,7 @@ The user is not expected to unblock it and does not care about the exact order, 
   Report what merged and what is waiting, and wait for the user.
 
 Check for open items twice for each PR: when you pick it up, and again just before the merge call, since a review may land while its CI runs.
-With `pause-on-review`, the check before a merge covers every PR still on the list, because that mode stops on a review item on any of them.
+With `pause-on-review`, both checks cover every PR still on the list, because that mode stops on a review item on any of them.
 Both checks look for the open items the ground rule names, plus any top-level review or comment that arrived since you last looked at that PR.
 An unresolved thread or a review requesting changes always blocks; a top-level review or comment blocks only when it carries actionable feedback.
 
