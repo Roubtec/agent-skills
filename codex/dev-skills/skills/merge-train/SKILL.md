@@ -20,14 +20,15 @@ Carry every such note through the run.
 
 - **Merge mechanics.**
   Fetch, rebase the PR onto the latest `origin/main`, push with `--force-with-lease=<branch>:<the exact sha you rebased from>`, then `gh pr merge <N> --merge --match-head-commit <pushed sha>`.
+  Every rebase the train runs passes `--no-update-refs --no-rebase-merges`, so the replay moves this one branch and stays flat whatever `rebase.updateRefs` and `rebase.rebaseMerges` say in the user's config.
   The fetched `origin/<branch>` must be the `headRefOid` whose rollup you read, whether or not a rebase follows: if it is anything else, someone pushed, so put the PR back under watch instead of rebasing or merging it.
   Never squash, never merge a PR that is not on the current `origin/main`, and never merge one whose base branch is not `main`: a merge into a parent PR's branch reports success and lands nothing on `main`.
   Never bypass what the repository enforces (`--admin`, `bypass_rules`): a merge the rules refuse is a human call.
   Leave `--delete-branch` off, because your worktree still holds the branch: the merge succeeds, the local delete fails, and the non-zero exit says nothing about the merge.
 - **One writer.**
   Rebase in a task worktree, never in the main checkout: `wt-enter merge-train-<N> <branch> origin/<branch>` where the helper is on PATH, plain `git worktree add` otherwise.
-  A local branch of the same name may be stale, so bring it to the PR head with `git -C <wt> reset --hard origin/<branch>`, but only when that discards nothing: the worktree is clean with no git operation in progress, and `git cherry origin/<branch> <branch>` prints no `+` line.
-  A dirty or mid-operation worktree is someone's unfinished work, a `+` line is a local commit the PR lacks, and a branch checked out somewhere else cannot be attached at all.
+  A local branch of the same name may be stale, so bring it to the PR head with `git -C <wt> reset --hard origin/<branch>`, but only when that discards nothing: the worktree is clean with no git operation in progress, and the local branch is an ancestor of the PR head (`git merge-base --is-ancestor <branch> origin/<branch>`), so the reset is a fast-forward.
+  A dirty or mid-operation worktree is someone's unfinished work, a branch that is not an ancestor holds history the PR head lacks, and a branch checked out somewhere else cannot be attached at all.
   All of these are the user's to sort out: leave that PR unmerged and report it, rather than reset, detach or switch anything.
   State-changing git runs as `git -C <abs path>` in one sequential call.
 - **Leave the user's calls to the user.**
@@ -155,7 +156,7 @@ Then poll `GET …/pulls/<N>/merge-async/<uuid>` until `status` is `merged` or `
 For a stacked request the async merge "includes all open downstack pull requests", which is nothing extra for the bottom PR.
 So request it only for a PR with no open PR beneath it: on a child it would merge the parents too, whatever state they are in.
 
-After the parent merges, rebase the child with `git rebase --onto origin/main <parent's old tip> <child>`, so the parent's pre-rebase commits do not replay.
+After the parent merges, rebase the child with `git rebase --no-update-refs --no-rebase-merges --onto origin/main <parent's old tip> <child>`, so the parent's pre-rebase commits do not replay.
 The old tip is the parent's head from before you rebased it, so note it then.
 A child outside GitHub's own stacks keeps its parent's branch as base unless GitHub retargeted it when that branch was deleted: confirm `baseRefName` reads `main` before pushing, and set it with `gh pr edit <N> --base main` if not.
 The child then needs its full CI run.
@@ -166,7 +167,7 @@ The queue may be shared with other sessions on a machine with limited runner slo
 Consider freeing what the train will not use:
 
 - Cancel a PR's in-flight CI run when the PR has to be re-pushed anyway: it turned `CONFLICTING`, or its red lane waits on a `main` fix.
-- After merging right after a rebase, cancel the CI run that push started on the PR: `main`'s own run covers the same tree.
+- After merging right after a rebase, cancel the CI run that push started on the PR, where `main` has a run of its own to cover the same tree.
 - After a re-push, cancel the previous head's CI run yourself.
   Lane-level concurrency cancels a stale lane only once the new run reaches that lane, and until then the stale run's queued jobs can take a runner.
 - When the queue stalls, look at which runner labels the waiting jobs need (`gh api repos/{owner}/{repo}/actions/runs/<id>/jobs`) and which runners are busy (`…/actions/runners`).
@@ -176,7 +177,8 @@ Consider freeing what the train will not use:
 
 ## Finishing
 
-After the last merge, watch `main`'s own CI run on the final tip.
+After the last merge, watch `main`'s own CI run on the final tip, where the repository runs CI on `main` at all.
+Where its workflows run on pull requests only, no such run will appear: say so in the report instead of waiting for one.
 Where each push to `main` cancels the previous `main` run, that one run covers the whole train.
 A lane cancelled with no newer push behind it, or failed for an infrastructure reason, gets a re-run once the run completes.
 Use reasonable effort on further re-runs, taking into account infrastructure issues, runner contention, and the history and state of the train.
