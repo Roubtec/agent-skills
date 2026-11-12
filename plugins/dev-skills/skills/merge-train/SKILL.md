@@ -164,7 +164,7 @@ The queue may be shared with other sessions on a machine with limited runner slo
 Consider freeing what the train will not use:
 
 - Cancel a PR's in-flight CI run when the PR has to be re-pushed anyway: it turned `CONFLICTING`, or its red lane waits on a `main` fix.
-- After merging right after a rebase, cancel the CI run that push started on the PR, where `main` has a run of its own to cover the same tree.
+- After merging right after a rebase, cancel the CI run that push started on the PR, but only where `main` gets a run of its own to cover the same tree.
 - After a re-push, cancel the previous head's CI run yourself.
   Lane-level concurrency cancels a stale lane only once the new run reaches that lane, and until then the stale run's queued jobs can take a runner.
 - When the queue stalls, look at which runner labels the waiting jobs need (`gh api repos/{owner}/{repo}/actions/runs/<id>/jobs`) and which runners are busy (`…/actions/runners`).
@@ -174,8 +174,8 @@ Consider freeing what the train will not use:
 
 ## Finishing
 
-After the last merge, watch `main`'s own CI run on the final tip, where the repository runs CI on `main` at all.
-Where its workflows run on pull requests only, no such run will appear: say so in the report instead of waiting for one.
+After the last merge, watch `main`'s own CI run on the final tip.
+Where the repository's workflows run on pull requests only, no such run will appear: say so in the report instead of waiting for one.
 Where each push to `main` cancels the previous `main` run, that one run covers the whole train.
 A lane cancelled with no newer push behind it, or failed for an infrastructure reason, gets a re-run once the run completes.
 Use reasonable effort on further re-runs, taking into account infrastructure issues, runner contention, and the history and state of the train.
