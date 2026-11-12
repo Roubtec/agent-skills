@@ -1,0 +1,4 @@
+interface:
+  display_name: "Merge Train"
+  short_description: "Merge reviewed PRs serially as CI passes"
+  default_prompt: "Use $merge-train to merge PRs #12, #13, and #14 one after another as they pass CI."
