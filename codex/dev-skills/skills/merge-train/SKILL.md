@@ -20,14 +20,15 @@ Carry every such note through the run.
 
 - **Merge mechanics.**
   Fetch, rebase the PR onto the latest `origin/main`, push with `--force-with-lease=<branch>:<the exact sha you rebased from>`, then `gh pr merge <N> --merge --match-head-commit <pushed sha>`.
+  The sha you rebase from must be the `headRefOid` whose rollup you read: if the fetched `origin/<branch>` is anything else, someone pushed, so put the PR back under watch instead of rebasing.
   Never squash, never merge a PR that is not on the current `origin/main`, and never merge one whose base branch is not `main`: a merge into a parent PR's branch reports success and lands nothing on `main`.
   Never bypass what the repository enforces (`--admin`, `bypass_rules`): a merge the rules refuse is a human call.
   Leave `--delete-branch` off, because your worktree still holds the branch: the merge succeeds, the local delete fails, and the non-zero exit says nothing about the merge.
 - **One writer.**
   Rebase in a task worktree, never in the main checkout: `wt-enter merge-train-<N> <branch> origin/<branch>` where the helper is on PATH, plain `git worktree add` otherwise.
-  A local branch of the same name may be stale, so bring it to the PR head with `git -C <wt> reset --hard origin/<branch>`, but only when that discards nothing: `git cherry origin/<branch> <branch>` prints no `+` line.
-  A `+` line is a local commit the PR lacks, and a branch checked out somewhere else cannot be attached at all.
-  Both are the user's to sort out: leave that PR unmerged and report it, rather than reset, detach or switch anything.
+  A local branch of the same name may be stale, so bring it to the PR head with `git -C <wt> reset --hard origin/<branch>`, but only when that discards nothing: the worktree is clean with no git operation in progress, and `git cherry origin/<branch> <branch>` prints no `+` line.
+  A dirty or mid-operation worktree is someone's unfinished work, a `+` line is a local commit the PR lacks, and a branch checked out somewhere else cannot be attached at all.
+  All of these are the user's to sort out: leave that PR unmerged and report it, rather than reset, detach or switch anything.
   State-changing git runs as `git -C <abs path>` in one sequential call.
 - **Leave the user's calls to the user.**
   A conflict whose resolution changes behavior, or a red lane whose fix needs a product or money decision: leave that PR unmerged and say why in the report.
@@ -87,16 +88,19 @@ The user is not expected to unblock it and does not care about the exact order, 
   Report what merged and what is waiting, and wait for the user.
 
 Check for open items twice for each PR: when you pick it up, and again just before the merge call, since a review may land while its CI runs.
-Both checks count unresolved threads, and any review or comment that arrived since you last looked at that PR.
-Not every comment blocks: skip or pause only on actionable feedback.
+With `pause-on-review`, the check before a merge covers every PR still on the list, because that mode stops on a review item on any of them.
+Both checks look for the open items the ground rule names, plus any top-level review or comment that arrived since you last looked at that PR.
+An unresolved thread or a review requesting changes always blocks; a top-level review or comment blocks only when it carries actionable feedback.
 
 ## The loop
 
-Watch with a bounded shell loop that polls `gh pr view <N> --json state,baseRefName,headRefOid,statusCheckRollup` for the active PRs and returns on the first terminal transition: all checks complete, a new failure, a merge.
+Watch with a shell loop that polls `gh pr view <N> --json state,baseRefName,headRefOid,statusCheckRollup` for the active PRs and exits on the first terminal transition: all checks complete, a new failure, a merge.
 Read the rollup by what it positively says.
 A `CheckRun` has settled once its `status` is `COMPLETED`, and is green when its `conclusion` is `SUCCESS`, `NEUTRAL` or `SKIPPED`; a `StatusContext` is green only when its `state` is `SUCCESS`.
 An in-progress `CheckRun` reports `conclusion: ""`, and right after a push the new head's rollup is empty or partial, so neither "nothing failed" nor "nothing pending" means green: require the rollup to describe the head you expect and to hold the lanes its last full run had.
-Have each wait end by itself inside the shell tool's own time limit, so re-issue it on expiry and widen the filter if the silence was unexpected.
+Give the loop a deadline of its own, because the shell tool's wait hands control back without stopping the command.
+When a call returns with the loop still running, resume that session instead of starting a second loop, and start a new one only after the last has exited.
+Widen what counts as a transition if the silence was unexpected.
 Nothing wakes a finished turn, so keep waiting in this one until the train is done or stopped.
 React to each event:
 
