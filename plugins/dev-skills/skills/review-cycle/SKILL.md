@@ -5,7 +5,7 @@ description: A change, worktree, or drafted document should be reviewed and fixe
 
 Run one complete review cycle — fix → own fresh-eyes review → best-effort peer review → fix — on a single artifact.
 
-**Arguments:** `[<target: worktree, branch, diff range, task/doc file, or nothing for the current change>] [artifact-type: code | prose | decision] [light] [close-out] [peer-opinions=off] [max-rounds=N]`
+**Arguments:** `[<target: worktree, branch, diff range, task/doc file, or nothing for the current change>] [artifact-type: code | prose | decision] [light] [close-out] [peer-opinions=off] [muse-contributor=on|off] [max-rounds=N]`
 
 This skill is two things at once.
 It is the **canonical definition** of the review protocol the other dev-skills share — `address-review`, `address-reviews`, `address-tasks`, `address-tasks-serialized`, `resolve-open-questions`, and `write-tasks` reference this file for the roles, gates, peer step, delegated rebase step, round cap, and disposition rule, and state only their own deltas — and it is a **drop-in**: invoked directly, it runs the full cycle on an ad-hoc change with no batch scaffolding.
@@ -37,10 +37,14 @@ Fix-ups and re-reviews always use a fresh `Agent` spawn (`subagent_type: "genera
   After either verdict it may add `NOTES (advisory; not necessarily fixes)` with at most three one-line bullets shaped `- path:line — note`, each note at most 15 words; omit the section when there is nothing material.
   Anything it believes ought to be fixed remains a finding under `VERDICT: ISSUES`, even when minor — a pass-note is below that bar, never a lighter channel for a finding.
   Brief it with the Reviewer's weighting rules too — both the nit weighting above and the comment weighting below: both of its severities gate, so a peer that never received them spends a whole round on a nit, or on the narration the fixer is told not to ship.
+- **Second peer** (optional, best-effort) — a `muse` review launched at the same moment as the Reviewer and the Peer, from the same committed checkout, only where the peer step's Muse preflight found it installed and logged in.
+  It receives the Peer's prompt unchanged and owes the same one thing in the same output shape, so its report is read, gated, and relayed exactly as the Peer's is.
+  One sentence of that prompt carries more weight for it: its read-only posture is an instruction rather than a sandbox, because its shell stays available, so say outright that the checkout is shared with other agents working at the same moment and that builds, tests, and file changes of any kind are out of scope.
+  It is an extra opinion and never a substitute: its absence is not an outcome worth a round's attention, and no cycle waits for one that was not launched.
 
 The rule is about committed state, not turn structure: never spawn the Reviewer until the fixer's commits are on disk — a reviewer racing an unfinished fixer diffs a half-written branch, sees nothing, and ships the work unverified.
 A harness may run spawns asynchronously, returning an id immediately and delivering the result as a later notification, so the obligation is to wait for that completion notification; "one checkout-dependent agent at a time" is the proxy for the invariant, sufficient where spawns are synchronous and neither sufficient nor necessary where they are not.
-The examination-only peer launched beside the Reviewer after the tree is clean and committed is the sole concurrency exception: two readers are safe.
+The examination-only peer launched beside the Reviewer after the tree is clean and committed is the sole concurrency exception: two readers are safe, and so is the third the optional second peer adds.
 
 **Finish inside your own turn, and reap what you start.**
 Say it in every role's prompt: nothing resumes a subagent, so it must never end a turn waiting for a notification, a callback, or a child it launched — it bounds and waits on anything it starts and reaps it before returning its packet, and no process of its own outlives its turn.
@@ -92,10 +96,12 @@ Each round is: a fixer pass (whenever there is work to implement or findings to 
 - Always wait for the Reviewer; when a peer was launched, wait for it too before deciding the round, otherwise carry the disabled or unavailable outcome forward explicitly.
 - A round passes only when the Reviewer passes and any intelligible peer report has no unaddressed grounded findings; **both `blocking` and `minor` peer findings gate.**
   Disabled, unavailable, timed-out, forfeited, and failed peer outcomes are explicit non-blocking outcomes — the peer is never required for the cycle to conclude.
+  Where the optional second peer ran, its report gates on exactly these terms, and it is never required either.
 - **Grounding spot-check:** only when the Reviewer passed and peer findings alone would gate, cheaply spot-check each finding's `file:line` and factual claim; discard self-evidently false or nonexistent references and note the discard.
   This noted discard is the one path by which a finding leaves the cycle without a fixer disposition.
 - **Verbatim relay:** do not summarize, merge, or rewrite feedback.
   When another fix round is needed, give the fresh fixer the complete available results verbatim as separately labeled `Reviewer findings` and `Peer (codex) findings` blocks so it can reconcile overlap or conflict.
+  A second peer's report travels as its own `Peer (muse) findings` block, never merged into the Peer's.
   A pushed-back peer claim is adjudicated by the next fresh Reviewer.
   Where the Reviewer passed and the peer blocked on the same fact (or the reverse), tell the fixer outright that the channels agree on the substance and differ only on severity — it visibly shortens deliberation.
   That is framing, not a gate change: a grounded finding keeps its existing force.
@@ -249,6 +255,18 @@ If a tree instead has to recover liveness from codex's unique `-o` path, resolve
 Persist that resolved PID's complete identity before any later-shell handoff; the identity-checked match is both the liveness answer and the only permitted signal target.
 Use a loose roughly 12-minute timeout, waiting longer when visible progress or review size justifies it; never substitute a capped foreground call.
 A non-empty result containing a `VERDICT:` line is authoritative only after confirmed teardown.
+
+**Optional second peer: Muse.**
+Muse Code is a third harness some containers carry and most do not, so it is strictly additive: everything above describes the cycle without it, and nothing here changes the Peer.
+Preflight it once per run beside the Peer's own preflight, unless `peer-opinions=off`, which disables both: run `command -v muse`, then `muse usage`.
+A missing binary or a non-zero exit means there is no second peer this run; say so once in the final summary only when the binary was present, since a container without Muse has nothing to report.
+A batch orchestrator preflights it once for the whole batch, like the Peer.
+It runs through `peer-review-run` only — there is no manual launch for it: `peer-review-run --provider muse --worktree "$worktree" --prompt-file "$prompt_file" --artifact-root "$muse_artifact_root" --timeout 260 --effort medium`, exactly once, in the foreground, inside its own role started at the same moment as the Peer's, under the same caller-side wait.
+Give it the Peer's `prompt_file` and an `artifact_root` of its own beside the Peer's, so the two results never share a directory.
+A missing helper, or one that answers that call with a usage error and no result line because it predates the `muse` provider, means no second peer for the rest of the run — state that once rather than every round.
+Pass no `--model`: the helper prefers the strongest Muse model the account's plan includes and falls back to that plan's floor on its own, so the applied `model` and `effort` it reports are this peer's strength note, recorded beside the Peer's.
+Contributor mode is the user's saved Muse setting and is left alone; only an explicit `muse-contributor=on` or `muse-contributor=off` argument overrides it, by exporting `MUSE_CONTRIBUTOR_MODE=1` or `=0` for that one call.
+Its result lands in the outcome vocabulary below and feeds the gate, the grounding spot-check, the verbatim relay, and the pass-note consumption on the Peer's terms, and its launches count toward the same batch throttle.
 
 **Compact pass-note consumption.**
 Read the review — the documented `reviewFile` payload on the helper path, the provider's captured result artifact on the fallback — and copy only the bounded bullets below its exact `NOTES (advisory; not necessarily fixes)` heading into the structured peer `notes`; do not import the verification line, issue prose, reasoning, or any text outside that section.
