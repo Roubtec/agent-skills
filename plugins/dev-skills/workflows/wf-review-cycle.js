@@ -2292,9 +2292,13 @@ async function runReviewCycle(cycle) {
       if (ground && Array.isArray(ground.verdicts)) {
         const ungrounded = ground.verdicts.filter((v) => v && v.grounded === false);
         if (ungrounded.length) {
+          // One record per finding dropped, so two providers that raised the
+          // same claim are each named: the filter below drops both.
           for (const u of ungrounded) {
-            const from = peerGating.find((f) => f.claim === u.finding);
-            discardedPeerFindings.push({ round: rounds, ...(from ? { provider: from.provider } : {}), finding: u.finding, why: u.why || "" });
+            const from = peerGating.filter((f) => f.claim === u.finding);
+            for (const f of from.length ? from : [null]) {
+              discardedPeerFindings.push({ round: rounds, ...(f ? { provider: f.provider } : {}), finding: u.finding, why: u.why || "" });
+            }
           }
           const dropped = new Set(ungrounded.map((v) => v.finding));
           peerGating = peerGating.filter((f) => !dropped.has(f.claim));

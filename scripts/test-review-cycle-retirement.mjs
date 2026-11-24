@@ -2168,14 +2168,15 @@ for (const name of WORKFLOWS) {
     const discarded = await drive({
       "peer-preflight:codex": available,
       "peer-preflight:muse": available,
-      "peer:codex#1": passed,
+      // Both raise the same claim, so the one verdict drops two findings.
+      "peer:codex#1": issues("points at a file that is not there"),
       "peer:muse#1": issues("points at a file that is not there"),
       "ground#1": { verdicts: [{ finding: "points at a file that is not there", grounded: false, why: "no such file" }] },
     });
     check(
-      "a finding the grounding check discards is recorded under the provider that raised it, and no longer gates",
+      "a finding the grounding check discards is recorded under every provider that raised it, and no longer gates",
       discarded.result.verdict === "pass" && discarded.result.rounds === 1 &&
-        JSON.stringify(discarded.result.discardedPeerFindings) === JSON.stringify([{ round: 1, provider: "muse", finding: "points at a file that is not there", why: "no such file" }]),
+        JSON.stringify(discarded.result.discardedPeerFindings) === JSON.stringify(["codex", "muse"].map((provider) => ({ round: 1, provider, finding: "points at a file that is not there", why: "no such file" }))),
       `${discarded.result.verdict}/${discarded.result.rounds} / ${JSON.stringify(discarded.result.discardedPeerFindings)}`,
     );
 
