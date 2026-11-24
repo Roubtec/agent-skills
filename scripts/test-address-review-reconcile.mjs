@@ -5,17 +5,13 @@
 //
 // Three properties hold the gate up, and each is a separate way to lose it:
 //
-//   1. The OFF-SHOOT EXEMPTION. Reconciliation is keyed on the two BRANCH
-//      NAMES: only a run whose checked-out branch IS the PR's head ref
-//      reconciles. Where they differ the supported local off-shoot of a
-//      merge-pending PR is in play, "behind the PR head" is that case's normal
-//      state, and the run proceeds whatever the gather reported.
-//   2. FAILING CLOSED. On the PR's own branch, only `work` and
-//      `fast-forwarded` let the run continue. Everything else stops it —
-//      `unrecognized`, an outcome string this script does not know, an empty
-//      one, an absent report, and `not-applicable` (which on THIS branch is a
-//      contradiction, not an exemption: keying the gate on the outcome instead
-//      of the names would let a misreporting agent bypass reconciliation).
+//   1. ONE BRANCH. The run works only on the PR's head ref: a gather that
+//      reports any other working branch is stopped before reconciliation is
+//      even read.
+//   2. FAILING CLOSED. Only `work` and `fast-forwarded` let the run continue.
+//      Everything else stops it — `unrecognized`, an outcome string this
+//      script does not know (the retired `not-applicable` among them), an
+//      empty one, and an absent report.
 //   3. The ORDER relative to the empty-`items` exit — since its split (task
 //      016a, below) two zero-item outcomes rather than one no-op. The rule's
 //      third outcome returns NO items by contract, so a gate placed after that
@@ -34,7 +30,7 @@
 // The gate is only the CONSUMER of `packet.reconcile`. The producer is a
 // paragraph of the gather brief, which no scenario reaches because the gather
 // agent is stubbed — so the RULE it states is read out of the rendered brief
-// directly: both probes, the head they compare against, the off-shoot skip, and
+// directly: both probes, the head they compare against, and
 // the outcome strings, whose agreement with the strings the gate keys on
 // nothing else pins.
 //
@@ -111,16 +107,12 @@
 // field the caller must not read charitably — and both fail closed, so they are
 // driven through the same harness rather than a second copy of it. Two things
 // hang off that location and are pinned beside it: a HALT keeps the worktree
-// (bar the fork arm's rejected landing, below), so the blocker exit — which
+// so the blocker exit — which
 // runs before the pair is even validated — has to name the surviving path, and
-// the brief has to oblige a blocker packet to carry it; and the three
-// helper-free attach arms each fail as written if they lose a clause (a
-// pathless `git worktree add --detach`, an add that never reads the live
-// registration a halted run left behind, an arm order that lets a prior fork
-// run's leftover local branch claim the re-run, a landing verification that
-// states no consequence, or one whose consequence keeps a tree the re-run would
-// then stop on forever), which no scenario can observe because the gather agent
-// is stubbed.
+// the brief has to oblige a blocker packet to carry it; and the two
+// helper-free attach arms each fail as written if they lose a clause (an add
+// that never reads the live registration a halted run left behind), which no
+// scenario can observe because the gather agent is stubbed.
 //
 // And it covers the two item kinds task 049 carried onto this surface from the
 // skill's step 3: a `ci-failure` item per lane failing on the reconciled head,
@@ -167,7 +159,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 300;
+const EXPECTED_CHECKS = 279;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -598,8 +590,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
 
 // --- What a HALTED run hands back: the worktree it left standing -------------
 // The reclaim step runs only where the run FINISHED; halting is what KEEPS the
-// tree (the fork arm's rejected landing hands its own back, inside the gather
-// and before this exit ever sees a path), so a blocker raised after the attach
+// tree, so a blocker raised after the attach
 // is the one exit that must name the surviving path. It is also the exit that runs BEFORE the location pair is
 // validated — the gather stopped, so there may be no usable pair at all — which
 // is what makes this a property of its own rather than a corollary of the gate:
@@ -641,79 +632,20 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
 
 // --- The producer half: how the working location is chosen -------------------
 // The gate above validates the pair the gather agent REPORTED. What lets that
-// report say `workingBranch != branch` at all is the gather brief's case list,
-// which no scenario reaches because the gather agent is stubbed — so it is read
-// out of the rendered brief: working on a branch that is NOT the PR head ref is
-// reachable ONLY by the request naming it with `off-shoot`. Two review rounds
-// tried to infer that case from the shape of the history instead; "already
-// CARRIES the PR head" was the last such predicate, and it rejected the very
-// case it was written for (an off-shoot cut BEFORE the head and advanced carries
-// no head) while still admitting a stacked child that has not been PR'd. Both
-// halves are pinned here: the token has to be the route, and that predicate must
-// not come back.
+// report honest is the gather brief's case list, which no scenario reaches
+// because the gather agent is stubbed — so it is read out of the rendered
+// brief: the run works on no branch but the PR's head ref, a fork PR is
+// refused, and no off-shoot route or history-shape inference is left in it.
 {
   const brief = gatherPrompt("#42");
   const cases = brief.split("\n\n").find((p) => p.includes("take the FIRST case that applies")) || "";
-  const tokenRoutes = /`off-shoot` token/.test(cases) && /NOTHING BUT THE TOKEN/.test(cases);
-  const inferredFromShape = /CARRIES the PR head/.test(brief);
+  const headOnly = /`workingBranch` must equal `branch`/.test(brief);
+  const refusesFork = /A FORK PR is not supported/.test(brief) && /isCrossRepository/.test(brief);
+  const retired = /off-shoot/i.test(brief) || /CARRIES the PR head/.test(brief) || /gh pr checkout/.test(brief);
   check(
-    "the off-shoot working location is selected by the `off-shoot` token, never inferred from the branch's shape",
-    tokenRoutes && !inferredFromShape,
-    `token route stated: ${tokenRoutes}; carries-the-head predicate present: ${inferredFromShape}`,
-  );
-  // The one check that survives beside the token is a stop for AMBIGUITY — the
-  // named branch is also another open PR's head — and it has to answer exactly
-  // that question and no neighbouring one. Two neighbouring ones are what a
-  // base-repository PR LIST answers instead: `gh pr list --head <branch>` reads
-  // one base repository (a PR based in another is simply absent), matches a bare
-  // branch NAME (its own `--help` refuses `<owner>:<branch>`, so a fork's
-  // same-named head answers for a branch it has nothing to do with), and stops
-  // at 30 items. Filtering its rows back down to the right question took a
-  // repository-qualified comparison whose components each had to be pinned
-  // separately here, and it still could not recover the rows the list never
-  // returned.
-  //
-  // So the probe is ROOTED at the head instead — the head repository's own ref,
-  // which is what the question is about — and the pins follow that root. Every
-  // open PR whose head IS that ref comes back whatever repository its base is
-  // in, and nothing else does, which is why one filter now does what two could
-  // not: exclude the PR being addressed by its `url`, since where the branch IS
-  // that PR's head the query answers with the very PR under work and an
-  // unqualified stop would halt an ordinary target-branch run on a token that is
-  // merely redundant there.
-  //
-  // Three things hold that root up and each is a separate way to lose it: the
-  // query shape (a `ref(qualifiedName:...)` carrying `associatedPullRequests`,
-  // not a PR list), the ref it is rooted AT (this branch's own resolved push
-  // remote/ref — without which the query names no ref at all), and the standing
-  // refusal of the list form, which is what a later round would otherwise
-  // restore as the obvious simplification.
-  // Which PR is "a DIFFERENT one" has to be asked of a GLOBALLY unique
-  // identifier, and the number is not one: a PR number is scoped to that PR's
-  // own BASE repository, while this answer set spans base repositories by
-  // construction — which is the entire reach the query root was widened for. So
-  // an addressed #71 and a conflicting #71 based elsewhere compare EQUAL, and
-  // the number filter discards precisely the case the widening reached. The
-  // query already asks for `url`; both halves are pinned, the comparison and
-  // the standing refusal of the number, because "just compare the number" is
-  // what a later round restores as the obvious simplification.
-  const excludesAddressedPr = /count a hit only where the PR's `url` DIFFERS from the resolved PR's own `url`/.test(cases);
-  const refusesTheNumberComparison = /Compare the `url` and never the `number`/.test(cases);
-  const rootsAtTheHeadRef = /ref\(qualifiedName:"refs\/heads\/<ref>"\)\{ associatedPullRequests\(states:OPEN/.test(cases);
-  const resolvesThatRefFromPushTarget = /resolve `C`'s own push remote\/ref/.test(cases);
-  const refusesTheListForm = /`gh pr list --head` delivers neither half/.test(cases);
-  // `isCrossRepository` was named here as a cheap short-circuit until it was
-  // found to license skipping the very comparison it stood in front of: the
-  // field says whether the OTHER PR's own head and base repositories differ,
-  // which is not the question asked. The query root now settles whose head it
-  // is, so the field is not merely unqualified but has nothing left to answer —
-  // and the refusal stays, because what invites it back is the same look of a
-  // cheap answer that got it added the first time.
-  const refusesShortCircuit = /`isCrossRepository` has no part in this and is not requested/.test(cases);
-  check(
-    "the conflicting-PR stop excludes the PR being addressed by its globally unique `url` — never by a base-scoped number — and asks the head repository's own ref which open PRs it heads, refusing the base-scoped PR list and any short-circuit of it",
-    excludesAddressedPr && refusesTheNumberComparison && rootsAtTheHeadRef && resolvesThatRefFromPushTarget && refusesTheListForm && refusesShortCircuit,
-    `url-identity filter stated: ${excludesAddressedPr}; number comparison refused: ${refusesTheNumberComparison}; rooted at the head ref: ${rootsAtTheHeadRef}; that ref resolved from this branch's push target: ${resolvesThatRefFromPushTarget}; base-scoped list form refused: ${refusesTheListForm}; short-circuit refused: ${refusesShortCircuit}`,
+    "the gather works on no branch but the PR's head ref and refuses a fork PR, with no off-shoot route or fork attach left in the brief",
+    headOnly && refusesFork && !retired,
+    `head-ref-only stated: ${headOnly}; fork refusal stated: ${refusesFork}; retired route still present: ${retired}`,
   );
   // Forced `inline` checks the target branch out in THIS checkout, and the
   // branch it checks out may already be there: a maintainer who has worked this
@@ -721,9 +653,9 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // force the mode from. A create is not a checkout — `git checkout -b` and
   // `git switch -c` REFUSE a branch that already exists — so an unconditional
   // "create a local tracking branch" fails that run at setup, before the
-  // supported mode is entered at all. Case 4's worktree arms already split
-  // EXISTS from NONE; nothing but this text makes case 2 split it too.
-  const inlineCase = cases.split("\n").find((l) => l.startsWith("2. ")) || "";
+  // supported mode is entered at all. Case 3's worktree arms already split
+  // EXISTS from NONE; nothing but this text makes case 1 split it too.
+  const inlineCase = cases.split("\n").find((l) => l.startsWith("1. ")) || "";
   if (!inlineCase) throw new Error(`${SOURCE}: forced-inline case not found; its checkout rule cannot be read`);
   const reusesExistingT = /where one EXISTS/.test(inlineCase);
   const createsOnlyWhenAbsent = /only where NONE/.test(inlineCase);
@@ -732,38 +664,23 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     reusesExistingT && createsOnlyWhenAbsent,
     `reuse arm stated: ${reusesExistingT}; create conditioned on absence: ${createsOnlyWhenAbsent}`,
   );
-  // Four clauses in the same case list, each of which the worktree case fails as
-  // written without — and none of the failures is visible to the gate above,
-  // which only ever sees what the gather REPORTED.
-  //
-  // `git worktree add` takes its path as a mandatory argument
-  // (`git worktree add … <path> [<commit-ish>]`), so the fork arm's `--detach`
-  // form needs one too: pathless, the command fails before `gh pr checkout` is
-  // reached and the default worktree mode never runs for a fork PR at all.
-  check(
-    "the fork attach's detached add carries the worktree path",
-    /git worktree add --detach "<worktree base>\/pr-<N>"/.test(cases),
-    cases.includes("--detach") ? "the `--detach` add is present but pathless" : "no `--detach` add found",
-  );
-  // And `git worktree prune` clears STALE registrations only, so the LIVE one a
+  // `git worktree prune` clears STALE registrations only, so the LIVE one a
   // halted run left is exactly what survives it — which is the run this stable
   // slug exists to resume. Without a reuse arm the helper-free fallback's add
   // fails on an occupied path, so the documented resume works only where the
   // optional helper exists. The read is asserted to precede the ARMS rather than
   // to appear anywhere in the case, because scoping it to one arm is how this
-  // was lost before: the fork arm is always helper-free and uses the same stable
-  // path, so a read stated only for the local-`T` arms leaves the one attach
-  // with no helper alternative unable to resume at all.
+  // was lost before.
   // Scoping means nothing if the anchor can vanish: `indexOf` answers -1 for an
   // absent marker and `slice(0, -1)` would then hand every assertion below the
   // WHOLE case block, degrading this into the "appears somewhere" check it
   // exists to replace. Fail closed on the marker, as the declaration-prefix cut
   // above does.
-  const armsAt = cases.indexOf("take the FIRST of these three arms");
+  const armsAt = cases.indexOf("Then, where a local `T` EXISTS, attach it");
   if (armsAt < 0) throw new Error(`${SOURCE}: arm-list marker not found; the registration read cannot be scoped ahead of the arms`);
   const registrationRule = cases.slice(0, armsAt);
   const readsRegistrations = /git worktree list/.test(registrationRule);
-  const coversEveryArm = /any of the three arms below/.test(registrationRule);
+  const coversEveryArm = /either of the two arms below/.test(registrationRule);
   const reusesMatch = /REUSE it/.test(registrationRule);
   const stopsOnMismatch = /registered on anything ELSE/.test(registrationRule);
   check(
@@ -778,7 +695,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // this case promises never to dirty — and a halt, which is precisely what
   // KEEPS the worktree, leaves it standing. Pinned ahead of the arms for the
   // same reason the registration read is: stated inside one arm it would exempt
-  // the other two, and the fork arm is always helper-free. Both halves are read,
+  // the other. Both halves are read,
   // because the probe without the write is a check nothing acts on: the
   // `check-ignore` probe, and the untracked repo-local exclude file it appends
   // to rather than the tracked `.gitignore`, which is the maintainer's.
@@ -807,41 +724,6 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "the worktree base is made ignored before any arm adds under it, probed as a directory and appended to the exclude file Git itself names — resolved from inside `<repo>`, never a literal `.git/info/exclude` and never the tracked `.gitignore`",
     probesTheIgnoreRule && resolvesTheExcludeThroughGit && resolvesItFromInsideTheRepo,
     `ignore rule probed as a directory: ${probesTheIgnoreRule}; exclude resolved through git instead of a literal path or .gitignore: ${resolvesTheExcludeThroughGit}; resolved from inside the repo, the answer being CWD-relative: ${resolvesItFromInsideTheRepo}`,
-  );
-  // Arm ORDER is a contract in its own right, and prose has to settle it: a
-  // prior fork run's `gh pr checkout` leaves a same-named local `T` behind, so
-  // on the re-run both "a local `T` EXISTS" and "the head is a fork" describe
-  // the tree, and the local arm would attach that leftover with no fork remote
-  // wired up. The fork arm therefore has to be named as taking precedence, not
-  // merely listed alongside.
-  const forkFirst = /FORK head takes the first arm, ahead of both local-`T` arms/.test(cases);
-  check(
-    "the fork arm is stated to take precedence over the local-`T` arms",
-    forkFirst,
-    forkFirst ? "" : "the fork arm's precedence over the local-`T` arms is unstated",
-  );
-  // And the landing verification has to say what a FAILURE does. The identity
-  // check runs before any checkout, so it cannot see a collision `gh`'s own
-  // branch selection creates; a verification with no consequence leaves that
-  // case to whatever the agent invents.
-  const forkMismatchStops = /verification FAILS[\s\S]*?ok: false[\s\S]*?attach nothing further and substitute nothing/.test(cases);
-  check(
-    "a failed fork landing verification is a blocker that attaches and substitutes nothing",
-    forkMismatchStops,
-    forkMismatchStops ? "" : "the fork arm verifies the landing but states no consequence for a mismatch",
-  );
-  // And that consequence has to GIVE THE TREE BACK, which is the one thing the
-  // rest of this case cannot recover from: the halt leaves `pr-<N>` detached or
-  // on the rejected ref, and the registration read above then stops every
-  // re-run on "registered on anything ELSE" — never a second slug and never a
-  // removal — so the slug stays blocked even once the maintainer has fixed the
-  // collision. `address-reviews` states the same give-back for the same
-  // failure, and this arm is the one place a divergence would be invisible.
-  const forkMismatchGivesTreeBack = /verification FAILS[\s\S]*?wt-remove pr-<N>[\s\S]*?git worktree remove/.test(cases);
-  check(
-    "and it hands that worktree back, so the rejected ref does not block the stable slug on every re-run",
-    forkMismatchGivesTreeBack,
-    forkMismatchGivesTreeBack ? "" : "the fork arm's failure path states no give-back, leaving `pr-<N>` occupied by the rejected landing",
   );
   // The location pair rides in `pr`, which is otherwise owed only on success —
   // so the packet that could silently omit the path is precisely the halt that
@@ -893,12 +775,9 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   check("an outcome string the script does not know stops the run", unknown.status === "skipped-unreconciled", unknown.status);
   const empty = await run(gathered({ reconcile: { outcome: "" } }));
   check("an empty outcome string stops the run", empty.status === "skipped-unreconciled", empty.status);
-  // The gate is keyed on the BRANCH NAMES, not on the outcome. Keyed on the
-  // outcome instead, this packet — an agent reporting the off-shoot exemption
-  // for a run that is on the PR's own branch — would sail straight through
-  // with reconciliation never performed.
+  // A retired outcome string is no exemption: it is one more unknown string.
   const contradiction = await run(gathered({ reconcile: { outcome: "not-applicable" } }));
-  check("`not-applicable` reported ON the PR's own branch stops the run", contradiction.status === "skipped-unreconciled", contradiction.status);
+  check("the retired `not-applicable` outcome stops the run like any other unknown string", contradiction.status === "skipped-unreconciled", contradiction.status);
   // And the gate wins over having work to do, not just over having none.
   const withWork = await run(gathered({ reconcile: { outcome: "unrecognized", detail: "diverged" }, items: [ITEM] }));
   check("an unreconciled branch stops the run even with threads to address", withWork.status === "skipped-unreconciled", withWork.status);
@@ -936,156 +815,24 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   );
 }
 
-// --- The off-shoot exemption ------------------------------------------------
-// A local off-shoot of a merge-pending PR: `workingBranch` legitimately differs
-// from the PR's head ref, fixes land on the off-shoot, and `branch`/`headOid`
-// stay publication metadata. A run only arrives in that shape by the request
-// NAMING the off-shoot (the `off-shoot` token, pinned above and, in the block
-// after this one, enforced against the request); reconciliation itself is keyed
-// on the two branch names and is indifferent to how the location was chosen,
-// which is why these scenarios state the packet rather than the route — while
-// carrying the token, without which the run stops before reaching this gate.
-// Reconciliation is skipped WHOLE here, so no reported outcome — including none
-// at all, and including one that contradicts the exemption — may stop the run.
+// --- The head ref is the only branch a run works on --------------------------
+// A gather that reports any other working branch — a misread of where it stood,
+// or a substitute it attached — would hand the fixing cycle that branch to
+// commit on, and publication would push those commits onto the PR under
+// `branch`. The caller stops it whatever the request said: the retired
+// `off-shoot` token selects nothing.
 {
-  const off = { workingBranch: "feature/x-offshoot" };
-  const SELECTED = "#42 off-shoot no-push";
-  const clean = await run(gathered({ ...off, reconcile: { outcome: "not-applicable" } }), { args: SELECTED });
-  check("off-shoot `not-applicable` with no threads is a plain no-op", clean.status === "no-op", JSON.stringify(clean.result));
-  // The no-op's reconciliation record is not path-dependent: the off-shoot run
-  // reports what reconciliation concluded exactly as the same-branch one above
-  // does. Pinned because the difference is invisible from the gate — both paths
-  // reach the SAME return — so a reader is free to conclude the off-shoot result
-  // carries no such record, and one did.
-  check(
-    "and that no-op names the reconciliation and carries its record too",
-    /not-applicable/.test((clean.result || {}).detail || "") &&
-      ((clean.result || {}).reconcile || {}).outcome === "not-applicable",
-    JSON.stringify(clean.result),
-  );
-  // This is the one scenario here that reaches a rebase point, and the rebase
-  // report names the branch it saved a recovery ref FOR — which the caller checks
-  // against the branch it dispatched. So an off-shoot run's report carries the
-  // off-shoot's ref: the shared fixture's `feature/x` one would be another
-  // branch's backup, which is exactly what that check refuses.
-  const offRebase = { rebase: { ...REBASE_NOOP, recoveryRef: `refs/pre-rebase/${off.workingBranch}/20260809-090000` } };
-  const working = await run(gathered({ ...off, reconcile: { outcome: "not-applicable" }, items: [ITEM] }), { args: SELECTED, ...offRebase });
-  check("off-shoot `not-applicable` with threads proceeds to the nested cycle", working.status === "reached-cycle", working.status);
-  check(
-    "and the cycle runs on the off-shoot, not on the PR's head ref",
-    working.seen.cycleOpts && working.seen.cycleOpts.opts.branch === "feature/x-offshoot",
-    JSON.stringify(working.seen.cycleOpts && working.seen.cycleOpts.opts && working.seen.cycleOpts.opts.branch),
-  );
-  const absent = await run(gathered({ ...off }), { args: SELECTED });
-  check("off-shoot with no `reconcile` report at all still proceeds", absent.status === "no-op", absent.status);
-  const contradicting = await run(gathered({ ...off, reconcile: { outcome: "unrecognized", detail: "behind the PR head" } }), { args: SELECTED });
-  check("off-shoot `unrecognized` still proceeds — behind the head is that case's normal state", contradicting.status === "no-op", contradicting.status);
-}
-
-// --- What ENTITLES a run to that exemption ----------------------------------
-// The exemption above is triggered by two branch names the gather agent chose,
-// and nothing in the packet says the request ever asked for a working branch
-// other than the PR's head ref. So the token is parsed from the ARGS here, by
-// the caller, and a differing `workingBranch` without it is a stop. Read the
-// exemption without this gate and one gather deviation — the history-shape
-// inference its brief forbids, or a plain misread of which branch it stood on —
-// skips reconciliation whole and hands the fixing cycle a stacked child to edit
-// and commit on, whose own commits publication then pushes onto this PR under
-// `branch`. Nothing downstream can catch that: differing names are exactly what
-// the supported case looks like, so every later step reads the deviation as the
-// mode working. The two directions are pinned together, because a gate keyed on
-// the wrong thing passes one of them: the token must ADMIT the supported case
-// (covered above, and again here from a differently-spelled request) and REFUSE
-// the packet that merely claims it.
-{
-  const off = { workingBranch: "feature/x-offshoot", reconcile: { outcome: "not-applicable" }, items: [ITEM] };
-  // Every selecting row below reaches a rebase point, and the caller checks the
-  // recovery ref the rebase reports against the branch it dispatched. So these
-  // runs need the OFF-SHOOT's ref; the shared fixture's `feature/x` one is
-  // another branch's backup and would stop every row on `rebase-unsaved-
-  // recovery-ref` — a refusal that says nothing about the token read under test.
-  const offRebase = { rebase: { ...REBASE_NOOP, recoveryRef: `refs/pre-rebase/${off.workingBranch}/20260809-090000` } };
-  const unselected = await run(gathered(off));
-  const u = unselected.result || {};
-  check(
-    "a working branch other than the PR head ref, from a request that never carried `off-shoot`, stops the run",
-    unselected.status === "skipped-unselected-working-branch" && /off-shoot/.test(u.detail || ""),
-    JSON.stringify(u),
-  );
-  check(
-    "and nothing runs past the gather: no nested cycle, and the off-shoot is never edited",
-    unselected.seen.cycleOpts === null && unselected.seen.agentLabels.join(",") === "gather",
-    JSON.stringify(unselected.seen),
-  );
-  // Parsing is lenient over free prose exactly as the push/ping tokens are, and
-  // the two directions of that leniency do NOT cost the same, which is what
-  // decides how it is pinned. A false positive disables this gate for one run
-  // and leaves the behaviour that shipped before it existed. A false negative
-  // REFUSES a run the request genuinely selected — `skipped-unselected-working-
-  // branch` on a supported case — and it is silent in the direction that reads
-  // as the guard working. So the ADMIT direction is swept wide, over every
-  // spelling a maintainer plausibly types: spaced and joined, quoted and
-  // backticked, abutting a slash, and sharing a request with a quoted phrase or
-  // a ref path. A round that narrows the text the token is read out of has to
-  // keep every one of these.
-  const selections = [
-    "#42 off-shoot, no-push",
-    "#42 off shoot, no-push",
-    "#42 offshoot, no-push",
-    "#42 off-shoots, no-push",
-    '#42 "off-shoot", no-push',
-    "#42 `off-shoot`, no-push",
-    '#42 please use "off-shoot mode", no-push',
-    "#42 off-shoot/no-push",
-    '#42 the review says "use origin/main" and off-shoot "yes"',
-    "#42 off-shoot; rebase onto origin/main first, no-push",
-    "#42 work on the off-shoot at task/021c-guard, no-push",
-    "#42 use off-shoot mode (see `docs/off-shoot.md`), no-push",
-    "#42 this run is an off-shoot of the head, no-push",
-    "#42 don't push; off-shoot",
-  ];
-  const refused = [];
-  for (const req of selections) {
-    const r = await run(gathered(off), { args: req, ...offRebase });
-    if (r.status !== "reached-cycle") refused.push(`${req} -> ${r.status}`);
-  }
-  check(
-    "and every genuine selection reaches the cycle — spaced, joined, plural, quoted, backticked, slash-abutted, and beside a quoted phrase or a ref path",
-    refused.length === 0,
-    refused.join("; "),
-  );
-  // The residual, pinned as the deliberate choice it is rather than left to be
-  // rediscovered: a request that merely MENTIONS an off-shoot selects one too,
-  // so an incidental mention disables this gate for that run. A narrowing pass
-  // over the text the token is read from — strip ref paths, quoted phrases,
-  // negations, the way `push-back` is stripped before `push` — was written and
-  // removed: measured against this same harness it caught 4 of 10 incidental
-  // mentions while REFUSING 3 of the genuine selections above, and the
-  // categories leaked anyway. Every row here is one that pass was supposed to
-  // catch and the last four are ones it did not, so restoring it in that form
-  // fails the check above by name before this one is even consulted. Widening
-  // it further is the same trade in the costlier direction. What the gate still
-  // catches, and what it is for, is the check at the top of this block: a
-  // deviating packet from a request that never says `off-shoot` at all.
-  const incidental = [
-    "#42 rebase on top of task/021c-publication-guard-for-an-off-shoot, no-push",
-    "#42 branch feature/offshoot-ui, no-push",
-    '#42 title "Fix offshoot accounting", no-push',
-    "#42 this is not an off shoot, no-push",
-    '#42 title "Fix the off-shoot in src/a"',
-    "#42 no off-shoot, use a worktree",
-    "#42 do not use off-shoot mode",
-    "#42 don't use the off-shoot mode",
-    "#42 don't work on the off-shoot",
-    "#42 rebase onto off-shoot-guard, no-push",
-  ];
+  const other = { workingBranch: "feature/x-offshoot", reconcile: { outcome: "work" }, items: [ITEM] };
   const stopped = [];
-  for (const req of incidental) {
-    const r = await run(gathered(off), { args: req, ...offRebase });
-    if (r.status !== "reached-cycle") stopped.push(`${req} -> ${r.status}`);
+  for (const req of [undefined, "#42 off-shoot, no-push", "#42 inline", "#42 no-push"]) {
+    const r = await run(gathered(other), req === undefined ? {} : { args: req });
+    const u = r.result || {};
+    if (r.status !== "skipped-unselected-working-branch" || !/head ref/.test(u.detail || "") || r.seen.cycleOpts !== null || r.seen.agentLabels.join(",") !== "gather") {
+      stopped.push(`${req} -> ${r.status}`);
+    }
   }
   check(
-    "while an incidental mention — a ref path, a quoted phrase, a negation — selects the off-shoot too: the accepted residual of reading the token from the whole request, no context stripped",
+    "a working branch other than the PR head ref stops the run before any cycle, whatever the request carried",
     stopped.length === 0,
     stopped.join("; "),
   );
@@ -1295,7 +1042,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
 // since the gather agent is stubbed with a packet already written — delete the
 // paragraph and every check above still passes while no run ever reconciles
 // anything again. So the brief is rendered and read: the two probes it orders,
-// the off-shoot skip, and the outcome vocabulary it fixes.
+// and the outcome vocabulary it fixes.
 {
   const brief = gatherPrompt("#42");
   const probes = ["git rev-list --right-only --cherry-pick", "git merge-base --is-ancestor"];
@@ -1586,46 +1333,26 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     );
   }
 
-  // The off-shoot exemption is stated to the agent as well as enforced by the
-  // gate: where the names differ the step is skipped WHOLE, which is what makes
-  // `not-applicable` the honest report there rather than an unrun probe's.
-  const skipPara = brief.split("\n\n").find((p) => p.includes('outcome: "not-applicable"')) || "";
-  check(
-    "and skips reconciliation whole where the branch names differ, reporting `not-applicable`",
-    /differ/i.test(skipPara) && /skip/i.test(skipPara),
-    skipPara ? skipPara.slice(0, 160) : 'no paragraph reports `outcome: "not-applicable"`',
-  );
-
   // The base commit this brief resolves is the review base of every `no-rebase`
   // run, and WHICH REPOSITORY it is read in decides whether it is the PR's base
-  // at all. The branch's push remote is the HEAD repository: on a
-  // cross-repository PR `<push-remote>/<baseRefName>` is a same-named branch in
-  // the fork or nothing, so a run there pins a commit off another branch — or
-  // fails — while looking exactly like a run that worked. And a remote-tracking
-  // ref is only as fresh as its last fetch, so reading one instead of fetching
-  // can pin a commit the base has moved past even same-repo. Both halves are
-  // pinned: the base repository is the PR's own, and the ref is fetched and
-  // resolved from what the fetch brought.
-  // And WHICH VALUE names that repository, which is the same hazard one step in:
-  // `gh repo view` with no repository argument answers for the repository the
-  // directory it runs in resolves to, so in the very fork-clone case this
-  // paragraph exists for it names the HEAD fork and the fetch lands on a
-  // same-named branch there. The PR's own URL is the explicit, already-resolved
-  // value that cannot drift with the working directory.
+  // at all. A remote-tracking ref is only as fresh as its last fetch, so
+  // reading one instead of fetching can pin a commit the base has moved past.
+  // And `gh repo view` with no repository argument answers for the repository
+  // the directory it runs in resolves to, which need not be the PR's; the PR's
+  // own URL is the explicit, already-resolved value that cannot drift.
   const noRebaseBrief = gatherPrompt("#42 no-rebase", true);
   const basePara = noRebaseBrief.split("\n\n").find((p) => p.includes("pr.baseOid")) || "";
-  const readsBaseRepo = /base always lives in the repository the PR itself is in/.test(basePara);
-  const notThePushRemote = /NOT this branch's push remote|not through this branch's push remote/.test(basePara);
+  const readsBaseRepo = /resolve it in the repository the PR itself is in/.test(basePara);
   const namesItFromThePrUrl = /this PR's OWN URL names/.test(basePara) && /you report as `pr\.url`/.test(basePara);
   const refusesTheDirectoryDerivedRepo =
-    /Do not ask a bare `gh repo view/.test(basePara) && /answers for the repository the DIRECTORY it runs in/.test(basePara);
+    /not from a bare `gh repo view/.test(basePara) && /answers for whatever repository the DIRECTORY it runs in/.test(basePara);
   const fetchesIt = /git fetch <the remote whose URL is that repository/.test(basePara) && /moving any branch/i.test(basePara);
   const resolvesTheFetch = /rev-parse --verify FETCH_HEAD\^\{commit\}/.test(basePara);
   const refusesTheTrackingRef = /remote-tracking ref is only as fresh as/.test(basePara);
   check(
-    "and resolves the base commit in the PR's OWN repository — named from the PR's URL, not from the directory `gh repo view` would answer for — freshly fetched, rather than through the branch's push remote or a remote-tracking ref",
-    readsBaseRepo && notThePushRemote && namesItFromThePrUrl && refusesTheDirectoryDerivedRepo && fetchesIt && resolvesTheFetch && refusesTheTrackingRef,
-    `base repository stated: ${readsBaseRepo}; push remote refused: ${notThePushRemote}; named from the PR url: ${namesItFromThePrUrl}; directory-derived repo refused: ${refusesTheDirectoryDerivedRepo}; fetches the ref: ${fetchesIt}; resolves the fetch: ${resolvesTheFetch}; refuses a tracking ref: ${refusesTheTrackingRef}`,
+    "and resolves the base commit in the PR's OWN repository — named from the PR's URL, not from the directory `gh repo view` would answer for — freshly fetched, rather than through a remote-tracking ref",
+    readsBaseRepo && namesItFromThePrUrl && refusesTheDirectoryDerivedRepo && fetchesIt && resolvesTheFetch && refusesTheTrackingRef,
+    `base repository stated: ${readsBaseRepo}; named from the PR url: ${namesItFromThePrUrl}; directory-derived repo refused: ${refusesTheDirectoryDerivedRepo}; fetches the ref: ${fetchesIt}; resolves the fetch: ${resolvesTheFetch}; refuses a tracking ref: ${refusesTheTrackingRef}`,
   );
 
   // ...but only where the request named no target of its own. `no-rebase`
@@ -1705,8 +1432,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
 
   const stated = [...new Set([...brief.matchAll(/outcome:\s*"([^"]*)"/g)].map((m) => m[1]))].sort();
   check(
-    "and names exactly the four outcomes the schema and the gate know",
-    stated.join(",") === "fast-forwarded,not-applicable,unrecognized,work",
+    "and names exactly the three outcomes the schema and the gate know",
+    stated.join(",") === "fast-forwarded,unrecognized,work",
     stated.join(",") || "the brief states no outcome at all",
   );
 
@@ -1744,118 +1471,20 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   check("and states that stop ahead of the lease it would otherwise match", stop > -1 && lease > -1 && stop < lease, `stop@${stop} lease@${lease}`);
 }
 
-// --- The off-shoot's publication gate ---------------------------------------
-// The hole the reconciliation deliberately leaves (task 021c). On the off-shoot
-// path reconciliation is skipped WHOLE, so nothing has compared the two tips by
-// the time the publisher runs — and an off-shoot cut BEFORE the recorded head,
-// advanced with its own commits, is neither an ancestor nor a descendant of it.
-// The lease is no protection there: the recorded OID is exactly what the remote
-// still points at, so it MATCHES, the push succeeds, and the PR branch is
-// rewound over every commit between the cut point and the head. Prose again, so
-// it is read out of the rendered brief — and the claim is about ORDER (before
-// the lease), about what the stop REPORTS (both tips, not a guess), and about
-// the gate being keyed on the two branch NAMES exactly as 021b's is.
+// --- Publication has one branch to push: the head ref -------------------------
+// The retired off-shoot route gave the publish brief a second target rule and a
+// representation probe of its own. Both are gone with it, and their absence is
+// read out of the rendered brief so neither comes back as a leftover; the
+// skill's own publication decisions are then read from both mirrors.
 {
-  const off = publishPrompt(
-    gathered({ workingBranch: "local/side-work", reconcile: { outcome: "not-applicable" } }),
-    [],
-    { push: true },
-    [],
-    [],
-  );
-  const probe = off.indexOf("git rev-list --right-only --cherry-pick HEAD...");
-  const offStop = off.indexOf(`aborted: "off-shoot does not carry the PR head: <both tips and the probe's commits>"`);
-  const offLease = off.indexOf("--force-with-lease=");
-  // The probe's POLARITY is read too, not only its presence: a gate that runs
-  // the probe and treats what it prints as information ("print it for the
-  // record and continue") keeps every other string this block reads. What no
-  // regex here can hold is a rule reversed while the phrasing survives — that
-  // is the reviewer's, exactly as in the fetched-head block above.
-  const requiresEmpty = /require it to print NOTHING/.test(off);
+  const pub = publishPrompt(gathered({ reconcile: { outcome: "work" } }), [], { push: true }, [], []);
+  const offShootLeft = /off-shoot/i.test(pub) || /cherry-pick HEAD\.\.\./.test(pub) || /resolve the target from the PR instead/.test(pub);
   check(
-    "the publish brief makes an off-shoot establish the recorded head is represented in it, before any lease",
-    probe > -1 && offStop > -1 && offLease > -1 && probe < offLease && offStop < offLease && requiresEmpty,
-    `probe@${probe} stop@${offStop} lease@${offLease} requires-empty@${requiresEmpty}`,
+    "the publish brief carries no off-shoot target rule and no representation probe",
+    !offShootLeft,
+    "an off-shoot rule is still rendered in the publish brief",
   );
 
-  // The stop must name what it SAW rather than reporting a classification, and
-  // it must not offer to make the push legal instead: fast-forwarding, merging
-  // or rebasing the off-shoot is the maintainer's call, exactly as the
-  // reconciliation's third outcome is.
-  const gate = off.split("\n").find((l) => l.includes(`aborted: "off-shoot does not carry the PR head: <both tips and the probe's commits>"`)) || "";
-  const namesBothTips = /BOTH tips/.test(gate) && gate.includes("deadbeef") && /\bHEAD\b/.test(gate);
-  const namesTheCommits = /every commit the probe printed/.test(gate);
-  const refusesToReconcile = /Do NOT fast-forward, merge, rebase/.test(gate);
-  check(
-    "and that stop names both tips and the commits it saw, and reconciles nothing to make the push legal",
-    namesBothTips && namesTheCommits && refusesToReconcile,
-    `names both tips: ${namesBothTips}; names the commits: ${namesTheCommits}; refuses to reconcile: ${refusesToReconcile}`,
-  );
-
-  // The schema the publisher fills that field FROM, exactly as for the push
-  // read-back's stop: an example list offering the bare literal offers
-  // precisely the value the gate forbids for this stop, and a publisher that
-  // takes it satisfies the abort while the tips and the probe's commits land
-  // nowhere the caller can read.
-  const offAbortedExample = PUBLISH_SCHEMA.properties.aborted.description;
-  check(
-    "and the schema it fills that field from offers this stop's appended form rather than its bare literal",
-    /`off-shoot does not carry the PR head: <both tips and the probe's commits>`/.test(offAbortedExample) &&
-      !/`off-shoot does not carry the PR head`/.test(offAbortedExample),
-    (offAbortedExample.match(/`off-shoot does not carry[^`]*`/) || ["no example for this stop"])[0],
-  );
-
-  // Keyed on the two names, and RENDERED with both, so the publisher settles
-  // applicability from its own brief rather than probing the shape of the
-  // history — the one thing task 018 forbids. The PR's own branch is left to the
-  // reconciliation deliberately: re-asking there would stop an ordinary run
-  // whose default rebase flattened a merge commit the recorded head carries.
-  const keyedOnNames = gate.includes("local/side-work") && gate.includes("feature/x");
-  const leavesTheOwnBranch = /run no probe there/.test(gate) && /reconciliation established representation/.test(gate);
-  check(
-    "and keys that gate on the two branch names it renders, leaving a run on the PR's own branch to the reconciliation",
-    keyedOnNames && leavesTheOwnBranch,
-    `renders both names: ${keyedOnNames}; leaves the own branch to the reconciliation: ${leavesTheOwnBranch}`,
-  );
-
-  // The residual case, which is the same gap seen from the other side: the lease
-  // case used to trigger on "history was rewritten", so a tip that is neither a
-  // proper ancestor nor a descendant of the expected tip and rewrote nothing
-  // matched no enumerated instruction at all — the run was left to choose at
-  // exactly the point where the wrong choice is the rewinding one. The remainder
-  // must therefore be "everything else". `rebased:` stays rendered as context;
-  // what it may not be again is the trigger.
-  const seg = off.slice(off.indexOf("normal push (", offStop), offLease);
-  const remainder = /OTHERWISE/.test(seg) && /every remaining state, whether or not this run rewrote history/.test(seg);
-  const notGatedOnRewrite = !/If history was rewritten/.test(seg);
-  const rebasedStillReported = /rebased: no/.test(seg);
-  check(
-    "and hands the remaining state an instruction — the lease is what everything else gets, not what a rewritten history gets",
-    remainder && notGatedOnRewrite && rebasedStillReported,
-    `remainder stated: ${remainder}; not gated on a rewrite: ${notGatedOnRewrite}; rebased still reported: ${rebasedStillReported}`,
-  );
-
-  // Item 1 is the other half of the same exposure and reaches the run FIRST: it
-  // resolves a push target and stops on a mismatch, and an off-shoot's own
-  // upstream never matches the PR head — so read as the branch's own resolution
-  // it halts every off-shoot run after all its work, at the one step whose remit
-  // is to decide what may be pushed from it. Read from the item as a WHOLE: the
-  // exception is a bullet of its own, because it is the off-shoot's alone (the
-  // block below pins the other bullet, which the same-branch case keeps).
-  const item1 = off.slice(off.indexOf("1. Re-check before publication"), off.indexOf("2. Push."));
-  const targetIsThePr = /resolve the target from the PR instead/.test(item1) && /its head repository and/.test(item1);
-  const notTheOffShootsUpstream =
-    /off-shoot's own upstream is NOT the target/.test(item1) && /normal state rather than a stop/.test(item1);
-  check(
-    "and item 1 resolves the publication target from the PR, so an off-shoot's own upstream is not a stop before the gate is reached",
-    targetIsThePr && notTheOffShootsUpstream,
-    `target is the PR's: ${targetIsThePr}; off-shoot upstream not a stop: ${notTheOffShootsUpstream}`,
-  );
-
-  // The same decisions in the SKILL that states them to a reader rather than
-  // to a subagent, in both mirrors, which no generator keeps in step. Anchored to
-  // the sentence that carries each decision, so a rewrite that keeps the heading
-  // and drops the rule fails rather than passing on the file's other mentions.
   {
     const wanted = [
       [
@@ -1868,22 +1497,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         [/nothing of yours to publish/, /the lease \*matches\*/, /Stop and report, exactly as for a rejected lease/],
       ],
       [
-        "the off-shoot representation gate",
-        "**Then, an off-shoot must carry the recorded head.**",
-        [
-          /`git rev-list --right-only --cherry-pick HEAD\.\.\.<expected-head-oid>`/,
-          /patch-id rather than raw ancestry/,
-          /naming both tips/,
-          /do not fast-forward, merge or rebase the off-shoot/,
-        ],
-      ],
-      [
-        "the off-shoot's publication target",
-        "**On a named off-shoot the target is the PR's head ref, never the branch's own upstream.**",
-        [/is never pushed to by this run/, /that mode's normal state/, /Mode 4 is the only mode this substitution covers/],
-      ],
-      [
-        "the check that substitution excepts",
+        "the publication re-check",
         "1. **Re-check before publication:**",
         [
           /Resolve the current branch's exact push remote\/ref, verify they match that PR head/,
@@ -1915,22 +1529,21 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       ],
       ["the lease as the remainder", "- **Otherwise** — every remaining state", [/whether or not this run rewrote history/]],
       [
-        // The target rule above is only followable if the shipped commands
-        // actually supply what it reads. `headRepositoryOwner` alone does not
-        // name a fork whose repository NAME differs from the base's, so a run
-        // that follows the recipes verbatim reaches publication with the work
-        // done and no target it can verify. Both recipes are pinned because the
-        // publish step's own read is not where the fields first arrive: step 1
-        // is what a run follows to RECORD them, and a run that recorded nothing
-        // has nothing for the publish-time read to confirm.
-        "the fields its off-shoot target rule reads",
+        // The refusal is only followable if the shipped commands ask for the
+        // field it reads, in both recipes a run follows.
+        "the field the fork refusal reads, in the context recipe",
         "**Read context:** `gh pr view NUMBER --repo <owner>/<repo> --json",
-        [/headRepository,/, /headRepositoryOwner,/, /isCrossRepository/],
+        [/isCrossRepository/],
       ],
       [
-        "the fields step 1 records them from",
+        "and in step 1's auto-detection",
         "2. **Auto-detect** — `gh pr view --json",
-        [/headRepository,/, /headRepositoryOwner,/, /isCrossRepository/],
+        [/isCrossRepository/],
+      ],
+      [
+        "the fork refusal itself",
+        "Where `isCrossRepository` is true the head lives in another repository",
+        [/stop and say so/, /hands-off: skip the entry and document it/],
       ],
       // The durable disposition record, whose whole value is that a LATER run
       // finds and replays it — so what is pinned is the marker it is found by,
@@ -2056,7 +1669,6 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     const anchorOf = (what) => wanted.find(([w]) => w === what)[1];
     const orderedChain = [
       "the proper-ancestor stop",
-      "the off-shoot representation gate",
       "the normal push the stops precede",
       "the lease as the remainder",
     ];
@@ -2088,7 +1700,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         if (placed[i][1] < placed[i - 1][1]) missing.push(`${path} states ${placed[i][0]} before ${placed[i - 1][0]}`);
     }
     check(
-      "and the skill carries the same decisions in both mirrors, in the order that makes the stops reachable — the proper-ancestor stop and the off-shoot's gate ahead of both pushes, the PR's ref as the off-shoot's target with the fields both recipes resolve it from, the check that substitution excepts, and the disposition record's carve-out, marker, supersession, SHA/patch-id and part-way-publication rules",
+      "and the skill carries the same decisions in both mirrors, in the order that makes the stops reachable — the proper-ancestor stop ahead of both pushes, the fork refusal and the field both recipes read it from, the publication re-check, and the disposition record's carve-out, marker, supersession, SHA/patch-id and part-way-publication rules",
       missing.length === 0,
       missing.join("; "),
     );
@@ -2357,71 +1969,43 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   );
 }
 
-// --- The check the off-shoot exception must not swallow ----------------------
-// The exception above substitutes a PR-DERIVED push target for the branch's own
-// resolution, and only the off-shoot needed that substitution. Item 1's "resolve
-// THIS branch's exact push remote/ref and verify they match the PR head" is a
-// check in its own right on every other path: it is what stops a run whose
-// checkout moved to some unrelated branch after the review, which would
-// otherwise trust the recorded equal names, skip the representation probe as a
-// same-branch run, and lease-push the wrong HEAD onto the PR. So the ordinary
-// path's resolution must survive, keyed on the two names exactly as its
-// exception is, and item 1 must re-verify that the checkout still STANDS on the
-// recorded working branch — the name both gates key on is otherwise a record
-// taken before the fixes landed rather than a present fact.
+// --- The push target is the branch's own, verified against the PR head --------
+// Item 1's "resolve THIS branch's exact push remote/ref and verify they match
+// the PR head" is what stops a run whose checkout moved to some unrelated branch
+// after the review, which would otherwise lease-push the wrong HEAD onto the PR.
+// And item 1 must re-verify that the checkout still STANDS on the recorded
+// working branch — otherwise that name is a record taken before the fixes
+// landed rather than a present fact.
 {
   const same = publishPrompt(gathered({ reconcile: { outcome: "work" } }), [], { push: true }, [], []);
   const item1 = same.slice(same.indexOf("1. Re-check before publication"), same.indexOf("2. Push."));
-  const lines = item1.split("\n");
-  const ownTarget = lines.find((l) => /Where the two names are the SAME/.test(l)) || "";
-  const prDerived = lines.find((l) => /Where they DIFFER/.test(l)) || "";
   // Presence of the resolution is not the claim — a bullet that resolves the
   // branch's own target and then treats a mismatch as information keeps every
   // other string here, so the STOP is read as well.
-  const resolvesOwn = /resolve THAT branch's exact push remote\/ref and verify they match the PR head/.test(ownTarget);
-  const stopsOnMismatch = /STOP rather than pushing to a target you resolved some other way/.test(ownTarget);
+  const resolvesOwn = /resolve THAT branch's exact push remote\/ref and verify they match the PR head/.test(item1);
+  const stopsOnMismatch = /STOP rather than pushing to a target you resolved some other way/.test(item1);
   check(
-    "the publish brief still resolves the same-branch case's own push remote/ref, and stops where they do not match the PR head",
+    "the publish brief resolves the branch's own push remote/ref, and stops where they do not match the PR head",
     resolvesOwn && stopsOnMismatch,
     `resolves the branch's own target: ${resolvesOwn}; stops on a mismatch: ${stopsOnMismatch}`,
   );
 
-  // And the substitution stays in the bullet it belongs to: an exception written
-  // as the unconditional rule is exactly how this check was lost.
-  const scoped = /resolve the target from the PR instead/.test(prDerived) && !/resolve the target from the PR instead/.test(ownTarget);
-  check(
-    "and confines the PR-derived target to the differing-names case, so the exception does not swallow the check it excepts",
-    scoped && ownTarget !== "" && prDerived !== "",
-    `PR-derived resolution confined to the differing case: ${scoped}; same-names bullet found: ${ownTarget !== ""}; differing bullet found: ${prDerived !== ""}`,
-  );
-
-  // The checkout re-verification, read from the OFF-SHOOT render because only
-  // there do the two names differ: what item 1 must require HEAD to be on is the
-  // branch the run addressed, not the PR's head ref.
-  const off = publishPrompt(
-    gathered({ workingBranch: "local/side-work", reconcile: { outcome: "not-applicable" } }),
-    [],
-    { push: true },
-    [],
-    [],
-  );
-  const offItem1 = off.slice(off.indexOf("1. Re-check before publication"), off.indexOf("2. Push."));
   // Read for the spelling too, not just the requirement: `git rev-parse
   // --abbrev-ref HEAD` is documented to produce a NON-AMBIGUOUS name, so it
   // prints `heads/<name>` wherever a tag shares the branch's name — a check
   // asked that way aborts a valid publication, and the wrong spelling is the
   // obvious one to write back in.
   const readsTheCheckout =
-    /`git branch --show-current` must print `local\/side-work`/.test(offItem1) && !/--abbrev-ref HEAD` must print/.test(offItem1);
+    /`git branch --show-current` must print `feature\/x`/.test(item1) && !/--abbrev-ref HEAD` must print/.test(item1);
   // The stop carries its own reason string, like every other stop in this step:
   // one the schema's `aborted` examples list, so the publisher reports it rather
   // than inventing a phrase of its own for a state nothing else names.
   const stopsOnAnotherBranch =
     /where it prints anything else, set `published: false`, `aborted: "working location moved off the branch"`, and STOP without pushing/.test(
-      offItem1,
+      item1,
     );
   check(
-    "and re-verifies the checkout still stands on the branch the run addressed — the working branch, not the head ref — stopping with a named reason when it does not",
+    "and re-verifies the checkout still stands on the branch the run addressed, stopping with a named reason when it does not",
     readsTheCheckout && stopsOnAnotherBranch,
     `requires HEAD on the working branch: ${readsTheCheckout}; stops with the named reason: ${stopsOnAnotherBranch}`,
   );
@@ -3245,16 +2829,16 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // Naming that repository is not enough: this step has to be HANDED it, because
   // the one command that would name it for itself — `gh repo view` with no
   // repository argument — answers for the repository its working directory
-  // resolves to, which in a fork clone is that same head fork. So the caller
+  // resolves to. So the caller
   // interpolates the PR's own already-resolved URL, and the brief is read for it.
-  const fetchesFromBaseRepo = /repository the PR itself is in/.test(brief) && /NOT this branch's push remote/.test(brief);
+  const fetchesFromBaseRepo = /repository the PR itself is in/.test(brief);
   const carriesThePrUrl = brief.includes(briefPacket.pr.url) && /whose `<owner>\/<repo>` IS that repository/.test(brief);
   const refusesTheDirectoryDerivedRepo =
     /Do not re-derive it from a bare `gh repo view/.test(brief) && /answers for the repository the DIRECTORY it runs in/.test(brief);
   const fetchesTheRef = /git fetch <the remote whose URL is that repository/.test(brief);
   const resolvesWhatItFetched = /`FETCH_HEAD` for a ref you just fetched/.test(brief);
   check(
-    "and fetches the target from the repository that ref lives in — the PR's own, handed over as its resolved URL rather than re-derived from the working directory — never through the branch's push remote",
+    "and fetches the target from the repository that ref lives in — the PR's own, handed over as its resolved URL rather than re-derived from the working directory",
     fetchesFromBaseRepo && carriesThePrUrl && refusesTheDirectoryDerivedRepo && fetchesTheRef && resolvesWhatItFetched,
     `base repository stated: ${fetchesFromBaseRepo}; carries the PR url: ${carriesThePrUrl}; directory-derived repo refused: ${refusesTheDirectoryDerivedRepo}; fetches the ref: ${fetchesTheRef}; resolves what it fetched: ${resolvesWhatItFetched}`,
   );
@@ -3275,13 +2859,13 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   const resolvesWhereNamed = /Resolve it WHERE IT WAS NAMED/.test(explicitBrief) &&
     /git rev-parse --verify 'my-local-base\^\{commit\}'/.test(explicitBrief) && /quoted as ONE argument/.test(explicitBrief);
   const fetchesNothingForIt = /Fetch NOTHING for it/.test(explicitBrief) && !/git fetch /.test(explicitBrief);
-  const refusesTheBaseRepoLookup = /do not go looking for it in the PR's base repository/.test(explicitBrief);
+  const refusesTheBaseRepoLookup = /do not go looking for it in the PR's repository/.test(explicitBrief);
   const stopsRatherThanSubstitute = /report `ok: false` naming what you tried, and substitute nothing/.test(explicitBrief);
   // The shared tail still applies to both arms: whatever it resolved is what
   // gets reported and rebased onto, at full length.
   const stillPinsTheOid = /Report exactly that full OID as `effectiveBase` and rebase onto THAT OID/.test(explicitBrief);
   check(
-    "but an explicitly named target is resolved in the working location and fetched from nowhere, since the token routinely names a local branch the base repository does not have",
+    "but an explicitly named target is resolved in the working location and fetched from nowhere, since the token routinely names a local branch the PR's repository does not have",
     resolvesWhereNamed && fetchesNothingForIt && refusesTheBaseRepoLookup && stopsRatherThanSubstitute && stillPinsTheOid,
     `resolves where named: ${resolvesWhereNamed}; fetches nothing: ${fetchesNothingForIt}; base-repo lookup refused: ${refusesTheBaseRepoLookup}; stops rather than substitutes: ${stopsRatherThanSubstitute}; still pins the OID: ${stillPinsTheOid}`,
   );
@@ -3482,7 +3066,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       text.includes("[rebase on top of <target>]") &&
         text.includes("| `rebase on top of <target>` |") &&
         text.includes("resolved WHERE IT WAS NAMED") &&
-        text.includes("Fetch nothing for it, and never send it at the base repository") &&
+        text.includes("Fetch nothing for it, and never send it at the PR's repository") &&
         // The failure mode is half the rule: a named ref that does not resolve
         // must stop the batch, since the one substitution available is the very
         // base-ref fetch the sentence before it forbids.
@@ -5362,7 +4946,6 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       qualifiedPub.includes("the PR's own URL `https://example.invalid/pr/42`") &&
       /never the repository your working location resolves to/.test(qualifiedPub) &&
       /Do not re-derive it from a bare `gh repo view --json nameWithOwner`/.test(qualifiedPub),
-    "step 1's head-repository read": /gh pr view 42 --repo <owner>\/<repo> --json headRepository,headRepositoryOwner,isCrossRepository/.test(qualifiedPub),
     "step 4's reply POST": /gh api --method POST repos\/<owner>\/<repo>\/pulls\/42\/comments\/<commentId>\/replies/.test(qualifiedPub),
     // The resolve mutation has no repository argument to carry, so the brief
     // says what stands in for one rather than leaving it implied.
@@ -5378,7 +4961,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /repos\/<owner>\/<repo>\/issues\/<PR#>\/timeline/.test(qualifiedPub),
     "no `{owner}`/`{repo}` placeholder left anywhere in it": !/\{owner\}\/\{repo\}/.test(qualifiedPub),
     "and no ordered `gh pr` call left bare":
-      orderedPrCalls.length >= 5 && orderedPrCalls.every((call) => call.includes("--repo <owner>/<repo>")),
+      orderedPrCalls.length >= 4 && orderedPrCalls.every((call) => call.includes("--repo <owner>/<repo>")),
   };
   const publishAbsent = Object.entries(publishClauses).filter(([, present]) => !present).map(([name]) => name);
   check(
@@ -5723,7 +5306,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // and a prior record the sweep cannot see is a replay that silently does not
   // happen, which no later step reports as a failure.
   check(
-    "and the sweep that finds it is repository-qualified, so a fork clone does not read the head fork's comments instead",
+    "and the sweep that finds it is repository-qualified rather than left to the directory's default",
     /gh api --paginate repos\/<owner>\/<repo>\/issues\/<PR>\/comments/.test(priorPara) &&
       /repository-qualified from the PR's OWN URL/.test(priorPara) &&
       !/repos\/\{owner\}\/\{repo\}\/issues/.test(priorPara),

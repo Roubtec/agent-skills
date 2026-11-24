@@ -75,18 +75,17 @@ Pin every target exactly as the next three paragraphs require — including re-r
 `no-rebase` turns the default off for the whole batch, and an entry the invocation prose excluded is treated the same way.
 The step itself is `review-cycle` → "The delegated rebase step": the brief, the base pinning, the parent-first `--onto` form, the hunk-level conflict rules, the clean halt, and the packet it returns are defined there, and nothing about them is restated here or in the entry's prompt.
 
-Detect a stack only when one entry's fully qualified `(base repository, baseRefName)` pair equals another entry's `(head repository, headRefName)` pair; construct the head repository as `headRepositoryOwner.login + "/" + headRepository.name`, use the base repository recorded for that PR at setup (from its own `url`), and never infer a stack from matching short branch names alone.
+Detect a stack only when one entry's `baseRefName` equals another entry's `headRefName`; every entry is a PR in the one repository, so the names are unambiguous.
 For a rebase-enabled stack, rebase the base entry first onto the pinned target, then pin the dependent's target to the exact rebased base tip — never rebase the dependent directly onto the original pinned target.
 
 For any rebase target that is not a just-rebased parent tip, **pin it to an exact commit** rather than passing a symbolic name that a later fetch could move — and pin it out of the repository that ref actually lives in, which Bootstrap's `git fetch origin` does not reach.
-Never pin from `git rev-parse origin/<baseRefName>`: in a fork clone `origin` is the HEAD repository, so that names a same-named branch in the fork, or nothing at all.
-The repository to fetch from is the base repository you recorded per entry from the PR's own `url`.
+The repository to fetch from is the one you recorded per entry from the PR's own `url`.
 So per entry: `git fetch <the remote whose URL is that repository, or that repository's URL where no remote points at it> refs/heads/<baseRefName>`, moving no branch, then `git rev-parse --verify FETCH_HEAD^{commit}` read immediately after that fetch (the next one overwrites `FETCH_HEAD`), and pin the full OID it prints.
 Select that remote by matching its URL every time; `isCrossRepository` cannot short-circuit the match, because it compares the PR's own head and base and says nothing about what THIS clone calls `origin`.
 That fetch is the **default** target's — the entry's own `baseRefName`, the one ref whose repository the PR names — and a target the invocation itself named is not resolved there at all, because whose ref it is decides where it lives.
 An exact commit needs no fetch, but it is still resolved once here, `git rev-parse --verify '<it>^{commit}'`, which proves it names an existing commit and prints the full OID to pin.
 A ref name (`rebase on top of release`) is resolved WHERE IT WAS NAMED — here, in your own checkout — with `git rev-parse --verify '<the target>^{commit}'`, the operand quoted as ONE argument because a legal ref name may carry `$`, backticks or `;`, and an unquoted `$`-fragment can silently resolve some other existing ref instead; that resolution takes a local branch, a remote-tracking ref or a commit, and the full OID it prints is what you pin.
-Fetch nothing for it, and never send it at the base repository as `refs/heads/<it>`.
+Fetch nothing for it, and never send it at the PR's repository as `refs/heads/<it>`.
 Never let a named ref fall through to the `<baseRefName>` fetch above: where an invocation-named target does not resolve — a ref or a commit alike — stop the batch and report what you tried rather than substituting anything.
 Either way the invocation-named target is resolved ONCE, here at setup and in your own checkout — after Bootstrap's `git fetch origin`, since the resolution takes a remote-tracking ref too and before that fetch one names a staler commit than the request meant — and that single OID serves every rebase-enabled entry at both of its points — overridden only for a stacked dependent, whose parent tip wins by the paragraph above.
 If a parent PR merges during the batch, resolve the refreshed branch containing that merge once to an exact commit at that refresh and reuse the pinned SHA for every affected dependent.
@@ -102,7 +101,7 @@ That the second point then normally finds nothing to do for a named target is in
 Normally rather than always, and the point runs either way — a pure-join merge still in range is flattened by the replay, moving the tip over an unmoved base — so a no-op is what that point may REPORT, never a reason for you not to spawn it.
 
 **"Rebase-enabled" is now every entry** — the phrase survives in the rules below because `no-rebase`, or an entry the invocation prose excluded, still turns rebasing off, and those entries keep their exemption from every restack obligation.
-The **parent map** those orderings are computed from is the per-entry data you already record — the fully qualified head/base pairs and both OIDs, from one `gh pr view --json number,state,url,headRefName,headRefOid,headRepository,headRepositoryOwner,baseRefName,baseRefOid` per entry, whose `url` is where the base repository is read from — extended with each parent's **pre- and post-rebase tips** as its rebase completes, because that pair is exactly what restacks its children (`git rebase --no-update-refs --no-rebase-merges --onto <new parent tip> <old parent tip>`).
+The **parent map** those orderings are computed from is the per-entry data you already record — the head and base names and both OIDs, from one `gh pr view --json number,state,url,headRefName,headRefOid,isCrossRepository,baseRefName,baseRefOid` per entry, whose `url` is where the repository is read from — extended with each parent's **pre- and post-rebase tips** as its rebase completes, because that pair is exactly what restacks its children (`git rebase --no-update-refs --no-rebase-merges --onto <new parent tip> <old parent tip>`).
 That is the whole of the stack bookkeeping this skill does; a chain that genuinely needs a whole-chain restack is `rebase-stack`'s after the batch, and reimplementing it here is the thing to resist.
 Each entry's **pinned effective base** — the OID its rebase actually landed on, read from the delegated step's packet — is what that entry's later delegations name as `<effective base>..HEAD`: Phase B's review base, and any range a fix-up round is handed.
 Where no rebase ran for an entry at all — a `no-rebase` batch, or an entry the invocation prose excluded — pin its effective base ONCE at setup, beside the target pinning above: on a `no-rebase` batch, the invocation-named target's own pinned OID where the invocation named one, since `no-rebase` suppresses the rebase without discarding the token, and that entry's `baseRefName` resolved to a commit otherwise — including for an entry the prose excluded while its siblings rebased, since excluding it is the statement that THAT branch stays on its own base.
@@ -168,7 +167,7 @@ Your job:
    De-duplicate aliases for the same PR (for example `#38` plus its branch name), and group different PRs that share one head branch so they run serially rather than contending for the same ref.
 5. **Create one worktree per distinct head branch in the current sub-batch** (see next section).
    Create a later same-head entry's worktree only after the earlier entry is complete and removed.
-   Skip-and-record any entry that cannot be set up (closed/merged or PR-less, branch checked out elsewhere, unsupported fork branch entry).
+   Skip-and-record any entry that cannot be set up (closed/merged or PR-less, branch checked out elsewhere, a fork PR).
 6. Run the per-PR **fix → review → fix-up** loop, bounded by the `review-cycle` round cap, in topological waves for rebase-enabled stacks, with unrelated entries advancing concurrently (see "Per-PR phased subagents": the parent gate, **Descendant invalidation**, and the **Remote-tip refresh guard**).
 7. For each entry that passes, spawn its `publish-reviewed` subagent the moment its own gate passes — parent-before-dependent on a best-effort basis, concurrently for unrelated entries, never held for the batch — under the "Publication" rules (the blocked-parent carve-out, honest-diff ping suppression, and merged-parent content gate).
    If the run is `no-push` (local-only), skip publication and keep each entry's disposition map for a later push — then leave that map on each entry's PR **yourself**, per "An entry that will not publish still leaves its record.".
@@ -177,14 +176,14 @@ Your job:
 
 ## Resolving and checking out each entry
 
-This is the part that differs most from the task-file skills: you check out a branch that **already exists** (your local ref, or `origin`'s, occasionally a fork's) rather than creating one.
+This is the part that differs most from the task-file skills: you check out a branch that **already exists** (your local ref, or `origin`'s) rather than creating one.
 Each entry resolves to a `(branch-to-check-out, PR-number)` pair; the pair drives the worktree and the subagent.
 
 Shared setup, from the main tree: `$WT_BASE` is the worktree base dir chosen in Bootstrap, and `$ROOT` the repo root.
-**Every** attach below reads `git worktree list` for an existing entry at `$WT_BASE/<slug>` FIRST — the plain form and the explicit commands alike, forks included, since they all add at that one path and a stable slug is precisely what a halted run leaves registered there: if the target directory already exists, verify it has the right branch checked out and reuse it; a wrong branch or an occupied ref means stop and report that entry, never guess.
+**Every** attach below reads `git worktree list` for an existing entry at `$WT_BASE/<slug>` FIRST — the plain form and the explicit commands alike, since they all add at that one path and a stable slug is precisely what a halted run leaves registered there: if the target directory already exists, verify it has the right branch checked out and reuse it; a wrong branch or an occupied ref means stop and report that entry, never guess.
 For the **plain attach cases** below the standard form is then `git worktree add "$WT_BASE/<slug>" <branch>`.
 If a `wt-enter <slug> <branch>` helper is on PATH, prefer it — it encodes exactly these checks (rerun-safe attach under `$WT_BASE`, refusing rather than guessing on wrong-branch or occupied-ref conflicts).
-The cases the plain attach does not cover (detaching the main checkout, tracking `origin`, forks) keep their explicit commands, under that same registration read.
+The cases the plain attach does not cover (detaching the main checkout, tracking `origin`) keep their explicit commands, under that same registration read.
 These calls are safe to run while other entries' subagents are active — they touch only their own worktrees and the lock-protected refs.
 Use a stable, collision-free slug per entry (e.g. `pr-<N>` or a sanitized branch name).
 
@@ -195,11 +194,11 @@ Normalize an explicit `refs/heads/<name>` input to the bare `<name>`, then requi
 The bare local branch name must equal the PR's `headRefName` (which is the norm: a local rebase keeps the branch name).
 If your local copy has a different name than the PR head, this auto-pairing cannot see it; use that PR's number with `address-review` directly, or rename to match.
 
-1. **Pair to the PR by head:** `gh pr list --head <branch> --state open --json number,url,headRefName,headRefOid,headRepository,headRepositoryOwner,baseRefName,baseRefOid`; for the one match, take the fully qualified base repository from that PR's own `url`, never from a bare `gh repo view` (see "PR-number entry" step 1); then record the same fully qualified head/base pairs and OIDs used by stack detection.
+1. **Pair to the PR by head:** `gh pr list --head <branch> --state open --json number,url,headRefName,headRefOid,isCrossRepository,baseRefName,baseRefOid`; for the one match, take the repository from that PR's own `url`, never from a bare `gh repo view` (see "PR-number entry" step 1); then record the head and base names and OIDs used by stack detection.
    - Exactly one open PR → that's the pairing.
    - Zero → skip-and-record: with no PR there are no review threads to address.
    - More than one → skip-and-record as ambiguous (or, interactive, ask which).
-   - If the PR head is a fork, skip-and-record this branch-form entry and tell the user to pass the PR number instead; the `origin/<branch>` upstream used below is valid only for same-repository heads.
+   - If `isCrossRepository` is true, skip-and-record: fork PRs are not supported.
 2. **Check out the verified local ref as-is** — never a reset that discards local commits.
    `address-review`'s step 1 then reconciles that ref against the PR head without discarding local work.
    The checkout below never pre-empts that decision:
@@ -208,7 +207,7 @@ If your local copy has a different name than the PR head, this auto-pairing cann
      If the main tree is *dirty*, skip-and-record (commit/stash or move the main checkout off it first).
      If setup fails after detaching and no later entry needs that branch free, restore immediately before continuing.
    - Occupied by **another worktree** (a sibling entry, or the same branch listed twice) → skip-and-record; a branch can't live in two worktrees.
-3. **Set the push target:** `git -C "$WT_BASE/<slug>" branch --set-upstream-to=origin/<branch>` (origin's head ref for the paired same-repository PR, refreshed by Bootstrap's fetch).
+3. **Set the push target:** `git -C "$WT_BASE/<slug>" branch --set-upstream-to=origin/<branch>` (origin's head ref for the paired PR, refreshed by Bootstrap's fetch).
    `address-review` still verifies the exact PR head and uses an expected-OID lease before any rewrite.
    Best-effort here too, for the reason given under "PR-number entry".
 
@@ -216,39 +215,24 @@ If your local copy has a different name than the PR head, this auto-pairing cann
 
 The canonical path.
 Resolve the PR, then prefer a same-named local branch if you have one (so we still never bypass your local copy), else create the branch at the PR's **recorded exact `headRefOid`** — not at `origin/<headRefName>`, which Bootstrap's single fetch can leave stale in either direction.
-Both same-repo paths (step 2) fetch that exact head ref first, and a fetch brings whatever the ref names *now* — not necessarily the OID `gh pr view` just reported — so take a same-repo entry's head from what that fetch brought, `git rev-parse FETCH_HEAD`, and classify the pair by ancestry before letting the fetched OID be the `headRefOid` recorded for its steps below.
+Both paths of step 2 fetch that exact head ref first, and a fetch brings whatever the ref names *now* — not necessarily the OID `gh pr view` just reported — so take the entry's head from what that fetch brought, `git rev-parse FETCH_HEAD`, and classify the pair by ancestry before letting the fetched OID be the `headRefOid` recorded for its steps below.
 **A fetched-behind-reported head is a rewind, not an advance:** when both commits are available and the fetched OID is a proper ancestor of the `headRefOid` that `gh pr view` reported, block the entry for a maintainer decision without adopting the fetched OID.
 Every other difference keeps the existing adoption rule: adopt the fetched OID as this entry's head and continue, including an advance and a force-push whose reported OID was not downloaded — creating the entry's branch at that OID on the path that creates one, and moving nothing on the path where a usable local `<headRefName>` already exists, which `address-review` step 1 reconciles against this head instead.
 Whether the reported OID is already a local object decides no other outcome.
-Read `FETCH_HEAD` in the tree that fetched it — the main tree, where both same-repo paths' fetches and every `git worktree add` run — and before any later fetch overwrites it, since git keeps a separate `FETCH_HEAD` per worktree.
+Read `FETCH_HEAD` in the tree that fetched it — the main tree, where step 2's fetches and every `git worktree add` run — and before any later fetch overwrites it, since git keeps a separate `FETCH_HEAD` per worktree.
 Besides that rewind block, skip-and-record only if the head keeps moving under you.
-A fork entry (step 3) has no such head-ref fetch of its own — its only fetch is the `gh pr checkout` run inside its worktree — so there is nothing of its own to read here: the main tree's `FETCH_HEAD` answers for whatever last fetched there.
-So a fork entry keeps the OID `gh pr view` reported, which step 3 needs as an independently obtained head that the branch it landed on must carry, and leaves that worktree's head to `address-review` step 1's reconciliation there, which fetches the exact head ref in that tree and reads it the same way.
 
-1. **Resolve and sanity-check:** `gh pr view N --json number,state,headRefName,headRefOid,headRepository,headRepositoryOwner,baseRefName,baseRefOid,url,title`.
+1. **Resolve and sanity-check:** `gh pr view N --json number,state,headRefName,headRefOid,isCrossRepository,baseRefName,baseRefOid,url,title`.
    If `state` is not `OPEN`, skip-and-record.
-   Record the fully qualified head repository/ref, record the fully qualified base repository as the `<owner>/<repo>` of the PR's own `url` — requested above, and a PR's base always lives in the repository the PR itself is in — and not from a bare `gh repo view --json nameWithOwner`, which answers for whatever repository the orchestrator's directory resolves to; record both OIDs; note whether `headRepositoryOwner` matches `origin`'s owner (same-repo) or differs (fork).
-2. **Same-repo:**
+   If `isCrossRepository` is true, skip-and-record: fork PRs are not supported.
+   Record the repository as the `<owner>/<repo>` of the PR's own `url` — not from a bare `gh repo view --json nameWithOwner`, which answers for whatever repository the orchestrator's directory resolves to — and record `headRefName`, `baseRefName` and both OIDs.
+2. **Attach:**
    - If local `<headRefName>` exists, compare it with the PR's **exact recorded `headRefOid`**, fetching that exact head ref first rather than trusting `origin/<headRefName>` — Bootstrap's `git fetch` runs once, so a PR force-updated since then leaves the remote-tracking ref stale while `headRefOid` is current.
      Do this **before** considering checkout occupancy.
      Then let `address-review` step 1's reconciliation decide: check out a strictly-behind or represented branch and let it run, and skip-and-record only genuine divergence in step 1's exact sense (each side holds commits the other lacks **and** the remote's are not represented in the local tip by patch-id, the qualifier that keeps an ordinary locally-rebased branch workable).
    - A usable local `<headRefName>` that is free → the plain attach (`git worktree add "$WT_BASE/pr-<N>" <headRefName>`) and **record any ahead/diverged state** in the summary.
    - A usable local `<headRefName>` occupied by the main checkout → detach the clean main `HEAD` and add the worktree as in the Branch-entry case; if held by another worktree or the main tree is dirty, skip-and-record.
    - No local `<headRefName>` → create the branch at the **recorded exact `headRefOid`**, not at `origin/<headRefName>`: `git fetch origin refs/heads/<headRefName>`, then `git worktree add -b <headRefName> "$WT_BASE/pr-<N>" <headRefOid>`, then set tracking separately with `git -C "$WT_BASE/pr-<N>" branch --set-upstream-to=origin/<headRefName>` — best-effort: a clone whose fetch refspec does not cover this branch has no `origin/<headRefName>` to track, so record the failure and continue rather than losing an otherwise valid entry; publication resolves the exact push remote and ref itself instead of reading the upstream.
-3. **Fork PR** — after the shared setup's registration read, which covers this case too (a live `pr-<N>` a halted run left is reused or reported there, never added over), let `gh` wire up the fork remote and tracking inside a detached worktree:
-
-   ```bash
-   git worktree add --detach "$WT_BASE/pr-<N>"
-   ( cd -- "${WT_BASE:?Session Bootstrap step 1 set no worktree base — prepare one there before attaching}/pr-<N>" && gh pr checkout N )
-   ```
-
-   Then **verify for yourself what you landed on**, rather than resting on `gh`'s refusal to clobber: `--detach` does not stop `gh pr checkout` selecting a same-named local branch, and a refused checkout leaves the worktree wherever the failure stopped it (still detached where the fetch failed, standing on the rejected ref where the merge did) instead of on the PR head.
-   So require both, in the worktree: `git -C "$WT_BASE/pr-<N>" branch --show-current` names a branch (the success path must end on a durable local one — see below), and that branch **carries the recorded `headRefOid`** in step 1's exact sense (an ancestor of `HEAD`, or every commit unique to it represented by patch-id), which admits the ordinary locally-ahead or locally-rebased copy `gh` fast-forwarded onto and refuses unrelated history.
-   On a mismatch — a HEAD that does not carry the PR head, a failed `gh pr checkout`, or a detached HEAD left standing — attach nothing further and substitute nothing: report the collision (the rejected local ref, the verified PR head, and what each points at) and ask the maintainer how to proceed; hands-off, skip-and-record the entry with that report.
-   Give that worktree back as part of the report — `wt-remove pr-<N>` where the helper is on PATH, else `git worktree remove "$WT_BASE/pr-<N>"`, whose path argument is required and is the path to report if it refuses — so the failed attempt does not sit on the rejected ref and block this slug when the entry is rerun; neither is a force, and a tree the command declines to remove is named with its path beside the collision instead.
-   Do **not** harden this by staying detached instead: commits on a detached HEAD are reachable from nothing once the worktree is reclaimed, so that would trade a wrong branch for no branch.
-   `gh pr checkout` also works for same-repo PRs, so it is a fine uniform fallback whenever the explicit `git worktree add` path is awkward.
-
 The absolute worktree path, the checked-out branch name, the **paired PR number**, and (for branch entries) the note "this is your local ref" are what you hand that entry's subagent.
 
 ## Per-PR phased subagents
@@ -257,7 +241,7 @@ Claude subagents cannot be assumed to spawn their own subagents, so the top-leve
 For each reviewer round, fan out one same-phase `general-purpose` `Agent` per distinct worktree concurrently and, when enabled and available, launch that entry's peer beside it; wait for each entry's own Reviewer and its launched peer, recording disabled, unavailable, or forfeited peer outcomes explicitly, then advance **that entry** — to its fix-up round or, per "Publication", its publisher — the moment its own outcomes are in.
 The phase is per entry, not a batch barrier: an entry never waits for a sibling's reviewer, and the only waits between entries are the stack dependencies "Publication" and the parent gate name.
 
-At every apply boundary — immediately before Phase A, each later dependency-wave launch, and each fix-up — re-fetch each affected PR's current state and relevant remote refs, then re-verify its open/merged state, fully qualified head/base pairs, and OIDs.
+At every apply boundary — immediately before Phase A, each later dependency-wave launch, and each fix-up — re-fetch each affected PR's current state and relevant remote refs, then re-verify its open/merged state, head and base names, and OIDs.
 Recompute stack ordering from those refreshed facts, but preserve the original non-parent target the invocation named, in either of its flavors — the commit it gave, or the OID a ref it named was resolved to once at setup: what this holds stable is the pin against a recomputation, and for a named target it is held across the run's own rebase points too, only a DEFAULT target being re-resolved there per "Re-pin a default target at each rebase point".
 
 **Descendant invalidation.**
@@ -395,7 +379,7 @@ If the content is missing or cannot be confirmed, do not treat the parent as sat
 The batch never makes that call silently.
 Immediately before that launch, re-fetch the PR and relevant refs and re-verify the same state, pair, and OID facts again.
 A changed head OID goes through the **Remote-tip refresh guard** above — at this boundary an adopted fast-forward is an entry-affecting change and a rewound or genuinely divergent tip blocks the entry.
-Invalidate the stale packet only when an entry-affecting fact changed: its head OID, open/merged state, fully qualified head/base pair identity, or dependency target because any parent tip changed; unrelated `baseRefOid` movement alone does not invalidate it.
+Invalidate the stale packet only when an entry-affecting fact changed: its head OID, open/merged state, head or base name, or dependency target because any parent tip changed; unrelated `baseRefOid` movement alone does not invalidate it.
 When a packet is invalidated, do not launch its publisher: rerun `delegated-fix` (including the required restack when a rebase-enabled dependent's parent changed its dependency target) and the fresh review gate first, and apply **Descendant invalidation** to any parent tip that rerun changes — restoring the last valid gate instead where the rerun ends with the parent blocked.
 When no parent changed the dependency target, preserve the original exact non-parent target — subject to the same carve-out: the rebase point that follows re-resolves a default one for itself.
 Tell it to invoke the `address-review` skill with arguments `#N hands-off publish-reviewed <resolved push/ping tokens>` — pass the run's resolved push/ping set (a bare default batch resolves to `ping-contributing`; a `no-push` batch skips publication entirely) — except for an entry whose diff is not honest and for which no bot was named outright, where the ping tokens are replaced by `push` (see "Publication" → ping only on an honest diff).
@@ -448,4 +432,4 @@ Aggregate the per-PR `address-review` reports into one batch summary:
 
 ## Checklist
 
-- [ ] Stacks detected only by matching fully qualified repository/ref pairs; every entry rebased by default — each point spawned by the orchestrator per `review-cycle` → "The delegated rebase step", before the fix agent and again after it and after every packet-changing fix-up, each point's default target re-resolved from the PR's base repository rather than reused from setup, an invocation-named target instead resolved once at setup and reused by every entry at both points, with each entry's later delegations naming its pinned effective base OID (for an entry no rebase ran for, that named target's pinned OID on a `no-rebase` batch, or the commit its `baseRefName` resolved to at setup — a prose-excluded entry the latter wherever its siblings rebased) rather than a remote-tracking name, and a halted rebase skip-and-recorded with its open question; rebase-enabled stacks ran and published parent-before-dependent on best-effort ordering with pinned exact targets; the terminal zero-feedback shortcut, **Descendant invalidation**, the blocked-parent carve-out, the honest-diff ping suppression, and the merged-parent content gate were each applied as defined; dependents of setup-skipped, Phase-A-failed, or round-cap-blocked parents were skip-and-recorded with the parent's reason rather than rebased onto the original target.
+- [ ] Stacks detected only by one entry's base name equalling another's head name; every entry rebased by default — each point spawned by the orchestrator per `review-cycle` → "The delegated rebase step", before the fix agent and again after it and after every packet-changing fix-up, each point's default target re-resolved from the PR's repository rather than reused from setup, an invocation-named target instead resolved once at setup and reused by every entry at both points, with each entry's later delegations naming its pinned effective base OID (for an entry no rebase ran for, that named target's pinned OID on a `no-rebase` batch, or the commit its `baseRefName` resolved to at setup — a prose-excluded entry the latter wherever its siblings rebased) rather than a remote-tracking name, and a halted rebase skip-and-recorded with its open question; rebase-enabled stacks ran and published parent-before-dependent on best-effort ordering with pinned exact targets; the terminal zero-feedback shortcut, **Descendant invalidation**, the blocked-parent carve-out, the honest-diff ping suppression, and the merged-parent content gate were each applied as defined; dependents of setup-skipped, Phase-A-failed, or round-cap-blocked parents were skip-and-recorded with the parent's reason rather than rebased onto the original target.

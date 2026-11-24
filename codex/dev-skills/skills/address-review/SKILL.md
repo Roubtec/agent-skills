@@ -5,7 +5,7 @@ description: Pull request review comments or CI failures require addressing or r
 
 Address the review feedback on a single pull request, end to end.
 
-**Arguments:** `[PR#] [rebase on top of <target>] [no-rebase] [inline] [off-shoot] [no-push] [push] [hands-off] [peer-opinions=off] [ping-codex] [ping-claude] [ping-copilot] [ping-contributing]`
+**Arguments:** `[PR#] [rebase on top of <target>] [no-rebase] [inline] [no-push] [push] [hands-off] [peer-opinions=off] [ping-codex] [ping-claude] [ping-copilot] [ping-contributing]`
 
 Explicit Codex invocation uses `$address-review`; natural-language equivalents are fine.
 
@@ -23,13 +23,12 @@ Trust yourself to extract intent, then sanity-check against the PR.
 
 | Argument | Meaning |
 | --- | --- |
-| `PR#` (e.g. `#38`) | The PR to address. Takes precedence over auto-detection — useful when the current branch is a local off-shoot of a merge-pending branch or otherwise disjoint from the PR head; pass `off-shoot` too when you want the run to work on that branch rather than on the PR's head ref. Always sanity-check that it really relates to this branch. |
+| `PR#` (e.g. `#38`) | The PR to address. Takes precedence over auto-detection — useful when the current branch is not the PR head, in which case the run works in a worktree. Always sanity-check that it really relates to the branch it would be worked on. |
 | `rebase on top of <target>` | Rebase the **working location's branch** onto `<target>` — a branch name or an exact commit — rather than onto the PR's own base, which is what step 2 rebases onto by default. Single-branch rebase only. |
 | `no-rebase` | Opt out of the default rebase entirely — **both** of step 2's points, so the branch is addressed and pushed on the base it already sits on. Use it when the base is known to be moving under you, or when a rebase would obscure what a reviewer is being asked to look at. It wins over `rebase on top of <target>` if both arrive — for the REBASE only: the token is not discarded, and a still-standing target is what step 6 pins as this run's effective review base. |
-| `inline` | Force **inline** working on the **target branch** — do the work in the current checkout rather than in a worktree, checking that branch out there when the checkout is not already on it. Requires that checkout to be clean, and the run ends on that branch. Unnecessary when you already stand on it (that is mode 1 anyway); to work in this checkout on a *different* branch — a local off-shoot of the PR — pass `off-shoot` instead, which is the only thing that selects one. See "Working location". |
-| `off-shoot` | The checkout stands on a local **off-shoot** of this PR's branch (the `PR#` row's case) and you are saying so, so the run works inline on **that** branch rather than the PR's head ref. Needs an explicit `PR#` and a named branch, and requires the current checkout clean like any inline run. Nothing else selects an off-shoot — see "Working location", mode 4. |
+| `inline` | Force **inline** working on the **target branch** — do the work in the current checkout rather than in a worktree, checking that branch out there when the checkout is not already on it. Requires that checkout to be clean, and the run ends on that branch. Unnecessary when you already stand on it (that is mode 1 anyway). See "Working location". |
 | `no-push` | **Local-only run** — make commits, but perform no PR-side communication: no push, no replies/resolves, no summary comment, no ping. It makes **exactly one** PR write, the single documented exception: the disposition record comment of "The durable disposition record" below. The final report still captures every disposition so a later push turn can replay it. |
-| `push` | Push the branch to the PR's actual head repository/ref and perform all PR-side communication (replies, resolves, summary comment) — but **ping no reviewer**. Use it to publish fixes quietly, without summoning a fresh review round. |
+| `push` | Push the branch to the PR's head ref and perform all PR-side communication (replies, resolves, summary comment) — but **ping no reviewer**. Use it to publish fixes quietly, without summoning a fresh review round. |
 | `hands-off` | Run with no user interaction — best-effort to completion, documenting every skipped/blocked item in the final report. See "Hands-off mode". Typically how a parallel review orchestrator invokes this skill in a subagent. |
 | `peer-opinions=off` | Disable the best-effort `claude` second opinion for this run. By default it runs beside every fresh Reviewer round while the peer remains available. |
 | `ping-codex` | After a push that advances the PR branch, post a dedicated top-level `@codex review` comment to summon a fresh review round. |
@@ -52,10 +51,9 @@ Ping the named bot(s) if any were named (filtered to contributors when `ping-con
   They are also separate from the Summary comment.
 - **`hands-off` + the default rebase** is the ordinary unattended combination now that rebasing is not opt-in, and its sharp edge is a decision nobody can be consulted about: whatever halts the delegated rebase — step 2's "A halt is a stop, not a guess" defines the cases, and this bullet does not restate them — leaves the tree clean and idle, and the run stops with that open question rather than guessing (see "Hands-off mode").
   `no-rebase` is how an unattended run avoids the edge entirely.
-- **`inline` and `off-shoot` select the working location and nothing else.**
-  Neither implies or suppresses a push, names or drops a ping, or changes how anything is triaged; both are orthogonal to every row of the table above and to `hands-off`.
-  The one thing they change is what the preflight requires — an inline run of either kind needs the current checkout clean (see "Working location").
-  Passed together, `off-shoot` decides which branch is worked and `inline` adds nothing, since an off-shoot run is already inline.
+- **`inline` selects the working location and nothing else.**
+  It neither implies nor suppresses a push, names or drops a ping, or changes how anything is triaged; it is orthogonal to every row of the table above and to `hands-off`.
+  The one thing it changes is what the preflight requires — an inline run needs the current checkout clean (see "Working location").
 
 ## Working location
 
@@ -65,15 +63,13 @@ You remain the main-loop orchestrator in every one of them, so the interactive c
 Architecture's *one checkout-dependent agent at a time* rule follows the working location too: in worktree mode the subagents share that worktree rather than the main checkout, and the invariant it protects — never spawn the reviewer until the fixer's commits are on disk — is untouched.
 
 Pick the mode once, after step 1 has resolved the PR and **before** step 1's reconciliation: that reconciliation can fast-forward a branch, so it has to run where the work will happen.
-Take the first mode below that applies, with the two argument-driven ones ahead of the rest and `off-shoot` (4) ahead of `inline` (3) where both were given.
+Take the first mode below that applies, with forced `inline` (3) ahead of the rest.
 
 **The target branch** is the PR's `headRefName`, or the branch an orchestrator named for this entry.
 In `delegated-fix` and `publish-reviewed` there is no mode to pick at all: `address-reviews` has already assigned this entry a worktree, that worktree *is* the working location, and this skill neither selects nor creates nor reclaims one.
 
-**The PR identity check** is step 1's PR-vs-branch sanity check, applied to whichever branch is a *candidate* working location rather than only to the one you happen to be standing on: the candidate shares recent history with the PR head, and for a fork PR its resolved push remote/ref matches the PR head repository/ref (the same resolution step 7's publication preflight performs).
+**The PR identity check** is step 1's PR-vs-branch sanity check, applied to whichever branch is a *candidate* working location rather than only to the one you happen to be standing on: the candidate shares recent history with the PR head.
 A branch that fails it never becomes the working location — not by being checked out, not by being attached.
-The fork clause gates a candidate meant to **be** the PR head ref — the same-named local ref, and the branch forced `inline` checks out — where a push resolving elsewhere proves the ref is not that head.
-A named off-shoot is a different branch by construction: it shares the head's recent history but resolves its push wherever the maintainer's own remote points, so the fork clause is not a gate on it, and whether anything may be published from it at all is step 7's question.
 
 1. **Inline — the checkout is already on the target branch.**
    `git branch --show-current` equals the target branch **and** that branch passes the identity check.
@@ -86,39 +82,16 @@ A named off-shoot is a different branch by construction: it shares the head's re
    Auto-detection has no PR to resolve from a branch that is not the PR head, so a mode-2 run normally arrives with an explicit `PR#` (or an orchestrator's pairing); step 1's ambiguous case already covers the rest.
 3. **Forced `inline` — the argument.**
    It forces the work into the current checkout, on the target branch.
-   Where that checkout is not already on the target branch, run step 0.1's two checks on it **first** and stop if either fails, then check the target branch out there (creating a local tracking branch from the PR head when there is none — `gh pr checkout <N>` for a fork head, which wires the fork remote and tracking for you) and proceed as mode 1. The run ends on that branch — the maintainer asked for the checkout, so it is not restored.
+   Where that checkout is not already on the target branch, run step 0.1's two checks on it **first** and stop if either fails, then check the target branch out there (creating a local tracking branch from the PR head when there is none) and proceed as mode 1. The run ends on that branch — the maintainer asked for the checkout, so it is not restored.
    Where the checkout already stands on the target branch there is nothing to switch and nothing to restore: that is mode 1, and `inline` changes none of it.
-4. **The off-shoot — the `off-shoot` argument.**
-   The maintainer stands on a local off-shoot of this PR's branch and has said so, so the run works inline on that branch: fixes land there, `headRefName`/`headRefOid` stay publication metadata, and step 1's reconciliation is skipped whole rather than used to drag the off-shoot onto the head — a tip behind the head is this case's normal state.
-   It requires an explicit `PR#` (auto-detection resolves no PR from a branch that is not a PR head) and a named branch: a detached HEAD is nobody's off-shoot, so there the argument selects nothing and the run stops saying exactly that (hands-off: halt with that report, naming the current `HEAD`).
-   Standing on the target branch already, it is redundant — that is mode 1. `inline` alone is not this mode and never becomes it: from an off-shoot it does what its own row says — checks the target branch out in this checkout and works there, leaving the off-shoot's ref and commits untouched — so name the off-shoot when the work belongs on it.
-   What an off-shoot may push is step 7's question: it requires the recorded head to be represented in this branch's tip before any push and stops when it is not.
-   This mode settles only where the work happens.
 
 A name match alone never selects mode 1. A same-named local branch that fails the identity check falls through to mode 2, and there into the collision stop below — never *onto that branch*.
-`off-shoot` does not rescue such a ref: a branch bearing the target's own name is not an off-shoot of it, whatever it carries — the fork PR's same-named local ref, which carries the head yet resolves its push to `origin`, is precisely the ref the identity check refused.
-
-**The off-shoot is stated, never recognised.**
-No test on the branch's shape can find it, so none is allowed to try.
-Without the `off-shoot` argument every branch that is not the target takes mode 2, which is safe by construction.
-
-**Another open PR on that branch makes the request ambiguous — it disproves nothing.**
-A branch can be an off-shoot of this PR's head *and* be the head of another open PR; the two are compatible, so such a PR is no evidence against what the token asserts.
-What it does mean is that two PRs could be advanced by the same commits and only the maintainer can say which, so it is a stop rather than a mode: ask which PR was meant (hands-off: halt naming both branches and both PRs).
-Probe it **at the head**, rather than through some base repository's PR list: resolve the branch's own push remote/ref to an owner, a repository and a ref, then ask GraphQL `repository(owner:<owner>,name:<repo>){ ref(qualifiedName:"refs/heads/<ref>"){ associatedPullRequests(states:OPEN,first:100){ nodes{ number url baseRepository{nameWithOwner} } } } }`.
-It answers with every open PR whose head *is* that repository-qualified ref, whatever repository each one's *base* is in.
-Not `gh pr list --head`: it reads one base repository, matches a bare branch name that a fork's same-named head answers too, and stops at 30 items.
-A branch that has never been pushed resolves `ref` to null and is nobody's PR head.
-The filter that remains: count a hit only for a PR whose `url` differs from the one being addressed, since where the branch *is* this PR's head the query answers with this very PR and stopping there would halt an ordinary run.
-Compare the `url`, never the `number`: a number is scoped to that PR's *own* base repository and this answer set spans base repositories.
-`isCrossRepository` has no part in this and is not requested.
-Only a **hit** is acted on: a miss concludes nothing and leaves the mode exactly where the token put it.
 
 ### Preflight in the working location
 
 Step 0.1 states the two checks — clean tree, no Git operation in progress — and this section says only **where** they run, which is wherever the work will happen rather than the main checkout:
 
-- Inline — mode 1, forced `inline`, and a named off-shoot — keeps today's requirement whole: they run on that checkout.
+- Inline — mode 1 and forced `inline` — runs them on that checkout.
 - Worktree mode requires nothing of the main checkout, which may be dirty or mid-anything.
   A worktree created for this run is clean by construction.
   A **reused** one — the stable slug surviving a prior halted run — gets the same two checks, and either one failing there is a stop-and-report naming the worktree path: what it holds is most likely that prior run's remains, and this run neither cleans nor forces past it (hands-off: document and stop).
@@ -127,9 +100,8 @@ Either way, nothing is auto-stashed or discarded anywhere; dirt is the maintaine
 
 ### Attaching the worktree
 
-Branch resolution and attach follow `address-reviews` → "Resolving and checking out each entry" wholesale — local-first (a local ref wins over `origin`), the `origin` head only when no local branch exists, and a fork PR through its detached-worktree + `gh pr checkout` case, whose landed-on-the-right-head verification is part of that recipe.
-Use a stable slug (`pr-<N>`) whichever command attaches the worktree, so a halted run's worktree is found again rather than duplicated — which that recipe's registration read before EVERY attach, the fork case included, is what delivers: a halt keeps its worktree, so the resume meets a LIVE `pr-<N>` registration, which `git worktree prune` does not clear and a bare `git worktree add` would then fail on.
-The one tree that recipe hands back is inherited unchanged rather than dropped here: a fork attach whose landing verification fails gives its worktree back (`wt-remove pr-<N>`), because that tree never became the working location and, left on the rejected ref, it is what the registration read would stop on at every re-run.
+Branch resolution and attach follow `address-reviews` → "Resolving and checking out each entry" wholesale — local-first (a local ref wins over `origin`), the `origin` head only when no local branch exists.
+Use a stable slug (`pr-<N>`) whichever command attaches the worktree, so a halted run's worktree is found again rather than duplicated — which that recipe's registration read before EVERY attach is what delivers: a halt keeps its worktree, so the resume meets a LIVE `pr-<N>` registration, which `git worktree prune` does not clear and a bare `git worktree add` would then fail on.
 The base those attaches place a worktree under is that recipe's too, and its ignore rule comes with it: `git worktree add` excludes nothing on its own, so where `<repo>/.worktrees/` is not already ignored — probe it with the trailing slash, a directory-only rule answering no for a bare `.worktrees` that is not yet on disk — list it before the first attach in the repo-local exclude file `git rev-parse --git-path info/exclude` names, untracked and so dirtying nothing itself, rather than editing the tracked `.gitignore`, which is the maintainer's — and run that `rev-parse` from inside `<repo>`, because in a primary checkout it answers with the RELATIVE `.git/info/exclude` (only a linked worktree gets an absolute path), so a `git -C <repo>` form whose answer you then append to from your own directory writes the rule to a file `check-ignore` never reads.
 Ask Git for that path: where the checkout is itself a linked worktree, `.git` is a gitfile and a literal `.git/info/exclude` is not a path at all, so the append fails and nothing is ignored.
 Where the worktree helpers are on PATH, `wt-enter <slug> <branch>` covers the plain attach of a branch that **already exists locally**; it refuses to create a missing one without a base (`branch '<branch>' does not exist and no <base> was given`), and no local ref for the PR head is mode 2's commonest arrival — standing on `main` with a head you have never checked out.
@@ -236,14 +208,14 @@ Precedence for identifying the PR:
    Is the branch an ahead/behind copy of the PR head?
    If they look genuinely unrelated (no shared commits), surface it — *"the supplied PR #N targets branch `x`, which shares no history with the current branch `y`; proceed anyway?"* — and ask before operating (hands-off: stop and document, since acting on the wrong PR is high-stakes).
    This is the **PR identity check** "Working location" turns on, and the candidate is whichever branch is in line to become the working location — the one you are standing on, or the local ref a worktree attach would otherwise pick up.
-2. **Auto-detect** — `gh pr view --json number,headRefName,headRepository,headRepositoryOwner,isCrossRepository,baseRefName,url,title,state` resolves the PR for the current branch; `gh pr list --head <branch>` is the fallback.
+2. **Auto-detect** — `gh pr view --json number,headRefName,headRefOid,isCrossRepository,baseRefName,url,title,state` resolves the PR for the current branch; `gh pr list --head <branch>` is the fallback.
 3. **Ambiguous or none found** — ask the user which PR (hands-off: stop and document the blocker; do not guess).
 
-Record `owner`, `repo`, PR `number`, `baseRefName`, `headRefName`, `headRefOid`, and the head repository **owner and name** — `headRepositoryOwner.login` plus `headRepository.name`, with `isCrossRepository` as the cheap short-circuit — for the API calls and publication guard below.
-Ask for all three by name: step 7 resolves a named off-shoot's push target from them.
+Record `owner`, `repo` (both from the PR's own `url`), PR `number`, `baseRefName`, `headRefName`, and `headRefOid` for the API calls and publication guard below.
+**A fork PR is not supported.**
+Where `isCrossRepository` is true the head lives in another repository, so stop and say so (hands-off: skip the entry and document it); nothing below resolves a head anywhere but the PR's own repository.
 
 **Now pick the working location**, per "Working location" above, and set it up before going any further: everything below this line — the reconciliation, the rebase, the fixes, the review, and the push — happens there.
-A named off-shoot has no reconciliation to run at all: `headRefName` is a branch that run is not on.
 
 **Reconcile the working location's branch with the PR head before triaging anything.**
 The rule is *no work lost*, and ancestry decides it rather than a standing preference for either side.
@@ -281,16 +253,12 @@ What is specific to one PR:
 
 - **The target.**
   By default the PR's own `baseRefName`, fetched fresh at the point the rebase runs rather than read from a remote-tracking ref some earlier step updated — and fetched from the repository that ref lives in, which is the repository this PR is in, so hand the delegated step that repository as the `<owner>/<repo>` of the PR's own `url`.
-  Not `origin`: in a fork clone that is the head repository, where the base's name is a different branch's tip or nothing at all.
-  `rebase on top of <target>` names a branch or an exact commit instead (a batch orchestrator pins one commit so every entry rebases onto the same base), and that one is resolved where the maintainer named it — locally, in the working location — rather than fetched from the base repository, since an explicit token routinely names a local branch or one in the head fork and asking the base repository for `refs/heads/<it>` pins an unrelated same-named branch there or stops a run whose target was on disk all along.
+  `rebase on top of <target>` names a branch or an exact commit instead (a batch orchestrator pins one commit so every entry rebases onto the same base), and that one is resolved where the maintainer named it — locally, in the working location — rather than fetched, since an explicit token routinely names a local branch that the remote has no such ref for.
   Tell the delegated step which of the two it is holding.
   Either way this is a **single-branch** rebase: a whole chain of dependent branches is the separate `rebase-stack` skill — mention it if the user seems to want chain-wide restacking.
   Where this PR's base is another in-flight PR's head, the target is that parent's new tip, per the delegated step's parent-first rule — which for a single-PR run reduces to that branch's tip as freshly fetched, since nothing here rebases the parent; a batch orchestrator holding the parent map is what rebases it first and then pins the resulting tip as this entry's target.
 - **Where it runs.**
   The working location, like everything else after step 1.
-  Mode 4 — the named off-shoot — is the one location where the default target is worth questioning rather than simply accepted: that branch was cut *before* the PR head and advanced with its own commits, so its position may be deliberate and it may itself be the base of unpushed stacked children, and what a rebase rewrites there is the maintainer's own line of work rather than a copy of the head.
-  The rebase still runs by default, and the report names the off-shoot as the branch it rewrote.
-  Where anything about the request suggests that position is deliberate, put the target to the maintainer before rebasing and name the two ways to settle it — `no-rebase`, or an explicit `rebase on top of <target>`; hands-off has nobody to ask, so it rebases onto the default target and records that the off-shoot was the branch rewritten.
 - **Both points are this run's own** at top level, the second once every intended change is committed, so the packet a top-level run reports has the rebased tip as its final SHA.
   In `delegated-fix` neither point is this run's ("Delegated modes for the worktree orchestrator"), and a `publish-reviewed` run rebases nothing.
 - **The pinned effective base is this run's effective review base** (step 6) and the boundary of every range you delegate afterwards.
@@ -310,7 +278,7 @@ Fetch the **unresolved** review threads and enough context to judge them (see "G
 
 - **Review threads** (inline comments): fetch every **unresolved** thread exactly per "GitHub API recipes" below — prefer the `gh-review-threads` helper when it is on PATH, else run the GraphQL query by hand as fresh single-shot per-page queries — keep only `isResolved == false`, and **validate every response before acting** as the recipes specify, failing closed on any identity, shape, or scope failure.
   For each thread, capture the thread `id`, `path`, `line`, `isOutdated`, and every comment's `databaseId`, author login/type, `body`, `diffHunk`, and `url`.
-- **CI on the PR head** (`gh pr view --json headRefOid,statusCheckRollup`, read the way README's *Contributing* reads it — by `__typename`, terminal values tested positively): every lane whose verdict is not `SUCCESS`/`NEUTRAL`/`SKIPPED` is a review item too, gathered with its identity — the `workflowName` and `name` of a `CheckRun` — an external app's has no `workflowName`, so its `checkSuite.app.slug` fills that slot, read through GraphQL's `statusCheckRollup.contexts` since `gh pr view` does not carry it, and two apps emitting one check name stay two lanes — the `context` of a `StatusContext`; a rollup carrying that identity more than once, one workflow fired by several events on the head, holds one lane there, failing while any instance is — and its details URL, and — for a GitHub Actions `CheckRun`, whose `detailsUrl` carries the segment `/<owner>/<repo>/actions/runs/<run-id>` (usually followed by `/job/<job-id>`) — the failing job's log tail — `gh run view --repo <owner>/<repo> --job <job-id> --log-failed | tail -n 200` where the URL names the job, else `gh run view <run-id> --repo <owner>/<repo> --log-failed | tail -n 200` for the run as a whole — under `set -o pipefail`, so a `gh` that failed (a stale job id, an expired token) is a failed gather to stop on rather than an empty tail that reads as evidence — with `<owner>/<repo>` taken from that URL rather than left to the checkout's default, which from a fork clone resolves against the fork. A `StatusContext` or an external app's `CheckRun` has no workflow run at all, so `gh run` can neither read nor re-run it: gather it with its `targetUrl`/`detailsUrl` as the only details mechanism, and record that logs and re-runs are unavailable through `gh run`.
+- **CI on the PR head** (`gh pr view --json headRefOid,statusCheckRollup`, read the way README's *Contributing* reads it — by `__typename`, terminal values tested positively): every lane whose verdict is not `SUCCESS`/`NEUTRAL`/`SKIPPED` is a review item too, gathered with its identity — the `workflowName` and `name` of a `CheckRun` — an external app's has no `workflowName`, so its `checkSuite.app.slug` fills that slot, read through GraphQL's `statusCheckRollup.contexts` since `gh pr view` does not carry it, and two apps emitting one check name stay two lanes — the `context` of a `StatusContext`; a rollup carrying that identity more than once, one workflow fired by several events on the head, holds one lane there, failing while any instance is — and its details URL, and — for a GitHub Actions `CheckRun`, whose `detailsUrl` carries the segment `/<owner>/<repo>/actions/runs/<run-id>` (usually followed by `/job/<job-id>`) — the failing job's log tail — `gh run view --repo <owner>/<repo> --job <job-id> --log-failed | tail -n 200` where the URL names the job, else `gh run view <run-id> --repo <owner>/<repo> --log-failed | tail -n 200` for the run as a whole — under `set -o pipefail`, so a `gh` that failed (a stale job id, an expired token) is a failed gather to stop on rather than an empty tail that reads as evidence — with `<owner>/<repo>` taken from that URL rather than left to the checkout's default. A `StatusContext` or an external app's `CheckRun` has no workflow run at all, so `gh run` can neither read nor re-run it: gather it with its `targetUrl`/`detailsUrl` as the only details mechanism, and record that logs and re-runs are unavailable through `gh run`.
   A lane still in progress on the current head is not an item: note it and let the push, or the re-run below, settle it.
   A rollup describing a head other than the one you reconciled against says nothing about this branch; re-read it after the push instead.
 - **Top-level review summaries** (`gh pr view --json reviews`) and **issue comments** (`gh api --paginate repos/{owner}/{repo}/issues/{number}/comments`) — read for context, especially **maintainer replies/push-backs** that override or qualify a bot's original comment.
@@ -416,7 +384,7 @@ This skill's deltas on the cycle:
   A `rebase on top of <target>` target still standing — named by the request and not discarded by `no-rebase`, which suppresses the rebase and not the target — resolves where it was named: locally, `git rev-parse --verify '<target>^{commit}'` (the operand quoted as ONE argument — a legal ref name may carry `$`, backticks or `;`, and an unquoted `$`-fragment can silently resolve some other existing ref instead), fetching nothing.
   Where that named target does not resolve here, stop and report what you tried rather than substituting anything: `baseRefName` is the target only where the request named NONE, never the fallback for one that failed to resolve, and `git rev-parse --verify` does not DWIM a remote-only branch to `origin/<it>`.
   Otherwise — the request having named none — pin `baseRefName`, resolved exactly as the rebasing path's default target is — `git fetch <the remote whose URL is that repository, or that repository's URL where no remote points at it> refs/heads/<baseRefName>` against the repository the PR's own `url` names, moving no branch, then `git rev-parse --verify FETCH_HEAD^{commit}` read immediately after that fetch.
-  Never a bare ref name or an `origin/<base>`: in a fork clone those resolve a same-named local or fork branch and in an ordinary clone a stale one.
+  Never a bare ref name or an `origin/<base>`: those resolve a same-named local branch or a stale remote-tracking ref.
   Neither the Reviewer nor the peer gets your implementation reasoning, drafted rationale, or the fixer's report.
 - The Reviewer independently verifies every disposition: fixes and already-addressed claims must hold in the committed code; push-backs must be technically justified rather than convenient dismissals; follow-up-task items must point at a committed task file that genuinely covers the concern, with the follow-up itself justified under step 4's conditions — never an evasion of a cheap fix — and its queued or deferred placement consistent with step 5; ambiguous items must genuinely require an authoritative decision.
   It may reclassify any item.
@@ -439,32 +407,20 @@ If any differ or the peer outcome is missing, stop; do not re-triage or publish 
 Publication runs in the working location: the re-check, the resolved push remote/ref, and the push itself all read and write that tree and its `HEAD`, never the main checkout.
 
 **Which repository every `gh` call below addresses: the one the PR is in**, written out literally (`--repo <owner>/<repo>`, `repos/<owner>/<repo>/…`) per "GitHub API recipes" rather than left to default.
-The `git` push of item 2 below is the deliberate exception — its target is the head repository, resolved from the remote in item 1.
 
-1. **Re-check before publication:** require the working location clean and idle, by step 0.1's two checks, and still standing on the branch this run has been working on (`git branch --show-current`, in that spelling, never `git rev-parse --abbrev-ref HEAD`) — a location that has moved to some other branch since the review is a stop; re-fetch the PR and confirm it is still open, still points to the recorded head repository/ref, and its current `headRefOid` is the expected remote tip you are prepared to replace.
-   Resolve the current branch's exact push remote/ref, verify they match that PR head, and fetch that exact head ref without moving the local branch so the expected commit object is available for the ancestry test — never assume `origin`, especially for fork PRs.
+1. **Re-check before publication:** require the working location clean and idle, by step 0.1's two checks, and still standing on the branch this run has been working on (`git branch --show-current`, in that spelling, never `git rev-parse --abbrev-ref HEAD`) — a location that has moved to some other branch since the review is a stop; re-fetch the PR and confirm it is still open, still points to the recorded head ref, and its current `headRefOid` is the expected remote tip you are prepared to replace.
+   Resolve the current branch's exact push remote/ref, verify they match that PR head, and fetch that exact head ref without moving the local branch so the expected commit object is available for the ancestry test — never assume `origin`.
    If the PR head moved, the push target cannot be matched, or the branch has no usable push permission, stop and report instead of guessing.
-
-   **On a named off-shoot the target is the PR's head ref, never the branch's own upstream.**
-   Resolve the target from the PR instead (its head repository owner/name and `headRefName`, with `isCrossRepository` as the cheap short-circuit) and push explicitly to `refs/heads/<headRefName>` there; the off-shoot's own upstream is not the target, is never pushed to by this run, and its not matching the PR head is that mode's normal state.
-   What the off-shoot may put **on** the head ref is item 2's representation probe, not a name comparison here.
-   Mode 4 is the only mode this substitution covers: everywhere else the working branch **is** the head ref, so the comparison above stands exactly as written.
 2. **Push:** work these in order, and never skip ahead to the lease — each excludes the ones above it and the last is "everything else", so no state is left for you to choose in.
    - **First, a `HEAD` that is a proper ancestor of the expected tip is a stop, not a push.**
      The remote branch is ahead of you: there is nothing of yours to publish, a normal push cannot fast-forward it, and the lease below is the trap rather than the protection — the expected OID is exactly what the remote still points at, so the lease *matches*, the push succeeds, and it rewinds the branch over the newer remote commits.
      Stop and report, exactly as for a rejected lease, and reconcile nothing to make the push legal.
-   - **Then, an off-shoot must carry the recorded head.**
-     Where the working location is mode 4's off-shoot, before choosing any push run step 1's own representation probe against the expected tip — `git rev-list --right-only --cherry-pick HEAD...<expected-head-oid>`, patch-id rather than raw ancestry, so an off-shoot rebased onto a newer base still reads as carrying the head — and require it to print nothing.
-     Whatever it prints is work the recorded head carries and this push would delete, and the lease below protects none of it, for the reason the stop above gives.
-     Stop and report instead — naming both tips (the expected tip and the `HEAD` you would have pushed) and every commit the probe printed — and do not fast-forward, merge or rebase the off-shoot to make the push legal: that state goes back to the maintainer, exactly as step 1's divergent outcome does.
-     An off-shoot whose own rebase in this run flattened a merge commit the head carries makes the probe print that merge: report it the same way rather than filtering merges out.
-     The probe is the off-shoot's alone.
    - Then, if the expected remote tip is an ancestor of `HEAD`, use a normal explicit push (`git push <remote> HEAD:refs/heads/<headRefName>`).
    - **Otherwise** — every remaining state, whether or not this run rewrote history — use an exact lease (`git push <remote> --force-with-lease=refs/heads/<headRefName>:<expected-head-oid> HEAD:refs/heads/<headRefName>`).
      If the lease is rejected, **never** escalate to bare `--force`; stop and report because the remote moved under you.
 
    Then, whichever push ran: confirm what actually landed against the ref itself — one `git ls-remote "<url>" refs/heads/<headRefName>` for each URL `git remote get-url --push --all <remote>` lists — rather than `gh pr view --json headRefOid`, which can still report the pre-push head for a while after the push returns.
-   Read back through the resolved **push** URLs, not the remote name: a remote may carry a distinct `pushurl` (a fork or a writable mirror).
+   Read back through the resolved **push** URLs, not the remote name: a remote may carry a distinct `pushurl` (a writable mirror).
    Enumerate with `--all` and read the URLs one at a time: `git push` writes to *every* configured push URL, plain `--push` names only the first, so one `ls-remote` per URL.
    Every URL has to come back with the `HEAD` you pushed: `git ls-remote` is observational and exits 0 even when it prints nothing, so an absent ref, a disagreeing OID, or a destination you could not reach is a stop, not a pass.
 3. **Re-read unresolved threads after the push.**
@@ -508,7 +464,7 @@ Always produce a report (it doubles as the body of the Summary comment on push r
 
 - The PR, the branch, before/after tip SHAs, and what each of step 2's two rebase points did — replayed, no-op, skipped as unnecessary (with why), or suppressed by `no-rebase` — plus the pinned effective base the run ended on and how any conflicts went.
   In `delegated-fix`, where those points are the orchestrator's, report the pinned effective base you were handed and carried rather than a rebase of your own.
-- **The working location and how it was selected** — inline on the target branch, forced `inline`, the off-shoot the `off-shoot` argument named, or a worktree (created or reused) — plus whether that worktree was reclaimed, or its absolute path where a halt left it standing.
+- **The working location and how it was selected** — inline on the target branch, forced `inline`, or a worktree (created or reused) — plus whether that worktree was reclaimed, or its absolute path where a halt left it standing.
   Say nothing about where the main checkout points now: a worktree run neither moved it nor watched it.
 - Each addressed comment with a **stable reference** — file:line, comment author, the thread's GraphQL node id, and the comment permalink — and its disposition (fixed / already-addressed / pushed-back / follow-up-task / skipped).
   On a **no-push** run this mapping is essential: a later "push now" turn uses it to replay the exact replies/resolves without re-deriving everything.
@@ -660,8 +616,7 @@ Reach the orchestrator if you can, but otherwise drive to a best-effort completi
 
 `gh api` expands `{owner}`/`{repo}` to the current repo.
 For GraphQL, pass real values — the `<owner>`/`<repo>` of the PR's own URL.
-On a **cross-repository PR handled from a fork clone** the current repo is the head fork, while the PR and its comments live in the base repository — and a bare `gh pr comment` resolves the same way — so qualify every PR-scoped call there with the `<owner>/<repo>` of the PR's own URL (`repos/<owner>/<repo>/…`, `--repo <owner>/<repo>`) rather than letting it default.
-Not from a bare `gh repo view --json nameWithOwner` either, which with no repository argument answers for the directory: the fork again.
+Qualify every PR-scoped call with the `<owner>/<repo>` of the PR's own URL (`repos/<owner>/<repo>/…`, `--repo <owner>/<repo>`) rather than letting it default to whatever repository the directory resolves to.
 
 **List unresolved review threads** (id for resolve, comment `databaseId` for replies).
 
@@ -690,7 +645,7 @@ query($owner:String!,$repo:String!,$pr:Int!,$after:String){
 
 **Optional accelerator — if `gh-review-threads` is available on PATH** (`command -v gh-review-threads`), prefer it: it encodes the query above plus the whole validation contract below (fresh single-shot per-page pagination, nested comment fetch-up, identity/shape/scope checks), retrying once and then failing closed with exit code `3` and nothing on stdout when validation keeps failing; ordinary `gh` API failures remain ordinary fatal errors.
 `gh-review-threads <PR#>` prints the unresolved threads as a JSON array on stdout — each thread with `id isResolved isOutdated path line` and `comments[]` (`databaseId`, `author { login __typename }`, `body`, `diffHunk`, `url`); add `--all` to include resolved threads.
-Qualify it like every call here — `--repo <owner>/<repo>` from the PR's own URL: left off, the helper resolves both the PR number and its scope check from the current repo (`gh repo view`), so from a fork clone a bare call fetches — and successfully validates — the fork's same-numbered PR.
+Qualify it like every call here — `--repo <owner>/<repo>` from the PR's own URL.
 
 Outside powbox, Codex users can copy `plugins/dev-skills/bin/gh-review-threads` onto their PATH.
 
@@ -745,4 +700,4 @@ gh pr comment NUMBER --repo <owner>/<repo> --body-file -                        
 gh pr edit NUMBER --repo <owner>/<repo> --add-reviewer @copilot
 ```
 
-**Read context:** `gh pr view NUMBER --repo <owner>/<repo> --json reviews,comments,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,baseRefName,url,state` and `gh api --paginate repos/<owner>/<repo>/issues/NUMBER/comments`.
+**Read context:** `gh pr view NUMBER --repo <owner>/<repo> --json reviews,comments,headRefName,headRefOid,isCrossRepository,baseRefName,url,state` and `gh api --paginate repos/<owner>/<repo>/issues/NUMBER/comments`.
