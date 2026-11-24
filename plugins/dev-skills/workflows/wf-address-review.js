@@ -3,8 +3,8 @@
  *
  * Work through every UNRESOLVED review thread on one pull request: gather the
  * threads, fix what is right / push back on what is wrong, verify every
- * disposition through the shared review cycle (fresh-eyes reviewer plus a
- * best-effort cross-harness codex peer, bounded by the cycle's round cap),
+ * disposition through the shared review cycle (fresh-eyes reviewer plus the
+ * best-effort cross-harness peers, bounded by the cycle's round cap),
  * then publish by default (lease-safe push, reply + resolve threads, Summary
  * comment, pings) — a `no-push` run stays local-only, and the one PR write it
  * makes is the disposition record every exit that does not publish IN FULL
@@ -84,8 +84,8 @@
  *
  * The fix -> review -> fix loop itself is NOT stated here: this workflow nests
  * the canonical cycle (`workflow("wf-review-cycle", ...)`) for its verification
- * loop — roles, gates, disposition rule, best-effort cross-harness codex peer
- * review, and the round cap are all wf-review-cycle's, and this script only
+ * loop — roles, gates, disposition rule, the best-effort cross-harness peer
+ * roster, and the round cap are all wf-review-cycle's, and this script only
  * supplies the PR-specific scope (triage kinds, per-thread report contract,
  * disposition-verification criteria). Nesting is the right consumption mode
  * here because this pipeline does not fan out; a fan-out owner embeds the
@@ -145,19 +145,19 @@
 // FIRST statement: it is how the script registers as the
 // `/dev-skills:wf-address-review` command and what the pre-run approval prompt
 // shows. The conditional report phases are not declared; undeclared phase()
-// titles get their own group. The "Peer review (codex)" title must stay
+// titles get their own group. The "Peer review" title must stay
 // byte-identical to the peer stage's phase string in the nested
 // wf-review-cycle (its CYCLE_PEER_PHASE) — a mismatch silently splits the
 // progress display into an extra group.
 export const meta = {
   name: "wf-address-review",
-  description: "Address every unresolved review thread on one PR: fix or push back, verify through the shared review cycle — a fresh-eyes reviewer plus a best-effort cross-harness codex peer review each round (review is cross-harness; peer outcomes never block; bounded round cap) — then publish by default (use no-push for a local-only dry run).",
-  whenToUse: "Work through maintainer-vetted review feedback on a single PR hands-off, with cross-harness verification (a best-effort codex peer beside the fresh reviewer). Not for new task batches (wf-address-tasks) or stack rebases.",
+  description: "Address every unresolved review thread on one PR: fix or push back, verify through the shared review cycle — a fresh-eyes reviewer plus best-effort cross-harness peer reviews each round (codex, plus muse where the container carries it; review is cross-harness; peer outcomes never block; bounded round cap) — then publish by default (use no-push for a local-only dry run).",
+  whenToUse: "Work through maintainer-vetted review feedback on a single PR hands-off, with cross-harness verification (best-effort codex and muse peers beside the fresh reviewer). Not for new task batches (wf-address-tasks) or stack rebases.",
   phases: [
     { title: "Gather", detail: "resolve the PR, branch state, unresolved threads, misfired top-level findings, and failing CI lanes" },
     { title: "Rebase", detail: "delegated rebase onto the freshest base — before fixing, and again before publication" },
     { title: "Fix and verify", detail: "fix/push-back per thread through the nested wf-review-cycle" },
-    { title: "Peer review (codex)", detail: "best-effort cross-harness second opinion beside each reviewer round; its outcome never blocks" },
+    { title: "Peer review", detail: "best-effort cross-harness opinions beside each reviewer round, one stage per available peer; their outcomes never block" },
     { title: "Record", detail: "on every exit that does not publish in full: leave the run's disposition map on the PR as one record comment" },
     { title: "Publish", detail: "lease-safe push, thread replies, summary comment, pings" },
     { title: "Summary" },
@@ -582,7 +582,7 @@ Change nothing else: no commits of your own, no push, no PR mutation, no branch 
 // assignment with its per-thread report contract (which rides the cycle's
 // untyped `workReport` — hence the explicit field list; the cycle's own
 // schemas cannot require consumer fields), and the disposition-verification
-// criteria the cycle hands verbatim to its reviewer AND its codex peer.
+// criteria the cycle hands verbatim to its reviewer AND its peers.
 // A prior DISPOSITION RECORD, REPLAYED rather than re-triaged. Replaying it is
 // the whole reason one was written: the drafted replies and the judgment behind
 // each disposition are the expensive part of a run, and a fixer that never sees
@@ -1452,6 +1452,15 @@ const flags = {
   pingCopilot: wantPush && pingCopilotTok,
   pingContributing,
 };
+
+// The nested cycle carries the peer roster and no per-provider argument (see
+// "The peer roster" in wf-review-cycle.js), so the skill's Muse contributor
+// override cannot be honored here. Refused before anything runs rather than
+// ignored: ignoring it would launch Muse under exactly the saved setting the
+// invocation tried to change.
+if (/\bmuse[\s-]*contributor\s*=/.test(flagText)) {
+  return { error: "`muse-contributor=` is not a workflow argument: wf-address-review leaves Muse's contributor mode as saved. Run the `address-review` skill for a per-run override, or pass `peer-opinions=off` to ask no peer at all." };
+}
 
 phase("Gather");
 const packet = await agent(gatherPrompt(args, flags.noRebase), { label: "gather", schema: PACKET_SCHEMA });
