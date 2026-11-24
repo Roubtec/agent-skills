@@ -1397,6 +1397,20 @@ if (!canonicalRule) {
 //      imposes nothing: the rule it points at is anchored in the same file, in
 //      both mirrors, so deleting the restatement cannot delete the rule. That is
 //      why this shape is not guarded at all where categories 2 and 3 are.
+// A skill's brief is its `SKILL.md` plus the `subagent-boundary.md` beside it,
+// where one ships: the destroy boundary lives in that file, which the skill's
+// prompts send every subagent to read, so the guarded bullet is looked for there.
+// A missing `SKILL.md` still throws; a missing boundary file is simply absent.
+function readSkill(dir, skill) {
+  const brief = readFileSync(join(dir, skill, "SKILL.md"), "utf8");
+  let boundary = "";
+  try {
+    boundary = readFileSync(join(dir, skill, "subagent-boundary.md"), "utf8");
+  } catch {
+    boundary = "";
+  }
+  return `${brief}\n${boundary}`;
+}
 const PROSE_MIRRORS = ["plugins/dev-skills/skills", "codex/dev-skills/skills"];
 // The warning every one of these clauses carries, and the census key. It is not
 // the anchor: a clause could keep this phrase and lose its destination, which is
@@ -1471,7 +1485,7 @@ const PROSE_DESTROY_BOUNDARY = /Empirical verification that could change state/g
 // constants to say Never Write `cd -- …` left the suite at exit 0, because a
 // one-word negation prefixed to the verb leaves the pinned bytes intact. This
 // span opens instead on the clause's SUBJECT — `**Empirical verification that
-// could change state goes where you send it.**` — which puts the polarity inside
+// could change state goes only where your prompt sent you.**` — which puts the polarity inside
 // the span, so inverting the rule IN PLACE takes rewriting that sentence rather
 // than prefixing an adverb to it. It does not FORECLOSE negation, and is not claimed
 // to: a frame put in front of a complete declarative sentence leaves any span
@@ -1508,7 +1522,7 @@ const PROSE_DESTROY_BOUNDARY = /Empirical verification that could change state/g
 // ASCII one edits this anchor in the same change, which is the point of spanning
 // the message rather than stopping at the `cd`.
 const PROSE_DESTROY_BOUNDARY_ANCHOR =
-  "**Empirical verification that could change state goes where you send it.** Send the subagent to `DC=\"$(dc-enter <slug>)\"` — one absolute path on stdout, dropped again with `dc-remove <slug>`; a reused slug is refused rather than re-derived, so anything that may run twice passes `--replace` or removes the slug first. Where that command is not found at all, install the helpers from the dev-skills plugin `bin/` rather than improvising a destination. Never leave the choice to the subagent. Give it the guarded `cd` too: `cd \"\"` returns 0 and moves nowhere, so checking the status catches nothing and a failed lookup leaves the subagent in the shared checkout — the form is `cd -- \"${DC:?dc-enter returned no path — see its error above; if it is not installed, install it from the dev-skills plugin bin/}\"`, with `pwd` confirmed before the first command that writes.";
+  "**Empirical verification that could change state goes only where your prompt sent you.** That is a disposable clone: `DC=\"$(dc-enter <slug>)\"` with the slug your prompt names, which prints one absolute path, dropped again with `dc-remove <slug>`. A reused slug is refused rather than re-derived, so anything that may run twice passes `--replace` or removes the slug first. If your prompt named no slug, you were not sent anywhere: do not pick a destination, report that the check needs one. If `dc-enter` is not found, install it from the dev-skills plugin `bin/` rather than improvising a destination. Enter it with the guarded form, because `cd \"\"` returns 0 and moves nowhere: `cd -- \"${DC:?dc-enter returned no path — see its error above; if it is not installed, install it from the dev-skills plugin bin/}\"`, and confirm `pwd` before the first command that writes.";
 const PROSE_CLAUSES = {
   "address-review": {
     anchors: [
@@ -1630,6 +1644,39 @@ if (emptyTables.length || blankSpans.length) {
   rows.push(["(all)", "declared tables", "ok", `REQUIRED ${REQUIRED.length} clauses, PROSE_MIRRORS ${PROSE_MIRRORS.length} mirrors, BESPOKE_DESTINATIONS ${BESPOKE_DESTINATIONS.length} clauses`]);
 }
 
+// The boundary file is one text shipped beside every skill that sends subagents
+// to it. Held here to two things the prose guard above cannot see: every copy is
+// the same bytes, and a brief that names the file ships it.
+{
+  const copies = new Map();
+  const orphans = [];
+  for (const mirror of PROSE_MIRRORS) {
+    for (const skill of readdirSync(join(root, mirror)).sort()) {
+      let brief;
+      try {
+        brief = readFileSync(join(root, mirror, skill, "SKILL.md"), "utf8");
+      } catch {
+        continue;
+      }
+      let boundary = null;
+      try {
+        boundary = readFileSync(join(root, mirror, skill, "subagent-boundary.md"), "utf8");
+      } catch {
+        boundary = null;
+      }
+      if (boundary !== null) copies.set(`${mirror}/${skill}`, boundary);
+      if (brief.includes("subagent-boundary.md") !== (boundary !== null)) orphans.push(`${mirror}/${skill}`);
+    }
+  }
+  const distinct = new Set(copies.values()).size;
+  if (copies.size === 0 || distinct !== 1 || orphans.length) {
+    failures++;
+    rows.push(["(all)", "boundary file", "FAIL", `${copies.size} copies in ${distinct} distinct texts; named-without-file or file-without-name: ${orphans.join(", ") || "none"}`]);
+  } else {
+    rows.push(["(all)", "boundary file", "ok", `${copies.size} byte-identical copies, each named by its brief`]);
+  }
+}
+
 for (const mirror of PROSE_MIRRORS) {
   const dir = join(root, mirror);
   // The census reads EVERY skill in the mirror rather than the declared ones, so
@@ -1639,7 +1686,7 @@ for (const mirror of PROSE_MIRRORS) {
   for (const skill of readdirSync(dir).sort()) {
     let text;
     try {
-      text = flat(readFileSync(join(dir, skill, "SKILL.md"), "utf8"));
+      text = flat(readSkill(dir, skill));
     } catch {
       continue;
     }
@@ -1664,7 +1711,7 @@ for (const mirror of PROSE_MIRRORS) {
     const path = `${mirror}/${skill}/SKILL.md`;
     let text;
     try {
-      text = flat(readFileSync(join(dir, skill, "SKILL.md"), "utf8"));
+      text = flat(readSkill(dir, skill));
     } catch (err) {
       failures++;
       rows.push([path, "prose clauses", "FAIL", `cannot read: ${err.message}`]);

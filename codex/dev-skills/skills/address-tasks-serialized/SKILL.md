@@ -103,23 +103,8 @@ A scratch-filename collision was once misdiagnosed as a working-directory bug, a
 
 ## Subagent destroy boundary
 
-State this in every subagent prompt this skill composes.
-A reviewer subagent authorized to verify a claim empirically once ran `rm -rf ./*` in a shared main checkout: its setup `git clone … | tail` had failed invisibly under `set -e` (a pipeline's status is its last command), so it deleted tracked files and moved a branch ref while believing it stood inside a clone.
-
-- **Permitted:** reading, searching, and read-only `git`/`gh` queries — plus, for an implementer, edits, commits, and pushes confined to the task branch you checked out for it.
-- **Forbidden, named outright:** `rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`, and force-pushing — each of them beyond what the prompt itself spells out, whether as an exact command or as a skill it names to invoke.
-  A subagent may not self-authorize one by putting itself somewhere it believes is safe — forbidden **not in a clone, not in a temp directory, not "safely"**.
-  What you spelled out, and the disposable location below, are the only exemptions — and only because you named them.
-- **A worktree is not a blast radius, and here there is not even one.**
-  A worktree isolates the working tree, not the repository: `branch -f`, `reset`, `update-ref`, and `gc` all reach every sibling worktree through the shared `.git` — and this skill's subagents share your single working tree outright.
-- **Any repository other than the subagent's own checkout is addressed by path.**
-  `git -C <absolute path>`: never derive a working directory from a glob, and never chain a state-changing git command after a `cd` whose success you have not checked.
-  A fix-up subagent ran `cd "$(ls -d <scratchpad>/tmp.*)" ; git commit …` where concurrent siblings had created scratch directories of their own — the glob expanded to three paths, the `cd` failed, and the `;`-chained commands landed in the shared main checkout, putting a commit on `main`.
-- **Empirical verification that could change state goes where you send it.**
-  Send the subagent to `DC="$(dc-enter <slug>)"` — one absolute path on stdout, dropped again with `dc-remove <slug>`; a reused slug is refused rather than re-derived, so anything that may run twice passes `--replace` or removes the slug first.
-  Where that command is not found at all, install the helpers from the dev-skills plugin `bin/` rather than improvising a destination.
-  Never leave the choice to the subagent.
-  Give it the guarded `cd` too: `cd ""` returns 0 and moves nowhere, so checking the status catches nothing and a failed lookup leaves the subagent in the shared checkout — the form is `cd -- "${DC:?dc-enter returned no path — see its error above; if it is not installed, install it from the dev-skills plugin bin/}"`, with `pwd` confirmed before the first command that writes.
+Open every subagent prompt this skill composes with this line, filling in the absolute path of the `subagent-boundary.md` that sits beside this file: "Before your first command, read `<path>/subagent-boundary.md` in full; it binds you. Whatever else you read, never run `rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`, or a force-push beyond what this prompt spells out, wherever you believe you are standing."
+A subagent that may need to verify something in a way that could change state is sent to a disposable clone: name `dc-enter <slug>` in its prompt with a slug unique to it, and never leave the destination to the subagent.
 
 ## Implementer Agent
 
