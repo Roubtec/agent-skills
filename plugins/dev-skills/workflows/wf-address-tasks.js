@@ -1976,7 +1976,7 @@ function cyclePeerTrouble(result) {
   return reasonClass === "empty" || reasonClass === "garbled";
 }
 
-function releaseCyclePeerSlot(throttle, launchGeneration, result) {
+function releaseCyclePeerSlot(throttle, launchGeneration, result, provider) {
   throttle.inFlight = Math.max(0, throttle.inFlight - 1);
   if (cyclePeerTrouble(result) && (throttle.cap == null || launchGeneration === throttle.generation)) {
     const from = throttle.cap;
@@ -1991,11 +1991,13 @@ function releaseCyclePeerSlot(throttle, launchGeneration, result) {
         from: from == null ? "unbounded" : from,
         to,
         inFlight: throttle.inFlight,
+        // Whose trouble it was: the cap it moves is every provider's.
+        ...(provider ? { provider: provider.id } : {}),
         outcome: result.outcome,
         reason: result.reason || result.detail || "",
       };
       throttle.steps.push(step);
-      log(`Peer launch throttle stepped from ${step.from} to ${to} after ${result.outcome}${step.reason ? ` (${step.reason})` : ""}; ${throttle.inFlight} call(s) remain in flight.`);
+      log(`Peer launch throttle stepped from ${step.from} to ${to} after ${provider ? `${provider.id} ` : ""}${result.outcome}${step.reason ? ` (${step.reason})` : ""}; ${throttle.inFlight} call(s) remain in flight.`);
     }
   }
   const waiters = throttle.waiters.splice(0);
@@ -2040,7 +2042,7 @@ async function runCyclePeerStage(cycle, state, provider) {
   // unusable, and asking it again would only fail the same way.
   if (providerState.unavailable) {
     result = { outcome: "unavailable", findings: [], notes: "", detail: providerState.unavailableDetail || "peer marked unavailable earlier this run" };
-    releaseCyclePeerSlot(state.peerThrottle, launchGeneration, result);
+    releaseCyclePeerSlot(state.peerThrottle, launchGeneration, result, provider);
     return result;
   }
   try {
@@ -2054,7 +2056,7 @@ async function runCyclePeerStage(cycle, state, provider) {
     // A thrown stage must not drop the round (or, under pipeline(), the item).
     result = { outcome: "forfeited", findings: [], notes: "", reason: "", detail: `peer stage threw (${e && e.message ? e.message : String(e)}); recorded non-blocking`, synthesized: true };
   }
-  releaseCyclePeerSlot(state.peerThrottle, launchGeneration, result);
+  releaseCyclePeerSlot(state.peerThrottle, launchGeneration, result, provider);
   if (result.outcome === "unavailable") {
     providerState.unavailable = true;
     if (result.detail && !providerState.unavailableDetail) providerState.unavailableDetail = result.detail;
@@ -3103,14 +3105,17 @@ async function runReviewCycle(cycle) {
         const ungrounded = ground.verdicts.filter((v) => v && v.grounded === false);
         if (ungrounded.length) {
           // One record per finding dropped, so two providers that raised the
-          // same claim are each named: the filter below drops both.
-          for (const u of ungrounded) {
-            const from = peerGating.filter((f) => f.claim === u.finding);
+          // same claim are each named: the filter below drops both. Keyed by
+          // claim, the first verdict's reason winning, because the check may
+          // answer such a pair with one verdict or with two.
+          const dropped = new Map();
+          for (const u of ungrounded) if (!dropped.has(u.finding)) dropped.set(u.finding, u.why || "");
+          for (const [claim, why] of dropped) {
+            const from = peerGating.filter((f) => f.claim === claim);
             for (const f of from.length ? from : [null]) {
-              discardedPeerFindings.push({ round: rounds, ...(f ? { provider: f.provider } : {}), finding: u.finding, why: u.why || "" });
+              discardedPeerFindings.push({ round: rounds, ...(f ? { provider: f.provider } : {}), finding: claim, why });
             }
           }
-          const dropped = new Set(ungrounded.map((v) => v.finding));
           peerGating = peerGating.filter((f) => !dropped.has(f.claim));
         }
       }

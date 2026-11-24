@@ -2171,10 +2171,11 @@ for (const name of WORKFLOWS) {
       // Both raise the same claim, so the one verdict drops two findings.
       "peer:codex#1": issues("points at a file that is not there"),
       "peer:muse#1": issues("points at a file that is not there"),
-      "ground#1": { verdicts: [{ finding: "points at a file that is not there", grounded: false, why: "no such file" }] },
+      // ...and the check may answer the pair with a verdict each.
+      "ground#1": { verdicts: [1, 2].map(() => ({ finding: "points at a file that is not there", grounded: false, why: "no such file" })) },
     });
     check(
-      "a finding the grounding check discards is recorded under every provider that raised it, and no longer gates",
+      "a finding the grounding check discards is recorded once under every provider that raised it, and no longer gates",
       discarded.result.verdict === "pass" && discarded.result.rounds === 1 &&
         JSON.stringify(discarded.result.discardedPeerFindings) === JSON.stringify(["codex", "muse"].map((provider) => ({ round: 1, provider, finding: "points at a file that is not there", why: "no such file" }))),
       `${discarded.result.verdict}/${discarded.result.rounds} / ${JSON.stringify(discarded.result.discardedPeerFindings)}`,
@@ -2621,7 +2622,7 @@ const PEER_LIFECYCLE_CHECKS = 23;
       if (!guard) return false;
       // eslint-disable-next-line no-new-func
       const pattern = new Function(`return ${guard[1]};`)();
-      return ["muse-contributor=on", "muse-contributor=off", "42 muse-contributor=off"].every((arg) => pattern.test(arg)) && !pattern.test("peer-opinions=off");
+      return ["muse-contributor=on", "muse-contributor=off", "42 muse-contributor=off"].every((arg) => pattern.test(arg)) && !pattern.test("peer-opinions=off") && !pattern.test("feature/muse-contributor=off");
     }),
     "muse-contributor refusal in the three entry scripts",
   );
