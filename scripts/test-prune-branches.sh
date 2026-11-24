@@ -306,7 +306,25 @@ git -C "$R" push -q -u origin rewritten
 git -C "$R" checkout -q -b wrongbase main
 commit "$R" b1
 git -C "$R" push -q -u origin wrongbase
+# stackbase sits under stacktop, which a merged PR settles; inreview is
+# reachable from the current branch and heads an open PR; nosubject has no
+# upstream, so only the default's "(#42)" subject can find its PR.
+git -C "$R" checkout -q -b stackbase main
+commit "$R" sb1
+git -C "$R" checkout -q -b stacktop
+commit "$R" st1
+git -C "$R" push -q -u origin stacktop
+git -C "$R" checkout -q -b nosubject main
+commit "$R" n1
 git -C "$R" checkout -q main
+commit "$R" "squash of nosubject (#42)"
+git -C "$R" push -q origin main
+git -C "$R" checkout -q -b standing main
+commit "$R" i1
+git -C "$R" branch inreview
+commit "$R" i2
+ST_OID="$(git -C "$R" rev-parse stacktop)"
+NS_OID="$(git -C "$R" rev-parse nosubject)"
 SQ_OID="$(git -C "$R" rev-parse squashed)"
 WB_OID="$(git -C "$R" rev-parse wrongbase)"
 FAKE="$(dirname "$R")/bin"
@@ -321,7 +339,11 @@ case "\$1 \$2" in
 	*"--head squashed "*) printf 'squashed\t$SQ_OID\tmain\n' ;;
 	*"--head rewritten "*) printf 'rewritten\t0000000000000000000000000000000000000000\tmain\n' ;;
 	*"--head wrongbase "*) printf 'wrongbase\t$WB_OID\trelease\n' ;;
+	*"--head stacktop "*) printf 'stacktop\t$ST_OID\tmain\n' ;;
+	*"--state open "*) printf 'inreview\t7\n' ;;
 	esac ;;
+"pr view")
+	[ "\$3" = 42 ] && printf 'MERGED\tnosubject\t$NS_OID\tmain\n' ;;
 esac
 EOF
 # `git remote get-url origin` answers with a GitHub-shaped URL; everything else
@@ -339,10 +361,48 @@ has "5: the selector is origin's own host and repository" "$OUT" "PR lookups: ex
 has "5: an exact head match on a merged PR is Merged" "$(row squashed)" "Merged"
 has "5: a merged PR with another head forces Uncertain" "$(row rewritten)" "different head"
 has "5: a merged PR into another base proves nothing" "$(row wrongbase)" "Uncertain"
+has "5: a branch under a PR-merged one is not kept alive by it" "$(row stackbase)" "Uncertain"
+has "5: a branch heading an open PR is Uncertain though the current branch contains it" "$(row inreview)" "open PR #7"
+has "5: a default-branch subject finds the PR of a branch with no upstream" "$(row nosubject)" "Merged"
 grep -q -- "--repo example.test/acme/widgets" "$FAKE/gh.log"
 ok "5: every PR query names the selector" $?
 ! grep "pr " "$FAKE/gh.log" | grep -qv -- "--repo example.test/acme/widgets"
 ok "5: ...with no exception" $?
+CASE_PATH="$REAL_PATH"
+
+# --- 5b. the subject fallback alone, and a branch that moves under apply -----
+new_repo main
+git -C "$R" checkout -q -b lonely main
+commit "$R" l1
+git -C "$R" checkout -q main
+commit "$R" "squash of lonely (#9)"
+git -C "$R" push -q origin main
+git -C "$R" branch racy main~2
+LO_OID="$(git -C "$R" rev-parse lonely)"
+FAKE="$(dirname "$R")/bin"
+mkdir -p "$FAKE"
+cat >"$FAKE/gh" <<EOF
+#!/usr/bin/env bash
+case "\$1 \$2" in
+"repo view") printf 'acme/widgets\thttps://example.test/acme/widgets\n' ;;
+"pr view") [ "\$3" = 9 ] && printf 'MERGED\tlonely\t$LO_OID\tmain\n' ;;
+esac
+EOF
+# This git moves `racy` in the instant before its deletion is attempted.
+cat >"$FAKE/git" <<EOF
+#!/usr/bin/env bash
+if [ "\$1 \$2 \$3" = "remote get-url origin" ]; then echo "https://example.test/acme/widgets.git"; exit 0; fi
+if [ "\$1 \$2 \$3" = "update-ref -d refs/heads/racy" ]; then "$REAL_GIT" update-ref refs/heads/racy "$LO_OID"; fi
+exec "$REAL_GIT" "\$@"
+EOF
+chmod +x "$FAKE/gh" "$FAKE/git"
+CASE_PATH="$FAKE:$REAL_PATH"
+plan
+has "5b: the subject fallback runs when no head lookup settled anything" "$(row lonely)" "Merged"
+apply --hands-off
+[ "$(git -C "$R" rev-parse --verify --quiet refs/heads/racy)" = "$LO_OID" ]
+ok "5b: a branch that moved just before its deletion survives at its new tip" $?
+has "5b: ...and is reported kept" "$OUT" "tip changed just before deletion"
 CASE_PATH="$REAL_PATH"
 
 # --- 6. a helper-owned worktree, through a fake wt-remove --------------------
@@ -374,6 +434,20 @@ ok "6: wt-remove was given the slug" $?
 exists refs/heads/dirty && [ -f "$R/.worktrees/box/dirty/file" ]
 ok "6: a dirty helper worktree keeps its branch and its files" $?
 has "6: ...and the report says why" "$OUT" "uncommitted or untracked files"
+git -C "$R" branch moved main~1
+git -C "$R" worktree add -q "$R/.worktrees/box/moved" moved
+git -C "$R" config branch.moved.description gone
+plan
+export CONTAINER_NAME=elsewhere
+apply --hands-off
+exists refs/heads/moved && [ -d "$R/.worktrees/box/moved" ]
+ok "6: a container renamed since the plan no longer owns the worktree" $?
+has "6: ...and the report says so" "$OUT" "no longer owns the worktree"
+export CONTAINER_NAME=box
+plan
+apply --hands-off
+! exists refs/heads/moved && ! git -C "$R" config --get branch.moved.description >/dev/null
+ok "6: a deleted branch takes its config section with it" $?
 unset CONTAINER_NAME
 CASE_PATH="$REAL_PATH"
 plan
@@ -381,6 +455,11 @@ has "6: without CONTAINER_NAME the same worktree needs approval" "$(row dirty)" 
 
 cmp -s "$HELPER" "$SCRIPT_DIR/../codex/dev-skills/skills/prune-branches/prune-branches.sh"
 ok "the Codex mirror ships the same helper, byte for byte" $?
+# The skill runs the helper by path, so the committed mode has to be executable.
+[ "$(git -c safe.directory='*' -C "$SCRIPT_DIR/.." ls-files -s -- '*/prune-branches/prune-branches.sh' | grep -c '^100755 ')" = 2 ]
+ok "both copies are committed executable" $?
+(cd "$R" && "$HELPER" --help >/dev/null 2>&1)
+ok "the helper runs by path" $?
 
 # --- 7. usage ----------------------------------------------------------------
 (cd "$R" && bash "$HELPER" frobnicate >/dev/null 2>&1)

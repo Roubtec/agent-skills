@@ -27,8 +27,9 @@
 # or a merged PR based on that default has exactly this tip as its head.
 # Transient: not merged, but the tip stays reachable from a ref that remains (a
 # protected branch, a `refs/pre-rebase/**` ref, or a branch this plan keeps), or
-# it is a merge commit whose parents all are. Uncertain: everything else; kept
-# unless `--delete-uncertain` names it. Every non-Merged deletion is preserved
+# it is a merge commit whose parents all are. Uncertain: everything else, and
+# any unmerged branch that heads an open PR in origin's repository; kept unless
+# `--delete-uncertain` names it. Every non-Merged deletion is preserved
 # first under `refs/pruned/<YYYYMMDD-UTC>/<branch>` (or the flat fallback
 # `refs/pruned/flat/<date>/<percent-encoded>`).
 #
@@ -266,6 +267,14 @@ kept_ref_containing() {
 		done
 }
 
+forced_verdict() { # branch
+	awk -F'\t' -v b="$1" '$1 == b { print $2; exit }' "$WORK/forced.tsv"
+}
+
+is_candidate() { # branch
+	awk -F'\t' -v b="$1" '$2 == b { found = 1 } END { exit !found }' "$WORK/cand.tsv"
+}
+
 classify_branches() {
 	local tip name upstream track
 	: >"$WORK/cand.tsv"
@@ -304,7 +313,7 @@ classify_branches() {
 		git log -n 200 --format='%s' "$DEFAULT_OID" | grep -oE '#[0-9]+' | tr -d '#' | awk '!s[$0]++' | head -n 20 >"$WORK/prnums"
 		while IFS= read -r num; do
 			# Stop once every candidate is settled.
-			seen="$(awk -F'\t' 'NR == FNR { f[$1] = 1; next } !($2 in f) { c++ } END { print c + 0 }' "$WORK/forced.tsv" "$WORK/cand.tsv")"
+			seen="$(awk -F'\t' 'FILENAME == ARGV[1] { f[$1] = 1; next } !($2 in f) { c++ } END { print c + 0 }' "$WORK/forced.tsv" "$WORK/cand.tsv")"
 			[ "$seen" -gt 0 ] || break
 			out="$(gh pr view "$num" --repo "$ORIGIN_SELECTOR" --json state,headRefName,headRefOid,baseRefName \
 				--jq '[.state, .headRefName, .headRefOid, .baseRefName] | @tsv' 2>/dev/null)" || continue
@@ -321,13 +330,26 @@ EOF
 				printf '%s\tUncertain\n' "$head" >>"$WORK/forced.tsv"
 			fi
 		done <"$WORK/prnums"
+		# A branch that heads an open PR in origin's repository is still in
+		# review: it is kept unless named, however reachable its tip is.
+		gh pr list --repo "$ORIGIN_SELECTOR" --state open --limit 200 --json number,headRefName,isCrossRepository \
+			--jq '.[] | select(.isCrossRepository | not) | [.headRefName, .number] | @tsv' 2>/dev/null |
+			while IFS="$TAB" read -r head num; do
+				awk -F'\t' -v b="$head" '$1 == b { found = 1 } END { exit !found }' "$WORK/forced.tsv" && continue
+				printf '%s\tOpen\t%s\n' "$head" "$num" >>"$WORK/forced.tsv"
+			done
 	fi
 
 	# Strict containment among the remaining candidates: a candidate whose tip is
 	# a proper ancestor of another candidate's tip survives through that one.
 	local verdict proof parents p ok others o otip first
 	while IFS="$TAB" read -r tip name upstream; do
-		verdict="$(awk -F'\t' -v b="$name" '$1 == b { print $2; exit }' "$WORK/forced.tsv")"
+		verdict="$(forced_verdict "$name")"
+		if [ "$verdict" = Open ]; then
+			p="$(awk -F'\t' -v b="$name" '$1 == b { print $3; exit }' "$WORK/forced.tsv")"
+			printf 'Uncertain\t%s\t%s\topen PR #%s has this branch as its head\n' "$name" "$tip" "$p" >>"$WORK/rows.tsv"
+			continue
+		fi
 		if [ "$verdict" = Merged ]; then
 			printf 'Merged\t%s\t%s\tmerged PR into %s has exactly this tip as its head\n' "$name" "$tip" "$DEFAULT_NAME" >>"$WORK/rows.tsv"
 			continue
@@ -361,7 +383,10 @@ EOF
 		others="$(git for-each-ref --contains "$tip" --format='%(objectname)%09%(refname:strip=2)' refs/heads/)"
 		while IFS="$TAB" read -r otip o; do
 			[ -n "$o" ] && [ "$o" != "$name" ] || continue
-			awk -F'\t' -v b="$o" '$2 == b { found = 1 } END { exit !found }' "$WORK/cand.tsv" || continue
+			is_candidate "$o" || continue
+			# A candidate a merged PR settles is deleted by this plan, so it
+			# keeps nothing alive.
+			[ "$(forced_verdict "$o")" != Merged ] || continue
 			if [ "$otip" = "$tip" ]; then
 				# Same tip: the earliest name is the one kept.
 				[ -n "$first" ] || { [ "$o" \< "$name" ] && first="$o"; }
@@ -740,6 +765,15 @@ reserve_ref() {
 }
 
 # Why a linked worktree may not be removed, or nothing when it may.
+# Where the current container's wt-remove would look for a slug, or nothing.
+helper_path() { # slug
+	local root
+	command -v wt-remove >/dev/null 2>&1 || return 0
+	case "${CONTAINER_NAME:-}" in "" | . | .. | */*) return 0 ;; esac
+	root="$(dirname "$(canon "$(git rev-parse --git-common-dir)")")"
+	canon "$root/.worktrees/$CONTAINER_NAME/$1"
+}
+
 worktree_blocker() { # path branch
 	local path="$1" branch="$2" row gd m
 	row="$(git worktree list --porcelain | awk -v p="worktree $path" '$0 == p { on = 1; next } on && /^$/ { exit } on { print }')"
@@ -887,7 +921,13 @@ cmd_apply() {
 			blocker="$(worktree_blocker "$path" "$name")"
 			if [ -z "$blocker" ]; then
 				if [ "$kind" = helper ]; then
-					(cd "$top" && wt-remove "$slug") >/dev/null 2>&1 || blocker="wt-remove refused"
+					# wt-remove resolves the slug under the current container's
+					# root, so that must still be the worktree the plan saw.
+					if [ "$(helper_path "$slug")" != "$path" ]; then
+						blocker="this container no longer owns the worktree"
+					else
+						(cd "$top" && wt-remove "$slug") >/dev/null 2>&1 || blocker="wt-remove refused"
+					fi
 				else
 					git worktree remove "$path" >/dev/null 2>&1 || blocker="git worktree remove refused"
 				fi
@@ -899,15 +939,17 @@ cmd_apply() {
 			fi
 			printf 'removed\t%s\t-\n' "$path" >>"$work/wt.tsv"
 		fi
-		cur="$(git rev-parse --verify --quiet "refs/heads/$name")" || cur=""
-		if [ "$cur" != "$tip" ]; then
-			printf 'Uncertain\t%s\t%s\ttip changed just before deletion%s\n' "$name" "$tip" "${cur:+ (now $cur)}" >>"$work/kept.tsv"
+		if git worktree list --porcelain | grep -Fqx "branch refs/heads/$name"; then
+			printf 'Uncertain\t%s\t%s\tchecked out in a worktree\n' "$name" "$tip" >>"$work/kept.tsv"
 			continue
 		fi
-		if git branch -D -- "$name" >/dev/null 2>&1; then
+		# The expected old value makes the deletion and the tip check one step.
+		if git update-ref -d "refs/heads/$name" "$tip" >/dev/null 2>&1; then
+			git config --remove-section "branch.$name" >/dev/null 2>&1 || true
 			printf '%s\t%s\t%s\t%s\n' "$bucket" "$name" "$tip" "$ref" >>"$work/deleted.tsv"
 		else
-			printf '%s\t%s\t%s\tgit branch -D failed\n' "$bucket" "$name" "$tip" >>"$work/kept.tsv"
+			cur="$(git rev-parse --verify --quiet "refs/heads/$name")" || cur=""
+			printf 'Uncertain\t%s\t%s\ttip changed just before deletion%s\n' "$name" "$tip" "${cur:+ (now $cur)}" >>"$work/kept.tsv"
 		fi
 	done <"$work/todo2.tsv"
 

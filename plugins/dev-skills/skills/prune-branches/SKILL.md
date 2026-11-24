@@ -30,7 +30,7 @@ Do not reproduce its steps by hand, and do not run any branch, ref, or worktree 
   Deleted without a backup ref.
 - **Transient** — not merged, but the tip stays reachable from a ref that remains: a protected branch, a `refs/pre-rebase/**` ref, a branch this run keeps, or a merge commit whose parents all are.
   Deleted behind a recovery ref.
-- **Uncertain** — everything else.
+- **Uncertain** — everything else, and any unmerged branch that heads an open PR, however reachable its tip.
   Kept unless the user names the branch for deletion in this run.
 - **Protected** — the default, the current branch, and the user's keeps.
 
