@@ -26,7 +26,7 @@ scripts/
   test-storage-probe-target.mjs         # regression coverage for the batch workflow's df-probe targeting and throttle retention
   test-collision-discovery.mjs          # behavior coverage for the batch workflow's discovery-stage collision partition
   test-collision-dispatch.mjs           # behavior coverage for the batch workflow's pre-PR collision dispatch
-  test-subagent-destroy-boundary.mjs    # asserts the destroy boundary and the output-destination rule over every rendered subagent brief, and guards both, plus the disposable-clone bullet, where they ship as skill prose
+  test-subagent-destroy-boundary.mjs    # asserts the destroy boundary and the output-destination rule over every rendered subagent brief, guards the destination rule where it ships as skill prose and the disposable-clone bullet in the subagent-boundary.md file beside each brief, and holds that file to byte-identical copies each brief names
   test-unreviewed-close-carriage.mjs    # asserts each consumer carries a cycle that concluded with no fresh reviewer through to the maintainer
   test-address-review-reconcile.mjs     # behavior coverage for the review-addressing workflow's reconciliation and location gates, delegated rebase points, publication guard, and disposition record
   test-skill-worktree-base-exclude.mjs  # asserts the skill steps that make the worktree base ignored carry the workflow's own recipe
@@ -180,11 +180,13 @@ It drives the shipped `review-cycle-core` section of both workflows through scri
 
 ### `test-subagent-destroy-boundary.mjs`
 
-Run `node scripts/test-subagent-destroy-boundary.mjs` after changing any workflow prompt, any skill brief that tells a subagent where its build or validation output goes, or the disposable-clone bullet the skill briefs ship.
+Run `node scripts/test-subagent-destroy-boundary.mjs` after changing any workflow prompt, any skill brief that tells a subagent where its build or validation output goes, or the `subagent-boundary.md` file that carries the destroy boundary's disposable-clone bullet beside each skill that sends subagents to it.
 
 It renders every brief the three workflows hand a spawned subagent — discovering the set from their own `agent()` call sites — and fails when a render is missing the destroy boundary, when a new prompt builder has no rendered case, when the cut-marker map and the workflows on disk disagree in either direction, when the three out-of-section boundary constants have drifted apart, or when a workflow's deputy copy of the finish-in-turn rule has drifted from the review cycle's, is interpolated without a declaration the check can read, or has stopped existing anywhere in the directory.
 
-Over those same renders it carries task 017's other rule — a brief that orders a build or validation must name a destination for output redirected to a file — and it deletion-guards that rule, and the destroy boundary's own disposable-clone bullet, where they ship as `SKILL.md` prose in both skill mirrors instead and there is nothing to render. A census over every skill in either mirror sorts the shipped clauses into the four categories that reconcile the counts.
+Over those same renders it carries task 017's other rule — a brief that orders a build or validation must name a destination for output redirected to a file — and it deletion-guards that rule, which ships as `SKILL.md` prose in both skill mirrors and has nothing to render, alongside the destroy boundary's own disposable-clone bullet, which now ships in a `subagent-boundary.md` file beside each `SKILL.md` that sends subagents to it and which the census reads as part of the brief. A census over every skill in either mirror sorts the shipped clauses into the four categories that reconcile the counts.
+
+It also holds the boundary file itself to the two things that census cannot see: every shipped copy is byte-identical across both mirrors, and a brief names `subagent-boundary.md` exactly when it ships one — neither a brief that names the file without shipping it, nor a file shipped beside a brief that never names it.
 
 Read the prose half as a deletion guard rather than as parity with the rendered checks: a call is syntax, so a new builder is discovered, while a new prose brief that orders a build and names no destination has nothing to be discovered by. The script's header states each check's premise, every accepted miss, and what every empty collection does — including the cases that reported a pass until they were demonstrated.
 
