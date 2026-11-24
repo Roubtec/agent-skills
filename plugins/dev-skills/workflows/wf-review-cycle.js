@@ -85,13 +85,16 @@
  * below, today `codex` and `muse`. Every entry gets the same prompt, answers in
  * the same shape, and is read, gated, grounded, and relayed on the same terms,
  * so adding a reviewer is one roster entry (plus the `peer-review-run` provider
- * it names) and touches no control flow and no consumer. The stages are
+ * it names) and touches no control flow, here or in a consumer. The stages are
  * independent: each has its own preflight, its own availability state, and its
  * own artifact directory, and each ends in a result whatever happened to it. A
  * provider that is logged out, out of quota, rate-limited, or slow therefore
- * costs the round at most its own helper timeout — the round waits for the
- * slowest stage, not their sum — and never its verdict. An `unavailable`
- * provider is not asked again for the rest of the run. A provider marked
+ * costs the round at most its own stage — the round waits for the slowest
+ * one, not their sum — and never its verdict. A stage's review launch is
+ * bounded by the `peer-review-run` timeout (by the manual launch's own, where a
+ * provider has one and takes it); the cheap preflight before it and any wait
+ * in the throttle's queue sit outside that bound. An `unavailable` provider is
+ * not asked again for the rest of the run. A provider marked
  * `quietWhenAbsent` (muse: most containers do not carry it) is dropped without
  * a trace where its binary is missing, so a container without it reports
  * exactly what it reported before the roster existed.
@@ -148,8 +151,8 @@
 // title silently splits the progress display into an extra group.
 export const meta = {
   name: "wf-review-cycle",
-  description: "Run the canonical review cycle on one change: implement/fix, verify with a fresh-eyes reviewer AND best-effort cross-harness peer reviews each round (codex, plus muse where the container carries it), dispose every finding explicitly (fixed / declined / escalated to an open question), and loop to convergence (max 12 reviewer rounds; callers may lower the cap, never raise it). Peer outcomes never block.",
-  whenToUse: "Run a local fix->review->peer->fix cycle — review is cross-harness, best-effort codex and muse peers beside the fresh reviewer — on a worktree, branch, diff, or drafted task file before a PR exists, or consume it from another workflow by nesting or by embedding its marked section. Not for addressing PR review threads (wf-address-review) or task batches (wf-address-tasks); those consume this cycle themselves.",
+  description: "Run the canonical review cycle on one change: implement/fix, verify with a fresh-eyes reviewer AND best-effort cross-harness peer reviews each round, dispose every finding explicitly (fixed / declined / escalated to an open question), and loop to convergence (max 12 reviewer rounds; callers may lower the cap, never raise it). Peer outcomes never block.",
+  whenToUse: "Run a local fix->review->peer->fix cycle — review is cross-harness, best-effort peers beside the fresh reviewer — on a worktree, branch, diff, or drafted task file before a PR exists, or consume it from another workflow by nesting or by embedding its marked section. Not for addressing PR review threads (wf-address-review) or task batches (wf-address-tasks); those consume this cycle themselves.",
   phases: [
     { title: "Scope", detail: "resolve the target worktree, branch, base, artifact type, and work items" },
     { title: "Review cycle", detail: "fixer -> fresh-eyes reviewer rounds with explicit finding dispositions" },
@@ -417,8 +420,11 @@ function cycleDeviationVerdict(recommendation) {
 // The peer roster: every cross-harness reviewer a round may ask, in report
 // order. Adding a reviewer is ONE entry here plus the `peer-review-run`
 // provider it names — the preflight, the stage, the gate, the relay, the
-// throttle, and the result all iterate this list, so nothing else in the
-// section and nothing in a consumer names a provider. Every entry is asked the
+// throttle, and the result all iterate this list, so no control flow in the
+// section or in a consumer names a provider. What follows an entry is
+// mechanical: refresh the embedded copy of this section, and give the new
+// provider its cases in scripts/test-subagent-destroy-boundary.mjs, which
+// fails until it has them. Every entry is asked the
 // same question with the same prompt and answers in the same shape, which is
 // what keeps the roster a list rather than a matrix: a provider differs only in
 // the fields below.
@@ -488,11 +494,12 @@ const CYCLE_PEER_PROVIDERS = [
 ];
 
 // Step 5 for a provider with no manual launch. A helper that predates the
-// provider answers its call with a usage error and no result line; that and a
-// missing helper both come back `unavailable`, which is sticky, so the cycle
-// stops asking for the rest of the run rather than failing the same way every
-// round.
-const CYCLE_PEER_NO_MANUAL_LAUNCH = `5. There is no manual launch for this provider, so \`fallbackReason\` stays empty. When \`command -v peer-review-run\` fails, or the helper answers the step-4 call with a usage error and no result line (a helper that predates this provider), return \`unavailable\` with a \`detail\` saying which.`;
+// provider rejects its `--provider` value with a usage error and no result
+// line; that and a missing helper both come back `unavailable`, which is
+// sticky, so the cycle stops asking for the rest of the run rather than failing
+// the same way every round. Only that usage error means so: any other is the
+// call's own mistake, and making it sticky would silence a working provider.
+const CYCLE_PEER_NO_MANUAL_LAUNCH = `5. There is no manual launch for this provider, so \`fallbackReason\` stays empty. When \`command -v peer-review-run\` fails, or the helper rejects the \`--provider\` value itself with a usage error and no result line (a helper that predates this provider), return \`unavailable\` with a \`detail\` saying which. Any other usage error is a mistake in the call rather than a missing provider: return \`failed\` with the error as \`detail\`.`;
 
 // Peer-stage result. `outcome` uses the peer-review-run vocabulary
 // (powbox.peer-review-run/v1), so a helper result carries straight into this
@@ -932,15 +939,14 @@ Return \`pass: true\` only if everything holds and no material issue remains; el
 }
 
 // The peer invocation happens INSIDE this subagent prompt, never in the
-// script (a workflow cannot shell out). Primary: the `peer-review-run` helper
-// (schema powbox.peer-review-run/v1), run once in the foreground, its review
-// read from the result's `reviewFile`. Fallback: the hardened raw launch, taken
-// only when the helper is absent or its passed/issues result carries no usable
-// `reviewFile`. See the header comment. Both pin review effort per invocation
-// (`--effort medium` / `-c model_reasoning_effort=medium`); the model is the
-// peer's configured high-capability default from ${CODEX_HOME:-~/.codex}/config.toml, which
-// the helper passes through and the raw launch reads directly. Neither writes
-// back to saved configuration.
+// script (a workflow cannot shell out). Every provider launches through the
+// `peer-review-run` helper (schema powbox.peer-review-run/v1), run once in the
+// foreground at `--effort medium`, its review read from the result's
+// `reviewFile`. What differs per provider comes from its roster entry: why no
+// `--model` is passed, and whether a manual launch exists as a fallback —
+// taken only when the helper is absent or its passed/issues result carries no
+// usable `reviewFile` — or the helper is the only route. See the header
+// comment. No launch writes back to saved configuration.
 function cyclePeerPrompt(cycle, state, provider) {
   const manual = !!provider.manualLaunch;
   const evidence = {
@@ -966,22 +972,22 @@ ${cycleContract(cycle, "peer")}
 
 ${CYCLE_DESTROY_BOUNDARY}
 
-The peer examines this worktree READ-ONLY; you edit nothing either. The cycle's fresh reviewer is examining the same committed state concurrently — two readers are safe, and the reviewer alone owns builds/execution.
+The peer examines this worktree READ-ONLY; you edit nothing either. The cycle's fresh reviewer is examining the same committed state concurrently, as may another peer's stage — readers are safe beside each other, and the reviewer alone owns builds/execution.
 
 ${CYCLE_FINISH_IN_TURN} ${manual ? "The primary path runs the helper in the foreground and returns when it does; the fallback path launches a supervised background peer, waits or times it out, and reaps it inside this turn. Either way you return the peer's outcome, never a promise to report it later." : "The helper runs in the foreground and returns when it does, so you return the peer's outcome in this turn, never a promise to report it later."}
 
 ## Steps
 
 ${preflightStep}
-2. Prepare unique per-attempt paths under this cycle's artifact directory: \`round_dir=${cycleShq(`${state.artifactDir}/round-${state.round}/peer-${provider.id}`)}\`, \`mkdir -p "$round_dir"\`, with \`prompt_file\` and \`artifact_root\` (a directory of your own beneath \`$round_dir\` — outside the reviewed worktree by construction, and the helper creates its private per-invocation session directory under it) inside it${manual ? ", plus, for the fallback only, \`outfile\`, \`stderr_file\`, and \`pid_file\` (suffix \`-attempt2\` on a fallback retry; never reuse a path)" : ""}. Another peer's stage is running beside this one with a directory of its own; stay inside yours.
+2. Set \`worktree\` to the absolute worktree path the contract above names, then prepare unique per-attempt paths under this cycle's artifact directory: \`round_dir=${cycleShq(`${state.artifactDir}/round-${state.round}/peer-${provider.id}`)}\`, \`mkdir -p "$round_dir"\`, with \`prompt_file\` and \`artifact_root\` (a directory of your own beneath \`$round_dir\` — outside the reviewed worktree by construction, and the helper creates its private per-invocation session directory under it) inside it${manual ? ", plus, for the fallback only, \`outfile\`, \`stderr_file\`, and \`pid_file\` (suffix \`-attempt2\` on a fallback retry; never reuse a path)" : ""}. Another peer's stage is running beside this one with a directory of its own; stay inside yours.
 3. Write the peer prompt below VERBATIM to \`$prompt_file\` with a quoted heredoc (\`<<'PEER_PROMPT'\`) — never assemble it through shell interpolation.
-4. Primary launch, when \`command -v peer-review-run\` succeeds: run \`peer-review-run --provider ${provider.id} --worktree "$worktree" --prompt-file "$prompt_file" --artifact-root "$artifact_root" --timeout 260 --effort medium\` exactly once, in the foreground, inside this Peer stage. Set the caller-side Bash/tool wait to at least 570 seconds but strictly below its roughly 600-second cap: the helper may make two 260-second attempts and spend roughly five seconds reaping each one, leaving at least 40 seconds for setup, parsing, and result emission. Pass \`--effort medium\` explicitly (the helper's own default is \`high\`) and no \`--model\`: ${provider.modelNote} Do not background, poll, retry, or signal it; the helper owns timeout, transient-only retry, provider-tree reaping, and the final one-line JSON result. Read ONLY the final stdout line, require \`schema\` \`powbox.peer-review-run/v1\`, and carry its \`outcome\` and \`reason\` exactly. Set \`strength\` to \`model=<model> effort=<effort>\` exactly as the result reports them, a null written as \`null\`${provider.nullModelNote}. For a \`passed\` or \`issues\` result, \`reviewFile\` is the peer's complete review as plain text: it must be non-null and name a readable file, and you read that file in full and apply step 6 to its bytes. A \`passed\`/\`issues\` result whose \`reviewFile\` is null or names a file that is not there is a result this stage cannot relay verbatim, whatever produced it: ${manual ? "take the fallback in step 5 for this round with \`fallbackReason\` exactly \`helper result carried no usable reviewFile\`" : "return \`forfeited\` with \`detail\` exactly \`helper result carried no usable reviewFile\`"}. Never enumerate \`artifactDir\`, guess a filename below it, or parse a provider-specific envelope. Every other helper outcome (\`unavailable\`, \`timeout\`, \`forfeited\`, \`failed\`) is returned as reported, with its \`reason\` verbatim and \`fallbackReason\` empty.
+4. ${manual ? "Primary launch" : "Launch"}, when \`command -v peer-review-run\` succeeds: run \`peer-review-run --provider ${provider.id} --worktree "$worktree" --prompt-file "$prompt_file" --artifact-root "$artifact_root" --timeout 260 --effort medium\` exactly once, in the foreground, inside this Peer stage. Set the caller-side Bash/tool wait to at least 570 seconds but strictly below its roughly 600-second cap: the helper may make two 260-second attempts and spend roughly five seconds reaping each one, leaving at least 40 seconds for setup, parsing, and result emission. Pass \`--effort medium\` explicitly (the helper's own default is \`high\`) and no \`--model\`: ${provider.modelNote} Do not background, poll, retry, or signal it; the helper owns timeout, transient-only retry, provider-tree reaping, and the final one-line JSON result. Read ONLY the final stdout line, require \`schema\` \`powbox.peer-review-run/v1\`, and carry its \`outcome\` and \`reason\` exactly. Set \`strength\` to \`model=<model> effort=<effort>\` exactly as the result reports them, a null written as \`null\`${provider.nullModelNote}. For a \`passed\` or \`issues\` result, \`reviewFile\` is the peer's complete review as plain text: it must be non-null and name a readable file, and you read that file in full and apply step 6 to its bytes. A \`passed\`/\`issues\` result whose \`reviewFile\` is null or names a file that is not there is a result this stage cannot relay verbatim, whatever produced it: ${manual ? "take the fallback in step 5 for this round with \`fallbackReason\` exactly \`helper result carried no usable reviewFile\`" : "return \`forfeited\` with \`detail\` exactly \`helper result carried no usable reviewFile\`"}. Never enumerate \`artifactDir\`, guess a filename below it, or parse a provider-specific envelope. Every other helper outcome (\`unavailable\`, \`timeout\`, \`forfeited\`, \`failed\`) is returned as reported, with its \`reason\` verbatim and \`fallbackReason\` empty.
 ${provider.manualLaunch || CYCLE_PEER_NO_MANUAL_LAUNCH}
 6. Read the review — the bytes of \`$reviewFile\`${manual ? " on the helper path, or \`$outfile\` on the fallback, even when the liveness probe has just gone dead" : ""}: a non-empty review with a \`VERDICT:\` line is authoritative. A \`VERDICT: PASS\` line → outcome \`passed\`. A \`VERDICT: ISSUES\` line → outcome \`issues\`, with every numbered finding mapped verbatim into \`findings\` (severity from its \`blocking\`/\`minor\` tag — default \`blocking\` when untagged — plus its \`file:line\` as \`location\` and the finding text as \`claim\`; do not summarize, merge, or rewrite). For either verdict, copy into \`notes\` ONLY valid bullets immediately below the exact \`NOTES (advisory; not necessarily fixes)\` heading: at most three \`- path:line — note\` lines whose note is at most 15 words. Preserve those bullets verbatim; ignore malformed, surplus, or over-budget entries and all other prose, including the verification line and findings. With no valid bullets, return empty \`notes\`. ${manual ? "The same extraction applies to both sources — the documented \`reviewFile\` payload only on the helper path" : "Read the documented \`reviewFile\` payload and nothing else"}; never enumerate \`artifactDir\`, guess a filename, or parse a provider-specific envelope. No verdict line, or empty/unintelligible output → \`forfeited\`, with \`reason\` exactly identifying \`empty output\` or \`garbled output\` where that is what happened. A timeout after retry is \`timeout\`; a provider crash or exhausted non-auth retry is \`failed\`. Every outcome carries \`reason\`: the provider diagnostic verbatim where one exists, otherwise the empty string — never omitted, and never invented.
 
 ## Peer prompt (write this text to the prompt file verbatim, filling only the placeholders)
 
-You are an independent read-only peer reviewer. Review the committed state of branch ${JSON.stringify(cycle.branch)} against base ${JSON.stringify(cycle.base)} in the current directory (artifact type: ${cycle.artifactType}). Read the actual files; edit nothing; use no network access — all GitHub thread text and diffs needed for the review are embedded here verbatim. You are running in a READ-ONLY sandbox: do not build, test, typecheck, or try to work around that — it is not your job, and attempting it only burns your time budget. Validation is covered elsewhere: the implementer validated its commits at this round's tier before handing them over (treat that as a carried claim unless the evidence below says what ran), a separate fresh reviewer is executing the round's build/typecheck concurrently, and CI gates anything skipped locally. What you owe is your opinion, judged statically from the files, on the quality of the fix in relation to the work items and any proposed dispositions below: does the committed code actually satisfy them, and is a declined finding technically justified?${commentWeighting} ${CYCLE_CARRIED_CLAIMS} Evidence (verbatim):
+You are an independent read-only peer reviewer. Review the committed state of branch ${JSON.stringify(cycle.branch)} against base ${JSON.stringify(cycle.base)} in the current directory (artifact type: ${cycle.artifactType}). Read the actual files; edit nothing; use no network access — all GitHub thread text and diffs needed for the review are embedded here verbatim. This review is READ-ONLY, and the checkout is shared with other agents working in it at this moment: builds, tests, typechecks, and file changes of any kind are out of scope, whether a sandbox stops you or only this sentence does. Do not attempt them or try to work around the restriction — it is not your job, and attempting it only burns your time budget. Validation is covered elsewhere: the implementer validated its commits at this round's tier before handing them over (treat that as a carried claim unless the evidence below says what ran), a separate fresh reviewer is executing the round's build/typecheck concurrently, and CI gates anything skipped locally. What you owe is your opinion, judged statically from the files, on the quality of the fix in relation to the work items and any proposed dispositions below: does the committed code actually satisfy them, and is a declined finding technically justified?${commentWeighting} ${CYCLE_CARRIED_CLAIMS} Evidence (verbatim):
 
 ${JSON.stringify(evidence, null, 2)}
 
@@ -1198,14 +1204,16 @@ function cyclePeerThrottleSummary(throttle) {
 
 // One provider's stage for one round. The round launches one of these per
 // roster entry beside the reviewer and awaits them together, so the wait is the
-// slowest stage, never their sum, and each stage is bounded by the helper's own
-// timeout inside it. `absent` is the one result that is not a round outcome: the
-// round loop drops it without an entry.
+// slowest stage, never their sum. `absent` is the one result that is not a
+// round outcome: the round loop drops it without an entry.
+//
+// The stage also owns its provider's availability state, written the moment the
+// result is in rather than when the round that launched it ends: under a shared
+// peerState a sibling cycle's launch may be queued behind this one, and it reads
+// the state when its slot comes up.
 async function runCyclePeerStage(cycle, state, provider) {
-  if (cycle.peer === "off") {
-    return { outcome: "disabled", findings: [], notes: "", detail: "peer-opinions=off" };
-  }
-  const preflight = await ensureCyclePeerPreflight(cyclePeerProviderState(state.peerState, provider), provider);
+  const providerState = cyclePeerProviderState(state.peerState, provider);
+  const preflight = await ensureCyclePeerPreflight(providerState, provider);
   if (preflight.outcome === "absent") {
     return { outcome: "absent", findings: [], notes: "", detail: "" };
   }
@@ -1217,6 +1225,14 @@ async function runCyclePeerStage(cycle, state, provider) {
   }
   const launchGeneration = await acquireCyclePeerSlot(state.peerThrottle);
   let result;
+  // Read again once the slot is held: a launch that waited in the throttle's
+  // queue may have been overtaken by a sibling's that found the provider
+  // unusable, and asking it again would only fail the same way.
+  if (providerState.unavailable) {
+    result = { outcome: "unavailable", findings: [], notes: "", detail: providerState.unavailableDetail || "peer marked unavailable earlier this run" };
+    releaseCyclePeerSlot(state.peerThrottle, launchGeneration, result);
+    return result;
+  }
   try {
     const res = await agent(cyclePeerPrompt(cycle, state, provider), {
       label: `${cycle.labelPrefix || ""}peer:${provider.id}#${state.round}`,
@@ -1229,6 +1245,17 @@ async function runCyclePeerStage(cycle, state, provider) {
     result = { outcome: "forfeited", findings: [], notes: "", reason: "", detail: `peer stage threw (${e && e.message ? e.message : String(e)}); recorded non-blocking`, synthesized: true };
   }
   releaseCyclePeerSlot(state.peerThrottle, launchGeneration, result);
+  if (result.outcome === "unavailable") {
+    providerState.unavailable = true;
+    if (result.detail && !providerState.unavailableDetail) providerState.unavailableDetail = result.detail;
+  } else if (!result.synthesized) {
+    // The preflight is demonstrably done only when a peer SUBAGENT actually
+    // reported back. A script-synthesized forfeit (dead/schema-failed
+    // subagent, thrown stage) proves nothing ran, so the next round must still
+    // probe rather than skip on a false "an earlier round verified the binary
+    // and login".
+    providerState.preflighted = true;
+  }
   return result;
 }
 
@@ -1559,7 +1586,8 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     one, which is the shape that used to lose the judged one outright),
 //   proactive, finalSha, notes, reviewerNotes,
 //   peerRounds ({ round, provider, outcome, detail, reason } entries — one per
-//     answering roster provider per round, in roster order, or a single
+//     roster provider per round whatever its outcome, in roster order (none
+//     for a quiet provider the container does not carry), or a single
 //     provider-less `disabled` entry per round with the peers off — where `detail`
 //     appends only the peer prompt's bounded advisory bullets when present,
 //     plus `strength` (the model/effort the helper result reports) and
@@ -2229,17 +2257,6 @@ async function runReviewCycle(cycle) {
         providerState.fallbackReason = peer.fallbackReason;
         log(`peer (${provider.id}) round ${rounds}: manual fallback taken — ${peer.fallbackReason}`);
       }
-      if (peer.outcome === "unavailable") {
-        providerState.unavailable = true;
-        if (peer.detail && !providerState.unavailableDetail) providerState.unavailableDetail = peer.detail;
-      } else if (!peer.synthesized) {
-        // The preflight is demonstrably done only when a peer SUBAGENT actually
-        // reported back. A script-synthesized forfeit (dead/schema-failed
-        // subagent, thrown stage, null parallel slot) proves nothing ran, so the
-        // next round must still probe rather than skip on a false "an earlier
-        // round verified the binary and login".
-        providerState.preflighted = true;
-      }
     }
     // The one peer condition that is not non-blocking, checked before anything
     // else this round produced and after EVERY peer's entry is recorded, so the
@@ -2275,7 +2292,10 @@ async function runReviewCycle(cycle) {
       if (ground && Array.isArray(ground.verdicts)) {
         const ungrounded = ground.verdicts.filter((v) => v && v.grounded === false);
         if (ungrounded.length) {
-          for (const u of ungrounded) discardedPeerFindings.push({ round: rounds, finding: u.finding, why: u.why || "" });
+          for (const u of ungrounded) {
+            const from = peerGating.find((f) => f.claim === u.finding);
+            discardedPeerFindings.push({ round: rounds, ...(from ? { provider: from.provider } : {}), finding: u.finding, why: u.why || "" });
+          }
           const dropped = new Set(ungrounded.map((v) => v.finding));
           peerGating = peerGating.filter((f) => !dropped.has(f.claim));
         }

@@ -96,7 +96,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 226;
+const CHECKS_PER_LEG = 229;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -2047,7 +2047,7 @@ for (const name of WORKFLOWS) {
         if (label === "fix#3") return { ...idle };
         if (label.startsWith("packet#")) return { measured: true, dirty: [], operation: "", detail: "" };
         if (label.startsWith("review#")) return { ...OK };
-        if (label.startsWith("ground#")) return { verdicts: [] };
+        if (label.startsWith("ground#")) return peers[label] || { verdicts: [] };
         const script = peers[label];
         if (script instanceof Error) throw script;
         return script === undefined ? null : JSON.parse(JSON.stringify(script));
@@ -2100,8 +2100,9 @@ for (const name of WORKFLOWS) {
     const musePrompt = both.prompts["peer:muse#1"] || "";
     const codexPrompt = both.prompts["peer:codex#1"] || "";
     check(
-      "each stage launches its own provider from a directory of its own",
-      /peer-review-run --provider muse --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --effort medium/.test(musePrompt) &&
+      "each stage launches its own provider, on the worktree it is told to name, from a directory of its own",
+      [musePrompt, codexPrompt].every((p) => /2\. Set `worktree` to the absolute worktree path the contract above names/.test(p)) &&
+        /peer-review-run --provider muse --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --effort medium/.test(musePrompt) &&
         !/--provider codex/.test(musePrompt) && /round-1\/peer-muse'/.test(musePrompt) &&
         /--provider codex /.test(codexPrompt) && !/--provider muse/.test(codexPrompt) && /round-1\/peer-codex'/.test(codexPrompt),
       "launch line and round directory per provider",
@@ -2110,7 +2111,9 @@ for (const name of WORKFLOWS) {
       "a provider with no manual launch gets none: no raw launch, no fallback trigger, and a missing or too-old helper is unavailable",
       !/nohup/.test(musePrompt) && !/codex exec/.test(musePrompt) && !/`fallbackReason` exactly `/.test(musePrompt) &&
         /5\. There is no manual launch for this provider/.test(musePrompt) &&
-        /a usage error and no result line \(a helper that predates this provider\), return `unavailable`/.test(musePrompt) &&
+        /the helper rejects the `--provider` value itself with a usage error and no result line \(a helper that predates this provider\), return `unavailable`/.test(musePrompt) &&
+        /Any other usage error is a mistake in the call rather than a missing provider: return `failed`/.test(musePrompt) &&
+        /4\. Launch, when `command -v peer-review-run` succeeds/.test(musePrompt) && !/Primary launch/.test(musePrompt) &&
         /return `forfeited` with `detail` exactly `helper result carried no usable reviewFile`/.test(musePrompt) &&
         /nohup sh -c '/.test(codexPrompt),
       "helper-only stage shape",
@@ -2125,6 +2128,55 @@ for (const name of WORKFLOWS) {
       "every provider is asked the same question in the same words",
       peerPromptOf(musePrompt).length > 500 && peerPromptOf(musePrompt) === peerPromptOf(codexPrompt),
       `${peerPromptOf(musePrompt).length}/${peerPromptOf(codexPrompt).length}`,
+    );
+
+    // The round waits for its slowest stage, not their sum: the reviewer and
+    // every provider's stage are in flight together. Each of the three holds
+    // until all three have been entered, so a round that launched them one
+    // after another could never release the first — the timer is what turns
+    // that deadlock into a failed check rather than a hung suite.
+    const entered = new Set();
+    let releaseAll;
+    const allEntered = new Promise((resolve) => { releaseAll = resolve; });
+    let serialized = false;
+    const together = async (label, value) => {
+      entered.add(label);
+      if (entered.size === 3) releaseAll();
+      let timer;
+      await Promise.race([allEntered, new Promise((resolve) => { timer = setTimeout(() => { serialized = true; resolve(); }, 2000); })]);
+      clearTimeout(timer);
+      return value;
+    };
+    const concurrentAgent = async (_prompt, opts) => {
+      const label = (opts && opts.label) || "";
+      if (label === "fix#1") return { ...PASS_PACKET, changed: true, dispositions: [] };
+      if (label === "fix#2") return { ...idle };
+      if (label.startsWith("packet#")) return { measured: true, dirty: [], operation: "", detail: "" };
+      if (label.startsWith("peer-preflight:")) return available;
+      if (label === "review#1") return together(label, { ...OK });
+      if (label === "peer:codex#1" || label === "peer:muse#1") return together(label, passed);
+      return null;
+    };
+    const concurrent = await loadCycle(src, concurrentAgent).runReviewCycle({ ...CYCLE, peer: "on" });
+    check(
+      "the reviewer and every provider's stage are in flight together, so the round waits for the slowest and not their sum",
+      !serialized && entered.size === 3 && concurrent.verdict === "pass" && entries(concurrent) === "1:codex:passed 1:muse:passed",
+      `serialized=${serialized} / entered ${[...entered].join(" ")} / ${concurrent.verdict}`,
+    );
+
+    // A discarded finding says whose it was.
+    const discarded = await drive({
+      "peer-preflight:codex": available,
+      "peer-preflight:muse": available,
+      "peer:codex#1": passed,
+      "peer:muse#1": issues("points at a file that is not there"),
+      "ground#1": { verdicts: [{ finding: "points at a file that is not there", grounded: false, why: "no such file" }] },
+    });
+    check(
+      "a finding the grounding check discards is recorded under the provider that raised it, and no longer gates",
+      discarded.result.verdict === "pass" && discarded.result.rounds === 1 &&
+        JSON.stringify(discarded.result.discardedPeerFindings) === JSON.stringify([{ round: 1, provider: "muse", finding: "points at a file that is not there", why: "no such file" }]),
+      `${discarded.result.verdict}/${discarded.result.rounds} / ${JSON.stringify(discarded.result.discardedPeerFindings)}`,
     );
 
     // One provider alone gates the round, exactly as the first one always did.
@@ -2183,6 +2235,25 @@ for (const name of WORKFLOWS) {
         sticky.count("peer:muse#1") === 1 && sticky.count("peer:muse#2") === 0 && sticky.count("peer-preflight:muse") === 1 &&
         sticky.result.peerRounds.filter((e) => e.provider === "muse").every((e) => /predates the muse provider/.test(e.detail)),
       `${entries(sticky.result)} / ${sticky.calls.filter((c) => c.includes("muse")).join(" ")}`,
+    );
+
+    // ...including by a sibling cycle whose launch was already queued behind
+    // the one that found out: availability is written by the stage itself and
+    // read again when the slot comes up, not when some round ends.
+    let queuedLaunches = 0;
+    const queued = loadCycle(src, async () => {
+      queuedLaunches += 1;
+      return { ...passed, outcome: "unavailable", detail: "usage exhausted" };
+    });
+    const queuedMuse = queued.CYCLE_PEER_PROVIDERS.find((provider) => provider.id === "muse");
+    const queuedState = { providers: { muse: { preflighted: true, preflightInProgress: null, unavailable: false, unavailableDetail: "", absent: false } } };
+    const queuedThrottle = { ...queued.createCyclePeerThrottle(), cap: 1 };
+    const queuedStage = (round) => queued.runCyclePeerStage({ ...CYCLE, peer: "on", contracts: {} }, { round, artifactDir: "/tmp/review-cycle-queued-test", packet: { workReport: [] }, handedFindings: [], peerState: queuedState, peerThrottle: queuedThrottle }, queuedMuse);
+    const queuedResults = await Promise.all([queuedStage(1), queuedStage(2), queuedStage(3)]);
+    check(
+      "launches queued behind the one that found a provider unavailable are not made",
+      queuedLaunches === 1 && queuedResults.every((r) => r.outcome === "unavailable" && /usage exhausted/.test(r.detail)) && queuedThrottle.inFlight === 0,
+      `${queuedLaunches} launch(es) / ${JSON.stringify(queuedResults.map((r) => r.outcome))} / ${queuedThrottle.inFlight} in flight`,
     );
 
     // A provider whose every call fails outright still decides nothing.
@@ -2531,7 +2602,7 @@ const PEER_LIFECYCLE_CHECKS = 23;
   check("the two executable review-cycle cores remain byte-identical", workflowCores[0] === workflowCores[1], `${workflowCores[0].length}/${workflowCores[1].length}`);
   check(
     "both workflow cores pin the primary helper launch, its private artifact root, and the caller wait budget",
-    workflowCores.every((core) => /4\. Primary launch, when \\`command -v peer-review-run\\` succeeds: run \\`peer-review-run --provider \$\{provider\.id\} --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --effort medium\\`[\s\S]*caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(core) && !/prerequisite/i.test(core.slice(core.indexOf("function cyclePeerPrompt")))),
+    workflowCores.every((core) => /4\. \$\{manual \? "Primary launch" : "Launch"\}, when \\`command -v peer-review-run\\` succeeds: run \\`peer-review-run --provider \$\{provider\.id\} --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --effort medium\\`[\s\S]*caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(core) && !/prerequisite/i.test(core.slice(core.indexOf("function cyclePeerPrompt")))),
     "primary helper envelope in workflow cores",
   );
 

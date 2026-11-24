@@ -151,8 +151,8 @@
 // progress display into an extra group.
 export const meta = {
   name: "wf-address-review",
-  description: "Address every unresolved review thread on one PR: fix or push back, verify through the shared review cycle — a fresh-eyes reviewer plus best-effort cross-harness peer reviews each round (codex, plus muse where the container carries it; review is cross-harness; peer outcomes never block; bounded round cap) — then publish by default (use no-push for a local-only dry run).",
-  whenToUse: "Work through maintainer-vetted review feedback on a single PR hands-off, with cross-harness verification (best-effort codex and muse peers beside the fresh reviewer). Not for new task batches (wf-address-tasks) or stack rebases.",
+  description: "Address every unresolved review thread on one PR: fix or push back, verify through the shared review cycle — a fresh-eyes reviewer plus best-effort cross-harness peer reviews each round (review is cross-harness; peer outcomes never block; bounded round cap) — then publish by default (use no-push for a local-only dry run).",
+  whenToUse: "Work through maintainer-vetted review feedback on a single PR hands-off, with cross-harness verification (best-effort peers beside the fresh reviewer). Not for new task batches (wf-address-tasks) or stack rebases.",
   phases: [
     { title: "Gather", detail: "resolve the PR, branch state, unresolved threads, misfired top-level findings, and failing CI lanes" },
     { title: "Rebase", detail: "delegated rebase onto the freshest base — before fixing, and again before publication" },
