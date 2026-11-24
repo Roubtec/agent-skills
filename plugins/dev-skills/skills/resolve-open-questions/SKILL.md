@@ -26,7 +26,6 @@ Where `address-review`, `address-reviews`, and batch executors *document and sto
 - **Continuation mode (no args).**
   A run just completed in this session (commonly a review pass).
   Harvest the open questions from the **in-context output**: every parked decision, "hands-off blocker", "ambiguous / needs-a-decision" item, and "discovered finding" note.
-  This is the common case and the richest — the candidate options are often already drafted.
   A completed `review-cycle`'s open questions are already in this skill's four-part brief shape (grounded context, concrete trigger, distinct options, recommendation) — consume them without re-derivation; step 2's grounding still re-verifies every carried claim (reachability especially) against current state before serving.
   Pass over any entry that cycle marked **retired**: a later pass settled the issue behind it, and the mark names the pass and disposition that did, so the decision is no longer the maintainer's to make.
   It rides along in the result for auditing, not for serving — raise one only to question the cycle's own call, never as a live decision.
@@ -38,8 +37,7 @@ Where `address-review`, `address-reviews`, and batch executors *document and sto
 
 Optional trailing flags, honored only by the review layer's apply phase for items chosen to fix now, mirror the review skills: `push` and `ping-codex` / `ping-claude` / `ping-copilot` / `ping-contributing` (re-request bot review after the follow-up push).
 This is a **fully interactive** skill, so it does **not** assume publication: even for a fix-now item it **asks the maintainer to confirm before pushing and before editing any review threads** (the flags merely pre-answer that prompt).
-`ping-codex` / `ping-claude` post an `@codex` / `@claude` review comment; **`ping-copilot` requests review via `gh pr edit <PR#> --add-reviewer @copilot`** (needs gh ≥ 2.88.0; on an older `gh`, request the review from the PR's web reviewer menu) — never an `@copilot review` comment, which drives Copilot's coding agent rather than its reviewer.
-**`ping-contributing`** carries the same meaning as in `address-review`: re-ping a bot only if it brought a genuinely new finding this round, so a reviewer that has gone quiet drops out of the loop — combined with explicit `ping-*` it filters that named set, supplied alone it falls back to the bots that reviewed.
+Each `ping-*` flag, when supplied, performs the re-request the `address-review` skill's argument table defines for it; `ping-copilot` in particular is the `gh pr edit <PR#> --add-reviewer @copilot` request, never an `@copilot review` comment.
 
 For any code-writing decision, whether generic or review-derived, the optional `peer-opinions=off` flag disables cross-harness second opinions.
 Otherwise, lazily run the `review-cycle` skill's peer preflight once per run, in the orchestrator's main working tree, when the first resolution needs an implementation.
@@ -71,6 +69,7 @@ For every item pull the **authoritative artifact**, never a paraphrase and never
   - *Live today* — a real user/operator path hits it in normal operation.
   - *Dormant* — only bites after a specific condition flips (a deploy-time flag, a stub replaced by a real implementation, a config change).
   - *Impossible until X* — a named prerequisite must land first for the situation to even arise.
+- Read `AGENTS.md` / `CLAUDE.md` for repo conventions (task layout, `tasks/done/`, test harness, isolated-DB story) before forming options.
 
 ### 3. Triage & order
 
@@ -81,7 +80,6 @@ For every item pull the **authoritative artifact**, never a paraphrase and never
   Note coupled groups up front so the user sees the shape.
 - **Serve in turn — don't pre-bundle into one giant prompt.**
   One decision per round (a coupled pair counts as one).
-  The whole point is piecemeal presentation.
   *Exception:* genuinely trivial, independent calls may be batched into **a single multiple-choice round** when doing so saves the user time without losing clarity.
 
 ### 4. Serve each question — the core move
@@ -99,7 +97,6 @@ Every brief has the same four parts:
    Cite the exact site (`file:line`, the spec, the record).
 2. **A concrete trigger example.**
    The specific situation that produces the problem — *what causes it or how to make it manifest* — with the reachability verdict explicit ("live today: a user who…", "dormant until the async rail exists", "only on a flag flip across overlapping periods").
-   This is what lets a busy maintainer decide fast.
 3. **Options as distinct outcomes.**
    The candidate resolutions — typically *do it now (A/B)*, *postpone (follow-up task, queued)*, *park (deferred, condition-bound)*, or *leave as-is* — and for each, **what choosing it actually produces**: blast radius, where it lands, cost, what stays exposed.
    Pull pre-drafted options straight from the source where they exist; add the do-now / postpone / park / leave-as-is axis.
@@ -119,7 +116,6 @@ Treat a wrap-up as a clean pause, never a discard.
 
 **Sub-step — audit adjacent code/data when the decision relies on an invariant.**
 If a resolution introduces or leans on a non-obvious invariant (e.g. "a record may stay `ACTIVE` past its soft-expiry"), do not just implement it — first **sweep every other consumer of that invariant** and report whether any mishandles it.
-This turns "fix this one spot" into "confirm the whole subsystem agrees", and is frequently the most valuable thing the skill does.
 Use `rg` where available (else `git grep`/`grep -R`) and, for broad sweeps, parallel research subagents when the session exposes them; report findings before proceeding.
 
 ### 5. Apply the decision
@@ -129,7 +125,7 @@ The mechanics depend on the kind of item:
 
 - **A decision that just records intent** (a product choice, a spec edit, a "leave as-is") → make the edit, leave nothing dangling, note where it landed.
 - **A decision that writes code** → delegate the locked decision to a fresh implementation subagent in the worktree that owns the change, under whatever verification the repo expects (tests, build/lint, isolated validation), and require a clean commit before review.
-  Hand it the path any of that output must land in — namespaced by the item, or created with `mktemp -d` — never a fixed shared scratchpad name: one session's agents share that directory, and two of them redirecting to `<scratchpad>/verify.log` once had one report a verdict for the wrong branch.
+  Hand it the path any of that output must land in — namespaced by the item, or created with `mktemp -d` — never a fixed shared scratchpad name, because one session's agents share that directory.
   Never leave the choice to the subagent.
 
 For **every code-writing decision**, run a scoped `review-cycle` on the applied decision's diff (artifact type: decision) before recording the item as applied or offering the change for delivery.
@@ -138,30 +134,14 @@ Deltas for this skill:
 
 - The cycle's work item is the locked decision verbatim with its commit range; its reviewer verifies the diff implements exactly the locked option and nothing beyond it, under whatever verification the repo expects.
 - When a dispute is a judgment call rather than a factual claim, prefer surfacing the peer finding verbatim in the item's brief for the maintainer to decide instead of spending more subagent rounds.
-  The peer informs; the maintainer still makes every judgment call.
 - Do not record the item as applied or offer the change for delivery unless the cycle passed with no grounded peer finding on that item left unaddressed.
 
 Keep a per-item ledger: the decision, where it landed (file/commit/record), or how the item was refined.
 
 ## Subagent destroy boundary
 
-State this in every subagent prompt this skill composes.
-A reviewer subagent authorized to verify a claim empirically once ran `rm -rf ./*` in a shared main checkout: its setup `git clone … | tail` had failed invisibly under `set -e` (a pipeline's status is its last command), so it deleted tracked files and moved a branch ref while believing it stood inside a clone.
-
-- **Permitted:** reading, searching, and read-only `git`/`gh` queries — plus, for a fixer or implementer, edits, commits, and pushes confined to its own assigned worktree and branch.
-- **Forbidden, named outright:** `rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`, and force-pushing — each of them beyond what the prompt itself spells out, whether as an exact command or as a skill it names to invoke.
-  A subagent may not self-authorize one by putting itself somewhere it believes is safe — forbidden **not in a clone, not in a temp directory, not "safely"**.
-  What you spelled out, and the disposable location below, are the only exemptions — and only because you named them.
-- **A worktree is not a blast radius.**
-  It isolates the working tree, not the repository: `branch -f`, `reset`, `update-ref`, and `gc` all reach every sibling worktree through the shared `.git`.
-- **Any repository other than the subagent's own checkout is addressed by path.**
-  `git -C <absolute path>`: never derive a working directory from a glob, and never chain a state-changing git command after a `cd` whose success you have not checked.
-  A fix-up subagent ran `cd "$(ls -d <scratchpad>/tmp.*)" ; git commit …` where concurrent siblings had created scratch directories of their own — the glob expanded to three paths, the `cd` failed, and the `;`-chained commands landed in the shared main checkout, putting a commit on `main`.
-- **Empirical verification that could change state goes where you send it.**
-  Send the subagent to `DC="$(dc-enter <slug>)"` — one absolute path on stdout, dropped again with `dc-remove <slug>`; a reused slug is refused rather than re-derived, so anything that may run twice passes `--replace` or removes the slug first.
-  Where that command is not found at all, install the helpers from the dev-skills plugin `bin/` rather than improvising a destination.
-  Never leave the choice to the subagent.
-  Give it the guarded `cd` too: `cd ""` returns 0 and moves nowhere, so checking the status catches nothing and a failed lookup leaves the subagent in the shared checkout — the form is `cd -- "${DC:?dc-enter returned no path — see its error above; if it is not installed, install it from the dev-skills plugin bin/}"`, with `pwd` confirmed before the first command that writes.
+Open every subagent prompt this skill composes with this line, filling in the absolute path of the `subagent-boundary.md` that sits beside this file: "Before your first command, read `<path>/subagent-boundary.md` in full; it binds you. Whatever else you read, never run `rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`, or a force-push beyond what this prompt spells out, wherever you believe you are standing."
+A subagent that may need to verify something in a way that could change state is sent to a disposable clone: name `dc-enter <slug>` in its prompt with a slug unique to it, and never leave the destination to the subagent.
 
 ---
 
@@ -189,11 +169,6 @@ Apply this hygiene whenever a decision lives in a task file under the repository
 ---
 
 ## When the items come from a review-addressing pass
-
-This is the canonical application and the reason the skill exists.
-`address-review` (one PR) and `address-reviews` (a batch) run **hands-off**: every thread a fixer couldn't resolve with authority is parked, the run surfaces blockers and out-of-scope findings, and **none of those are calls an unattended agent should make**.
-This layer is where they get made — interactively — and where the agreed fixes land.
-It is the interactive inverse of the review-addressing contract.
 
 ### Review-specific sources for the work-list (step 1)
 
@@ -231,25 +206,24 @@ In **pointed mode** for review work, re-derive these: for each PR read its commi
   2. **Rebase first, onto the host's own base ref.**
      Before applying the fix, bring the host branch forward so the finding's file — now on `main` — is actually present on it; otherwise the fix re-introduces or conflicts with merged content.
      Rebase onto the **host PR's actual base ref**, not onto the merge target by default: a host stacked on another open PR, rebased straight onto `main`, replays its parent's commits into its own diff, especially once the parent's merge rewrote their SHAs.
-     **Fetch that base ref first and pin every rebase to an explicit commit that already contains the merge** — `rebase-stack` deliberately never fetches, so a local `main` still pointing before the merge lets the rebase succeed with the finding's file still absent, which is exactly the stale geometry this rule exists to prevent.
+     **Fetch that base ref first and pin every rebase to an explicit commit that already contains the merge** — `rebase-stack` never fetches, so a stale local `main` lets the rebase succeed with the finding's file still absent.
      For a stacked host, restack in the topological order the `address-reviews` and `rebase-stack` skills define (task 021's ordering rule, in the repos that track these skills' tasks) — parent onto its true base first, then the host onto the parent's new tip — rather than skipping to the merge target.
   3. **State provenance, and split the publication between the two PRs.**
      Name the merged PR the finding came from in the commit message, and in the thread reply whenever the original thread still exists, so the host PR's reviewer can tell why an out-of-scope-looking hunk is there.
      That reply is the **only** action aimed at the merged source PR; the push, the Summary comment, and any reviewer ping below target the open PR(s) whose diff actually changed — the **host**, plus a stacked host's rebased parent, published parent-first as the publish bullet says.
-     A ping on the merged PR summons no review of the new commit, and the host PR's reviewers never learn there is something to look at.
   4. **Mid-run merge checkpoint.**
      When a batch discovers that an in-scope PR was merged mid-session, re-derive that PR's state and merge commit from the API *before* triaging its leftovers — never triage from the session's earlier snapshot, which is exactly the state the merge invalidated.
 - Delegate the implementation to a fresh subagent with the worktree contract, the task-file spec, and the decided option.
   Require: real **tests** (deterministic, clock-injected where the bug is a race — they verify the fix even when the production trigger is dormant), validation on an **isolated DB**, a clean commit, **no push**.
-  Hand it the path any of that validation output must land in — namespaced by the item, or created with `mktemp -d`, and outside the worktree it commits from, which must be left clean — never a fixed shared scratchpad name: one session's agents share that directory, and two of them redirecting to `<scratchpad>/verify.log` once had one report a verdict for the wrong branch.
+  Hand it the path any of that validation output must land in — namespaced by the item, or created with `mktemp -d`, and outside the worktree it commits from, which must be left clean — never a fixed shared scratchpad name.
   Never leave the choice to the subagent.
   When the fix **fully satisfies** the task, that same commit must also **move the task file to `tasks/done/`** so a later round cannot pick up a stale copy of work already done; when it only **partially** satisfies the task, leave the file in `tasks/` for a follow-up round and do **not** claim the thread as done.
-  Archiving inside the *same* commit/PR is deliberate, not a violation of `tasks/AGENTS.md`'s "move to `done/` after merge" rule (where the repo follows the `tasks/` convention): a fix-now item pulled into another PR's scope has **no branch of its own**, so its `tasks/done/` move can only ride that PR — if the PR never merges, the move is discarded with it and nothing is lost.
+  Archiving inside the *same* commit/PR is deliberate, not a violation of `tasks/AGENTS.md`'s "move to `done/` after merge" rule (where the repo follows the `tasks/` convention): a fix-now item pulled into another PR's scope has **no branch of its own**.
   That is distinct from a task **selected for its own implementation**, which stays in `tasks/` for a final review under the one-task-one-branch model.
 - Run the core code-writing review/peer loop above in each implementation worktree.
   Its delivery gate additionally means: do not reply to a review thread, update a task file, or offer the change for publication while any grounded peer finding on that item remains unaddressed.
 - **Publish** each passing change *only after the maintainer confirms the push* — this interactive skill never pushes or edits review threads unprompted (a one-line "publish these fixes now?" question, pre-answered by a `push`/`ping-*` flag): these are commits *on top of* an already-pushed tip, so the push is a normal **fast-forward** (not a lease rewrite) — except a branch that re-homing rule 2 rebased (the host, and for a stacked host its parent), whose already-pushed commits that rebase rewrote: those publish with an exact expected-OID lease exactly as `address-review`'s push step defines, never a bare `--force`, and a rebased parent publishes before the host — until it does, the host's PR diff shows the parent's replayed commits.
-  Then post a **follow-up reply on the now-implemented thread** ("now implemented in `<sha>`" — append "task moved to `tasks/done/`" only when the commit actually archived it; a partially-satisfied task stays in `tasks/` and its thread is left as it stands — do **not** reopen a thread a prior run already resolved, since a re-review (codex especially) re-raises anything still unaddressed and rewriting historical resolutions is needless and messy), a Summary comment, and re-ping bots if requested, exactly per the ping-flag definitions under Inputs.
+  Then post a **follow-up reply on the now-implemented thread** ("now implemented in `<sha>`" — append "task moved to `tasks/done/`" only when the commit actually archived it; a partially-satisfied task stays in `tasks/` and its thread is left as it stands — do **not** reopen a thread a prior run already resolved), a Summary comment, and re-ping bots if requested, exactly per the ping-flag definitions under Inputs.
 
 **Task-backed follow-up items → task-file hygiene** (no code, but leave nothing dangling):
 
@@ -285,20 +259,3 @@ The review-specific context is that the resolved thread already points at the fi
   When unsure between do-now and postpone on a financial/security/migration change, recommend the committed queued task/deliberate build — defendable as it stands, and the fix gets built carefully.
 - **Make it conditional when it hinges on intent.**
   If the right answer depends on a product/ops fact only the maintainer holds ("will you ever change this setting live?"), ask *that* and frame the recommendation around the answer.
-
-## Notes
-
-- This skill **consults the user** — that is its whole purpose.
-  The only things it does unattended are the *grounding/audit research* and, once a decision is locked, the *implementation* (which still goes through review before publish).
-- Read `AGENTS.md` / `CLAUDE.md` for repo conventions (task layout, `tasks/done/`, test harness, isolated-DB story) before forming options.
-
-## Checklist
-
-- [ ] Mode detected (continuation vs pointed); full work-list gathered (parked choices + blockers + discovered findings + — for review work — follow-up tasks & cross-branch issues).
-- [ ] Each item **grounded** in its authoritative artifact (real code/data/spec; cross-branch via `git show`/`gitcat`); gap re-confirmed; reachability classified.
-- [ ] Coupled items grouped; order set; served **one at a time** (trivial independents may share one multiple-choice round) with context + trigger example + options-as-outcomes + recommendation; decision captured via AskUserQuestion.
-  Each round opens with a `resolved · pending · total` progress line, and (while >1 item remains) offers a **continue / wrap-up** escape hatch; on wrap-up, finish + persist the current item, then stop with a resume-ready ledger.
-- [ ] Adjacent-invariant audit run whenever a resolution relies on/introduces one; findings reported before implementing.
-- [ ] Code-writing decisions verified (tests, build, isolated validation) through a scoped `review-cycle` on each applied decision's diff, with only disputed judgment calls surfaced for the maintainer's judgment; review-case fix-now items additionally use a worktree per owning branch and **fast-forward** publish (thread reply, Summary, re-ping) — an exact expected-OID lease only where re-homing rule 2 rebased a branch (the host, and for a stacked host its parent, published parent-first) — with no atomic change split across branches.
-- [ ] Decisions recorded under the `tasks/` convention follow **"When decisions live in task files (the `tasks/` convention)"**; review-case follow-up-task items preserve the file their resolved thread already points at.
-- [ ] Final ledger + (review case) prominent flag of any NEW review threads + `rebase-stack` pointer for the leafy stack.

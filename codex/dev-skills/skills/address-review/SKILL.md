@@ -25,44 +25,29 @@ Trust yourself to extract intent, then sanity-check against the PR.
 | --- | --- |
 | `PR#` (e.g. `#38`) | The PR to address. Takes precedence over auto-detection — useful when the current branch is a local off-shoot of a merge-pending branch or otherwise disjoint from the PR head; pass `off-shoot` too when you want the run to work on that branch rather than on the PR's head ref. Always sanity-check that it really relates to this branch. |
 | `rebase on top of <target>` | Rebase the **working location's branch** onto `<target>` — a branch name or an exact commit — rather than onto the PR's own base, which is what step 2 rebases onto by default. Single-branch rebase only. |
-| `no-rebase` | Opt out of the default rebase entirely — **both** of step 2's points, so the branch is addressed and pushed on the base it already sits on. Use it when the base is known to be moving under you, or when a rebase would obscure what a reviewer is being asked to look at. It wins over `rebase on top of <target>` if both arrive — for the REBASE only: the token is not discarded, and a still-standing target is what step 6 pins as this run's effective review base. In `delegated-fix` it is also how the batch orchestrator says the two points are its own rather than this entry's (see "Delegated modes for the worktree orchestrator"). |
-| `inline` | Force **inline** working on the **target branch** — do the work in the current checkout rather than in a worktree, checking that branch out there when the checkout is not already on it. Requires that checkout to be clean, and the run ends on that branch. Unnecessary when you already stand on it (that is mode 1 anyway); to work in this checkout on a *different* branch — a local off-shoot of the PR — pass `off-shoot` instead, which is the only thing that selects one. See "Working location". It composes with `no-push` and the ping flags without interacting with either. |
-| `off-shoot` | The checkout stands on a local **off-shoot** of this PR's branch (the `PR#` row's case) and you are saying so, so the run works inline on **that** branch rather than the PR's head ref: fixes land there, `headRefName`/`headRefOid` stay publication metadata, and step 1's reconciliation is skipped — a tip behind the head is this case's normal state. Needs an explicit `PR#` and a named branch, and requires the current checkout clean like any inline run. It is inline working by construction, so `inline` beside it is redundant rather than contradictory. Nothing else selects an off-shoot: no test on your history's shape may conclude one, because none can — see "Working location". |
-| `no-push` | **Local-only run** — make commits, but perform no PR-side communication: no push, no replies/resolves, no summary comment, no ping. It makes **exactly one** PR write, the single documented exception: the disposition record comment of "The durable disposition record" below, which is what keeps a local run's mapping from dying with the session. Nothing about the branch, the thread state, or the reviewer set is touched by it. This was the default until now; it is now the explicit way to ask for a dry run / inspect-only pass. The final report still captures every disposition so a later push turn can replay it. |
-| `push` | Push the branch to the PR's actual head repository/ref and perform all PR-side communication (replies, resolves, summary comment) — but **ping no reviewer**. Use it to publish fixes quietly, without summoning a fresh review round. (Normal push for a fast-forward; an explicit `--force-with-lease=<ref>:<expected-oid>` for every other state that pushes at all.) |
+| `no-rebase` | Opt out of the default rebase entirely — **both** of step 2's points, so the branch is addressed and pushed on the base it already sits on. Use it when the base is known to be moving under you, or when a rebase would obscure what a reviewer is being asked to look at. It wins over `rebase on top of <target>` if both arrive — for the REBASE only: the token is not discarded, and a still-standing target is what step 6 pins as this run's effective review base. |
+| `inline` | Force **inline** working on the **target branch** — do the work in the current checkout rather than in a worktree, checking that branch out there when the checkout is not already on it. Requires that checkout to be clean, and the run ends on that branch. Unnecessary when you already stand on it (that is mode 1 anyway); to work in this checkout on a *different* branch — a local off-shoot of the PR — pass `off-shoot` instead, which is the only thing that selects one. See "Working location". |
+| `off-shoot` | The checkout stands on a local **off-shoot** of this PR's branch (the `PR#` row's case) and you are saying so, so the run works inline on **that** branch rather than the PR's head ref. Needs an explicit `PR#` and a named branch, and requires the current checkout clean like any inline run. Nothing else selects an off-shoot — see "Working location", mode 4. |
+| `no-push` | **Local-only run** — make commits, but perform no PR-side communication: no push, no replies/resolves, no summary comment, no ping. It makes **exactly one** PR write, the single documented exception: the disposition record comment of "The durable disposition record" below. The final report still captures every disposition so a later push turn can replay it. |
+| `push` | Push the branch to the PR's actual head repository/ref and perform all PR-side communication (replies, resolves, summary comment) — but **ping no reviewer**. Use it to publish fixes quietly, without summoning a fresh review round. |
 | `hands-off` | Run with no user interaction — best-effort to completion, documenting every skipped/blocked item in the final report. See "Hands-off mode". Typically how a parallel review orchestrator invokes this skill in a subagent. |
 | `peer-opinions=off` | Disable the best-effort `claude` second opinion for this run. By default it runs beside every fresh Reviewer round while the peer remains available. |
 | `ping-codex` | After a push that advances the PR branch, post a dedicated top-level `@codex review` comment to summon a fresh review round. |
 | `ping-claude` | After a push that advances the PR branch, post a dedicated top-level `@claude review` comment. |
-| `ping-copilot` | After a push that advances the PR branch, request a fresh Copilot review via `gh pr edit <PR#> --repo <owner>/<repo> --add-reviewer @copilot` (the canonical CLI request; needs gh ≥ 2.88.0) — **never** an `@copilot review` comment, which drives Copilot's coding agent (it can start editing the branch) rather than its reviewer. Tested working: the add-reviewer request re-triggers Copilot's review even on a PR it already reviewed, and never misfires into the coding agent. |
-| `ping-contributing` | **The default** — a bare run behaves exactly as if you passed this. As a **modifier** on the ping set: re-ping a bot only if it **brought a new finding this round.** Combined with explicit `ping-codex`/`ping-claude`/`ping-copilot`, it filters that named set down to the contributors; supplied **alone** (or as the bare default), it falls back to every known bot (codex/claude/copilot) that reviewed this round. The point: keep one fixed reviewer set across rounds and let a bot that has gone quiet drop out of the ping cycle on its own, so a multi-bot review→address loop winds down bot-by-bot instead of pinging everyone forever. *Brought a new finding* = authored ≥1 thread this round that surfaces a real concern not raised before on this PR (typically `actionable-fixed`, or a genuinely new `follow-up-task`/`already-addressed`); it does **not** count a `push-back` (the comment was wrong), a re-raise of a concern already captured in a committed task, or a bot re-arguing a push-back it already lost — **unless** that thread carries a genuinely new angle this round. |
+| `ping-copilot` | After a push that advances the PR branch, request a fresh Copilot review via `gh pr edit <PR#> --repo <owner>/<repo> --add-reviewer @copilot` (the canonical CLI request; needs gh ≥ 2.88.0) — **never** an `@copilot review` comment, which drives Copilot's coding agent (it can start editing the branch) rather than its reviewer. |
+| `ping-contributing` | **The default** — a bare run behaves exactly as if you passed this. As a **modifier** on the ping set: re-ping a bot only if it **brought a new finding this round.** Combined with explicit `ping-codex`/`ping-claude`/`ping-copilot`, it filters that named set down to the contributors; supplied **alone** (or as the bare default), it falls back to every known bot (codex/claude/copilot) that reviewed this round. *Brought a new finding* = authored ≥1 thread this round that surfaces a real concern not raised before on this PR (typically `actionable-fixed`, or a genuinely new `follow-up-task`/`already-addressed`); it does **not** count a `push-back` (the comment was wrong), a re-raise of a concern already captured in a committed task, or a bot re-arguing a push-back it already lost — **unless** that thread carries a genuinely new angle this round. |
 
 ### Flag interactions
 
-**The default is now to publish.**
-A run with **no** push/ping argument pushes the branch, performs all PR-side communication, **and** re-pings every bot that brought a new finding this round — i.e. a bare run behaves exactly like `ping-contributing`.
-The flags only adjust that default:
+Push unless `no-push`.
+Ping the named bot(s) if any were named (filtered to contributors when `ping-contributing` is also present), else **nobody** when `push` was spelled out, else the **contributing** set (the bare default, identical to `ping-contributing`).
 
-| You pass… | Push? | Who gets pinged |
-| --- | --- | --- |
-| *(nothing)* | yes | contributing bots — every bot with a new finding this round |
-| `ping-contributing` | yes | contributing bots — the explicit (redundant) spelling of the default |
-| `push` | yes | **nobody** — publish quietly, summon no fresh review |
-| `ping-codex` / `ping-claude` / `ping-copilot` | yes | exactly the bot(s) you name; this **overrides** the contributing default (add `ping-contributing` to instead filter the named set down to its contributors) |
-| `no-push` | **no** | nobody — local-only dry run (the pre-change default); its one PR write is the disposition record |
-
-- **Resolution order — `no-push` wins.**
-  If `no-push` is present it forces a local-only run — its one PR write being the disposition record, per its argument-table row; if it is somehow combined with `push`/`ping-*` (a contradiction), honor `no-push` and note the ignored flag.
-  Otherwise push is always on; the ping set is then: the named bots if any were named (filtered to contributors when `ping-contributing` is also present), else **nobody** when `push` was spelled out, else the **contributing** set (the bare default, or `ping-contributing`).
-- **`ping-*` implies `push`.**
-  A named `ping-codex`/`ping-claude`/`ping-copilot` or `ping-contributing` always publishes — a re-review of unpushed work is meaningless.
-  Only `no-push` suppresses the push.
+- **`no-push` wins.**
+  Combined with `push`/`ping-*` (a contradiction), honor `no-push` and note the ignored flag.
 - **A ping fires only when the push actually advanced the branch.**
-  A ping summons a *fresh* review, which is only meaningful if new commits (or a rewritten history) were just pushed.
   If this run produces nothing new to push — every disposition was already-addressed or push-back, or the branch was already up to date — **skip the pings.**
-  Re-requesting a review with nothing new to look at would spin the review → address → review cycle forever; the resolved threads and Summary comment already record the outcome.
 - **`ping-contributing` prunes the ping set per this round's triage** (its table row defines what counts as a new finding).
-  It never adds a bot you did not name, and a round in which no candidate bot brought a new finding pings no bot — even while the push itself advanced (e.g. you fixed a human's thread) — which, like the no-op-push skip, lets an automated multi-bot loop wind down reviewer-by-reviewer.
+  It never adds a bot you did not name, and a round in which no candidate bot brought a new finding pings no bot — even while the push itself advanced (e.g. you fixed a human's thread).
 - **Multiple pings present** → perform each as its own dedicated action (a separate comment per named bot; the `gh pr edit --add-reviewer @copilot` request for Copilot), never a single comment mentioning several.
   They are also separate from the Summary comment.
 - **`hands-off` + the default rebase** is the ordinary unattended combination now that rebasing is not opt-in, and its sharp edge is a decision nobody can be consulted about: whatever halts the delegated rebase — step 2's "A halt is a stop, not a guess" defines the cases, and this bullet does not restate them — leaves the tree clean and idle, and the run stops with that open question rather than guessing (see "Hands-off mode").
@@ -80,7 +65,7 @@ You remain the main-loop orchestrator in every one of them, so the interactive c
 Architecture's *one checkout-dependent agent at a time* rule follows the working location too: in worktree mode the subagents share that worktree rather than the main checkout, and the invariant it protects — never spawn the reviewer until the fixer's commits are on disk — is untouched.
 
 Pick the mode once, after step 1 has resolved the PR and **before** step 1's reconciliation: that reconciliation can fast-forward a branch, so it has to run where the work will happen.
-Take the first mode below that applies, with the two argument-driven ones ahead of the rest and `off-shoot` (4) ahead of `inline` (3) where both were given: an argument the maintainer supplied outranks whatever the checkout happens to be standing on, and of the two only `off-shoot` names the branch to work on — `inline` names the tree, which is the same tree either way.
+Take the first mode below that applies, with the two argument-driven ones ahead of the rest and `off-shoot` (4) ahead of `inline` (3) where both were given.
 
 **The target branch** is the PR's `headRefName`, or the branch an orchestrator named for this entry.
 In `delegated-fix` and `publish-reviewed` there is no mode to pick at all: `address-reviews` has already assigned this entry a worktree, that worktree *is* the working location, and this skill neither selects nor creates nor reclaims one.
@@ -92,47 +77,42 @@ A named off-shoot is a different branch by construction: it shares the head's re
 
 1. **Inline — the checkout is already on the target branch.**
    `git branch --show-current` equals the target branch **and** that branch passes the identity check.
-   Work in place, exactly as this skill always has.
-   The branch advances under the maintainer: that is the mode's contract rather than a side effect, so a step-2 rebase rewriting their checked-out branch is expected.
+   Work in place.
+   The branch advances under the maintainer, so a step-2 rebase rewriting their checked-out branch is expected.
 2. **Worktree — anywhere else.**
    Any other branch, and a detached HEAD (there is nothing to advance under the user).
    Attach the target branch in a worktree and do everything there.
-   The main checkout is never switched, never dirtied, and never required to be clean, and the maintainer may repoint it to any other branch mid-run without breaking anything — git itself refuses to check the worktree's branch out a second time, so "anything but the worktree branch" needs no guard of ours.
+   The main checkout is never switched, never dirtied, and never required to be clean, and the maintainer may repoint it to any other branch mid-run without breaking anything.
    Auto-detection has no PR to resolve from a branch that is not the PR head, so a mode-2 run normally arrives with an explicit `PR#` (or an orchestrator's pairing); step 1's ambiguous case already covers the rest.
 3. **Forced `inline` — the argument.**
    It forces the work into the current checkout, on the target branch.
-   Where that checkout is not already on the target branch, run step 0.1's two checks on it **first** and stop if either fails — a run that switches the maintainer's checkout and only then discovers their dirt has moved them for nothing — then check the target branch out there (creating a local tracking branch from the PR head when there is none — `gh pr checkout <N>` for a fork head, which wires the fork remote and tracking for you) and proceed as mode 1. The run ends on that branch — the maintainer asked for the checkout, so it is not restored.
+   Where that checkout is not already on the target branch, run step 0.1's two checks on it **first** and stop if either fails, then check the target branch out there (creating a local tracking branch from the PR head when there is none — `gh pr checkout <N>` for a fork head, which wires the fork remote and tracking for you) and proceed as mode 1. The run ends on that branch — the maintainer asked for the checkout, so it is not restored.
    Where the checkout already stands on the target branch there is nothing to switch and nothing to restore: that is mode 1, and `inline` changes none of it.
 4. **The off-shoot — the `off-shoot` argument.**
    The maintainer stands on a local off-shoot of this PR's branch and has said so, so the run works inline on that branch: fixes land there, `headRefName`/`headRefOid` stay publication metadata, and step 1's reconciliation is skipped whole rather than used to drag the off-shoot onto the head — a tip behind the head is this case's normal state.
-   It requires an explicit `PR#` (auto-detection resolves no PR from a branch that is not a PR head) and a named branch: a detached HEAD is nobody's off-shoot, so there the argument selects nothing and the run stops saying exactly that (hands-off: halt with that report).
+   It requires an explicit `PR#` (auto-detection resolves no PR from a branch that is not a PR head) and a named branch: a detached HEAD is nobody's off-shoot, so there the argument selects nothing and the run stops saying exactly that (hands-off: halt with that report, naming the current `HEAD`).
    Standing on the target branch already, it is redundant — that is mode 1. `inline` alone is not this mode and never becomes it: from an off-shoot it does what its own row says — checks the target branch out in this checkout and works there, leaving the off-shoot's ref and commits untouched — so name the off-shoot when the work belongs on it.
-   Skipping the reconciliation is not a licence to publish over the head either: what an off-shoot may push is step 7's question, and step 7 answers it on its own — it requires the recorded head to be represented in this branch's tip before any push and stops when it is not, so an off-shoot cut before the head and advanced never rewinds the PR branch.
+   What an off-shoot may push is step 7's question: it requires the recorded head to be represented in this branch's tip before any push and stops when it is not.
    This mode settles only where the work happens.
 
 A name match alone never selects mode 1. A same-named local branch that fails the identity check falls through to mode 2, and there into the collision stop below — never *onto that branch*.
-Reusing a name like `minor-fixes` or `batch-wrap-up` across unrelated work is ordinary maintainer practice, so treat that collision as expected rather than exotic.
 `off-shoot` does not rescue such a ref: a branch bearing the target's own name is not an off-shoot of it, whatever it carries — the fork PR's same-named local ref, which carries the head yet resolves its push to `origin`, is precisely the ref the identity check refused.
 
 **The off-shoot is stated, never recognised.**
 No test on the branch's shape can find it, so none is allowed to try.
-The supported case is a branch cut *before* the current PR head and advanced with its own commits, which therefore neither carries the head nor is carried by it — and a child cut *from* the head and advanced is the same shape up to where the cut was made, while working on the second as if it were the first publishes that child's own commits onto this PR under `headRefName`.
-Both halves of that were tried here and both failed: requiring the branch to **carry** the PR head rejects the very case this mode exists for, and requiring it to have no open PR of its own admits every stacked child not yet PR'd — which is exactly what a batch executor leaves behind when it opens PRs and then builds an unpushed local review stack.
-So one word from the maintainer settles what no probe can, and without that word every branch that is not the target takes mode 2, which is safe by construction.
+Without the `off-shoot` argument every branch that is not the target takes mode 2, which is safe by construction.
 
 **Another open PR on that branch makes the request ambiguous — it disproves nothing.**
 A branch can be an off-shoot of this PR's head *and* be the head of another open PR; the two are compatible, so such a PR is no evidence against what the token asserts.
 What it does mean is that two PRs could be advanced by the same commits and only the maintainer can say which, so it is a stop rather than a mode: ask which PR was meant (hands-off: halt naming both branches and both PRs).
 Probe it **at the head**, rather than through some base repository's PR list: resolve the branch's own push remote/ref to an owner, a repository and a ref, then ask GraphQL `repository(owner:<owner>,name:<repo>){ ref(qualifiedName:"refs/heads/<ref>"){ associatedPullRequests(states:OPEN,first:100){ nodes{ number url baseRepository{nameWithOwner} } } } }`.
-Rooting the query at that ref is what makes it exhaustive and exact at once, and it is why **one** filter is left where two were needed: it answers with every open PR whose head *is* that repository-qualified ref — whatever repository each one's *base* is in — and with nothing else.
-`gh pr list --head` delivers neither half: it reads one base repository, so a PR based in another never appears; its own `--help` says `<owner>:<branch>` is not supported, so it matches a bare branch name that a fork's same-named head answers too; and it stops at 30 items.
+It answers with every open PR whose head *is* that repository-qualified ref, whatever repository each one's *base* is in.
+Not `gh pr list --head`: it reads one base repository, matches a bare branch name that a fork's same-named head answers too, and stops at 30 items.
 A branch that has never been pushed resolves `ref` to null and is nobody's PR head.
 The filter that remains: count a hit only for a PR whose `url` differs from the one being addressed, since where the branch *is* this PR's head the query answers with this very PR and stopping there would halt an ordinary run.
-Compare the `url`, never the `number`: a number is scoped to that PR's *own* base repository and this answer set spans base repositories by construction — the very reach the query root was widened for — so a conflicting PR can carry the same number as the one being addressed, and comparing numbers would discard exactly that case.
-The `url` is globally unique and the query already asks for it.
-`isCrossRepository` has no part in this and is not requested: the field reports whether a PR's *own* head and base repositories differ, which is not the question — the query root already settles whose head it is — and reading it as an answer is what once made an upstream PR in a fork clone report `false` for a head that is not the fork this branch pushes to.
-This is not how the deleted heuristic used the same probe, and the difference is what makes it safe: as a recognizer it needed "no open PR" to imply "off-shoot", which is invalid and rejected the very case the mode exists for; as an ambiguity check on a claim already made, only a **hit** is acted on: a miss concludes nothing and leaves the mode exactly where the token put it.
-That is not the same as free — a conflict this probe fails to see is a halt the maintainer never gets asked for, and the same commits then advance this PR while another open PR still heads that branch — which is why the answer set has to be exact rather than merely cheap.
+Compare the `url`, never the `number`: a number is scoped to that PR's *own* base repository and this answer set spans base repositories.
+`isCrossRepository` has no part in this and is not requested.
+Only a **hit** is acted on: a miss concludes nothing and leaves the mode exactly where the token put it.
 
 ### Preflight in the working location
 
@@ -152,7 +132,6 @@ Use a stable slug (`pr-<N>`) whichever command attaches the worktree, so a halte
 The one tree that recipe hands back is inherited unchanged rather than dropped here: a fork attach whose landing verification fails gives its worktree back (`wt-remove pr-<N>`), because that tree never became the working location and, left on the rejected ref, it is what the registration read would stop on at every re-run.
 The base those attaches place a worktree under is that recipe's too, and its ignore rule comes with it: `git worktree add` excludes nothing on its own, so where `<repo>/.worktrees/` is not already ignored — probe it with the trailing slash, a directory-only rule answering no for a bare `.worktrees` that is not yet on disk — list it before the first attach in the repo-local exclude file `git rev-parse --git-path info/exclude` names, untracked and so dirtying nothing itself, rather than editing the tracked `.gitignore`, which is the maintainer's — and run that `rev-parse` from inside `<repo>`, because in a primary checkout it answers with the RELATIVE `.git/info/exclude` (only a linked worktree gets an absolute path), so a `git -C <repo>` form whose answer you then append to from your own directory writes the rule to a file `check-ignore` never reads.
 Ask Git for that path: where the checkout is itself a linked worktree, `.git` is a gitfile and a literal `.git/info/exclude` is not a path at all, so the append fails and nothing is ignored.
-Skip it and the nested worktree leaves `?? .worktrees/` in the main checkout, standing there for as long as a halted run keeps its worktree — the one thing mode 2 promises not to do.
 Where the worktree helpers are on PATH, `wt-enter <slug> <branch>` covers the plain attach of a branch that **already exists locally**; it refuses to create a missing one without a base (`branch '<branch>' does not exist and no <base> was given`), and no local ref for the PR head is mode 2's commonest arrival — standing on `main` with a head you have never checked out.
 So pass the verified head OID as that base (`wt-enter pr-<N> <branch> <headRefOid>`, which reads the base only when the branch is missing and so is safe when a local ref wins), or use the explicit `git worktree add -b <branch> <path> <headRefOid>` the inherited rules already keep for the tracking-`origin` case.
 Where the helpers are absent, those explicit commands are the whole path.
@@ -160,8 +139,6 @@ Where the helpers are absent, those explicit commands are the whole path.
 One exception suspends local-first: **a local ref bearing the target's name that has already failed the PR identity check.**
 Attach nothing and substitute nothing.
 Report the collision — the rejected local ref, the verified PR head, and what each points at — and ask the maintainer how to proceed, resuming on their answer; hands-off, halt the entry with that same report.
-Branch hygiene is the maintainer's call, and every heuristic the run could apply instead invents a new local downstream for an existing upstream: attaching by branch name lands on the rejected ref and succeeds silently (`wt-enter` verifies the branch is checked out, which it is, so unrelated history passes without complaint), deriving a disambiguated name hands back a branch whose name is not the head ref but whose push still resolves to it — that upstream is what makes it a downstream — so step 7's item 1 finds the target it expects and item 2 pushes it without objection, and nothing there notices the substitution, and checking out detached leaves the fix commits reachable from nothing once `wt-remove` reclaims the worktree.
-Stopping costs one question; each of those costs a run's work.
 The same stop applies wherever a same-named local ref is the candidate, forced `inline`'s checkout included.
 
 ### After setup, the main checkout is not yours
@@ -222,8 +199,7 @@ Codex subagents must not be assumed to spawn nested subagents.
 
 - **`delegated-fix`** — run steps 0–5 directly in the assigned worktree, without spawning helpers, then stop before review/publication and return a complete review packet: PR/head metadata, starting/final SHAs, every item verbatim with stable refs and proposed disposition, validation run, and any blocker.
   **Step 2's rebase points are not yours in this mode.**
-  Spawning no helpers is exactly why: step 2 requires a fresh rebaser that is never the fixer, and the boundaries a stacked entry's rebase needs — the parent's new tip *and* its old tip — live in the parent map the orchestrator holds and nothing here can see.
-  So the orchestrator runs each point as its own rebaser around this mode (`address-reviews` → "Phase A — initial fix"), and the invocation arrives with `no-rebase` plus the pinned effective base its pre-fix rebaser landed on, or the one the orchestrator pinned at setup where no rebase ran for this entry: carry that OID into the packet as this entry's effective review base, and rebase nothing yourself.
+  The orchestrator runs each point as its own rebaser around this mode (`address-reviews` → "Phase A — initial fix"), and the invocation arrives with `no-rebase` plus the pinned effective base its pre-fix rebaser landed on, or the one the orchestrator pinned at setup where no rebase ran for this entry: carry that OID into the packet as this entry's effective review base, and rebase nothing yourself.
   This mode reaches neither step 7 nor step 8, so it posts **no** disposition record and makes no PR write at all: the packet goes back to the orchestrator, which owns the record for an entry that ends without publishing (`address-reviews` → "Publication").
 - **`publish-reviewed`** — receive that packet plus a fresh external reviewer's Pass verdict and the peer outcome (satisfying the `review-cycle` gate), verify the packet still matches the clean committed `HEAD`, then run only step 7 and return step 8's report.
   Refuse to edit code, re-triage, or publish without this complete passing review gate.
@@ -233,32 +209,15 @@ The worktree orchestrator owns the fresh reviewer, peer invocation, and any fix-
 
 ## Subagent destroy boundary
 
-State this in every subagent prompt this skill composes.
-A reviewer subagent authorized to verify a claim empirically once ran `rm -rf ./*` in a shared main checkout: its setup `git clone … | tail` had failed invisibly under `set -e` (a pipeline's status is its last command), so it deleted tracked files and moved a branch ref while believing it stood inside a clone.
-
-- **Permitted:** reading, searching, and read-only `git`/`gh` queries — plus, for a fixer or implementer, edits, commits, and pushes confined to its own assigned worktree and branch.
-- **Forbidden, named outright:** `rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`, and force-pushing — each of them beyond what the prompt itself spells out, whether as an exact command or as a skill it names to invoke.
-  A subagent may not self-authorize one by putting itself somewhere it believes is safe — forbidden **not in a clone, not in a temp directory, not "safely"**.
-  What you spelled out, and the disposable location below, are the only exemptions — and only because you named them.
-- **A worktree is not a blast radius.**
-  It isolates the working tree, not the repository: `branch -f`, `reset`, `update-ref`, and `gc` all reach every sibling worktree through the shared `.git`.
-- **Any repository other than the subagent's own checkout is addressed by path.**
-  `git -C <absolute path>`: never derive a working directory from a glob, and never chain a state-changing git command after a `cd` whose success you have not checked.
-  A fix-up subagent ran `cd "$(ls -d <scratchpad>/tmp.*)" ; git commit …` where concurrent siblings had created scratch directories of their own — the glob expanded to three paths, the `cd` failed, and the `;`-chained commands landed in the shared main checkout, putting a commit on `main`.
-- **Empirical verification that could change state goes where you send it.**
-  Send the subagent to `DC="$(dc-enter <slug>)"` — one absolute path on stdout, dropped again with `dc-remove <slug>`; a reused slug is refused rather than re-derived, so anything that may run twice passes `--replace` or removes the slug first.
-  Where that command is not found at all, install the helpers from the dev-skills plugin `bin/` rather than improvising a destination.
-  Never leave the choice to the subagent.
-  Give it the guarded `cd` too: `cd ""` returns 0 and moves nowhere, so checking the status catches nothing and a failed lookup leaves the subagent in the shared checkout — the form is `cd -- "${DC:?dc-enter returned no path — see its error above; if it is not installed, install it from the dev-skills plugin bin/}"`, with `pwd` confirmed before the first command that writes.
+Open every subagent prompt this skill composes with this line, filling in the absolute path of the `subagent-boundary.md` that sits beside this file: "Before your first command, read `<path>/subagent-boundary.md` in full; it binds you. Whatever else you read, never run `rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`, or a force-push beyond what this prompt spells out, wherever you believe you are standing."
+A subagent that may need to verify something in a way that could change state is sent to a disposable clone: name `dc-enter <slug>` in its prompt with a slug unique to it, and never leave the destination to the subagent.
 
 ## Procedure
 
 ### Step 0 — Preflight
 
 1. **Clean and idle tree — checked in the working location, not here.**
-   Both checks survive unchanged in substance but are scoped to wherever this run will work, which "Working location" picks once step 1 has resolved the PR; run them there, and only there.
-   This is where they are stated, whichever mode selects them: `git status --porcelain` empty, **and** no Git operation in progress — `git rev-parse --git-path rebase-merge` and `rebase-apply` for an existing path, plus `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`.
-   Those markers are not decoration: a tree left mid-cherry-pick, mid-merge or mid-revert prints empty porcelain and has no rebase path, so a rebase-only probe passes it here and the state surfaces only at step 5's packet hard-check, with a run's fixes already committed on top of it.
+   Run both checks wherever this run will work, which "Working location" picks once step 1 has resolved the PR, and only there: `git status --porcelain` empty, **and** no Git operation in progress — `git rev-parse --git-path rebase-merge` and `rebase-apply` for an existing path, plus `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`.
    Either check failing stops the run to ask the user to commit/stash/clean it (hands-off: document and stop).
    Never auto-stash or discard files, wherever you check.
 2. **Confirm `gh` is authenticated** (`gh auth status`).
@@ -281,16 +240,14 @@ Precedence for identifying the PR:
 3. **Ambiguous or none found** — ask the user which PR (hands-off: stop and document the blocker; do not guess).
 
 Record `owner`, `repo`, PR `number`, `baseRefName`, `headRefName`, `headRefOid`, and the head repository **owner and name** — `headRepositoryOwner.login` plus `headRepository.name`, with `isCrossRepository` as the cheap short-circuit — for the API calls and publication guard below.
-Ask for all three by name: step 7 resolves a named off-shoot's push target from them, and a fork whose repository name differs from the base repository's cannot be identified from the owner alone, so a run that never requested them reaches publication with every fix made and no target it can verify.
+Ask for all three by name: step 7 resolves a named off-shoot's push target from them.
 
 **Now pick the working location**, per "Working location" above, and set it up before going any further: everything below this line — the reconciliation, the rebase, the fixes, the review, and the push — happens there.
-It comes before the reconciliation rather than after because reconciling can move a branch, and the branch it must move is the one the work will land on.
 A named off-shoot has no reconciliation to run at all: `headRefName` is a branch that run is not on.
 
 **Reconcile the working location's branch with the PR head before triaging anything.**
 The rule is *no work lost*, and ancestry decides it rather than a standing preference for either side.
 Fetch the PR's exact head ref in the working location without moving the local branch, and take the head you reconcile against from what that fetch actually brought — `git rev-parse FETCH_HEAD` — rather than from the recorded `headRefOid`.
-A fetch brings whatever the ref names *now*, and whether the recorded OID is a local object says nothing about that: it is normally reachable from your own checkout, so an existence check on it passes even where a push has since advanced the head, leaving the reconciliation to run against a tip origin has already moved past.
 Where the fetched OID differs from the recorded one, classify the pair by ancestry before adopting anything.
 **A fetched-behind-reported head is a rewind, not an advance:** when both commits are available and the fetched OID is a proper ancestor of the `headRefOid` that `gh pr view` reported, block the entry for a maintainer decision without adopting the fetched OID.
 Every other difference keeps the existing adoption rule: adopt the fetched OID as `headRefOid` and continue, including an advance and a force-push whose reported OID was not downloaded, so the comparison below and step 7's lease both name the head you actually reconciled against.
@@ -299,14 +256,12 @@ Then compare `HEAD` against `headRefOid`:
 
 - **Equal** → the two agree; proceed.
 - **`HEAD` is a proper ancestor of `headRefOid`** (local strictly behind, nothing unpushed) → fast-forward the local branch to the PR head and address the feedback from there.
-  Someone advanced the branch on origin and you hold nothing it lacks.
-  Never carry a strictly-behind tip into publication: a normal push cannot fast-forward it, and an exact-lease force-push from it would delete the newer remote commits.
+  Never carry a strictly-behind tip into publication (step 7 stops on one).
 - **`headRefOid` is represented in `HEAD`** — either it is an ancestor, or every commit unique to it is present in `HEAD` by patch-id → keep the local branch and put the fixes on top.
-  Test representation by patch-id rather than raw ancestry: a branch rebased onto a newer base carries the PR head's content forward while sharing no SHAs with it, so a raw-ancestry test would misread that routine case as divergence and stop a run that should simply proceed.
+  Test representation by patch-id rather than raw ancestry: a branch rebased onto a newer base carries the PR head's content forward while sharing no SHAs with it.
   Patch-id cannot speak for a merge commit, which has no patch of its own: ignore one that merely joined its parents, but treat a conflict resolution it introduced as unrepresented work unless `HEAD` carries that resolution too.
 - **Genuinely divergent** — each side holds commits the other lacks, and the remote's are not represented in `HEAD` by patch-id → **stop and ask the maintainer.**
   Do not pick a side, merge, or rebase on your own; report both tips and the commits unique to each.
-  Two contributors fixing one branch unaware of each other, or a deliberately dropped commit, are a maintainer call every time — the likely answers (preserve both efforts, or choose between competing fixes) are judgments this skill must not encode.
   Hands-off: skip the entry and document exactly this.
 
 The tip this run started from is the **working location's** tip as attached, not step 0's reading — in worktree mode that reading describes the main checkout, which the run never touches.
@@ -314,9 +269,7 @@ Record it when the location is set up, and re-record it if the fast-forward abov
 
 ### Step 2 — Rebase onto the freshest base (the default; `no-rebase` opts out)
 
-Rebasing brings the branch close to its final merged state, so the feedback is addressed against the geometry the work will actually land in (essential when several stacked PRs are being fixed at once) and the diff a reviewer — human or bot — reads at push time is minimal against the base as it stands then.
-It happens at **two points**: here, before triage and fixing, and again at the end of step 5, before step 6's reviewer round — the second one repeating whenever step 6 sends the work back for further fixing.
-Both are usually no-ops and cheap; when they are not, they are exactly the work the maintainer otherwise does by hand between review rounds.
+The rebase happens at **two points**: here, before triage and fixing, and again at the end of step 5, before step 6's reviewer round — the second one repeating whenever step 6 sends the work back for further fixing.
 You may judge a point unnecessary — where the base demonstrably has not moved since this run's earlier rebase, say so in the report and skip it rather than delegating a replay of nothing.
 `no-rebase` suppresses **both** points, and nothing else does.
 `rebase on top of <target>` replaces the default target with the one it names.
@@ -324,7 +277,6 @@ Given both, honor `no-rebase` and note the token it overrode, exactly as `no-pus
 
 **Do not run the rebase in your own turn.**
 Delegate each point to a fresh subagent under `review-cycle` → "The delegated rebase step", which defines that brief whole — the pre-rebase recovery ref, the base pinned to the OID actually rebased onto, the hunk-level conflict rules it takes from `rebase-stack`, the clean halt, the validation, and the packet it hands back.
-None of that is restated here.
 What is specific to one PR:
 
 - **The target.**
@@ -335,14 +287,12 @@ What is specific to one PR:
   Either way this is a **single-branch** rebase: a whole chain of dependent branches is the separate `rebase-stack` skill — mention it if the user seems to want chain-wide restacking.
   Where this PR's base is another in-flight PR's head, the target is that parent's new tip, per the delegated step's parent-first rule — which for a single-PR run reduces to that branch's tip as freshly fetched, since nothing here rebases the parent; a batch orchestrator holding the parent map is what rebases it first and then pins the resulting tip as this entry's target.
 - **Where it runs.**
-  The working location, like everything else after step 1. Inline that rewrites the branch the maintainer is standing on, which is mode 1's accepted contract; in worktree mode the rewrite and any conflict happen in a tree that is disposable, and the main checkout is unaffected either way.
+  The working location, like everything else after step 1.
   Mode 4 — the named off-shoot — is the one location where the default target is worth questioning rather than simply accepted: that branch was cut *before* the PR head and advanced with its own commits, so its position may be deliberate and it may itself be the base of unpushed stacked children, and what a rebase rewrites there is the maintainer's own line of work rather than a copy of the head.
   The rebase still runs by default, and the report names the off-shoot as the branch it rewrote.
   Where anything about the request suggests that position is deliberate, put the target to the maintainer before rebasing and name the two ways to settle it — `no-rebase`, or an explicit `rebase on top of <target>`; hands-off has nobody to ask, so it rebases onto the default target and records that the off-shoot was the branch rewritten.
 - **Both points are this run's own** at top level, the second once every intended change is committed, so the packet a top-level run reports has the rebased tip as its final SHA.
-  Step 6 can send that state back for another Fixer round, whose commits land on a base that may have moved since: the second point runs **again after every such round**, before the reviewer round that judges it — the same after-every-packet-changing-fix-up rule the delegated arrangement below states, for the same reason, so no verdict that authorizes a push is rendered on a tree whose last base refresh predates its last fix.
-  In `delegated-fix` neither point is this run's: the orchestrator runs both around it — the first before the fix agent, the second once that agent's packet is adopted, and again after every packet-changing fix-up — and re-pins the packet's final SHA and effective base from each rebaser's report, so what `publish-reviewed` later matches against `HEAD` still describes the tree that was reviewed.
-  A `publish-reviewed` run rebases nothing in either arrangement.
+  In `delegated-fix` neither point is this run's ("Delegated modes for the worktree orchestrator"), and a `publish-reviewed` run rebases nothing.
 - **The pinned effective base is this run's effective review base** (step 6) and the boundary of every range you delegate afterwards.
   Take it from the returned packet — the OID that rebase actually landed on — and never re-derive it later from `baseRefName` or `origin/<base>`.
 - **The second point runs before each reviewer round**, so a passing verdict always describes the exact tree step 7 pushes.
@@ -350,7 +300,7 @@ What is specific to one PR:
 - **A halt is a stop, not a guess.**
   A conflict beyond the delegated step's competence — or a merge carrying its own content, met before any replay (the conflict is aborted; the merge starts no rebase, so there is nothing to abort) — comes back as an open question with the tree left clean and idle.
   **Interactive:** put that question to the user — what it turns on, your proposed resolution, and the reasoning — and hand their answer to a *fresh* rebase subagent rather than finishing the rebase in your own turn; loop them in as many times as needed.
-  **Hands-off:** the run stops there having pushed nothing, with that open question and its detail (the offending commit, the files, why) as the blocker — addressing review on a wrong or stale base and then force-pushing is worse than not running.
+  **Hands-off:** the run stops there having pushed nothing, with that open question and its detail (the offending commit, the files, why) as the blocker.
 
 If either rebase changed the branch tip, expect the eventual push to be a force-push (step 7's exact `--force-with-lease`).
 
@@ -358,9 +308,9 @@ If either rebase changed the branch tip, expect the eventual push to be a force-
 
 Fetch the **unresolved** review threads and enough context to judge them (see "GitHub API recipes"):
 
-- **Review threads** (inline comments): fetch every **unresolved** thread exactly per "GitHub API recipes" below — prefer the `gh-review-threads` helper when it is on PATH, else run the GraphQL query by hand as fresh single-shot per-page queries (never `gh api graphql --paginate`) — keep only `isResolved == false`, and **validate every response before acting** as the recipes specify, failing closed on any identity, shape, or scope failure.
+- **Review threads** (inline comments): fetch every **unresolved** thread exactly per "GitHub API recipes" below — prefer the `gh-review-threads` helper when it is on PATH, else run the GraphQL query by hand as fresh single-shot per-page queries — keep only `isResolved == false`, and **validate every response before acting** as the recipes specify, failing closed on any identity, shape, or scope failure.
   For each thread, capture the thread `id`, `path`, `line`, `isOutdated`, and every comment's `databaseId`, author login/type, `body`, `diffHunk`, and `url`.
-- **CI on the PR head** (`gh pr view --json headRefOid,statusCheckRollup`, read the way README's *Contributing* reads it — by `__typename`, terminal values tested positively): every lane whose verdict is not `SUCCESS`/`NEUTRAL`/`SKIPPED` is a review item too, gathered with its identity — the `workflowName` and `name` of a `CheckRun` — an external app's has no `workflowName`, so its `checkSuite.app.slug` fills that slot, read through GraphQL's `statusCheckRollup.contexts` since `gh pr view` does not carry it, and two apps emitting one check name stay two lanes — the `context` of a `StatusContext`; a rollup carrying that identity more than once, one workflow fired by several events on the head, holds one lane there, failing while any instance is — and its details URL, and — for a GitHub Actions `CheckRun`, whose `detailsUrl` carries the segment `/<owner>/<repo>/actions/runs/<run-id>` (usually followed by `/job/<job-id>`) — the failing job's log tail — `gh run view --repo <owner>/<repo> --job <job-id> --log-failed | tail -n 200` where the URL names the job, else `gh run view <run-id> --repo <owner>/<repo> --log-failed | tail -n 200` for the run as a whole — under `set -o pipefail`: the pipeline otherwise reports `tail`'s zero status, so a `gh` that failed (a stale job id, an expired token) hands back an empty tail that reads as evidence, where it is a failed gather to stop on — the `tail` doing the bounding that `--log-failed` does not: it prints every failed step's log whole, and a large one fills the context before the failure it ends with is read, the very evidence the item is gathered for — with `<owner>/<repo>` taken from that URL rather than left to the checkout's default: a fork PR's `pull_request` workflow runs in the base repository, where an unqualified call resolves against the fork and returns the wrong run or a 404. A `StatusContext` or an external app's `CheckRun` has no workflow run at all, so `gh run` can neither read nor re-run it: gather it with its `targetUrl`/`detailsUrl` as the only details mechanism, and record that logs and re-runs are unavailable through `gh run`.
+- **CI on the PR head** (`gh pr view --json headRefOid,statusCheckRollup`, read the way README's *Contributing* reads it — by `__typename`, terminal values tested positively): every lane whose verdict is not `SUCCESS`/`NEUTRAL`/`SKIPPED` is a review item too, gathered with its identity — the `workflowName` and `name` of a `CheckRun` — an external app's has no `workflowName`, so its `checkSuite.app.slug` fills that slot, read through GraphQL's `statusCheckRollup.contexts` since `gh pr view` does not carry it, and two apps emitting one check name stay two lanes — the `context` of a `StatusContext`; a rollup carrying that identity more than once, one workflow fired by several events on the head, holds one lane there, failing while any instance is — and its details URL, and — for a GitHub Actions `CheckRun`, whose `detailsUrl` carries the segment `/<owner>/<repo>/actions/runs/<run-id>` (usually followed by `/job/<job-id>`) — the failing job's log tail — `gh run view --repo <owner>/<repo> --job <job-id> --log-failed | tail -n 200` where the URL names the job, else `gh run view <run-id> --repo <owner>/<repo> --log-failed | tail -n 200` for the run as a whole — under `set -o pipefail`, so a `gh` that failed (a stale job id, an expired token) is a failed gather to stop on rather than an empty tail that reads as evidence — with `<owner>/<repo>` taken from that URL rather than left to the checkout's default, which from a fork clone resolves against the fork. A `StatusContext` or an external app's `CheckRun` has no workflow run at all, so `gh run` can neither read nor re-run it: gather it with its `targetUrl`/`detailsUrl` as the only details mechanism, and record that logs and re-runs are unavailable through `gh run`.
   A lane still in progress on the current head is not an item: note it and let the push, or the re-run below, settle it.
   A rollup describing a head other than the one you reconciled against says nothing about this branch; re-read it after the push instead.
 - **Top-level review summaries** (`gh pr view --json reviews`) and **issue comments** (`gh api --paginate repos/{owner}/{repo}/issues/{number}/comments`) — read for context, especially **maintainer replies/push-backs** that override or qualify a bot's original comment.
@@ -384,7 +334,7 @@ Every other case follows the zero-item path: in `delegated-fix`, return the comp
 This includes both a rebase that changed `HEAD` and any already-unpublished local tip.
 A zero-item path makes no synthetic commit, and a terminal no-op makes no commits, push, ping, or summary comment.
 Step 1's reconciliation has already fast-forwarded a strictly-behind branch, so `HEAD` cannot be a proper ancestor of `headRefOid` by the time you get here.
-If it somehow is, stop and report rather than entering the zero-item path: that tip has no unpublished work to publish, and the only push that could reach the recorded head is a force-push that deletes the newer remote commits.
+If it somehow is, stop and report rather than entering the zero-item path.
 
 ### Step 4 — Triage every review item
 
@@ -404,7 +354,7 @@ Classify each into one of:
   Caused by this branch and within the PR's scope → **actionable**; fix it like any other item, and the push re-runs every lane.
   Not caused by this branch, or caused by it but structural or sprawling to fix (a shared fixture, a toolchain pin, a suite that fails on the base too) → **ambiguous**: the maintainer chooses between fixing here, a follow-up task, or accepting the red lane — hands-off records the lane, the cause you found, and that choice unmade, and pushes nothing for it.
   A **flake** — evidence, not a hunch: the same lane green on the base at a commit carrying the same relevant files, or an earlier re-run of this same head having gone green.
-  A log that names only files the diff does not touch is **not** that evidence: a branch change that breaks an unchanged test names that test, its fixture, or a generated artifact rather than anything in the diff, and reading it as a flake re-runs a deterministic regression and leaves the PR red — so find the cause, or compare against an equivalent base run, before calling it one.
+  A log that names only files the diff does not touch is **not** that evidence: find the cause, or compare against an equivalent base run, before calling it one.
   An evidenced flake is re-run rather than fixed (`gh run rerun <run-id> --repo <owner>/<repo> --failed` for an Actions lane — once per run, the repository taken from the run URL as step 3 takes it: several failed jobs of one run share its id and `--failed` re-runs them all, and a second request meets a run already re-running; a lane with no workflow run is left for the maintainer, since nothing here can re-run it), and only where the run pushes nothing new, since a push re-runs it anyway; a flake that has bitten before earns a follow-up-task item to fix the flake itself, offered rather than assumed on an interactive run.
   Those three are a failing lane's only dispositions — **already-addressed** is the replay disposition of a recorded lane this head shows green, running or absent, and a fix the tree already carries for a lane still red on the head (this branch's from an earlier run, or the base's after a rebase) is **actionable** with where the fix lives, since only the push re-runs the lane.
   Every CI item reaches the Summary comment with its cause, whichever way it went: a lane has no thread to reply on.
@@ -430,7 +380,7 @@ For the actionable items:
   Inspect and commit every intended change; if a fixer leaves partial or unexplained changes, resolve that state or stop rather than letting the reviewer inspect only the committed subset.
 - Then run **step 2's second rebase point** — after that hard-check passes, before anything reaches review or publication.
   Its pinned effective base supersedes the first point's for step 6's brief and every later range, and a rebase that replayed anything runs its delivery-tier validation there rather than leaving step 6 to discover the breakage.
-  In `delegated-fix` that point is the orchestrator's: leave the worktree clean at the hard-check and return the packet, and it runs the rebaser and re-pins the packet before any reviewer sees the tree.
+  In `delegated-fix` that point is the orchestrator's: leave the worktree clean at the hard-check and return the packet.
 
 For the **follow-up-task** items, write the task file(s) following the `write-tasks` skill conventions (invoke that skill where available):
 
@@ -442,11 +392,10 @@ For the **follow-up-task** items, write the task file(s) following the `write-ta
 - Each task must stand alone: restate the concern and link the PR thread; an implementer should not need to re-read the review.
   The link permanently anchors the exact line under review, so the task body anchors to named symbols per the `write-tasks` conventions and stays true after the branch moves.
 - **Commit task files on the current branch, separately from code-fix commits** (when practical).
-  The task ships with the branch that prompted it — merging the PR then also lands the record of its loose ends, which is what makes a committed follow-up a legitimate way to close a thread.
 
 Fixer subagent prompt should include: the relevant review comment(s) **verbatim**, the file/line locations, the branch name (and "verify you are on it"), the **absolute path of the working location** with an instruction to `cd` there and confirm `git rev-parse --show-toplevel` prints exactly it before touching anything (in worktree mode a fixer that resolved the branch itself would land in the main checkout), an instruction to read `AGENTS.md` first, the same-pattern sweep instruction, commit/validation instructions, an instruction not to write to any shared task/plan tracker, and a request to report what it changed, any tradeoffs, and anything uncertain.
 Do **not** give it unrelated context.
-With those validation instructions, hand it the path any build or check output must land in — namespaced by this PR number, or created with `mktemp -d`, and outside the checkout it commits from — never a fixed shared scratchpad name: one session's agents share that directory, and two of them redirecting to `<scratchpad>/verify.log` once had one report a verdict for the wrong branch.
+With those validation instructions, hand it the path any build or check output must land in — namespaced by this PR number, or created with `mktemp -d`, and outside the checkout it commits from — never a fixed shared scratchpad name, since one session's agents share that directory.
 Never leave the choice to the fixer.
 This Fixer runs before step 6, so it never receives the prompt that cycle composes: brief it under `review-cycle`'s Fixer contract whole — every rule that skill states for a Fixer binds here, later additions included — rather than importing named rules one at a time.
 
@@ -464,21 +413,20 @@ This skill's deltas on the cycle:
 
 - The work items are every unresolved thread and standalone item verbatim, and every CI lane step 3 gathered — its identity as step 3 gathers it, its details URL, the log tail or the explicit logs-unavailable marker step 3 recorded, the cause found, and any fix made for it — each with its proposed disposition label (actionable-fixed / already-addressed / push-back / follow-up-task / ambiguous, or the CI disposition step 4 gave a lane), plus the effective review base, the branch, and the **working location** — its absolute path in worktree mode, so the Reviewer and the peer read the tree the fixes landed in rather than the main checkout.
   The effective review base is the **pinned OID** step 2's latest rebase point landed on — the same commit every delegated range is taken against; where no rebase ran at all this turn (`no-rebase`, or both points judged unnecessary), pin the target the rebase would have used, once here instead, resolved exactly where the rebasing path resolves it.
-  A `rebase on top of <target>` target still standing — named by the request and not discarded by `no-rebase`, which suppresses the rebase and not the target — resolves where it was named: locally, `git rev-parse --verify '<target>^{commit}'` (the operand quoted as ONE argument — a legal ref name may carry `$`, backticks or `;`, and an unquoted `$`-fragment can silently resolve some other existing ref instead), fetching nothing, because the branch was deliberately based on it and a `baseRefName` boundary would bound every range at the wrong commit — handing the Reviewer and the peer the underlying branch's own commits as this PR's diff, or cutting the range short of the intended boundary.
-  Where that named target does not resolve here, stop and report what you tried rather than substituting anything: `baseRefName` is the target only where the request named NONE, never the fallback for one that failed to resolve, and `git rev-parse --verify` does not DWIM a remote-only branch to `origin/<it>` — so a maintainer naming one reaches exactly this case, and on a `no-rebase` run this is the only place the target is resolved at all.
+  A `rebase on top of <target>` target still standing — named by the request and not discarded by `no-rebase`, which suppresses the rebase and not the target — resolves where it was named: locally, `git rev-parse --verify '<target>^{commit}'` (the operand quoted as ONE argument — a legal ref name may carry `$`, backticks or `;`, and an unquoted `$`-fragment can silently resolve some other existing ref instead), fetching nothing.
+  Where that named target does not resolve here, stop and report what you tried rather than substituting anything: `baseRefName` is the target only where the request named NONE, never the fallback for one that failed to resolve, and `git rev-parse --verify` does not DWIM a remote-only branch to `origin/<it>`.
   Otherwise — the request having named none — pin `baseRefName`, resolved exactly as the rebasing path's default target is — `git fetch <the remote whose URL is that repository, or that repository's URL where no remote points at it> refs/heads/<baseRefName>` against the repository the PR's own `url` names, moving no branch, then `git rev-parse --verify FETCH_HEAD^{commit}` read immediately after that fetch.
-  Never a bare ref name or an `origin/<base>`: in a fork clone those resolve a same-named local or fork branch and in an ordinary clone a stale one, and this OID bounds every Reviewer and peer range, so a passing verdict would cover a diff against the wrong commit — with nothing left to catch it, since this is the one path with no rebase report to pin from.
+  Never a bare ref name or an `origin/<base>`: in a fork clone those resolve a same-named local or fork branch and in an ordinary clone a stale one.
   Neither the Reviewer nor the peer gets your implementation reasoning, drafted rationale, or the fixer's report.
 - The Reviewer independently verifies every disposition: fixes and already-addressed claims must hold in the committed code; push-backs must be technically justified rather than convenient dismissals; follow-up-task items must point at a committed task file that genuinely covers the concern, with the follow-up itself justified under step 4's conditions — never an evasion of a cheap fix — and its queued or deferred placement consistent with step 5; ambiguous items must genuinely require an authoritative decision.
   It may reclassify any item.
 - When a round fails, re-triage the affected comments before the cycle's next fresh Fixer round.
 - If the cycle stops at its round cap, do **not** push; surface every outstanding finding set in the final report (and to the user if interactive).
-  Such a run intended to publish and could not, which is exactly what "The durable disposition record" is for — it leaves that record on the PR.
+  Such a run leaves the disposition record on the PR ("The durable disposition record").
 
 ### Step 7 — Publish after the review gate (every run except `no-push`)
 
-If `no-push` was given this is a local-only run: **skip this entire step** — push nothing, touch no thread, post no Summary comment, ping nobody.
-Go to step 8, which posts the disposition record: that comment is the one PR write such a run makes, and it is the only thing a skipped step 7 leaves behind.
+If `no-push` was given, **skip this entire step** and go to step 8, which posts the disposition record — the one PR write such a run makes.
 
 Otherwise:
 
@@ -490,41 +438,34 @@ If any differ or the peer outcome is missing, stop; do not re-triage or publish 
 
 Publication runs in the working location: the re-check, the resolved push remote/ref, and the push itself all read and write that tree and its `HEAD`, never the main checkout.
 
-**Which repository every `gh` call below addresses: the one the PR is in**, whose `<owner>/<repo>` is the PR's own `url`, written out literally (`--repo <owner>/<repo>`, `repos/<owner>/<repo>/…`) rather than left to default.
-"GitHub API recipes" states this once for every call in this skill; it is restated here because these are the writes that *mutate* the PR — on a cross-repository PR handled from a fork clone the working location is the head fork, so an unqualified read, reply, Summary comment or reviewer request addresses a same-numbered PR there instead of this one.
-Not from a bare `gh repo view --json nameWithOwner` either, which with no repository argument answers for the directory: the fork again.
+**Which repository every `gh` call below addresses: the one the PR is in**, written out literally (`--repo <owner>/<repo>`, `repos/<owner>/<repo>/…`) per "GitHub API recipes" rather than left to default.
 The `git` push of item 2 below is the deliberate exception — its target is the head repository, resolved from the remote in item 1.
 
-1. **Re-check before publication:** require the working location clean and idle, by step 0.1's two checks, and still standing on the branch this run has been working on (`git branch --show-current`, in that spelling: `git rev-parse --abbrev-ref HEAD` is documented to produce a non-ambiguous name, so where a tag shares the branch's name it prints `heads/<name>` and would stop a publication that was valid) — the mode picked that branch and everything below is keyed on its name, so a location that has moved to some other branch since the review is a stop rather than something to publish from; re-fetch the PR and confirm it is still open, still points to the recorded head repository/ref, and its current `headRefOid` is the expected remote tip you are prepared to replace.
+1. **Re-check before publication:** require the working location clean and idle, by step 0.1's two checks, and still standing on the branch this run has been working on (`git branch --show-current`, in that spelling, never `git rev-parse --abbrev-ref HEAD`) — a location that has moved to some other branch since the review is a stop; re-fetch the PR and confirm it is still open, still points to the recorded head repository/ref, and its current `headRefOid` is the expected remote tip you are prepared to replace.
    Resolve the current branch's exact push remote/ref, verify they match that PR head, and fetch that exact head ref without moving the local branch so the expected commit object is available for the ancestry test — never assume `origin`, especially for fork PRs.
    If the PR head moved, the push target cannot be matched, or the branch has no usable push permission, stop and report instead of guessing.
 
    **On a named off-shoot the target is the PR's head ref, never the branch's own upstream.**
-   Mode 4's branch has a different name and may track a ref of its own, so "the current branch's push remote/ref match the PR head" is a comparison it fails by construction — and failing it is not the answer, since the maintainer's `off-shoot` argument is what put the work there.
    Resolve the target from the PR instead (its head repository owner/name and `headRefName`, with `isCrossRepository` as the cheap short-circuit) and push explicitly to `refs/heads/<headRefName>` there; the off-shoot's own upstream is not the target, is never pushed to by this run, and its not matching the PR head is that mode's normal state.
    What the off-shoot may put **on** the head ref is item 2's representation probe, not a name comparison here.
-   Mode 4 is the only mode this substitution covers: everywhere else the working branch **is** the head ref, so the comparison above stands exactly as written — it is what catches a location standing on a branch that is not the one this PR publishes from.
+   Mode 4 is the only mode this substitution covers: everywhere else the working branch **is** the head ref, so the comparison above stands exactly as written.
 2. **Push:** work these in order, and never skip ahead to the lease — each excludes the ones above it and the last is "everything else", so no state is left for you to choose in.
    - **First, a `HEAD` that is a proper ancestor of the expected tip is a stop, not a push.**
      The remote branch is ahead of you: there is nothing of yours to publish, a normal push cannot fast-forward it, and the lease below is the trap rather than the protection — the expected OID is exactly what the remote still points at, so the lease *matches*, the push succeeds, and it rewinds the branch over the newer remote commits.
      Stop and report, exactly as for a rejected lease, and reconcile nothing to make the push legal.
-     Step 1 fast-forwards a strictly-behind branch before any fix lands, so on the PR's own branch this state means the working location moved backwards after that — which is why it is checked here rather than assumed away.
    - **Then, an off-shoot must carry the recorded head.**
-     Where the working location is mode 4's off-shoot, nothing has yet established that `HEAD` carries the PR head: step 1's reconciliation was skipped whole and "behind the head" is that mode's normal state.
-     So before choosing any push, run step 1's own representation probe against the expected tip — `git rev-list --right-only --cherry-pick HEAD...<expected-head-oid>`, patch-id rather than raw ancestry, so an off-shoot rebased onto a newer base still reads as carrying the head — and require it to print nothing.
-     Whatever it prints is work the recorded head carries and this push would delete, and the lease below protects none of it: the recorded OID is exactly what the remote still points at, so the lease *matches*, the push succeeds, and the PR branch is rewound over commits this run never saw.
+     Where the working location is mode 4's off-shoot, before choosing any push run step 1's own representation probe against the expected tip — `git rev-list --right-only --cherry-pick HEAD...<expected-head-oid>`, patch-id rather than raw ancestry, so an off-shoot rebased onto a newer base still reads as carrying the head — and require it to print nothing.
+     Whatever it prints is work the recorded head carries and this push would delete, and the lease below protects none of it, for the reason the stop above gives.
      Stop and report instead — naming both tips (the expected tip and the `HEAD` you would have pushed) and every commit the probe printed — and do not fast-forward, merge or rebase the off-shoot to make the push legal: that state goes back to the maintainer, exactly as step 1's divergent outcome does.
-     One shape reaches this stop with nothing actually lost: an off-shoot that carried the head until this run's own rebase flattened a merge commit the head carries — content replayed, patch-id gone — so the probe prints that merge.
-     Report it the same way rather than filtering merges out, which is the trade step 1's probe already makes: one extra ask where a UI "Update branch" merge is in the head, against never silently dropping what such a merge resolved.
-     On the PR's own branch step 1 already settled representation before any fix landed, and item 1 has just re-verified both that the head has not moved since and that the working location still stands on that branch, so the probe is the off-shoot's alone.
+     An off-shoot whose own rebase in this run flattened a merge commit the head carries makes the probe print that merge: report it the same way rather than filtering merges out.
+     The probe is the off-shoot's alone.
    - Then, if the expected remote tip is an ancestor of `HEAD`, use a normal explicit push (`git push <remote> HEAD:refs/heads/<headRefName>`).
    - **Otherwise** — every remaining state, whether or not this run rewrote history — use an exact lease (`git push <remote> --force-with-lease=refs/heads/<headRefName>:<expected-head-oid> HEAD:refs/heads/<headRefName>`).
-     The remainder is deliberately not "history was rewritten": a tip that carries the expected head by patch-id without having it as an ancestor is the ordinary result of a rebase, and it reaches this same instruction whether that rebase ran in this run or before it.
      If the lease is rejected, **never** escalate to bare `--force`; stop and report because the remote moved under you.
 
    Then, whichever push ran: confirm what actually landed against the ref itself — one `git ls-remote "<url>" refs/heads/<headRefName>` for each URL `git remote get-url --push --all <remote>` lists — rather than `gh pr view --json headRefOid`, which can still report the pre-push head for a while after the push returns.
-   Read back through the resolved **push** URLs, not the remote name: where a remote carries a distinct `pushurl` (a fork or a writable mirror), the push wrote to one repository while `git ls-remote <remote>` and any fetch read the other, so the name would confirm the push against a repository it never wrote to.
-   Enumerate with `--all` and read the URLs one at a time: `git push` writes to *every* configured push URL, plain `--push` names only the first, and interpolating the whole list into a single `ls-remote` either fails outright when quoted or, unquoted, swallows the second URL as a ref pattern and reports the first URL's ref as if it spoke for both.
+   Read back through the resolved **push** URLs, not the remote name: a remote may carry a distinct `pushurl` (a fork or a writable mirror).
+   Enumerate with `--all` and read the URLs one at a time: `git push` writes to *every* configured push URL, plain `--push` names only the first, so one `ls-remote` per URL.
    Every URL has to come back with the `HEAD` you pushed: `git ls-remote` is observational and exits 0 even when it prints nothing, so an absent ref, a disagreeing OID, or a destination you could not reach is a stop, not a pass.
 3. **Re-read unresolved threads after the push.**
    Re-run any lane step 4 judged a flake only where the push was a no-op — a push that advanced the branch already re-ran every lane, and this run does not wait on the fresh rollup: CI gates the merge, and the next round reads it.
@@ -546,14 +487,14 @@ The `git` push of item 2 below is the deliberate exception — its target is the
 5. **Summary comment** — post a top-level **"Summary of Review Fixes"** (`gh pr comment <PR#> --repo <owner>/<repo>`).
    Structure: what was fixed (with proactive same-pattern fixes called out), a **prominent "Pushed back — please re-examine" section** for every push-back with its rationale, a **"Follow-up tasks" section** listing each item with its committed task file (explicitly flag deferred placement and flag agent-proposed follow-ups for confirmation), a **"Top-level findings"** section for every standalone item taken from a bot's misfired top-level comment (step 3), each with its disposition and the permalink of the comment it came from, since no thread carries the reply — a **"CI"** section where step 3 gathered a failing lane or a replayed record carried one — each lane with the cause found and its disposition (fixed, re-run as an evidenced flake, or left for the maintainer's choice) — any ambiguous/skipped or newly-arrived items still needing a decision, and (in hands-off runs) every automatic low-stakes decision and every item skipped for lack of feedback.
    In this comment, avoid bare `@codex`/`@claude`/`@copilot` mentions (write "codex"/"claude"/"copilot" plain) so only the dedicated ping comments below trigger a review.
-6. **Pings** — only after the push and summary succeeded, **and only when the push actually advanced the branch** (per "Flag interactions": skip all pings on an "Everything up-to-date" no-op push, even when `ping-*` was supplied, or an automated review → address → review cycle never terminates).
+6. **Pings** — only after the push and summary succeeded, **and only when the push actually advanced the branch** (skip all pings on an "Everything up-to-date" no-op push, even when `ping-*` was supplied).
    `ping-codex` → a dedicated comment whose body is `@codex review`; `ping-claude` → a dedicated comment whose body is `@claude review` — both posted with `gh pr comment <PR#> --repo <owner>/<repo>`; `ping-copilot` → `gh pr edit <PR#> --repo <owner>/<repo> --add-reviewer @copilot`, never an `@copilot review` comment (its table row says why).
    **Guard first:** check `gh --version` against the `ping-copilot` row's gh floor; if the request errors on an older `gh`, **skip the Copilot request without failing the run** — the push and summary already succeeded — and report that Copilot was not summoned (upgrade `gh`, or re-request from the PR's web reviewer menu).
    **Confirm the request from the timeline, never from `gh pr view --json reviewRequests`:** that GraphQL-backed field reads back empty on a request that succeeded, and REST `gh api repos/<owner>/<repo>/pulls/NUMBER/requested_reviewers` lists the request only while it is still pending, so it can confirm one but never refute one — the durable evidence is a `review_requested` event in `gh api --paginate repos/<owner>/<repo>/issues/NUMBER/timeline`.
    Match that event to *this* request by identity: a repeatedly reviewed PR already carries older `review_requested` events for the same reviewer, so snapshot the `id`s of the events naming the intended reviewer *before* issuing the request, and afterwards require one that is not in that snapshot.
-   Compare by event id, never against your own clock: a "newer than the time I noted" test fails whenever the runner clock runs ahead of GitHub's or the event lands in the same one-second `created_at` tick, reporting the reviewer as un-summoned while the correct event sits right there in the timeline.
-   Paginate **both** reads: the timeline is oldest-first and pages at 30, so an unpaginated confirmation returns the oldest events and misses the one you just made, while an unpaginated snapshot misses any existing `review_requested` event beyond the first 30 entries — and that one then reads back as unseen and falsely confirms a request that may never have landed, the worse direction of the two.
-   If no unseen event appears, record that request as unconfirmed and carry on with any pings that remain — do not fail the run, and do not issue this one again: the timeline is eventually consistent like every other read in this step, so an absent event is as consistent with a request that has not propagated yet as with one that never landed.
+   Compare by event id, never against your own clock.
+   Paginate **both** reads: the timeline is oldest-first and pages at 30.
+   If no unseen event appears, record that request as unconfirmed and carry on with any pings that remain — do not fail the run, and do not issue this one again: the timeline is eventually consistent.
    An empty `reviewRequests` read is not a failed request — do not re-issue on the strength of it.
    When `ping-contributing` is in effect — including on a bare default run — determine which bots brought a new finding this round (its table row defines what counts) and ping only those; note each skipped bot in the summary.
    If more than one bot remains, perform each as its own dedicated action.
@@ -561,10 +502,9 @@ The `git` push of item 2 below is the deliberate exception — its target is the
 ### Step 8 — Final report
 
 Post the disposition record first, where this run leaves one ("The durable disposition record" says which runs do): the tips it cites — its `final HEAD` above all — are read in the working location, and a worktree already given back is no location to read anything in.
-Then, in worktree mode, reclaim the worktree, per "Working location" — after publication and equally after a `no-push` finish, but never in `delegated-fix`/`publish-reviewed`, where the worktree is the orchestrator's to reclaim (and it deliberately keeps a held descendant's).
-A run that is halting rather than finishing keeps its worktree and reports the path instead.
+Then, in worktree mode, reclaim the worktree, per "Working location" — never in `delegated-fix`/`publish-reviewed`, where the worktree is the orchestrator's to reclaim (and it deliberately keeps a held descendant's).
 
-Always produce a report (on a `no-push` run it is the only chat output the run leaves, beside the one PR write that run makes — its disposition record — and it doubles as the body of the Summary comment on push runs):
+Always produce a report (it doubles as the body of the Summary comment on push runs):
 
 - The PR, the branch, before/after tip SHAs, and what each of step 2's two rebase points did — replayed, no-op, skipped as unnecessary (with why), or suppressed by `no-rebase` — plus the pinned effective base the run ended on and how any conflicts went.
   In `delegated-fix`, where those points are the orchestrator's, report the pinned effective base you were handed and carried rather than a rebase of your own.
@@ -572,7 +512,6 @@ Always produce a report (on a `no-push` run it is the only chat output the run l
   Say nothing about where the main checkout points now: a worktree run neither moved it nor watched it.
 - Each addressed comment with a **stable reference** — file:line, comment author, the thread's GraphQL node id, and the comment permalink — and its disposition (fixed / already-addressed / pushed-back / follow-up-task / skipped).
   On a **no-push** run this mapping is essential: a later "push now" turn uses it to replay the exact replies/resolves without re-deriving everything.
-  Which is why it does not stay in chat — every run that does not publish in full writes the same mapping to the PR itself, per "The durable disposition record" below.
 - Push-backs, prominently, with rationale.
 - Each failing CI lane step 3 gathered, with the cause found and what was done about it, and each lane replayed from a prior disposition record with its recorded cause and disposition — or, where there was neither, that the rollup was green or still running.
 - Follow-up tasks, each with its committed file, queued or deferred placement, and whether it was maintainer-directed or agent-proposed.
@@ -585,46 +524,37 @@ Always produce a report (on a `no-push` run it is the only chat output the run l
 
 ## The durable disposition record
 
-Step 8's report is chat output.
-Close the session and the mapping of which thread was pushed back, what the drafted rationale said, and what the Summary comment was going to say is gone — and the next run re-triages from scratch, most likely reaching a different answer on exactly the judgment calls that were expensive the first time.
+Step 8's report is chat output, and dies with the session.
 So every run that ends **without publishing in full** leaves that mapping on the PR itself, as one top-level comment.
-It survives worktree teardown, `git clean`, a rebase, the session, and container recreation; it is visible with no incantation; and step 3 already reads issue comments, so the next run finds it without being told where to look.
-A gitignored file and a custom git ref were both weighed and rejected as homes — teardown and `git clean` delete the file by design, while a ref is findable only by remembering the `git for-each-ref` incantation and pins its objects indefinitely, which is task 031a's objection — so neither is worth re-deriving here.
 
 **When it is posted.**
 Any run holding a triaged disposition map that did not publish it in full: a `no-push` run, and a run that intended to publish and could not — stopped at step 6's round cap, halted on a blocker, or waiting on a maintainer decision.
-Hands-off runs included, which is where it matters most, since there is nobody in front of the report.
+Hands-off runs included.
 A publication that stopped part-way is the same case rather than an exception: it has replies left to replay, so it leaves the record too — in the rendering "A publication that stopped part-way" defines below, since the canonical `status: not published` is false once part of the map is on origin, while what the local-only line claims of the tips follows the push rather than the map: false where a push advanced the remote or an `Everything up-to-date` no-op found the tips already there, still true where what landed rode the API with no successful push.
 A run that published posts none — step 7's replies, resolves, and Summary comment are the durable record there — and "published" means a publication whose own report can show it: an account of every item, and the URL of the Summary comment step 7 ends with.
 A run reporting itself complete over less has not published in this sense, and neither has one whose account **contradicts** the claim: a report calling the publication complete while its own entries say a thread it owed a reply never got one — or while reporting that no push command succeeded, which no complete publication reports, step 2's push being where publication starts and an `Everything up-to-date` no-op push already reporting its success — is refused exactly as one that accounts for nothing — over the same set of what step 7 owes each disposition that the outstanding count below is taken over, so the two cannot drift apart.
-It leaves the record, keeps its worktree, and reports an incomplete publication, because the one exit that gives the tree back and writes nothing must not be reachable by a claim nobody can check.
+It leaves the record, keeps its worktree, and reports an incomplete publication.
 A run with nothing triaged posts none either, whether step 3's terminal no-op or a stop before triage: there is no mapping to replay, so say so in the report rather than posting an empty record.
 One last run posts none: one whose review stopped without any reviewer round ever having passed over the map it holds — a round that never finished, over a tree nobody read.
-A record is replayed rather than re-triaged, so recording that map would hand the next run a baseline no reviewer stood behind; it rides out in the run's report instead.
+That map rides out in the run's report instead.
 That exemption is about the MAP and never about how the review stopped: a final confirmation pass that stops the cycle leaves an error standing over the map a round has just passed, and that map is recorded like any other.
 
 **One record per PR per run, superseding your own rather than stacking.**
 The comment carries a stable machine-recognizable marker as its first line — `<!-- address-review:disposition-record -->` — so a later run finds it by that marker and never by matching prose.
-Before posting, look through the PR's issue comments (step 3 already fetched them) for one of the authenticated user's whose **first line is exactly** that marker — that is the whole test, and a substring search is not it: an ordinary comment quoting the marker (a maintainer asking how this works, a summary echoing it) would be selected and then overwritten by the update below, so match the first line byte for byte and keep the authenticated-author filter: found, **update that comment in place**, so the PR keeps a single record instead of a stack of near-duplicates; absent, post a new one.
+Before posting, look through the PR's issue comments (step 3 already fetched them) for one of the authenticated user's whose **first line is exactly** that marker — matched byte for byte, never by substring (the recipe says why) — and keep the authenticated-author filter: found, **update that comment in place**; absent, post a new one.
 Either way this run writes exactly one record, the same idempotence step 7 requires of thread replies.
 Where more than one prior record is present — one predating the marker, or another actor's — update the most recent of your own and report the rest: nothing here deletes, sweeps, or expires a record.
 "GitHub API recipes" carries both commands.
 **One map may not supersede: a map this run already knows is incomplete** — an item gathered and left with no disposition, one carrying two, or an entry publication rejected as unpublishable.
-Updating in place is a `PATCH`, so writing such a map over an earlier record destroys the entry that record holds for every item this one omits, doubles, or cannot publish — the only durable copy of a previous run's judgment and drafted reply for it, lost through the mechanism that exists to keep it.
-So post it as a *new* comment and leave every earlier record standing, saying in its status line that it is partial and naming the record that still stands.
-It is still written: its entries are a real triage of the items they do cover, and dropping them to protect the older record trades one loss for the other.
-And standing is not preservation on its own: step 3's gather replays only the **most recent** record, so once this comment is the newest, an entry living only in the record it displaces is never replayed again — and a `standalone` item only that record names is never even re-gathered — while the older comment stands unread.
-So the partial record **carries the displaced record's orphaned entries forward**: every `## Threads` entry of the record this run replayed whose identity (`thread=<threadId or url>`, the url carrying its finding ordinal for a misfired finding) none of its own dispositions carries — a disposition that is itself the incompleteness (one of several naming the same gathered item, or one publication rejected as unpublishable) carrying nothing for this test, since its account of the item is the very thing the map cannot publish while the displaced record's entry is the only durable copy of a judged reply for it — is copied in verbatim and whole, marked as carried unchanged from that record, so the newest record stays the one complete replay surface while the older one stands as provenance — the next run's replay re-judges every entry against the tree either way, a carried one included.
+Post it as a *new* comment and leave every earlier record standing, saying in its status line that it is partial and naming the record that still stands.
+Step 3's gather replays only the **most recent** record, so the partial record **carries the displaced record's orphaned entries forward**: every `## Threads` entry of the record this run replayed whose identity (`thread=<threadId or url>`, the url carrying its finding ordinal for a misfired finding) none of its own dispositions carries — a disposition that is itself the incompleteness (one of several naming the same gathered item, or one publication rejected as unpublishable) carrying nothing for this test, since its account of the item is the very thing the map cannot publish while the displaced record's entry is the only durable copy of a judged reply for it — is copied in verbatim and whole, marked as carried unchanged from that record, so the newest record stays the one complete replay surface while the older one stands as provenance — the next run's replay re-judges every entry against the tree either way, a carried one included.
 **A run that publishes in full SPENDS the record it replayed.**
-A record is replayed rather than re-triaged, and the review-thread half of that replay terminates on the PR itself: step 3 keeps only unresolved threads, so a record whose threads a later run resolved replays to nothing.
-A `standalone` entry has no such state — nothing on the PR marks a comment as addressed, which is exactly why the rule below reintroduces one from the record — so the record *is* the claim that the item is outstanding, and one left standing over a map that has since been published hands that item to every later run as fresh work: re-gathered, re-judged, re-listed in every future Summary comment, and turning what should be the zero-item no-op into a full cycle.
-So a run that publishes in full and finds a prior record of its own updates it in place to a **spent** record — the marker, the header line, and a status line saying the map it held has since been published in full — carrying no `## Threads` block and no `## Summary comment` block, since that absence is what ends it.
-The marker stays so a later run still *finds* the record and reads it as spent rather than as absent; the map itself is on the PR, which is where a reader now goes for it.
+A run that publishes in full and finds a prior record of its own updates it in place to a **spent** record — the marker, the header line, and a status line saying the map it held has since been published in full — carrying no `## Threads` block and no `## Summary comment` block.
 It supersedes only a record already there: where the PR carries none, there is nothing to spend and nothing is posted, since a published run has nothing to hand forward.
-What it spends is **the record it replayed**, named by that comment's own id rather than by the "most recent record of my own" the supersession above selects on — the two differ where the record replayed is another actor's, and where the incomplete-map carve-out left a second one of this account's standing beside an earlier one — and the difference is not symmetric: a supersession that lands on the wrong record replaces one map with another, while a spend *empties* it.
-So where the PR no longer carries that exact record of its own, the run writes nothing and says so in its report: an unspent record is replayed by the next run, which the report surfaces, while a spend written over the wrong record deletes a map nothing later can recover.
+What it spends is **the record it replayed**, named by that comment's own id rather than by the "most recent record of my own" the supersession above selects on — the two differ where the record replayed is another actor's, and where the incomplete-map carve-out left a second one of this account's standing beside an earlier one.
+So where the PR no longer carries that exact record of its own, the run writes nothing and says so in its report.
 
-**Content** — the shape agreed on PR #29, marker first:
+**Content** — marker first:
 
 ```markdown
 <!-- address-review:disposition-record -->
@@ -653,12 +583,10 @@ the tips above are LOCAL ONLY — this run pushed nothing, so they are not on or
 **A publication that stopped part-way** renders that same record with two lines changed, because `status: not published` is false once part of the map is on origin and only the rest failed, and the local-only line gives way with it to the line naming what did reach origin: the status line becomes `status: published in part (<what landed, and what did not>)`, and in place of the local-only line goes one naming both halves — `reached origin: <what landed> — still outstanding: <what is left>`.
 What that replacement says of the TIPS follows the push rather than the map, in the three states the push is always read in, and the replacement line itself is what says it — the record is the durable copy a later turn acts on, so the tips fact rides on that line rather than only in the reasoning of the run that wrote it: a push that advanced the remote put the tips on origin, and is named among what landed — the one state that appends no tips clause, the landed list already saying it; an `Everything up-to-date` no-op moved nothing while leaving the tips already on origin, so the line appends that the tips above are already on origin, this run having put nothing there; and a map that landed through the API with no successful push — replies and resolves land without one — leaves the tips still LOCAL-ONLY, so the line appends that the tips above are still LOCAL-ONLY, what is on the PR putting nothing of the branch on origin.
 What counts as landed is what **is on the PR**, never what this run itself did: the per-thread account states each thread's END STATE when publication stopped — a reply skipped as a duplicate of one already there is on the PR and counts — so a reply an earlier run posted and a resolve already done are landed too.
-That is the reading a record is for: it tells the next turn what not to repeat, and one naming only this run's own writes would have that turn post a reply the PR already carries.
 `reached origin` is read the same way — "is on origin", not "this run put it there" — so a replay whose push moved nothing over replies already on the PR renders as a publication published in part, which it is: the map is on the PR, whichever run posted it.
 The push is the one act named in that line, the flag that says the remote MOVED being the only push fact it may name: a push answered `Everything up-to-date` moved nothing, so a run whose no-op push left no reply, resolve or Summary comment on the PR published nothing in part — it keeps the canonical status and says in place of the local-only line that the tips are already on origin while nothing of this map reached it.
 Nothing else changes, and in particular every thread keeps its entry and its verbatim reply — with each entry saying where it stands, from what the publication actually confirmed per thread rather than from what it set out to do: an entry whose reply is already posted says so and whether its resolve is still owed, and one the publication reported no outcome for says that rather than guessing either way, since a reply posted twice and a reply never posted are both worse than an entry that sends the next turn to look.
 What is **outstanding** is what step 7 owes, not every disposition it did not report a reply for: a standalone item is addressed in the Summary comment alone and is never resolved as a thread, and an ambiguous-skipped thread is deliberately left without a reply and left open, so both stand at "nothing is owed" on a *complete* publication.
-Count them as debt and the record asks the next turn to post what step 7 forbids — a thread reply for an item that has no thread, or a reply on a thread this run deliberately left silent.
 The **resolve** is owed over a narrower set again, for the same reason: step 7 resolves a push-back or a deferral only on a bot thread, leaving the human one open unless the maintainer explicitly authorized otherwise, so a human push-back or deferral is unresolved by policy on a complete publication — it is out of the resolve count, and its entry says the resolve turns on that authorization rather than that one is still owed.
 
 **A publication whose outcome is not known** is a third state rather than a flavour of either, and it is the ordinary shape of a part-way stop rather than an exotic one: publication pushes at step 2 and replies at step 4, so a run that stops after the push and reports nothing usable about what it posted holds no fact about what it posted beyond the push itself.
@@ -672,22 +600,18 @@ One empty account is complete rather than missing — a publisher whose push nev
 
 **A push whose read-back could not confirm the ref** is a fourth rendering, and step 7's read-back stop is what enters it: `git push` returned, and then `git ls-remote` answered with an absent ref, a disagreeing OID, or a destination it could not reach, so whether the ref moved is the one fact that stop failed to establish.
 Every line the canonical rendering would print asserts that it did not move — `status: not published`, the local-only line, and the warning about commits that are not there — and the no-op line asserts the opposite, that the tips are already there, so this rendering takes neither: the status line becomes `status: UNKNOWN whether its push reached origin, and nothing else was published (<what each push URL returned>)`, and in place of the local-only line goes one saying that whether this run's push reached origin is UNKNOWN — `git push` returned and the read-back at the ref did not confirm the ref moved, so read the ref itself before treating the tips above as either published or local, while no reply, resolve or Summary comment reached the PR.
-Those are the same two lines the part-way rendering changes, and the reader consequence changes with them: a reader who takes this record for "nothing reached origin" treats these tips as unpushed when the ref may already carry them.
 Nothing else changes — every thread entry keeps its verbatim reply and carries no reservation of the third state's, because the read-back stops ahead of the first reply, so what this run posted is not in doubt and saying unknown of it would be saying unknown of what the run does know.
 What enters this rendering is that stop and never what the push command printed: an exit 0 and an `Everything up-to-date` are both reports of the command rather than of the ref, so the read-back's own verdict is read ahead of either.
 And it yields to the two renderings above, which claim less or more precisely: an account this run cannot read knows nothing about the push either, so that run keeps the third state's flat unknown, and a publication that stopped part-way names what it confirmed reaching origin — never this push, which nothing confirmed.
 
 **Every entry carries the same field set whatever its disposition** — the stable reference (path:line, the comment author, and the thread's node id; for a standalone item, whose url is its permalink below and is written there once rather than in both slots, the comment author and — for a misfired finding — the finding's ordinal within its comment, `finding N of M`, since every finding that comment holds shares the one url — and, on its own `finding:` line, that finding's text verbatim as step 3 took it — as a one-line JSON string literal, its newlines and quotes escaped, since a finding is ordinarily several paragraphs or a code fence and placed raw would run into the entry's other slots — since the ordinal alone cannot tell the recorded finding from different text a later edit of the comment puts at N; for a CI lane, its identity as step 3 gathers it — its details URL names one head's run and the next push replaces it, so it is the lane's permalink rather than its identity), the permalink (the thread's, the standalone comment's url, or the lane's details URL), and the reply body verbatim — with a follow-up-task entry adding the committed file and its queued or deferred placement, and a standalone item or CI lane, which has no thread to reply on, carrying in the reply slot the Summary-comment text drafted for it (its cause and disposition, for a lane) rather than a reply nothing will post.
-An entry short of that cannot be replayed at all: which thread a follow-up closes is not re-derivable from the PR, so an entry naming only the task file leaves the next run to guess which thread it closes.
 
-That local-only line is not decoration: a reader who assumes those SHAs are on origin goes looking for commits that are not there, and on a worktree run the tree they were made in is gone by the time they look (the branch and its commits stay in the shared `.git`, which is what makes the record replayable at all).
 Everything else in the record can be re-derived from the PR.
-The drafted reply bodies and the ready-to-post Summary body cannot, so they go in **verbatim** — they are the expensive part and the reason the record exists.
-Step 8's report is the source of both, so this is one rendering of that report rather than a second account of the run.
+The drafted reply bodies and the ready-to-post Summary body cannot, so they go in **verbatim**; step 8's report is the source of both.
 
 **The SHAs are provenance, never a replay gate.**
 They say what this run saw, not what a later run must find.
-The branch may well want a rebase before the final push — step 2 rebases by default, so it usually gets one — and that invalidates any `final HEAD == branch tip` assertion while changing nothing about whether the work is still there.
+A rebase before the final push invalidates any `final HEAD == branch tip` assertion while changing nothing about whether the work is still there.
 So never assert that equality, and never replay a recorded `Fixed in <sha>` citation as written: **re-derive every SHA from the branch at replay time**, so each reply cites a commit the branch actually carries.
 
 **Replaying a record.**
@@ -701,9 +625,8 @@ What replay must establish is that the reviewed work is still in the branch, and
   With `F` the recorded final tip and `B` the branch tip now, `git rev-list --right-only --cherry-pick B...F` printing nothing means every recorded commit is represented and the record replays as written — the same representation test step 1's reconciliation uses.
 - **A non-empty result rejects nothing.**
   A rebase that resolved a conflict, or split or squashed a commit, mutates the resulting patch-ids while keeping the work — `rebase-stack` documents that as the patch-id cascade — and such a rebase is this record's expected case rather than an edge one.
-  It could not decide the question even if it were the gate: a fix that survived a conflict resolution and one that was later reverted both print the recorded commit as unrepresented — measured, both of them — so the tree is the only thing that separates them.
   A probe that cannot run at all says the same: `F` may no longer be a local object (a fresh clone, a pruned repository), and an absent recorded commit is not an absent fix.
-  Fall through to the tree, the move `address-reviews`' merged-parent content gate makes when it declines to conclude from patch-id.
+  Fall through to the tree.
 - **Then judge per thread, against the tree rather than the record.**
   Is the fix this disposition claims present in the branch as it now stands — for a follow-up-task disposition, is its task file still committed there?
   Present → replay the disposition, its SHA re-derived.
@@ -712,9 +635,7 @@ What replay must establish is that the reviewed work is still in the branch, and
 - **Replay against the threads as they now stand**, per step 3's unresolved-only rule.
   A record whose threads have since been resolved and published replays to nothing, which is the right answer rather than a conflict: a record is only ever the account of the run that wrote it.
 - **A recorded standalone item is gathered again.**
-  Step 3 makes a standalone comment an item only where the request identifies it as outstanding or it qualifies on its own as a fresh, applicable misfired finding, so on a later "push now" turn the recorded `standalone` disposition would be replayable by nothing: the fix step owes exactly one disposition per gathered item, and publication rejects a standalone disposition whose url was never gathered.
-  The recorded judgment and the Summary text drafted for it would then be dropped in silence by the very run that read the record.
-  So re-fetch each standalone url the record names and reintroduce the comment as an item where it is still there — an earlier run having gathered it, by the request that identified it or as a misfired finding that qualified on its own, is what makes it one — then judge it against the tree like any other.
+  Re-fetch each standalone url the record names and reintroduce the comment as an item where it is still there — an earlier run having gathered it, by the request that identified it or as a misfired finding that qualified on its own, is what makes it one — then judge it against the tree like any other.
   A misfired finding is reintroduced by its recorded ordinal, checked against the finding's text the record carries for it, decoded from the JSON string literal its `finding:` line holds — the record carries it for exactly this, since the ordinal alone cannot tell the recorded finding from whatever text a later edit puts at N — and where the comment now holds fewer than M findings, or the text at N differs from the recorded text beyond whitespace, the body was edited or reordered since and that entry is unsettleable and goes to the maintainer rather than being matched to whichever finding now sits at N.
   Where the comment is gone, it is not outstanding work and that entry replays to nothing.
   A recorded CI lane is re-gathered in the same spirit: step 3 reads the rollup of the current head, and where that lane — matched by the identity step 3 gathers, the new head's run carrying a new details URL — is still failing it is an item again, judged against the tree like any other; where it has since gone green — the push that recorded it re-ran it — or is still running, nothing re-gathers it, so the entry replays as its recorded cause and disposition into this run's Summary comment rather than being dropped, since a green lane on the new head is the outcome the entry claimed and its account is what is still owed.
@@ -726,14 +647,11 @@ What replay must establish is that the reviewed work is still in the branch, and
 Purpose: run inside a parallelized agent that has no direct line to the user (e.g. a review orchestrator's subagent).
 Reach the orchestrator if you can, but otherwise drive to a best-effort completion and **document, never guess on high-stakes choices.**
 
-- Low-stakes ambiguity → make a sensible best-effort call and record it.
+- Every stop tagged "(hands-off: …)" inline applies as written, and so does every unconditional stop (a rejected lease, the reviewer cap): do not force or guess your way past it.
+- Ambiguity → step 4's rule: a recorded best-effort call only when stakes are low; otherwise skip, do not guess, and document precisely what's needed.
 - A real concern whose fix would expand the PR's scope, on a branch that is defendable as it stands → postpone it to a committed follow-up task (step 5) and flag the task and any deferred placement prominently; this is a legitimate unattended resolution, not a skip.
-- High-stakes/authoritative ambiguity → skip, do not guess, document precisely what's needed.
 - A delegated-rebase halt — step 2's "A halt is a stop, not a guess" defines the cases, and this list does not restate them → the step leaves the tree clean and idle, and the run stops with the halt's open question.
   Nothing is pushed on the old base instead.
-- Lease-rejected push, unidentifiable/unrelated PR, or reviewer cap hit → stop and document; do not force or guess your way past it.
-- A same-named local ref failing the PR identity check, a named off-shoot that is also a *different* open PR's head by the repository-qualified comparison "Working location" states, `off-shoot` given on a detached HEAD, or a reused worktree holding a prior run's dirt or half-finished operation → halt with the report "Working location" defines (both refs and what each points at; both PRs for the branch carrying its own; the current `HEAD` for the detached case; or the worktree path and what it holds).
-  Attach nothing, substitute no branch name, clean nothing.
 - At top level, fixer/reviewer subagents are still fine.
   In `delegated-fix` mode, do not attempt nested delegation; return the packet to the orchestrator.
   Every skipped/blocked item must appear in the final report (and the Summary comment if pushing) so the user learns of it and can act later.
@@ -821,8 +739,6 @@ gh api --method PATCH repos/<owner>/<repo>/issues/comments/COMMENT_ID -F body=@-
 gh pr comment NUMBER --repo <owner>/<repo> --body-file -                           # none found: post one
 ```
 
-`<owner>/<repo>` is written out rather than left to `{owner}`/`{repo}` and a bare `gh pr comment` for the reason the section intro gives: from a fork clone all three would otherwise address the head fork, where this record's prior copy is not and this PR is not.
-
 **Request a Copilot review** — this request, never an `@copilot review` comment (the `ping-copilot` table row says why and carries the gh version floor):
 
 ```sh
@@ -830,24 +746,3 @@ gh pr edit NUMBER --repo <owner>/<repo> --add-reviewer @copilot
 ```
 
 **Read context:** `gh pr view NUMBER --repo <owner>/<repo> --json reviews,comments,headRefName,headRefOid,headRepository,headRepositoryOwner,isCrossRepository,baseRefName,url,state` and `gh api --paginate repos/<owner>/<repo>/issues/NUMBER/comments`.
-
-## Checklist
-
-- [ ] `gh` authenticated; the working location's tree clean and idle there, by step 0.1's two checks — the main checkout held to that only on an inline run, and checked before a forced `inline` switches it.
-- [ ] Working location picked per "Working location" before any reconciliation: inline on the target branch, a worktree from anywhere else (detached included), the target branch checked out in the current checkout when `inline` was given, or the branch you are standing on when `off-shoot` named it as this PR's local off-shoot — nothing inferred that last one from the shape of the history.
-  A candidate branch failing the PR identity check was reported to the maintainer with both refs and never worked, checked out, or attached; nothing invented a branch name in its place.
-- [ ] Worktree mode: the main checkout was never switched, dirtied, or required to be clean after setup; the worktree was reclaimed after publication or after a `no-push` finish, or its path reported where a halt left it standing.
-- [ ] PR resolved (explicit `PR#` precedence) and sanity-checked against the candidate branch; the working location's branch reconciled against the PR head by ancestry — fast-forward when strictly behind, keep local when the head is represented by patch-id, ask the maintainer on genuine divergence.
-- [ ] Both of step 2's rebase points ran unless `no-rebase` was given (or a point was judged unnecessary and said so), each delegated to a fresh subagent rather than run in your own turn, each single-branch, with the effective base pinned to the OID actually rebased onto — or, where no rebase ran at all (`no-rebase`, or both points judged unnecessary), pinned once at step 6 instead: a still-standing named target resolved where it was named, else `baseRefName` resolved in the PR's own base repository; a conflict beyond that step's competence — or a content-bearing merge in range — halted it with the tree clean and idle (interactive loop-in / hands-off stop), and a rebase that replayed anything was validated.
-- [ ] All **unresolved** threads gathered and validated per "GitHub API recipes" (single-shot queries, never GraphQL `--paginate`); resolved ones fetched only for step 3's duplicate check, never as work items; maintainer replies and top-level decision comments treated as authoritative; a bot's findings misfired into a top-level comment taken as standalone items only where fresh and applicable by step 3's four conditions, else left as context; step 3's zero-item rule applied (terminal no-op only on the three-way tip equality).
-- [ ] Failing CI lanes on the reconciled head gathered as items, each judged from the evidence gathered for it (an Actions log tail, or the details URL with logs marked unavailable): fixed where this branch caused it and the fix is in scope, re-run only as an evidenced flake on a no-op push, otherwise left as the maintainer's choice — and every one reported in the Summary comment, beside any lane a prior disposition record replayed with its recorded cause and disposition.
-- [ ] Each thread triaged: actionable / already-addressed / push-back / follow-up-task / ambiguous.
-- [ ] Fixes done inline or via a fixer subagent (no reviewer started until the fixer's commits are on disk — one checkout-dependent agent at a time is the proxy for that; briefed under `review-cycle`'s Fixer contract); same-pattern sweep done in changed/related code.
-- [ ] Follow-up-task items recorded as standalone task files per `write-tasks` conventions, placed under step 5's queued-vs-deferred rule, and committed on the current branch separately from code fixes.
-- [ ] Worktree clean and every intended change committed before review and publication.
-- [ ] Step 6 ran the `review-cycle` verification loop to a pass — every disposition checked by the fresh Reviewer and best-effort peer under that skill's gates, non-blocking peer outcomes recorded — or stopped at its round cap without pushing.
-- [ ] Publish run (the default; suppressed only by `no-push`): step 7 followed — PR head and exact push target re-verified; normal push for a fast-forward or explicit expected-OID lease for every other state that pushes at all (never bare `--force`); threads re-read after push; replies + resolves applied idempotently per disposition; Summary comment posted without stray `@` mentions; pings fired per "Flag interactions", only after summary success and only when new commits were actually pushed.
-- [ ] `no-push` run: no push, no replies/resolves, no Summary comment, no ping — the disposition record is the one documented PR write; final report maps every thread to its disposition for a later push turn.
-- [ ] Publish run that completed in full: where a prior disposition record of its own stood on the PR, it was superseded in place with a spent record — marker kept, no `## Threads` or `## Summary comment` block — so nothing replays from a map that is now published; where none stood, no record was posted.
-- [ ] Every run that did not publish in full while holding a triaged map — nothing pushed, or a publication that stopped part-way — left exactly one disposition record per "The durable disposition record" — marker carried, its own prior record superseded in place rather than a second appended — unless the map is one this run knows is incomplete, which is posted beside that record rather than over it — drafted replies and the ready-to-post Summary body verbatim, the cited tips stated as local-only (or, where a publication stopped part-way, what reached origin, what remains, where the push leaves the tips, and where each thread's reply stands — or, where its account of what it posted was unusable, that the outcome is UNKNOWN, with every entry sent to the PR to be checked — or, where its own push read-back could not confirm the ref, that whether its push reached origin is UNKNOWN) — and a record this run replayed was judged against the branch's current tree, with patch-id as the first probe rather than a gate, every `Fixed in <sha>` citation re-derived, and no `final HEAD == branch tip` assertion anywhere.
-- [ ] Final report covers rebase outcome, dispositions with stable refs, push-backs, proactive fixes, Reviewer and peer outcomes, and blocked/skipped items.

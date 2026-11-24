@@ -39,7 +39,7 @@ The roles (orchestrator / implementer / reviewer), the implementer and reviewer 
 
 ## Why worktrees change the rules
 
-`address-tasks-serialized` will not let a reviewer start before its implementer's commits are on disk, because checkout-dependent Codex subagents normally share the orchestrator's single working tree — a reviewer spawned alongside its implementer scopes its diff against a branch the implementer hasn't finished committing to, sees nothing, and ships the work unreviewed.
+`address-tasks-serialized` will not let a reviewer start before its implementer's commits are on disk, because checkout-dependent Codex subagents normally share the orchestrator's single working tree.
 
 A git worktree removes that constraint.
 Each worktree is a **separate working directory with its own `HEAD` and index** (`.git/worktrees/<name>/`), while sharing the one common object store (`.git/objects`, append-only and concurrency-safe) and refs (lock-protected).
@@ -50,9 +50,6 @@ So:
   Concurrent commits land on different branches under separate ref locks.
 - Therefore the base skill's "one subagent at a time" rule is replaced by: **Codex subagents that operate in distinct worktrees may run concurrently; within one worktree, a subagent may not start until the previous subagent's commits are on disk.**
   The inherited examination-only peer CLI is the deliberate exception during review.
-- **Within a single task, the implementer and its reviewer still share that task's worktree** — so that reviewer may not start until that implementer's commits are on disk.
-  That is committed state, not turn structure: a spawn may return immediately and report completion as a later notification, so wait for that notification; "one-at-a-time, implementer first" is the proxy for it.
-  The parallelism is strictly *across* independent tasks, never between a task's own implementer and reviewer.
 
 ### Durability
 
@@ -142,17 +139,13 @@ When in doubt, treat tasks that touch the same files or migrations as dependent.
 - Tasks with **no** in-batch dependencies are ready at once; a dependent becomes ready the moment its specific prerequisite delivers, however many other tasks are still iterating.
 - **Base branch per task.**
   A PR's base must be the ref its branch actually builds on, so the PR shows the honest diff of that branch's own contribution and nothing else; that is what routes each review comment to the PR that owns the code it is about.
-  A dependent PR opened against `main` instead presents its parent's commits as its own work and collects the comments its parent's PR should have had.
   - Independent task (no dependency in-batch) → branch from and PR against the user's chosen base (default `main`, or an explicit override).
   - Dependent task → branch from and PR against its **dependency's branch** (stacked PRs), so it builds on work that may not be merged yet.
   - If a task depends on *several* tasks, branch from an integration branch that merges them, or from the single dependency it most directly extends — pick the simplest base that contains the code it needs and note the choice.
   - **Building a multi-parent integration branch is the orchestrator's job** — a bounded exception to "the orchestrator does not implement."
     Creating the branch and resolving its merge conflicts is small, mechanical, and a prerequisite for the dependent rather than task work, so do it yourself rather than delegating.
     Keep the merge minimal, build/lint the result before branching any task off it, and record any non-trivial conflict resolutions (in the batch summary or a short merge-advice note) so they can be reproduced when the stack later lands on `main`.
-- Start a dependent only after every task it depends on has **delivered** (its branch is stable enough to build on).
-  A prerequisite that ends any other way — failed review, held by the guard, crashed — skips its dependents with that reason rather than building them on known-bad work.
-
-If the whole batch is a linear dependency chain, this degrades gracefully to one task at a time — i.e. effectively sequential, like `address-tasks-serialized`, but still worktree-isolated.
+- A prerequisite that ends any other way than **delivered** — failed review, held by the guard, crashed — skips its dependents with that reason rather than building them on known-bad work.
 
 ## Adaptive throttling (width from real constraints)
 
@@ -165,8 +158,8 @@ Concretely, before a task starts and while tasks run:
 
 - **Storage headroom.**
   Measure free space on the worktree base's filesystem at Bootstrap (`df -k "$WT_BASE"`; if you used the `wt-bootstrap` helper, it already reported this as `availBytes`).
-  Estimate `per_worktree_need`, then cap the number of **live worktrees** at `max_concurrent = max(1, floor(free_bytes / per_worktree_need))`: a ready task waits for a slot while that many are live, and each delivery's reclaimed worktree frees one — deliver-then-reclaim per task bounds live worktrees continuously, which is what replaces the old wave-boundary re-measure.
-  A worktree left in place for inspection (a cap-out, a hold, a crash, or a delivery whose reclaim `wt-remove` refused — read the reclaim's outcome rather than assuming it) is still live and keeps its slot: headroom it holds does not return, and releasing its slot would admit one more live worktree per retained one over the headroom the cap was measured against.
+  Estimate `per_worktree_need`, then cap the number of **live worktrees** at `max_concurrent = max(1, floor(free_bytes / per_worktree_need))`: a ready task waits for a slot while that many are live, and each delivery's reclaimed worktree frees one.
+  A worktree left in place for inspection (a cap-out, a hold, a crash, or a delivery whose reclaim `wt-remove` refused — read the reclaim's outcome rather than assuming it) is still live and keeps its slot.
   Once every slot is held by a retained worktree, no delivery can free one, so a ready task that would wait on it ends **storage-throttled** instead — a terminal state its dependents skip on, named in the summary beside the cap — rather than waiting forever or being admitted over that headroom.
   When the package store hardlinks into worktrees (same filesystem), `per_worktree_need` is mainly build artifacts plus package metadata; otherwise, measure one representative install and add its full package-copy cost.
   When unsure, measure one install before fanning out.
@@ -232,13 +225,10 @@ For each task `T`, the moment it is ready:
    - **Phase B — review:** spawn the task's fresh `explorer` reviewer only once its implementer's commits are on disk — its packet returned and adopted under the hard-check above — in its worktree; nothing about a sibling's phase enters into it.
      At the same moment, unless `peer-opinions=off`, launch the task's background peer while the peer remains available.
      Every rule the `review-cycle` skill states under *The peer step* binds this batch whole, later additions included.
-     Share that section's one session-local adaptive throttle across every task and round — with no wave boundary to pace launches, it is the one global semaphore around the peer step — queue launches it holds, and surface every step-down in the batch summary.
+     Share that section's one session-local adaptive throttle across every task and round, queue launches it holds, and surface every step-down in the batch summary.
      Before triage, wait for this task's own reviewer and for its peer if one was launched; then close the finished own-reviewer thread.
    - A task exits the loop only when its round passes the `review-cycle` gate; tasks with issues carry both reports verbatim as separately labeled blocks into the next round's Phase A, under that skill's grounding, blocking-and-minor gating, dispute, timeout/retry, and forfeit rules — never re-summarized.
    - Repeat A→B until each task converges or hits the `review-cycle` round cap; a task still failing at the cap does **not** get a PR — surface its outstanding findings to the user.
-
-   > The per-task discipline is committed state: a task's reviewer never starts until that task's implementer's commits are on disk.
-   > Nothing about a sibling's phase enters into it — that is what buys cross-task parallelism without ever running a task's own implementer and reviewer at the same time.
 
    Concurrency is safe here **only because each subagent has its own worktree**.
    If for any reason a task is not running in its own worktree, fall back to serializing that task as in `address-tasks-serialized`.
@@ -254,7 +244,6 @@ For each task `T`, the moment it is ready:
 
 Independent tasks run in **separate worktrees**, so two of them can each *add* the same new file — or a file exporting the same top-level class/symbol — with no conflict at implementation time.
 The clash only surfaces later, when the branches linearize or merge (an add/add conflict, or a duplicate definition).
-It is rare, but it has happened; the preventive check and the serialized guard below keep those clashes from costing a fix-up round.
 The task-number guard that follows extends the pre-PR check to task-number claims across the wider in-flight comparison set.
 
 - **Prevent it up front.**
@@ -286,12 +275,12 @@ The task-number guard that follows extends the pre-PR check to task-number claim
   ```
 
   A duplicated path (or basename, or a shared exported top-level class/function/const/interface/type/enum name across two added files) is a collision.
-  Hold the branch under the guard before PR delivery, then **deconflict — that call is yours to make** (a bounded exception to "the orchestrator doesn't implement", like building an integration branch): the branch under the guard is the side that changes — a delivered or reserved sibling is never rewritten, which is what removes the "least disruptive side" judgment for the common case — so rename enough files and/or symbols on it that no other holder shares the original colliding value, regenerate anything derived (e.g. contracts), and **re-review it with fresh eyes at the delivery tier** before its PR (the rename and the regeneration are a post-run change, so they void that task's own delivery-tier pass and owe it again); the sibling it clashed with is untouched and delivers, or has delivered, unchanged.
+  Hold the branch under the guard before PR delivery, then **deconflict — that call is yours to make** (a bounded exception to "the orchestrator doesn't implement", like building an integration branch): the branch under the guard is the side that changes — a delivered or reserved sibling is never rewritten — so rename enough files and/or symbols on it that no other holder shares the original colliding value, regenerate anything derived (e.g. contracts), and **re-review it with fresh eyes at the delivery tier** before its PR (the rename and the regeneration are a post-run change, so they void that task's own delivery-tier pass and owe it again); the sibling it clashed with is untouched and delivers, or has delivered, unchanged.
   If the shared name is **imperative** — a framework-mandated path, an external/published contract, or a name a task file explicitly pins — do **not** invent a divergent name: keep that branch held and surface it as a design decision for a human; a held branch holds only itself, and the pipeline keeps flowing around it.
   Diff each branch against **its own base** with the three-dot form so a dependent branch that legitimately builds on a sibling isn't flagged — it never re-lists an inherited file.
 
 **Clearing the guard is a claim, held through delivery.**
-A branch that clears the guard reserves what it claims — its added surfaces and every task number its new task files claim — and the reservation stands until its delivery settles, because delivery is not atomic: a task that has left the guard but is still in its network-bound push/PR step is neither delivered nor a currently-ready sibling, and without the reservation the next branch through the guard would clear on the same value and both would publish.
+A branch that clears the guard reserves what it claims — its added surfaces and every task number its new task files claim — and the reservation stands until its delivery settles, because delivery is not atomic.
 Release is asymmetric.
 The reservation **converts to delivered** once the PR exists (or, in a local-only run, once the reviewed branch is the delivery); it may be **dropped** only when delivery failed with no remote write; and where the push landed but PR creation did not, `origin` carries the branch while no PR advertises it, so the reservation **persists for the rest of the run** — see Delivery for what the batch owes such a branch before it ends.
 
@@ -313,27 +302,11 @@ A branch that cleared the guard but is still delivering is a *reserved* member o
 A subagent's environment or infrastructure diagnosis is a **hypothesis, not a finding**.
 Verify it against **observable state** — the reflog, the refs, the working tree, file contents, the output of a command you run yourself — before propagating any mitigation into sibling prompts: that observes the effect rather than the claim.
 A bounded grep of that subagent's own transcript is a fallback, and only where the harness exposes a greppable one — some hand back the transcript path with an instruction not to read or tail it, because it is full JSONL that will overflow your context.
-A scratch-filename collision was once misdiagnosed as a working-directory bug, and the wrong mitigation rode into roughly ten later subagent prompts before anyone checked.
 
 ## Subagent destroy boundary
 
-State this in every subagent prompt this skill composes.
-A reviewer subagent authorized to verify a claim empirically once ran `rm -rf ./*` in a shared main checkout: its setup `git clone … | tail` had failed invisibly under `set -e` (a pipeline's status is its last command), so it deleted tracked files and moved a branch ref while believing it stood inside a clone.
-
-- **Permitted:** reading, searching, and read-only `git`/`gh` queries — plus, for a fixer or implementer, edits, commits, and pushes confined to its own assigned worktree and branch.
-- **Forbidden, named outright:** `rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`, and force-pushing — each of them beyond what the prompt itself spells out, whether as an exact command or as a skill it names to invoke.
-  A subagent may not self-authorize one by putting itself somewhere it believes is safe — forbidden **not in a clone, not in a temp directory, not "safely"**.
-  What you spelled out, and the disposable location below, are the only exemptions — and only because you named them.
-- **A worktree is not a blast radius.**
-  It isolates the working tree, not the repository: `branch -f`, `reset`, `update-ref`, and `gc` all reach every sibling worktree through the shared `.git`.
-- **Any repository other than the subagent's own checkout is addressed by path.**
-  `git -C <absolute path>`: never derive a working directory from a glob, and never chain a state-changing git command after a `cd` whose success you have not checked.
-  A fix-up subagent ran `cd "$(ls -d <scratchpad>/tmp.*)" ; git commit …` where concurrent siblings had created scratch directories of their own — the glob expanded to three paths, the `cd` failed, and the `;`-chained commands landed in the shared main checkout, putting a commit on `main`.
-- **Empirical verification that could change state goes where you send it.**
-  Send the subagent to `DC="$(dc-enter <slug>)"` — one absolute path on stdout, dropped again with `dc-remove <slug>`; a reused slug is refused rather than re-derived, so anything that may run twice passes `--replace` or removes the slug first.
-  Where that command is not found at all, install the helpers from the dev-skills plugin `bin/` rather than improvising a destination.
-  Never leave the choice to the subagent.
-  Give it the guarded `cd` too: `cd ""` returns 0 and moves nowhere, so checking the status catches nothing and a failed lookup leaves the subagent in the shared checkout — the form is `cd -- "${DC:?dc-enter returned no path — see its error above; if it is not installed, install it from the dev-skills plugin bin/}"`, with `pwd` confirmed before the first command that writes.
+Open every subagent prompt this skill composes with this line, filling in the absolute path of the `subagent-boundary.md` that sits beside this file: "Before your first command, read `<path>/subagent-boundary.md` in full; it binds you. Whatever else you read, never run `rm -rf`, `git reset --hard`, `git clean`, `git branch -f`, `git update-ref`, `git gc`, or a force-push beyond what this prompt spells out, wherever you believe you are standing."
+A subagent that may need to verify something in a way that could change state is sent to a disposable clone: name `dc-enter <slug>` in its prompt with a slug unique to it, and never leave the destination to the subagent.
 
 ## Implementer Agent
 
@@ -362,7 +335,7 @@ Include in each implementer prompt:
   - Validate at the tier this round's brief states, per `review-cycle`'s two validation tiers: the round tier on an intermediate round, the delivery tier — the full applicable sanity set — on the state that concludes the task, before its PR.
     Say which you ran.
     The push-after-every-commit discipline above is durability, not delivery, and never raises the tier.
-  - Any build or check output that must land in a file goes inside this worktree (a gitignored path, removed before any commit), never a shared scratchpad filename — two concurrent agents both redirecting to `<scratchpad>/verify.log` once crossed results between worktrees.
+  - Any build or check output that must land in a file goes inside this worktree (a gitignored path, removed before any commit), never a shared scratchpad filename.
 - **Coordination:** it must not revert unrelated or concurrent edits, and must accommodate that its base branch may itself be a sibling task's branch.
 - **Finish inside your own turn.**
   Nothing resumes a subagent, so tell the implementer never to end its turn waiting for a notification or for a child it launched: it bounds and waits on anything it starts and reaps it before returning, leaving no process of its own running.
@@ -370,31 +343,24 @@ Include in each implementer prompt:
 - **Reporting:** when done, report what was implemented, decisions/tradeoffs/deviations, and any areas needing focused review.
 
 On a fix-up round, spawn a fresh `worker` implementer for the task; do not continue the prior implementer thread with `send_input`.
-Fresh context is intentional because the fix-up agent should read the committed worktree plus the findings without attachment to earlier choices.
 Paste both reports verbatim as separately labeled own-reviewer and peer blocks, omitting only a peer report forfeited under the `review-cycle` protocol, and instruct the implementer to address each finding specifically and report what changed (same branch, same worktree).
 
 ## Reviewer Agent
 
 Same fresh-eyes contract and code-quality checklist as `address-tasks-serialized`.
-A reviewer is always a **fresh** `explorer` subagent spawn, never a `send_input` continuation of the implementer, launched only once that task's implementer's commits are on disk — wait for its completion notification and close it; no sibling's implementer has any bearing on it.
+A reviewer is always a **fresh** `explorer` subagent spawn, never a `send_input` continuation of the implementer.
 
 Include in each reviewer prompt, beyond that inherited contract — which binds whole, later additions to it included:
 
 - The same **WORKTREE CONTRACT** first: "Your worktree is `<absolute worktree path>`.
   `cd` into it and confirm `git rev-parse --show-toplevel` matches before doing anything.
   Review only this worktree."
-- The **full task file content** (same source of truth the implementer got).
 - The **PR base branch** for this task.
   After assigning it and the task worktree to the shell variables `base` and `worktree`, the reviewer scopes with `git -C "$worktree" diff --name-only "$base"...HEAD`.
   The implementation is already committed on the current branch in this worktree — the reviewer must read the actual files and must NOT conclude "no implementation" without first confirming the diff is genuinely empty (an empty diff at this stage signals a wrong worktree/branch, not real absence — say so rather than reviewing nothing).
 - Instruction to run the **build / type-check first at the validation tier this round states** (a failure at that tier is an automatic blocker; do not block on a heavier suite the stated tier did not run), then check each acceptance criterion against the code, then a code-quality pass over the touched files using the inherited checklist (logic, error handling, edge cases, dead code, consistency, duplication, type safety).
 - **Where validation output goes:** any build or check output that must land in a file goes inside this task's worktree (a gitignored path, removed before any commit), never a shared scratchpad filename.
-  Two concurrent reviewers both redirecting to `<scratchpad>/verify.log` once had one reading the other worktree's results and returning a verdict for the wrong branch.
-- Reporting format: **Pass** (all criteria met, build passes, no material issues) or **Issues** (numbered, each with category + file/line + what's wrong + what to change).
 - **Do NOT edit, create, or delete any files** — the worktree-local validation output file above is the sole exception.
-  **Do NOT read commit messages or `git diff` content** — list touched files for scoping only, then read whole files.
-  Be strict but fair; flag real gaps, not style nits.
-  Put any follow-up suggestions in the report only.
 
 ## Delivery (push + PR, per task)
 
@@ -422,20 +388,18 @@ Default behavior: each task that passes review and clears the guard gets **pushe
 3. If pushing/PR creation is unavailable (no remote auth — see Bootstrap step 3), fall back to **local reviewed branches**: the work persists in the shared `.git`.
    Note in the final summary which branches still need to be pushed once a remote is reachable.
 
-After the PR is open, remove the task's worktree per Cleanup to reclaim storage.
 Do not delete the branch — the PR and any dependents need it (removing a worktree never touches branches).
 
 **A pushed branch left without a PR is a terminal-state obligation.**
-A push that landed while PR creation failed leaves the branch on `origin` advertised by no PR, holding a task number the next run's same-number guard sees on neither the base branch nor any open PR head — so the collision this run caught would reappear there, and a session-local reservation cannot outlive the run to prevent it.
 Act on such a branch the moment its delivery settles, before its terminal state reaches its dependents: retry PR creation once (looking first for a PR the failed attempt may have opened, and reading the base back), and where that fails delete the branch from `origin` (its commits stay in the shared `.git` for a later push).
-Acted on only at the end of the batch, a prerequisite whose retry opened its PR would find its dependents already skipped on the state it held in between; acted on at once, a retry that succeeds delivers it and unlocks them, while a branch deleted from origin is local-only and — on a run with a remote — unlocks nothing, since a dependent stacked on it would open its PR against a base `origin` no longer carries.
+A retry that succeeds delivers it and unlocks its dependents; a branch deleted from origin is local-only and — on a run with a remote — unlocks nothing.
 Name any branch that survives both attempts in the final summary beside the task number it still holds, so the next run can reclaim it by hand.
 
 ## Cleanup
 
 - Remove a task's worktree once its PR is open — a **delivered** task's only.
   A task that stopped short of delivery (a review cap-out, a guard hold, a crash) keeps its worktree in place for inspection and keeps its live-worktree slot (see Storage headroom above): report it as retained, with the state it stopped in, rather than removing it.
-  First verify a delivered worktree is safe to remove: `git -C <worktree> status --porcelain` must be empty and no Git operation may be in progress (no `rebase-merge`/`rebase-apply` paths, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, or `BISECT_LOG` under its git dir — the same six the packet hard-check names, and for the same reason: the last three can print empty porcelain, so a porcelain-plus-rebase-only check clears a tree nobody should remove).
+  First verify a delivered worktree is safe to remove: `git -C <worktree> status --porcelain` must be empty and no Git operation may be in progress (no `rebase-merge`/`rebase-apply` paths, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, or `BISECT_LOG` under its git dir — the same six the packet hard-check names).
   Then `git worktree remove <path>`.
   **Never force-remove a worktree with uncommitted changes or an in-progress Git operation** — `git worktree remove --force` destroys that work; if the checks fail, leave the worktree in place and report why rather than deleting evidence.
   Use `--force` only to clear git's refusal over leftovers like ignored build artifacts *after* the clean checks pass.
@@ -472,10 +436,9 @@ Those names are unique per batch and clock second, which is what the teardown's 
 Point each guide branch `gN` at the captured tip of its canonical branch `bN`; do not check out or move any `bN`.
 Create a dedicated worktree attached to `g1`: `git worktree add "$WT_BASE/_review-stack-<batch>-<YYYYMMDD-HHMMSS>" <g1>` (same ref-safe timestamp; `g1` already exists, so this attaches it without creating any branch).
 Running the restack there keeps the user's main checkout and current branch untouched.
-A fresh worktree has no installed dependencies, so if `rebase-stack`'s post-conflict validation would need a build, install the project's dependencies in this worktree first (cheap when the package store hardlinks — same filesystem) — otherwise a resolved trivial conflict that triggers validation false-stops the guide on missing modules rather than a real failure.
+A fresh worktree has no installed dependencies, so if `rebase-stack`'s post-conflict validation would need a build, install the project's dependencies in this worktree first (cheap when the package store hardlinks — same filesystem).
 
 Delegate the restack to one fresh `worker` subagent in that dedicated worktree and have it invoke `$rebase-stack` with the explicit guide chain.
-Use the explicit form because independently created branches have no topology from which to infer the intended order.
 The prompt contract is:
 
 - Start with the usual worktree contract: `cd` to the exact dedicated worktree, verify `git rev-parse --show-toplevel`, and operate only there.
@@ -508,20 +471,19 @@ If the restack stops partway, the canonical order remains the review recommendat
 
 Every task runs in its own worktree, but the repository's main checkout is shared — with the maintainer, and with any peer harness running in the same container.
 Take a reading of its working-tree state at Bootstrap, and take the same reading again once **every** batch entry has reached a terminal state.
-Trigger it on batch termination, not on "the last task delivers": a batch in which every task blocks, fails, or aborts never reaches a delivery, and a failed implementer is at least as likely to have leaked strays as a successful one — so gating on a delivery skips the check exactly when it matters most.
+Trigger it on batch termination, not on "the last task delivers": a batch in which every task blocks, fails, or aborts never reaches a delivery.
 
 Compare the two **by path**, so a path whose status code changed reads as a re-classification — a co-tenant staging their own work — rather than as one path vanishing and another appearing.
 Paths that appeared are a finding in the final report; paths that **disappeared** are a louder one, because a stray `checkout` or `clean` in the shared tree eating a co-tenant's uncommitted work is the hazard only a baseline can see.
 Report a vanished path as something to check against co-tenant commits, the reflog, and the stash rather than as established loss: a maintainer who committed their own work mid-run also removes a baseline path, with nothing gone.
 Everything else is pre-existing.
-Take a baseline rather than testing for emptiness — the maintainer's own work-in-progress is deliberately permitted in that checkout, so an unconditional non-empty rule would both blame the batch for work it never touched and destroy the one signal separating a real stray from the tree's starting state.
+Take a baseline rather than testing for emptiness — the maintainer's own work-in-progress is deliberately permitted in that checkout.
 
 **Report, never clean.**
 Do not `git clean`, `checkout`, `reset`, or `stash` the shared main checkout on the strength of this report — another agent's uncommitted work is not yours to delete — and diff any stray against the delivered branches before touching it at all.
 
 State the claim as narrowly as it is.
 The report says what its reading could see change; it claims nothing about what was **written into** paths already present in the baseline, nor about anything its reading does not surface.
-That is an exclusion rather than a list of blind spots, because the list is open: widening what the reading sees improves the report and leaves the claim exactly this narrow.
 What it does surface is a report to verify, not a conclusion — the same reading cannot tell a stray from a co-tenant's ordinary progress.
 It is never a proof that the batch wrote nothing, and must not be delivered as one.
 
