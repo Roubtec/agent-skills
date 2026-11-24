@@ -5,7 +5,7 @@ description: A change, worktree, or drafted document should be reviewed and fixe
 
 Run one complete review cycle — fix → own fresh-eyes review → best-effort peer review → fix — on a single artifact.
 
-**Arguments:** `[<target: worktree, branch, diff range, task/doc file, or nothing for the current change>] [artifact-type: code | prose | decision] [light] [close-out] [peer-opinions=off] [muse-contributor=on|off] [max-rounds=N]`
+**Arguments:** `[<target: worktree, branch, diff range, task/doc file, or nothing for the current change>] [artifact-type: code | prose | decision] [light] [close-out] [peer-opinions=off] [max-rounds=N]`
 
 This skill is two things at once.
 It is the **canonical definition** of the review protocol the other dev-skills share — `address-review`, `address-reviews`, `address-tasks`, `address-tasks-serialized`, `resolve-open-questions`, and `write-tasks` reference this file for the roles, gates, peer step, delegated rebase step, round cap, and disposition rule, and state only their own deltas — and it is a **drop-in**: invoked directly, it runs the full cycle on an ad-hoc change with no batch scaffolding.
@@ -269,7 +269,7 @@ It runs through `peer-review-run` only — there is no manual launch for it: `pe
 Give it the Peer's `prompt_file` and an `artifact_root` of its own beside the Peer's, so the two results never share a directory.
 A missing helper, or one that answers that call with a usage error and no result line because it predates the `muse` provider, means no second peer for the rest of the run — state that once rather than every round.
 Pass no `--model`: the helper prefers the strongest Muse model the account's plan includes and falls back to that plan's floor on its own, so the applied `model` and `effort` it reports are this peer's strength note, recorded beside the Peer's.
-Contributor mode is the user's saved Muse setting and is left alone; only an explicit `muse-contributor=on` or `muse-contributor=off` argument overrides it, by exporting `MUSE_CONTRIBUTOR_MODE=1` or `=0` for that one call.
+Contributor mode is the user's saved Muse setting, which also decides how fast their Muse allowance is spent, so leave it alone: set no `MUSE_CONTRIBUTOR_MODE` for the call and offer no argument that overrides it.
 Its result lands in the outcome vocabulary below and feeds the gate, the grounding spot-check, the verbatim relay, and the pass-note consumption on the Peer's terms, and its launches count toward the same batch throttle.
 
 **Compact pass-note consumption.**

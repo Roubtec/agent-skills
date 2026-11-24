@@ -96,7 +96,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 210;
+const CHECKS_PER_LEG = 230;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -111,6 +111,13 @@ async function scenario(name, fn) {
     check(`${name} ran without throwing`, false, String((err && err.stack) || err));
   }
 }
+
+// The single-peer scenarios below predate the peer roster and are about one
+// provider's stage, so they run as the container most runs see: Muse not
+// installed. Its preflight answers `absent`, which drops it for the run with no
+// round entry — the roster scenario at the end is where it answers.
+const museAbsent = (agent) => async (prompt, opts) =>
+  opts && opts.label === "peer-preflight:muse" ? { outcome: "absent", detail: "" } : agent(prompt, opts);
 
 // Load the marked section and hand back `runReviewCycle`, bound to a scripted
 // `agent`. Fail loudly if the markers moved, so this cannot silently pass
@@ -129,7 +136,7 @@ function loadCycle(src, agent, logSink) {
   // every renderer outside a cycle today, so driving the cycle can never
   // exercise the default and only a direct call can.
   // eslint-disable-next-line no-new-func
-  return new Function("agent", "parallel", "pipeline", "log", "phase", `${section}\nreturn { runReviewCycle, cycleReviewChecks, cyclePeerPrompt, runCyclePeerStage, createCyclePeerThrottle, cyclePeerTrouble, normalizeCyclePeerResult, CYCLE_PEER_SCHEMA };`)(
+  return new Function("agent", "parallel", "pipeline", "log", "phase", `${section}\nreturn { runReviewCycle, cycleReviewChecks, cyclePeerPrompt, runCyclePeerStage, createCyclePeerThrottle, createCyclePeerState, cyclePeerProviderState, cyclePeerTrouble, normalizeCyclePeerResult, CYCLE_PEER_SCHEMA, CYCLE_PEER_PROVIDERS };`)(
     agent,
     parallel,
     pipeline,
@@ -1626,7 +1633,7 @@ for (const name of WORKFLOWS) {
     const peerPrompts = [];
     let preflightCalls = 0;
     const agent = async (prompt, opts) => {
-      if (opts && opts.label === "peer-preflight") {
+      if (opts && opts.label === "peer-preflight:codex") {
         preflightCalls += 1;
         ownerEnteredResolve();
         await new Promise((resolve) => { releaseOwner = resolve; });
@@ -1635,7 +1642,9 @@ for (const name of WORKFLOWS) {
       peerPrompts.push(prompt);
       return { outcome: "passed", findings: [], notes: "- src/example.js:7 — Naming could be clearer.", detail: "" };
     };
-    const { cyclePeerPrompt, runCyclePeerStage, createCyclePeerThrottle, cyclePeerTrouble } = loadCycle(src, agent);
+    const { cyclePeerPrompt, runCyclePeerStage: runStage, createCyclePeerThrottle, cyclePeerTrouble, CYCLE_PEER_PROVIDERS } = loadCycle(src, agent);
+    const CODEX = CYCLE_PEER_PROVIDERS.find((provider) => provider.id === "codex");
+    const runCyclePeerStage = (c, st) => runStage(c, st, CODEX);
     check(
       "the helper's exact empty and malformed reasons are eligible forfeiture trouble",
       cyclePeerTrouble({ outcome: "forfeited", reason: "provider exited 0 with an empty final message" }) &&
@@ -1664,7 +1673,7 @@ for (const name of WORKFLOWS) {
       ].every((reason) => !cyclePeerTrouble({ outcome: "forfeited", reason })),
       "negative exact-match cases",
     );
-    const peerState = { preflighted: false, preflightInProgress: null, unavailable: false, unavailableDetail: "" };
+    const peerState = { providers: {} };
     const peerThrottle = createCyclePeerThrottle();
     const cycle = { ...CYCLE, peer: "on", contracts: {}, labelPrefix: "batch:" };
     const state = (round) => ({
@@ -1675,7 +1684,7 @@ for (const name of WORKFLOWS) {
       peerState,
       peerThrottle,
     });
-    const renderedPeer = cyclePeerPrompt(cycle, state(1));
+    const renderedPeer = cyclePeerPrompt(cycle, state(1), CODEX);
     check(
       "the peer prompt preserves the first-line verdict and keeps advisory notes compact and optional",
       /exactly `VERDICT: PASS` or `VERDICT: ISSUES` on the first line/.test(renderedPeer) &&
@@ -1747,7 +1756,7 @@ for (const name of WORKFLOWS) {
     check("a passing peer's bounded note survives structurally while clean notes may stay empty", results.every((r) => r.notes === "- src/example.js:7 — Naming could be clearer."), JSON.stringify(results.map((r) => r.notes)));
     check("the parallel first wave executes exactly one real preflight", preflightCalls === 1, `${preflightCalls} preflight call(s)`);
     check("all six peer launches fan out after it and skip duplicate probes", peerPrompts.length === 6 && peerPrompts.every((p) => /Preflight: already done by the run-level shared preflight/.test(p)), `${peerPrompts.length} peer prompt(s)`);
-    check("the shared state records completion and leaves no in-progress latch", peerState.preflighted === true && peerState.preflightInProgress === null, JSON.stringify(peerState));
+    check("the shared state records completion and leaves no in-progress latch", peerState.providers.codex.preflighted === true && peerState.providers.codex.preflightInProgress === null && Object.keys(peerState.providers).join() === "codex", JSON.stringify(peerState));
 
     const summarizedPass = async (notes) => {
       const fixPrompts = [];
@@ -1763,11 +1772,11 @@ for (const name of WORKFLOWS) {
         }
         if (label.startsWith("packet#")) return { measured: true, dirty: [], operation: "", detail: "" };
         if (label === "review#1") return { ...OK };
-        if (label === "peer-preflight") return { outcome: "available", detail: "" };
-        if (label === "peer#1") return { outcome: "passed", findings: [], notes, detail: "" };
+        if (label === "peer-preflight:codex") return { outcome: "available", detail: "" };
+        if (label === "peer:codex#1") return { outcome: "passed", findings: [], notes, detail: "" };
         return null;
       };
-      const loaded = loadCycle(src, summaryAgent);
+      const loaded = loadCycle(src, museAbsent(summaryAgent));
       return { result: await loaded.runReviewCycle({ ...CYCLE, peer: "on" }), fixPrompts };
     };
     const noteMarker = "- src/example.js:7 — Naming could be clearer.";
@@ -1824,13 +1833,13 @@ for (const name of WORKFLOWS) {
       if (label === "fix#3") return { ...idle };
       if (label.startsWith("packet#")) return { measured: true, dirty: [], operation: "", detail: "" };
       if (label.startsWith("review#")) return { ...OK };
-      if (label === "peer-preflight") return { outcome: "available", detail: "" };
-      if (label === "peer#1") return { outcome: "issues", findings: [{ claim: "fix the defect" }], notes: issuesNoteMarker, detail: "" };
-      if (label === "peer#2") return { outcome: "passed", findings: [], notes: "", detail: "" };
+      if (label === "peer-preflight:codex") return { outcome: "available", detail: "" };
+      if (label === "peer:codex#1") return { outcome: "issues", findings: [{ claim: "fix the defect" }], notes: issuesNoteMarker, detail: "" };
+      if (label === "peer:codex#2") return { outcome: "passed", findings: [], notes: "", detail: "" };
       if (label === "ground#1") return { verdicts: [] };
       return null;
     };
-    const issuesLoaded = loadCycle(src, issuesAgent);
+    const issuesLoaded = loadCycle(src, museAbsent(issuesAgent));
     const issuesResult = await issuesLoaded.runReviewCycle({ ...CYCLE, peer: "on" });
     check(
       "advisory notes beside an issues verdict stay in peerRounds and out of every later fixer input",
@@ -1851,13 +1860,13 @@ for (const name of WORKFLOWS) {
       if (label === "fix#3") return { ...idle };
       if (label.startsWith("packet#")) return { measured: true, dirty: [], operation: "", detail: "" };
       if (label.startsWith("review#")) return { ...OK };
-      if (label === "peer-preflight") return { outcome: "available", detail: "" };
-      if (label === "peer#1") return { outcome: "issues", findings: [{ claim: "fix the defect" }], notes: "", detail: "", reason: "", teardownFailure: false, strength: "", fallbackReason: "helper result carried no usable reviewFile" };
-      if (label === "peer#2") return { outcome: "passed", findings: [], notes: "", detail: "", reason: "", teardownFailure: false, strength: "", fallbackReason: "helper result carried no usable reviewFile" };
+      if (label === "peer-preflight:codex") return { outcome: "available", detail: "" };
+      if (label === "peer:codex#1") return { outcome: "issues", findings: [{ claim: "fix the defect" }], notes: "", detail: "", reason: "", teardownFailure: false, strength: "", fallbackReason: "helper result carried no usable reviewFile" };
+      if (label === "peer:codex#2") return { outcome: "passed", findings: [], notes: "", detail: "", reason: "", teardownFailure: false, strength: "", fallbackReason: "helper result carried no usable reviewFile" };
       if (label === "ground#1") return { verdicts: [] };
       return null;
     };
-    const fallbackLoaded = loadCycle(src, fallbackAgent, (line) => fallbackLogs.push(String(line)));
+    const fallbackLoaded = loadCycle(src, museAbsent(fallbackAgent), (line) => fallbackLogs.push(String(line)));
     const fallbackResult = await fallbackLoaded.runReviewCycle({ ...CYCLE, peer: "on" });
     const fallbackLines = fallbackLogs.filter((line) => /manual fallback taken/.test(line));
     check(
@@ -1874,12 +1883,12 @@ for (const name of WORKFLOWS) {
       if (label === "fix#2") return { ...idle };
       if (label.startsWith("packet#")) return { measured: true, dirty: [], operation: "", detail: "" };
       if (label === "review#1") return { ...OK };
-      if (label === "peer-preflight") return { outcome: "available", detail: "" };
-      if (label === "peer#1") return { outcome: "passed", findings: [], notes: "", detail: "", reason: "", teardownFailure: false, strength: "model=null effort=medium", fallbackReason: "" };
+      if (label === "peer-preflight:codex") return { outcome: "available", detail: "" };
+      if (label === "peer:codex#1") return { outcome: "passed", findings: [], notes: "", detail: "", reason: "", teardownFailure: false, strength: "model=null effort=medium", fallbackReason: "" };
       return null;
     };
     const nullModelLogs = [];
-    const nullModelResult = await loadCycle(src, nullModelAgent, (line) => nullModelLogs.push(String(line))).runReviewCycle({ ...CYCLE, peer: "on" });
+    const nullModelResult = await loadCycle(src, museAbsent(nullModelAgent), (line) => nullModelLogs.push(String(line))).runReviewCycle({ ...CYCLE, peer: "on" });
     check(
       "a helper result reporting model: null is recorded as the applied strength and triggers no fallback",
       nullModelResult.verdict === "pass" && nullModelResult.rounds === 1 &&
@@ -1900,7 +1909,7 @@ for (const name of WORKFLOWS) {
     let preflightAttempts = 0;
     let peerAttempts = 0;
     const resetAgent = async (_prompt, opts) => {
-      if (opts && opts.label === "peer-preflight") {
+      if (opts && opts.label === "peer-preflight:codex") {
         preflightAttempts += 1;
         if (preflightAttempts === 1) throw new Error("synthetic preflight throw");
         return { outcome: "available", detail: "" };
@@ -1909,17 +1918,17 @@ for (const name of WORKFLOWS) {
       return { outcome: "passed", findings: [], notes: "", detail: "" };
     };
     const resetLoaded = loadCycle(src, resetAgent);
-    const resetState = { preflighted: false, preflightInProgress: null, unavailable: false, unavailableDetail: "" };
+    const resetState = { providers: {} };
     const resetThrottle = resetLoaded.createCyclePeerThrottle();
     const resetStage = (round) => resetLoaded.runCyclePeerStage(cycle, {
       ...state(round),
       peerState: resetState,
       peerThrottle: resetThrottle,
-    });
+    }, CODEX);
     const resetResults = await Promise.all([resetStage(1), resetStage(2)]);
     check("a thrown owner releases the waiter instead of deadlocking it", resetResults.length === 2 && preflightAttempts === 2, `${preflightAttempts} preflight attempt(s)`);
     check("the thrown stage stays a synthesized non-blocking forfeit while the waiter succeeds", resetResults.some((r) => r.outcome === "forfeited" && r.synthesized) && resetResults.some((r) => r.outcome === "passed"), JSON.stringify(resetResults));
-    check("synthesis resets ownership, so the successor preflights again and only it launches a peer", preflightAttempts === 2 && peerAttempts === 1 && resetState.preflighted === true && resetState.preflightInProgress === null, `${preflightAttempts} preflight/${peerAttempts} peer/${JSON.stringify(resetState)}`);
+    check("synthesis resets ownership, so the successor preflights again and only it launches a peer", preflightAttempts === 2 && peerAttempts === 1 && resetState.providers.codex.preflighted === true && resetState.providers.codex.preflightInProgress === null, `${preflightAttempts} preflight/${peerAttempts} peer/${JSON.stringify(resetState)}`);
   });
 
   // 29. The peer stage's ONE non-blocking exception. Every OUTCOME normalizes
@@ -1938,11 +1947,11 @@ for (const name of WORKFLOWS) {
       const base = scriptedAgent([JSON.parse(JSON.stringify(PASS_PACKET)), JSON.parse(JSON.stringify(idle))], [OK, OK], seen);
       const agent = async (prompt, opts) => {
         const label = (opts && opts.label) || "";
-        if (label === "peer-preflight") return { outcome: "available", detail: "" };
-        if (label.startsWith("peer#")) return JSON.parse(JSON.stringify(peerResult));
+        if (label === "peer-preflight:codex") return { outcome: "available", detail: "" };
+        if (label.startsWith("peer:codex#")) return JSON.parse(JSON.stringify(peerResult));
         return base(prompt, opts);
       };
-      const { runReviewCycle } = loadCycle(src, agent);
+      const { runReviewCycle } = loadCycle(src, museAbsent(agent));
       return runReviewCycle({ ...CYCLE, peer: "on" });
     };
     const survivor = { outcome: "failed", findings: [], notes: "", detail: "PID 4711 still answered kill -0 after KILL", reason: "", teardownFailure: true };
@@ -1964,7 +1973,7 @@ for (const name of WORKFLOWS) {
       `${cleared.verdict}/${JSON.stringify(cleared.peerRounds)}`,
     );
 
-    const { normalizeCyclePeerResult, CYCLE_PEER_SCHEMA, runCyclePeerStage, createCyclePeerThrottle } = loadCycle(src, async () => {
+    const { normalizeCyclePeerResult, CYCLE_PEER_SCHEMA, runCyclePeerStage, createCyclePeerThrottle, CYCLE_PEER_PROVIDERS } = loadCycle(src, async () => {
       throw new Error("synthetic peer stage throw");
     });
     check(
@@ -1999,14 +2008,320 @@ for (const name of WORKFLOWS) {
         artifactDir: "/tmp/review-cycle-teardown-test",
         packet: { workReport: [] },
         handedFindings: [],
-        peerState: { preflighted: true, preflightInProgress: null, unavailable: false, unavailableDetail: "" },
+        peerState: { providers: { codex: { preflighted: true, preflightInProgress: null, unavailable: false, unavailableDetail: "", absent: false } } },
         peerThrottle: createCyclePeerThrottle(),
       },
+      CYCLE_PEER_PROVIDERS.find((provider) => provider.id === "codex"),
     );
     check(
       "but a thrown stage synthesizes no teardown failure of its own",
       thrown.outcome === "forfeited" && thrown.synthesized === true && !thrown.teardownFailure,
       JSON.stringify(thrown),
+    );
+  });
+
+  // 32. The peer ROSTER. Everything above drives one provider's stage; this is
+  //     what makes several of them one stage per provider rather than one
+  //     stage with cases. The properties are the ones a second and a third
+  //     reviewer must not disturb: each provider is probed once, answers under
+  //     its own name, and gates on the same terms; a provider that is missing,
+  //     unusable, or broken costs the round nothing but its own entry; and the
+  //     peers-off round is the one it always was. Each drive scripts the two
+  //     providers independently, so a check that passes for the wrong provider
+  //     has the other one's script to fail against.
+  await scenario("32. the peer roster asks every provider independently and none of them is required", async () => {
+    const drive = async (peers, cycleOverrides) => {
+      const calls = [];
+      const prompts = {};
+      const agent = async (prompt, opts) => {
+        const label = (opts && opts.label) || "";
+        calls.push(label);
+        prompts[label] = prompt;
+        if (label === "fix#1") return { ...PASS_PACKET, changed: true, dispositions: [] };
+        if (label === "fix#2") {
+          const handed = [...prompt.matchAll(/"id": "(p1-\d+)"/g)].map((m) => m[1]);
+          return handed.length
+            ? { ...PASS_PACKET, changed: false, dispositions: handed.map((findingId) => ({ findingId, finding: "f", origin: "peer", disposition: "declined", detail: "declined" })) }
+            : { ...idle };
+        }
+        if (label === "fix#3") return { ...idle };
+        if (label.startsWith("packet#")) return { measured: true, dirty: [], operation: "", detail: "" };
+        if (label.startsWith("review#")) return { ...OK };
+        if (label.startsWith("ground#")) return peers[label] || { verdicts: [] };
+        const script = peers[label];
+        if (script instanceof Error) throw script;
+        return script === undefined ? null : JSON.parse(JSON.stringify(script));
+      };
+      const result = await loadCycle(src, agent).runReviewCycle({ ...CYCLE, peer: "on", ...(cycleOverrides || {}) });
+      return { result, calls, prompts, count: (label) => calls.filter((c) => c === label).length };
+    };
+    const available = { outcome: "available", detail: "" };
+    const passed = { outcome: "passed", findings: [], notes: "", detail: "", reason: "", teardownFailure: false };
+    const issues = (claim, extra) => ({ ...passed, outcome: "issues", findings: [{ severity: "minor", claim, ...(extra || {}) }] });
+    const entries = (r) => (r.peerRounds || []).map((e) => `${e.round}:${e.provider || "-"}:${e.outcome}`).join(" ");
+
+    // Both providers answer, and both raise something.
+    const both = await drive({
+      "peer-preflight:codex": available,
+      "peer-preflight:muse": available,
+      "peer:codex#1": issues("codex claim"),
+      // A finding cannot name its own channel: the tag is the script's.
+      "peer:muse#1": issues("muse claim", { provider: "codex" }),
+      "peer:codex#2": passed,
+      "peer:muse#2": passed,
+    });
+    check(
+      "every provider on the roster is recorded under its own name, in roster order, every round",
+      both.result.verdict === "pass" && entries(both.result) === "1:codex:issues 1:muse:issues 2:codex:passed 2:muse:passed",
+      `${both.result.verdict} / ${entries(both.result)}`,
+    );
+    check(
+      "each provider is preflighted once for the run, not once per round",
+      both.count("peer-preflight:codex") === 1 && both.count("peer-preflight:muse") === 1,
+      both.calls.filter((c) => c.startsWith("peer-preflight")).join(" "),
+    );
+    const handedFix = both.prompts["fix#2"] || "";
+    const codexBlock = handedFix.indexOf("### Peer (codex) findings");
+    const museBlock = handedFix.indexOf("### Peer (muse) findings");
+    check(
+      "the fixer is handed one block per provider, each holding only that provider's findings",
+      codexBlock !== -1 && museBlock > codexBlock &&
+        handedFix.indexOf("codex claim") > codexBlock && handedFix.indexOf("codex claim") < museBlock &&
+        handedFix.indexOf("muse claim") > museBlock &&
+        (handedFix.match(/### Peer \(/g) || []).length === 2,
+      `codex block at ${codexBlock}, muse block at ${museBlock}`,
+    );
+    check(
+      "finding ids stay unique across providers so each is disposed exactly once",
+      /"id": "p1-1"/.test(handedFix) && /"id": "p1-2"/.test(handedFix) && (handedFix.match(/"id": "p1-/g) || []).length === 2 &&
+        (both.result.undisposed || []).length === 0,
+      JSON.stringify(both.result.undisposed),
+    );
+    const musePrompt = both.prompts["peer:muse#1"] || "";
+    const codexPrompt = both.prompts["peer:codex#1"] || "";
+    check(
+      "each stage launches its own provider, on the worktree it is told to name, from a directory of its own",
+      [musePrompt, codexPrompt].every((p) => /2\. Set `worktree` to the absolute worktree path the contract above names/.test(p)) &&
+        /peer-review-run --provider muse --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --effort medium/.test(musePrompt) &&
+        !/--provider codex/.test(musePrompt) && /round-1\/peer-muse'/.test(musePrompt) &&
+        /--provider codex /.test(codexPrompt) && !/--provider muse/.test(codexPrompt) && /round-1\/peer-codex'/.test(codexPrompt),
+      "launch line and round directory per provider",
+    );
+    check(
+      "a provider with no manual launch gets none: no raw launch, no fallback trigger, and a missing or too-old helper is unavailable",
+      !/nohup/.test(musePrompt) && !/codex exec/.test(musePrompt) && !/`fallbackReason` exactly `/.test(musePrompt) &&
+        /5\. There is no manual launch for this provider/.test(musePrompt) &&
+        /the helper rejects the `--provider` value itself with a usage error and no result line \(a helper that predates this provider\), return `unavailable`/.test(musePrompt) &&
+        /Any other usage error is a mistake in the call rather than a missing provider: return `failed`/.test(musePrompt) &&
+        /4\. Launch, when `command -v peer-review-run` succeeds/.test(musePrompt) && !/Primary launch/.test(musePrompt) &&
+        /return `forfeited` with `detail` exactly `helper result carried no usable reviewFile`/.test(musePrompt) &&
+        /nohup sh -c '/.test(codexPrompt),
+      "helper-only stage shape",
+    );
+    check(
+      "the Muse stage leaves contributor mode as saved and pins no model",
+      /Set no `MUSE_CONTRIBUTOR_MODE` for the call either/.test(musePrompt) && !/peer-review-run --provider muse[^`]*--model/.test(musePrompt),
+      "muse launch notes",
+    );
+    const peerPromptOf = (stagePrompt) => stagePrompt.slice(stagePrompt.indexOf("## Peer prompt"), stagePrompt.indexOf("## Output"));
+    check(
+      "every provider is asked the same question in the same words",
+      peerPromptOf(musePrompt).length > 500 && peerPromptOf(musePrompt) === peerPromptOf(codexPrompt),
+      `${peerPromptOf(musePrompt).length}/${peerPromptOf(codexPrompt).length}`,
+    );
+
+    // The round waits for its slowest stage, not their sum: the reviewer and
+    // every provider's stage are in flight together. Each of the three holds
+    // until all three have been entered, so a round that launched them one
+    // after another could never release the first — the timer is what turns
+    // that deadlock into a failed check rather than a hung suite.
+    const entered = new Set();
+    let releaseAll;
+    const allEntered = new Promise((resolve) => { releaseAll = resolve; });
+    let serialized = false;
+    const together = async (label, value) => {
+      entered.add(label);
+      if (entered.size === 3) releaseAll();
+      let timer;
+      await Promise.race([allEntered, new Promise((resolve) => { timer = setTimeout(() => { serialized = true; resolve(); }, 2000); })]);
+      clearTimeout(timer);
+      return value;
+    };
+    const concurrentAgent = async (_prompt, opts) => {
+      const label = (opts && opts.label) || "";
+      if (label === "fix#1") return { ...PASS_PACKET, changed: true, dispositions: [] };
+      if (label === "fix#2") return { ...idle };
+      if (label.startsWith("packet#")) return { measured: true, dirty: [], operation: "", detail: "" };
+      if (label.startsWith("peer-preflight:")) return available;
+      if (label === "review#1") return together(label, { ...OK });
+      if (label === "peer:codex#1" || label === "peer:muse#1") return together(label, passed);
+      return null;
+    };
+    const concurrent = await loadCycle(src, concurrentAgent).runReviewCycle({ ...CYCLE, peer: "on" });
+    check(
+      "the reviewer and every provider's stage are in flight together, so the round waits for the slowest and not their sum",
+      !serialized && entered.size === 3 && concurrent.verdict === "pass" && entries(concurrent) === "1:codex:passed 1:muse:passed",
+      `serialized=${serialized} / entered ${[...entered].join(" ")} / ${concurrent.verdict}`,
+    );
+
+    // A discarded finding says whose it was.
+    const discarded = await drive({
+      "peer-preflight:codex": available,
+      "peer-preflight:muse": available,
+      // Both raise the same claim, and each is its own finding...
+      "peer:codex#1": issues("points at a file that is not there"),
+      "peer:muse#1": issues("points at a file that is not there"),
+      // ...and the check may answer the pair with a verdict each.
+      // ...which the check answers per id; a second verdict on one id is ignored.
+      "ground#1": { verdicts: [...["G1", "G2"].map((id) => ({ id, grounded: false, why: "no such file" })), { id: "G1", grounded: false, why: "said twice" }] },
+    });
+    check(
+      "a finding the grounding check discards is recorded once under every provider that raised it, and no longer gates",
+      discarded.result.verdict === "pass" && discarded.result.rounds === 1 &&
+        JSON.stringify(discarded.result.discardedPeerFindings) === JSON.stringify(["codex", "muse"].map((provider) => ({ round: 1, provider, finding: "points at a file that is not there", why: "no such file" }))),
+      `${discarded.result.verdict}/${discarded.result.rounds} / ${JSON.stringify(discarded.result.discardedPeerFindings)}`,
+    );
+
+    // The same wording at two sites is two findings: rejecting one reference
+    // leaves the other gating, and a verdict naming no listed id drops nothing.
+    const twin = await drive({
+      "peer-preflight:codex": available,
+      "peer-preflight:muse": available,
+      "peer:codex#1": issues("this guard is never reached", { file: "real.js:4" }),
+      "peer:muse#1": issues("this guard is never reached", { file: "gone.js:9" }),
+      "ground#1": { verdicts: [{ id: "G2", grounded: false, why: "no such file" }, { id: "this guard is never reached", grounded: false, why: "names a claim" }] },
+      "peer:codex#2": passed,
+      "peer:muse#2": passed,
+    });
+    check(
+      "a grounding verdict drops only the finding whose id it names, so an identically worded sound finding still gates",
+      twin.result.verdict === "pass" && twin.result.rounds === 2 &&
+        JSON.stringify(twin.result.discardedPeerFindings) === JSON.stringify([{ round: 1, provider: "muse", finding: "this guard is never reached", why: "no such file" }]) &&
+        /"id": "G1"[\s\S]*"id": "G2"/.test(twin.prompts["ground#1"] || "") &&
+        /### Peer \(codex\) findings/.test(twin.prompts["fix#2"] || "") && !/### Peer \(muse\) findings/.test(twin.prompts["fix#2"] || "") &&
+        /real\.js:4/.test(twin.prompts["fix#2"] || "") && !/"id": "G1"/.test(twin.prompts["fix#2"] || ""),
+      `${twin.result.verdict}/${twin.result.rounds} / ${JSON.stringify(twin.result.discardedPeerFindings)}`,
+    );
+
+    // One provider alone gates the round, exactly as the first one always did.
+    const museOnly = await drive({
+      "peer-preflight:codex": available,
+      "peer-preflight:muse": available,
+      "peer:codex#1": passed,
+      "peer:muse#1": issues("only muse saw this"),
+      "peer:codex#2": passed,
+      "peer:muse#2": passed,
+    });
+    const museOnlyFix = museOnly.prompts["fix#2"] || "";
+    check(
+      "a finding from any one provider gates the round and reaches the fixer under that provider alone",
+      museOnly.result.verdict === "pass" && museOnly.result.rounds === 2 &&
+        /### Peer \(muse\) findings/.test(museOnlyFix) && !/### Peer \(codex\) findings/.test(museOnlyFix) && /only muse saw this/.test(museOnlyFix),
+      `${museOnly.result.verdict}/${museOnly.result.rounds} round(s)`,
+    );
+
+    // A container without the quiet provider reports nothing about it.
+    const absent = await drive({
+      "peer-preflight:codex": available,
+      "peer-preflight:muse": { outcome: "absent", detail: "missing binary" },
+      "peer:codex#1": issues("codex claim"),
+      "peer:codex#2": passed,
+    });
+    check(
+      "an absent quiet provider leaves no round entry, launches nothing, and is not probed again",
+      absent.result.verdict === "pass" && entries(absent.result) === "1:codex:issues 2:codex:passed" &&
+        absent.count("peer-preflight:muse") === 1 && !absent.calls.some((c) => c.startsWith("peer:muse#")),
+      `${entries(absent.result)} / ${absent.calls.filter((c) => c.includes("muse")).join(" ")}`,
+    );
+    // ...but only a provider that declares it may be quiet about it.
+    const loudAbsent = await drive({
+      "peer-preflight:codex": { outcome: "absent", detail: "missing binary" },
+      "peer-preflight:muse": { outcome: "absent", detail: "missing binary" },
+    });
+    check(
+      "a provider that is not quiet cannot vanish: `absent` from it is recorded as unavailable",
+      loudAbsent.result.verdict === "pass" && entries(loudAbsent.result) === "1:codex:unavailable" && /missing binary/.test(loudAbsent.result.peerRounds[0].detail),
+      `${entries(loudAbsent.result)} / ${JSON.stringify(loudAbsent.result.peerRounds)}`,
+    );
+
+    // A provider that turns out unusable at launch is not asked again, and the
+    // other provider's rounds are untouched by it.
+    const sticky = await drive({
+      "peer-preflight:codex": available,
+      "peer-preflight:muse": available,
+      "peer:codex#1": issues("codex claim"),
+      "peer:muse#1": { ...passed, outcome: "unavailable", detail: "peer-review-run predates the muse provider" },
+      "peer:codex#2": passed,
+    });
+    check(
+      "an unavailable provider is launched once, stays unavailable for the run, and leaves the other provider's rounds alone",
+      sticky.result.verdict === "pass" && entries(sticky.result) === "1:codex:issues 1:muse:unavailable 2:codex:passed 2:muse:unavailable" &&
+        sticky.count("peer:muse#1") === 1 && sticky.count("peer:muse#2") === 0 && sticky.count("peer-preflight:muse") === 1 &&
+        sticky.result.peerRounds.filter((e) => e.provider === "muse").every((e) => /predates the muse provider/.test(e.detail)),
+      `${entries(sticky.result)} / ${sticky.calls.filter((c) => c.includes("muse")).join(" ")}`,
+    );
+
+    // ...including by a sibling cycle whose launch was already queued behind
+    // the one that found out: availability is written by the stage itself and
+    // read again when the slot comes up, not when some round ends.
+    let queuedLaunches = 0;
+    const queued = loadCycle(src, async () => {
+      queuedLaunches += 1;
+      return { ...passed, outcome: "unavailable", detail: "usage exhausted" };
+    });
+    const queuedMuse = queued.CYCLE_PEER_PROVIDERS.find((provider) => provider.id === "muse");
+    const queuedState = { providers: { muse: { preflighted: true, preflightInProgress: null, unavailable: false, unavailableDetail: "", absent: false } } };
+    const queuedThrottle = { ...queued.createCyclePeerThrottle(), cap: 1 };
+    const queuedStage = (round) => queued.runCyclePeerStage({ ...CYCLE, peer: "on", contracts: {} }, { round, artifactDir: "/tmp/review-cycle-queued-test", packet: { workReport: [] }, handedFindings: [], peerState: queuedState, peerThrottle: queuedThrottle }, queuedMuse);
+    const queuedResults = await Promise.all([queuedStage(1), queuedStage(2), queuedStage(3)]);
+    check(
+      "launches queued behind the one that found a provider unavailable are not made",
+      queuedLaunches === 1 && queuedResults.every((r) => r.outcome === "unavailable" && /usage exhausted/.test(r.detail)) && queuedThrottle.inFlight === 0,
+      `${queuedLaunches} launch(es) / ${JSON.stringify(queuedResults.map((r) => r.outcome))} / ${queuedThrottle.inFlight} in flight`,
+    );
+
+    // A provider whose every call fails outright still decides nothing.
+    const broken = await drive({
+      "peer-preflight:codex": available,
+      "peer-preflight:muse": new Error("synthetic muse preflight failure"),
+      "peer:codex#1": passed,
+    });
+    check(
+      "a provider whose preflight throws is a recorded non-blocking forfeit and the round concludes on the others",
+      broken.result.verdict === "pass" && broken.result.rounds === 1 && entries(broken.result) === "1:codex:passed 1:muse:forfeited",
+      `${broken.result.verdict} / ${entries(broken.result)}`,
+    );
+    const dead = await drive({
+      "peer-preflight:codex": available,
+      "peer-preflight:muse": available,
+      "peer:codex#1": passed,
+      // no script for the muse stage: its subagent returns nothing at all
+    });
+    check(
+      "a provider whose stage returns nothing is a recorded non-blocking forfeit too",
+      dead.result.verdict === "pass" && entries(dead.result) === "1:codex:passed 1:muse:forfeited",
+      `${dead.result.verdict} / ${entries(dead.result)}`,
+    );
+    // The stop is any provider's to raise, and the round keeps what the others said.
+    const torn = await drive({
+      "peer-preflight:codex": available,
+      "peer-preflight:muse": available,
+      "peer:codex#1": passed,
+      "peer:muse#1": { ...passed, outcome: "failed", detail: "PID 4711 still answered kill -0 after KILL", teardownFailure: true },
+    });
+    check(
+      "a teardown failure from any provider stops the cycle with every provider's entry for that round recorded",
+      torn.result.verdict === "error" && /4711/.test(torn.result.detail || "") && entries(torn.result) === "1:codex:passed 1:muse:failed" &&
+        torn.result.peerRounds[1].teardownFailure === true,
+      `${torn.result.verdict}/${torn.result.detail} / ${entries(torn.result)}`,
+    );
+
+    // The peers-off round is unchanged: one entry, no provider, nothing probed.
+    const off = await drive({}, { peer: "off" });
+    check(
+      "with the peers off the round records one provider-less `disabled` entry and asks no provider anything",
+      off.result.verdict === "pass" && entries(off.result) === "1:-:disabled" && !off.calls.some((c) => c.startsWith("peer")),
+      `${entries(off.result)} / ${off.calls.filter((c) => c.startsWith("peer")).join(" ")}`,
     );
   });
 
@@ -2311,7 +2626,7 @@ const PEER_LIFECYCLE_CHECKS = 22;
   check("the two executable review-cycle cores remain byte-identical", workflowCores[0] === workflowCores[1], `${workflowCores[0].length}/${workflowCores[1].length}`);
   check(
     "both workflow cores pin the primary helper launch, its private artifact root, and the caller wait budget",
-    workflowCores.every((core) => /4\. Primary launch, when \\`command -v peer-review-run\\` succeeds: run \\`peer-review-run --provider codex --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --effort medium\\`[\s\S]*caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(core) && !/prerequisite/i.test(core.slice(core.indexOf("function cyclePeerPrompt")))),
+    workflowCores.every((core) => /4\. \$\{manual \? "Primary launch" : "Launch"\}, when \\`command -v peer-review-run\\` succeeds: run \\`peer-review-run --provider \$\{provider\.id\} --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --effort medium\\`[\s\S]*caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(core) && !/prerequisite/i.test(core.slice(core.indexOf("function cyclePeerPrompt")))),
     "primary helper envelope in workflow cores",
   );
 

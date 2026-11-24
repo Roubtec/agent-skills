@@ -671,9 +671,13 @@ function load(file) {
   // briefs interpolate; the source-text identity check further down is a
   // separate question and reads the literal instead.
   const wanted = [...names, ...bNames, ...dNames];
-  const body = `"use strict";\n${prefix}\nreturn { ${wanted.map((n) => `${n}: ${n}`).join(", ")} };`;
+  // The peer roster rides along for the peer builders' fixtures, which render
+  // one case per provider. It is data, not a builder, so it is read only where
+  // the file declares it and never joins `names`.
+  const body = `"use strict";\n${prefix}\nreturn { ${wanted.map((n) => `${n}: ${n}`).join(", ")}, CYCLE_PEER_PROVIDERS: typeof CYCLE_PEER_PROVIDERS === "undefined" ? [] : CYCLE_PEER_PROVIDERS };`;
   const out = new Function("args", body)("");
   const fns = Object.fromEntries(names.map((n) => [n, out[n]]));
+  fns.CYCLE_PEER_PROVIDERS = out.CYCLE_PEER_PROVIDERS;
   const boundaries = bNames.map((n) => [n, out[n]]);
   const destinations = new Map(dNames.map((n) => [n, out[n]]));
   return { src, names, fns, boundaries, destinations, accounting };
@@ -816,6 +820,20 @@ const cycleOverridden = {
 const fixState = { round: 2, findings: { reviewer: [{ id: "f1", text: "x" }] }, confirming: false, artifactDir: "/tmp/a", openQuestions: [] };
 const reviewState = { round: 2, packet: { dispositions: [] }, artifactDir: "/tmp/a" };
 const peerState = { round: 2, packet: { dispositions: [] } };
+// The peer builders branch on the PROVIDER — one with no manual launch renders
+// a different stage — so each provider on the roster is a case of its own, for
+// the reason the artifact-directory branches below are. The list is the
+// roster's ids as this suite renders them, and looking a provider up checks the
+// two still agree: a provider added to the roster with no case here would
+// otherwise go unrendered in silence, so it fails every peer render instead.
+const PEER_PROVIDERS_RENDERED = ["codex", "muse"];
+function peerProvider(f, id) {
+  const roster = (f.CYCLE_PEER_PROVIDERS || []).map((provider) => provider.id);
+  if (roster.join() !== PEER_PROVIDERS_RENDERED.join()) {
+    throw new Error(`the peer roster is [${roster.join(", ")}] but this suite renders [${PEER_PROVIDERS_RENDERED.join(", ")}]; give every provider its cases`);
+  }
+  return f.CYCLE_PEER_PROVIDERS.find((provider) => provider.id === id);
+}
 // The states above all carry an artifact directory, which the fixer and
 // reviewer briefs branch on — and both take the empty branch in a real run:
 // round 1 has not created the directory yet, and wf-address-tasks's collision
@@ -861,11 +879,14 @@ const cycleCases = {
     ["cycleReviewPrompt (no artifact directory — collision re-review)", (f) => f.cycleReviewPrompt(cycleOverridden, reviewStateNoArtifact), REREVIEW_TEMP_DIRECTORY],
   ],
   cyclePeerPrompt: [
-    ["cyclePeerPrompt (standalone)", (f) => f.cyclePeerPrompt(cycleStandalone, peerState), NO_BUILD],
-    ["cyclePeerPrompt (batch/overridden)", (f) => f.cyclePeerPrompt(cycleOverridden, peerState), NO_BUILD],
+    ["cyclePeerPrompt (codex, standalone)", (f) => f.cyclePeerPrompt(cycleStandalone, peerState, peerProvider(f, "codex")), NO_BUILD],
+    ["cyclePeerPrompt (codex, batch/overridden)", (f) => f.cyclePeerPrompt(cycleOverridden, peerState, peerProvider(f, "codex")), NO_BUILD],
+    ["cyclePeerPrompt (muse, standalone)", (f) => f.cyclePeerPrompt(cycleStandalone, peerState, peerProvider(f, "muse")), NO_BUILD],
+    ["cyclePeerPrompt (muse, batch/overridden)", (f) => f.cyclePeerPrompt(cycleOverridden, peerState, peerProvider(f, "muse")), NO_BUILD],
   ],
   cyclePeerPreflightPrompt: [
-    ["cyclePeerPreflightPrompt", (f) => f.cyclePeerPreflightPrompt(), NO_BUILD],
+    ["cyclePeerPreflightPrompt (codex)", (f) => f.cyclePeerPreflightPrompt(peerProvider(f, "codex")), NO_BUILD],
+    ["cyclePeerPreflightPrompt (muse)", (f) => f.cyclePeerPreflightPrompt(peerProvider(f, "muse")), NO_BUILD],
   ],
   cycleGroundingPrompt: [
     ["cycleGroundingPrompt (standalone)", (f) => f.cycleGroundingPrompt(cycleStandalone, [{ id: "p1", text: "y", severity: "minor" }]), NO_BUILD],
@@ -1102,10 +1123,10 @@ for (const file of Object.keys(CUT)) {
     ...BESPOKE_DESTINATIONS,
     // An empty span is contained in every string, so a destination constant
     // emptied out would report every NO_BUILD render as carrying it. That is a
-    // failure of the constant, reported once as such below, not of thirty-three
+    // failure of the constant, reported once as such below, not of forty-six
     // briefs — the measured count, taken by emptying `CYCLE_REDIRECTED_OUTPUT`
     // and dropping this guard: the NO_BUILD renders of the two files that declare
-    // it, 11 in `wf-review-cycle.js` and 21 in `wf-address-tasks.js`, out of 39
+    // it, 15 in `wf-review-cycle.js` and 31 in `wf-address-tasks.js`, out of 57
     // NO_BUILD renders overall. An emptied BESPOKE_DESTINATIONS span is dropped
     // here for the same reason and reported once by the declared-tables check.
   ].filter(([, span]) => span);
