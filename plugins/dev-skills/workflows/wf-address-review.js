@@ -1453,16 +1453,6 @@ const flags = {
   pingContributing,
 };
 
-// The nested cycle carries the peer roster and no per-provider argument (see
-// "The peer roster" in wf-review-cycle.js), so the skill's Muse contributor
-// override cannot be honored here. Refused before anything runs rather than
-// ignored: ignoring it would launch Muse under exactly the saved setting the
-// invocation tried to change. Anchored to the start of a token, so a branch
-// name that merely contains the text is not read as the flag.
-if (/(?<![^\s,&])muse[\s-]*contributor\s*=/.test(flagText)) {
-  return { error: "`muse-contributor=` is not a workflow argument: wf-address-review leaves Muse's contributor mode as saved. Run the `address-review` skill for a per-run override, or pass `peer-opinions=off` to ask no peer at all." };
-}
-
 phase("Gather");
 const packet = await agent(gatherPrompt(args, flags.noRebase), { label: "gather", schema: PACKET_SCHEMA });
 if (!packet) {

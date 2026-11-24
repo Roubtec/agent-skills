@@ -96,7 +96,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 229;
+const CHECKS_PER_LEG = 230;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -2168,17 +2168,39 @@ for (const name of WORKFLOWS) {
     const discarded = await drive({
       "peer-preflight:codex": available,
       "peer-preflight:muse": available,
-      // Both raise the same claim, so the one verdict drops two findings.
+      // Both raise the same claim, and each is its own finding...
       "peer:codex#1": issues("points at a file that is not there"),
       "peer:muse#1": issues("points at a file that is not there"),
       // ...and the check may answer the pair with a verdict each.
-      "ground#1": { verdicts: [1, 2].map(() => ({ finding: "points at a file that is not there", grounded: false, why: "no such file" })) },
+      // ...which the check answers per id; a second verdict on one id is ignored.
+      "ground#1": { verdicts: [...["G1", "G2"].map((id) => ({ id, grounded: false, why: "no such file" })), { id: "G1", grounded: false, why: "said twice" }] },
     });
     check(
       "a finding the grounding check discards is recorded once under every provider that raised it, and no longer gates",
       discarded.result.verdict === "pass" && discarded.result.rounds === 1 &&
         JSON.stringify(discarded.result.discardedPeerFindings) === JSON.stringify(["codex", "muse"].map((provider) => ({ round: 1, provider, finding: "points at a file that is not there", why: "no such file" }))),
       `${discarded.result.verdict}/${discarded.result.rounds} / ${JSON.stringify(discarded.result.discardedPeerFindings)}`,
+    );
+
+    // The same wording at two sites is two findings: rejecting one reference
+    // leaves the other gating, and a verdict naming no listed id drops nothing.
+    const twin = await drive({
+      "peer-preflight:codex": available,
+      "peer-preflight:muse": available,
+      "peer:codex#1": issues("this guard is never reached", { file: "real.js:4" }),
+      "peer:muse#1": issues("this guard is never reached", { file: "gone.js:9" }),
+      "ground#1": { verdicts: [{ id: "G2", grounded: false, why: "no such file" }, { id: "this guard is never reached", grounded: false, why: "names a claim" }] },
+      "peer:codex#2": passed,
+      "peer:muse#2": passed,
+    });
+    check(
+      "a grounding verdict drops only the finding whose id it names, so an identically worded sound finding still gates",
+      twin.result.verdict === "pass" && twin.result.rounds === 2 &&
+        JSON.stringify(twin.result.discardedPeerFindings) === JSON.stringify([{ round: 1, provider: "muse", finding: "this guard is never reached", why: "no such file" }]) &&
+        /"id": "G1"[\s\S]*"id": "G2"/.test(twin.prompts["ground#1"] || "") &&
+        /### Peer \(codex\) findings/.test(twin.prompts["fix#2"] || "") && !/### Peer \(muse\) findings/.test(twin.prompts["fix#2"] || "") &&
+        /real\.js:4/.test(twin.prompts["fix#2"] || "") && !/"id": "G1"/.test(twin.prompts["fix#2"] || ""),
+      `${twin.result.verdict}/${twin.result.rounds} / ${JSON.stringify(twin.result.discardedPeerFindings)}`,
     );
 
     // One provider alone gates the round, exactly as the first one always did.
@@ -2400,7 +2422,7 @@ const BATCH_CONTRACT_CHECKS = 5;
 // constant — the reuse failure this guard exists for — without ever probing or
 // signalling a real process. The fake `kill` records every operand and can
 // model TERM resistance, KILL death, or a teardown survivor.
-const PEER_LIFECYCLE_CHECKS = 23;
+const PEER_LIFECYCLE_CHECKS = 22;
 {
   console.log("# codex review-cycle prose — peer lifecycle negative controls");
   const before = legOk + legFail;
@@ -2606,25 +2628,6 @@ const PEER_LIFECYCLE_CHECKS = 23;
     "both workflow cores pin the primary helper launch, its private artifact root, and the caller wait budget",
     workflowCores.every((core) => /4\. \$\{manual \? "Primary launch" : "Launch"\}, when \\`command -v peer-review-run\\` succeeds: run \\`peer-review-run --provider \$\{provider\.id\} --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --effort medium\\`[\s\S]*caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(core) && !/prerequisite/i.test(core.slice(core.indexOf("function cyclePeerPrompt")))),
     "primary helper envelope in workflow cores",
-  );
-
-  // The workflows carry the peer roster and no per-provider argument, so the
-  // skill's Muse contributor override is REFUSED by every entry script rather
-  // than dropped: a dropped one launches Muse under the saved setting the
-  // invocation tried to change. Each script's own pattern is lifted and run
-  // against the skill's documented spellings, so the check fails on a script
-  // that lost its guard and on one whose guard no longer matches them.
-  const entryScripts = ["wf-review-cycle.js", "wf-address-review.js", "wf-address-tasks.js"].map((f) => readFileSync(join(here, "..", "plugins", "dev-skills", "workflows", f), "utf8"));
-  check(
-    "every workflow entry script refuses the skill's Muse contributor override by name",
-    entryScripts.every((text) => {
-      const guard = text.match(/\nif \((?:!structured && )?(\/.*muse.*contributor.*\/i?)\.test\((\w+)\)\) \{\n  return \{ error: "`muse-contributor=` is not a workflow argument: /);
-      if (!guard) return false;
-      // eslint-disable-next-line no-new-func
-      const pattern = new Function(`return ${guard[1]};`)();
-      return ["muse-contributor=on", "muse-contributor=off", "42 muse-contributor=off"].every((arg) => pattern.test(arg)) && !pattern.test("peer-opinions=off") && !pattern.test("feature/muse-contributor=off");
-    }),
-    "muse-contributor refusal in the three entry scripts",
   );
 
   const n = legOk + legFail - before;

@@ -1421,11 +1421,11 @@ const CYCLE_GROUNDING_SCHEMA = {
       items: {
         type: "object",
         properties: {
-          finding: { type: "string", description: "The finding checked, by its claim text." },
+          id: { type: "string", description: "The `id` of the finding checked, exactly as listed." },
           grounded: { type: "boolean", description: "False ONLY for a self-evidently false claim or a nonexistent file:line reference. When in doubt, true — discarding is the exception." },
           why: { type: "string" },
         },
-        required: ["finding", "grounded"],
+        required: ["id", "grounded"],
       },
     },
   },
@@ -2178,7 +2178,7 @@ ${CYCLE_FINISH_IN_TURN} ${CYCLE_NO_SELF_PEER}
 
 ${JSON.stringify(findings, null, 2)}
 
-Return a verdict per finding. Edit nothing.`;
+Return a verdict per finding, naming it by its \`id\`: two findings may share a claim and differ only in where they point, and each is judged on its own. Edit nothing.`;
 }
 
 // Structural enforcement of the disposition rule: every handed finding carries
@@ -3096,28 +3096,29 @@ async function runReviewCycle(cycle) {
       // Grounding spot-check — only when the reviewer passed and peer findings
       // alone would gate. Discard is the one path a finding leaves the cycle
       // without a fixer disposition, and it is noted.
-      const ground = await agent(cycleGroundingPrompt(cycle, peerGating), {
+      // Each finding is judged under an id the script assigns for this check
+      // alone. Claim text cannot name one: two providers, or one provider at
+      // two sites, may word a claim identically, and a verdict rejecting one
+      // reference would then drop the sound one with it.
+      const numbered = peerGating.map((f, i) => ({ ...f, id: `G${i + 1}` }));
+      const ground = await agent(cycleGroundingPrompt(cycle, numbered), {
         label: `${lp}ground#${rounds}`,
         schema: CYCLE_GROUNDING_SCHEMA,
         effort: "low",
       });
       if (ground && Array.isArray(ground.verdicts)) {
-        const ungrounded = ground.verdicts.filter((v) => v && v.grounded === false);
-        if (ungrounded.length) {
-          // One record per finding dropped, so two providers that raised the
-          // same claim are each named: the filter below drops both. Keyed by
-          // claim, the first verdict's reason winning, because the check may
-          // answer such a pair with one verdict or with two.
-          const dropped = new Map();
-          for (const u of ungrounded) if (!dropped.has(u.finding)) dropped.set(u.finding, u.why || "");
-          for (const [claim, why] of dropped) {
-            const from = peerGating.filter((f) => f.claim === claim);
-            for (const f of from.length ? from : [null]) {
-              discardedPeerFindings.push({ round: rounds, ...(f ? { provider: f.provider } : {}), finding: claim, why });
-            }
-          }
-          peerGating = peerGating.filter((f) => !dropped.has(f.claim));
+        // A finding is dropped only by a verdict naming its id; a verdict that
+        // names none of them drops nothing, since discard is the exception. A
+        // second verdict on one id is ignored, the first reason standing.
+        const dropped = new Map();
+        for (const v of ground.verdicts) {
+          if (v && v.grounded === false && !dropped.has(v.id)) dropped.set(v.id, v.why || "");
         }
+        peerGating = numbered.flatMap(({ id, ...f }) => {
+          if (!dropped.has(id)) return [f];
+          discardedPeerFindings.push({ round: rounds, provider: f.provider, finding: f.claim, why: dropped.get(id) });
+          return [];
+        });
       }
     }
 
@@ -5677,16 +5678,6 @@ const peerFlagText = args != null && typeof args === "object"
   : String(args == null ? "" : args);
 const peerFlagValues = [...peerFlagText.matchAll(PEER_OPINIONS_FLAG)].map((m) => m[1]);
 const peerMode = /\boff\b/i.test(peerFlagValues.join(" ")) ? "off" : "on";
-// The embedded cycle carries the peer roster and no per-provider argument (see
-// "The peer roster" in wf-review-cycle.js), so the skill's Muse contributor
-// override cannot be honored here. Refused before anything runs, and by name:
-// left alone the token would only surface as a task pointer nothing resolves.
-// Token-anchored like the peer flag, so a path that merely contains the text
-// stays a pointer.
-const batchArgText = args != null && typeof args === "object" ? structuredArgLeaves(args).join(" ") : String(args == null ? "" : args);
-if (/(?<![^\s,])muse[\s-]*contributor\s*=/i.test(batchArgText)) {
-  return { error: "`muse-contributor=` is not a workflow argument: wf-address-tasks leaves Muse's contributor mode as saved. Run the `address-tasks` skill for a per-run override, or pass `peer-opinions=off` to ask no peer at all." };
-}
 
 phase("Bootstrap");
 const boot = await agent(bootstrapPrompt(), { label: "bootstrap", schema: BOOTSTRAP_SCHEMA });
