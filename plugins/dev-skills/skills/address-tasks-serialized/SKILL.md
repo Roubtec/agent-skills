@@ -45,15 +45,11 @@ Your job is to sequence tasks, manage branches and PRs, and coordinate two speci
 - **Reviewer** — fresh-eyes acceptance check against the task definition.
   Spawned via the `Agent` tool with `subagent_type: "general-purpose"`.
 
-This separation keeps your context window clean across long batches and ensures the reviewer evaluates the work without implementation bias.
-
 > **Critical — one agent at a time; subagents share your working tree.**
 > Every subagent operates on your single checked-out branch and working tree — they are **not** isolated copies of the repo.
 > Two checkout-dependent agents running at once corrupt each other.
-> The most common failure: a reviewer spawned alongside its implementer scopes `git diff <base>...HEAD` against a branch the implementer has not finished committing to, sees nothing, and falsely reports "no implementation" — so the work ships **unreviewed**.
 > The invariant is about committed state, not about turn structure: **a reviewer may not start until its implementer's commits are on disk.**
 > A harness may run spawns asynchronously — an `Agent` call can return immediately with a background task id and deliver its result as a later notification — so your obligation is to wait for that completion notification before spawning the reviewer.
-> Keeping the two out of the same turn or parallel tool block is a **proxy** for that invariant: sufficient where spawns are synchronous, and neither sufficient nor necessary where they are not.
 > The harness's general "batch independent tool calls together" guidance does **not** apply to these spawns: the implementer and its reviewer are *not* independent — they contend for the same working tree.
 > The examination-only peer CLI described below is the sole exception: launch it alongside the reviewer only after the implementation is committed, and forbid it from running builds or tests, so it remains a concurrent reader while the own reviewer may build.
 
@@ -71,7 +67,6 @@ Your responsibilities are:
 2. Read each task file enough to understand dependencies and sequencing — do not deeply analyze implementation details.
 3. Manage branch creation and PR base determination.
 4. Construct focused prompts and spawn subagents **one at a time** — implementer, await its result, then a fresh reviewer — for each task.
-   The rule is that the reviewer does not start until its implementer's commits are on disk, so wait for the completion notification; keeping the two out of one turn is the **proxy** for that, not the rule (see the shared-working-tree rule above).
 5. Handle the review feedback loop.
 6. Open PRs once a task passes review.
 7. Advance to the next task or stop on blockers.
@@ -85,7 +80,6 @@ Observe only; never "fix" a checkout that is already dirty.
 A subagent's environment or infrastructure diagnosis is a **hypothesis, not a finding**.
 Verify it against **observable state** — the reflog, the refs, the working tree, file contents, the output of a command you run yourself — before propagating any mitigation into sibling prompts: that observes the effect rather than the claim.
 A bounded grep of that subagent's own transcript is a fallback, and only where the harness exposes a greppable one — some hand back the transcript path with an instruction not to read or tail it, because it is full JSONL that will overflow your context.
-A scratch-filename collision was once misdiagnosed as a working-directory bug, and the wrong mitigation rode into roughly ten later subagent prompts before anyone checked.
 
 ## Subagent destroy boundary
 
@@ -95,7 +89,7 @@ A subagent that may need to verify something in a way that could change state is
 ## Implementer Agent
 
 The implementer receives a focused, self-contained prompt and works autonomously on a single task.
-It is spawned **on its own**: the reviewer may not start until this implementer's commits are on disk, so wait for its completion notification — however the harness delivers it — before starting any other checkout-dependent agent (see the shared-working-tree rule in Architecture).
+It is spawned **on its own**: wait for its completion notification — however the harness delivers it — before starting any other checkout-dependent agent (see the shared-working-tree rule in Architecture).
 
 ### What to include in the implementer prompt
 
@@ -117,14 +111,14 @@ Construct a prompt that contains:
   It launches no peer review of its own either — the loop's peer step is the sanctioned second opinion (see `review-cycle`).
 - **No shared task-tracker.**
   Tell the implementer not to use the `TaskCreate`/`TaskUpdate`/`TaskList` tools.
-  A subagent's entries leak into the orchestrator's task view and linger there as stale, misleading items (e.g. a child's `in_progress` step that has already finished), adding noise to every later turn without helping the orchestrator spot a struggling task — that signal comes from the implement→review→fix result, not from a child's micro-steps.
+  A subagent's entries leak into the orchestrator's task view and linger there as stale, misleading items.
   The implementer should track its own steps however it likes and surface progress only in its final report.
 - **Reporting instructions** — when done, report back with:
   - A concise summary of what was implemented.
   - Any decisions, tradeoffs, or deviations from the task description.
   - Any uncertainties or areas that may need focused review.
 - **The `review-cycle` Fixer contract, whole** — the implementer is that cycle's Fixer on round 1, so every rule that skill states for a Fixer binds here, later additions included; the bullets above are this loop's deltas, not a closed list.
-  It carries the deviation protocol, and a task-implementation loop is exactly where that was broken: where the task hands down a decision the maintainer LOCKED and the implementer must deliver something else, it reports what it delivered instead and the constraint that forced it rather than conforming the deviation away — report, don't correct; the maintainer ratifies it or asks for conformance, and has ratified one and reversed their own earlier decision.
+  It carries the deviation protocol: where the task hands down a decision the maintainer LOCKED and the implementer must deliver something else, it reports what it delivered instead and the constraint that forced it rather than conforming the deviation away — report, don't correct; the maintainer ratifies it or asks for conformance.
   It buys no slack meanwhile: completeness, tests, and regressions are graded exactly as strictly.
 
 ### What the implementer should NOT receive
@@ -166,8 +160,7 @@ The reviewer is a **fresh** subagent with no knowledge of the implementation pro
 It evaluates the current codebase state against two orthogonal dimensions: acceptance criteria compliance and implementation quality.
 It must be a **new** `Agent` invocation — a fresh-eyes agent with no implementation context, never a continuation of the implementer.
 Ignore any `SendMessage` continuation footer from earlier `Agent` results; this harness does not expose that tool.
-Spawn it only **after** the implementer's commits are on disk — wait for that completion notification; keeping it out of the implementer's turn or parallel tool block is only a proxy for the same thing.
-You share one working tree, so a concurrent reviewer scans an empty or half-finished branch and wrongly reports "no implementation" (see the shared-working-tree rule in Architecture).
+Spawn it only **after** the implementer's commits are on disk (see the shared-working-tree rule in Architecture).
 Wait for its result before advancing branches or starting the next task — the feedback loop must complete first.
 
 ### What to include in the reviewer prompt
@@ -182,7 +175,7 @@ Wait for its result before advancing branches or starting the next task — the 
 - **Scoping guidance** — the reviewer may run `git diff --name-only <base>...HEAD` to identify the set of touched files and prioritize quality review there.
   It must still read each touched file in full (not just the diff) and may follow references into untouched files when needed to evaluate consistency or call sites.
 - **An absolute path for validation output**, which you allocate — namespaced by this task's number or created with `mktemp -d`.
-  Any build or check output that must land in a file goes there, never a fixed shared scratchpad name: one session's agents share that directory, and two of them redirecting to `<scratchpad>/verify.log` once had one reading the other's results and returning a verdict for the wrong branch.
+  Any build or check output that must land in a file goes there, never a fixed shared scratchpad name: one session's agents share that directory.
   This batch runs serially, but the session around it does not.
   Never leave the choice to the reviewer.
 - **Reporting format:**
@@ -259,13 +252,12 @@ The PR base branch for this task is `<base-branch>`. The current branch is `<tas
 
 ## Execution Model
 
-Process the batch **sequentially**, not in parallel — and within each task, never start the reviewer until its implementer's commits are on disk, waiting for the completion however the harness reports it; running the two one at a time rather than concurrently is the **proxy** for that invariant, since they share your single working tree (see the rule in Architecture).
+Process the batch **sequentially**, not in parallel — and within each task, never start the reviewer until its implementer's commits are on disk (see the rule in Architecture).
 Each task is its own delivery unit, but stack later task branches on top of earlier ones when needed so dependent work can continue without waiting for review.
 
 ### Determining the PR base
 
 A PR's base must be the ref its branch actually builds on, so the PR shows the honest diff of that branch's own contribution and nothing else; that is what routes each review comment to the PR that owns the code it is about.
-A branch stacked on an earlier task but targeted at `main` instead presents that earlier task's commits as its own work and collects the comments its PR should have had.
 
 Use the following precedence:
 
@@ -283,7 +275,7 @@ For each task file in the input set:
 3. **Read the task file** enough to construct a good implementer prompt.
    Identify the acceptance criteria so you can later evaluate the reviewer's report.
 4. **Spawn the implementer agent** with a well-structured prompt (see Implementer Agent section).
-   Wait for its completion notification — the reviewer comes only once this implementer's commits exist on disk, and spawning nothing else in this turn is the **proxy** that keeps it there, not the rule itself.
+   Wait for its completion notification.
 5. **Evaluate the implementer's packet.**
    Apply `review-cycle`'s packet hard-check before adopting it: `git status --porcelain` empty **and** no Git operation in progress — check `git rev-parse --git-path rebase-merge` and `rebase-apply` for an existing path, plus `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`, since a tree left mid-rebase or mid-cherry-pick prints empty porcelain.
    Either condition failing means redrive or resume that implementer, never silent adoption.
@@ -411,8 +403,6 @@ This loop is `review-cycle`'s: every rule that skill states under *The loop and 
 When either reviewer reports material issues:
 
 > **Fix-ups always use a fresh `Agent` spawn — never a "continued" prior implementer.**
-> If an `Agent` result prints a `SendMessage` continuation footer, ignore it; this harness does not expose that tool.
-> A fresh spawn is the preferred path: the fix-up agent reads the already-committed branch plus the reviewer's verbatim findings with no attachment to its earlier choices.
 
 1. **Spawn a new implementer agent** (on its own, as in step 4) with:
    - The original task file content.
@@ -420,16 +410,13 @@ When either reviewer reports material issues:
    - The branch name (same as before).
    - Instruction to address each finding specifically and report what was fixed.
    - The same project context and validation instructions as the original implementer prompt.
-2. Once the fix-up implementer's commits are on disk — wait for its completion, and only then, in a later turn as the **proxy** for that — **spawn a new reviewer agent** and launch the peer per the protocol above to re-check (same fresh prompt structure as before; never concurrent with the fix-up implementer).
+2. Once the fix-up implementer's commits are on disk — wait for its completion — **spawn a new reviewer agent** and launch the peer per the protocol above to re-check (same fresh prompt structure as before; never concurrent with the fix-up implementer).
 3. Repeat until the own reviewer passes and the peer has no unaddressed grounded findings under the protocol above.
 4. **Cap the feedback loop at the `review-cycle` skill's round cap.**
    If issues persist at the cap, stop iterating and do not open a PR for this task.
    Surface the outstanding findings clearly to the user in the final summary and ask for guidance on how to proceed.
 
 ## Hints
-
-For serialized task batches, branch each new task from the previous task branch when the work is expected to depend on earlier changes.
-This keeps the batch moving while review happens incrementally.
 
 If a PR cannot be opened for any reason, still create the task branch and finish the implementation commits.
 The user can open the PR manually later.
@@ -441,21 +428,20 @@ The completed task branch and final PR should be clean and pass validation.
 
 This batch runs on the repository's main checkout, which is shared — with the maintainer, and with any peer harness running in the same container.
 Take a reading of its working-tree state before the first task's branch is created, and take the same reading again once **every** batch entry has reached a terminal state.
-Trigger it on batch termination, not on "the last task delivers": a batch in which every task blocks, fails, or aborts never reaches a delivery, and a failed implementer is at least as likely to have leaked strays as a successful one — so gating on a delivery skips the check exactly when it matters most.
+Trigger it on batch termination, not on "the last task delivers": a batch in which every task blocks, fails, or aborts never reaches a delivery.
 Because the flow works in that very tree, the reading is about uncommitted and untracked residue left behind rather than about staying out of it — a stray is still a stray.
 
 Compare the two **by path**, so a path whose status code changed reads as a re-classification — a co-tenant staging their own work — rather than as one path vanishing and another appearing.
 Paths that appeared are a finding in the final report; paths that **disappeared** are a louder one, because a stray `checkout` or `clean` in the shared tree eating a co-tenant's uncommitted work is the hazard only a baseline can see.
 Report a vanished path as something to check against co-tenant commits, the reflog, and the stash rather than as established loss: a maintainer who committed their own work mid-run also removes a baseline path, with nothing gone.
 Everything else is pre-existing.
-Take a baseline rather than testing for emptiness — the maintainer's own work-in-progress is deliberately permitted in that checkout, so an unconditional non-empty rule would both blame the batch for work it never touched and destroy the one signal separating a real stray from the tree's starting state.
+Take a baseline rather than testing for emptiness — the maintainer's own work-in-progress is deliberately permitted in that checkout.
 
 **Report, never clean.**
 Do not `git clean`, `checkout`, `reset`, or `stash` the shared main checkout on the strength of this report — another agent's uncommitted work is not yours to delete — and diff any stray against the delivered branches before touching it at all.
 
 State the claim as narrowly as it is.
 The report says what its reading could see change; it claims nothing about what was **written into** paths already present in the baseline, nor about anything its reading does not surface.
-That is an exclusion rather than a list of blind spots, because the list is open: widening what the reading sees improves the report and leaves the claim exactly this narrow.
 What it does surface is a report to verify, not a conclusion — the same reading cannot tell a stray from a co-tenant's ordinary progress.
 It is never a proof that the batch wrote nothing, and must not be delivered as one.
 
