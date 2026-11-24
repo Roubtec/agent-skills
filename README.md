@@ -21,6 +21,7 @@ scripts/
   lib/logical-lines.mjs                 # shared Markdown paragraph-rejoining reader for the suites that pin skill prose by its words rather than its wrapping
   test-gh-review-threads.sh             # hermetic contract coverage for the review-thread helper
   test-dc-helpers.sh                    # hermetic contract coverage for the disposable-clone helpers
+  test-prune-branches.sh                # hermetic coverage for the prune-branches helper
   test-checkout-cleanliness-report.mjs  # regression coverage for the batch workflow's checkout report
   test-review-cycle-retirement.mjs      # behavior coverage for the review cycle's claim lifecycles, terminal gates, and packet measurement
   test-storage-probe-target.mjs         # regression coverage for the batch workflow's df-probe targeting and throttle retention
@@ -59,6 +60,10 @@ A slug that already has a clone is refused rather than reused, because concurren
 `dc-enter` also refuses rather than handing back a clone whose isolation the surrounding environment would weaken — one whose caller-side git configuration defines a remote or a push destination outside the clone, where no local write can remove it — and refuses a **partial clone** it cannot copy faithfully. A **shallow** source is bounded rather than refused, so its clone cannot answer "was this unreferenced object still there?". Each of those refusals names the configuration it decided by.
 
 Why each of those is drawn where it is, and what bounds it, is documented in the helper's own header comment in `plugins/dev-skills/bin/dc-enter`; `scripts/test-dc-helpers.sh` pins the behavior.
+
+### Helpers bundled inside a skill
+
+A skill whose procedure is deterministic ships it as a script in its own folder and calls it by path, so the script arrives, updates, and is removed with the skill on every install route: Claude's plugin, powbox's seeding of either mirror, or a hand copy of the folder. Nothing has to be on `PATH`. `prune-branches/prune-branches.sh` is the first; the brief keeps only what needs judgement (reading the user's guidance, the confirmation, relaying the report). Such a script targets bash 3.2 and needs nothing beyond `git`, using `gh` and the powbox helpers only when present. Each mirror carries its own copy, held byte-identical by the script's test.
 
 ### `codex/`
 
@@ -151,6 +156,10 @@ Run `bash scripts/test-gh-review-threads.sh` after any behavior change to `plugi
 ### `test-dc-helpers.sh`
 
 Run `bash scripts/test-dc-helpers.sh` after any behavior change to `plugins/dev-skills/bin/dc-enter` or `plugins/dev-skills/bin/dc-remove`; the hermetic suite builds throwaway repositories under one `mktemp -d` root, never touches this repository, and needs only Bash, git, and coreutils.
+
+### `test-prune-branches.sh`
+
+Run `bash scripts/test-prune-branches.sh` after any change to `prune-branches.sh` in either mirror's `prune-branches` skill folder; the hermetic suite builds throwaway origins and clones under one `mktemp -d` root, drives `gh` and `wt-remove` through fakes, and also holds the two mirrors' copies of the helper to the same bytes.
 
 ### `test-checkout-cleanliness-report.mjs`
 
