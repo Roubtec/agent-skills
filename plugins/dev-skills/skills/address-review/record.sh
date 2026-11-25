@@ -46,7 +46,8 @@
 #                          --outstanding and --push advanced | noop | none,
 #                          which says what that means for the tips
 #   --state unknown        the publication left no usable account. --push
-#                          advanced | noop | none is the one fact still known
+#                          advanced | noop | none is the one fact still known,
+#                          and --missing <one line> says what the account lacks
 #   --state unconfirmed    the push returned and its read-back did not confirm
 #                          the ref; nothing else was published
 # Every state takes --reason <one line>, and the facts of the run:
@@ -80,7 +81,7 @@ stop() { # <outcome> <explanation>
 	exit 3
 }
 
-REPO="" PR="" BRANCH="" STATE="" PUSH="" REASON="" LANDED="" OUTSTANDING=""
+REPO="" PR="" BRANCH="" STATE="" PUSH="" REASON="" LANDED="" OUTSTANDING="" MISSING=""
 STARTING="" FINAL="" HEADOID="" BASE="" VALIDATION="" REVIEWER="" PEER=""
 INCOMPLETE=0 ID="" SUMMARY_URL=""
 
@@ -102,6 +103,7 @@ parse() {
 		--push) PUSH="$2" ;;
 		--reason) REASON="$2" ;;
 		--landed) LANDED="$2" ;;
+		--missing) MISSING="$2" ;;
 		--outstanding) OUTSTANDING="$2" ;;
 		--starting) STARTING="$2" ;;
 		--final) FINAL="$2" ;;
@@ -147,7 +149,7 @@ need_render_args() {
 	[ -n "$BRANCH" ] || usage "--branch <branch> is required"
 	[ -n "$REASON" ] || usage "--reason <one line> is required"
 	local n
-	for n in "$BRANCH" "$REASON" "$LANDED" "$OUTSTANDING" "$STARTING" "$FINAL" "$HEADOID" "$BASE" "$VALIDATION" "$REVIEWER" "$PEER"; do
+	for n in "$BRANCH" "$REASON" "$LANDED" "$OUTSTANDING" "$MISSING" "$STARTING" "$FINAL" "$HEADOID" "$BASE" "$VALIDATION" "$REVIEWER" "$PEER"; do
 		one_line "every header value" "$n"
 	done
 	# Unsaid, the push is the state that claims least: except for `part`, where
@@ -206,7 +208,7 @@ word_state() {
 			origin="whether anything reached origin is UNKNOWN — not even a push is known to have advanced the remote branch, so whether the tips above are on origin is unknown too"
 			;;
 		esac
-		origin="$origin: check the PR itself before acting on any tip or any entry below"
+		origin="$origin: ${MISSING:+$MISSING; }the publisher pushes BEFORE it replies, so a stop with something already on origin is the ordinary shape of this failure: check the PR itself before acting on any tip or any entry below"
 		;;
 	unconfirmed)
 		status="UNKNOWN whether its push reached origin, and nothing else was published"

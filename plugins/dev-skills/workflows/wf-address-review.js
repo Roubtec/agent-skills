@@ -1006,11 +1006,10 @@ function recordPrompt(packet, dispositions, facts) {
   // What an unusable account does NOT put in doubt is the push, which is
   // reported positively and in three states rather than two — so the third
   // state's own rendering says which of them holds and reserves "unknown" for
-  // what actually is unknown. All three of its lines come from ONE entry below,
-  // because they drifted apart the moment they did not: a status of "UNKNOWN
-  // whether anything was published" stood two lines above "what IS known is
-  // that the push advanced the remote branch", and the same record both refused
-  // to claim anything reached origin and said the tips were there.
+  // what actually is unknown. The record's own two lines for it are the
+  // `address-review-record` script's to word, from the state and the push this
+  // brief hands it; what stays here is the lead that tells the deputy which case
+  // it is writing for.
   const landed = typeof facts.landed === "string" ? facts.landed.trim() : "";
   const outstanding = typeof facts.outstanding === "string" ? facts.outstanding.trim() : "";
   const outcomes = Array.isArray(facts.outcomes) ? facts.outcomes : [];
@@ -1033,8 +1032,8 @@ function recordPrompt(packet, dispositions, facts) {
     ? facts.compromisedIdentities.filter((v) => typeof v === "string" && v.trim()).map((v) => v.trim())
     : [];
   const priorUrl = packet.priorRecord && typeof packet.priorRecord.url === "string" ? packet.priorRecord.url.trim() : "";
-  // The three push states, each with the lead, the `status:` line and the origin
-  // line it implies. An unrecognized or absent state reads as `unknown`, which
+  // The three push states, each with the lead it implies (the script words the
+  // `status:` and origin lines). An unrecognized or absent state reads as `unknown`, which
   // claims the least. `noop` is the state a two-valued flag lost: a push that
   // succeeded while moving nothing leaves the remote pointing at these tips
   // (`PUBLISH_SCHEMA.pushed` says exactly that of itself), so telling the next
@@ -1042,30 +1041,23 @@ function recordPrompt(packet, dispositions, facts) {
   // The table is PROTOTYPE-LESS, and the fallback below is why that is not a
   // flourish: on a plain object literal a `pushState` of `constructor`,
   // `toString`, `valueOf`, `hasOwnProperty`, `isPrototypeOf` or `__proto__`
-  // resolves to a truthy INHERITED value, so the `||` never fires and the record
-  // renders `status: undefined`, its lead and claims sentences as the literal word
-  // `undefined`, and an origin line whose whole claim is that same word — so it
-  // matches none of the three renderings and says NOTHING where the fallback
-  // exists to say the least. A null prototype deletes that class rather than
+  // resolves to a truthy INHERITED value, so the `||` never fires and the brief
+  // renders its lead and claims sentences as the literal word `undefined` — it
+  // matches none of the three cases and says NOTHING where the fallback exists
+  // to say the least. A null prototype deletes that class rather than
   // guarding each name in it.
   const UNKNOWN_BY_PUSH = Object.assign(Object.create(null), {
     advanced: {
       lead: "This run's publication PUSHED and then stopped, and WHAT ELSE IT PUBLISHED IS UNKNOWN",
       claims: "So this record says the push was published, and neither claims that any reply, resolve or Summary comment reached the PR nor claims that none did",
-      status: "published in part (the push), and UNKNOWN whether any reply, resolve or Summary comment was published",
-      origin: "the push WAS published — it advanced the remote branch, so the tips above ARE on origin — while whether any reply, resolve or Summary comment below was published is UNKNOWN",
     },
     noop: {
       lead: "This run's publication stopped and WHAT IT PUBLISHED IS UNKNOWN",
       claims: "Its push succeeded while moving nothing, so this record says the tips are already on origin, and neither claims that any reply, resolve or Summary comment reached the PR nor claims that none did",
-      status: "UNKNOWN whether any reply, resolve or Summary comment was published",
-      origin: "this run's push published NOTHING — it was an `Everything up-to-date` no-op, so the tips above are already on origin though this run put nothing there — while whether any reply, resolve or Summary comment below was published is UNKNOWN",
     },
     unknown: {
       lead: "This run's publication stopped and WHAT IT PUBLISHED IS UNKNOWN",
       claims: "So this record neither claims that nothing reached origin nor claims that anything did",
-      status: "UNKNOWN whether anything was published",
-      origin: "whether anything reached origin is UNKNOWN — not even a push is known to have advanced the remote branch, so whether the tips above are on origin is unknown too",
     },
   });
   const pushCase = UNKNOWN_BY_PUSH[facts.pushState] || UNKNOWN_BY_PUSH.unknown;
@@ -1073,26 +1065,43 @@ function recordPrompt(packet, dispositions, facts) {
   // above: `git push` returned, so the tips may be on origin, and every line
   // this record would otherwise print asserts their absence — "published
   // NOTHING", `not published`, LOCAL ONLY, and the warning about commits that
-  // are not there. All of them come from this ONE entry, the way the three push
-  // states' do, because that is what stopped those drifting apart. It defers to
+  // are not there. The script words those lines for `--state unconfirmed`; this
+  // entry selects that state and leads the brief. It defers to
   // the two cases that already claim less or more precisely: an unusable
   // account, which knows nothing about the push either, and a part-way
   // publication, whose lines name what the account CONFIRMED reaching origin —
   // never this push, which the caller withholds from `landed` for that reason.
   const unconfirmedPush = facts.pushUnconfirmed && !unknown && !landed
     ? {
-        lead: `This run's publication PUSHED and could not CONFIRM that push at the ref: ${facts.why} So this record says whether the push reached origin is UNKNOWN rather than calling its tips local-only — the two lines below marked for that case are the ones that differ.`,
-        status: "UNKNOWN whether its push reached origin, and nothing else was published",
-        origin: "whether this run's push reached origin is UNKNOWN — `git push` returned and the read-back at the ref did not confirm the ref moved, so read the ref itself before treating the tips above as either published or local, while no reply, resolve or Summary comment reached the PR",
-        reader: " — a reader who takes this record for \"nothing reached origin\" treats these tips as unpushed when the ref may already carry them",
+        lead: `This run's publication PUSHED and could not CONFIRM that push at the ref: ${facts.why} So this record says whether the push reached origin is UNKNOWN rather than calling its tips local-only, which is how the script words its header for this case.`,
       }
     : null;
+  // The header is `address-review-record`'s to word: this brief hands it the
+  // state and the push the facts above select, and the script prints the
+  // marker, the `status:` line and the line saying what is on origin. Those two
+  // flags are computed HERE, never left to the deputy to choose.
+  const pushKnown = facts.pushState === "advanced" || facts.pushState === "noop" ? facts.pushState : "none";
+  const recordState = unknown ? "unknown" : landed ? "part" : unconfirmedPush ? "unconfirmed" : "not-published";
+  const recordPush = unknown || landed ? pushKnown : unconfirmedPush ? "" : facts.pushNoop ? "noop" : "none";
+  const recordCommand = [
+    `address-review-record post --repo <owner>/<repo> --pr ${packet.pr.number} --branch ${shq(oneLine(packet.pr.workingBranch))}`,
+    `--state ${recordState}`,
+    recordPush ? `--push ${recordPush}` : "",
+    incomplete ? "--incomplete" : "",
+    landed ? `--landed ${shq(oneLine(landed))} --outstanding ${shq(oneLine(outstanding))}` : "",
+    unknown ? `--missing ${shq(oneLine(unknown))}` : "",
+    `--starting ${shq(oneLine(facts.startingHead || "") || "(not recorded — neither the gather nor a rebase point reported one)")}`,
+    `--final ${judgedTip ? shq(oneLine(judgedTip)) : "<the tip you read>"}`,
+    `--head-oid ${shq(oneLine(packet.pr.headOid || ""))} --base ${shq(oneLine(packet.pr.base || ""))}`,
+    `--reviewer ${shq(oneLine(`${facts.reviewerStatus || (facts.reviewerPassed ? "Pass" : "did NOT pass")} (${facts.rounds} round(s))`))}`,
+    "--validation '<what ran>' --peer '<participation>' --reason '<one line>'",
+  ].filter(Boolean).join(" ");
   return `Leave this run's disposition record on PR #${packet.pr.number} (branch \`${packet.pr.workingBranch}\`). ${unknown
-    ? `${pushCase.lead}: ${facts.why} ${pushCase.claims} — the lines below marked for that case say what is unknown, and every thread entry carries the same reservation.`
+    ? `${pushCase.lead}: ${facts.why} ${pushCase.claims} — the script words that into the record's header, and every thread entry carries the same reservation.`
     : landed
       ? `This run's publication stopped with PART OF THIS MAP ALREADY ON THE PR: ${facts.why} So this record says what is on it rather than "not published", and its tips are ${facts.pushState === "advanced" || facts.pushState === "noop"
         ? "NOT local-only"
-        : "still LOCAL-ONLY — replies and resolves land through the API without a push, and this run's own account reports no successful push, so what is on the PR does not put these tips on origin"} — the two lines below marked for that case are the ones that differ. What is named as having reached origin is what the PR CARRIES, whichever run put it there — a reply an earlier run posted counts — so write it as that rather than as an account of this run's own writes.`
+        : "still LOCAL-ONLY — replies and resolves land through the API without a push, and this run's own account reports no successful push, so what is on the PR does not put these tips on origin"}, which is how the script words its header for this case. What is named as having reached origin is what the PR CARRIES, whichever run put it there — a reply an earlier run posted counts — so write it as that rather than as an account of this run's own writes.`
       : unconfirmedPush
         ? unconfirmedPush.lead
         : `This run published NOTHING: ${facts.why}`} Read \`AGENTS.md\` / \`CLAUDE.md\` first.
@@ -1105,35 +1114,17 @@ ${DESTROY_BOUNDARY}
 
 You make exactly ONE PR write — this record comment — and nothing else: no push, no reply, no resolve, no Summary comment, no ping, no label, no review request. If you cannot make that one write, report \`posted: false\` with what failed; never compensate by writing something else.
 
-WHICH REPOSITORY every command below addresses: the one this PR is IN, whose \`<owner>/<repo>\` is already resolved and handed to you in the PR's own URL \`${packet.pr.url}\` — never the repository your working location resolves to. \`gh api\`'s \`{owner}\`/\`{repo}\` placeholders expand to the repository of the current directory, and a bare \`gh pr comment\` posts into the repository it resolves the same way. So write that \`<owner>/<repo>\` out LITERALLY in each command below. Do not re-derive it from a bare \`gh repo view --json nameWithOwner\`, which answers for the directory.
-1. Find a prior record. \`gh api --paginate repos/<owner>/<repo>/issues/${packet.pr.number}/comments --jq '.[] | select((.body | split("\\n")[0] | rtrimstr("\\r")) == "<!-- address-review:disposition-record -->") | {id, login: .user.login, updated_at}'\` — the MARKER identifies a record, never its prose, and it must be the body's FIRST LINE byte for byte. A \`contains\` test is what you must NOT use: it also selects an ordinary comment that merely QUOTES the marker (a maintainer asking about this mechanism, a review summary echoing it), and step 2 would then \`PATCH\` that person's comment away. The \`rtrimstr("\\r")\` is why a body GitHub hands back with CRLF line endings still matches its own first line. Keep the ones authored by the authenticated user (\`gh api user --jq .login\`).
-2. Compose the body below, then write it ONCE, reading it from stdin so composing it puts no file in the working location: ${incomplete
-    ? `this run's map is INCOMPLETE (${incomplete}), so it SUPERSEDES NOTHING — post it as a new comment with \`gh pr comment ${packet.pr.number} --repo <owner>/<repo> --body-file -\` and leave every record step 1 found standing, your own included, reporting \`superseded: false\`. The update is a \`PATCH\` in place, so an entry an earlier record of yours holds for an item this map leaves out, names twice, or cannot publish would be destroyed by it and the next run would inherit only this replacement — the very loss this record exists against. Name in \`detail\` the record(s) you left standing${priorUrl ? ` (the most recent is ${priorUrl})` : ""}.`
-    : `a prior record of your own → \`gh api --method PATCH repos/<owner>/<repo>/issues/comments/<id> -F body=@-\`, which supersedes it IN PLACE so the PR keeps one record instead of a stack of near-duplicates; none → \`gh pr comment ${packet.pr.number} --repo <owner>/<repo> --body-file -\`.`} Where several of your own are present (one predating the marker, say), ${incomplete ? "report them all in \`detail\`" : "update the most recent and report the rest in \`detail\`"}: delete, sweep or expire NOTHING, and never touch another actor's comment.
-3. Write "codex"/"claude"/"copilot" PLAIN in the body, with no bare \`@\`-mentions anywhere, exactly as the Summary comment does — a mention here would summon a review round for work this run did not publish.
+WHICH REPOSITORY every command below addresses: the one this PR is IN, whose \`<owner>/<repo>\` is that of the PR's own URL \`${packet.pr.url}\` — never the repository your working location resolves to. Where that URL is not on github.com, the helper's \`--repo\` takes \`<host>/<owner>/<repo>\`, and that form is the helper's alone: a \`gh api\` read below keeps the plain \`repos/<owner>/<repo>/…\` path and names the host with \`--hostname <host>\`. Write it out LITERALLY; do not re-derive it from a bare \`gh repo view --json nameWithOwner\`, which answers for the directory.
 
-The body, marker first (the marker line is what step 1 of the next run matches, so it is mandatory and must be byte-exact):
+1. Compose the record's BODY: the \`## Threads\` block and the \`## Summary comment\` block below, and nothing above them. Write "codex"/"claude"/"copilot" PLAIN in it, with no bare \`@\`-mentions anywhere, exactly as the Summary comment does — a mention here would summon a review round for work this run did not publish.
+2. Write it ONCE, with ONE command that reads that body on stdin — fed from a QUOTED heredoc, since a reply body carries backticks and \`$\` — so composing it puts no file in the working location: \`${recordCommand}\`. It is the dev-skills plugin's own script, on PATH for this session; where the shell cannot find it, report \`posted: false\` with \`detail\` "record helper not found" and STOP — never hand-roll the comment in its place. The script words the record's header itself — the marker on its first line, the \`status:\` line, and the line saying what is on origin — from the flags above, which are this run's facts and not yours to change. You supply three: \`--validation\` (what ran), \`--peer\` (its participation), and \`--reason\`, one line giving the reason above${unknown ? " and saying which facts are missing" : landed ? " and saying what landed and what did not" : unconfirmedPush ? " and saying what each push URL returned" : ""}. It finds this account's earlier records by that marker and${incomplete
+    ? `, because this run's map is INCOMPLETE (${incomplete}), SUPERSEDES NOTHING: it posts a new comment and leaves every earlier record standing, your own included. A write in place would destroy an entry an earlier record of yours holds for an item this map leaves out, names twice, or cannot publish, and the next run would inherit only the replacement — the very loss this record exists against. Name in \`detail\` the record(s) left standing${priorUrl ? ` (the most recent is ${priorUrl})` : ""}.`
+    : " writes over the most recent record of your own IN PLACE, so the PR keeps one record instead of a stack of near-duplicates, or posts a new comment where there is none."}
+3. Read its first line. \`outcome=posted\` → report \`posted: true\`, its \`url=\`, and \`superseded\` true where it printed \`superseded=yes\`; name in \`detail\` every \`other=\` record it listed, which it left untouched. \`outcome=mention\` or \`outcome=malformed\` → it wrote nothing: correct what you wrote (a bot's name written plain, in the body or in one of your three flags; both blocks present) and run it again — where the bare mention sits in a flag that is not yours, report \`posted: false\` and say so. Exit status 64 → it wrote nothing either: fix the flag it names (each value is ONE line) and run it again. Any other failure with no outcome → the write may have landed: run \`address-review-record find --repo <owner>/<repo> --pr ${packet.pr.number}\` before anything else. Its \`id=\` and \`url=\` name your latest record whether or not this write reached it, so they do not answer the question: READ that comment's body (\`gh api repos/<owner>/<repo>/issues/comments/<id> --jq .body\`, with \`--hostname <host>\` off github.com) and compare it with the record you composed. Where it holds this run's entries the write landed — report \`posted: true\` with that url; where it does not, or \`find\` printed \`outcome=none\`, run the post command once more; where \`find\` or the read itself fails, report \`posted: false\` saying the record's state is not established, and write nothing. Delete, sweep or expire NOTHING, and never touch another actor's comment.
+
+The body:
 
 \`\`\`
-<!-- address-review:disposition-record -->
-# address-review packet — PR #${packet.pr.number} (${packet.pr.workingBranch})
-status: ${unknown ? pushCase.status : landed ? "published in part" : unconfirmedPush ? unconfirmedPush.status : "not published"} (<the reason above, one line${unknown ? ", saying which facts are missing" : landed ? ", saying what landed and what did not" : unconfirmedPush ? ", saying what each push URL returned" : ""}>)
-starting HEAD ${facts.startingHead || "(not recorded — neither the gather nor a rebase point reported one)"} | final HEAD ${judgedTip || "<the tip you read>"} | recorded headRefOid ${packet.pr.headOid}
-base ${packet.pr.base} | validation <what ran> | reviewer ${facts.reviewerStatus || (facts.reviewerPassed ? "Pass" : "did NOT pass")} (${facts.rounds} round(s)) | peer <participation>
-${unknown
-    ? `${pushCase.origin}: ${unknown}; the publisher pushes BEFORE it replies, so a stop with something already on origin is the ordinary shape of this failure: check the PR itself before acting on any tip or any entry below`
-    : landed
-      ? `reached origin: ${landed} — still outstanding: ${outstanding}${facts.pushState === "advanced"
-        ? ""
-        : facts.pushState === "noop"
-          ? " — and the tips above are already on origin, this run having put nothing there: its push was an \`Everything up-to-date\` no-op"
-          : " — and the tips above are still LOCAL-ONLY: what landed rode the API with no successful push, so nothing of the branch is on origin"}`
-      : unconfirmedPush
-        ? unconfirmedPush.origin
-        : facts.pushNoop
-          ? "this run changed NOTHING on origin: its push was an `Everything up-to-date` no-op, so the tips above are already on origin while no reply, resolve or Summary comment reached it"
-          : "the tips above are LOCAL ONLY — this run pushed nothing, so they are not on origin"}
-
 ## Threads
 [<disposition>] <path>:<line>  <author>  thread=<threadId, or url (finding N of M) for a standalone item, or lane for a CI lane>
                 url:   <permalink>
@@ -1145,23 +1136,17 @@ ${unknown
 \`\`\`
 
 ${incomplete
-    ? `- This map is INCOMPLETE (${incomplete}), so say so in the \`status:\` line's reason${priorUrl ? ` and name the earlier record that still stands (${priorUrl})` : ""}: a reader must not take this record for the whole account of this PR, and the entries it does carry are a real triage of the items they cover rather than a draft. Every one of them still gets its full entry below.${priorUrl
-      ? ` And leaving the earlier record standing preserves nothing on its own: the next run's gather replays only the MOST RECENT record — this one, once posted — so an entry living only in the record this one displaces is never replayed again, and a \`standalone\` item only that record names is never even re-gathered, for as long as the older comment stands unread. So CARRY the earlier record's orphaned entries into this one: fetch the body of the record this run replayed — the comment at ${priorUrl}, whose comment id is the number its \`#issuecomment-<id>\` fragment ends with: \`gh api repos/<owner>/<repo>/issues/comments/<id> --jq .body\` — and append to this record's \`## Threads\` block, verbatim and whole (kind, reference, permalink, reply body, any task line), every entry of its own \`## Threads\` block whose identity (\`thread=<threadId, url (finding N of M), or lane>\`) no disposition below carries${compromised.length
+    ? `- This map is INCOMPLETE (${incomplete}), so say so in \`--reason\`${priorUrl ? ` and name the earlier record that still stands (${priorUrl})` : ""}: a reader must not take this record for the whole account of this PR, and the entries it does carry are a real triage of the items they cover rather than a draft. Every one of them still gets its full entry below.${priorUrl
+      ? ` And leaving the earlier record standing preserves nothing on its own: the next run's gather replays only the MOST RECENT record — this one, once posted — so an entry living only in the record this one displaces is never replayed again, and a \`standalone\` item only that record names is never even re-gathered, for as long as the older comment stands unread. So CARRY the earlier record's orphaned entries into this one: fetch the body of the record this run replayed — the comment at ${priorUrl}, whose comment id is the number its \`#issuecomment-<id>\` fragment ends with: \`gh api repos/<owner>/<repo>/issues/comments/<id> --jq .body\`, with \`--hostname <host>\` off github.com — and append to this record's \`## Threads\` block, verbatim and whole (kind, reference, permalink, reply body, any task line), every entry of its own \`## Threads\` block whose identity (\`thread=<threadId, url (finding N of M), or lane>\`) no disposition below carries${compromised.length
         ? ` — a disposition that is itself part of what makes this map incomplete (one of several naming the same gathered item, or one publication rejected as unpublishable) carrying NOTHING for this test, since the account it gives of its item is the very thing this map cannot publish while the displaced record's entry is the one durable copy of a judged reply for it: the identities so compromised here are ${compromised.map((v) => `\`${v}\``).join(", ")}, so a prior entry keyed to one of them is carried too`
         : ""}, marking each \`carried unchanged from ${priorUrl}\` so a reader knows this run did not re-judge it — the next run's replay re-judges every entry against the tree either way. Where that comment is gone, or is spent and holds no \`## Threads\` block, carry nothing and say so in \`detail\`.`
       : ""}\n`
     : ""}- ${judgedTip
-    ? `\`final HEAD\` is given above as \`${judgedTip}\` — write it EXACTLY as given and read no tip for it. It is the tip the reviewer's verdict was rendered over, and the dispositions below are that round's; the tip standing in the working location may be a LATER one a pass committed on top of it, and citing that would hand the next run's replay probe a tree no reviewer ever passed — which, the recorded commits all being its ancestors, prints nothing and so reads as "the record replays as written". Report what \`git rev-parse HEAD\` prints in the working location in \`detail\` instead, as this run's parting tip.`
-    : "`final HEAD` is what `git rev-parse HEAD` prints in the working location. Read it there rather than repeating a SHA from this brief."}
+    ? `\`--final\` is given in the command as \`${judgedTip}\` — pass it EXACTLY as given and read no tip for it. It is the tip the reviewer's verdict was rendered over, and the dispositions below are that round's; the tip standing in the working location may be a LATER one a pass committed on top of it, and citing that would hand the next run's replay probe a tree no reviewer ever passed — which, the recorded commits all being its ancestors, prints nothing and so reads as "the record replays as written". Report what \`git rev-parse HEAD\` prints in the working location in \`detail\` instead, as this run's parting tip.`
+    : "`--final` is what `git rev-parse HEAD` prints in the working location. Read it there rather than repeating a SHA from this brief."}
 - One \`## Threads\` block entry per disposition below, in that shape, and EVERY entry carries the same field set whatever its kind: the disposition kind, its stable reference (path:line, the comment author, and the thread's \`threadId\`; for a standalone item, whose url is its permalink below and is written there once rather than in both slots, the comment author and — for a misfired finding — the finding's ordinal within its comment, \`finding N of M\`, since every finding that comment holds shares the one url — and, on its own \`finding:\` line, that finding's text VERBATIM as the gather took it (its \`body\`, listed under "Misfired findings as gathered" below) — written as the ONE-LINE JSON string literal that list carries, copied byte for byte, never as raw text: a finding is ordinarily several paragraphs, a code fence or a quote, and placed raw its lines would run into the entry's other slots and the next reader could not tell where the finding ends, while the literal keeps every newline and quote escaped on the one line and decodes to the exact text — since the ordinal alone cannot tell the recorded finding from different text a later edit of the comment puts at N, and the next run's gather decodes this literal (\`JSON.parse\`) and compares the finding now at N against it before replaying the entry; for a CI lane, its \`lane\` identity as the gather recorded it — its details URL names one head's run and the next push replaces it, so it is the lane's permalink rather than its identity), the permalink (the thread's, the standalone comment's url, or the lane's details URL), and the reply body VERBATIM — a \`deferred-to-task\` entry adding the committed task file and its queued or deferred placement beside them rather than in place of them, since which thread a follow-up closes is not re-derivable from the PR; a standalone item or CI lane, which has no thread to reply on, carrying in the reply slot the Summary-comment text drafted for it (its cause and disposition, for a lane) rather than a reply nothing will post. The drafted reply bodies and the ready-to-post Summary body are the only parts of this record that cannot be re-derived from the PR later, so they are the parts that must be exact.
 - The \`## Summary comment\` block holds the "Summary of Review Fixes" body a publishing run would have posted — what was fixed, a prominent "Pushed back — please re-examine" section, a "Deferred to follow-up tasks" section naming each committed task file, a "Top-level findings" section for every misfired finding taken as a standalone item (its disposition, the comment's permalink and its \`N of M\` ordinal), a "CI" section naming each \`ci-failure\` lane with the cause found and its disposition, and any ambiguous/skipped item — ready to post unchanged. Where the cycle recorded locked-decision deviations, that body LEADS with them under a "Deviation from a locked decision" section, since a later turn posts what you wrote here as it stands. Standing deviations for this run: ${JSON.stringify(facts.deviations || [])}.
-- The SHAs are PROVENANCE, not a promise. Assert nothing about them holding later: the branch may be rebased before any push, which rewrites every one while changing nothing about whether the work is there. Do not write "the branch tip is <sha>" as a condition a replay must check, and do not omit the header's last line${unknown
-    ? " — a reader who takes this record for \"nothing was published\" either re-posts a reply that already landed or never posts one that did not"
-    : landed
-      ? " — a reader who takes a part-way publication for a complete one stops looking for the replies that never landed"
-      : unconfirmedPush
-        ? unconfirmedPush.reader
-        : " — a reader who takes those SHAs for origin's goes looking for commits that are not there"}.${perThread.length
+- The SHAs are PROVENANCE, not a promise. Assert nothing about them holding later: the branch may be rebased before any push, which rewrites every one while changing nothing about whether the work is there. Do not write "the branch tip is <sha>" as a condition a replay must check.${perThread.length
     ? `\n- Every thread keeps its entry and its verbatim reply, this run's stopped publication included — and each entry says WHERE IT STANDS. That standing is NOT yours to derive: the lines below are already matched to the dispositions by the identity publication routes on (\`thread=<threadId, url (finding N of M), or lane>\`, never \`ref\` — file:line plus author is shared by two threads a re-review left on one line, so it identifies neither). Copy each line's standing onto the entry it names, above that entry's verbatim reply body, and change nothing else:\n${perThread.map((l) => `  ${l}`).join("\n")}\n  Never drop an entry because its reply landed, and never drop one because its standing is unknown: the difference between the two is the whole reason this rendering exists.${unknown
       ? ` What the publisher DID report is below, for a maintainer's eye and not as a fact to act on — a report that broke the contract these facts are read under is distrusted WHOLE, so no part of its per-thread account is acted on here, an entry that looks complete included: ${JSON.stringify(outcomes)}.`
       : ""}`
@@ -1199,7 +1184,7 @@ ${JSON.stringify(misfiredFindings, null, 2)}`
 // entries, which is what leaves nothing for any replay to pick up.
 // It supersedes only a record that is already there. Where the PR carries none
 // there is nothing to spend, and posting one would create the very thing this
-// step exists to end — so the brief's step 2 writes nothing in that case.
+// step exists to end — so `spendPriorRecord` renders no brief in that case.
 // And it spends THE RECORD THIS RUN REPLAYED, named by the url the gather
 // reported, rather than "the most recent record of your own" the supersession
 // selects by. The two questions are different, and the difference is not
@@ -1215,36 +1200,41 @@ ${JSON.stringify(misfiredFindings, null, 2)}`
 // replayed again by the next run, which the run's `note` surfaces, while a
 // mis-targeted spend is a silent deletion nothing later can notice.
 // `priorUrl` is always a url here: `spendPriorRecord` returns before rendering
-// this where the gather reported none, so step 1 below names one rather than
+// this where the gather reported none, so the command below names one rather than
 // carrying a fallback nothing reaches.
 function spendRecordPrompt(packet, facts) {
   const summaryUrl = typeof facts.summaryUrl === "string" ? facts.summaryUrl.trim() : "";
   const priorUrl = typeof facts.priorUrl === "string" ? facts.priorUrl.trim() : "";
+  const spendCommand = [
+    `address-review-record spend --repo <owner>/<repo> --pr ${packet.pr.number} --branch ${shq(packet.pr.workingBranch)} --id ${recordIdOf(priorUrl)}`,
+    summaryUrl ? `--summary-url ${shq(summaryUrl)}` : "",
+  ].filter(Boolean).join(" ");
   return `Spend the prior disposition record on PR #${packet.pr.number} (branch \`${packet.pr.workingBranch}\`). This run PUBLISHED the addressed review IN FULL, so the map that record holds is on the PR and nothing in it is outstanding. Read \`AGENTS.md\` / \`CLAUDE.md\` first.
 
 ${DEPUTY_FINISH_IN_TURN}
 
 ${DESTROY_BOUNDARY}
 
-You make at most ONE PR write — updating that record comment in place — and nothing else: no push, no reply, no resolve, no Summary comment, no ping, no label, no review request. If you cannot make that one write, report \`posted: false\` with what failed; never compensate by writing something else. And you make NO write at all where step 1 does not find THAT record, still there and still yours: there is then nothing this run may spend, and posting a new comment would create exactly what this step exists to end.
+You make at most ONE PR write — the one the command below makes, emptying that record comment in place — and nothing else: no push, no reply, no resolve, no Summary comment, no ping, no label, no review request. If that write cannot be made, report \`posted: false\` with what failed; never compensate by writing something else, and never post a new comment: that would create exactly what this step exists to end.
 
-WHICH REPOSITORY every command below addresses: the one this PR is IN, whose \`<owner>/<repo>\` is already resolved and handed to you in the PR's own URL \`${packet.pr.url}\` — never the repository your working location resolves to. \`gh api\`'s \`{owner}\`/\`{repo}\` placeholders expand to the repository of the current directory. So write that \`<owner>/<repo>\` out LITERALLY in each command below. Do not re-derive it from a bare \`gh repo view --json nameWithOwner\`, which answers for the directory.
-1. Find THE record this run replayed — the comment at ${priorUrl}, whose comment id is the number its \`#issuecomment-<id>\` fragment ends with. It is the ONLY record this run may spend: its map is the one this publication put on the PR, and any other record on this PR is some other run's account, which the in-place update below would EMPTY rather than replace. Confirm it is still there and still yours: \`gh api --paginate repos/<owner>/<repo>/issues/${packet.pr.number}/comments --jq '.[] | select((.body | split("\\n")[0] | rtrimstr("\\r")) == "<!-- address-review:disposition-record -->") | {id, login: .user.login, updated_at}'\` — the MARKER identifies a record, never its prose, and it must be the body's FIRST LINE byte for byte. A \`contains\` test is what you must NOT use: it also selects an ordinary comment that merely QUOTES the marker (a maintainer asking about this mechanism, a review summary echoing it), and step 2 would then \`PATCH\` that person's comment away. The \`rtrimstr("\\r")\` is why a body GitHub hands back with CRLF line endings still matches its own first line. Yours are the ones authored by the authenticated user (\`gh api user --jq .login\`).
-2. Where that listing does not carry that id as a record of your own — it is gone, it is another actor's, or no id could be read from the url — write NOTHING: report \`posted: false\`, \`superseded: false\`, and say in \`detail\` which of those it was. Do NOT fall back to the most recent record of your own, or to any other: an unspent record is replayed by the next run and this run's report says so, while a spend written over the wrong record deletes a map nothing later can recover. Otherwise update THAT id IN PLACE with the body below, read from stdin so composing it puts no file in the working location: \`gh api --method PATCH repos/<owner>/<repo>/issues/comments/<id> -F body=@-\`. Report any further records the listing shows in \`detail\` rather than touching them, and never touch another actor's comment: delete, sweep or expire NOTHING.
-3. Write "codex"/"claude"/"copilot" PLAIN in the body, with no bare \`@\`-mentions anywhere — a mention here would summon a review round for work that is already published.
+WHICH REPOSITORY the command addresses: the one this PR is IN, whose \`<owner>/<repo>\` is that of the PR's own URL \`${packet.pr.url}\` — never the repository your working location resolves to. Where that URL is not on github.com, the helper's \`--repo\` takes \`<host>/<owner>/<repo>\`, and that form is the helper's alone: a \`gh api\` read below keeps the plain \`repos/<owner>/<repo>/…\` path and names the host with \`--hostname <host>\`. Write it out LITERALLY; do not re-derive it from a bare \`gh repo view --json nameWithOwner\`, which answers for the directory.
 
-The body, marker first (the marker line is mandatory and must be byte-exact: a spent record must still be FOUND as a record by the next run, which is how it reads as spent rather than as absent):
+1. Run ONE command: \`${spendCommand}\`. It is the dev-skills plugin's own script, on PATH for this session; where the shell cannot find it, report \`posted: false\` with \`detail\` "record helper not found" and STOP — never hand-roll the write in its place. \`--id\` is THE record this run replayed, the comment at ${priorUrl}, and the ONLY record this run may spend: its map is the one this publication put on the PR, and any other record on this PR is some other run's account, which a spend would EMPTY rather than replace. The script confirms that id is still a record of your own, then writes over it in place: the marker kept, so a later run still FINDS it and reads it as spent rather than absent, a SPENT status${summaryUrl ? " naming this run's Summary comment" : ""}, and neither a \`## Threads\` block nor a \`## Summary comment\` block — their ABSENCE is what ends the record, since a standalone item has no resolved state on the PR and an entry left standing would be re-gathered as fresh work by every later run.
+2. Read its first line. \`outcome=spent\` → report \`posted: true\`, \`superseded: true\`, and its \`url=\`. \`outcome=absent\` → it wrote nothing, because that comment is gone or is another actor's: report \`posted: false\`, \`superseded: false\`, and say so in \`detail\`. Do NOT fall back to the most recent record of your own, or to any other: an unspent record is replayed by the next run and this run's report says so, while a spend written over the wrong record deletes a map nothing later can recover. Exit status 64 → it wrote nothing: report \`posted: false\` with what it said. Any other failure with no outcome → whether it changed is not established: read that comment before anything else (\`gh api repos/<owner>/<repo>/issues/comments/<id> --jq .body\`, with \`--hostname <host>\` off github.com), and report what it shows rather than writing twice.
 
-\`\`\`
-<!-- address-review:disposition-record -->
-# address-review packet — PR #${packet.pr.number} (${packet.pr.workingBranch})
-status: SPENT — the map this record held has since been published in full by a later run of this workflow${summaryUrl ? `, whose Summary comment is at ${summaryUrl}` : ""}
-nothing here is outstanding: every reply and resolve that publication owed reached the PR, and every standalone item and CI lane this record named was carried into that run's Summary comment — one it could not settle appearing there as the ambiguous/skipped item it is, which is where a maintainer picks it up, since a spent record hands nothing to a later run. This record is kept, and kept findable by its marker, so a later run reads a SPENT record rather than a live one.
-\`\`\`
-
-Write NOTHING else into it — no \`## Threads\` block and no \`## Summary comment\` block, and do not carry the old ones forward. Their content is on the PR now, and their ABSENCE is what ends this record: a run REPLAYS a record rather than re-triaging it, and while the review threads a record names self-terminate on having been resolved, a standalone item has no resolved state on the PR at all — so an entry left standing here would be re-gathered as fresh work by every later run, forever.
-
-Report \`posted\`, \`superseded\` (true when you updated a prior record of your own), \`url\` (that comment's permalink), and one line of \`detail\`.`;
+Report \`posted\`, \`superseded\` (true when the record was updated), \`url\` (that comment's permalink), and one line of \`detail\`.`;
+}
+// The comment id a record's permalink names: the digits its `#issuecomment-<id>`
+// fragment ends with. Empty where the url carries none, which `spendPriorRecord`
+// reports without spending anything — a spend aimed by guesswork EMPTIES a map.
+// One line, since the record helper takes each header value on one and refuses
+// a value that is not.
+function oneLine(v) {
+  return String(v).replace(/\s+/g, " ").trim();
+}
+function recordIdOf(url) {
+  const m = /#issuecomment-(\d+)$/.exec(typeof url === "string" ? url.trim() : "");
+  return m ? m[1] : "";
 }
 
 // The one deputy whose whole job is giving the worktree back. It runs only on
@@ -2295,6 +2285,9 @@ async function leaveDispositionRecord(why, map, facts) {
 async function spendPriorRecord(summaryUrl) {
   const priorUrl = packet.priorRecord && typeof packet.priorRecord.url === "string" ? packet.priorRecord.url.trim() : "";
   if (!priorUrl) return {};
+  if (!recordIdOf(priorUrl)) {
+    return { spentRecord: { posted: false, superseded: false, detail: `no comment id could be read from the prior record's url (${priorUrl}), so it was not spent and the next run will replay it.` } };
+  }
   phase("Record");
   const spent = await agent(spendRecordPrompt(packet, { summaryUrl, priorUrl }), {
     label: "spend-record",
@@ -2358,7 +2351,7 @@ function reviewedMapOf(cycle) {
 // having committed nothing.
 const judgedTipClause = (judged) =>
   judged.sha
-    ? ` The \`final HEAD\` below is \`${judged.sha}\` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass may have moved past.`
+    ? ` The record's \`final HEAD\` is \`${judged.sha}\` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass may have moved past.`
     : " The `final HEAD` below is the tip standing in the working location, which is therefore NOT necessarily the tree that verdict was rendered over: the cycle reported no tip for the round that judged this map.";
 // The same fact in the one line a maintainer reads first. A record that failed
 // to post is the more important half: it means the map is in this result and

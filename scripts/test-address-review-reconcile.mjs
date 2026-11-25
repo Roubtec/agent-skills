@@ -131,7 +131,8 @@
 //
 // Run: node scripts/test-address-review-reconcile.mjs
 
-import { readFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
@@ -159,6 +160,86 @@ const renderRecord = (...args) =>
     input: "## Threads\n\n## Summary comment (verbatim, ready to post)\n",
     encoding: "utf8",
   }).stdout || "";
+// The record brief no longer prints the record's header: it orders
+// `address-review-record post` with this run's facts as flags, and the script
+// words the marker, the status line and the origin line. So what a record SAYS
+// is read here by carrying that command out — the shipped helper, with `render`
+// in place of `post` — and appending what it prints to the brief. An assertion
+// on a header line therefore holds the workflow's flags and the helper's
+// wording together, and a command the helper refuses shows as such.
+const recordRenders = { carried: 0, refused: [] };
+const recordOf = (brief) => {
+  const text = typeof brief === "string" ? brief : "";
+  const start = text.indexOf("`address-review-record post ");
+  const tail = "--reason '<one line>'`";
+  const end = start < 0 ? -1 : text.indexOf(tail, start);
+  if (start < 0 || end < 0) {
+    recordRenders.refused.push(`no record command found in a brief opening "${text.slice(0, 60)}"`);
+    return text;
+  }
+  // The body the helper is fed is the brief's own template, so a template that
+  // lost a block, or grew a second one, is what the helper sees.
+  const template = (/\nThe body:\n\n```\n([\s\S]*?)\n```\n/.exec(text) || [])[1] || "";
+  if ((template.match(/^## Threads$/gm) || []).length !== 1 || (template.match(/^## Summary comment/gm) || []).length !== 1 || /disposition-record|^status:/m.test(template)) {
+    recordRenders.refused.push(`the brief's body template is not one \`## Threads\` block and one \`## Summary comment\` block under no header: ${JSON.stringify(template.slice(0, 160))}`);
+  }
+  const args = text
+    .slice(start + "`address-review-record post ".length, end + tail.length - 1)
+    .replace("--repo <owner>/<repo> ", "")
+    .replace("--final <the tip you read>", "--final '<the tip you read>'");
+  const run = spawnSync("bash", ["-c", `bash '${recordHelperPath}' render ${args}`], {
+    input: `${template}\n`,
+    encoding: "utf8",
+  });
+  if (run.status === 0) recordRenders.carried++;
+  else recordRenders.refused.push(`${args.slice(0, 120)} → ${run.status}: ${(run.stderr || "").trim().slice(0, 160)}`);
+  return `${text}\n\n${run.status === 0 ? run.stdout : `RECORD COMMAND REFUSED (${run.status}): ${run.stderr}`}`;
+};
+// And the spend brief orders `address-review-record spend`, whose whole effect
+// is the body it writes over the record. So that body is read by carrying the
+// command out against a fake `gh` holding one record of this account's at the
+// id the command names: real `jq` runs the helper's own listing expression,
+// and the PATCH's body file is what comes back. Empty where the helper wrote
+// nothing — an id that is not that record, a command it refused.
+const spentBodyOf = (brief) => {
+  const text = typeof brief === "string" ? brief : "";
+  const m = /`address-review-record spend --repo <owner>\/<repo> ([^`]*)`/.exec(text);
+  if (!m) return "";
+  const dir = mkdtempSync(join(tmpdir(), "record-spend-"));
+  try {
+    writeFileSync(
+      join(dir, "comments.json"),
+      JSON.stringify([
+        { id: 9, user: { login: "bot" }, created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z", html_url: "https://example.invalid/pr/42#issuecomment-9", body: "<!-- address-review:disposition-record -->\n# t\nstatus: not published (x)\n\n## Threads\n" },
+      ]),
+    );
+    writeFileSync(
+      join(dir, "gh"),
+      [
+        "#!/usr/bin/env bash",
+        'dir="$(dirname "$0")"; expr=.; method=GET; body=; path=',
+        'while [ $# -gt 0 ]; do case "$1" in',
+        '  --jq) expr="$2"; shift ;; --method) method="$2"; shift ;; -F) body="${2#body=@}"; shift ;;',
+        '  api | --paginate) ;; *) [ -n "$path" ] || path="$1" ;; esac; shift; done',
+        'case "$method $path" in',
+        '  "GET user") echo bot ;;',
+        '  "GET repos/acme/widgets/issues/42/comments") jq -r "$expr" "$dir/comments.json" ;;',
+        '  "PATCH repos/acme/widgets/issues/comments/9") cp "$body" "$dir/written"; echo "https://example.invalid/pr/42#issuecomment-9" ;;',
+        "  *) exit 1 ;;",
+        "esac",
+        "",
+      ].join("\n"),
+      { mode: 0o755 },
+    );
+    const run = spawnSync("bash", ["-c", `bash '${recordHelperPath}' spend --repo acme/widgets ${m[1]}`], {
+      encoding: "utf8",
+      env: { ...process.env, PATH: `${dir}:${process.env.PATH}` },
+    });
+    return run.status === 0 && existsSync(join(dir, "written")) ? readFileSync(join(dir, "written"), "utf8").replace(/\n$/, "") : "";
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+};
 const workflows = join(here, "..", "plugins", "dev-skills", "workflows");
 const SOURCE = "wf-address-review.js";
 
@@ -181,7 +262,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 282;
+const EXPECTED_CHECKS = 285;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -456,7 +537,7 @@ async function run(packet, opts = {}) {
     // makes. Stubbed as a clean post and its brief kept, for the publisher's
     // reason — WHICH exits reach it, and what they are handed, is script logic.
     if (label === "record") {
-      seen.recordPrompts.push(prompt);
+      seen.recordPrompts.push(recordOf(prompt));
       return opts.record === undefined
         ? { posted: true, superseded: false, url: "https://example.invalid/pr/42#issuecomment-1", detail: "posted" }
         : opts.record;
@@ -4093,7 +4174,6 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /^whether this run's push reached origin is UNKNOWN — `git push` returned and the read-back at the ref did not confirm the ref moved, so read the ref itself before treating the tips above as either published or local, while no reply, resolve or Summary comment reached the PR$/m.test(b)
         ? ""
         : "does not say in place of the local-only line that the push's landing is unknown",
-      /takes this record for "nothing reached origin" treats these tips as unpushed when the ref may already carry them/.test(b) ? "" : "does not warn the reader off reading it as nothing-reached-origin",
     ].filter(Boolean);
     if (wrongLines.length) claimedOrigin.push(`${what}: ${wrongLines.join(", ")}`);
     const note = (results[caseName] || {}).note || "";
@@ -4281,20 +4361,22 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "a known-incomplete map is posted beside a prior record rather than superseding it in place, while a complete one still supersedes",
     /SUPERSEDES NOTHING/.test(incompleteOverPrior) &&
       /this run's map is INCOMPLETE \(1 gathered item\(s\) carry no disposition\)/.test(incompleteOverPrior) &&
-      /leave every record step 1 found standing, your own included, reporting `superseded: false`/.test(incompleteOverPrior) &&
+      /it posts a new comment and leaves every earlier record standing, your own included/.test(incompleteOverPrior) &&
+      / --state not-published --push none --incomplete /.test(incompleteOverPrior) &&
       incompleteOverPrior.includes("the most recent is https://example.invalid/pr/42#issuecomment-9") &&
       !/--method PATCH/.test(incompleteOverPrior) &&
       // And the record says it of itself, so a reader does not take a partial
       // account for the whole one.
-      /- This map is INCOMPLETE \(1 gathered item\(s\) carry no disposition\), so say so in the `status:` line's reason and name the earlier record that still stands \(https:\/\/example\.invalid\/pr\/42#issuecomment-9\)/.test(incompleteOverPrior) &&
+      /- This map is INCOMPLETE \(1 gathered item\(s\) carry no disposition\), so say so in `--reason` and name the earlier record that still stands \(https:\/\/example\.invalid\/pr\/42#issuecomment-9\)/.test(incompleteOverPrior) &&
       // The control: nothing here narrows the ordinary run's one-record-per-PR
       // supersession, which is the property the whole rule is a carve-out from.
-      /--method PATCH repos\/<owner>\/<repo>\/issues\/comments\/<id>/.test(completeOverPrior) &&
+      /writes over the most recent record of your own IN PLACE/.test(completeOverPrior) &&
+      !/ --incomplete /.test(completeOverPrior) &&
       !/SUPERSEDES NOTHING/.test(completeOverPrior) &&
       !/This map is INCOMPLETE/.test(completeOverPrior),
     JSON.stringify({
-      incompleteStep2: (incompleteOverPrior.match(/^2\. Compose the body below[^\n]*/m) || ["no step 2"])[0].slice(0, 200),
-      completeStep2: (completeOverPrior.match(/^2\. Compose the body below[^\n]*/m) || ["no step 2"])[0].slice(0, 160),
+      incompleteStep2: (incompleteOverPrior.match(/^2\. Write it ONCE[^\n]*/m) || ["no step 2"])[0].slice(0, 200),
+      completeStep2: (completeOverPrior.match(/^2\. Write it ONCE[^\n]*/m) || ["no step 2"])[0].slice(0, 160),
     }),
   );
 
@@ -4312,6 +4394,10 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   check(
     "an incomplete record carries the displaced record's orphaned entries forward — fetched from the replayed record, keyed by thread identity, marked as carried — while a complete map and a prior-less incomplete one carry nothing",
     /CARRY the earlier record's orphaned entries into this one/.test(incompleteOverPrior) &&
+      // Its read of the replayed record names the host apart, like every direct read.
+      /that form is the helper's alone: a `gh api` read below keeps the plain `repos\/<owner>\/<repo>\/…` path and names the host with `--hostname <host>`/.test(incompleteOverPrior) &&
+      !/gh api repos\/<owner>\/<repo>\/issues\/comments\/<id> --jq \.body`(?!, with `--hostname <host>` off github\.com)/.test(incompleteOverPrior) &&
+      /gh api repos\/<owner>\/<repo>\/issues\/comments\/<id> --jq \.body`, with `--hostname <host>` off github\.com/.test(incompleteOverPrior) &&
       /whose identity \(`thread=<threadId, url \(finding N of M\), or lane>`\) no disposition below carries/.test(incompleteOverPrior) &&
       incompleteOverPrior.includes("marking each `carried unchanged from https://example.invalid/pr/42#issuecomment-9`") &&
       /the next run's gather replays only the MOST RECENT record/.test(incompleteOverPrior) &&
@@ -4378,11 +4464,16 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // a new comment there being the very thing this ends.
   const spentBrief = spends["a run that published on a PR that already carries a record"];
   const spentResult = results["a run that published on a PR that already carries a record"];
+  const spentWritten = spentBodyOf(spentBrief);
   check(
     "a run that publishes in full spends the prior record it replayed — superseded in place, marker kept, entries gone — and posts nothing where no record stands",
     // The write itself, at the repository the PR is in and never as a new comment.
-    /--method PATCH repos\/<owner>\/<repo>\/issues\/comments\/<id>/.test(spentBrief) &&
+    /`address-review-record spend --repo <owner>\/<repo> --pr 42 --branch 'feature\/x' --id 9 /.test(spentBrief) &&
       !/repos\/\{owner\}\/\{repo\}/.test(spentBrief) &&
+      // The read after a failed spend is spelled, host apart, not left to the slug.
+      /that form is the helper's alone: a `gh api` read below keeps the plain `repos\/<owner>\/<repo>\/…` path and names the host with `--hostname <host>`/.test(spentBrief) &&
+      !/gh api repos\/<owner>\/<repo>\/issues\/comments\/<id> --jq \.body`(?!, with `--hostname <host>` off github\.com)/.test(spentBrief) &&
+      /gh api repos\/<owner>\/<repo>\/issues\/comments\/<id> --jq \.body`, with `--hostname <host>` off github\.com/.test(spentBrief) &&
       !/gh pr comment/.test(spentBrief) &&
       // And the record it targets is the one this run REPLAYED, named by the
       // url the gather reported, rather than "the most recent record of my
@@ -4394,17 +4485,17 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       // from that url, and a PR that no longer carries it is written nothing at
       // all rather than fallen back from.
       spentBrief.includes(PRIOR_RECORD.url) &&
-      /whose comment id is the number its `#issuecomment-<id>` fragment ends with/.test(spentBrief) &&
-      /Where that listing does not carry that id as a record of your own[^\n]*write NOTHING/.test(spentBrief) &&
+      /`outcome=absent` → it wrote nothing, because that comment is gone or is another actor's/.test(spentBrief) &&
       /Do NOT fall back to the most recent record of your own, or to any other/.test(spentBrief) &&
       // The body: the marker it must still be findable by, the spent status, and
       // the two blocks whose ABSENCE is the termination.
-      spentBrief.includes("<!-- address-review:disposition-record -->") &&
-      /status: SPENT — the map this record held has since been published in full/.test(spentBrief) &&
-      /no `## Threads` block and no `## Summary comment` block/.test(spentBrief) &&
+      // Read off what the ordered command WRITES, carried out by the helper.
+      spentWritten.startsWith("<!-- address-review:disposition-record -->\n") &&
+      /^status: SPENT — the map this record held has since been published in full/m.test(spentWritten) &&
+      !/^## (Threads|Summary comment)/m.test(spentWritten) &&
       // The Summary comment the publisher actually posted, so a reader of the
       // spent record is sent to where the map now lives.
-      spentBrief.includes("https://example.invalid/pr/42#issuecomment-5") &&
+      spentWritten.includes("https://example.invalid/pr/42#issuecomment-5") &&
       // It is not a disposition record: the published exit still reports none.
       !spentResult.dispositionRecord &&
       spentResult.spentRecord &&
@@ -4413,7 +4504,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       // nothing at all, rather than posting one nobody asked for.
       spends["a run that published"] === "",
     JSON.stringify({
-      spentStatus: (spentBrief.match(/^status: [^\n]*/m) || ["no status line"])[0].slice(0, 140),
+      spentStatus: (spentWritten.match(/^status: [^\n]*/m) || ["no status line: the ordered spend wrote nothing"])[0].slice(0, 140),
       noPriorSpend: spends["a run that published"] ? "a spend brief was rendered with no prior record" : "none, as required",
     }),
   );
@@ -4512,7 +4603,9 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       b.includes(said.status) &&
       b.includes(said.origin) &&
       b.includes(why) &&
-      /the publisher pushes BEFORE it replies, so a stop with something already on origin is the ordinary shape of this failure/.test(b) &&
+      // On the record's own origin line, where the script puts what the account
+      // lacks ahead of why a stop with something on origin is the ordinary case.
+      ((b.match(/^.*; the publisher pushes BEFORE it replies, so a stop with something already on origin is the ordinary shape of this failure: check the PR itself.*$/m) || [""])[0]).includes(why) &&
       // The same reservation in the one line a maintainer reads first.
       /what reached origin is UNKNOWN/.test((results[what] || {}).note || "") &&
       !/LOCAL ONLY/.test(b) &&
@@ -4521,9 +4614,6 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       // The reader-warning takes the UNKNOWN case first, which is only observable
       // where a landed mutation stands beside it — the rows whose push advanced
       // the remote — and none of these may warn about the other two states.
-      /a reader who takes this record for "nothing was published" either re-posts a reply that already landed or never posts one that did not/.test(b) &&
-      !/takes a part-way publication for a complete one/.test(b) &&
-      !/takes those SHAs for origin's/.test(b) &&
       // The only durable copy of the account that could not be used, dumped for a
       // maintainer's eye — with the rule that says why an entry claiming a landed
       // reply still leaves its thread reserved.
@@ -4871,9 +4961,9 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   const carriedMoved = briefs["a first cycle that errored after a pass committed and was then rejected"];
   check(
     "and a carried map cites the tip the cycle reported for the round that judged it, rather than reading the working location a rejected pass may have moved",
-    /The `final HEAD` below is `0ddba11` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass may have moved past\./.test(carriedMoved) &&
+    /The record's `final HEAD` is `0ddba11` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass may have moved past\./.test(carriedMoved) &&
       /\| final HEAD 0ddba11 \| recorded headRefOid/.test(carriedMoved) &&
-      /`final HEAD` is given above as `0ddba11` — write it EXACTLY as given and read no tip for it/.test(carriedMoved) &&
+      /`--final` is given in the command as `0ddba11` — pass it EXACTLY as given and read no tip for it/.test(carriedMoved) &&
       // Still the carried map's own reason, not the replaced one's.
       /errored AFTER a reviewer round had passed over the dispositions below/.test(carriedMoved) &&
       carriedMoved.includes(CYCLE_PASS.workReport[0].detail),
@@ -4915,9 +5005,9 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       // caveated because a replay PROBES this field: with the recorded commits
       // all ancestors of the later tip, probing that tip prints nothing and the
       // record reads as replaying as written over a tree no reviewer passed.
-      /The `final HEAD` below is `feedface` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass may have moved past\./.test(replacedFirst) &&
+      /The record's `final HEAD` is `feedface` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass may have moved past\./.test(replacedFirst) &&
       /\| final HEAD feedface \| recorded headRefOid/.test(replacedFirst) &&
-      /`final HEAD` is given above as `feedface` — write it EXACTLY as given and read no tip for it/.test(replacedFirst) &&
+      /`--final` is given in the command as `feedface` — pass it EXACTLY as given and read no tip for it/.test(replacedFirst) &&
       // The post-rebase exit: its own judged map, not the pre-rebase map that used
       // to stand in for it, and not the replacement either.
       replacedReverify.includes("judged over the rebased tree, then replaced by a later pass") &&
@@ -4927,7 +5017,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       // its own copy of it.
       /errored after a later pass had SUPERSEDED the map its reviewer round passed over — replacing its entries, or committing a new tip under the same ones —/.test(replacedReverify) &&
       /reviewer passed a round over the rebased tree, after which a later pass superseded the map it judged and the cycle errored/.test(replacedReverify) &&
-      /The `final HEAD` below is `feedface` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass may have moved past\./.test(replacedReverify) &&
+      /The record's `final HEAD` is `feedface` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass may have moved past\./.test(replacedReverify) &&
       /\| final HEAD feedface \| recorded headRefOid/.test(replacedReverify) &&
       // The empty judged map: the record is written, over the map that passed on
       // the pre-replay base, rather than not written at all.
@@ -5000,12 +5090,14 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // body's first line, and a `contains` test also selects an ordinary comment
     // that merely quotes it. The author filter stays either way.
     "the marker a later run matches, as the body's first line and not by a substring":
-      /<!-- address-review:disposition-record -->/.test(recordBrief) &&
-      /the MARKER identifies a record, never its prose/.test(recordBrief) &&
-      recordBrief.includes('select((.body | split("\\n")[0] | rtrimstr("\\r")) == "<!-- address-review:disposition-record -->")') &&
-      !/select\(\.body \| contains\(/.test(recordBrief) &&
-      /Keep the ones authored by the authenticated user/.test(recordBrief),
-    "superseding its own prior record in place rather than appending a second": /--method PATCH repos\/<owner>\/<repo>\/issues\/comments\/<id>/.test(recordBrief) && /instead of a stack of near-duplicates/.test(recordBrief),
+      // The helper's to get right now (its own suite drives the lookup): the
+      // brief orders it, and what it prints opens with the marker.
+      /\n\n<!-- address-review:disposition-record -->\n# address-review packet — PR #42 /.test(recordBrief) &&
+      (recordBrief.match(/<!-- address-review:disposition-record -->/g) || []).length === 1 &&
+      !/marker first/.test(recordBrief) &&
+      /It finds this account's earlier records by that marker/.test(recordBrief) &&
+      /never hand-roll the comment in its place/.test(recordBrief),
+    "superseding its own prior record in place rather than appending a second": /writes over the most recent record of your own IN PLACE/.test(recordBrief) && /instead of a stack of near-duplicates/.test(recordBrief),
     // All three of this brief's PR writes address the repository the PR is IN,
     // named from the PR's own URL. Left to `{owner}`/`{repo}` and a bare `gh pr
     // comment`, every one of them answers for the current directory's
@@ -5014,10 +5106,19 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // create posts onto a same-numbered PR there. The negative half is the
     // point: a re-introduced placeholder fails rather than passing on the
     // prose alone.
-    "the three PR writes qualified at the repository the PR is in, named from its own URL":
+    "both record commands qualified at the repository the PR is in, named from its own URL":
       recordBrief.includes("the PR's own URL `https://example.invalid/pr/42`") &&
-      /gh api --paginate repos\/<owner>\/<repo>\/issues\/\d+\/comments/.test(recordBrief) &&
-      /gh pr comment \d+ --repo <owner>\/<repo> --body-file -/.test(recordBrief) &&
+      /address-review-record post --repo <owner>\/<repo> --pr \d+ /.test(recordBrief) &&
+      /address-review-record find --repo <owner>\/<repo> --pr \d+/.test(recordBrief) &&
+      // `find` names the latest record whether or not the failed write reached
+      // it, so the retry decision rests on the body read back, not on its id.
+      /READ that comment's body \(`gh api repos\/<owner>\/<repo>\/issues\/comments\/<id> --jq \.body`, with `--hostname <host>` off github\.com\) and compare it with the record you composed/.test(recordBrief) &&
+      /where `find` or the read itself fails, report `posted: false`/.test(recordBrief) &&
+      // The host-prefixed slug is the helper's `--repo` form; a REST path built
+      // from it addresses no API at all, so a direct read names the host apart.
+      /that form is the helper's alone: a `gh api` read below keeps the plain `repos\/<owner>\/<repo>\/…` path and names the host with `--hostname <host>`/.test(recordBrief) &&
+      !/gh api repos\/<owner>\/<repo>\/issues\/comments\/<id> --jq \.body`(?!, with `--hostname <host>` off github\.com)/.test(recordBrief) &&
+      !/gh pr comment/.test(recordBrief) &&
       !/repos\/\{owner\}\/\{repo\}/.test(recordBrief) &&
       /never the repository your working location resolves to/.test(recordBrief),
     "exactly one PR write, and no reply, resolve, push or ping beside it": /You make exactly ONE PR write/.test(recordBrief) && /no push, no reply, no resolve, no Summary comment, no ping/.test(recordBrief),
@@ -5173,8 +5274,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   }
   // The status line agreeing with the line under it is the helper's to get
   // right now, so read both off what it prints for each push state.
-  // Whole spans, and the same ones the workflow's `UNKNOWN_BY_PUSH` table
-  // holds, so rewording either side alone fails here.
+  // Whole spans.
   for (const [push, status, origin] of [
     [
       "advanced",
@@ -5196,8 +5296,10 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     if (!printed.includes(`\nstatus: ${status} (r)\n`) || !printed.includes(`\n${origin}: `)) {
       missingRules.push(`record.sh: the status line saying what the line under it says, for a push that is ${push}`);
     }
-    if (!src.includes(`status: "${status}"`) || !src.includes(`origin: "${origin}"`)) {
-      missingRules.push(`${SOURCE}: the same two lines for a push that is ${push}`);
+    // The workflow no longer holds those lines at all: it hands the helper the
+    // state and the push, so a copy reappearing there is the drift to catch.
+    if (src.includes(status) || src.includes(origin)) {
+      missingRules.push(`${SOURCE}: holds its own copy of the two lines for a push that is ${push}`);
     }
   }
   check(
@@ -5373,7 +5475,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // like `sideways` left that whole class uncovered.
   const renderStrangePush = (pushState) => {
     try {
-      return recordPrompt(
+      return recordOf(recordPrompt(
         { pr: { number: 42, workingBranch: "feature/x", base: "main", headOid: "deadbeef" } },
         [{ ref: "src/app.ts:12 a-reviewer", threadId: "T1" }],
         {
@@ -5383,7 +5485,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
           rounds: 1,
           perThread: ["thread=T1  src/app.ts:12 a-reviewer — UNKNOWN whether its reply is posted or its thread resolved: check it on the PR before replying, and before resolving."],
         },
-      );
+      ));
     } catch (err) {
       return `the record brief threw: ${(err && err.message) || err}`;
     }
@@ -5524,7 +5626,22 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // comes out of the spend brief this workflow actually renders, so the carve-out
   // and the shape it keys on cannot drift apart.
   const spendRun = await run(gathered(withRecord), { args: "push no-rebase", cycles: [CYCLE_PASS] });
-  const spentBody = ((spendRun.seen.spendPrompts[0] || "").match(/```\n(<!-- address-review:disposition-record -->[\s\S]*?)\n```/) || [])[1] || "";
+  const spentBody = spentBodyOf(spendRun.seen.spendPrompts[0] || "");
+  // The id is read from the url by the script, never by the deputy: a prior
+  // record whose url names none is not spent at all, and the run says so.
+  const noIdRun = await run(
+    gathered({ reconcile: { outcome: "work" }, items: [ITEM], priorRecord: { url: "https://example.invalid/pr/42", body: withRecord.priorRecord.body } }),
+    { args: "push no-rebase", cycles: [CYCLE_PASS] },
+  );
+  check(
+    "and a prior record whose url names no comment id is not spent by guesswork — no spend brief is rendered, and the run reports the record left standing",
+    noIdRun.seen.spendPrompts.length === 0 &&
+      noIdRun.result.spentRecord &&
+      noIdRun.result.spentRecord.posted === false &&
+      /no comment id could be read from the prior record's url/.test(noIdRun.result.spentRecord.detail) &&
+      spendRun.seen.spendPrompts.length === 1,
+    JSON.stringify({ spends: noIdRun.seen.spendPrompts.length, spentRecord: noIdRun.result.spentRecord }),
+  );
   const afterSpend = await run(
     gathered({ reconcile: { outcome: "work" }, items: [ITEM], priorRecord: { url: "https://example.invalid/pr/42#issuecomment-9", body: spentBody } }),
     { args: "no-push no-rebase" },
@@ -6403,6 +6520,35 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   );
 }
 
+// The helper takes each header value on one line and refuses one that is not,
+// which would cost the record. What landed and what is owed are composed from
+// item text, so the brief flattens them before they become flags.
+{
+  const refusedBefore = recordRenders.refused.length;
+  const wrapped = recordOf(
+    recordPrompt(
+      { pr: { number: 42, workingBranch: "feat/it's $HOME `x`", base: "main", headOid: "deadbeef\n", url: "https://example.invalid/pr/42" } },
+      [{ ref: "src/app.ts:12 a-reviewer", threadId: "T1" }],
+      { why: "the publisher stopped.", startingHead: "cafe\n", landed: "the push;\n  1 reply", outstanding: "1 resolve\nand the Summary comment", pushState: "advanced", rounds: 1 },
+    ),
+  );
+  check(
+    "a value that spans lines, or holds what a shell would expand, still yields a record — flattened to the one line the helper takes and quoted whole, never refused",
+    recordRenders.refused.length === refusedBefore &&
+      wrapped.includes("\n# address-review packet — PR #42 (feat/it's $HOME `x`)\n") &&
+      wrapped.includes("\nstarting HEAD cafe | final HEAD <the tip you read> | recorded headRefOid deadbeef\n") &&
+      wrapped.includes("\nreached origin: the push; 1 reply — still outstanding: 1 resolve and the Summary comment\n"),
+    (wrapped.match(/^(reached origin|RECORD COMMAND REFUSED)[^\n]*/m) || ["no origin line"])[0],
+  );
+}
+// Every record brief above was read through the command it orders, so a state
+// or flag the workflow hands the helper that the helper refuses would have gone
+// by as one unreadable brief among many. Held here once, for all of them.
+check(
+  "every `address-review-record post` a record brief ordered is a command the shipped helper carries out",
+  recordRenders.refused.length === 0 && recordRenders.carried >= 20,
+  recordRenders.refused.join("; ") || `only ${recordRenders.carried} carried out`,
+);
 check(`suite ran all ${EXPECTED_CHECKS} checks`, ran === EXPECTED_CHECKS, `ran ${ran}`);
 
 if (failures) {
