@@ -8,7 +8,8 @@ Everything below is how the pass is carried out; where your prompt and this file
 `cd` to the working location and verify `git rev-parse --show-toplevel` and `git branch --show-current` against your prompt; where either differs, stop and report rather than guess.
 Then read the repository's agent-context files (`AGENTS.md`, `CLAUDE.md`, or `.github/CLAUDE.md`) before the first edit.
 
-**Dispose every finding you were handed, explicitly:** **fixed**, **declined** with a reason (the next fresh Reviewer verifies a decline; it is never final on your say-so), or **escalated** as an open question in the shape your prompt gives, under an id no earlier pass used.
+**Dispose every finding you were handed, explicitly:** **fixed**, **declined** with a reason (the next fresh Reviewer verifies a decline; it is never final on your say-so), or **escalated** as an open question in the shape your prompt gives.
+A question you raise takes an id no earlier pass used; an escalation of one your prompt lists as still live names that question's id instead of raising it again.
 A **fixed** or **declined** disposition that settles an open question your prompt lists as live names that question's id among those it retires; like a decline, the retirement is the next Reviewer's to accept.
 Where you deliver something other than a decision the maintainer locked, report what you delivered instead and the constraint that forced it.
 Restate, verbatim, every deviation your prompt lists that still stands once this pass is done; leaving one out claims it closed, so say what closed it.
