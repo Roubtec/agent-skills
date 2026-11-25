@@ -2102,7 +2102,10 @@ for (const name of WORKFLOWS) {
     check(
       "each stage launches its own provider, on the worktree it is told to name, from a directory of its own",
       [musePrompt, codexPrompt].every((p) => /2\. Set `worktree` to the absolute worktree path the contract above names/.test(p)) &&
-        /peer-review-run --provider muse --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --effort medium/.test(musePrompt) &&
+        /peer-review-run --provider muse --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 540 --attempts 1 --effort medium/.test(musePrompt) &&
+        /the helper makes one 540-second attempt/.test(musePrompt) &&
+        /--artifact-root "\$artifact_root" --timeout 260 --effort medium/.test(codexPrompt) &&
+        /the helper may make two 260-second attempts/.test(codexPrompt) &&
         !/--provider codex/.test(musePrompt) && /round-1\/peer-muse'/.test(musePrompt) &&
         /--provider codex /.test(codexPrompt) && !/--provider muse/.test(codexPrompt) && /round-1\/peer-codex'/.test(codexPrompt),
       "launch line and round directory per provider",
@@ -2626,7 +2629,7 @@ const PEER_LIFECYCLE_CHECKS = 22;
   check("the two executable review-cycle cores remain byte-identical", workflowCores[0] === workflowCores[1], `${workflowCores[0].length}/${workflowCores[1].length}`);
   check(
     "both workflow cores pin the primary helper launch, its private artifact root, and the caller wait budget",
-    workflowCores.every((core) => /4\. \$\{manual \? "Primary launch" : "Launch"\}, when \\`command -v peer-review-run\\` succeeds: run \\`peer-review-run --provider \$\{provider\.id\} --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --effort medium\\`[\s\S]*caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(core) && !/prerequisite/i.test(core.slice(core.indexOf("function cyclePeerPrompt")))),
+    workflowCores.every((core) => /4\. \$\{manual \? "Primary launch" : "Launch"\}, when \\`command -v peer-review-run\\` succeeds: run \\`peer-review-run --provider \$\{provider\.id\} --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" \$\{\(provider\.budget \|\| CYCLE_PEER_DEFAULT_BUDGET\)\.flags\} --effort medium\\`[\s\S]*caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap: \$\{\(provider\.budget \|\| CYCLE_PEER_DEFAULT_BUDGET\)\.wait\}/.test(core) && /flags: "--timeout 260",\n  wait: "the helper may make two 260-second attempts and spend roughly five seconds reaping each one/.test(core) && /flags: "--timeout 540 --attempts 1",\n      wait: "the helper makes one 540-second attempt and spends roughly five seconds reaping it/.test(core) && !/prerequisite/i.test(core.slice(core.indexOf("function cyclePeerPrompt")))),
     "primary helper envelope in workflow cores",
   );
 
