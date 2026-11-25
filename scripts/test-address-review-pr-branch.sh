@@ -78,8 +78,8 @@ mkdir -p "$DEAF"
 chmod +x "$DEAF/git"
 # pr <state> <headRefName> <headRefOid> [<isCrossRepository> [<baseRefName>]]
 pr() {
-	printf '{"state":"%s","headRefName":"%s","headRefOid":"%s","baseRefName":"%s","isCrossRepository":%s}\n' \
-		"$1" "$2" "$3" "${5-main}" "${4:-false}" >"$FAKE/pr.json"
+	printf '{"state":"%s","headRefName":"%s","headRefOid":"%s","baseRefName":"%s","isCrossRepository":%s,"url":"https://%s/Acme/Widgets/pull/7"}\n' \
+		"$1" "$2" "$3" "${5-main}" "${4:-false}" "${PR_HOST:-github.com}" >"$FAKE/pr.json"
 }
 
 # new_repo → O (bare origin), R (clone on `feature`, two commits past main,
@@ -313,7 +313,7 @@ for url in "https://gitlab.com/Acme/Widgets.git" "git@gitlab.com:Acme/Widgets.gi
 	run reconcile "${ARGS[@]}"
 	is "3b: a same-named repository on another host is not the PR's ($url)" "$(val outcome)" no-remote
 done
-for url in "ssh://git@github.com:22/Acme/Widgets.git" "https://someone@GitHub.com/Acme/Widgets" "github.com:Acme/Widgets.git"; do
+for url in "ssh://git@github.com:22/Acme/Widgets.git" "https://someone@GitHub.com/Acme/Widgets" "github.com:Acme/Widgets.git" "ssh://git@ssh.github.com:443/Acme/Widgets.git"; do
 	git -C "$R" config "url.$O.insteadOf" "$url"
 	git -C "$R" remote set-url origin "$url"
 	run reconcile "${ARGS[@]}"
@@ -323,10 +323,17 @@ git -C "$R" config "url.$O.insteadOf" "https://ghe.example.test/Acme/Widgets.git
 git -C "$R" remote set-url origin "https://ghe.example.test/Acme/Widgets.git"
 run reconcile "${ARGS[@]}"
 is "3b: an Enterprise remote is not github.com's repository" "$(val outcome)" no-remote
+has "3b: ...and the stop names the host it looked for" "$ERR" "on github.com,"
+PR_HOST=ghe.example.test pr OPEN feature "$(tip HEAD)"
+run reconcile "${ARGS[@]}"
+is "3b: ...but it is the repository of a PR whose own URL is on that host" "$(val remote)" origin
+pr OPEN feature "$(tip HEAD)"
 run reconcile --repo ghe.example.test/acme/widgets --pr 7
 is "3b: ...but it is the one a host-qualified selector names" "$(val remote)" origin
-OUT="$(cd "$R" && GH_HOST=ghe.example.test bash "$HELPER" reconcile "${ARGS[@]}" 2>/dev/null)"
-is "3b: ...and the one GH_HOST names" "$(val remote)" origin
+run pin-base --repo acme/widgets --base main
+is "3b: with no PR read, the host defaults to github.com" "$(val outcome)" no-remote
+OUT="$(cd "$R" && GH_HOST=ghe.example.test bash "$HELPER" pin-base --repo acme/widgets --base main 2>/dev/null)"
+is "3b: ...or to the one GH_HOST names" "$(val outcome)" pinned
 
 # --- 4. pin-base ------------------------------------------------------------
 new_repo

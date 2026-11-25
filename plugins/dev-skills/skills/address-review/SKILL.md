@@ -16,6 +16,7 @@ Because you resolve the threads you address (on push runs), running this skill r
 
 The branch mechanics — the clean-and-idle check, reconciling with the PR head, pinning a base, and the publication push — live in `pr-branch.sh`, beside this file.
 Run it by its absolute path from the working location; `--help` prints its full contract.
+Where the PR is on a host other than github.com, write `--repo` as `<host>/<owner>/<repo>`, the way `gh` takes it.
 It prints `key=value` lines with `outcome=` first, exits 0 to proceed and 3 on a stop that needs a decision, and explains a stop on stderr.
 Exit 1 is a failure with no `outcome=` line (the network, `gh`): retry it once, then stop and report what it said.
 Do not reproduce its steps by hand, and never work past a stop by running the fetch, fast-forward, or push yourself.

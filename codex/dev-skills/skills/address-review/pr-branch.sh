@@ -10,8 +10,9 @@
 #
 # `<owner>/<repo>` is the repository the PR is in, read from the PR's own URL.
 # Every `gh` call names it and the PR number; nothing is left to the directory.
-# Its host is `$GH_HOST`, else github.com, unless the selector names one
-# (`<host>/<owner>/<repo>`); a remote on another host is never the PR's.
+# Its host is the one the selector names (`<host>/<owner>/<repo>`), else the
+# host of the PR's own URL as `gh` reports it, else `$GH_HOST`, else
+# github.com; a remote on another host is never the PR's.
 #
 # check      The tree is clean and no Git operation is in progress.
 # reconcile  Runs `check`, reads the PR, fetches its head ref, and brings the
@@ -158,6 +159,10 @@ names_repo() { # host, owner/repo, url
 	case "${u%%/*}" in
 	*@*) u="${u#*@}" ;;
 	esac
+	# GitHub's SSH-over-443 endpoint is github.com under another name.
+	case "$u" in
+	ssh.github.com[:/]*) u="${u#ssh.}" ;;
+	esac
 	case "$u" in
 	"$1/$2" | "$1:$2") return 0 ;;
 	"$1":*/"$2")
@@ -179,6 +184,13 @@ any_names_repo() {
 	done
 	return 1
 }
+# The host find_remote looks for; it runs in a subshell, so this re-derives it.
+wanted_host() {
+	local host
+	host="$(lower "$REPO" | awk -F/ 'NF > 2 { print $1 }')"
+	[ -n "$host" ] || host="$(lower "${P_HOST:-${GH_HOST:-github.com}}")"
+	printf '%s' "$host"
+}
 # The remote of this checkout that both fetches from $REPO and pushes to it.
 # The match is on the URLs as configured, so a local insteadOf rewrite does not
 # hide it. A remote whose push URLs all point elsewhere is not a match: a push
@@ -187,8 +199,7 @@ find_remote() {
 	local host want r matches="" pick="" cur
 	# The same reading `gh --repo [HOST/]OWNER/REPO` gives the selector.
 	want="$(lower "$REPO" | awk -F/ '{ print $(NF-1) "/" $NF }')"
-	host="$(lower "$REPO" | awk -F/ 'NF > 2 { print $1 }')"
-	[ -n "$host" ] || host="$(lower "${GH_HOST:-github.com}")"
+	host="$(wanted_host)"
 	for r in $(git remote); do
 		git config --get-all "remote.$r.url" | any_names_repo "$host" "$want" || continue
 		{ git config --get-all "remote.$r.pushurl" || git config --get-all "remote.$r.url"; } |
@@ -209,15 +220,19 @@ find_remote() {
 	printf '%s' "$pick"
 }
 
-P_STATE="" P_HEAD="" P_OID="" P_BASE="" P_CROSS=""
+P_STATE="" P_HEAD="" P_OID="" P_BASE="" P_CROSS="" P_HOST=""
 read_pr() {
 	local out
-	out="$(gh pr view "$PR" --repo "$REPO" --json state,headRefName,headRefOid,baseRefName,isCrossRepository \
-		--jq '[.state, .headRefName, .headRefOid, .baseRefName, (.isCrossRepository | tostring)] | join("\u001f")')" ||
+	out="$(gh pr view "$PR" --repo "$REPO" --json state,headRefName,headRefOid,baseRefName,isCrossRepository,url \
+		--jq '[.state, .headRefName, .headRefOid, .baseRefName, (.isCrossRepository | tostring), .url] | join("\u001f")')" ||
 		fail "could not read PR #$PR in $REPO (gh failed). Nothing was changed."
-	IFS="$SEP" read -r P_STATE P_HEAD P_OID P_BASE P_CROSS <<EOF
+	local url
+	IFS="$SEP" read -r P_STATE P_HEAD P_OID P_BASE P_CROSS url <<EOF
 $out
 EOF
+	# The host this PR is on, which is the host its remote has to be on.
+	url="${url#*://}"
+	P_HOST="${url%%/*}"
 	[ -n "$P_HEAD" ] && [ -n "$P_OID" ] || fail "PR #$PR in $REPO answered without a head ref. Nothing was changed."
 }
 # The checks every command that touches the head ref shares.
@@ -267,7 +282,7 @@ cmd_reconcile() {
 	read_pr
 	require_head_branch
 	local remote start head tip lost
-	remote="$(find_remote)" || stop no-remote "no remote of this checkout both fetches from and pushes to $REPO on its host, so the head ref cannot be reconciled."
+	remote="$(find_remote)" || stop no-remote "no remote of this checkout both fetches from and pushes to $REPO on $(wanted_host), so the head ref cannot be reconciled."
 	start="$(git rev-parse HEAD)"
 	head="$(fetch_ref "$remote" "$P_HEAD")" || fail "could not fetch refs/heads/$P_HEAD from $remote. Nothing was changed."
 	if [ "$head" != "$P_OID" ] && git cat-file -e "$P_OID^{commit}" 2>/dev/null &&
@@ -319,7 +334,7 @@ cmd_pin_base() {
 	fi
 	[ -n "$BASE" ] || usage "pin-base needs --base <branch> or --target <ref>"
 	need_repo
-	remote="$(find_remote)" || stop no-remote "no remote of this checkout both fetches from and pushes to $REPO on its host, so its $BASE cannot be fetched."
+	remote="$(find_remote)" || stop no-remote "no remote of this checkout both fetches from and pushes to $REPO on $(wanted_host), so its $BASE cannot be fetched."
 	oid="$(fetch_ref "$remote" "$BASE")" || fail "could not fetch refs/heads/$BASE from $remote. A stale ref is not a fallback."
 	say "outcome=pinned"
 	say "base=$oid"
@@ -340,7 +355,7 @@ cmd_push() {
 	local remote tip fetched mode url got raw bad="" refused=0 urls=0 landed=0 unread=0 urlfile
 	tip="$(git rev-parse HEAD)"
 	[ "$P_OID" = "$EXPECT" ] || stop head-moved "PR #$PR's head is now $P_OID, not the $EXPECT this run worked against. Nothing was pushed." "now=$P_OID" "expected=$EXPECT" "tip=$tip"
-	remote="$(find_remote)" || stop no-remote "no remote of this checkout both fetches from and pushes to $REPO on its host, so there is no push target."
+	remote="$(find_remote)" || stop no-remote "no remote of this checkout both fetches from and pushes to $REPO on $(wanted_host), so there is no push target."
 	fetched="$(fetch_ref "$remote" "$P_HEAD")" || fail "could not fetch refs/heads/$P_HEAD from $remote. Nothing was pushed."
 	[ "$fetched" = "$EXPECT" ] || stop head-moved "refs/heads/$P_HEAD on $remote is now $fetched, not the $EXPECT this run worked against. Nothing was pushed." "now=$fetched" "expected=$EXPECT" "tip=$tip"
 
