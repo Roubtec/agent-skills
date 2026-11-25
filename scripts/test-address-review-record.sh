@@ -98,7 +98,7 @@ case "$method $path" in
 "POST repos/acme/widgets/issues/7/comments")
 	id="$(jq 'map(.id) | max + 1' "$db")"
 	jq --rawfile b "$bodyfile" --argjson id "$id" --arg me "$(cat "$FAKE/me")" \
-		'. + [{id: $id, user: {login: $me}, updated_at: "2026-12-30T00:00:00Z", html_url: "https://github.com/acme/widgets/pull/7#issuecomment-\($id)", body: $b}]' "$db" >"$db.new" && mv "$db.new" "$db"
+		'. + [{id: $id, user: {login: $me}, created_at: "2026-12-30T00:00:00Z", updated_at: "2026-12-30T00:00:00Z", html_url: "https://github.com/acme/widgets/pull/7#issuecomment-\($id)", body: $b}]' "$db" >"$db.new" && mv "$db.new" "$db"
 	jq -r --argjson id "$id" ".[] | select(.id == \$id) | $expr" "$db"
 	;;
 *) exit 1 ;;
@@ -108,14 +108,14 @@ chmod +x "$FAKE/gh"
 export PATH="$FAKE:$PATH"
 
 MARK='<!-- address-review:disposition-record -->'
-# comment <id> <login> <updated_at> <body> → appended to the PR
+# comment <id> <login> <created_at, and updated_at> <body> → appended to the PR
 comment() {
 	jq --argjson id "$1" --arg login "$2" --arg at "$3" --arg b "$4" \
-		'. + [{id: $id, user: {login: $login}, updated_at: $at, html_url: "https://github.com/acme/widgets/pull/7#issuecomment-\($id)", body: $b}]' \
+		'. + [{id: $id, user: {login: $login}, created_at: $at, updated_at: $at, html_url: "https://github.com/acme/widgets/pull/7#issuecomment-\($id)", body: $b}]' \
 		"$FAKE/comments.json" >"$FAKE/comments.json.new" && mv "$FAKE/comments.json.new" "$FAKE/comments.json"
 }
 fresh() { # an empty PR, asked about by `bot`
-	echo '[{"id":1,"user":{"login":"human"},"updated_at":"2026-01-01T00:00:00Z","html_url":"https://github.com/acme/widgets/pull/7#issuecomment-1","body":"looks good"}]' >"$FAKE/comments.json"
+	echo '[{"id":1,"user":{"login":"human"},"created_at":"2026-01-01T00:00:00Z","updated_at":"2026-01-01T00:00:00Z","html_url":"https://github.com/acme/widgets/pull/7#issuecomment-1","body":"looks good"}]' >"$FAKE/comments.json"
 	echo bot >"$FAKE/me"
 	rm -f "$FAKE"/fail-*
 	: >"$FAKE/gh.log"
@@ -318,7 +318,7 @@ comment 8 bot 2026-02-05T00:00:00Z "$MARK
 comment 7 bot 2026-02-05T00:00:00Z "$MARK
 # listed after it, though it came first"
 run find --repo acme/widgets --pr 7
-is "3: of two records updated in the same second, the later comment wins" "$(val id)" 8
+is "3: of two records posted in the same second, the later comment wins" "$(val id)" 8
 echo other >"$FAKE/me"
 run find --repo acme/widgets --pr 7
 is "3: asked by another account, the answer is theirs" "$(val id)" 5
@@ -440,6 +440,8 @@ is "5: my more recent record is not the one spent" "$(body_of 6)" "$MARK
 # a later partial record of mine"
 run find --repo acme/widgets --pr 7
 is "5: a spent record is still found as a record" "$(val outcome)" found
+is "5: ...but spending the older one does not lift it over my later, outstanding one" "$(val id)" 6
+has "5: ...and it is listed with the time it was spent" "$OUT" "other=https://github.com/acme/widgets/pull/7#issuecomment-4 bot 2026-12-31T00:00:00Z spent=yes"
 
 run spend --repo acme/widgets --pr 7 --branch task/foo --id 5
 is "5: another actor's record is not mine to spend" "$(val outcome)" absent

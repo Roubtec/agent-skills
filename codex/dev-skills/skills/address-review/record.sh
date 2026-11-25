@@ -14,8 +14,9 @@
 #
 # find    Lists the records on the PR: comments whose FIRST LINE is the marker,
 #         byte for byte (a comment that merely quotes the marker is not one).
-#           outcome=found   id=, url=, spent=yes|no — the most recent record of
-#                           the authenticated user
+#           outcome=found   id=, url=, spent=yes|no — the record the authenticated
+#                           user posted most recently (an edit, such as
+#                           spending it, does not reorder it)
 #           outcome=none    the authenticated user has no record here
 #         and, either way, one line for every further record, anyone's:
 #           other=<url> <login> <updated-at> spent=<yes|no>
@@ -333,7 +334,7 @@ write_record() {
 ME="" OWN_ID="" OWN_URL="" OWN_SPENT="" OWN_AT="" OTHERS="" OWN_IDS=""
 # Every record on the PR, the authenticated user's most recent one picked out.
 list_records() {
-	local rows id login updated url spent best="" newer
+	local rows id login created updated url spent best="" newer
 	ME="$(api user --jq .login)" || fail "could not read the authenticated user (gh failed). Nothing was written."
 	[ -n "$ME" ] || fail "gh named no authenticated user. Nothing was written."
 	# shellcheck disable=SC2016 # $m is jq's
@@ -342,24 +343,27 @@ list_records() {
 		| .[]
 		| (.body | split("\n")) as $l
 		| select(($l[0] // "" | rtrimstr("\r")) == $m)
-		| [(.id | tostring), .user.login, .updated_at, .html_url,
+		| [(.id | tostring), .user.login, .created_at, .updated_at, .html_url,
 		   (if ($l[2] // "" | startswith("status: SPENT")) then "yes" else "no" end)]
 		| join("\u001f")')" || fail "could not list the comments of PR #$PR in $REPO (gh failed). Nothing was written."
-	while IFS="$SEP" read -r id login updated url spent; do
+	while IFS="$SEP" read -r id login created updated url spent; do
 		[ -n "$id" ] || continue
 		if [ "$login" = "$ME" ]; then
 			OWN_IDS="$OWN_IDS $id"
+			# Ordered by when a record was posted, never by when it was last
+			# written: spending an older record edits it, and must not lift it
+			# over a later one whose map is still outstanding.
 			# ISO timestamps order as strings; on a tie the later comment wins.
 			newer=0
-			if [ -z "$best" ] || [ "$updated" \> "$best" ]; then
+			if [ -z "$best" ] || [ "$created" \> "$best" ]; then
 				newer=1
-			elif [ "$updated" = "$best" ] && [ "$id" -gt "$OWN_ID" ]; then
+			elif [ "$created" = "$best" ] && [ "$id" -gt "$OWN_ID" ]; then
 				newer=1
 			fi
 			if [ "$newer" = 1 ]; then
 				[ -z "$OWN_ID" ] || OTHERS="$OTHERS
-other=$OWN_URL $ME $best spent=$OWN_SPENT"
-				best="$updated" OWN_ID="$id" OWN_URL="$url" OWN_SPENT="$spent"
+other=$OWN_URL $ME $OWN_AT spent=$OWN_SPENT"
+				best="$created" OWN_ID="$id" OWN_URL="$url" OWN_SPENT="$spent" OWN_AT="$updated"
 				continue
 			fi
 		fi
@@ -368,7 +372,6 @@ other=$url $login $updated spent=$spent"
 	done <<EOF
 $rows
 EOF
-	OWN_AT="$best"
 }
 others() { printf '%s\n' "$OTHERS" | awk 'NF'; }
 
