@@ -173,13 +173,22 @@ const recordOf = (brief) => {
   const start = text.indexOf("`address-review-record post ");
   const tail = "--reason '<one line>'`";
   const end = start < 0 ? -1 : text.indexOf(tail, start);
-  if (start < 0 || end < 0) return text;
+  if (start < 0 || end < 0) {
+    recordRenders.refused.push(`no record command found in a brief opening "${text.slice(0, 60)}"`);
+    return text;
+  }
+  // The body the helper is fed is the brief's own template, so a template that
+  // lost a block, or grew a second one, is what the helper sees.
+  const template = (/\nThe body:\n\n```\n([\s\S]*?)\n```\n/.exec(text) || [])[1] || "";
+  if ((template.match(/^## Threads$/gm) || []).length !== 1 || (template.match(/^## Summary comment/gm) || []).length !== 1 || /disposition-record|^status:/m.test(template)) {
+    recordRenders.refused.push(`the brief's body template is not one \`## Threads\` block and one \`## Summary comment\` block under no header: ${JSON.stringify(template.slice(0, 160))}`);
+  }
   const args = text
     .slice(start + "`address-review-record post ".length, end + tail.length - 1)
     .replace("--repo <owner>/<repo> ", "")
     .replace("--final <the tip you read>", "--final '<the tip you read>'");
   const run = spawnSync("bash", ["-c", `bash '${recordHelperPath}' render ${args}`], {
-    input: "## Threads\n\n## Summary comment (verbatim, ready to post)\n",
+    input: `${template}\n`,
     encoding: "utf8",
   });
   if (run.status === 0) recordRenders.carried++;
@@ -4586,6 +4595,9 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       b.includes(said.status) &&
       b.includes(said.origin) &&
       b.includes(why) &&
+      // On the record's own origin line, where the script puts what the account
+      // lacks ahead of why a stop with something on origin is the ordinary case.
+      ((b.match(/^.*; the publisher pushes BEFORE it replies, so a stop with something already on origin is the ordinary shape of this failure: check the PR itself.*$/m) || [""])[0]).includes(why) &&
       // The same reservation in the one line a maintainer reads first.
       /what reached origin is UNKNOWN/.test((results[what] || {}).note || "") &&
       !/LOCAL ONLY/.test(b) &&
@@ -4941,7 +4953,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   const carriedMoved = briefs["a first cycle that errored after a pass committed and was then rejected"];
   check(
     "and a carried map cites the tip the cycle reported for the round that judged it, rather than reading the working location a rejected pass may have moved",
-    /The `final HEAD` below is `0ddba11` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass may have moved past\./.test(carriedMoved) &&
+    /The record's `final HEAD` is `0ddba11` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass may have moved past\./.test(carriedMoved) &&
       /\| final HEAD 0ddba11 \| recorded headRefOid/.test(carriedMoved) &&
       /`--final` is given in the command as `0ddba11` — pass it EXACTLY as given and read no tip for it/.test(carriedMoved) &&
       // Still the carried map's own reason, not the replaced one's.
@@ -4985,7 +4997,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       // caveated because a replay PROBES this field: with the recorded commits
       // all ancestors of the later tip, probing that tip prints nothing and the
       // record reads as replaying as written over a tree no reviewer passed.
-      /The `final HEAD` below is `feedface` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass may have moved past\./.test(replacedFirst) &&
+      /The record's `final HEAD` is `feedface` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass may have moved past\./.test(replacedFirst) &&
       /\| final HEAD feedface \| recorded headRefOid/.test(replacedFirst) &&
       /`--final` is given in the command as `feedface` — pass it EXACTLY as given and read no tip for it/.test(replacedFirst) &&
       // The post-rebase exit: its own judged map, not the pre-rebase map that used
@@ -4997,7 +5009,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       // its own copy of it.
       /errored after a later pass had SUPERSEDED the map its reviewer round passed over — replacing its entries, or committing a new tip under the same ones —/.test(replacedReverify) &&
       /reviewer passed a round over the rebased tree, after which a later pass superseded the map it judged and the cycle errored/.test(replacedReverify) &&
-      /The `final HEAD` below is `feedface` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass may have moved past\./.test(replacedReverify) &&
+      /The record's `final HEAD` is `feedface` — the tip that verdict WAS rendered over — rather than the tip standing in the working location, which a later pass may have moved past\./.test(replacedReverify) &&
       /\| final HEAD feedface \| recorded headRefOid/.test(replacedReverify) &&
       // The empty judged map: the record is written, over the map that passed on
       // the pre-replay base, rather than not written at all.
@@ -5072,9 +5084,10 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "the marker a later run matches, as the body's first line and not by a substring":
       // The helper's to get right now (its own suite drives the lookup): the
       // brief orders it, and what it prints opens with the marker.
-      /^<!-- address-review:disposition-record -->$/m.test(recordBrief) &&
+      /\n\n<!-- address-review:disposition-record -->\n# address-review packet — PR #42 /.test(recordBrief) &&
+      (recordBrief.match(/<!-- address-review:disposition-record -->/g) || []).length === 1 &&
+      !/marker first/.test(recordBrief) &&
       /It finds this account's earlier records by that marker/.test(recordBrief) &&
-      !/select\(\.body \| contains\(/.test(recordBrief) &&
       /never hand-roll the comment in its place/.test(recordBrief),
     "superseding its own prior record in place rather than appending a second": /writes over the most recent record of your own IN PLACE/.test(recordBrief) && /instead of a stack of near-duplicates/.test(recordBrief),
     // All three of this brief's PR writes address the repository the PR is IN,
@@ -5085,7 +5098,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // create posts onto a same-numbered PR there. The negative half is the
     // point: a re-introduced placeholder fails rather than passing on the
     // prose alone.
-    "the three PR writes qualified at the repository the PR is in, named from its own URL":
+    "both record commands qualified at the repository the PR is in, named from its own URL":
       recordBrief.includes("the PR's own URL `https://example.invalid/pr/42`") &&
       /address-review-record post --repo <owner>\/<repo> --pr \d+ /.test(recordBrief) &&
       /address-review-record find --repo <owner>\/<repo> --pr \d+/.test(recordBrief) &&
@@ -5269,7 +5282,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     }
     // The workflow no longer holds those lines at all: it hands the helper the
     // state and the push, so a copy reappearing there is the drift to catch.
-    if (src.includes(status) && src.includes(origin)) {
+    if (src.includes(status) || src.includes(origin)) {
       missingRules.push(`${SOURCE}: holds its own copy of the two lines for a push that is ${push}`);
     }
   }
@@ -6498,14 +6511,17 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   const refusedBefore = recordRenders.refused.length;
   const wrapped = recordOf(
     recordPrompt(
-      { pr: { number: 42, workingBranch: "feature/x", base: "main", headOid: "deadbeef", url: "https://example.invalid/pr/42" } },
+      { pr: { number: 42, workingBranch: "feat/it's $HOME `x`", base: "main", headOid: "deadbeef\n", url: "https://example.invalid/pr/42" } },
       [{ ref: "src/app.ts:12 a-reviewer", threadId: "T1" }],
-      { why: "the publisher stopped.", landed: "the push;\n  1 reply", outstanding: "1 resolve\nand the Summary comment", pushState: "advanced", rounds: 1 },
+      { why: "the publisher stopped.", startingHead: "cafe\n", landed: "the push;\n  1 reply", outstanding: "1 resolve\nand the Summary comment", pushState: "advanced", rounds: 1 },
     ),
   );
   check(
-    "a landed or outstanding account that spans lines still yields a record — flattened to the one line the helper takes, never refused",
-    recordRenders.refused.length === refusedBefore && wrapped.includes("\nreached origin: the push; 1 reply — still outstanding: 1 resolve and the Summary comment\n"),
+    "a value that spans lines, or holds what a shell would expand, still yields a record — flattened to the one line the helper takes and quoted whole, never refused",
+    recordRenders.refused.length === refusedBefore &&
+      wrapped.includes("\n# address-review packet — PR #42 (feat/it's $HOME `x`)\n") &&
+      wrapped.includes("\nstarting HEAD cafe | final HEAD <the tip you read> | recorded headRefOid deadbeef\n") &&
+      wrapped.includes("\nreached origin: the push; 1 reply — still outstanding: 1 resolve and the Summary comment\n"),
     (wrapped.match(/^(reached origin|RECORD COMMAND REFUSED)[^\n]*/m) || ["no origin line"])[0],
   );
 }

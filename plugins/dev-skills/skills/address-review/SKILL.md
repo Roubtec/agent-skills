@@ -534,7 +534,7 @@ Where a reply or a finding quotes one verbatim, keep it inside a code span or a 
 - **`unknown` — the publication left no usable account of what it posted.**
   The per-item account is missing, incomplete while the PR already carries part of this map, names one item twice, or names an item that is no disposition this run holds — those entries are keyed by `threadId`/`url` — a misfired finding's url with its ordinal, a CI lane's identity as step 3 gathers it — never by a `ref`, which two threads a re-review left on one line share.
   Absence of a report is not evidence that nothing reached the PR: publication pushes first and replies after, so a stop after the push with nothing usable reported is the ordinary shape of a part-way stop.
-  `--reason` says which facts are missing.
+  `--reason` says which facts are missing, and `--missing <one line>` puts them on the record's origin line.
   Say what is unknown; never say nothing reached origin — and never say unknown of what the run does know: `--push` carries the one fact still held, `advanced` where the push moved the remote, `noop` where it was an `Everything up-to-date` no-op, `none` where no successful push is known.
   A report that broke its own required-field contract is distrusted **whole** rather than field by field, its per-thread half included: every thread entry carries the reservation to check it on the PR before replying or resolving, even where only the Summary URL is missing and the account looks complete.
   One empty account is complete rather than missing — a publisher whose push never succeeded acted on no thread, since the push precedes every reply and the Summary — and that run is `not-published`, or `unconfirmed` where its own push read-back is what stopped it.
