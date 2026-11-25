@@ -243,13 +243,22 @@ has_mention() {
 		if (substr(s, 1, 1) == "`" && index(substr(line, RSTART + RLENGTH), "`")) return ""
 		return s
 	}
-	function strip_spans(t,   out, i, n, rest, pos, found) {
+	function strip_spans(t,   out, i, n, rest, pos, found, pre, k) {
 		out = ""
-		# An escaped backtick opens and closes nothing.
-		gsub(/\\`/, " ", t)
 		while ((i = index(t, "`")) > 0) {
-			out = out substr(t, 1, i - 1)
+			# A backtick behind an odd run of backslashes is escaped and opens
+			# nothing. Inside a span a backslash is literal, so this is asked
+			# only of an opener.
+			pre = substr(t, 1, i - 1)
+			k = 0
+			while (k < length(pre) && substr(pre, length(pre) - k, 1) == "\\") k++
+			out = out pre
 			t = substr(t, i)
+			if (k % 2 == 1) {
+				out = out " "
+				t = substr(t, 2)
+				continue
+			}
 			match(t, /^`+/)
 			n = RLENGTH
 			rest = substr(t, n + 1)
@@ -274,6 +283,7 @@ has_mention() {
 		return out t
 	}
 	{
+		sub(/\r$/, "")
 		f = fence_of($0)
 		if (open == "") {
 			if (f != "") {

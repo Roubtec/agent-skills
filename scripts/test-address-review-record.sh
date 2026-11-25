@@ -253,6 +253,18 @@ escaped \` @codex review `' run render "${R[@]}" --state not-published --reason 
 is "2: an escaped backtick opens no span" "$(val outcome)" mention
 STDIN='## Threads
 ## Summary comment
+Use `C:\` and ask @codex review; see `details`.' run render "${R[@]}" --state not-published --reason r
+is "2: a backslash inside a span is literal, so the span closes where it closes" "$(val outcome)" mention
+STDIN='## Threads
+## Summary comment
+a literal \\`@claude` is quoted' run render "${R[@]}" --state not-published --reason r
+is "2: an escaped backslash escapes nothing after it" "$RC" 0
+STDIN="$(printf '## Threads\r\n## Summary comment\r\n```\r\nquoted @codex\r\n```\r\n@codex review\r\n')" run render "${R[@]}" --state not-published --reason r
+is "2: CRLF line endings do not keep a fence open" "$(val outcome)" mention
+STDIN="$(printf '## Threads\r\n## Summary comment\r\n```\r\nquoted @codex\r\n```\r\nplain\r\n')" run render "${R[@]}" --state not-published --reason r
+is "2: ...nor stop a body that only quotes one" "$RC" 0
+STDIN='## Threads
+## Summary comment
 use `@codex
 review` here' run render "${R[@]}" --state not-published --reason r
 is "2: where it cannot tell — a span over a line break — it stops" "$(val outcome)" mention
