@@ -1540,7 +1540,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         // The CONSEQUENCE of a stop, not only its name: a line that names the
         // outcomes and then lets the run push by hand keeps every other span.
         "the push stops",
-        "- **`behind`, `head-moved`, `rejected`** → nothing was pushed, and for `rejected` the read-back confirmed no push URL shows the tip: stop and report.",
+        "- **`behind`, `head-moved`, `rejected`** → nothing was pushed, and for `rejected` every push URL answered the read-back without the tip: stop and report.",
         [/Reconcile nothing to make the push legal/, /\*\*never\*\* escalate to a bare `--force`/],
       ],
       [
@@ -1685,9 +1685,10 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       ["the PR's reported head against the expected one", '[ "$P_OID" = "$EXPECT" ] || stop head-moved'],
       ["the fetched ref against the expected one", '[ "$fetched" = "$EXPECT" ] || stop head-moved'],
       ["the proper-ancestor stop", 'if [ "$tip" != "$EXPECT" ] && git merge-base --is-ancestor "$tip" "$EXPECT"; then'],
+      ["every push URL listed before the push, so nothing can fail between a push and its account", 'git remote get-url --push --all "$remote" >"$urlfile"'],
       ["the one push, under its exact lease", 'git push --quiet "$remote" "--force-with-lease=refs/heads/$P_HEAD:$EXPECT" "HEAD:refs/heads/$P_HEAD" >&2 || refused=1'],
-      ["the read-back through every push URL", 'git remote get-url --push --all "$remote" >"$urlfile"'],
-      ["the refusal that the read-back confirmed", 'if [ "$refused" = 1 ] && [ "$landed" = 0 ]; then'],
+      ["the read-back through every push URL", 'if raw="$(git ls-remote "$url" "refs/heads/$P_HEAD" 2>/dev/null)"; then'],
+      ["the refusal every URL answered and none contradicted", 'if [ "$refused" = 1 ] && [ "$urls" -gt 0 ] && [ "$unread" = 0 ] && [ "$landed" = 0 ]; then'],
     ];
     const missing = [];
     for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
@@ -1949,7 +1950,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     ],
     [
       "the read-back's stop",
-      "- **`unconfirmed`** → some push URL does not show the tip at the head ref, whether the push command returned or was refused",
+      "- **`unconfirmed`** → some push URL does not show the tip at the head ref or did not answer, whether the push command returned or was refused",
       [/whether it reached origin is unknown/, /render the disposition record as its read-back case/],
     ],
     [

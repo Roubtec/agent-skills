@@ -18,6 +18,7 @@ MIRROR="$SCRIPT_DIR/../codex/dev-skills/skills/address-review/pr-branch.sh"
 WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
+unset GH_HOST
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.test GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.test
 
 checks=0
@@ -63,6 +64,18 @@ mkdir -p "$FAKE"
 } >"$FAKE/gh"
 chmod +x "$FAKE/gh"
 export PATH="$FAKE:$PATH"
+# A `git` that cannot reach any remote for a read-back, put ahead on PATH by
+# the cases that need one: `ls-remote` fails, everything else is the real git.
+REAL_GIT="$(command -v git)"
+DEAF="$WORKDIR/deaf"
+mkdir -p "$DEAF"
+# shellcheck disable=SC2016 # the shim's own $@ must reach it unexpanded
+{
+	printf '#!/usr/bin/env bash\n'
+	printf 'for a in "$@"; do [ "$a" = ls-remote ] && exit 128; done\n'
+	printf 'exec "%s" "$@"\n' "$REAL_GIT"
+} >"$DEAF/git"
+chmod +x "$DEAF/git"
 # pr <state> <headRefName> <headRefOid> [<isCrossRepository> [<baseRefName>]]
 pr() {
 	printf '{"state":"%s","headRefName":"%s","headRefOid":"%s","baseRefName":"%s","isCrossRepository":%s}\n' \
@@ -247,6 +260,22 @@ rm "$FAKE/pr.json"
 run reconcile "${ARGS[@]}"
 is "3: a failed PR read exits 1" "$RC" 1
 
+# A comparison that cannot run is a failure, never "nothing would be lost":
+# with a blob of this branch's own commit gone, the patch-id pass dies.
+new_repo
+commit "$U" f2 theirs
+git -C "$U" push -q origin feature
+pr OPEN feature "$(tip HEAD "$U")"
+commit "$R" f2 mine
+blob="$(git -C "$R" rev-parse HEAD:f2)"
+rm -f "$R/.git/objects/${blob:0:2}/${blob:2}"
+BEFORE="$(tip HEAD)"
+run reconcile "${ARGS[@]}"
+is "3: a patch-id comparison that could not run is a failure" "$RC" 1
+is "3: ...with no outcome, least of all 'represented'" "$(val outcome)" ""
+has "3: ...saying what was not established" "$ERR" "could not compare"
+is "3: ...and the branch is where it was" "$(tip HEAD)" "$BEFORE"
+
 # --- 3b. finding the remote --------------------------------------------------
 new_repo
 pr OPEN feature "$(tip HEAD)"
@@ -274,6 +303,30 @@ git -C "$R" remote set-url origin "https://github.com/someone/fork.git"
 git -C "$R" remote set-url --push origin "https://github.com/acme/widgets/"
 run reconcile "${ARGS[@]}"
 is "3b: nor is one that only pushes to it" "$(val outcome)" no-remote
+
+# The host is part of the repository's name: a mirror elsewhere is not it.
+new_repo
+pr OPEN feature "$(tip HEAD)"
+for url in "https://gitlab.com/Acme/Widgets.git" "git@gitlab.com:Acme/Widgets.git" "https://github.com.evil.test/Acme/Widgets.git" "https://evil.test/github.com/Acme/Widgets.git" "git@github.com:other/Acme/Widgets.git"; do
+	git -C "$R" config "url.$O.insteadOf" "$url"
+	git -C "$R" remote set-url origin "$url"
+	run reconcile "${ARGS[@]}"
+	is "3b: a same-named repository on another host is not the PR's ($url)" "$(val outcome)" no-remote
+done
+for url in "ssh://git@github.com:22/Acme/Widgets.git" "https://someone@GitHub.com/Acme/Widgets" "github.com:Acme/Widgets.git"; do
+	git -C "$R" config "url.$O.insteadOf" "$url"
+	git -C "$R" remote set-url origin "$url"
+	run reconcile "${ARGS[@]}"
+	is "3b: the host is found behind a user, a port or the scp form ($url)" "$(val remote)" origin
+done
+git -C "$R" config "url.$O.insteadOf" "https://ghe.example.test/Acme/Widgets.git"
+git -C "$R" remote set-url origin "https://ghe.example.test/Acme/Widgets.git"
+run reconcile "${ARGS[@]}"
+is "3b: an Enterprise remote is not github.com's repository" "$(val outcome)" no-remote
+run reconcile --repo ghe.example.test/acme/widgets --pr 7
+is "3b: ...but it is the one a host-qualified selector names" "$(val remote)" origin
+OUT="$(cd "$R" && GH_HOST=ghe.example.test bash "$HELPER" reconcile "${ARGS[@]}" 2>/dev/null)"
+is "3b: ...and the one GH_HOST names" "$(val remote)" origin
 
 # --- 4. pin-base ------------------------------------------------------------
 new_repo
@@ -362,6 +415,39 @@ is "5: a push one URL took and another refused is 'unconfirmed', not 'rejected'"
 is "5: ...saying the command was refused" "$(val push-command)" refused
 is "5: ...while the PR's repository does carry the tip" "$(remote_tip feature)" "$(tip HEAD)"
 
+# A refused push whose read-back gets no answer has established nothing.
+new_repo
+HEAD0="$(tip HEAD)"
+pr OPEN feature "$HEAD0"
+commit "$U" f7 theirs
+printf '#!/bin/sh\nunset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE\ngit -C "%s" push -q origin feature\n' "$U" >"$R/.git/hooks/pre-push"
+chmod +x "$R/.git/hooks/pre-push"
+commit "$R" f8 mine
+OUT="$(cd "$R" && PATH="$DEAF:$PATH" bash "$HELPER" push "${ARGS[@]}" --expect "$HEAD0" 2>/dev/null)"
+is "5: a refused push nobody could read back is 'unconfirmed', not 'rejected'" "$(val outcome)" unconfirmed
+is "5: ...saying the command was refused" "$(val push-command)" refused
+has "5: ...and that the URL did not answer" "$OUT" "no answer"
+rm "$R/.git/hooks/pre-push"
+
+# A push that went through, with the same silence afterwards.
+new_repo
+HEAD0="$(tip HEAD)"
+pr OPEN feature "$HEAD0"
+commit "$R" f3 one
+OUT="$(cd "$R" && PATH="$DEAF:$PATH" bash "$HELPER" push "${ARGS[@]}" --expect "$HEAD0" 2>/dev/null)"
+is "5: a push that returned but could not be read back is 'unconfirmed'" "$(val outcome)" unconfirmed
+is "5: ...though it did land" "$(remote_tip feature)" "$(tip HEAD)"
+
+# No temporary file, no push: the read-back is provisioned first.
+new_repo
+HEAD0="$(tip HEAD)"
+pr OPEN feature "$HEAD0"
+commit "$R" f3 one
+OUT="$(cd "$R" && TMPDIR="$WORKDIR/no-such-dir" bash "$HELPER" push "${ARGS[@]}" --expect "$HEAD0" 2>/dev/null)"
+RC=$?
+is "5: a read-back that cannot be provisioned fails the command" "$RC" 1
+is "5: ...before anything is pushed" "$(remote_tip feature)" "$HEAD0"
+
 echo x >"$R/stray"
 run push "${ARGS[@]}" --expect "$HEAD0"
 is "5: a dirty tree is never pushed from" "$(val outcome)" dirty
@@ -387,7 +473,7 @@ git -C "$R" remote set-url --add --push origin "https://github.com/Acme/Widgets.
 git -C "$R" remote set-url --add --push origin "$(dirname "$O")/mirror.git"
 run push "${ARGS[@]}" --expect "$HEAD0"
 is "5: every push URL is read back, and one without the ref is 'unconfirmed'" "$(val outcome)" unconfirmed
-has "5: ...naming the URL that did not answer" "$OUT" "readback=$(dirname "$O")/mirror.git no answer"
+has "5: ...naming the URL that answered without the ref" "$OUT" "readback=$(dirname "$O")/mirror.git absent"
 is "5: ...exit 3" "$RC" 3
 
 new_repo

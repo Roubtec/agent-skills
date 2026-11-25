@@ -414,9 +414,9 @@ Publication runs in the working location: the re-check, the resolved push remote
 2. **Read its outcome:**
    - **`pushed`** → the branch advanced (`advanced=yes`), and `head=` is what origin now carries.
    - **`up-to-date`** → the tip was already the PR head, so the push was the `Everything up-to-date` no-op (`advanced=no`); carry on with the PR-side communication.
-   - **`behind`, `head-moved`, `rejected`** → nothing was pushed, and for `rejected` the read-back confirmed no push URL shows the tip: stop and report.
+   - **`behind`, `head-moved`, `rejected`** → nothing was pushed, and for `rejected` every push URL answered the read-back without the tip: stop and report.
      Reconcile nothing to make the push legal, and **never** escalate to a bare `--force`.
-   - **`unconfirmed`** → some push URL does not show the tip at the head ref, whether the push command returned or was refused (`push-command=`), so whether it reached origin is unknown: stop, and render the disposition record as its read-back case.
+   - **`unconfirmed`** → some push URL does not show the tip at the head ref or did not answer, whether the push command returned or was refused (`push-command=`), so whether it reached origin is unknown: stop, and render the disposition record as its read-back case.
    - **`fork`, `closed`, `wrong-branch`, `no-remote`, `dirty`** → stop and report what it said.
 
 3. **Re-read unresolved threads after the push.**

@@ -10,6 +10,8 @@
 #
 # `<owner>/<repo>` is the repository the PR is in, read from the PR's own URL.
 # Every `gh` call names it and the PR number; nothing is left to the directory.
+# Its host is `$GH_HOST`, else github.com, unless the selector names one
+# (`<host>/<owner>/<repo>`); a remote on another host is never the PR's.
 #
 # check      The tree is clean and no Git operation is in progress.
 # reconcile  Runs `check`, reads the PR, fetches its head ref, and brings the
@@ -37,10 +39,12 @@
 #            and stops on:
 #              behind          the tip is a proper ancestor of the PR head
 #              head-moved      the PR head is no longer `--expect`
-#              rejected        git refused the push and no push URL shows the
-#                              tip; never retried with --force
+#              rejected        git refused the push, and every push URL
+#                              answered the read-back without the tip; never
+#                              retried with --force
 #              unconfirmed     some push URL does not show the tip at the head
-#                              ref, whatever the push command answered
+#                              ref or did not answer, whatever the push command
+#                              answered
 #            Every push carries an exact --force-with-lease on `--expect`, and
 #            is confirmed by `git ls-remote` on every push URL, after a refused
 #            push as well.
@@ -139,22 +143,39 @@ require_idle() {
 	[ -z "$why" ] || stop dirty "$(git rev-parse --show-toplevel): $why. Nothing was changed; commit, stash or finish it first." "reason=$why"
 }
 
-# Does a configured URL name $1 (a lowercase owner/repo)?
-names_repo() { # want, url
-	local u
-	u="$(lower "$2")"
+# Does a configured URL name the repository $2 (lowercase owner/repo) on the
+# host $1? Understood: scheme://[user@]host[:port]/owner/repo and the scp form
+# [user@]host:owner/repo, with or without a trailing slash or `.git`.
+names_repo() { # host, owner/repo, url
+	local u rest port
+	u="$(lower "$3")"
 	u="${u%/}"
 	u="${u%.git}"
 	case "$u" in
-	*[:/]"$1") return 0 ;;
+	*://*) u="${u#*://}" ;;
+	esac
+	# Drop a user part, which sits ahead of the first slash.
+	case "${u%%/*}" in
+	*@*) u="${u#*@}" ;;
+	esac
+	case "$u" in
+	"$1/$2" | "$1:$2") return 0 ;;
+	"$1":*/"$2")
+		rest="${u#"$1":}"
+		port="${rest%%/*}"
+		case "$port" in
+		'' | *[!0-9]*) return 1 ;;
+		esac
+		[ "${rest#*/}" = "$2" ] && return 0
+		;;
 	esac
 	return 1
 }
-# Succeeds when one of the URLs on stdin names $1.
+# Succeeds when one of the URLs on stdin names the repository $2 on host $1.
 any_names_repo() {
 	local u
 	while IFS= read -r u; do
-		[ -n "$u" ] && names_repo "$1" "$u" && return 0
+		[ -n "$u" ] && names_repo "$1" "$2" "$u" && return 0
 	done
 	return 1
 }
@@ -163,13 +184,15 @@ any_names_repo() {
 # hide it. A remote whose push URLs all point elsewhere is not a match: a push
 # through it would never reach the PR.
 find_remote() {
-	local want r matches="" pick="" cur
-	# A host-qualified selector (host/owner/repo) is matched on owner/repo.
+	local host want r matches="" pick="" cur
+	# The same reading `gh --repo [HOST/]OWNER/REPO` gives the selector.
 	want="$(lower "$REPO" | awk -F/ '{ print $(NF-1) "/" $NF }')"
+	host="$(lower "$REPO" | awk -F/ 'NF > 2 { print $1 }')"
+	[ -n "$host" ] || host="$(lower "${GH_HOST:-github.com}")"
 	for r in $(git remote); do
-		git config --get-all "remote.$r.url" | any_names_repo "$want" || continue
+		git config --get-all "remote.$r.url" | any_names_repo "$host" "$want" || continue
 		{ git config --get-all "remote.$r.pushurl" || git config --get-all "remote.$r.url"; } |
-			any_names_repo "$want" || continue
+			any_names_repo "$host" "$want" || continue
 		matches="$matches$r
 "
 	done
@@ -221,9 +244,12 @@ cmd_check() {
 # Commits unique to $2 that $1 does not carry: non-merge commits by patch-id,
 # and any merge that is more than the automatic join of its parents.
 unrepresented() { # tip, head
-	local m parents auto
-	git rev-list --right-only --cherry-pick --no-merges "$1...$2"
-	for m in $(git rev-list --merges "$1..$2"); do
+	local m parents auto merges
+	# A comparison that could not run (a missing object, a partial clone
+	# offline) proves nothing: fail it, since empty output means "none lost".
+	git rev-list --right-only --cherry-pick --no-merges "$1...$2" || return 1
+	merges="$(git rev-list --merges "$1..$2")" || return 1
+	for m in $merges; do
 		parents="$(git rev-list --parents -n 1 "$m" | cut -d' ' -f2-)"
 		auto=""
 		# shellcheck disable=SC2086 # the parents are separate arguments
@@ -241,7 +267,7 @@ cmd_reconcile() {
 	read_pr
 	require_head_branch
 	local remote start head tip lost
-	remote="$(find_remote)" || stop no-remote "no remote of this checkout both fetches from and pushes to $REPO, so the head ref cannot be reconciled."
+	remote="$(find_remote)" || stop no-remote "no remote of this checkout both fetches from and pushes to $REPO on its host, so the head ref cannot be reconciled."
 	start="$(git rev-parse HEAD)"
 	head="$(fetch_ref "$remote" "$P_HEAD")" || fail "could not fetch refs/heads/$P_HEAD from $remote. Nothing was changed."
 	if [ "$head" != "$P_OID" ] && git cat-file -e "$P_OID^{commit}" 2>/dev/null &&
@@ -259,7 +285,7 @@ cmd_reconcile() {
 	elif git merge-base --is-ancestor "$head" "$tip"; then
 		say "outcome=ahead"
 	else
-		lost="$(unrepresented "$tip" "$head")"
+		lost="$(unrepresented "$tip" "$head")" || fail "could not compare this branch with the PR head $head, so whether its commits are carried here is not established. Nothing was changed."
 		if [ -n "$lost" ]; then
 			say "outcome=divergent"
 			say "head=$head"
@@ -293,7 +319,7 @@ cmd_pin_base() {
 	fi
 	[ -n "$BASE" ] || usage "pin-base needs --base <branch> or --target <ref>"
 	need_repo
-	remote="$(find_remote)" || stop no-remote "no remote of this checkout points at $REPO, so its $BASE cannot be fetched."
+	remote="$(find_remote)" || stop no-remote "no remote of this checkout both fetches from and pushes to $REPO on its host, so its $BASE cannot be fetched."
 	oid="$(fetch_ref "$remote" "$BASE")" || fail "could not fetch refs/heads/$BASE from $remote. A stale ref is not a fallback."
 	say "outcome=pinned"
 	say "base=$oid"
@@ -311,10 +337,10 @@ cmd_push() {
 	require_idle
 	read_pr
 	require_head_branch
-	local remote tip fetched mode url got bad="" refused=0 urls=0 landed=0 urlfile
+	local remote tip fetched mode url got raw bad="" refused=0 urls=0 landed=0 unread=0 urlfile
 	tip="$(git rev-parse HEAD)"
 	[ "$P_OID" = "$EXPECT" ] || stop head-moved "PR #$PR's head is now $P_OID, not the $EXPECT this run worked against. Nothing was pushed." "now=$P_OID" "expected=$EXPECT" "tip=$tip"
-	remote="$(find_remote)" || stop no-remote "no remote of this checkout both fetches from and pushes to $REPO, so there is no push target."
+	remote="$(find_remote)" || stop no-remote "no remote of this checkout both fetches from and pushes to $REPO on its host, so there is no push target."
 	fetched="$(fetch_ref "$remote" "$P_HEAD")" || fail "could not fetch refs/heads/$P_HEAD from $remote. Nothing was pushed."
 	[ "$fetched" = "$EXPECT" ] || stop head-moved "refs/heads/$P_HEAD on $remote is now $fetched, not the $EXPECT this run worked against. Nothing was pushed." "now=$fetched" "expected=$EXPECT" "tip=$tip"
 
@@ -328,28 +354,38 @@ cmd_push() {
 	else
 		mode=rewrite
 	fi
+	# Everything the read-back needs exists before the push, so nothing can fail
+	# between a push and the account of it.
+	urlfile="$(mktemp "${TMPDIR:-/tmp}/pr-branch.XXXXXX")" || fail "could not create a temporary file for the read-back. Nothing was pushed."
+	git remote get-url --push --all "$remote" >"$urlfile" 2>/dev/null
 	# The lease is exact on every push, the fast-forward included: the remote
 	# is only ever replaced where it still holds the head this run worked on.
 	git push --quiet "$remote" "--force-with-lease=refs/heads/$P_HEAD:$EXPECT" "HEAD:refs/heads/$P_HEAD" >&2 || refused=1
 
 	# Read the ref back through every push URL, after a refused push as well:
 	# with several push URLs one can take the update before another refuses.
-	urlfile="$(mktemp "${TMPDIR:-/tmp}/pr-branch.XXXXXX")" || fail "could not create a temporary file to read the push back; the push command had already run."
-	git remote get-url --push --all "$remote" >"$urlfile" 2>/dev/null
+	# A URL that did not answer is not one that lacks the tip.
 	while IFS= read -r url; do
 		[ -n "$url" ] || continue
 		urls=$((urls + 1))
-		got="$(git ls-remote "$url" "refs/heads/$P_HEAD" 2>/dev/null | cut -f1)"
-		if [ "$got" = "$tip" ]; then
-			landed=$((landed + 1))
+		if raw="$(git ls-remote "$url" "refs/heads/$P_HEAD" 2>/dev/null)"; then
+			got="$(printf '%s' "$raw" | cut -f1)"
+			if [ "$got" = "$tip" ]; then
+				landed=$((landed + 1))
+			else
+				bad="$bad
+readback=$url ${got:-absent}"
+			fi
 		else
+			unread=$((unread + 1))
 			bad="$bad
-readback=$url ${got:-no answer}"
+readback=$url no answer"
 		fi
 	done <"$urlfile"
 	rm -f "$urlfile"
-	if [ "$refused" = 1 ] && [ "$landed" = 0 ]; then
-		stop rejected "the push to refs/heads/$P_HEAD on $remote was refused and no push URL shows $tip: the remote moved, or the push is not permitted. Never retry with --force." "expected=$EXPECT" "tip=$tip"
+	# `rejected` claims nothing was pushed, so every URL has to have said so.
+	if [ "$refused" = 1 ] && [ "$urls" -gt 0 ] && [ "$unread" = 0 ] && [ "$landed" = 0 ]; then
+		stop rejected "the push to refs/heads/$P_HEAD on $remote was refused, and every push URL answered without $tip: the remote moved, or the push is not permitted. Never retry with --force." "expected=$EXPECT" "tip=$tip"
 	fi
 	if [ -n "$bad" ] || [ "$urls" = 0 ]; then
 		say "outcome=unconfirmed"
@@ -358,7 +394,7 @@ readback=$url ${got:-no answer}"
 		say "expected=$EXPECT"
 		if [ "$refused" = 1 ]; then say "push-command=refused"; else say "push-command=returned"; fi
 		printf '%s\n' "$bad" | awk 'NF'
-		note "the head ref does not show $tip at every push URL ($landed of $urls do). Whether this push reached origin is not established; read the ref before going on."
+		note "the head ref does not show $tip at every push URL ($landed of $urls do, $unread did not answer). Whether this push reached origin is not established; read the ref before going on."
 		exit 3
 	fi
 	if [ "$mode" = none ]; then
