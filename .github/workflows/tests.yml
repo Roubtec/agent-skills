@@ -21,6 +21,7 @@ jobs:
       - run: bash scripts/test-gh-review-threads.sh
       - run: bash scripts/test-dc-helpers.sh
       - run: bash scripts/test-prune-branches.sh
+      - run: bash scripts/test-address-review-pr-branch.sh
       - run: node scripts/test-checkout-cleanliness-report.mjs
       - run: node scripts/test-storage-probe-target.mjs
       - run: node scripts/test-collision-discovery.mjs
