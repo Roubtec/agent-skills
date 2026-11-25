@@ -272,7 +272,7 @@ STDIN='## Threads
 use `@codex
 review` here' run render "${R[@]}" --state not-published --reason r
 is "2: where it cannot tell — a span over a line break — it stops" "$(val outcome)" mention
-for m in "@copilot" "@Codex flagged this" "see .@claude" "x/@COPILOT."; do
+for m in "@copilot" "@Codex flagged this" "see .@claude" "x/@COPILOT." "_@codex_ said" "__@claude__" "snake_@copilot_case"; do
 	STDIN="## Threads
 ## Summary comment
 $m" run render "${R[@]}" --state not-published --reason r

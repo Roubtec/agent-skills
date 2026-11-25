@@ -241,7 +241,8 @@ new_tmp() {
 # It is a guardrail, not a Markdown parser, and where it cannot tell it stops:
 # a span that runs over a line break, or a fence inside a block quote, reads
 # as unquoted. A fence left open inside a list item is the one case read the
-# other way.
+# other way. An underscore beside the name is Markdown emphasis as often as
+# part of a longer word, and no login holds one, so it hides nothing.
 # shellcheck disable=SC2016 # the backticks are Markdown's
 has_mention() {
 	awk '
@@ -304,7 +305,7 @@ has_mention() {
 		} else if (f != "" && substr(f, 1, 1) == substr(open, 1, 1) && length(f) >= length(open) && $0 ~ /^ ? ? ?(`+|~+)[ \t]*$/) {
 			open = ""
 		}
-	}' | grep -Eiq '(^|[^A-Za-z0-9_])@(codex|claude|copilot)([^A-Za-z0-9_-]|$)'
+	}' | grep -Eiq '(^|[^A-Za-z0-9])@(codex|claude|copilot)([^A-Za-z0-9-]|$)'
 }
 # take_body: stdin → $TMPF.body, stopping on one that is not a record's body.
 take_body() {
