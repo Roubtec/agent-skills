@@ -2114,8 +2114,8 @@ for (const name of WORKFLOWS) {
       "a provider with no manual launch gets none: no raw launch, no fallback trigger, and a missing or too-old helper is unavailable",
       !/nohup/.test(musePrompt) && !/codex exec/.test(musePrompt) && !/`fallbackReason` exactly `/.test(musePrompt) &&
         /5\. There is no manual launch for this provider/.test(musePrompt) &&
-        /the helper rejects the `--provider` value itself with a usage error and no result line \(a helper that predates this provider\), return `unavailable`/.test(musePrompt) &&
-        /Any other usage error is a mistake in the call rather than a missing provider: return `failed`/.test(musePrompt) &&
+        /the helper rejects the `--provider` value itself, or a flag of this launch such as `--attempts`, with a usage error and no result line \(a helper that predates this provider or that flag\), return `unavailable`/.test(musePrompt) &&
+        /Any other usage error is a mistake in the call rather than a helper too old for it: return `failed`/.test(musePrompt) &&
         /4\. Launch, when `command -v peer-review-run` succeeds/.test(musePrompt) && !/Primary launch/.test(musePrompt) &&
         /return `forfeited` with `detail` exactly `helper result carried no usable reviewFile`/.test(musePrompt) &&
         /nohup sh -c '/.test(codexPrompt),

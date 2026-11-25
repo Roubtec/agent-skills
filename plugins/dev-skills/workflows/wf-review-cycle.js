@@ -512,7 +512,7 @@ const CYCLE_PEER_PROVIDERS = [
 // sticky, so the cycle stops asking for the rest of the run rather than failing
 // the same way every round. Only that usage error means so: any other is the
 // call's own mistake, and making it sticky would silence a working provider.
-const CYCLE_PEER_NO_MANUAL_LAUNCH = `5. There is no manual launch for this provider, so \`fallbackReason\` stays empty. When \`command -v peer-review-run\` fails, or the helper rejects the \`--provider\` value itself with a usage error and no result line (a helper that predates this provider), return \`unavailable\` with a \`detail\` saying which. Any other usage error is a mistake in the call rather than a missing provider: return \`failed\` with the error as \`detail\`.`;
+const CYCLE_PEER_NO_MANUAL_LAUNCH = `5. There is no manual launch for this provider, so \`fallbackReason\` stays empty. When \`command -v peer-review-run\` fails, or the helper rejects the \`--provider\` value itself, or a flag of this launch such as \`--attempts\`, with a usage error and no result line (a helper that predates this provider or that flag), return \`unavailable\` with a \`detail\` saying which. Any other usage error is a mistake in the call rather than a helper too old for it: return \`failed\` with the error as \`detail\`.`;
 
 // Peer-stage result. `outcome` uses the peer-review-run vocabulary
 // (powbox.peer-review-run/v1), so a helper result carries straight into this
