@@ -6,9 +6,10 @@
 #   ci.sh log   --url <details-url> [--lines <n>]
 #   ci.sh rerun --url <details-url>
 #
-# `<owner>/<repo>` is the repository the PR is in, read from the PR's own URL.
-# `log` and `rerun` take a lane's details URL and read the repository and the
-# run out of it, never from the directory.
+# `<owner>/<repo>` is the repository the PR is in, read from the PR's own URL;
+# write it `<host>/<owner>/<repo>` where that is not github.com.
+# `log` and `rerun` take a lane's details URL and read the host, the
+# repository and the run out of it, never from the directory or gh's default.
 #
 # lanes  Reads the status rollup of the PR's head commit and prints every lane
 #        instance that is not passing. A lane passes on SUCCESS, NEUTRAL or
@@ -84,7 +85,11 @@ parse() {
 # per context — TAB-separated: verdict class, identity, kind, verdict, url.
 # shellcheck disable=SC2016 # the $names are GraphQL's and jq's
 page() { # cursor (may be empty)
-	set -- -f owner="${REPO%%/*}" -f name="${REPO##*/}" -F pr="$PR" ${1:+-f} ${1:+after="$1"}
+	local slug host
+	# `--repo` may be `<host>/<owner>/<repo>`, as gh takes it.
+	slug="$(printf '%s' "$REPO" | awk -F/ '{ print $(NF-1) "/" $NF }')"
+	host="$(printf '%s' "$REPO" | awk -F/ 'NF > 2 { print $1 }')"
+	set -- ${host:+--hostname} ${host:+"$host"} -f owner="${slug%%/*}" -f name="${slug##*/}" -F pr="$PR" ${1:+-f} ${1:+after="$1"}
 	gh api graphql "$@" -f query='
 query($owner:String!,$name:String!,$pr:Int!,$after:String){
   repository(owner:$owner,name:$name){
@@ -199,7 +204,8 @@ run_of() {
 	*) return 1 ;;
 	esac
 	rest="${URL#*://}"
-	rest="${rest#*/}"
+	# Host-qualified, so gh addresses the run this URL names whatever its
+	# default host is.
 	R_REPO="${rest%%/actions/runs/*}"
 	rest="${rest#*/actions/runs/}"
 	R_RUN="${rest%%[!0-9]*}"
@@ -211,7 +217,7 @@ run_of() {
 		;;
 	esac
 	case "$R_REPO" in
-	?*/?*) ;;
+	?*/?*/?*) ;;
 	*) return 1 ;;
 	esac
 	[ -n "$R_RUN" ]

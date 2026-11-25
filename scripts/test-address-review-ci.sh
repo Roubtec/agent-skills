@@ -147,6 +147,11 @@ call lanes "${ARGS[@]}"
 is "1: nothing failing and something in progress is 'running'" "$(val outcome)" running
 
 fresh
+rollup page1.json 7 false "" "$(run_node tests scripts COMPLETED '"SUCCESS"' "$RUN")"
+call lanes --repo ghe.example.test/acme/widgets --pr 7
+is "1: a host-qualified repository is read by its owner and name" "$(val outcome)" green
+has "1: ...on its own host" "$(cat "$FAKE/gh.log")" "api graphql --hostname ghe.example.test -f owner=acme -f name=widgets"
+fresh
 rollup page1.json 7 false "" ""
 call lanes "${ARGS[@]}"
 is "1: a head with no checks at all is 'none', not green" "$(val outcome)" none
@@ -197,14 +202,17 @@ fresh
 call log --url "$RUN"
 is "2: a job's failing log is tailed to 200 lines" "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" 200
 is "2: ...the last ones" "$(printf '%s\n' "$OUT" | tail -n 1)" "log line 300"
-has "2: ...read by the job the URL names, in the repository it names" "$(cat "$FAKE/gh.log")" "run view --repo acme/widgets --job 222 --log-failed"
+has "2: ...read by the job the URL names, in the repository it names" "$(cat "$FAKE/gh.log")" "run view --repo github.com/acme/widgets --job 222 --log-failed"
 fresh
 call log --url https://github.com/acme/widgets/actions/runs/111 --lines 5
 is "2: a URL naming only the run reads the run, to the length asked" "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" 5
-has "2: ...as a whole" "$(cat "$FAKE/gh.log")" "run view 111 --repo acme/widgets --log-failed"
+has "2: ...as a whole" "$(cat "$FAKE/gh.log")" "run view 111 --repo github.com/acme/widgets --log-failed"
 fresh
 call log --url "https://github.com/acme/widgets/actions/runs/111/job/222?pr=7#step:4:1"
 has "2: a query string or fragment on the URL is not part of the job id" "$(cat "$FAKE/gh.log")" "--job 222 --log-failed"
+fresh
+call log --url https://ghe.example.test/acme/widgets/actions/runs/111/job/222
+has "2: an Enterprise run is read on the host its URL names" "$(cat "$FAKE/gh.log")" "run view --repo ghe.example.test/acme/widgets --job 222"
 call log --url https://codecov.example/x
 is "2: a URL with no workflow run has no logs through gh" "$(val outcome)" no-logs
 is "2: ...which is a stop" "$RC" 3
@@ -221,7 +229,7 @@ fresh
 call rerun --url "$RUN"
 is "3: an accepted re-run says so" "$(val outcome)" accepted
 is "3: ...by run id" "$(val run)" 111
-has "3: ...having asked for the failed jobs of that run, in its repository" "$(cat "$FAKE/gh.log")" "run rerun 111 --repo acme/widgets --failed"
+has "3: ...having asked for the failed jobs of that run, in its repository" "$(cat "$FAKE/gh.log")" "run rerun 111 --repo github.com/acme/widgets --failed"
 fresh
 touch "$FAKE/fail-run"
 call rerun --url "$RUN"
