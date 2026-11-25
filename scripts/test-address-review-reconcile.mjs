@@ -181,7 +181,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 279;
+const EXPECTED_CHECKS = 280;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -3589,6 +3589,16 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // the push is step 2 and the replies are step 4, so a publisher that never
   // pushed acted on no thread, and there is nothing an entry could say. This is
   // the one shape in which `[]` is the whole truth rather than a silence.
+  // Git refused the push while every push URL already showed the tip: no push
+  // of this run's succeeded, and the tips are on origin all the same.
+  const PUBLISH_PUSH_REFUSED_TIP_PRESENT = {
+    published: false,
+    pushed: false,
+    pushedNewCommits: false,
+    aborted: "push refused though the ref shows the tip: a pre-push hook rejected the no-op push",
+    summaryCommentUrl: "",
+    threadOutcomes: [],
+  };
   const PUBLISH_NOTHING = {
     published: false,
     pushed: false,
@@ -3846,6 +3856,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     ["a publication that claimed the advance its read-back could not confirm", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_PUSH_UNCONFIRMED_ADVANCE_CLAIMED }, "fixed-publish-failed", true],
     ["a publication whose unconfirmed push left its account short", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_PUSH_UNCONFIRMED_UNACCOUNTED }, "fixed-publish-failed", true],
     ["a publication that aborted with nothing on origin", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_NOTHING }, "fixed-publish-failed", true],
+    ["a publication whose push was refused though the ref already showed the tip", { args: "push no-rebase", cycles: [CYCLE_PASS], publish: PUBLISH_PUSH_REFUSED_TIP_PRESENT }, "fixed-publish-failed", true],
     ["a publication whose reply and resolve landed on one of two threads", { args: "push no-rebase", cycles: [CYCLE_PASS_TWO], publish: PUBLISH_PART_WAY_RESOLVED }, "fixed-publish-failed", true, withTwo],
     ["a publication holding items publication owes neither a reply nor a resolve", { args: "push no-rebase", cycles: [CYCLE_PASS_POLICY_KINDS], publish: PUBLISH_PART_WAY_POLICY_KINDS }, "fixed-publish-failed", true, withPolicyKinds],
     ["a publication holding human push-backs and deferrals it owes no resolve on", { args: "push no-rebase", cycles: [CYCLE_PASS_POLICY_RESOLVES], publish: PUBLISH_PART_WAY_POLICY_RESOLVES }, "fixed-publish-failed", true, withPolicyResolves],
@@ -5242,6 +5253,19 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // `recordPrompt`, entered off the push read-back's abort) now sits on the same
   // base as the skill's, so the two-sided comparison the shape was written for
   // follows this check, beside the brief-vs-skill reads above.
+  // A refused push over a ref that already shows the tip: `pushed` is false, as
+  // it must be of the command, and the record still may not call the tips
+  // local-only — the read-back that produced this stop is what put them on
+  // origin's side of the ledger.
+  const refusedBrief = briefs["a publication whose push was refused though the ref already showed the tip"] || "";
+  check(
+    "and a push git refused while the ref already showed the tip records the tips as on origin, never as local-only",
+    /so the tips above are already on origin while no reply, resolve or Summary comment reached it/.test(refusedBrief) &&
+      !/the tips above are LOCAL ONLY/.test(refusedBrief) &&
+      /push refused though the ref shows the tip: a pre-push hook rejected the no-op push/.test(refusedBrief),
+    refusedBrief ? "the record brief renders the local-only line, or drops the reason" : "no record brief was rendered for that exit",
+  );
+
   const UNCONFIRMED_PUSH_CLAUSES = {
     "the fourth rendering's status line, which claims neither presence nor absence on origin":
       "status: UNKNOWN whether its push reached origin, and nothing else was published",

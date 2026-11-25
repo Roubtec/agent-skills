@@ -272,12 +272,18 @@ const REBASE_SCHEMA = {
 // to report it, the schema that enumerates it, and the disposition record, whose
 // push claims are the ones it withdraws.
 const PUSH_UNCONFIRMED_ABORT = "push not confirmed at the ref";
+// The stop whose own evidence puts the tips ON origin without a push of this
+// run's having succeeded: git refused the push, and every push URL's read-back
+// showed the tip already there. The publisher reports `pushed: false`, which is
+// true of the command, so this phrase is what tells the record the tips are
+// not local-only.
+const PUSH_REFUSED_ABORT = "push refused though the ref shows the tip";
 
 const PUBLISH_SCHEMA = {
   type: "object",
   properties: {
     published: { type: "boolean", description: "True only if the push AND every required reply/resolve/summary/ping step succeeded. False if any guard (moved head, unmatched remote, rejected lease, failed comment) aborted publication. The caller accepts it only over a report that can SUPPORT it — an account of every item it can read, and the `summaryCommentUrl` of the Summary comment this step ends with. Claimed over less, the run reports an incomplete publication, keeps its worktree, and leaves its disposition record: a completion nobody can check is not a completion." },
-    aborted: { type: "string", description: "Why publication stopped, when published is false (e.g. `head moved`, `working location moved off the branch`, `lease rejected`, `local behind PR head`, `push remote unmatched`, `push refused`, `push helper not found`, `" + PUSH_UNCONFIRMED_ABORT + ": <what each URL returned>`). Empty when published. Write it: the run's own note carries this reason inline, so an omitted one reads as `no reason reported` there." },
+    aborted: { type: "string", description: "Why publication stopped, when published is false (e.g. `head moved`, `working location moved off the branch`, `lease rejected`, `local behind PR head`, `push remote unmatched`, `" + PUSH_REFUSED_ABORT + "`, `push helper not found`, `" + PUSH_UNCONFIRMED_ABORT + ": <what each URL returned>`). Empty when published. Write it: the run's own note carries this reason inline, so an omitted one reads as `no reason reported` there." },
     pushed: { type: "boolean", description: "Whether a push command SUCCEEDED — an `Everything up-to-date` no-op counts, since it leaves the remote pointing at this tip. False when none was attempted, or when one was rejected or failed. This is NOT evidence that anything this run did reached origin: a no-op push changed nothing there, so `pushedNewCommits` is what says the remote moved." },
     pushedNewCommits: { type: "boolean", description: "True ONLY if the push actually advanced the remote branch — new commits or rewritten history. False when no push happened or for a no-op `Everything up-to-date` push. Gates whether the re-review pings may fire, and it is the push half of what a disposition record may call landed." },
     threadOutcomes: {
@@ -908,7 +914,7 @@ Report a STRUCTURED result: set \`published: true\` ONLY if the push and every r
    - \`pushed\` → the push advanced the branch: \`pushed: true\`, \`pushedNewCommits: true\`.
    - \`up-to-date\` → the tip was already the PR head and the push was the \`Everything up-to-date\` no-op: \`pushed: true\`, \`pushedNewCommits: false\`.
    - \`behind\` → HEAD is a PROPER ANCESTOR of the expected tip: the remote branch is ahead of you, there is nothing of yours to publish, and the lease would have MATCHED and rewound the branch, which is why the script stops ahead of it. Set \`published: false\`, \`aborted: "local behind PR head"\`, and STOP, exactly as for a rejected lease.
-   - \`head-moved\` → \`aborted: "head moved"\`; \`rejected\` → git refused the push and every push URL answered without your tip: \`aborted: "lease rejected"\`; \`refused\` → git refused the push although every push URL already shows your tip (a hook said no, or the same commit arrived another way), so the push command did not succeed: \`aborted: "push refused"\`; \`wrong-branch\` → \`aborted: "working location moved off the branch"\`; \`no-remote\` → \`aborted: "push remote unmatched"\`; \`dirty\`, \`closed\`, \`fork\` → \`aborted\` with what it said. Each with \`published: false\`, and STOP without pushing — do not guess, and do not reconcile anything to make a push legal.
+   - \`head-moved\` → \`aborted: "head moved"\`; \`rejected\` → git refused the push and every push URL answered without your tip: \`aborted: "lease rejected"\`; \`refused\` → git refused the push although every push URL already shows your tip (a hook said no, or the same commit arrived another way), so the push command did not succeed: \`pushed: false\` and \`aborted: "${PUSH_REFUSED_ABORT}"\`, in exactly those words, since the record this run leaves reads them to say the tips are already on origin; \`wrong-branch\` → \`aborted: "working location moved off the branch"\`; \`no-remote\` → \`aborted: "push remote unmatched"\`; \`dirty\`, \`closed\`, \`fork\` → \`aborted\` with what it said. Each with \`published: false\`, and STOP without pushing — do not guess, and do not reconcile anything to make a push legal.
    - \`unconfirmed\` → some push URL did not show your tip or did not answer, which is a stop rather than a pass: set \`published: false\` and \`aborted: "${PUSH_UNCONFIRMED_ABORT}: <what each URL returned>"\`, taking that evidence from its \`readback=\` lines, one per push URL, the ones that do show your tip included — the phrase LEADS that field and the per-URL evidence rides after it in the SAME one, which is the only field this schema has for the reason: the record this run leaves quotes this field verbatim, and its status line is required to say what each push URL returned. Report \`pushed\`/\`pushedNewCommits\` as what the push COMMAND itself reported (\`push-command=returned\` or \`refused\`) and nothing more: whether the ref MOVED is exactly the fact this read-back failed to establish, so do not set either flag to stand for it in either direction — that abort is what says it is unestablished, and it is read ahead of both.
 3. Re-read unresolved threads after the push. Do not mutate newly-arrived feedback that was not triaged this run — leave it open and call it out. Then the \`flake-rerun\` lanes among the dispositions below, ONLY where the push was a no-op (\`Everything up-to-date\`): a push that advanced the branch already re-ran every lane, so re-run nothing then. For each, take \`<owner>/<repo>\` and \`<run-id>\` from the lane's details URL (its \`url\`, the \`/<owner>/<repo>/actions/runs/<run-id>\` segment) and from EVERY URL in its \`instances\` where it carries them (attached to the disposition from the gathered lane, so it is the rollup's own list) — a lane the rollup held more than once is one item but several workflow runs, and a re-run of \`url\`'s alone leaves the others red — the repository from the URL, never the checkout's default — and run \`gh run rerun <run-id> --repo <owner>/<repo> --failed\` ONCE PER RUN ID, every distinct id the lane names: several failed jobs of one run share its id and \`--failed\` re-runs them all, and a second request meets a run already re-running. SKIP an id the disposition's \`detail\` names as ALREADY ORDERED — the account of an earlier turn's accepted re-run, replayed from its record — since that run is re-running or has re-run, and a second request meets it; such an id counts as accepted below without a request of yours. Issue the request for EVERY remaining id before judging any: a rejection on one id does not leave the ids after it unordered and unreported. Every \`flake-rerun\` below names such a run: the publishability check admits the kind on no other lane. This run does not wait on the fresh rollup: CI gates the merge, and the next round reads it. Each of those requests is part of this publication's SUCCESS CONTRACT, reported STRUCTURALLY rather than in prose, PER RUN ID: on that lane's \`threadOutcomes\` entry set \`rerunAccepted\` to the list of every run id of the lane's that is accepted — each id whose \`gh run rerun\` exited 0 this turn, plus each already ordered by an earlier turn — as the bare \`<run-id>\` digits, and set \`rerun\` to true ONLY if that list covers EVERY distinct run id the lane names — one request GitHub rejected or that failed (a deleted workflow, a run too old to re-run, an expired token) makes it false, and so does a request you never issued. The caller checks that coverage itself against the ids the gathered lane names, so \`rerun: true\` beside a \`rerunAccepted\` that leaves an id out is read as the lane still owed on that id, not as accepted. Where any request failed, the one action this disposition promised never happened while the lane stays red, so set \`published: false\` and \`aborted: "flake re-run failed: <lane, run id, what gh returned>"\` and STOP here, before step 4: the record this run leaves renders the push as landed and every reply as still owed, and the next turn replays them — ordering only the run ids \`rerunAccepted\` does not carry, which is why an accepted id is reported even beside a rejected one. On a push that ADVANCED the branch nothing is ordered here and both fields are left out: that push re-ran every lane.
 4. Per-item hygiene for each disposition:
@@ -3514,7 +3520,15 @@ const landed = published
 // FIRST, so this flag is only ever read where there is none. Guarding it here as
 // well would be the second copy of that precedence this file has already refused
 // twice — unobservable while it agreed, silent when it stopped agreeing.
-const pushNoop = !published && !landed && !!(publishReport && publishReport.pushed);
+// A push git REFUSED while the read-back showed the tip everywhere is the same
+// fact about origin by another road — the tips are there, and this run put
+// nothing there — so it takes this line rather than a rendering of its own.
+const pushRefusedTipPresent =
+  !published &&
+  !!publishReport &&
+  typeof publishReport.aborted === "string" &&
+  publishReport.aborted.toLowerCase().includes(PUSH_REFUSED_ABORT);
+const pushNoop = !published && !landed && (!!(publishReport && publishReport.pushed) || pushRefusedTipPresent);
 // What is left, as the COMPLEMENT of what landed over the same keyed set rather
 // than a second count of its own: every disposition is named exactly once in the
 // account, so an item is owed its reply precisely when the account does not
@@ -3618,7 +3632,7 @@ const publishRecord = published
           ? "unknown"
           : publishReport && publishReport.pushedNewCommits
             ? "advanced"
-            : publishReport && publishReport.pushed
+            : (publishReport && publishReport.pushed) || pushRefusedTipPresent
               ? "noop"
               : "unknown",
       },
