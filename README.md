@@ -12,6 +12,8 @@ plugins/
     bin/gh-review-threads          # hardened review-thread helper added to the plugin PATH
     bin/dc-enter                   # makes a disposable clone to verify claims in, printing only its path
     bin/dc-remove                  # drops one, and can reach nothing else
+    bin/address-review-pr-branch   # a name on PATH for skills/address-review/pr-branch.sh, for workflow agents
+    bin/address-review-record      # the same for skills/address-review/record.sh
     skills/<name>/SKILL.md
     workflows/wf-*.js              # Claude dynamic workflows
 codex/
@@ -22,7 +24,7 @@ scripts/
   test-gh-review-threads.sh             # hermetic contract coverage for the review-thread helper
   test-dc-helpers.sh                    # hermetic contract coverage for the disposable-clone helpers
   test-prune-branches.sh                # hermetic coverage for the prune-branches helper
-  test-address-review-pr-branch.sh      # hermetic coverage for the address-review branch helper (reconcile, base pin, publication push)
+  test-address-review-pr-branch.sh      # hermetic coverage for the address-review branch helper (head, reconcile, base pin, publication push) and its `bin/` shim
   test-address-review-record.sh         # hermetic coverage for the address-review disposition-record helper (find, render, post, spend)
   test-checkout-cleanliness-report.mjs  # regression coverage for the batch workflow's checkout report
   test-review-cycle-retirement.mjs      # behavior coverage for the review cycle's claim lifecycles, terminal gates, and packet measurement
@@ -65,7 +67,7 @@ Why each of those is drawn where it is, and what bounds it, is documented in the
 
 ### Helpers bundled inside a skill
 
-A skill whose procedure is deterministic ships it as a script in its own folder and calls it by path, so the script arrives, updates, and is removed with the skill on every install route: Claude's plugin, powbox's seeding of either mirror, or a hand copy of the folder. Nothing has to be on `PATH`. `prune-branches/prune-branches.sh` is the first; the brief keeps only what needs judgement (reading the user's guidance, the confirmation, relaying the report). `address-review/pr-branch.sh` carries that skill's branch mechanics: the clean-and-idle check, reconciling the branch with the PR head, pinning a review base, and the publication push with its read-back. `address-review/record.sh` words the disposition record's header for each publish state and makes its one write: finding a prior record by its marker, writing over the run's own, or spending the one it replayed. Such a script targets bash 3.2 and needs nothing beyond `git`, using `gh` and the powbox helpers only when present. Each mirror carries its own copy, held byte-identical by the script's test.
+A skill whose procedure is deterministic ships it as a script in its own folder and calls it by path, so the script arrives, updates, and is removed with the skill on every install route: Claude's plugin, powbox's seeding of either mirror, or a hand copy of the folder. Nothing has to be on `PATH`. A workflow agent holds a brief rather than a skill folder, so where a workflow needs one of these scripts the plugin's `bin/` carries a small shim that runs the copy beside it (`address-review-pr-branch`, `address-review-record`): Claude's plugin runtime puts that directory on the Bash tool's PATH, nothing is installed on the user's machine, and the Codex tree, which has no workflows, needs none. `prune-branches/prune-branches.sh` is the first; the brief keeps only what needs judgement (reading the user's guidance, the confirmation, relaying the report). `address-review/pr-branch.sh` carries that skill's branch mechanics: the clean-and-idle check, reconciling the branch with the PR head, pinning a review base, and the publication push with its read-back; `address-reviews` runs its `head`, `pin-base` and `check` commands from the orchestrator's tree, and `wf-address-review.js` publishes through its `push`. `address-review/record.sh` words the disposition record's header for each publish state and makes its one write: finding a prior record by its marker, writing over the run's own, or spending the one it replayed. Such a script targets bash 3.2 and needs nothing beyond `git`, using `gh` and the powbox helpers only when present. Each mirror carries its own copy, held byte-identical by the script's test.
 
 ### `codex/`
 
@@ -165,11 +167,11 @@ Run `bash scripts/test-prune-branches.sh` after any change to `prune-branches.sh
 
 ### `test-address-review-pr-branch.sh`
 
-Run `bash scripts/test-address-review-pr-branch.sh` after any change to `pr-branch.sh` in either mirror's `address-review` skill folder; the hermetic suite builds a throwaway origin and two clones per case under one `mktemp -d` root, answers `gh pr view` from a fake, and also holds the two mirrors' copies of the helper to the same bytes and to the executable bit. `test-address-review-reconcile.mjs` reads the same helper's source where it used to pin the brief's git recipes.
+Run `bash scripts/test-address-review-pr-branch.sh` after any change to `pr-branch.sh` in either mirror's `address-review` skill folder or to `bin/address-review-pr-branch`; the hermetic suite builds a throwaway origin and two clones per case under one `mktemp -d` root, answers `gh pr view` from a fake, and also holds the two mirrors' copies of the helper to the same bytes and to the executable bit. `test-address-review-reconcile.mjs` reads the same helper's source where it used to pin the brief's git recipes.
 
 ### `test-address-review-record.sh`
 
-Run `bash scripts/test-address-review-record.sh` after any change to `record.sh` in either mirror's `address-review` skill folder; the hermetic suite keeps a PR's comments in one JSON file behind a fake `gh` that runs the helper's own `--jq` expressions through the real `jq`, and also holds the two mirrors' copies to the same bytes and to the executable bit. `test-address-review-reconcile.mjs` runs the same helper's `render` where it used to compare the skill's wording of a record state with the workflow's record brief, so that suite needs Bash too.
+Run `bash scripts/test-address-review-record.sh` after any change to `record.sh` in either mirror's `address-review` skill folder or to `bin/address-review-record`; the hermetic suite keeps a PR's comments in one JSON file behind a fake `gh` that runs the helper's own `--jq` expressions through the real `jq`, and also holds the two mirrors' copies to the same bytes and to the executable bit. `test-address-review-reconcile.mjs` runs the same helper's `render` where it used to compare the skill's wording of a record state with the workflow's record brief, so that suite needs Bash too.
 
 ### `test-checkout-cleanliness-report.mjs`
 

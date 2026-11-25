@@ -466,6 +466,14 @@ done
 OUT="$(bash "$HELPER" --help)"
 has "6: --help prints the header" "$OUT" "record.sh find"
 lacks "6: ...and none of the code" "$OUT" "set -u"
+SHIM="$SCRIPT_DIR/../plugins/dev-skills/bin/address-review-record"
+is "6: the bin/ shim is committed executable" "$(git -C "$ROOT" ls-files -s -- plugins/dev-skills/bin/address-review-record | cut -c1-6)" 100755
+fresh
+OUT="$(PATH="$(dirname "$SHIM"):$PATH" address-review-record find --repo acme/widgets --pr 7 2>&1)"
+is "6: the shim runs the bundled helper by name" "$OUT" "outcome=none"
+cp "$SHIM" "$WORKDIR/address-review-record"
+OUT="$(bash "$WORKDIR/address-review-record" find --repo acme/widgets --pr 7 2>&1)"
+is "6: a shim copied away from the plugin fails as 'not found' does" "$?" 127
 
 if [ "$fails" -gt 0 ]; then
 	echo "address-review record helper test: $fails/$checks checks FAILED." >&2
