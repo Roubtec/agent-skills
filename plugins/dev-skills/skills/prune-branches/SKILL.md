@@ -32,7 +32,7 @@ Do not reproduce its steps by hand, and do not run any branch, ref, or worktree 
   Deleted behind a recovery ref.
 - **Uncertain** — everything else, and any unmerged branch that heads an open PR, however reachable its tip.
   Kept unless the user names the branch for deletion in this run.
-- **Protected** — the default, the current branch, and the user's keeps.
+- **Protected** — the default, the current branch, the user's keeps, and any symbolic ref under `refs/heads/` (an alias, not a branch).
 
 The listing also inventories recovery breadcrumbs earlier runs left under `refs/pruned/`: a **Redundant** one (landed in the default, at least 7 days old) is marked `sweep`; load-bearing, recent, changed, and unrecognized ones are kept.
 

@@ -316,6 +316,10 @@ commit "$R" st1
 git -C "$R" push -q -u origin stacktop
 git -C "$R" checkout -q -b nosubject main
 commit "$R" n1
+# reopened was merged at exactly this tip and now heads a second, open PR.
+git -C "$R" checkout -q -b reopened main
+commit "$R" ro1
+git -C "$R" push -q -u origin reopened
 git -C "$R" checkout -q main
 commit "$R" "squash of nosubject (#42)"
 git -C "$R" push -q origin main
@@ -327,6 +331,7 @@ ST_OID="$(git -C "$R" rev-parse stacktop)"
 NS_OID="$(git -C "$R" rev-parse nosubject)"
 SQ_OID="$(git -C "$R" rev-parse squashed)"
 WB_OID="$(git -C "$R" rev-parse wrongbase)"
+RO_OID="$(git -C "$R" rev-parse reopened)"
 FAKE="$(dirname "$R")/bin"
 mkdir -p "$FAKE"
 cat >"$FAKE/gh" <<EOF
@@ -340,7 +345,8 @@ case "\$1 \$2" in
 	*"--head rewritten "*) printf 'rewritten\t0000000000000000000000000000000000000000\tmain\n' ;;
 	*"--head wrongbase "*) printf 'wrongbase\t$WB_OID\trelease\n' ;;
 	*"--head stacktop "*) printf 'stacktop\t$ST_OID\tmain\n' ;;
-	*"--state open "*) printf 'inreview\t7\n' ;;
+	*"--head reopened "*) printf 'reopened\t$RO_OID\tmain\n' ;;
+	*"--state open "*) printf 'inreview\t7\nreopened\t8\n' ;;
 	esac ;;
 "pr view")
 	[ "\$3" = 42 ] && printf 'MERGED\tnosubject\t$NS_OID\tmain\n' ;;
@@ -363,6 +369,7 @@ has "5: a merged PR with another head forces Uncertain" "$(row rewritten)" "diff
 has "5: a merged PR into another base proves nothing" "$(row wrongbase)" "Uncertain"
 has "5: a branch under a PR-merged one is not kept alive by it" "$(row stackbase)" "Uncertain"
 has "5: a branch heading an open PR is Uncertain though the current branch contains it" "$(row inreview)" "open PR #7"
+has "5: an open PR outranks a merged PR with this exact head" "$(row reopened)" "open PR #8"
 has "5: a default-branch subject finds the PR of a branch with no upstream" "$(row nosubject)" "Merged"
 grep -q -- "--repo example.test/acme/widgets" "$FAKE/gh.log"
 ok "5: every PR query names the selector" $?
@@ -378,6 +385,7 @@ git -C "$R" checkout -q main
 commit "$R" "squash of lonely (#9)"
 git -C "$R" push -q origin main
 git -C "$R" branch racy main~2
+git -C "$R" symbolic-ref refs/heads/alias refs/heads/main
 LO_OID="$(git -C "$R" rev-parse lonely)"
 FAKE="$(dirname "$R")/bin"
 mkdir -p "$FAKE"
@@ -392,14 +400,17 @@ EOF
 cat >"$FAKE/git" <<EOF
 #!/usr/bin/env bash
 if [ "\$1 \$2 \$3" = "remote get-url origin" ]; then echo "https://example.test/acme/widgets.git"; exit 0; fi
-if [ "\$1 \$2 \$3" = "update-ref -d refs/heads/racy" ]; then "$REAL_GIT" update-ref refs/heads/racy "$LO_OID"; fi
+if [ "\$1 \$2 \$3 \$4" = "update-ref --no-deref -d refs/heads/racy" ]; then "$REAL_GIT" update-ref refs/heads/racy "$LO_OID"; fi
 exec "$REAL_GIT" "\$@"
 EOF
 chmod +x "$FAKE/gh" "$FAKE/git"
 CASE_PATH="$FAKE:$REAL_PATH"
 plan
 has "5b: the subject fallback runs when no head lookup settled anything" "$(row lonely)" "Merged"
+has "5b: a symbolic ref under refs/heads/ is protected, not a candidate" "$(row alias)" "symbolic ref to refs/heads/main"
 apply --hands-off
+exists refs/heads/main && [ "$(git -C "$R" symbolic-ref refs/heads/alias)" = refs/heads/main ]
+ok "5b: ...so neither it nor its target is deleted" $?
 [ "$(git -C "$R" rev-parse --verify --quiet refs/heads/racy)" = "$LO_OID" ]
 ok "5b: a branch that moved just before its deletion survives at its new tip" $?
 has "5b: ...and is reported kept" "$OUT" "tip changed just before deletion"

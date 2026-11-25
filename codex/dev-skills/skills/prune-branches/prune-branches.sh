@@ -267,8 +267,8 @@ kept_ref_containing() {
 		done
 }
 
-forced_verdict() { # branch
-	awk -F'\t' -v b="$1" '$1 == b { print $2; exit }' "$WORK/forced.tsv"
+forced_verdict() { # branch; an open PR outranks whatever a merged one settled
+	awk -F'\t' -v b="$1" '$1 == b { if ($2 == "Open" || v == "") v = $2 } END { if (v != "") print v }' "$WORK/forced.tsv"
 }
 
 is_candidate() { # branch
@@ -335,7 +335,6 @@ EOF
 		gh pr list --repo "$ORIGIN_SELECTOR" --state open --limit 200 --json number,headRefName,isCrossRepository \
 			--jq '.[] | select(.isCrossRepository | not) | [.headRefName, .number] | @tsv' 2>/dev/null |
 			while IFS="$TAB" read -r head num; do
-				awk -F'\t' -v b="$head" '$1 == b { found = 1 } END { exit !found }' "$WORK/forced.tsv" && continue
 				printf '%s\tOpen\t%s\n' "$head" "$num" >>"$WORK/forced.tsv"
 			done
 	fi
@@ -346,7 +345,7 @@ EOF
 	while IFS="$TAB" read -r tip name upstream; do
 		verdict="$(forced_verdict "$name")"
 		if [ "$verdict" = Open ]; then
-			p="$(awk -F'\t' -v b="$name" '$1 == b { print $3; exit }' "$WORK/forced.tsv")"
+			p="$(awk -F'\t' -v b="$name" '$1 == b && $2 == "Open" { print $3; exit }' "$WORK/forced.tsv")"
 			printf 'Uncertain\t%s\t%s\topen PR #%s has this branch as its head\n' "$name" "$tip" "$p" >>"$WORK/rows.tsv"
 			continue
 		fi
@@ -588,6 +587,12 @@ $KEEPS
 EOF
 	fi
 
+	# A symbolic ref under refs/heads/ is another branch's alias, not a branch:
+	# deleting through it would delete its target, so it is never a candidate.
+	SYMBOLIC="$(git for-each-ref --format='%(if)%(symref)%(then)%(refname:strip=2)%(end)' refs/heads/ | awk 'NF')"
+	[ -z "$SYMBOLIC" ] || PROTECTED="$PROTECTED
+$SYMBOLIC"
+
 	classify_branches
 	classify_breadcrumbs
 
@@ -614,6 +619,8 @@ EOF
 				why="authoritative default branch"
 			elif [ "$name" = "$CUR_BRANCH" ]; then
 				why="current branch in invoking worktree"
+			elif in_list "$name" "$SYMBOLIC"; then
+				why="symbolic ref to $(git symbolic-ref --quiet "refs/heads/$name"), not a branch of its own"
 			else
 				why="kept on request"
 			fi
@@ -944,7 +951,7 @@ cmd_apply() {
 			continue
 		fi
 		# The expected old value makes the deletion and the tip check one step.
-		if git update-ref -d "refs/heads/$name" "$tip" >/dev/null 2>&1; then
+		if git update-ref --no-deref -d "refs/heads/$name" "$tip" >/dev/null 2>&1; then
 			git config --remove-section "branch.$name" >/dev/null 2>&1 || true
 			printf '%s\t%s\t%s\t%s\n' "$bucket" "$name" "$tip" "$ref" >>"$work/deleted.tsv"
 		else
