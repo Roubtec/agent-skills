@@ -80,8 +80,8 @@ For a rebase-enabled stack, rebase the base entry first onto the pinned target, 
 
 For any rebase target that is not a just-rebased parent tip, **pin it to an exact commit** rather than passing a symbolic name that a later fetch could move — and pin it out of the repository that ref actually lives in, which Bootstrap's `git fetch origin` does not reach.
 The repository to fetch from is the one you recorded per entry from the PR's own `url`.
-So per entry: `git fetch <the remote whose URL is that repository, or that repository's URL where no remote points at it> refs/heads/<baseRefName>`, moving no branch, then `git rev-parse --verify FETCH_HEAD^{commit}` read immediately after that fetch (the next one overwrites `FETCH_HEAD`), and pin the full OID it prints.
-Select that remote by matching its URL every time; `isCrossRepository` cannot short-circuit the match, because it compares the PR's own head and base and says nothing about what THIS clone calls `origin`.
+So per entry: `pr-branch.sh pin-base --repo <owner>/<repo> --base <baseRefName>` — the helper in the sibling `address-review` skill folder, run by absolute path, whose header says what each command answers, with `--repo` written `<host>/<owner>/<repo>` where the PR is not on github.com — which fetches that ref from the remote that fetches from that repository, moves no branch, and prints the full OID to pin as `base=`.
+It matches the remote by URL every time and never assumes `origin`; where it stops on `no-remote`, that is the entry's blocker, never a reason to pin `origin/<baseRefName>`.
 That fetch is the **default** target's — the entry's own `baseRefName`, the one ref whose repository the PR names — and a target the invocation itself named is not resolved there at all, because whose ref it is decides where it lives.
 An exact commit needs no fetch, but it is still resolved once here, `git rev-parse --verify '<it>^{commit}'`, which proves it names an existing commit and prints the full OID to pin.
 A ref name (`rebase on top of release`) is resolved WHERE IT WAS NAMED — here, in your own checkout — with `git rev-parse --verify '<the target>^{commit}'`, the operand quoted as ONE argument because a legal ref name may carry `$`, backticks or `;`, and an unquoted `$`-fragment can silently resolve some other existing ref instead; that resolution takes a local branch, a remote-tracking ref or a commit, and the full OID it prints is what you pin.
@@ -215,11 +215,10 @@ If your local copy has a different name than the PR head, this auto-pairing cann
 
 The canonical path.
 Resolve the PR, then prefer a same-named local branch if you have one (so we still never bypass your local copy), else create the branch at the PR's **recorded exact `headRefOid`** — not at `origin/<headRefName>`, which Bootstrap's single fetch can leave stale in either direction.
-Both paths of step 2 fetch that exact head ref first, and a fetch brings whatever the ref names *now* — not necessarily the OID `gh pr view` just reported — so take the entry's head from what that fetch brought, `git rev-parse FETCH_HEAD`, and classify the pair by ancestry before letting the fetched OID be the `headRefOid` recorded for its steps below.
-**A fetched-behind-reported head is a rewind, not an advance:** when both commits are available and the fetched OID is a proper ancestor of the `headRefOid` that `gh pr view` reported, block the entry for a maintainer decision without adopting the fetched OID.
-Every other difference keeps the existing adoption rule: adopt the fetched OID as this entry's head and continue, including an advance and a force-push whose reported OID was not downloaded — creating the entry's branch at that OID on the path that creates one, and moving nothing on the path where a usable local `<headRefName>` already exists, which `address-review` step 1 reconciles against this head instead.
-Whether the reported OID is already a local object decides no other outcome.
-Read `FETCH_HEAD` in the tree that fetched it — the main tree, where step 2's fetches and every `git worktree add` run — and before any later fetch overwrites it, since git keeps a separate `FETCH_HEAD` per worktree.
+Both paths of step 2 start from `pr-branch.sh head --repo <owner>/<repo> --pr <N>`, run in the main tree: it fetches that exact head ref, moves nothing, and prints the entry's head as `head=` — what the fetch brought *now*, which is not necessarily the OID `gh pr view` just reported, and is the `headRefOid` recorded for the steps below.
+**A fetched-behind-reported head is a rewind, not an advance:** where it stops on `rewind`, block the entry for a maintainer decision without adopting the fetched OID.
+Every other difference is adopted: create the entry's branch at `head=` on the path that creates one, and move nothing on the path where a usable local `<headRefName>` already exists, which `address-review` step 1 reconciles against this head instead.
+Its `relation=` line says how that local branch stands to the head — `absent`, `equal`, `behind`, `ahead`, `represented`, or `divergent` — read as step 1 reads them.
 Besides that rewind block, skip-and-record only if the head keeps moving under you.
 
 1. **Resolve and sanity-check:** `gh pr view N --json number,state,headRefName,headRefOid,isCrossRepository,baseRefName,baseRefOid,url,title`.
@@ -227,12 +226,12 @@ Besides that rewind block, skip-and-record only if the head keeps moving under y
    If `isCrossRepository` is true, skip-and-record: fork PRs are not supported.
    Record the repository as the `<owner>/<repo>` of the PR's own `url` — not from a bare `gh repo view --json nameWithOwner`, which answers for whatever repository the orchestrator's directory resolves to — and record `headRefName`, `baseRefName` and both OIDs.
 2. **Attach:**
-   - If local `<headRefName>` exists, compare it with the PR's **exact recorded `headRefOid`**, fetching that exact head ref first rather than trusting `origin/<headRefName>` — Bootstrap's `git fetch` runs once, so a PR force-updated since then leaves the remote-tracking ref stale while `headRefOid` is current.
+   - If local `<headRefName>` exists, read `relation=` from that `head` call rather than trusting `origin/<headRefName>` — Bootstrap's `git fetch` runs once, so a PR force-updated since then leaves the remote-tracking ref stale.
      Do this **before** considering checkout occupancy.
-     Then let `address-review` step 1's reconciliation decide: check out a strictly-behind or represented branch and let it run, and skip-and-record only genuine divergence in step 1's exact sense (each side holds commits the other lacks **and** the remote's are not represented in the local tip by patch-id, the qualifier that keeps an ordinary locally-rebased branch workable).
+     Then let `address-review` step 1's reconciliation decide: check out a `behind` or `represented` branch and let it run, and skip-and-record only `divergent` — each side holds commits the other lacks **and** the remote's are not represented in the local tip by patch-id, the qualifier that keeps an ordinary locally-rebased branch workable.
    - A usable local `<headRefName>` that is free → the plain attach (`git worktree add "$WT_BASE/pr-<N>" <headRefName>`) and **record any ahead/diverged state** in the summary.
    - A usable local `<headRefName>` occupied by the main checkout → detach the clean main `HEAD` and add the worktree as in the Branch-entry case; if held by another worktree or the main tree is dirty, skip-and-record.
-   - No local `<headRefName>` → create the branch at the **recorded exact `headRefOid`**, not at `origin/<headRefName>`: `git fetch origin refs/heads/<headRefName>`, then `git worktree add -b <headRefName> "$WT_BASE/pr-<N>" <headRefOid>`, then set tracking separately with `git -C "$WT_BASE/pr-<N>" branch --set-upstream-to=origin/<headRefName>` — best-effort: a clone whose fetch refspec does not cover this branch has no `origin/<headRefName>` to track, so record the failure and continue rather than losing an otherwise valid entry; publication resolves the exact push remote and ref itself instead of reading the upstream.
+   - No local `<headRefName>` (`relation=absent`) → create the branch at that **`head=` OID**, not at `origin/<headRefName>`: `git worktree add -b <headRefName> "$WT_BASE/pr-<N>" <head>`, then set tracking separately with `git -C "$WT_BASE/pr-<N>" branch --set-upstream-to=origin/<headRefName>` — best-effort: a clone whose fetch refspec does not cover this branch has no `origin/<headRefName>` to track, so record the failure and continue rather than losing an otherwise valid entry; publication resolves the exact push remote and ref itself instead of reading the upstream.
 The absolute worktree path, the checked-out branch name, the **paired PR number**, and (for branch entries) the note "this is your local ref" are what you hand that entry's subagent.
 
 ## Per-PR phased subagents
@@ -309,7 +308,7 @@ If the agent reports that step 1's reconciliation fast-forwarded the branch, ado
 If it reports a successful no-op because no actionable review items remain, apply the **terminal zero-feedback shortcut**: accept it without a reviewer or publisher only when `final HEAD == starting HEAD == recorded PR headRefOid`, and treat that published-tip completion as satisfying each dependent's topological gate.
 The shortcut is deliberately the one path that ends an entry without its pre-review rebaser.
 A rebase-changed tip or an unchanged but already ahead/diverged local tip does not qualify: it requires a complete zero-item packet, Phase B, and, unless `no-push`, the normal publication waves.
-Adopt a returned packet only under `review-cycle`'s packet hard-check: that entry's worktree must have `git -C <worktree> status --porcelain` empty **and** no Git operation in progress (`rebase-merge`/`rebase-apply` paths, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG` — a tree left mid-rebase or mid-cherry-pick prints empty porcelain).
+Adopt a returned packet only under `review-cycle`'s packet hard-check: `pr-branch.sh -C <worktree> check` must answer `clean` for that entry's worktree — an empty `git status --porcelain` **and** no Git operation in progress, since a tree left mid-rebase or mid-cherry-pick prints empty porcelain.
 Either condition failing means redrive or resume that entry, never silent adoption.
 
 ### Phase B — fresh review
@@ -396,7 +395,7 @@ Because concurrent entries each invoke the peer, repeated peer-side rate, transi
 
 ## Cleanup
 
-- Remove each worktree once a PR's subagents have returned cleanly and its work is committed — but check first: `git -C "$WT_BASE/<slug>" status --porcelain` must print nothing and no Git operation may be in progress (no `rebase-merge`/`rebase-apply` paths, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, or `BISECT_LOG` under its git dir — the same six the packet hard-check names); only then `git worktree remove "$WT_BASE/<slug>"`.
+- Remove each worktree once a PR's subagents have returned cleanly and its work is committed — but check first: `pr-branch.sh -C "$WT_BASE/<slug>" check` must answer `clean`, the same check the packet hard-check runs; only then `git worktree remove "$WT_BASE/<slug>"`.
   **Never force-remove a worktree with uncommitted changes or an in-progress Git operation** — `git worktree remove --force` destroys that work; on dirt, leave the worktree in place and report its path instead of deleting evidence or work.
   If a `wt-remove` helper is on PATH, prefer it — it enforces these refusal checks itself (even with `--force`).
   Keep the worktree of a descendant held pending its parent's situation, or blocked alongside it, even though its subagents returned cleanly and its tree is clean: the eventual restack runs there, and a carve-out publication needs a `HEAD` that still matches the packet being restored.

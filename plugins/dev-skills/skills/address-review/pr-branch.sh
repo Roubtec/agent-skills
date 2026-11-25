@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
 # pr-branch.sh — the git mechanics of addressing one pull request.
 #
-# Usage, from the working location (the tree standing on the PR's head branch):
+# Usage, from the working location (the tree standing on the PR's head branch),
+# or from anywhere with `-C <dir>` ahead of the command, as git takes it:
 #   pr-branch.sh check
+#   pr-branch.sh head      --repo <owner>/<repo> --pr <N>
 #   pr-branch.sh reconcile --repo <owner>/<repo> --pr <N>
 #   pr-branch.sh pin-base  --repo <owner>/<repo> --base <branch>
 #   pr-branch.sh pin-base  --target <ref>
@@ -15,6 +17,18 @@
 # github.com; a remote on another host is never the PR's.
 #
 # check      The tree is clean and no Git operation is in progress.
+# head       For a tree that is NOT on the head branch (an orchestrator's, ahead
+#            of attaching a worktree). Reads the PR, fetches its head ref, and
+#            says how a local branch of the same name stands to it; it moves
+#            nothing and needs no clean tree. `outcome=open` with `head=` (the
+#            fetched commit: create or compare the branch at this, never at a
+#            remote-tracking ref), `head-ref=`, `base-ref=`, `remote=`, and
+#              relation=absent       no local branch of that name
+#              relation=equal | behind | ahead | represented | divergent
+#                                    with `local=`, read as reconcile reads them
+#            and stops on rewind | fork | closed | no-remote.
+#            `head` and `pin-base` read no FETCH_HEAD, which every fetch in a
+#            tree shares, so several may run at once in one tree.
 # reconcile  Runs `check`, reads the PR, fetches its head ref, and brings the
 #            branch level with it where that loses nothing:
 #              equal           the tip is the PR head
@@ -60,6 +74,11 @@
 set -u
 
 SEP="$(printf '\037')"
+# This file, by a path that survives `-C`.
+case "$0" in
+/*) SELF="$0" ;;
+*) SELF="$PWD/$0" ;;
+esac
 
 say() { printf '%s\n' "$*"; }
 note() { printf 'pr-branch: %s\n' "$*" >&2; }
@@ -69,7 +88,7 @@ fail() {
 }
 usage() {
 	note "$*"
-	sed -n '4,9p' "$0" | sed 's/^# \{0,1\}//' >&2
+	sed -n '4,11p' "$SELF" | sed 's/^# \{0,1\}//' >&2
 	exit 64
 }
 # stop <outcome> <explanation> [extra key=value lines...]
@@ -194,7 +213,8 @@ wanted_host() {
 # The remote of this checkout that both fetches from $REPO and pushes to it.
 # The match is on the URLs as configured, so a local insteadOf rewrite does not
 # hide it. A remote whose push URLs all point elsewhere is not a match: a push
-# through it would never reach the PR.
+# through it would never reach the PR. `find_remote fetch` asks only where it
+# fetches from, for a command that pushes nothing.
 find_remote() {
 	local host want r matches="" pick="" cur
 	# The same reading `gh --repo [HOST/]OWNER/REPO` gives the selector.
@@ -203,7 +223,7 @@ find_remote() {
 	for r in $(git remote); do
 		# `git fetch <remote>` reads the FIRST url only, so that one decides.
 		git config --get-all "remote.$r.url" | head -n 1 | any_names_repo "$host" "$want" || continue
-		{ git config --get-all "remote.$r.pushurl" || git config --get-all "remote.$r.url"; } |
+		[ "${1:-}" = fetch ] || { git config --get-all "remote.$r.pushurl" || git config --get-all "remote.$r.url"; } |
 			any_names_repo "$host" "$want" || continue
 		matches="$matches$r
 "
@@ -246,16 +266,29 @@ is_ancestor() {
 	return "$rc"
 }
 # The checks every command that touches the head ref shares.
-require_head_branch() {
+require_open() {
 	[ "$P_CROSS" != true ] || stop fork "PR #$PR is a fork PR: its head lives in another repository, which is not supported."
 	[ "$P_STATE" = OPEN ] || stop closed "PR #$PR is $P_STATE, not open." "state=$P_STATE"
+}
+require_head_branch() {
+	require_open
 	local cur
 	cur="$(git branch --show-current)"
 	[ "$cur" = "$P_HEAD" ] || stop wrong-branch "this tree is on '${cur:-a detached HEAD}', but PR #$PR publishes from '$P_HEAD'." "branch=$cur" "head-ref=$P_HEAD"
 }
+# The commit a branch of the remote names now, with its objects fetched. Not
+# read from FETCH_HEAD: every fetch in a tree shares that file, so two of
+# these overlapping would each read the other's line.
 fetch_ref() { # remote, branch → prints the fetched commit
-	git fetch --quiet "$1" "refs/heads/$2" >/dev/null 2>&1 || return 1
-	git rev-parse --verify --quiet 'FETCH_HEAD^{commit}'
+	local oid
+	oid="$(git ls-remote "$1" "refs/heads/$2" 2>/dev/null | cut -f1)"
+	[ -n "$oid" ] || return 1
+	# --no-write-fetch-head needs git 2.29; older gits just write the file.
+	git fetch --quiet --no-write-fetch-head "$1" "refs/heads/$2" >/dev/null 2>&1 ||
+		git fetch --quiet "$1" "refs/heads/$2" >/dev/null 2>&1 || return 1
+	# The ref moved between the two reads if the commit did not arrive.
+	git cat-file -e "$oid^{commit}" 2>/dev/null || return 1
+	printf '%s\n' "$oid"
 }
 
 cmd_check() {
@@ -284,6 +317,48 @@ unrepresented() { # tip, head
 	done
 }
 
+# A fetched head behind the one GitHub reports is a rewind, not an advance.
+refuse_rewind() { # fetched head, extra key=value line
+	if [ "$1" != "$P_OID" ] && git cat-file -e "$P_OID^{commit}" 2>/dev/null &&
+		git merge-base --is-ancestor "$1" "$P_OID"; then
+		stop rewind "the head ref now points at $1, which is behind the $P_OID GitHub reports for PR #$PR. A maintainer decides; nothing was adopted." \
+			"fetched=$1" "reported=$P_OID" "$2"
+	fi
+}
+
+cmd_head() {
+	parse "$@"
+	need_repo
+	need_pr
+	git rev-parse --git-dir >/dev/null 2>&1 || fail "not inside a Git repository"
+	read_pr
+	require_open
+	local remote head tip relation lost
+	remote="$(find_remote)" || stop no-remote "no remote of this checkout both fetches from and pushes to $REPO on $(wanted_host), so the head ref cannot be fetched."
+	head="$(fetch_ref "$remote" "$P_HEAD")" || fail "could not fetch refs/heads/$P_HEAD from $remote. Nothing was changed."
+	tip="$(git rev-parse --verify --quiet "refs/heads/$P_HEAD^{commit}")" || tip=""
+	refuse_rewind "$head" "local=${tip:-absent}"
+	if [ -z "$tip" ]; then
+		relation=absent
+	elif [ "$tip" = "$head" ]; then
+		relation=equal
+	elif git merge-base --is-ancestor "$tip" "$head"; then
+		relation=behind
+	elif git merge-base --is-ancestor "$head" "$tip"; then
+		relation=ahead
+	else
+		lost="$(unrepresented "$tip" "$head")" || fail "could not compare the local $P_HEAD with the PR head $head, so whether its commits are carried there is not established. Nothing was changed."
+		if [ -n "$lost" ]; then relation=divergent; else relation=represented; fi
+	fi
+	say "outcome=open"
+	say "head=$head"
+	say "head-ref=$P_HEAD"
+	say "base-ref=$P_BASE"
+	say "remote=$remote"
+	say "relation=$relation"
+	[ -z "$tip" ] || say "local=$tip"
+}
+
 cmd_reconcile() {
 	parse "$@"
 	need_repo
@@ -299,11 +374,7 @@ cmd_reconcile() {
 	# branch is checked out now, so it must still be the one read before it.
 	require_head_branch
 	[ "$(git rev-parse HEAD)" = "$start" ] || fail "this branch moved off $start while the head ref was being fetched. Nothing was changed."
-	if [ "$head" != "$P_OID" ] && git cat-file -e "$P_OID^{commit}" 2>/dev/null &&
-		is_ancestor "$head" "$P_OID"; then
-		stop rewind "the head ref now points at $head, which is behind the $P_OID GitHub reports for PR #$PR. A maintainer decides; nothing was adopted." \
-			"fetched=$head" "reported=$P_OID" "tip=$start"
-	fi
+	refuse_rewind "$head" "tip=$start"
 	tip="$start"
 	if [ "$tip" = "$head" ]; then
 		say "outcome=equal"
@@ -348,7 +419,7 @@ cmd_pin_base() {
 	fi
 	[ -n "$BASE" ] || usage "pin-base needs --base <branch> or --target <ref>"
 	need_repo
-	remote="$(find_remote)" || stop no-remote "no remote of this checkout both fetches from and pushes to $REPO on $(wanted_host), so its $BASE cannot be fetched."
+	remote="$(find_remote fetch)" || stop no-remote "no remote of this checkout fetches from $REPO on $(wanted_host), so its $BASE cannot be fetched."
 	oid="$(fetch_ref "$remote" "$BASE")" || fail "could not fetch refs/heads/$BASE from $remote. A stale ref is not a fallback."
 	say "outcome=pinned"
 	say "base=$oid"
@@ -441,16 +512,22 @@ readback=$url no answer"
 	say "remote=$remote"
 }
 
+if [ "${1:-}" = -C ]; then
+	[ $# -ge 2 ] || usage "-C needs a directory"
+	cd -- "$2" 2>/dev/null || fail "cannot enter $2"
+	shift 2
+fi
 [ $# -ge 1 ] || usage "a command is required"
 command="$1"
 shift
 case "$command" in
 check) cmd_check "$@" ;;
+head) cmd_head "$@" ;;
 reconcile) cmd_reconcile "$@" ;;
 pin-base) cmd_pin_base "$@" ;;
 push) cmd_push "$@" ;;
 -h | --help | help)
-	awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$0"
+	awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$SELF"
 	;;
 *) usage "unknown command: $command" ;;
 esac

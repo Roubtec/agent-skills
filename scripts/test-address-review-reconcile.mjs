@@ -1257,14 +1257,29 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         "address-review",
         "**Reconcile the working location's branch with the PR head before triaging anything:**",
         /adopt that as `headRefOid` from here on, whatever `gh pr view` reported/,
-        "viaHelper",
+        {
+          command: "`pr-branch.sh reconcile --repo <owner>/<repo> --pr <N>`",
+          rewind: "- **`rewind`** → the head ref is behind the head GitHub reports: block the entry for a maintainer decision without adopting either.",
+          refusal: 'refuse_rewind "$head" "tip=$start"',
+          adoption: 'tip="$start"',
+          driven: '"2: a fetched head ahead of the reported one is adopted"',
+        },
       ],
-      ["address-reviews", "The canonical path.", /adopt(?:ing)? the fetched OID as (?:this|the) entry's head/],
+      // The batch skill reads the same head from a tree that is not on the
+      // branch, through the helper's `head` command.
+      [
+        "address-reviews",
+        "The canonical path.",
+        /prints the entry's head as `head=` — what the fetch brought \*now\*, which is not necessarily the OID `gh pr view` just reported/,
+        {
+          command: "`pr-branch.sh head --repo <owner>/<repo> --pr <N>`",
+          rewind: "**A fetched-behind-reported head is a rewind, not an advance:** where it stops on `rewind`, block the entry for a maintainer decision without adopting the fetched OID.",
+          refusal: 'refuse_rewind "$head" "local=${tip:-absent}"',
+          adoption: "relation=absent",
+          driven: '"2b: the head is what the fetch brought, not what the PR reported"',
+        },
+      ],
     ];
-    const rewindRule =
-      "when both commits are available and the fetched OID is a proper ancestor of the `headRefOid` that `gh pr view` reported, block the entry for a maintainer decision without adopting the fetched OID";
-    const unchangedCases =
-      /Every other difference keeps the existing adoption rule:.*including an advance and a force-push whose reported OID was not downloaded/;
     const unread = [];
     const unphrased = [];
     const unclassifiedRewinds = [];
@@ -1292,30 +1307,25 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
           // stops on a rewind before adopting anything, and adopts every other
           // difference (its own suite drives that case).
           paragraphs.set(`${mirror}/${skill}`, para);
-          if (!para.includes("`pr-branch.sh reconcile --repo <owner>/<repo> --pr <N>`")) unread.push(`${path}'s rule paragraph does not order the helper's reconcile`);
-          if (!/git rev-parse --verify --quiet 'FETCH_HEAD\^\{commit\}'/.test(prBranchHelper)) unread.push("pr-branch.sh does not read the fetched head");
+          if (!para.includes(viaHelper.command)) unread.push(`${path}'s rule paragraph does not order ${viaHelper.command}`);
+          if (!prBranchHelper.includes('oid="$(git ls-remote "$1" "refs/heads/$2" 2>/dev/null | cut -f1)"')) unread.push("pr-branch.sh does not read the head the remote names now");
           if (!phrase.test(para)) unphrased.push(`${path} does not state ${phrase}`);
-          const rewindAt = prBranchHelper.indexOf("stop rewind ");
-          const adoptAt = prBranchHelper.indexOf('tip="$start"');
+          const rewindAt = prBranchHelper.indexOf(viaHelper.refusal);
+          const adoptAt = prBranchHelper.indexOf(viaHelper.adoption, rewindAt);
           if (
-            !text.includes("- **`rewind`** → the head ref is behind the head GitHub reports: block the entry for a maintainer decision without adopting either.") ||
-            !prBranchHelper.includes('is_ancestor "$head" "$P_OID"; then') ||
+            !text.includes(viaHelper.rewind) ||
+            !prBranchHelper.includes('is_ancestor "$1" "$P_OID"; then') ||
+            !prBranchHelper.includes('stop rewind "the head ref now points at $1') ||
             rewindAt === -1 ||
-            adoptAt < rewindAt
+            adoptAt === -1
           )
             unclassifiedRewinds.push(`${path} or pr-branch.sh does not block the fetched-behind-reported head before adopting it`);
-          if (!prBranchHelperTest.includes('"2: a fetched head ahead of the reported one is adopted"'))
+          if (!prBranchHelperTest.includes(viaHelper.driven))
             changedExistingCases.push("the helper's suite no longer drives an advanced head being adopted");
           const probes = gatingProbes(para);
           if (probes.length) gated.push(`${path} runs ${probes.join(", ")}`);
         } else {
-          paragraphs.set(`${mirror}/${skill}`, para);
-          if (!/git rev-parse (?:--verify )?FETCH_HEAD/.test(para)) unread.push(`${path}'s rule paragraph does not read the fetched head`);
-          if (!phrase.test(para)) unphrased.push(`${path} does not state ${phrase}`);
-          if (!para.includes(rewindRule)) unclassifiedRewinds.push(`${path} does not state the fetched-behind-reported block`);
-          if (!unchangedCases.test(para)) changedExistingCases.push(`${path} does not preserve advances and undownloaded force-pushes`);
-          const probes = gatingProbes(para);
-          if (probes.length) gated.push(`${path} runs ${probes.join(", ")}`);
+          unread.push(`${path}'s rule is not routed through the helper`);
         }
         if (skill === "address-reviews") {
           const guard = text.split("\n\n").find((p) => p.includes("**Remote-tip refresh guard** — the one rule"));
@@ -1513,11 +1523,20 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
 // it, which is a claim about ORDER as much as about presence.
 {
   const brief = publishPrompt(gathered({ reconcile: { outcome: "work" } }), [], { push: true }, [], []);
+  // The push itself is the bundled helper's now, so the ORDER is read out of
+  // its source and the brief is held to ordering that helper and nothing else.
   const stop = brief.indexOf('aborted: "local behind PR head"');
-  const lease = brief.indexOf("--force-with-lease=");
-  const named = /PROPER ANCESTOR/.test(brief);
+  const named = /`behind` → HEAD is a PROPER ANCESTOR/.test(brief);
   check("the publish brief stops a proper-ancestor HEAD without pushing", stop > -1 && named, `stop@${stop} names-the-case@${named}`);
-  check("and states that stop ahead of the lease it would otherwise match", stop > -1 && lease > -1 && stop < lease, `stop@${stop} lease@${lease}`);
+  const helperStop = prBranchHelper.indexOf('stop behind "this branch is behind the PR head');
+  const helperLease = prBranchHelper.indexOf('"--force-with-lease=refs/heads/$P_HEAD:$EXPECT"');
+  const ordersHelper = brief.includes("`address-review-pr-branch push --repo <owner>/<repo> --pr 42 --expect ");
+  const handRolled = /`git push /.test(brief);
+  check(
+    "and states that stop ahead of the lease it would otherwise match",
+    ordersHelper && !handRolled && helperStop > -1 && helperLease > -1 && helperStop < helperLease,
+    `orders the helper: ${ordersHelper}; hand-rolled push in the brief: ${handRolled}; stop@${helperStop} lease@${helperLease}`,
+  );
 }
 
 // --- Publication has one branch to push: the head ref -------------------------
@@ -1794,11 +1813,16 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // read-back stated before them confirms nothing.
   const step2 = brief.slice(brief.indexOf("2. Push."), brief.indexOf("3. Re-read unresolved threads"));
   const readBack = {
-    "reads the ref itself": /confirm what actually LANDED against the ref itself/.test(step2),
+    "reads the ref itself": /confirms what actually LANDED against the ref itself/.test(step2),
     "refuses the PR API as the evidence": /rather than from `gh pr view --json headRefOid`/.test(step2),
-    "names the per-URL ls-remote": /git ls-remote "<url>" refs\/heads\//.test(step2) && /git remote get-url --push --all <remote>/.test(step2),
-    "requires every push URL": /require every one of them to come back with the HEAD you pushed/.test(step2),
-    "treats silence as a stop": /exits 0 even when it prints nothing/.test(step2) && /is a stop rather than a pass/.test(step2),
+    // The per-URL read is the helper's: every push URL listed, one `ls-remote`
+    // each, and a URL that did not answer never counted as one lacking the tip.
+    "names the per-URL ls-remote":
+      /one `git ls-remote` per push URL/.test(step2) &&
+      prBranchHelper.includes('git remote get-url --push --all "$remote" >"$urlfile"') &&
+      prBranchHelper.includes('if raw="$(git ls-remote "$url" "refs/heads/$P_HEAD" 2>/dev/null)"; then'),
+    "requires every push URL": prBranchHelper.includes('if [ -n "$bad" ] || [ "$urls" = 0 ]; then'),
+    "treats silence as a stop": /did not show your tip or did not answer, which is a stop rather than a pass/.test(step2),
     "stops rather than claiming publication": step2.includes('aborted: "push not confirmed at the ref'),
     // The per-URL evidence has exactly ONE channel, so the brief has to name it:
     // `aborted` is the only field `PUBLISH_SCHEMA` has for a stop's reason, the
@@ -1808,17 +1832,15 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // literal abort and drops it, and the status line downstream has nothing to
     // say.
     "sends the per-URL evidence into that same field":
-      step2.includes('aborted: "push not confirmed at the ref: <what each URL returned>"'),
+      step2.includes('aborted: "push not confirmed at the ref: <what each URL returned>"') && /taking that evidence from its `readback=` lines/.test(step2),
     // The abort is the ONE fact the record and the run's result read to withhold
-    // their origin claims, so the stop leaves the advance TO it: ordering
-    // `pushedNewCommits: false` here would have the publisher assert the very fact
-    // its read-back failed to establish — in the direction that claims less about
-    // origin, but a claim either way.
+    // their origin claims, so the stop leaves the advance TO it.
     "leaves the advance to the abort rather than to a flag":
       /whether the ref MOVED is exactly the fact this read-back failed to establish/.test(step2) &&
       /do not set either flag to stand for it in either direction/.test(step2),
-    "orders no boolean for the advance it could not establish": !/`pushedNewCommits: (?:true|false)`/.test(step2),
-    "states it after the push": step2.indexOf("confirm what actually LANDED") > step2.indexOf("--force-with-lease="),
+    "orders no boolean for the advance it could not establish": !/`pushedNewCommits: (?:true|false)`/.test(step2.slice(step2.indexOf("- `unconfirmed`"))),
+    "is the only push": /it is the ONLY push of this publication/.test(step2) && /NEVER with `--force`/.test(step2),
+    "states it after the push": prBranchHelper.indexOf('git ls-remote "$url"') > prBranchHelper.indexOf("git push --quiet"),
   };
   const readBackMissing = Object.entries(readBack).filter(([, ok]) => !ok).map(([what]) => what);
   check(
@@ -1948,13 +1970,15 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // pinned positively, because "no restatement here" is only the right answer
   // while the steps themselves still do it.
   const step1 = brief.slice(brief.indexOf("1. Re-check before publication"), brief.indexOf("2. Push."));
-  const reVerified =
-    /re-fetch the PR and confirm it is still open/.test(step1) &&
-    /Re-read unresolved threads after the push/.test(brief);
+  const reFetches =
+    /the PR still open; its head, and the head ref itself, both still the expected commit/.test(step1) &&
+    /which step 2's command does for you/.test(step1) &&
+    prBranchHelper.includes('[ "$fetched" = "$EXPECT" ] || stop head-moved');
+  const reVerified = reFetches && /Re-read unresolved threads after the push/.test(brief);
   check(
     "and re-verifies the PR at the publish boundary through its own steps, needing no fourth copy of that rule",
     reVerified,
-    `step 1 re-fetches: ${/re-fetch the PR and confirm it is still open/.test(step1)}; step 3 re-reads: ${/Re-read unresolved threads after the push/.test(brief)}`,
+    `step 1 re-fetches: ${reFetches}; step 3 re-reads: ${/Re-read unresolved threads after the push/.test(brief)}`,
   );
 
   // And the sections that AUTHOR both recipes, in both mirrors: the brief is a
@@ -2026,8 +2050,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // Presence of the resolution is not the claim — a bullet that resolves the
   // branch's own target and then treats a mismatch as information keeps every
   // other string here, so the STOP is read as well.
-  const resolvesOwn = /resolve THAT branch's exact push remote\/ref and verify they match the PR head/.test(item1);
-  const stopsOnMismatch = /STOP rather than pushing to a target you resolved some other way/.test(item1);
+  const item2 = same.slice(same.indexOf("2. Push."), same.indexOf("3. Re-read unresolved threads"));
+  const resolvesOwn =
+    /the push remote found by matching its URLs against the PR's repository \(never assuming `origin`\)/.test(item1) &&
+    prBranchHelper.includes('remote="$(find_remote)" || stop no-remote');
+  const stopsOnMismatch = /`no-remote` → `aborted: "push remote unmatched"`/.test(item2) && /STOP without pushing/.test(item2);
   check(
     "the publish brief resolves the branch's own push remote/ref, and stops where they do not match the PR head",
     resolvesOwn && stopsOnMismatch,
@@ -2040,14 +2067,15 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // asked that way aborts a valid publication, and the wrong spelling is the
   // obvious one to write back in.
   const readsTheCheckout =
-    /`git branch --show-current` must print `feature\/x`/.test(item1) && !/--abbrev-ref HEAD` must print/.test(item1);
+    /still standing on the branch this run addressed — it must be `feature\/x`/.test(item1) &&
+    prBranchHelper.includes('cur="$(git branch --show-current)"') &&
+    !/--abbrev-ref/.test(prBranchHelper);
   // The stop carries its own reason string, like every other stop in this step:
   // one the schema's `aborted` examples list, so the publisher reports it rather
   // than inventing a phrase of its own for a state nothing else names.
   const stopsOnAnotherBranch =
-    /where it prints anything else, set `published: false`, `aborted: "working location moved off the branch"`, and STOP without pushing/.test(
-      item1,
-    );
+    /`wrong-branch` → `aborted: "working location moved off the branch"`/.test(item2) &&
+    prBranchHelper.includes('[ "$cur" = "$P_HEAD" ] || stop wrong-branch');
   check(
     "and re-verifies the checkout still stands on the branch the run addressed, stopping with a named reason when it does not",
     readsTheCheckout && stopsOnAnotherBranch,

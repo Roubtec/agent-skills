@@ -65,14 +65,18 @@ mkdir -p "$FAKE"
 chmod +x "$FAKE/gh"
 export PATH="$FAKE:$PATH"
 # A `git` that cannot reach any remote for a read-back, put ahead on PATH by
-# the cases that need one: `ls-remote` fails, everything else is the real git.
+# the cases that need one: an `ls-remote` of a URL fails — the read-back's, as
+# against the helper's own read of the remote by name — and everything else is
+# the real git.
 REAL_GIT="$(command -v git)"
 DEAF="$WORKDIR/deaf"
 mkdir -p "$DEAF"
 # shellcheck disable=SC2016 # the shim's own $@ must reach it unexpanded
 {
 	printf '#!/usr/bin/env bash\n'
-	printf 'for a in "$@"; do [ "$a" = ls-remote ] && exit 128; done\n'
+	printf 'ls=0 named=0\n'
+	printf 'for a in "$@"; do [ "$a" = ls-remote ] && ls=1; [ "$a" = origin ] && named=1; done\n'
+	printf '[ "$ls$named" = 10 ] && exit 128\n'
 	printf 'exec "%s" "$@"\n' "$REAL_GIT"
 } >"$DEAF/git"
 chmod +x "$DEAF/git"
@@ -178,6 +182,108 @@ pr OPEN feature "$NEWER"
 run reconcile "${ARGS[@]}"
 is "2: a rebased branch carrying the head by patch-id is 'represented'" "$(val outcome)" represented
 is "2: ...exit 0" "$RC" 0
+
+# --- 2b. head: the same reading, from a tree that is not on the branch --------
+new_repo
+git -C "$R" checkout -q main
+LOCAL="$(tip feature)"
+pr OPEN feature "$LOCAL"
+echo x >"$R/stray"
+run head "${ARGS[@]}"
+is "2b: head answers from another branch, clean tree or not" "$(val outcome)" open
+is "2b: ...with the fetched head" "$(val head)" "$LOCAL"
+is "2b: ...the head ref and the base ref" "$(val head-ref) $(val base-ref)" "feature main"
+is "2b: ...and a local branch at the head as 'equal'" "$(val relation)" equal
+[ ! -e "$R/.git/FETCH_HEAD" ]
+ok "2b: ...leaving no FETCH_HEAD for an overlapping run to misread" $?
+rm "$R/stray"
+commit "$U" f3 theirs
+git -C "$U" push -q origin feature
+pr OPEN feature "$LOCAL"
+run head "${ARGS[@]}"
+is "2b: the head is what the fetch brought, not what the PR reported" "$(val head)" "$(tip HEAD "$U")"
+is "2b: a local branch strictly behind it is 'behind'" "$(val relation)" behind
+is "2b: ...and is not moved" "$(tip feature)" "$LOCAL"
+is "2b: ...nor is the checkout" "$(git -C "$R" branch --show-current)" main
+git -C "$R" branch -q -f feature "$(val head)"
+git -C "$R" checkout -q feature
+commit "$R" f4 mine
+git -C "$R" checkout -q main
+run head "${ARGS[@]}"
+is "2b: a local branch past the head is 'ahead'" "$(val relation)" ahead
+git -C "$R" checkout -q feature
+git -C "$R" reset -q --soft HEAD~2
+git -C "$R" commit -q -m "f3 and f4, squashed differently"
+git -C "$R" checkout -q main
+run head "${ARGS[@]}"
+is "2b: a local branch missing the head's own commit is 'divergent'" "$(val relation)" divergent
+is "2b: ...which is an answer, not a stop" "$RC" 0
+git -C "$R" branch -q -f feature "$(val head)"
+git -C "$R" checkout -q feature
+git -C "$R" commit -q --amend -m "f3 reworded"
+commit "$R" f5 mine
+git -C "$R" checkout -q main
+run head "${ARGS[@]}"
+is "2b: a rewritten local branch carrying the head's patches is 'represented'" "$(val relation)" represented
+has "2b: ...with the local tip named" "$OUT" "local=$(tip feature)"
+git -C "$R" checkout -q -b newer "$(tip HEAD "$U")"
+commit "$R" f6 newer
+git -C "$R" checkout -q main
+pr OPEN feature "$(tip newer)"
+run head "${ARGS[@]}"
+is "2b: with the reported head ahead of the fetched one, head stops on the rewind" "$(val outcome)" rewind
+has "2b: ...naming the local tip beside the two heads" "$OUT" "local=$(tip feature)"
+pr OPEN feature "$(tip HEAD "$U")"
+git -C "$R" branch -q -D feature
+run head "${ARGS[@]}"
+is "2b: no local branch of that name is 'absent'" "$(val relation)" absent
+git -C "$R" tag feature main
+run head "${ARGS[@]}"
+is "2b: ...and a tag of that name does not answer for one" "$(val relation)" absent
+git -C "$R" tag -d feature >/dev/null
+lacks_local="$(val local)"
+is "2b: ...with no local tip to name" "$lacks_local" ""
+pr CLOSED feature "$(tip HEAD "$U")"
+run head "${ARGS[@]}"
+is "2b: a closed PR is a stop" "$(val outcome)" closed
+pr OPEN feature "$(tip HEAD "$U")" true
+run head "${ARGS[@]}"
+is "2b: a fork PR is a stop" "$(val outcome)" fork
+pr OPEN feature "$(tip HEAD "$U")"
+git -C "$R" remote set-url origin "https://github.com/someone/else.git"
+run head "${ARGS[@]}"
+is "2b: with no remote for the repository, head stops" "$(val outcome)" no-remote
+
+new_repo
+commit "$U" f2 theirs
+git -C "$U" push -q origin feature
+pr OPEN feature "$(tip HEAD "$U")"
+commit "$R" f2 mine
+blob="$(git -C "$R" rev-parse HEAD:f2)"
+rm -f "$R/.git/objects/${blob:0:2}/${blob:2}"
+git -C "$R" checkout -q main
+run head "${ARGS[@]}"
+is "2b: a comparison that could not run is a failure, never a relation" "$RC" 1
+is "2b: ...with no outcome" "$(val outcome)" ""
+
+# -C runs a command in another tree, as git takes it.
+new_repo
+OUT="$(cd "$WORKDIR" && bash "$HELPER" -C "$R" check 2>/dev/null)"
+is "2b: -C names the tree to work in" "$(val tip)" "$(tip HEAD)"
+echo x >"$R/stray"
+OUT="$(cd "$WORKDIR" && bash "$HELPER" -C "$R" check 2>/dev/null)"
+is "2b: ...and it is that tree whose dirt is reported" "$(val outcome)" dirty
+(cd "$WORKDIR" && bash "$HELPER" -C "$WORKDIR/no-such-tree" check >/dev/null 2>&1)
+is "2b: a tree that cannot be entered is a failure" "$?" 1
+(cd "$WORKDIR" && bash "$HELPER" -C >/dev/null 2>&1)
+is "2b: -C with no directory is a usage error" "$?" 64
+cp "$HELPER" "$WORKDIR/copy.sh"
+OUT="$(cd "$WORKDIR" && bash ./copy.sh -C "$R" --help 2>&1)"
+has "2b: --help still finds the script after -C, by a relative path" "$OUT" "pr-branch.sh head"
+OUT="$(cd "$WORKDIR" && bash ./copy.sh -C "$R" bogus 2>&1)"
+has "2b: ...and so does the usage block, down to its last line" "$OUT" "pr-branch.sh push"
+(cd "$WORKDIR" && bash "$HELPER" head "${ARGS[@]}" >/dev/null 2>&1)
+is "2b: head outside a repository is a failure" "$?" 1
 
 # --- 3. reconcile: the stops ------------------------------------------------
 new_repo
@@ -299,6 +405,8 @@ git -C "$R" remote remove aaa
 git -C "$R" remote set-url --push origin "https://github.com/someone/fork.git"
 run reconcile "${ARGS[@]}"
 is "3b: a remote that fetches from the repository but pushes elsewhere is not it" "$(val outcome)" no-remote
+run pin-base --repo acme/widgets --base main
+is "3b: ...except to pin a base from, which pushes nothing" "$(val outcome)" pinned
 git -C "$R" remote set-url origin "https://github.com/someone/fork.git"
 git -C "$R" remote set-url --push origin "https://github.com/acme/widgets/"
 run reconcile "${ARGS[@]}"
@@ -577,6 +685,20 @@ for f in plugins/dev-skills/skills/address-review/pr-branch.sh codex/dev-skills/
 done
 OUT="$("$SCRIPT_DIR/../plugins/dev-skills/skills/address-review/pr-branch.sh" --help 2>&1)"
 has "the helper runs by path and prints its contract" "$OUT" "pr-branch.sh reconcile"
+# The plugin's bin/ gives the same script a name on PATH, for a workflow agent
+# that holds a brief rather than a skill folder.
+SHIM="$SCRIPT_DIR/../plugins/dev-skills/bin/address-review-pr-branch"
+is "the bin/ shim is committed executable" "$(git -c safe.directory='*' -C "$SCRIPT_DIR/.." ls-files -s -- plugins/dev-skills/bin/address-review-pr-branch | cut -d' ' -f1)" 100755
+new_repo
+OUT="$(cd "$R" && PATH="$(dirname "$SHIM"):$PATH" address-review-pr-branch check 2>&1)"
+has "the shim runs the bundled helper by name, in the caller's directory" "$OUT" "tip=$(tip HEAD)"
+ln -s "$SHIM" "$WORKDIR/linked-shim"
+OUT="$(cd "$R" && bash "$WORKDIR/linked-shim" check 2>&1)"
+has "the shim follows a symlink to itself" "$OUT" "tip=$(tip HEAD)"
+cp "$SHIM" "$WORKDIR/address-review-pr-branch"
+OUT="$(bash "$WORKDIR/address-review-pr-branch" check 2>&1)"
+is "a shim copied away from the plugin fails as 'not found' does" "$?" 127
+has "...saying what it needs beside it" "$OUT" "only works from the dev-skills plugin's own bin/"
 
 if [ "$fails" -gt 0 ]; then
 	printf 'address-review pr-branch helper test: %d/%d checks FAILED.\n' "$fails" "$checks" >&2
