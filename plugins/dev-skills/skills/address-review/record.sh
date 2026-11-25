@@ -9,7 +9,8 @@
 #   record.sh spend  --repo <owner>/<repo> --pr <N> --branch <branch> --id <comment-id> [--summary-url <url>]
 #
 # `<owner>/<repo>` is the repository the PR is in, read from the PR's own URL;
-# every `gh` call names it.
+# every `gh` call names it. Write it `<host>/<owner>/<repo>` where the PR is not
+# on github.com.
 #
 # find    Lists the records on the PR: comments whose FIRST LINE is the marker,
 #         byte for byte (a comment that merely quotes the marker is not one).
@@ -120,6 +121,14 @@ need_repo() {
 	?*/?*) ;;
 	*) usage "--repo <owner>/<repo> is required (the repository the PR is in)" ;;
 	esac
+	SLUG="$(printf '%s' "$REPO" | awk -F/ '{ print $(NF-1) "/" $NF }')"
+	HOST="$(printf '%s' "$REPO" | awk -F/ 'NF > 2 { print $1 }')"
+}
+# `--repo` may be `<host>/<owner>/<repo>`, as gh takes it: the host goes to
+# `gh api --hostname`, and SLUG is the owner/repo the REST paths name.
+HOST="" SLUG=""
+api() {
+	if [ -n "$HOST" ]; then gh api --hostname "$HOST" "$@"; else gh api "$@"; fi
 }
 need_pr() {
 	case "$PR" in
@@ -325,10 +334,10 @@ ME="" OWN_ID="" OWN_URL="" OWN_SPENT="" OWN_AT="" OTHERS="" OWN_IDS=""
 # Every record on the PR, the authenticated user's most recent one picked out.
 list_records() {
 	local rows id login updated url spent best="" newer
-	ME="$(gh api user --jq .login)" || fail "could not read the authenticated user (gh failed). Nothing was written."
+	ME="$(api user --jq .login)" || fail "could not read the authenticated user (gh failed). Nothing was written."
 	[ -n "$ME" ] || fail "gh named no authenticated user. Nothing was written."
 	# shellcheck disable=SC2016 # $m is jq's
-	rows="$(gh api --paginate "repos/$REPO/issues/$PR/comments" --jq '
+	rows="$(api --paginate "repos/$SLUG/issues/$PR/comments" --jq '
 		"<!-- address-review:disposition-record -->" as $m
 		| .[]
 		| (.body | split("\n")) as $l
@@ -404,11 +413,11 @@ cmd_post() {
 	[ "$INCOMPLETE" = 0 ] || STANDING="$OWN_URL"
 	write_record
 	if [ -n "$OWN_ID" ] && [ "$INCOMPLETE" = 0 ]; then
-		url="$(gh api --method PATCH "repos/$REPO/issues/comments/$OWN_ID" -F "body=@$TMPF" --jq .html_url)" ||
+		url="$(api --method PATCH "repos/$SLUG/issues/comments/$OWN_ID" -F "body=@$TMPF" --jq .html_url)" ||
 			fail "could not update record $OWN_URL (gh failed). Whether it changed is not established: run find, and read it, before writing again."
 		superseded=yes
 	else
-		url="$(gh api --method POST "repos/$REPO/issues/$PR/comments" -F "body=@$TMPF" --jq .html_url)" ||
+		url="$(api --method POST "repos/$SLUG/issues/$PR/comments" -F "body=@$TMPF" --jq .html_url)" ||
 			fail "could not post the record on PR #$PR (gh failed). Whether it landed is not established: run find before posting again."
 		superseded=no
 		# The record left standing is one of the others now.
@@ -445,7 +454,7 @@ cmd_spend() {
 			say "status: SPENT — the map this record held has since been published in full by a later run$by" &&
 			say "nothing here is outstanding: every reply and resolve that publication owed reached the PR, and every standalone item and CI lane this record named was carried into that run's Summary comment — one it could not settle appearing there as the ambiguous/skipped item it is, which is where a maintainer picks it up, since a spent record hands nothing to a later run. This record is kept, findable by its marker, so a later run reads a SPENT record rather than a live one."
 	} >"$TMPF" || fail "could not write the record to a temporary file. Nothing was written."
-	url="$(gh api --method PATCH "repos/$REPO/issues/comments/$ID" -F "body=@$TMPF" --jq .html_url)" ||
+	url="$(api --method PATCH "repos/$SLUG/issues/comments/$ID" -F "body=@$TMPF" --jq .html_url)" ||
 		fail "could not update record $ID (gh failed). Whether it changed is not established: read it before writing again."
 	say "outcome=spent"
 	say "url=$url"

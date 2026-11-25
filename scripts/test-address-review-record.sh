@@ -57,6 +57,10 @@ cat >"$FAKE/gh" <<'FAKEGH'
 echo "$*" >>"$FAKE/gh.log"
 [ "$1" = api ] || exit 1
 shift
+if [ "$1" = --hostname ]; then
+	echo "$2" >"$FAKE/host"
+	shift 2
+fi
 method=GET path="" expr="." bodyfile=""
 while [ $# -gt 0 ]; do
 	case "$1" in
@@ -335,6 +339,15 @@ is "3: ...which is never read as an empty PR" "$(val outcome)" ""
 N="$(count)"
 run post "${P[@]}" --state not-published --reason r
 is "3: ...and never posted over" "$(count)" "$N"
+
+fresh
+run find --repo ghe.example.test/acme/widgets --pr 7
+is "3: a host-qualified repository is read on its own host" "$(cat "$FAKE/host" 2>/dev/null)" ghe.example.test
+is "3: ...by its owner and name" "$(val outcome)" none
+rm -f "$FAKE/host"
+run find --repo acme/widgets --pr 7
+[ ! -e "$FAKE/host" ]
+ok "3: ...and an unqualified one names no host, leaving gh its default" $?
 
 # --- 4. post -------------------------------------------------------------------
 fresh
