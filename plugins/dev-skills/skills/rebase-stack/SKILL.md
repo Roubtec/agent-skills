@@ -88,70 +88,44 @@ Without all three guarantees — explicit chain, explicit authorization, and dis
 
 ### Step 1 — Preflight
 
-1. **Working tree must be clean.**
-   Run `git status --porcelain`.
-   If anything is staged or modified, or any untracked file would be overwritten by a checkout (a `git checkout` or `git rebase` to another branch in the chain would fail), abort with a clear message asking the user to commit, stash, or clean.
-   Do not auto-stash.
-2. **Resolve target.**
-   Default target is `main` (fall back to `master` if `main` is absent).
-   Verify the local target ref exists.
-3. **Resolve source.**
-   Default source is the currently checked-out branch.
-   If the user specified a source, locate it; the source need not be checked out yet — the skill will check out branches as it goes.
-4. **Check no rebase is already in progress.**
-   Use `git rev-parse --git-path rebase-merge` and `git rev-parse --git-path rebase-apply`, which work in both the main checkout and linked worktrees.
-   If either path exists, abort with a message asking the user to finish or abort the in-progress rebase first.
+`stack.sh`, beside this file, does the ref arithmetic of the steps below; run it by absolute path.
+It prints `key=value` lines with `outcome=` first, exits 0 to proceed and 3 on a stop that needs a decision, and explains a stop on stderr; `stack.sh --help` lists every command and the lines it prints.
+It reads local refs only, and never fetches, pushes, rebases, or deletes a ref.
+
+Run `stack.sh preflight [--source <branch>] [--target <ref>]`, passing whichever of the two the user named.
+
+- **`ready`** → it prints the resolved `target` (default `main`, then `master`), the `source` (default: the current branch; it need not be checked out, since the skill checks branches out as it goes), and the `stamp` every pre-rebase ref of this run shares.
+  `untracked=` counts untracked files: they do not block the run, unless a checkout of a chain branch would overwrite one, in which case ask the user to move it first.
+- **`dirty`**, **`rebase-in-progress`** → stop with a clear message asking the user to commit, stash, or clean, or to finish or abort the rebase.
+  Do not auto-stash.
+- **`no-target`**, **`no-source`** → ask the user for the branch it could not resolve.
 
 ### Step 2 — Detect the chain
 
 If the user supplied an explicit `chain` form (see Invocation forms), skip detection entirely and use the provided list as-is — the last branch is the source, the rest are chain branches in stacking order.
 
-Otherwise, auto-detect:
+Otherwise run `stack.sh detect --source <source> --target <target>`.
 
-#### 2a. Compute the **effective frontier** `EF` between source and target
-
-Compute `EF` as the latest commit on source's history that is patch-equivalent to a commit reachable from target:
-
-```sh
-# Walk source's commits past the strict merge-base, marked + (unique) or = (patch-equiv on target).
-git rev-list --right-only --cherry-mark --no-merges <target>...<source>
-```
-
-The newest `=`-marked commit is `EF` (which is the **first** `=` line in the output, since `git rev-list` emits commits newest-first).
-If there are none, fall back to `EF = git merge-base <source> <target>` (the strict merge-base — same as `git rebase`'s default base in that case).
-
-#### 2b. Identify chain candidates
-
-For each local branch `X` (excluding `source` and `target`):
-
-```text
-mb = git merge-base X <source>
-```
-
-Include `X` as a chain candidate if all of these hold:
-
-- `mb` is a descendant of `EF`: `git merge-base --is-ancestor <EF> mb` (and `mb != EF`)
-- `mb` is an ancestor of `<source>`: `git merge-base --is-ancestor mb <source>`
-- `X != <target>` and `X != <source>`
-- **`X` has at least one unique commit past `<source>`**: `git rev-list --count <source>..<X>` is greater than zero.
-  All-ancestor tips are usually "snapshot" refs left behind from a prior workflow stage; excluding them keeps such refs out of the chain, at the cost of also skipping a real chain branch that has no commits of its own — to carry those refs along too, use the explicit `chain` form (which bypasses this filter — that list is authoritative) or a deliberate manual `git rebase --update-refs --no-rebase-merges` after explicitly enumerating and approving every ref the replay would move and applying Step 4's all-worktree checkout check.
+It computes the **effective frontier** `EF`: the newest commit on the source's history that is patch-equivalent to one reachable from the target, or their strict merge-base where there is none (`ef-kind=` says which, `equivalent=` how many source commits the target already carries).
+A chain candidate is a local branch that forks from the source's history past `EF` and holds at least one commit the source lacks; the candidates are ordered from the frontier up.
+The full ordered chain to be rebased is its `branch=` lines, in order, the source last: `[chain_branch_1, chain_branch_2, ..., chain_branch_M, source]`.
 
 This is **heuristic, not metadata**: it can also catch unrelated branches that happen to share a merge-base on the spine (e.g., `login-tests` accidentally branched from `feature/03`), which the confirmation listing lets the user filter out.
 
-Order candidates by `git rev-list --count <EF>..<mb>` ascending — closest to the effective frontier comes first.
-
-The full ordered chain to be rebased is `[chain_branch_1, chain_branch_2, ..., chain_branch_M, source]`.
+A `near=` line names a branch on the spine with no commit of its own past the source.
+Such tips are usually "snapshot" refs left behind from a prior workflow stage; leaving them out keeps such refs out of the chain, at the cost of also skipping a real chain branch that has no commits of its own — to carry those refs along too, use the explicit `chain` form (which bypasses this filter — that list is authoritative) or a deliberate manual `git rebase --update-refs --no-rebase-merges` after explicitly enumerating and approving every ref the replay would move and applying Step 4's all-worktree checkout check.
 
 #### 2c. Detection corner cases
 
-- **Detection finds nothing**: surface this clearly, show `EF` and any nearby branches that *almost* qualified, and offer two paths: re-run with the explicit `chain` form, or proceed with just the source.
+- **Detection finds nothing** (`outcome=empty`): surface this clearly, show `EF` and the `near=` branches that *almost* qualified, and offer two paths: re-run with the explicit `chain` form, or proceed with just the source.
   Don't silently treat "empty chain" as "rebase the source alone" — confirm.
-- **Source is a checkpoint, not a tip**: if `source` is itself an ancestor of some other local branch, the user probably meant that other branch as the source.
+- **Source is a checkpoint, not a tip** (a `checkpoint=` line): the source is itself an ancestor of that other local branch, so the user probably meant that branch as the source.
   Note this in the confirmation listing as a `[!]` flag.
+  Such a branch is never listed as a chain branch: it sits above the source, and the chain is replayed with the source last.
 
 ### Step 3 — Present the confirmation listing
 
-Output a clear, scannable listing.
+Output a clear, scannable listing, from what `detect` printed: each `branch=` line is a name, its tip, its count of commits past the branch above it, that branch's name, and the tip's subject, tab-separated.
 Include for each branch in the proposed chain:
 
 - Branch name.
@@ -166,7 +140,7 @@ Also report **target divergence info** as a non-blocking courtesy:
 
 - Local target SHA.
 - Cached `origin/<target>` SHA (read from local cache; do not fetch).
-- Approximate time since last fetch (from the cached ref's mtime, if available).
+- Approximately when that cached ref last changed (`origin-read=`, where its reflog says).
 - Whether they differ.
 
 Do **not** block on divergence.
@@ -208,46 +182,35 @@ Skipped branches are **left entirely untouched**.
 
 ### Step 4 — Linear-run fast path and per-branch rebase loop
 
-After the chain is confirmed and any skipped branches have been removed, freeze every confirmed branch's original tip and divide the chain at every consecutive pair `X → Y` for which `git merge-base --is-ancestor <X-original-tip> <Y-original-tip>` fails.
-Each maximal resulting sequence of at least two branches is a candidate run; single branches use the per-branch loop.
+After the chain is confirmed and any skipped branches have been removed, run `stack.sh segments <b1> ... <bN>` on it, in order: it divides the chain at every consecutive pair `X → Y` where `X`'s tip is not an ancestor of `Y`'s.
+Each `segment=run` line is a candidate run of at least two branches; a `segment=single` branch uses the per-branch loop.
 Process candidate runs and single-branch segments strictly left to right under one base-selection invariant: before qualifying or executing any segment `<first> ...`, set its `<segment-base>` to `<target>` if and only if `<first>` is the first branch of the entire confirmed chain; otherwise set it to the freshly rebased tip of `<first>`'s immediately preceding confirmed branch.
 Never choose the base from whether this is the first fast-path run or the first run of a particular kind.
 If a candidate run falls back, its first branch keeps that same `<segment-base>` and each later branch advances onto its freshly rebased immediate predecessor; after any segment succeeds, apply the invariant anew to the next segment.
-For a candidate run `<first> ... <last>`, derive its replay boundary with `git merge-base --all <segment-base> <last-original-tip>` and qualify the run only if that command returns exactly one commit distinct from `<segment-base>`; call it `<fork>`.
-A run whose fork already is the segment base needs no combined replay and uses the per-branch loop, whose iterations safely no-op as appropriate.
-Do **not** spell this as `--onto <segment-base> <fork>`: that makes `<fork>` the upstream used for cherry-pick dropping, so commits already represented on `<segment-base>` can be replayed instead of dropped.
-If a unique `<fork>` or the exact replay range cannot be proved by the checks below, use the per-branch loop; never guess a boundary.
+For a candidate run `<first> ... <last>`, run `stack.sh qualify --base <segment-base> <first> ... <last>`.
+It never guesses a boundary: the run is replayed together only where every one of its checks holds, and any one failing sends the whole run to the per-branch loop.
 
-Use the linear-run fast path only when **all** of these checks pass:
+- **`combined`** → the run has one fork from the base (`fork=`), carries no merge and no commit off that line, is pointed into by exactly its own branches — no omitted or skipped chain branch and no unrelated local branch — has every intermediate tip actually replayed rather than dropped as patch-equivalent to the base, and has no branch checked out in another worktree.
+  Where it prints `detach-first=`, this worktree stands on a run branch: run `git checkout --detach <segment-base>` and qualify again before replaying.
+- **`per-branch`** → `reason=` names the check that failed; process the run's branches with the per-branch loop below.
+  A run whose fork already is the segment base needs no combined replay, and that loop's iterations safely no-op as appropriate.
 
-- Every run branch's original tip lies in `<fork>..<last-original-tip>` on the one ancestry line from `<fork>` through `<last-original-tip>`, in confirmed-chain order.
-  The consecutive ancestry checks establish tip contiguity; also require `git rev-list --merges <fork>..<last-original-tip>` to be empty and require the OID sets from `git rev-list <fork>..<last-original-tip>` and `git rev-list --ancestry-path <fork>..<last-original-tip>` to be identical, so no branch can carry a merge or commits off that line.
-- Enumerate that same replay range with `git rev-list <fork>..<last-original-tip>`, then enumerate every local branch with `git for-each-ref --format='%(refname) %(objectname)' refs/heads/`.
-  The local branches whose exact tip OIDs occur in that replay set must be **exactly** the run's branches: no omitted or skipped chain branch and no unrelated local branch may point into it.
-- Prove that Git will actually replay every intermediate branch tip.
-  Enumerate the right side with `git rev-list --right-only --cherry-mark --no-merges <segment-base>...<last-original-tip>` and require every run tip except `<last-original-tip>` to appear as `+<full-tip-OID>`; a `=<tip-OID>` is patch-equivalent to `<segment-base>` and disqualifies the whole run.
-- No run branch is checked out in any worktree.
-  If this worktree currently has a run branch checked out, first detach it at `<segment-base>` with `git checkout --detach <segment-base>`, then inspect all `branch` entries from `git worktree list --porcelain`; if any run branch remains checked out, fall back.
-
-Any failed condition disqualifies the whole candidate run; process its branches with the per-branch loop below.
-
-Whenever the instructions below say to restore an entire run, first detach this worktree, verify each snapshot still resolves to its frozen original tip, and record every run branch's current OID.
-Restore all run branches in one `git update-ref --stdin` transaction: `start`, one `update refs/heads/<X> <snapshot-OID> <recorded-current-OID>` line per branch, `prepare`, then `commit`.
-Verify every run branch equals its snapshot afterwards.
-If a current OID changed before the restore or the transaction fails, stop and report the concurrent or unexpected ref movement; do not start the fallback from a state that was not restored exactly.
+Whenever the instructions below say to restore an entire run, run `stack.sh restore --stamp <stamp> <first> ... <last>`.
+It detaches this worktree if it stands on a run branch, checks each snapshot still holds the tip the run was frozen at, and moves every run branch back in one transaction, each update guarded by the commit the branch holds now, so it restores all of them or none.
+On `ref-moved`, or on any stop, report the concurrent or unexpected ref movement; do not start the fallback from a state that was not restored exactly.
 
 For a qualifying run:
 
 1. **Save every pre-rebase ref before replaying anything.**
-   For each branch `X` in the run, run `git update-ref refs/pre-rebase/<X>/<timestamp> <X>`, using the `YYYYMMDD-HHMMSS` timestamp captured once at the start of the whole stack run.
+   `stack.sh snapshot --stamp <stamp> <first> ... <last>` saves `refs/pre-rebase/<X>/<stamp>` for each branch, with the stamp `preflight` printed, and records every local branch's tip for the verification below.
    These snapshots receive the same inspection and run-scoped cleanup treatment as the per-branch snapshots below.
 2. **Replay once from the last branch.**
-   Run `git rebase --update-refs --no-rebase-merges --no-fork-point <segment-base> <last-branch>`.
+   Run the `replay=` command `qualify` printed, exactly as printed: `git rebase --update-refs --no-rebase-merges --no-fork-point <segment-base> <last-branch>`.
+   Do **not** respell it as `--onto <segment-base> <fork>`: that makes `<fork>` the upstream used for cherry-pick dropping, so commits already represented on `<segment-base>` can be replayed instead of dropped.
 3. **Verify exact ref movement and topology before accepting the run.**
-   Re-enumerate all local branch tips and require the set whose OIDs changed from the frozen pre-replay enumeration to be exactly the run's branches.
-   Require every run branch's new tip to differ from its snapshot, descend from `<segment-base>`, and be an ancestor of the next run branch's new tip.
-   If only run refs changed but any run postcondition fails, restore the entire run and use the per-branch loop from the same `<segment-base>`.
-   If any outside branch changed, stop and report it rather than hiding out-of-scope movement with a fallback.
+   `stack.sh verify --stamp <stamp> --base <segment-base> <first> ... <last>` requires that exactly the run's branches moved, each off its snapshot, onto the base, and each an ancestor of the next.
+   On `postcondition-failed`, restore the entire run and use the per-branch loop from the same `<segment-base>`.
+   On `outside-moved`, a branch outside the run changed: stop and report it rather than hiding out-of-scope movement with a fallback.
 4. **Handle conflicts under Step 5.**
    Attribute a conflicted commit to `<first>` when it lies in `<fork>..<first-original-tip>`, or to the later branch `Y` whose original interval is `<previous-original-tip>..<Y-original-tip>`.
    Trivial conflicts and accepted resolutions continue within the combined replay.
@@ -266,7 +229,7 @@ For every branch `X` not processed by the fast path, use this loop in confirmed-
 Apply the segment-base invariant above: set `<new-base>` for the first branch of a fallback or singleton segment to that segment's already selected `<segment-base>`, then set `<new-base>` for every later branch in the same fallback to the freshly rebased immediately preceding confirmed branch:
 
 1. **Save pre-rebase ref.**
-   `git update-ref refs/pre-rebase/<X>/<timestamp> <X>` where `<timestamp>` is `YYYYMMDD-HHMMSS`, **captured once at the start of the run** so every ref this run creates shares the same timestamp.
+   `stack.sh snapshot --stamp <stamp> <X>` saves `refs/pre-rebase/<X>/<stamp>`, with the one `YYYYMMDD-HHMMSS` stamp `preflight` printed, so every ref this run creates shares it.
    These refs are not deleted automatically; document the cleanup pattern in the final summary — scoped to **this run's** refs (the shared timestamp, or the exact list saved), never the whole `refs/pre-rebase/` namespace.
 2. **Checkout.**
    `git checkout <X>`.
@@ -412,6 +375,7 @@ Output:
   # Restore a single branch from its pre-rebase snapshot:
   git update-ref refs/heads/<branch> $(git rev-parse refs/pre-rebase/<branch>/<timestamp>)
 
+  # (Each run also leaves two small rebase-stack-<timestamp>.* files in the git dir; delete them with the refs.)
   # Delete only the pre-rebase refs created in THIS run. Every ref this run saved shares one <timestamp>,
   # so filter by that suffix — do NOT blanket-delete refs/pre-rebase/, which would also remove snapshots
   # from other branches and earlier runs:
