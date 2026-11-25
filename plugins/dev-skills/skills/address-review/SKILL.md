@@ -276,7 +276,7 @@ Fetch the **unresolved** review threads and enough context to judge them (see "G
   A finding failing any of those is stale context and stays out.
   Where it is only ambiguous which of the bot's comments are fresh, take none and say so in the Summary comment — or in step 8's report where the run ends as the terminal no-op below, which posts none — rather than re-addressing a round that is done.
   Its disposition rides the Summary comment alone, per step 7, and its identity is the comment's permalink **plus its ordinal within that comment** (`<html_url>`, finding N of M, counted in the order the body presents them): every finding one body holds shares the one permalink, so an identity of the url alone could carry only one of them into the disposition record and would collapse the rest.
-  Among them, look for a **prior disposition record** left by an earlier run of this skill, matched by the marker "The durable disposition record" defines rather than by its prose.
+  Among them, look for a **prior disposition record** left by an earlier run of this skill, found with `record.sh find` ("The durable disposition record"), by its marker rather than by its prose.
   That comment is this skill's own output rather than feedback: it is never a work item and carries no maintainer authority, and what to do with it — replay it, and supersede it rather than appending a second — is that section's.
 
 A maintainer reply on an unresolved thread is **authoritative**: if they said "skip this" or "do X instead," follow the maintainer over the original reviewer.
@@ -470,7 +470,7 @@ So every run that ends **without publishing in full** leaves that mapping on the
 **When it is posted.**
 Any run holding a triaged disposition map that did not publish it in full: a `no-push` run, and a run that intended to publish and could not — stopped at step 6's round cap, halted on a blocker, or waiting on a maintainer decision.
 Hands-off runs included.
-A publication that stopped part-way is the same case rather than an exception: it has replies left to replay, so it leaves the record too — in the rendering "A publication that stopped part-way" defines below, since the canonical `status: not published` is false once part of the map is on origin, while what the local-only line claims of the tips follows the push rather than the map: false where a push advanced the remote or an `Everything up-to-date` no-op found the tips already there, still true where what landed rode the API with no successful push.
+A publication that stopped part-way is the same case rather than an exception: it has replies left to replay, so it leaves the record too — in the `part` state below, since `not published` is false once part of the map is on origin, while what the record may say of the tips follows the push rather than the map: "local only" is false where a push advanced the remote or an `Everything up-to-date` no-op found the tips already there, still true where what landed rode the API with no successful push.
 A run that published posts none — step 7's replies, resolves, and Summary comment are the durable record there — and "published" means a publication whose own report can show it: an account of every item, and the URL of the Summary comment step 7 ends with.
 A run reporting itself complete over less has not published in this sense, and neither has one whose account **contradicts** the claim: a report calling the publication complete while its own entries say a thread it owed a reply never got one — or while reporting that no push command succeeded, which no complete publication reports, step 2's push being where publication starts and an `Everything up-to-date` no-op push already reporting its success — is refused exactly as one that accounts for nothing — over the same set of what step 7 owes each disposition that the outstanding count below is taken over, so the two cannot drift apart.
 It leaves the record, keeps its worktree, and reports an incomplete publication.
@@ -479,31 +479,30 @@ One last run posts none: one whose review stopped without any reviewer round eve
 That map rides out in the run's report instead.
 That exemption is about the MAP and never about how the review stopped: a final confirmation pass that stops the cycle leaves an error standing over the map a round has just passed, and that map is recorded like any other.
 
-**One record per PR per run, superseding your own rather than stacking.**
-The comment carries a stable machine-recognizable marker as its first line — `<!-- address-review:disposition-record -->` — so a later run finds it by that marker and never by matching prose.
-Before posting, look through the PR's issue comments (step 3 already fetched them) for one of the authenticated user's whose **first line is exactly** that marker — matched byte for byte, never by substring (the recipe says why) — and keep the authenticated-author filter: found, **update that comment in place**; absent, post a new one.
-Either way this run writes exactly one record, the same idempotence step 7 requires of thread replies.
-Where more than one prior record is present — one predating the marker, or another actor's — update the most recent of your own and report the rest: nothing here deletes, sweeps, or expires a record.
-"GitHub API recipes" carries both commands.
+**One record per PR per run, written by `record.sh`.**
+`record.sh` sits beside this file and is run by absolute path, like `pr-branch.sh`, answering the same way: `outcome=` first, exit 3 on a stop, exit 1 on a failure.
+After an exit 1 from `post` or `spend`, run `find` before writing again, since the write may have landed.
+It words the record's header and makes the one write.
+A record is a comment whose first line is the marker `<!-- address-review:disposition-record -->`, byte for byte, so a later run finds it by that marker and never by matching prose: `record.sh find --repo <owner>/<repo> --pr <N>` prints the most recent record of the authenticated user (`id=`, `url=`, `spent=`) and an `other=<url> <login> <updated-at> spent=<yes|no>` line for every further one.
+Another actor's record shows only as an `other=` line, under `outcome=none` where you have none of your own, and is still the record to replay where it is the most recent.
+`record.sh post` writes over that most recent record of your own where there is one and posts a new comment where there is none, so this run writes exactly one record, the same idempotence step 7 requires of thread replies.
+Report the `other=` records it lists: nothing here deletes, sweeps, or expires a record, and another actor's is never written to.
 **One map may not supersede: a map this run already knows is incomplete** — an item gathered and left with no disposition, one carrying two, or an entry publication rejected as unpublishable.
-Post it as a *new* comment and leave every earlier record standing, saying in its status line that it is partial and naming the record that still stands.
+Pass `--incomplete`, which posts it as a *new* comment, leaves every earlier record standing, and says in the status line that it is partial, naming the record of yours that still stands.
 Step 3's gather replays only the **most recent** record, so the partial record **carries the displaced record's orphaned entries forward**: every `## Threads` entry of the record this run replayed whose identity (`thread=<threadId or url>`, the url carrying its finding ordinal for a misfired finding) none of its own dispositions carries — a disposition that is itself the incompleteness (one of several naming the same gathered item, or one publication rejected as unpublishable) carrying nothing for this test, since its account of the item is the very thing the map cannot publish while the displaced record's entry is the only durable copy of a judged reply for it — is copied in verbatim and whole, marked as carried unchanged from that record, so the newest record stays the one complete replay surface while the older one stands as provenance — the next run's replay re-judges every entry against the tree either way, a carried one included.
-**A run that publishes in full SPENDS the record it replayed.**
-A run that publishes in full and finds a prior record of its own updates it in place to a **spent** record — the marker, the header line, and a status line saying the map it held has since been published in full — carrying no `## Threads` block and no `## Summary comment` block.
-It supersedes only a record already there: where the PR carries none, there is nothing to spend and nothing is posted, since a published run has nothing to hand forward.
-What it spends is **the record it replayed**, named by that comment's own id rather than by the "most recent record of my own" the supersession above selects on — the two differ where the record replayed is another actor's, and where the incomplete-map carve-out left a second one of this account's standing beside an earlier one.
-So where the PR no longer carries that exact record of its own, the run writes nothing and says so in its report.
+**A run that publishes in full SPENDS the record it replayed:** `record.sh spend --repo <owner>/<repo> --pr <N> --branch <branch> --id <that record's comment id> --summary-url <the Summary comment's url>` empties it in place — the marker, the header line, and a `SPENT` status, with no `## Threads` block and no `## Summary comment` block.
+It spends only a record already there: where the PR carries none, there is nothing to spend and nothing is posted, since a published run has nothing to hand forward.
+`--id` is **the record this run replayed**, never the "most recent record of my own" that `post` selects on — the two differ where the record replayed is another actor's, and where the incomplete-map carve-out left a second one of this account's standing beside an earlier one.
+Where it answers `absent`, the PR no longer carries that exact record of your own: nothing was written, and the report says so.
 
-**Content** — marker first:
+**Content.**
+The header is the script's, worded from the facts you pass; the body is yours, on stdin — the `## Threads` block and the `## Summary comment` block:
 
-```markdown
-<!-- address-review:disposition-record -->
-# address-review packet — PR #141 (task/141-foo)
-status: not published (<reason>)
-starting HEAD 9f3a1c2 | final HEAD abc1234 | recorded headRefOid 9f3a1c2
-base 21af561 | validation PASS | reviewer Pass (2 rounds) | peer forfeited
-the tips above are LOCAL ONLY — this run pushed nothing, so they are not on origin
-
+```sh
+record.sh post --repo <owner>/<repo> --pr 141 --branch task/141-foo \
+  --state not-published --reason '<why, one line>' \
+  --starting 9f3a1c2 --final abc1234 --head-oid 9f3a1c2 --base 21af561 \
+  --validation PASS --reviewer 'Pass (2 rounds)' --peer forfeited <<'RECORD'
 ## Threads
 [fixed]     SKILL.md:265  codex  thread=PRRT_kwDO...vv
             url:   .../pull/141#discussion_r369...
@@ -518,31 +517,35 @@ the tips above are LOCAL ONLY — this run pushed nothing, so they are not on or
 
 ## Summary comment (verbatim, ready to post)
 <full markdown body>
+RECORD
 ```
 
-**A publication that stopped part-way** renders that same record with two lines changed, because `status: not published` is false once part of the map is on origin and only the rest failed, and the local-only line gives way with it to the line naming what did reach origin: the status line becomes `status: published in part (<what landed, and what did not>)`, and in place of the local-only line goes one naming both halves — `reached origin: <what landed> — still outstanding: <what is left>`.
-What that replacement says of the TIPS follows the push rather than the map, in the three states the push is always read in, and the replacement line itself is what says it — the record is the durable copy a later turn acts on, so the tips fact rides on that line rather than only in the reasoning of the run that wrote it: a push that advanced the remote put the tips on origin, and is named among what landed — the one state that appends no tips clause, the landed list already saying it; an `Everything up-to-date` no-op moved nothing while leaving the tips already on origin, so the line appends that the tips above are already on origin, this run having put nothing there; and a map that landed through the API with no successful push — replies and resolves land without one — leaves the tips still LOCAL-ONLY, so the line appends that the tips above are still LOCAL-ONLY, what is on the PR putting nothing of the branch on origin.
-What counts as landed is what **is on the PR**, never what this run itself did: the per-thread account states each thread's END STATE when publication stopped — a reply skipped as a duplicate of one already there is on the PR and counts — so a reply an earlier run posted and a resolve already done are landed too.
-`reached origin` is read the same way — "is on origin", not "this run put it there" — so a replay whose push moved nothing over replies already on the PR renders as a publication published in part, which it is: the map is on the PR, whichever run posted it.
-The push is the one act named in that line, the flag that says the remote MOVED being the only push fact it may name: a push answered `Everything up-to-date` moved nothing, so a run whose no-op push left no reply, resolve or Summary comment on the PR published nothing in part — it keeps the canonical status and says in place of the local-only line that the tips are already on origin while nothing of this map reached it.
-Nothing else changes, and in particular every thread keeps its entry and its verbatim reply — with each entry saying where it stands, from what the publication actually confirmed per thread rather than from what it set out to do: an entry whose reply is already posted says so and whether its resolve is still owed, and one the publication reported no outcome for says that rather than guessing either way, since a reply posted twice and a reply never posted are both worse than an entry that sends the next turn to look.
-What is **outstanding** is what step 7 owes, not every disposition it did not report a reply for: a standalone item is addressed in the Summary comment alone and is never resolved as a thread, and an ambiguous-skipped thread is deliberately left without a reply and left open, so both stand at "nothing is owed" on a *complete* publication.
-The **resolve** is owed over a narrower set again, for the same reason: step 7 resolves a push-back or a deferral only on a bot thread, leaving the human one open unless the maintainer explicitly authorized otherwise, so a human push-back or deferral is unresolved by policy on a complete publication — it is out of the resolve count, and its entry says the resolve turns on that authorization rather than that one is still owed.
+Write "codex"/"claude"/"copilot" plain in the body and in the facts: a bare `@`-mention would summon a review round for unpublished work, and the script stops on one (`mention`).
+Where a reply or a finding quotes one verbatim, keep it inside a code span or a fenced block, which notifies nobody.
 
-**A publication whose outcome is not known** is a third state rather than a flavour of either, and it is the ordinary shape of a part-way stop rather than an exotic one: publication pushes at step 2 and replies at step 4, so a run that stops after the push and reports nothing usable about what it posted holds no fact about what it posted beyond the push itself.
-Absence of a report is not evidence that nothing reached the PR.
-So where the per-item account is missing, incomplete while the PR already carries part of this map, names one item twice, or names an item that is no disposition this run holds — those entries are keyed by `threadId`/`url` — a misfired finding's url with its ordinal, a CI lane's identity as step 3 gathers it — never by a `ref`, which two threads a re-review left on one line share — the status line says what is unknown rather than what happened — `status: UNKNOWN whether anything was published (<which facts are missing>)` where no successful push is known — the line in place of the local-only one says the same and why, and every thread entry carries that same reservation: check it on the PR before replying or resolving.
-Say what is unknown; never say nothing reached origin — and never say unknown of what the run does know.
-The push is reported positively and holds three states rather than two, so both of those lines still say the tips ARE on origin where the push advanced the remote, reserving the unknown for the replies, resolves and Summary comment the report cannot account for; still say the tips are already on origin, this run having put nothing there, where the push was an `Everything up-to-date` no-op; and keep the flat unknown above for a run no successful push is known for.
-The status line says what the line under it says, in the same terms: a status of "unknown whether anything was published" standing two lines above "what is known is that the push advanced the remote branch" is one record making both claims.
-A report that broke its own required-field contract is distrusted **whole** rather than field by field, its per-thread half included — where only the Summary URL is missing the account can be present, keyed and complete, and every entry still carries the reservation, because that reservation says the outcome is UNKNOWN rather than that the account is absent, and a report this run cannot read as a whole is not read in part.
-One empty account is complete rather than missing — a publisher whose push never succeeded acted on no thread, since the push precedes every reply and the Summary — and that run keeps the canonical rendering above unless its own push read-back is what stopped it, which is the fourth rendering below: the push command returned there and only the ref went unconfirmed, so the canonical rendering's local-only line would assert the very absence that stop failed to establish.
+**Which `--state`** — the first of these that is true of the run, since each later one asserts more about origin than the ones above it allow:
 
-**A push whose read-back could not confirm the ref** is a fourth rendering, and step 7's read-back stop is what enters it: `git push` returned, and then `git ls-remote` answered with an absent ref, a disagreeing OID, or a destination it could not reach, so whether the ref moved is the one fact that stop failed to establish.
-Every line the canonical rendering would print asserts that it did not move — `status: not published`, the local-only line, and the warning about commits that are not there — and the no-op line asserts the opposite, that the tips are already there, so this rendering takes neither: the status line becomes `status: UNKNOWN whether its push reached origin, and nothing else was published (<what each push URL returned>)`, and in place of the local-only line goes one saying that whether this run's push reached origin is UNKNOWN — `git push` returned and the read-back at the ref did not confirm the ref moved, so read the ref itself before treating the tips above as either published or local, while no reply, resolve or Summary comment reached the PR.
-Nothing else changes — every thread entry keeps its verbatim reply and carries no reservation of the third state's, because the read-back stops ahead of the first reply, so what this run posted is not in doubt and saying unknown of it would be saying unknown of what the run does know.
-What enters this rendering is that stop and never what the push command printed: an exit 0 and an `Everything up-to-date` are both reports of the command rather than of the ref, so the read-back's own verdict is read ahead of either.
-And it yields to the two renderings above, which claim less or more precisely: an account this run cannot read knows nothing about the push either, so that run keeps the third state's flat unknown, and a publication that stopped part-way names what it confirmed reaching origin — never this push, which nothing confirmed.
+- **`unknown` — the publication left no usable account of what it posted.**
+  The per-item account is missing, incomplete while the PR already carries part of this map, names one item twice, or names an item that is no disposition this run holds — those entries are keyed by `threadId`/`url` — a misfired finding's url with its ordinal, a CI lane's identity as step 3 gathers it — never by a `ref`, which two threads a re-review left on one line share.
+  Absence of a report is not evidence that nothing reached the PR: publication pushes first and replies after, so a stop after the push with nothing usable reported is the ordinary shape of a part-way stop.
+  `--reason` says which facts are missing.
+  Say what is unknown; never say nothing reached origin — and never say unknown of what the run does know: `--push` carries the one fact still held, `advanced` where the push moved the remote, `noop` where it was an `Everything up-to-date` no-op, `none` where no successful push is known.
+  A report that broke its own required-field contract is distrusted **whole** rather than field by field, its per-thread half included: every thread entry carries the reservation to check it on the PR before replying or resolving, even where only the Summary URL is missing and the account looks complete.
+  One empty account is complete rather than missing — a publisher whose push never succeeded acted on no thread, since the push precedes every reply and the Summary — and that run is `not-published`, or `unconfirmed` where its own push read-back is what stopped it.
+- **`part` — part of the map is on the PR and the rest is not.**
+  `--reason` says what landed and what did not.
+  `--landed` names what **is on the PR**, never what this run itself did: each thread's end state when publication stopped, so a reply an earlier run posted, a reply skipped as a duplicate, and a resolve already done all count.
+  `--outstanding` names what step 7 still owes, which is not every disposition without a reported reply: a standalone item is addressed in the Summary comment alone and is never resolved as a thread, and an ambiguous-skipped thread is deliberately left without a reply and left open, so both stand at "nothing is owed" on a *complete* publication.
+  The **resolve** is owed over a narrower set again: step 7 resolves a push-back or a deferral only on a bot thread, so a human push-back or deferral is unresolved by policy on a complete publication — it is out of the resolve count, and its entry says the resolve turns on the maintainer's authorization rather than that one is still owed.
+  `--push` is required here, and says what that means for the tips: `advanced` where a push put them on origin (name it in `--landed`), `noop` where they were already there, `none` where what landed rode the API with no successful push and the tips are still local.
+- **`unconfirmed` — `pr-branch.sh push` answered `unconfirmed`, and nothing else was published.**
+  Whether the ref moved is the one fact that stop failed to establish, so the record calls the tips neither published nor local; put what each push URL returned (the `readback=` lines) in `--reason`.
+  The entries carry no reservation: the read-back stops ahead of the first reply, so what this run posted is not in doubt.
+- **`not-published` — nothing of the map is on the PR.**
+  A `no-push` run, a round cap, a blocker.
+  Add `--push noop` where a push succeeded as an `Everything up-to-date` no-op and no reply, resolve or Summary comment followed: the tips are then already on origin, and the record must not call them local.
+
+In `part` and `unknown`, every thread keeps its entry and its verbatim reply, and each entry says where it stands, from what the publication actually confirmed per thread rather than from what it set out to do: an entry whose reply is already posted says so and whether its resolve is still owed, and one the publication reported no outcome for says that rather than guessing either way, since a reply posted twice and a reply never posted are both worse than an entry that sends the next turn to look.
 
 **Every entry carries the same field set whatever its disposition** — the stable reference (path:line, the comment author, and the thread's node id; for a standalone item, whose url is its permalink below and is written there once rather than in both slots, the comment author and — for a misfired finding — the finding's ordinal within its comment, `finding N of M`, since every finding that comment holds shares the one url — and, on its own `finding:` line, that finding's text verbatim as step 3 took it — as a one-line JSON string literal, its newlines and quotes escaped, since a finding is ordinarily several paragraphs or a code fence and placed raw would run into the entry's other slots — since the ordinal alone cannot tell the recorded finding from different text a later edit of the comment puts at N; for a CI lane, its identity as step 3 gathers it — its details URL names one head's run and the next push replaces it, so it is the lane's permalink rather than its identity), the permalink (the thread's, the standalone comment's url, or the lane's details URL), and the reply body verbatim — with a follow-up-task entry adding the committed file and its queued or deferred placement, and a standalone item or CI lane, which has no thread to reply on, carrying in the reply slot the Summary-comment text drafted for it (its cause and disposition, for a lane) rather than a reply nothing will post.
 
@@ -662,18 +665,6 @@ gh api graphql -f query='mutation($id:ID!){ resolveReviewThread(input:{threadId:
 gh pr comment NUMBER --repo <owner>/<repo> --body '...'        # Summary of Review Fixes
 gh pr comment NUMBER --repo <owner>/<repo> --body '@codex review'
 gh pr comment NUMBER --repo <owner>/<repo> --body '@claude review'
-```
-
-**The disposition record** — find a prior one by its marker, then update that comment in place; post a new one only where there is none (see "The durable disposition record").
-The match is on the body's **first line, byte for byte**, never `contains`: an ordinary comment that merely quotes the marker would otherwise be selected and `PATCH`ed away.
-(`rtrimstr("\r")` is why a body GitHub returns with CRLF endings still matches its own first line.)
-Both writes read the body from stdin, so composing it puts no file in the working location:
-
-```sh
-gh api --paginate repos/<owner>/<repo>/issues/NUMBER/comments \
-  --jq '.[] | select((.body | split("\n")[0] | rtrimstr("\r")) == "<!-- address-review:disposition-record -->") | {id, login: .user.login, updated_at}'
-gh api --method PATCH repos/<owner>/<repo>/issues/comments/COMMENT_ID -F body=@-   # supersede your own
-gh pr comment NUMBER --repo <owner>/<repo> --body-file -                           # none found: post one
 ```
 
 **Request a Copilot review** — this request, never an `@copilot review` comment (the `ping-copilot` table row says why and carries the gh version floor):

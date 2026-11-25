@@ -132,6 +132,7 @@
 // Run: node scripts/test-address-review-reconcile.mjs
 
 import { readFileSync } from "node:fs";
+import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { logicalLines } from "./lib/logical-lines.mjs";
@@ -147,6 +148,17 @@ const prBranchHelper = readFileSync(
   "utf8",
 );
 const prBranchHelperTest = readFileSync(join(here, "test-address-review-pr-branch.sh"), "utf8");
+// The disposition record's header is worded by a second bundled script, so the
+// checks that held the skill's prose to the workflow's record brief now read
+// what that script PRINTS for a state; `scripts/test-address-review-record.sh`
+// exercises the rest of it and holds the two mirrors' copies to the same bytes.
+const recordHelperPath = join(here, "..", "plugins", "dev-skills", "skills", "address-review", "record.sh");
+const recordHelper = readFileSync(recordHelperPath, "utf8");
+const renderRecord = (...args) =>
+  spawnSync("bash", [recordHelperPath, "render", "--pr", "7", "--branch", "b", "--reason", "r", ...args], {
+    input: "## Threads\n\n## Summary comment (verbatim, ready to post)\n",
+    encoding: "utf8",
+  }).stdout || "";
 const workflows = join(here, "..", "plugins", "dev-skills", "workflows");
 const SOURCE = "wf-address-review.js";
 
@@ -1572,17 +1584,18 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       ],
       [
         "the record's marker and its supersession",
-        "**One record per PR per run, superseding your own rather than stacking.**",
+        "**One record per PR per run, written by `record.sh`.**",
         [
           /<!-- address-review:disposition-record -->/,
           /never by matching prose/,
-          /update that comment in place/,
+          /writes over that most recent record of your own where there is one/,
           /this run writes exactly one record/,
           // What the lookup matches decides which comment the update overwrites,
           // so the first-line test and the author filter are part of the rule
-          // rather than of the recipe.
-          /whose \*\*first line is exactly\*\* that marker/,
-          /keep the authenticated-author filter/,
+          // rather than of the script alone.
+          /whose first line is the marker `<!-- address-review:disposition-record -->`, byte for byte/,
+          /the most recent record of the authenticated user/,
+          /another actor's is never written to/,
         ],
       ],
       [
@@ -1597,11 +1610,6 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         "step 3's replay premise for a recorded standalone item",
         "- **Top-level review summaries** (`gh pr view --json reviews`)",
         [/an earlier run having gathered it — by the request that identified it or as a misfired finding that qualified on its own — and is what makes that entry replayable at all/],
-      ],
-      [
-        "the recipe that finds it",
-        "**The disposition record** — find a prior one by its marker",
-        [/first line, byte for byte\*\*, never `contains`/, /would otherwise be selected and `PATCH`ed away/],
       ],
       [
         "the SHAs as provenance rather than a replay gate",
@@ -1637,27 +1645,19 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       // states; and on the codex mirror, which no workflow renders, that opener
       // IS the contract an agent derives the rendering from.
       [
-        "the part-way publication's rendering of that format",
-        "**A publication that stopped part-way**",
+        "the part-way state and what counts as landed",
+        "- **`part` — part of the map is on the PR and the rest is not.**",
         [
-          /status: published in part/,
-          /`status: not published` is false once part of the map is on origin/,
-          /a map that landed through the API with no successful push/,
-          /leaves the tips still LOCAL-ONLY/,
-          // The surface the tips claim is attributed to: the replacement LINE
-          // carries the clause, in the two states whose landed list cannot —
-          // the renderer's side of the same fact is pinned where the rendered
-          // record line is read, so the two cannot drift apart again.
-          /so the line appends that the tips above are still LOCAL-ONLY/,
-          /so the line appends that the tips above are already on origin/,
-          /the one state that appends no tips clause, the landed list already saying it/,
-          /reached origin: <what landed> — still outstanding: <what is left>/,
-          /What counts as landed is what \*\*is on the PR\*\*, never what this run itself did/,
-          /a reply an earlier run posted and a resolve already done are landed too/,
-          /`Everything up-to-date` moved nothing/,
-          /keeps its entry and its verbatim reply/,
-          /reported no outcome for says that rather than guessing/,
+          /`--landed` names what \*\*is on the PR\*\*, never what this run itself did/,
+          /a reply an earlier run posted, a reply skipped as a duplicate, and a resolve already done all count/,
+          /`none` where what landed rode the API with no successful push and the tips are still local/,
+          /`noop` where they were already there/,
         ],
+      ],
+      [
+        "every entry kept, with where it stands",
+        "In `part` and `unknown`, every thread keeps its entry and its verbatim reply",
+        [/reported no outcome for says that rather than guessing/],
       ],
       // The third state's ENTRY CONDITION, for the same reason the part-way
       // opener above is pinned and by the same mechanism: it is the one line an
@@ -1672,7 +1672,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       // PR is carrying.
       [
         "the third state's entry condition",
-        "**A publication whose outcome is not known**",
+        "- **`unknown` — the publication left no usable account of what it posted.**",
         [/incomplete while the PR already carries part of this map/],
       ],
     ];
@@ -1717,6 +1717,28 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       else last = at;
     }
     if (/--abbrev-ref/.test(prBranchHelper)) missing.push("pr-branch.sh reads the branch with --abbrev-ref");
+    // The recipe that finds a record is the record helper's now: the marker on
+    // the FIRST line, byte for byte — a `contains` test would select a comment
+    // that merely quotes it, and the update would PATCH that comment away —
+    // and only the authenticated user's is ever written over.
+    for (const [what, needle] of [
+      ["the first-line marker match", '| select(($l[0] // "" | rtrimstr("\\r")) == $m)'],
+      ["the authenticated-author filter", 'if [ "$login" = "$ME" ]; then'],
+    ]) {
+      if (!recordHelper.includes(needle)) missing.push(`record.sh has no ${what}`);
+    }
+    if (/contains\(/.test(recordHelper)) missing.push("record.sh matches a record with `contains`");
+    // The part-way rendering, read out of what the helper prints: the status,
+    // both halves on one line, and the tips clause that follows the push.
+    const part = (push) => renderRecord("--state", "part", "--push", push, "--landed", "L", "--outstanding", "O");
+    for (const [what, text, phrase] of [
+      ["its status", part("advanced"), "status: published in part (r)"],
+      ["both halves with no tips clause after a push that advanced", part("advanced"), "\nreached origin: L — still outstanding: O\n"],
+      ["the tips still local where nothing was pushed", part("none"), "still outstanding: O — and the tips above are still LOCAL-ONLY"],
+      ["the tips already on origin after a no-op push", part("noop"), "still outstanding: O — and the tips above are already on origin, this run having put nothing there"],
+    ]) {
+      if (!text.includes(phrase)) missing.push(`record.sh's part-way rendering does not print ${what}`);
+    }
     // Exactly one push in the helper, so nothing can force beside the lease.
     const pushes = prBranchHelper.replace(/^\s*#.*$/gm, "").match(/\bgit push\b[^\n]*/g) || [];
     if (pushes.length !== 1 || /\s(?:--force|-f)\s|"\+/.test(pushes[0])) missing.push(`pr-branch.sh must push exactly once and only under the lease; found: ${pushes.join(" | ")}`);
@@ -5038,12 +5060,10 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     }).join(" / ");
   const wantedGrouping = HEADER_LINES.map((fields) => fields.join(" | ")).join(" / ");
   const groupings = { "the record brief": headerGrouping(tipBrief) };
-  for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
-    groupings[mirror] = headerGrouping(readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8"));
-  }
+  groupings["record.sh"] = headerGrouping(renderRecord("--state", "not-published"));
   const drifted = Object.entries(groupings).filter(([, g]) => g !== wantedGrouping);
   check(
-    "and the record header groups its fields identically in the brief and in both mirrors of the skill that defines the shape",
+    "and the record header groups its fields identically in the brief and in what the skill's record helper prints",
     drifted.length === 0,
     drifted.map(([who, g]) => `${who}: ${g}`).join("; ") || wantedGrouping,
   );
@@ -5054,9 +5074,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // contradict. Read as text because they are prose no scenario executes.
   const RULE_CLAUSES = {
     "the push's three states, so the record never calls unknown what the run knows":
-      "The push is reported positively and holds three states rather than two",
-    "and the status line saying what the line under it says, rather than contradicting it":
-      "The status line says what the line under it says, in the same terms",
+      "never say unknown of what the run does know: `--push` carries the one fact still held",
     "a contract-breaking report distrusted whole rather than field by field":
       "is distrusted **whole** rather than field by field, its per-thread half included",
     "and a claim of publication accepted only over a report that can show it":
@@ -5077,6 +5095,35 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     const text = readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8");
     for (const [name, clause] of Object.entries(RULE_CLAUSES)) {
       if (!text.includes(clause)) missingRules.push(`${mirror}: ${name}`);
+    }
+  }
+  // The status line agreeing with the line under it is the helper's to get
+  // right now, so read both off what it prints for each push state.
+  // Whole spans, and the same ones the workflow's `UNKNOWN_BY_PUSH` table
+  // holds, so rewording either side alone fails here.
+  for (const [push, status, origin] of [
+    [
+      "advanced",
+      "published in part (the push), and UNKNOWN whether any reply, resolve or Summary comment was published",
+      "the push WAS published — it advanced the remote branch, so the tips above ARE on origin — while whether any reply, resolve or Summary comment below was published is UNKNOWN",
+    ],
+    [
+      "noop",
+      "UNKNOWN whether any reply, resolve or Summary comment was published",
+      "this run's push published NOTHING — it was an `Everything up-to-date` no-op, so the tips above are already on origin though this run put nothing there — while whether any reply, resolve or Summary comment below was published is UNKNOWN",
+    ],
+    [
+      "none",
+      "UNKNOWN whether anything was published",
+      "whether anything reached origin is UNKNOWN — not even a push is known to have advanced the remote branch, so whether the tips above are on origin is unknown too",
+    ],
+  ]) {
+    const printed = renderRecord("--state", "unknown", "--push", push);
+    if (!printed.includes(`\nstatus: ${status} (r)\n`) || !printed.includes(`\n${origin}: `)) {
+      missingRules.push(`record.sh: the status line saying what the line under it says, for a push that is ${push}`);
+    }
+    if (!src.includes(`status: "${status}"`) || !src.includes(`origin: "${origin}"`)) {
+      missingRules.push(`${SOURCE}: the same two lines for a push that is ${push}`);
     }
   }
   check(
@@ -5110,7 +5157,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "a doubled or unpublishable disposition counting as carrying nothing, so the prior entry it would mask is carried too":
       "a disposition that is itself the incompleteness (one of several naming the same gathered item, or one publication rejected as unpublishable) carrying nothing for this test",
     "and a full publication spending the record it replayed, leaving no entries to replay":
-      "**A run that publishes in full SPENDS the record it replayed.**",
+      "**A run that publishes in full SPENDS the record it replayed:**",
     "the spend named as what ends the standalone replay":
       "What ends this — the standalone half's answer to the unresolved-only rule the thread half self-terminates on — is the spend above",
     // WHICH record the spend writes over. It is not the one the supersession
@@ -5118,7 +5165,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // mis-targeted spend EMPTIES one, so the spend names the record it replayed
     // and writes nothing where the PR no longer carries it.
     "the spend targeting the record the run replayed rather than the account's most recent":
-      "What it spends is **the record it replayed**, named by that comment's own id",
+      "`--id` is **the record this run replayed**, never the \"most recent record of my own\" that `post` selects on",
     // And what the far end of that lifecycle owes: a run handed a spent record
     // is told what it is, or it is told to probe a `final HEAD` no spent record
     // cites — on the ordinary path, every run after a published one.
@@ -5172,17 +5219,21 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "and the line that replaces the local-only one, sending the reader to the ref itself":
       "whether this run's push reached origin is UNKNOWN — `git push` returned and the read-back at the ref did not confirm the ref moved, so read the ref itself before treating the tips above as either published or local",
     "and the route into it, so the empty-account rule stops sending this stop to the canonical rendering":
-      "that run keeps the canonical rendering above unless its own push read-back is what stopped it",
+      "and that run is `not-published`, or `unconfirmed` where its own push read-back is what stopped it",
   };
   const missingUnconfirmed = [];
+  const printedUnconfirmed = renderRecord("--state", "unconfirmed");
   for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
     const text = readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8");
     for (const [name, clause] of Object.entries(UNCONFIRMED_PUSH_CLAUSES)) {
-      if (!text.includes(clause)) missingUnconfirmed.push(`${mirror}: ${name}`);
+      // The two lines are the helper's wording; the route into them is the skill's.
+      const where = name.startsWith("and the route") ? text : printedUnconfirmed;
+      if (!where.includes(clause)) missingUnconfirmed.push(`${mirror}: ${name}`);
     }
+    if (/LOCAL ONLY/.test(printedUnconfirmed)) missingUnconfirmed.push("record.sh: an unconfirmed push printed as local only");
   }
   check(
-    "and both mirrors give a push whose read-back could not confirm the ref its own rendering — its status line, the line in place of the local-only one, and the route into it out of the empty-account rule",
+    "and a push whose read-back could not confirm the ref has its own rendering — the status line and the line in place of the local-only one as the record helper prints them, and the route into it out of the empty-account rule in both mirrors",
     missingUnconfirmed.length === 0,
     missingUnconfirmed.join("; "),
   );
@@ -5207,9 +5258,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       "whether this run's push reached origin is UNKNOWN — `git push` returned and the read-back at the ref did not confirm the ref moved, so read the ref itself before treating the tips above as either published or local, while no reply, resolve or Summary comment reached the PR",
   };
   const unconfirmedSurfaces = { "the record brief": briefs["a publication whose push could not be confirmed at the ref"] || "" };
-  for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
-    unconfirmedSurfaces[mirror] = readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8");
-  }
+  unconfirmedSurfaces["record.sh"] = printedUnconfirmed;
   const unsharedSpans = [];
   for (const [where, text] of Object.entries(unconfirmedSurfaces)) {
     for (const [name, span] of Object.entries(SHARED_UNCONFIRMED_SPANS)) {
@@ -5217,7 +5266,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     }
   }
   check(
-    "and the skill's wording for it is word for word what the brief prints — its status line and its origin line read out of the rendered brief and both mirrors together, so rewording either side alone fails",
+    "and the record helper's wording for it is word for word what the brief prints — its status line and its origin line read out of the rendered brief and the helper's output together, so rewording either side alone fails",
     unsharedSpans.length === 0,
     unsharedSpans.join("; "),
   );
