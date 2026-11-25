@@ -397,7 +397,7 @@ ref=$ref $t"
 	done
 	heads >"$(frozen_file)" || fail "could not record the local branch tips"
 	for b in $BRANCHES; do
-		[ -f "$(taken_file)" ] && awk -v b="$b" '$1 == b { f = 1 } END { exit !f }' "$(taken_file)" && continue
+		[ -f "$(taken_file)" ] && awk -v b="$b" '("b:" $1) == ("b:" b) { f = 1 } END { exit !f }' "$(taken_file)" && continue
 		printf '%s %s\n' "$b" "$(git rev-parse --verify --quiet "refs/pre-rebase/$b/$STAMP")" >>"$(taken_file)" || fail "could not record what $b was snapshotted at"
 	done
 	say "outcome=saved"
@@ -455,9 +455,9 @@ cmd_restore() {
 	done
 	for b in $BRANCHES; do
 		snap="$(git rev-parse --verify --quiet "refs/pre-rebase/$b/$STAMP")" || stop no-snapshot "$b has no snapshot for stamp $STAMP. Nothing was restored." "branch=$b"
-		was="$(awk -v b="$b" '$1 == b { print $2 }' "$frozen")"
+		was="$(awk -v b="$b" '("b:" $1) == ("b:" b) { print $2 }' "$frozen")"
 		[ "$was" = "$snap" ] || stop no-snapshot "$b's snapshot is $snap, not the ${was:-(nothing)} it was first taken at. Nothing was restored." "branch=$b"
-		cur="$(tip "$b")"
+		cur="$(tip "$b")" || stop ref-moved "$b is no longer a local branch: it was deleted since this command read it. Nothing was restored; a restore never recreates a branch." "branch=$b"
 		lines="$lines
 update refs/heads/$b $snap $cur"
 	done

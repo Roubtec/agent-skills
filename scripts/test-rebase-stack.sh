@@ -431,6 +431,18 @@ is "5: a branch checked out in another worktree is not moved from here" "$(val o
 is "5: ...and stays where it was" "$(tip f2)" "$BEFORE2"
 git -C "$R" worktree remove "$WORKDIR/held"
 
+# Branch names that awk would compare as numbers.
+git -C "$R" branch -q 01 f3
+git -C "$R" branch -q 1 f2
+STAMP=20260105-000000
+run snapshot --stamp "$STAMP" 01
+run snapshot --stamp "$STAMP" 1
+git -C "$R" branch -q -f 1 main
+run restore --stamp "$STAMP" 1
+is "5: branches named 01 and 1 are two branches, each with its own record" "$(val outcome)" restored
+is "5: ...restored to its own snapshot" "$(tip 1)" "$(tip f2)"
+git -C "$R" branch -q -D 01 1
+
 # A branch outside the run that moved during the replay.
 stack
 git -C "$R" checkout -q main
