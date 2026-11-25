@@ -46,8 +46,9 @@
 #              outcome=per-branch reason=<which check failed>
 # snapshot   Saves refs/pre-rebase/<branch>/<stamp> for each branch, and the
 #            tips of every local branch as they stand, for `verify` and
-#            `restore` (a small `rebase-stack-<stamp>.heads` file in the git
-#            dir, safe to delete once the run is over).
+#            what each snapshot was first taken at, for `restore` (two small
+#            `rebase-stack-<stamp>.*` files in the git dir, safe to delete once
+#            the run is over).
 #            `outcome=saved`, one `ref=` line each. Stops on `conflict` where
 #            that snapshot already exists with another commit.
 # verify     After a combined replay: exactly the run's branches moved, each
@@ -61,7 +62,7 @@
 #            Detaches this tree first if it stands on one of them.
 #              outcome=restored
 #            and stops, moving nothing, on:
-#              rebase-in-progress | no-snapshot | ref-moved
+#              rebase-in-progress | no-snapshot | checked-out | ref-moved
 #
 # Output: `key=value` lines on stdout, `outcome=` first; the explanation of a
 # stop goes to stderr. Exit status: 0 to proceed, 3 on a stop that needs a
@@ -123,6 +124,9 @@ parse() {
 in_repo() { git rev-parse --git-dir >/dev/null 2>&1 || fail "not inside a Git repository"; }
 oid() { git rev-parse --verify --quiet "$1^{commit}"; }
 tip() { git rev-parse --verify --quiet "refs/heads/$1^{commit}"; }
+# What a target or base names: the local branch of that name where there is
+# one — a tag called `main` must not answer for the branch — else any revision.
+commit_of() { tip "$1" || oid "$1"; }
 need_branches() { # minimum count
 	local n=0 b
 	for b in $BRANCHES; do
@@ -149,6 +153,29 @@ rebasing() {
 heads() { git for-each-ref --format='%(refname) %(objectname)' refs/heads/ | sed 's|^refs/heads/||'; }
 # In the common git dir, so every worktree of the repository reads one record.
 frozen_file() { printf '%s/rebase-stack-%s.heads' "$(cd "$(git rev-parse --git-common-dir)" && pwd)" "$STAMP"; }
+# What each snapshot of this stamp was first taken at: appended to, never
+# rewritten, so a later segment's snapshot cannot change an earlier one's line.
+taken_file() { printf '%s/rebase-stack-%s.taken' "$(cd "$(git rev-parse --git-common-dir)" && pwd)" "$STAMP"; }
+# Fails where a branch is checked out in a worktree other than this one,
+# printing that worktree.
+elsewhere() { # branch
+	local here wt="" key val
+	here="$(git rev-parse --show-toplevel)"
+	while read -r key val; do
+		case "$key" in
+		worktree) wt="$val" ;;
+		branch)
+			if [ "$val" = "refs/heads/$1" ] && [ "$wt" != "$here" ]; then
+				printf '%s' "$wt"
+				return 0
+			fi
+			;;
+		esac
+	done <<EOF
+$(git worktree list --porcelain)
+EOF
+	return 1
+}
 
 cmd_preflight() {
 	parse "$@"
@@ -168,13 +195,13 @@ cmd_preflight() {
 	else
 		stop no-target "there is no local main or master. Name the target."
 	fi
-	oid "$t" >/dev/null || stop no-target "'$t' does not resolve to a commit here." "target=$t"
+	commit_of "$t" >/dev/null || stop no-target "'$t' does not resolve to a commit here." "target=$t"
 	s="${SOURCE:-$(git branch --show-current)}"
 	[ -n "$s" ] || stop no-source "HEAD is detached and no source was named."
 	tip "$s" >/dev/null || stop no-source "'$s' is not a local branch." "source=$s"
 	say "outcome=ready"
 	say "target=$t"
-	say "target-oid=$(oid "$t")"
+	say "target-oid=$(commit_of "$t")"
 	say "source=$s"
 	say "source-oid=$(tip "$s")"
 	say "untracked=$(git status --porcelain --untracked-files=all 2>/dev/null | grep -c '^??')"
@@ -188,7 +215,7 @@ cmd_detect() {
 	in_repo
 	local s t ef kind marks equiv x xt mb n rows="" near="" sorted next
 	s="$(tip "$SOURCE")" || fail "'$SOURCE' is not a local branch"
-	t="$(oid "$TARGET")" || fail "'$TARGET' does not resolve to a commit"
+	t="$(commit_of "$TARGET")" || fail "'$TARGET' does not resolve to a commit"
 	marks="$(git rev-list --right-only --cherry-mark --no-merges "$t...$s")" || fail "could not compare $SOURCE with $TARGET"
 	ef="$(printf '%s\n' "$marks" | sed -n 's/^=//p' | head -n 1)"
 	equiv="$(printf '%s\n' "$marks" | grep -c '^=')"
@@ -287,7 +314,7 @@ cmd_qualify() {
 	need_branches 2
 	in_repo
 	local base last lastb="" forks fork b t range prev="" here wt br detach="" key val
-	base="$(oid "$BASE")" || fail "'$BASE' does not resolve to a commit"
+	base="$(commit_of "$BASE")" || fail "'$BASE' does not resolve to a commit"
 	for b in $BRANCHES; do lastb="$b"; done
 	last="$(tip "$lastb")"
 	forks="$(git merge-base --all "$base" "$last")" || per_branch "the base and $lastb share no history"
@@ -369,6 +396,10 @@ cmd_snapshot() {
 ref=$ref $t"
 	done
 	heads >"$(frozen_file)" || fail "could not record the local branch tips"
+	for b in $BRANCHES; do
+		[ -f "$(taken_file)" ] && awk -v b="$b" '$1 == b { f = 1 } END { exit !f }' "$(taken_file)" && continue
+		printf '%s %s\n' "$b" "$(git rev-parse --verify --quiet "refs/pre-rebase/$b/$STAMP")" >>"$(taken_file)" || fail "could not record what $b was snapshotted at"
+	done
 	say "outcome=saved"
 	printf '%s\n' "$out" | awk 'NF'
 }
@@ -380,7 +411,7 @@ cmd_verify() {
 	need_branches 2
 	in_repo
 	local base frozen b t was snap prev="" moved="" br
-	base="$(oid "$BASE")" || fail "'$BASE' does not resolve to a commit"
+	base="$(commit_of "$BASE")" || fail "'$BASE' does not resolve to a commit"
 	frozen="$(frozen_file)"
 	[ -f "$frozen" ] || fail "there is no record of the branch tips for stamp $STAMP: snapshot the run before replaying it"
 	while read -r br was; do
@@ -416,13 +447,16 @@ cmd_restore() {
 	need_branches 1
 	in_repo
 	! rebasing || stop rebase-in-progress "a rebase is in progress here. Abort it first; nothing was restored."
-	local b snap cur was frozen lines="" here
-	frozen="$(frozen_file)"
-	[ -f "$frozen" ] || stop no-snapshot "there is no record of the branch tips for stamp $STAMP, so no snapshot can be checked against it. Nothing was restored."
+	local b snap cur was frozen lines="" here wt
+	frozen="$(taken_file)"
+	[ -f "$frozen" ] || stop no-snapshot "there is no record of what stamp $STAMP's snapshots were taken at, so none can be checked against it. Nothing was restored."
+	for b in $BRANCHES; do
+		! wt="$(elsewhere "$b")" || stop checked-out "$b is checked out in another worktree ($wt): moving it from here would leave that tree's files on the rebased commit. Nothing was restored; restore from there, or free the branch first." "branch=$b"
+	done
 	for b in $BRANCHES; do
 		snap="$(git rev-parse --verify --quiet "refs/pre-rebase/$b/$STAMP")" || stop no-snapshot "$b has no snapshot for stamp $STAMP. Nothing was restored." "branch=$b"
 		was="$(awk -v b="$b" '$1 == b { print $2 }' "$frozen")"
-		[ "$was" = "$snap" ] || stop no-snapshot "$b's snapshot is $snap, not the ${was:-(nothing)} it stood at when the run was frozen. Nothing was restored." "branch=$b"
+		[ "$was" = "$snap" ] || stop no-snapshot "$b's snapshot is $snap, not the ${was:-(nothing)} it was first taken at. Nothing was restored." "branch=$b"
 		cur="$(tip "$b")"
 		lines="$lines
 update refs/heads/$b $snap $cur"

@@ -375,7 +375,7 @@ Output:
   # Restore a single branch from its pre-rebase snapshot:
   git update-ref refs/heads/<branch> $(git rev-parse refs/pre-rebase/<branch>/<timestamp>)
 
-  # (Each run also leaves a small rebase-stack-<timestamp>.heads file in the git dir; delete it with the refs.)
+  # (Each run also leaves two small rebase-stack-<timestamp>.* files in the git dir; delete them with the refs.)
   # Delete only the pre-rebase refs created in THIS run. Every ref this run saved shares one <timestamp>,
   # so filter by that suffix — do NOT blanket-delete refs/pre-rebase/, which would also remove snapshots
   # from other branches and earlier runs:

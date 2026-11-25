@@ -93,6 +93,10 @@ is "1: a clean tree on a branch is ready" "$(val outcome)" ready
 is "1: the source defaults to the current branch" "$(val source)" f3
 is "1: the target defaults to main" "$(val target)" main
 is "1: ...by its commit" "$(val target-oid)" "$(tip main)"
+git -C "$R" tag main f1
+run preflight
+is "1: a tag named like the target does not answer for the branch" "$(val target-oid)" "$(tip main)"
+git -C "$R" tag -d main >/dev/null
 case "$(val stamp)" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]) ok "1: it hands out the run's one stamp" 0 ;; *) ok "1: it hands out the run's one stamp" 1 ;; esac
 echo x >"$R/stray"
 run preflight
@@ -373,14 +377,14 @@ is "5: ...that moved nothing, the branches it could have moved included" "$(tip 
 rm "$R/.git/refs/heads/f2.lock"
 run restore --stamp 20990101-000000 f1
 is "5: a run with no snapshot is not restored" "$(val outcome)" no-snapshot
-mv "$R/.git/rebase-stack-$STAMP.heads" "$WORKDIR/heads.keep"
+mv "$R/.git/rebase-stack-$STAMP.taken" "$WORKDIR/heads.keep"
 run restore --stamp "$STAMP" f1 f2 f3
 is "5: nor is one whose record of the frozen tips is gone" "$(val outcome)" no-snapshot
-sed "s/^f1 .*/f1 $(tip main)/" "$WORKDIR/heads.keep" >"$R/.git/rebase-stack-$STAMP.heads"
+sed "s/^f1 .*/f1 $(tip main)/" "$WORKDIR/heads.keep" >"$R/.git/rebase-stack-$STAMP.taken"
 run restore --stamp "$STAMP" f1 f2 f3
 is "5: ...or disagrees with a snapshot" "$(val outcome)" no-snapshot
 is "5: ...which moves nothing" "$(tip f1) $(tip f2) $(tip f3)" "$BEFORE"
-mv "$WORKDIR/heads.keep" "$R/.git/rebase-stack-$STAMP.heads"
+mv "$WORKDIR/heads.keep" "$R/.git/rebase-stack-$STAMP.taken"
 # A branch that moves after restore has read it and before the transaction:
 # the hook fires on restore's own detach.
 git -C "$R" checkout -q f3
@@ -402,6 +406,30 @@ run restore --stamp "$STAMP" f1 f2 f3
 is "5: standing on a run branch, restore detaches and proceeds" "$(val outcome)" restored
 is "5: ...leaving the tree detached" "$(git -C "$R" branch --show-current)" ""
 is "5: ...and the branch on its snapshot" "$(tip f2)" "$(git -C "$R" rev-parse "refs/pre-rebase/f2/$STAMP")"
+
+# Branch by branch under one stamp: a later snapshot must not unsettle an earlier one.
+stack
+git -C "$R" checkout -q main
+commit m2 one
+STAMP=20260104-000000
+ORIG1="$(tip f1)"
+run snapshot --stamp "$STAMP" f1
+(cd "$R" && git rebase -q --no-update-refs --no-rebase-merges main f1 >/dev/null 2>&1)
+run snapshot --stamp "$STAMP" f2
+git -C "$R" checkout -q main
+run restore --stamp "$STAMP" f1
+is "5: a branch snapshotted and rebased before a later branch's snapshot can still be restored" "$(val outcome)" restored
+is "5: ...to where it was first taken" "$(tip f1)" "$ORIG1"
+git -C "$R" tag main f1
+run qualify --base main f1 f2 f3
+is "5: a tag named like the base does not answer for the branch there either" "$(val base-oid)" "$(tip main)"
+git -C "$R" tag -d main >/dev/null
+git -C "$R" worktree add -q "$WORKDIR/held" f2
+BEFORE2="$(tip f2)"
+run restore --stamp "$STAMP" f2
+is "5: a branch checked out in another worktree is not moved from here" "$(val outcome)" checked-out
+is "5: ...and stays where it was" "$(tip f2)" "$BEFORE2"
+git -C "$R" worktree remove "$WORKDIR/held"
 
 # A branch outside the run that moved during the replay.
 stack
