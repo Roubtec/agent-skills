@@ -144,7 +144,12 @@ cmd_lanes() {
 		while IFS="$TAB" read -r f1 f2 f3 f4 f5; do
 			case "$f1" in
 			pr) [ "$f2" = "$PR" ] || fail "the rollup answered for PR #$f2, not #$PR. Discard it and ask again." ;;
-			head) head="$f2" ;;
+			head)
+				# Every page re-reads the PR's live head: a push between two
+				# pages would mix two commits' checks under one name.
+				[ -z "$head" ] || [ "$head" = "$f2" ] || fail "the PR's head moved from $head to $f2 while its rollup was being read. Nothing here describes either commit; ask again."
+				head="$f2"
+				;;
 			page)
 				more="$f2"
 				cursor="$f3"

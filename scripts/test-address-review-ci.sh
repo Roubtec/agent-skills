@@ -164,6 +164,14 @@ call lanes "${ARGS[@]}"
 is "1: a rollup of several pages is read to its end" "$(val outcome)" failing
 has "1: ...by the cursor the first page gave" "$(cat "$FAKE/gh.log")" "after=CURSOR1"
 fresh
+rollup page1.json 7 true CURSOR1 "$(run_node tests scripts COMPLETED '"FAILURE"' "$RUN")"
+rollup page2.json 7 false "" "$(run_node tests markdown COMPLETED '"SUCCESS"' "$RUN2")"
+sed 's/abc123/def456/' "$FAKE/page2.json" >"$FAKE/page2.json.new" && mv "$FAKE/page2.json.new" "$FAKE/page2.json"
+call lanes "${ARGS[@]}"
+is "1: a head that moved between two pages is a failure, not a rollup of two commits" "$RC" 1
+is "1: ...with no outcome and no lane" "$OUT" ""
+has "1: ...naming both heads" "$ERR" "moved from abc123 to def456"
+fresh
 rollup page1.json 7 true "" "$(run_node tests scripts COMPLETED '"SUCCESS"' "$RUN")"
 call lanes "${ARGS[@]}"
 is "1: a promised page with no cursor is a failure, not a green rollup" "$RC" 1
