@@ -1272,7 +1272,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         "The canonical path.",
         /prints the entry's head as `head=` — what the fetch brought \*now\*, which is not necessarily the OID `gh pr view` just reported/,
         {
-          command: "`pr-branch.sh head --repo <owner>/<repo> --pr <N>`",
+          command: "`pr-branch.sh head --repo <owner>/<repo> --pr <N> --expect <the headRefOid step 1 recorded>`",
           rewind: "**A fetched-behind-reported head is a rewind, not an advance:** where it stops on `rewind`, block the entry for a maintainer decision without adopting the fetched OID.",
           refusal: 'refuse_rewind "$head" "local=${tip:-absent}"',
           adoption: "relation=absent",
@@ -1314,7 +1314,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
           const adoptAt = prBranchHelper.indexOf(viaHelper.adoption, rewindAt);
           if (
             !text.includes(viaHelper.rewind) ||
-            !prBranchHelper.includes('is_ancestor "$1" "$P_OID"; then') ||
+            !prBranchHelper.includes('git merge-base --is-ancestor "$1" "$seen"; then') ||
+            !prBranchHelper.includes('for seen in "$P_OID" "$EXPECT"; do') ||
             !prBranchHelper.includes('stop rewind "the head ref now points at $1') ||
             rewindAt === -1 ||
             adoptAt === -1

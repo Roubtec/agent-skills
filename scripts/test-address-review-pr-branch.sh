@@ -233,6 +233,14 @@ pr OPEN feature "$(tip newer)"
 run head "${ARGS[@]}"
 is "2b: with the reported head ahead of the fetched one, head stops on the rewind" "$(val outcome)" rewind
 has "2b: ...naming the local tip beside the two heads" "$OUT" "local=$(tip feature)"
+# GitHub has caught up with the rewind, but the caller read the head before it.
+pr OPEN feature "$(tip HEAD "$U")"
+run head "${ARGS[@]}"
+is "2b: once GitHub reports the rewound head, the fresh read alone sees nothing" "$(val outcome)" open
+run head "${ARGS[@]}" --expect "$(tip newer)"
+is "2b: ...so a head the caller read earlier is tested too, and the rewind stops" "$(val outcome)" rewind
+has "2b: ...naming the head it was behind" "$OUT" "reported=$(tip newer)"
+pr OPEN feature "$(tip newer)"
 pr OPEN feature "$(tip HEAD "$U")"
 git -C "$R" branch -q -D feature
 run head "${ARGS[@]}"
@@ -264,6 +272,39 @@ rm -f "$R/.git/objects/${blob:0:2}/${blob:2}"
 git -C "$R" checkout -q main
 run head "${ARGS[@]}"
 is "2b: a comparison that could not run is a failure, never a relation" "$RC" 1
+is "2b: ...with no outcome" "$(val outcome)" ""
+
+# The remote moves between the helper's read of the ref and its fetch: a git
+# that pushes from the other clone just ahead of each fetch, while armed.
+RACY="$WORKDIR/racy"
+mkdir -p "$RACY"
+# shellcheck disable=SC2016 # the shim's own $@ must reach it unexpanded
+{
+	printf '#!/usr/bin/env bash\n'
+	printf 'f=0; for a in "$@"; do [ "$a" = fetch ] && f=1; done\n'
+	printf 'if [ "$f" = 1 ] && [ -s "%s/armed" ]; then\n' "$RACY"
+	printf '  n="$(cat "%s/armed")"; echo $((n - 1)) >"%s/armed"; [ "$n" -gt 1 ] || : >"%s/armed"\n' "$RACY" "$RACY" "$RACY"
+	printf '  echo "$n" >>"%s/other/race"; "%s" -C "%s/other" add race; "%s" -C "%s/other" commit -q -m race; "%s" -C "%s/other" push -q origin feature\n' '__D__' "$REAL_GIT" '__D__' "$REAL_GIT" '__D__' "$REAL_GIT" '__D__'
+	printf 'fi\n'
+	printf 'exec "%s" "$@"\n' "$REAL_GIT"
+} >"$RACY/git.tmpl"
+racy() { # <times the remote moves under a fetch> <command...> → OUT, RC
+	sed "s|__D__|$(dirname "$R")|g" "$RACY/git.tmpl" >"$RACY/git"
+	chmod +x "$RACY/git"
+	echo "$1" >"$RACY/armed"
+	shift
+	OUT="$(cd "$R" && PATH="$RACY:$PATH" bash "$HELPER" "$@" 2>/dev/null)"
+	RC=$?
+}
+new_repo
+pr OPEN feature "$(tip HEAD)"
+racy 1 reconcile "${ARGS[@]}"
+is "2b: a head that moved under the fetch is read again, and the head it settles on is the one adopted" "$(val head)" "$(remote_tip feature)"
+is "2b: ...here an advance, fast-forwarded to" "$(val outcome)" fast-forwarded
+new_repo
+pr OPEN feature "$(tip HEAD)"
+racy 5 reconcile "${ARGS[@]}"
+is "2b: a head that will not hold still is a failure, never an older commit passed off as it" "$RC" 1
 is "2b: ...with no outcome" "$(val outcome)" ""
 
 # -C runs a command in another tree, as git takes it.
@@ -539,6 +580,8 @@ run push "${ARGS[@]}" --expect "$HEAD0"
 is "5: a push one URL took and another refused is 'unconfirmed', not 'rejected'" "$(val outcome)" unconfirmed
 is "5: ...saying the command was refused" "$(val push-command)" refused
 is "5: ...while the PR's repository does carry the tip" "$(remote_tip feature)" "$(tip HEAD)"
+is "5: ...and every push URL's answer is given, the one that took it included" "$(printf '%s\n' "$OUT" | grep -c '^readback=')" 2
+has "5: ...that one by the tip it shows" "$OUT" "readback=$O $(tip HEAD)"
 
 # A refused push whose read-back gets no answer has established nothing.
 new_repo

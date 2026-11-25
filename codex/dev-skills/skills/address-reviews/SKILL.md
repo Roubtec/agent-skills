@@ -233,8 +233,9 @@ If your local copy has a different name than the PR head, this auto-pairing cann
 
 The canonical path.
 Resolve the PR, then prefer a same-named local branch if you have one (so we still never bypass your local copy), else create the branch at the PR's **recorded exact `headRefOid`** — not at `origin/<headRefName>`, which Bootstrap's single fetch can leave stale in either direction.
-Both paths of step 2 start from `pr-branch.sh head --repo <owner>/<repo> --pr <N>`, run in the main tree: it fetches that exact head ref, moves nothing, and prints the entry's head as `head=` — what the fetch brought *now*, which is not necessarily the OID `gh pr view` just reported, and is the `headRefOid` recorded for the steps below.
+Both paths of step 2 start from `pr-branch.sh head --repo <owner>/<repo> --pr <N> --expect <the headRefOid step 1 recorded>`, run in the main tree: it fetches that exact head ref, moves nothing, and prints the entry's head as `head=` — what the fetch brought *now*, which is not necessarily the OID `gh pr view` just reported, and is the `headRefOid` recorded for the steps below.
 **A fetched-behind-reported head is a rewind, not an advance:** where it stops on `rewind`, block the entry for a maintainer decision without adopting the fetched OID.
+It tests the fetched head against both the head GitHub reports now and the one step 1 recorded, so a rewind that landed between the two reads is not adopted either.
 Every other difference is adopted: create the entry's branch at `head=` on the path that creates one, and move nothing on the path where a usable local `<headRefName>` already exists, which `address-review` step 1 reconciles against this head instead.
 Its `relation=` line says how that local branch stands to the head — `absent`, `equal`, `behind`, `ahead`, `represented`, or `divergent` — read as step 1 reads them.
 Besides that rewind block, skip-and-record only if the head keeps moving under you.

@@ -4,7 +4,7 @@
 # Usage, from the working location (the tree standing on the PR's head branch),
 # or from anywhere with `-C <dir>` ahead of the command, as git takes it:
 #   pr-branch.sh check
-#   pr-branch.sh head      --repo <owner>/<repo> --pr <N>
+#   pr-branch.sh head      --repo <owner>/<repo> --pr <N> [--expect <head-oid>]
 #   pr-branch.sh reconcile --repo <owner>/<repo> --pr <N>
 #   pr-branch.sh pin-base  --repo <owner>/<repo> --base <branch>
 #   pr-branch.sh pin-base  --target <ref>
@@ -26,7 +26,9 @@
 #              relation=absent       no local branch of that name
 #              relation=equal | behind | ahead | represented | divergent
 #                                    with `local=`, read as reconcile reads them
-#            and stops on rewind | fork | closed | no-remote.
+#            and stops on rewind | fork | closed | no-remote. `--expect`
+#            names a head read earlier: a fetched head behind THAT is a
+#            rewind too, though GitHub now reports the rewound one.
 #            `head` and `pin-base` read no FETCH_HEAD, which every fetch in a
 #            tree shares, so several may run at once in one tree.
 # reconcile  Runs `check`, reads the PR, fetches its head ref, and brings the
@@ -280,15 +282,23 @@ require_head_branch() {
 # read from FETCH_HEAD: every fetch in a tree shares that file, so two of
 # these overlapping would each read the other's line.
 fetch_ref() { # remote, branch → prints the fetched commit
-	local oid
-	oid="$(git ls-remote "$1" "refs/heads/$2" 2>/dev/null | cut -f1)"
-	[ -n "$oid" ] || return 1
-	# --no-write-fetch-head needs git 2.29; older gits just write the file.
-	git fetch --quiet --no-write-fetch-head "$1" "refs/heads/$2" >/dev/null 2>&1 ||
-		git fetch --quiet "$1" "refs/heads/$2" >/dev/null 2>&1 || return 1
-	# The ref moved between the two reads if the commit did not arrive.
-	git cat-file -e "$oid^{commit}" 2>/dev/null || return 1
-	printf '%s\n' "$oid"
+	local oid again
+	for _ in 1 2; do
+		oid="$(git ls-remote "$1" "refs/heads/$2" 2>/dev/null | cut -f1)"
+		[ -n "$oid" ] || return 1
+		# --no-write-fetch-head needs git 2.29; older gits just write the file.
+		git fetch --quiet --no-write-fetch-head "$1" "refs/heads/$2" >/dev/null 2>&1 ||
+			git fetch --quiet "$1" "refs/heads/$2" >/dev/null 2>&1 || return 1
+		# The same answer on both sides of the fetch is the head it fetched. A
+		# ref that moved in between gets one more try, then is a failure: an
+		# object already here would otherwise pass for the head.
+		again="$(git ls-remote "$1" "refs/heads/$2" 2>/dev/null | cut -f1)"
+		if [ "$again" = "$oid" ] && git cat-file -e "$oid^{commit}" 2>/dev/null; then
+			printf '%s\n' "$oid"
+			return 0
+		fi
+	done
+	return 1
 }
 
 cmd_check() {
@@ -319,11 +329,15 @@ unrepresented() { # tip, head
 
 # A fetched head behind the one GitHub reports is a rewind, not an advance.
 refuse_rewind() { # fetched head, extra key=value line
-	if [ "$1" != "$P_OID" ] && git cat-file -e "$P_OID^{commit}" 2>/dev/null &&
-		git merge-base --is-ancestor "$1" "$P_OID"; then
-		stop rewind "the head ref now points at $1, which is behind the $P_OID GitHub reports for PR #$PR. A maintainer decides; nothing was adopted." \
-			"fetched=$1" "reported=$P_OID" "$2"
-	fi
+	local seen
+	# The head GitHub reports now, and one the caller read earlier.
+	for seen in "$P_OID" "$EXPECT"; do
+		[ -n "$seen" ] && [ "$1" != "$seen" ] || continue
+		if git cat-file -e "$seen^{commit}" 2>/dev/null && git merge-base --is-ancestor "$1" "$seen"; then
+			stop rewind "the head ref now points at $1, which is behind the $seen recorded for PR #$PR. A maintainer decides; nothing was adopted." \
+				"fetched=$1" "reported=$seen" "$2"
+		fi
+	done
 }
 
 cmd_head() {
@@ -437,7 +451,7 @@ cmd_push() {
 	require_idle
 	read_pr
 	require_head_branch
-	local remote tip fetched mode url got raw bad="" refused=0 urls=0 landed=0 unread=0 urlfile
+	local remote tip fetched mode url got raw bad="" seen="" refused=0 urls=0 landed=0 unread=0 urlfile
 	tip="$(git rev-parse HEAD)"
 	[ "$P_OID" = "$EXPECT" ] || stop head-moved "PR #$PR's head is now $P_OID, not the $EXPECT this run worked against. Nothing was pushed." "now=$P_OID" "expected=$EXPECT" "tip=$tip"
 	remote="$(find_remote)" || stop no-remote "no remote of this checkout both fetches from and pushes to $REPO on $(wanted_host), so there is no push target."
@@ -472,15 +486,17 @@ cmd_push() {
 		urls=$((urls + 1))
 		if raw="$(git ls-remote "$url" "refs/heads/$P_HEAD" 2>/dev/null)"; then
 			got="$(printf '%s' "$raw" | cut -f1)"
+			seen="$seen
+readback=$url ${got:-absent}"
 			if [ "$got" = "$tip" ]; then
 				landed=$((landed + 1))
 			else
-				bad="$bad
-readback=$url ${got:-absent}"
+				bad=1
 			fi
 		else
 			unread=$((unread + 1))
-			bad="$bad
+			bad=1
+			seen="$seen
 readback=$url no answer"
 		fi
 	done <"$urlfile"
@@ -495,7 +511,8 @@ readback=$url no answer"
 		say "tip=$tip"
 		say "expected=$EXPECT"
 		if [ "$refused" = 1 ]; then say "push-command=refused"; else say "push-command=returned"; fi
-		printf '%s\n' "$bad" | awk 'NF'
+		# Every URL's answer, the ones that do show the tip included.
+		printf '%s\n' "$seen" | awk 'NF'
 		note "the head ref does not show $tip at every push URL ($landed of $urls do, $unread did not answer). Whether this push reached origin is not established; read the ref before going on."
 		exit 3
 	fi
