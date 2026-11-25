@@ -1592,7 +1592,7 @@ const PROSE_CLAUSES = {
   // everywhere in this suite, taken knowingly.
   "review-cycle": {
     anchors: [
-      "tell it where any output of that build goes, a path under the cycle's artifact directory below or inside the reviewed worktree, never a fixed shared scratchpad name and never left to the reviewer to pick",
+      "where any output of its build goes — a path under the cycle's artifact directory or inside the reviewed worktree, never a fixed shared scratchpad name and never left to the reviewer to pick",
       "Every cycle uses its own unique artifact directory outside the worktree — suffix the cycle slug, reduced first to a single path segment, or create it with `mktemp -d` — never a fixed shared filename: parallel cycles share one scratchpad, and fixed names have crossed review streams between concurrent runs before.\n" +
         "A slug is routinely a branch name, and the `/` in one splits the suffix into a parent directory: `mktemp` refuses that outright, and a `mkdir -p` path takes it silently, nesting the round history where nobody will look for it.\n" +
         "The full round history (reviewer reports, peer output, fixer packets) lives there, as does any build or validation output a role redirects to a file",
