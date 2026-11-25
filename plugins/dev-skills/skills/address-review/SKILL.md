@@ -14,6 +14,12 @@ The maintainer signals intent through GitHub's own resolved/unresolved state, no
 They resolve threads they want dropped (or reply with their own push-back) **before** triggering you, so the rule is simply: **unresolved = actionable, resolved = leave alone.**
 Because you resolve the threads you address (on push runs), running this skill repeatedly is self-cleaning — each run only re-examines what truly remains open.
 
+The branch mechanics — the clean-and-idle check, reconciling with the PR head, pinning a base, and the publication push — live in `pr-branch.sh`, beside this file.
+Run it by its absolute path from the working location; `--help` prints its full contract.
+It prints `key=value` lines with `outcome=` first, exits 0 to proceed and 3 on a stop that needs a decision, and explains a stop on stderr.
+Exit 1 is a failure with no `outcome=` line (the network, `gh`): retry it once, then stop and report what it said.
+Do not reproduce its steps by hand, and never work past a stop by running the fetch, fast-forward, or push yourself.
+
 ## Arguments
 
 All arguments are optional and parsing is **lenient** — accept commas, `&`, and free word order, mirroring the example prompts.
@@ -176,8 +182,8 @@ A subagent that may need to verify something in a way that could change state is
 ### Step 0 — Preflight
 
 1. **Clean and idle tree — checked in the working location, not here.**
-   Run both checks wherever this run will work, which "Working location" picks once step 1 has resolved the PR, and only there: `git status --porcelain` empty, **and** no Git operation in progress — `git rev-parse --git-path rebase-merge` and `rebase-apply` for an existing path, plus `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`.
-   Either check failing stops the run to ask the user to commit/stash/clean it (hands-off: document and stop).
+   Run `pr-branch.sh check` wherever this run will work, which "Working location" picks once step 1 has resolved the PR, and only there: it requires `git status --porcelain` empty **and** no Git operation in progress (a rebase, merge, cherry-pick, revert or bisect, several of which leave the porcelain empty).
+   A stop there asks the user to commit/stash/clean it (hands-off: document and stop).
    Never auto-stash or discard files, wherever you check.
 2. **Confirm `gh` is authenticated** (`gh auth status`).
    Without it you cannot read threads, reply, resolve, or comment.
@@ -204,27 +210,20 @@ Where `isCrossRepository` is true the head lives in another repository, so stop 
 
 **Now pick the working location**, per "Working location" above, and set it up before going any further: everything below this line — the reconciliation, the rebase, the fixes, the review, and the push — happens there.
 
-**Reconcile the working location's branch with the PR head before triaging anything.**
+**Reconcile the working location's branch with the PR head before triaging anything:** run `pr-branch.sh reconcile --repo <owner>/<repo> --pr <N>` there.
 The rule is *no work lost*, and ancestry decides it rather than a standing preference for either side.
-Fetch the PR's exact head ref in the working location without moving the local branch, and take the head you reconcile against from what that fetch actually brought — `git rev-parse FETCH_HEAD` — rather than from the recorded `headRefOid`.
-Where the fetched OID differs from the recorded one, classify the pair by ancestry before adopting anything.
-**A fetched-behind-reported head is a rewind, not an advance:** when both commits are available and the fetched OID is a proper ancestor of the `headRefOid` that `gh pr view` reported, block the entry for a maintainer decision without adopting the fetched OID.
-Every other difference keeps the existing adoption rule: adopt the fetched OID as `headRefOid` and continue, including an advance and a force-push whose reported OID was not downloaded, so the comparison below and step 7's lease both name the head you actually reconciled against.
-Read `FETCH_HEAD` in the tree that fetched it, and before anything else fetches: git keeps it per worktree, so a freshly attached worktree has none of its own until it fetches there, and the next fetch in that tree overwrites it.
-Then compare `HEAD` against `headRefOid`:
+It fetches the head ref itself and prints the head it reconciled against as `head=`: adopt that as `headRefOid` from here on, whatever `gh pr view` reported, so step 7's lease names the head you actually reconciled against.
 
-- **Equal** → the two agree; proceed.
-- **`HEAD` is a proper ancestor of `headRefOid`** (local strictly behind, nothing unpushed) → fast-forward the local branch to the PR head and address the feedback from there.
-  Never carry a strictly-behind tip into publication (step 7 stops on one).
-- **`headRefOid` is represented in `HEAD`** — either it is an ancestor, or every commit unique to it is present in `HEAD` by patch-id → keep the local branch and put the fixes on top.
-  Test representation by patch-id rather than raw ancestry: a branch rebased onto a newer base carries the PR head's content forward while sharing no SHAs with it.
-  Patch-id cannot speak for a merge commit, which has no patch of its own: ignore one that merely joined its parents, but treat a conflict resolution it introduced as unrepresented work unless `HEAD` carries that resolution too.
-- **Genuinely divergent** — each side holds commits the other lacks, and the remote's are not represented in `HEAD` by patch-id → **stop and ask the maintainer.**
-  Do not pick a side, merge, or rebase on your own; report both tips and the commits unique to each.
+- **`equal`, `ahead`, `represented`** → proceed; the branch was not moved.
+  `represented` is a branch rebased onto a newer base, which carries the PR head's content by patch-id while sharing no SHAs with it.
+- **`fast-forwarded`** → the branch was strictly behind and now stands on the PR head; address the feedback from there.
+- **`divergent`** → each side holds work the other lacks, or the PR head carries a merge commit with content of its own, which no patch-id can speak for: **stop and ask the maintainer**, reporting both tips and the `remote-only=` and `local-only=` commits it printed.
+  Do not pick a side, merge, or rebase on your own.
   Hands-off: skip the entry and document exactly this.
+- **`rewind`** → the head ref is behind the head GitHub reports: block the entry for a maintainer decision without adopting either.
+- **`fork`, `closed`, `wrong-branch`, `no-remote`, `dirty`** → stop and report what it said.
 
-The tip this run started from is the **working location's** tip as attached, not step 0's reading — in worktree mode that reading describes the main checkout, which the run never touches.
-Record it when the location is set up, and re-record it if the fast-forward above moved the branch; either way the pre-reconciliation value no longer describes what this run started from.
+The tip this run started from is the `tip=` it printed — the **working location's**, after any fast-forward (`was=` is where the branch stood before one) — not step 0's reading, which in worktree mode describes the main checkout the run never touches.
 
 ### Step 2 — Rebase onto the freshest base (the default; `no-rebase` opts out)
 
@@ -367,11 +366,11 @@ The peer preflight outcome from step 0 and `peer-opinions=off` carry into the cy
 This skill's deltas on the cycle:
 
 - The work items are every unresolved thread and standalone item verbatim, and every CI lane step 3 gathered — its identity as step 3 gathers it, its details URL, the log tail or the explicit logs-unavailable marker step 3 recorded, the cause found, and any fix made for it — each with its proposed disposition label (actionable-fixed / already-addressed / push-back / follow-up-task / ambiguous, or the CI disposition step 4 gave a lane), plus the effective review base, the branch, and the **working location** — its absolute path in worktree mode, so the Reviewer and the peer read the tree the fixes landed in rather than the main checkout.
-  The effective review base is the **pinned OID** step 2's latest rebase point landed on — the same commit every delegated range is taken against; where no rebase ran at all this turn (`no-rebase`, or both points judged unnecessary), pin the target the rebase would have used, once here instead, resolved exactly where the rebasing path resolves it.
-  A `rebase on top of <target>` target still standing — named by the request and not discarded by `no-rebase`, which suppresses the rebase and not the target — resolves where it was named: locally, `git rev-parse --verify '<target>^{commit}'` (the operand quoted as ONE argument — a legal ref name may carry `$`, backticks or `;`, and an unquoted `$`-fragment can silently resolve some other existing ref instead), fetching nothing.
-  Where that named target does not resolve here, stop and report what you tried rather than substituting anything: `baseRefName` is the target only where the request named NONE, never the fallback for one that failed to resolve, and `git rev-parse --verify` does not DWIM a remote-only branch to `origin/<it>`.
-  Otherwise — the request having named none — pin `baseRefName`, resolved exactly as the rebasing path's default target is — `git fetch <the remote whose URL is that repository, or that repository's URL where no remote points at it> refs/heads/<baseRefName>` against the repository the PR's own `url` names, moving no branch, then `git rev-parse --verify FETCH_HEAD^{commit}` read immediately after that fetch.
-  Never a bare ref name or an `origin/<base>`: those resolve a same-named local branch or a stale remote-tracking ref.
+  The effective review base is the **pinned OID** step 2's latest rebase point landed on — the same commit every delegated range is taken against; where no rebase ran at all this turn (`no-rebase`, or both points judged unnecessary), pin the target the rebase would have used, once here instead, with `pr-branch.sh pin-base`.
+  A `rebase on top of <target>` target still standing — named by the request and not discarded by `no-rebase`, which suppresses the rebase and not the target — is pinned with `--target '<target>'` (quoted as ONE argument), which resolves it in this checkout and fetches nothing.
+  Where that reports `unresolved`, stop and report it rather than substituting anything: `baseRefName` is the target only where the request named NONE, never the fallback for one that failed to resolve.
+  Otherwise — the request having named none — pin `baseRefName` with `--repo <owner>/<repo> --base <baseRefName>`, which fetches it fresh from the PR's own repository and moves no branch.
+  Never a bare ref name or an `origin/<base>`, not even where it stops on `no-remote`: those resolve a same-named local branch or a stale remote-tracking ref.
   Neither the Reviewer nor the peer gets your implementation reasoning, drafted rationale, or the fixer's report.
 - The Reviewer independently verifies every disposition: fixes and already-addressed claims must hold in the committed code; push-backs must be technically justified rather than convenient dismissals; follow-up-task items must point at a committed task file that genuinely covers the concern, with the follow-up itself justified under step 4's conditions — never an evasion of a cheap fix — and its queued or deferred placement consistent with step 5; ambiguous items must genuinely require an authoritative decision.
   It may reclassify any item.
@@ -395,22 +394,17 @@ Publication runs in the working location: the re-check, the resolved push remote
 
 **Which repository every `gh` call below addresses: the one the PR is in**, written out literally (`--repo <owner>/<repo>`, `repos/<owner>/<repo>/…`) per "GitHub API recipes" rather than left to default.
 
-1. **Re-check before publication:** require the working location clean and idle, by step 0.1's two checks, and still standing on the branch this run has been working on (`git branch --show-current`, in that spelling, never `git rev-parse --abbrev-ref HEAD`) — a location that has moved to some other branch since the review is a stop; re-fetch the PR and confirm it is still open, still points to the recorded head ref, and its current `headRefOid` is the expected remote tip you are prepared to replace.
-   Resolve the current branch's exact push remote/ref, verify they match that PR head, and fetch that exact head ref without moving the local branch so the expected commit object is available for the ancestry test — never assume `origin`.
-   If the PR head moved, the push target cannot be matched, or the branch has no usable push permission, stop and report instead of guessing.
+1. **Re-check and push:** run `pr-branch.sh push --repo <owner>/<repo> --pr <N> --expect <headRefOid>`, naming the head step 1 reconciled against.
+   It re-checks everything publication depends on — the tree clean, idle and still on the head branch; the PR open, with its head and the head ref itself both still the expected commit — then pushes `HEAD` to the head ref under an exact `--force-with-lease` on the expected head, whether that push is a fast-forward, a rewrite, or the no-op of a tip already there.
+   It then reads the ref back with `git ls-remote` through every push URL, after a refused push as well, since `gh pr view --json headRefOid` can report the pre-push head for a while.
 
-2. **Push:** work these in order, and never skip ahead to the lease — each excludes the ones above it and the last is "everything else", so no state is left for you to choose in.
-   - **First, a `HEAD` that is a proper ancestor of the expected tip is a stop, not a push.**
-     The remote branch is ahead of you: there is nothing of yours to publish, a normal push cannot fast-forward it, and the lease below is the trap rather than the protection — the expected OID is exactly what the remote still points at, so the lease *matches*, the push succeeds, and it rewinds the branch over the newer remote commits.
-     Stop and report, exactly as for a rejected lease, and reconcile nothing to make the push legal.
-   - Then, if the expected remote tip is an ancestor of `HEAD`, use a normal explicit push (`git push <remote> HEAD:refs/heads/<headRefName>`).
-   - **Otherwise** — every remaining state, whether or not this run rewrote history — use an exact lease (`git push <remote> --force-with-lease=refs/heads/<headRefName>:<expected-head-oid> HEAD:refs/heads/<headRefName>`).
-     If the lease is rejected, **never** escalate to bare `--force`; stop and report because the remote moved under you.
-
-   Then, whichever push ran: confirm what actually landed against the ref itself — one `git ls-remote "<url>" refs/heads/<headRefName>` for each URL `git remote get-url --push --all <remote>` lists — rather than `gh pr view --json headRefOid`, which can still report the pre-push head for a while after the push returns.
-   Read back through the resolved **push** URLs, not the remote name: a remote may carry a distinct `pushurl` (a writable mirror).
-   Enumerate with `--all` and read the URLs one at a time: `git push` writes to *every* configured push URL, plain `--push` names only the first, so one `ls-remote` per URL.
-   Every URL has to come back with the `HEAD` you pushed: `git ls-remote` is observational and exits 0 even when it prints nothing, so an absent ref, a disagreeing OID, or a destination you could not reach is a stop, not a pass.
+2. **Read its outcome:**
+   - **`pushed`** → the branch advanced (`advanced=yes`), and `head=` is what origin now carries.
+   - **`up-to-date`** → the tip was already the PR head, so the push was the `Everything up-to-date` no-op (`advanced=no`); carry on with the PR-side communication.
+   - **`behind`, `head-moved`, `rejected`** → nothing was pushed, and for `rejected` the read-back confirmed no push URL shows the tip: stop and report.
+     Reconcile nothing to make the push legal, and **never** escalate to a bare `--force`.
+   - **`unconfirmed`** → some push URL does not show the tip at the head ref, whether the push command returned or was refused (`push-command=`), so whether it reached origin is unknown: stop, and render the disposition record as its read-back case.
+   - **`fork`, `closed`, `wrong-branch`, `no-remote`, `dirty`** → stop and report what it said.
 
 3. **Re-read unresolved threads after the push.**
    Re-run any lane step 4 judged a flake only where the push was a no-op — a push that advanced the branch already re-ran every lane, and this run does not wait on the fresh rollup: CI gates the merge, and the next round reads it.

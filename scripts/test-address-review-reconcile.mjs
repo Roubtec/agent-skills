@@ -137,6 +137,16 @@ import { dirname, join } from "node:path";
 import { logicalLines } from "./lib/logical-lines.mjs";
 
 const here = dirname(fileURLToPath(import.meta.url));
+// The address-review skill delegates its branch mechanics to a script bundled
+// beside the brief. Where a check below used to pin the prose that carried a
+// git recipe, it now pins the command the brief orders and the helper source
+// that performs it; `scripts/test-address-review-pr-branch.sh` exercises the
+// behavior itself and holds the two mirrors' copies to the same bytes.
+const prBranchHelper = readFileSync(
+  join(here, "..", "plugins", "dev-skills", "skills", "address-review", "pr-branch.sh"),
+  "utf8",
+);
+const prBranchHelperTest = readFileSync(join(here, "test-address-review-pr-branch.sh"), "utf8");
 const workflows = join(here, "..", "plugins", "dev-skills", "workflows");
 const SOURCE = "wf-address-review.js";
 
@@ -1233,8 +1243,9 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     const rulePara = [
       [
         "address-review",
-        "**Reconcile the working location's branch with the PR head before triaging anything.**",
-        /rather than (?:from )?the recorded `headRefOid`/,
+        "**Reconcile the working location's branch with the PR head before triaging anything:**",
+        /adopt that as `headRefOid` from here on, whatever `gh pr view` reported/,
+        "viaHelper",
       ],
       ["address-reviews", "The canonical path.", /adopt(?:ing)? the fetched OID as (?:this|the) entry's head/],
     ];
@@ -1252,7 +1263,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     const paragraphs = new Map();
     const guards = new Map();
     for (const mirror of mirrors) {
-      for (const [skill, anchor, phrase] of rulePara) {
+      for (const [skill, anchor, phrase, viaHelper] of rulePara) {
         const path = `${mirror}/${skill}/SKILL.md`;
         let text;
         try {
@@ -1264,6 +1275,27 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         const para = text.split("\n\n").find((p) => p.includes(anchor));
         if (!para) {
           unread.push(`${path} has no paragraph carrying ${JSON.stringify(anchor)}`);
+        } else if (viaHelper) {
+          // The brief orders the helper; the helper reads the fetched head,
+          // stops on a rewind before adopting anything, and adopts every other
+          // difference (its own suite drives that case).
+          paragraphs.set(`${mirror}/${skill}`, para);
+          if (!para.includes("`pr-branch.sh reconcile --repo <owner>/<repo> --pr <N>`")) unread.push(`${path}'s rule paragraph does not order the helper's reconcile`);
+          if (!/git rev-parse --verify --quiet 'FETCH_HEAD\^\{commit\}'/.test(prBranchHelper)) unread.push("pr-branch.sh does not read the fetched head");
+          if (!phrase.test(para)) unphrased.push(`${path} does not state ${phrase}`);
+          const rewindAt = prBranchHelper.indexOf("stop rewind ");
+          const adoptAt = prBranchHelper.indexOf('tip="$start"');
+          if (
+            !text.includes("- **`rewind`** → the head ref is behind the head GitHub reports: block the entry for a maintainer decision without adopting either.") ||
+            !prBranchHelper.includes('git merge-base --is-ancestor "$head" "$P_OID"; then') ||
+            rewindAt === -1 ||
+            adoptAt < rewindAt
+          )
+            unclassifiedRewinds.push(`${path} or pr-branch.sh does not block the fetched-behind-reported head before adopting it`);
+          if (!prBranchHelperTest.includes('"2: a fetched head ahead of the reported one is adopted"'))
+            changedExistingCases.push("the helper's suite no longer drives an advanced head being adopted");
+          const probes = gatingProbes(para);
+          if (probes.length) gated.push(`${path} runs ${probes.join(", ")}`);
         } else {
           paragraphs.set(`${mirror}/${skill}`, para);
           if (!/git rev-parse (?:--verify )?FETCH_HEAD/.test(para)) unread.push(`${path}'s rule paragraph does not read the fetched head`);
@@ -1493,46 +1525,24 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   {
     const wanted = [
       [
-        // The stop the workflow brief has always carried and the skill did not:
-        // a HEAD that is a proper ancestor of the expected tip has nothing to
-        // publish, and the lease MATCHES there, so the fallback rewinds the
-        // branch over the newer remote commits.
-        "the proper-ancestor stop",
-        "**First, a `HEAD` that is a proper ancestor of the expected tip is a stop, not a push.**",
-        [/nothing of yours to publish/, /the lease \*matches\*/, /Stop and report, exactly as for a rejected lease/],
-      ],
-      [
-        "the publication re-check",
-        "1. **Re-check before publication:**",
+        // The push is the helper's: the brief orders it with the head this run
+        // reconciled against, and states what the helper re-checks and how it
+        // chooses between the plain push and the lease.
+        "the publication push",
+        "1. **Re-check and push:** run `pr-branch.sh push --repo <owner>/<repo> --pr <N> --expect <headRefOid>`",
         [
-          /Resolve the current branch's exact push remote\/ref, verify they match that PR head/,
-          /still standing on the branch this run has been working on/,
-          // The SPELLING, not only the requirement, and for the same reason the
-          // rendered brief is read for it below: `git rev-parse --abbrev-ref
-          // HEAD` is documented to produce a non-ambiguous name, so it prints
-          // `heads/<name>` wherever a tag shares the branch's name and aborts a
-          // valid publication. The span runs into "in that spelling" rather than
-          // stopping at the command, because both spellings appear on this line
-          // — the wrong one as the counter-example — so a bare mention of the
-          // right one would still pass a line that swapped which is asked for.
-          /`git branch --show-current`, in that spelling/,
-          // The CONSEQUENCE, not only the requirement. Everything above pins
-          // what the step must establish; none of it pins what happens when the
-          // establishing fails, and a line that resolves the target, finds it
-          // unmatched and then publishes anyway keeps every other span here.
-          // The span runs to "instead of guessing" rather than stopping at the
-          // verb, because "stop" alone also appears on this line as the
-          // moved-checkout case — so a bare mention would pass a line whose
-          // push-target failure had been softened to a note-and-continue.
-          /stop and report instead of guessing/,
+          /the tree clean, idle and still on the head branch/,
+          /its head and the head ref itself both still the expected commit/,
+          /under an exact `--force-with-lease` on the expected head, whether that push is a fast-forward, a rewrite, or the no-op/,
         ],
       ],
       [
-        "the normal push the stops precede",
-        "- Then, if the expected remote tip is an ancestor of `HEAD`",
-        [/`git push <remote> HEAD:refs\/heads\/<headRefName>`/],
+        // The CONSEQUENCE of a stop, not only its name: a line that names the
+        // outcomes and then lets the run push by hand keeps every other span.
+        "the push stops",
+        "- **`behind`, `head-moved`, `rejected`** → nothing was pushed, and for `rejected` the read-back confirmed no push URL shows the tip: stop and report.",
+        [/Reconcile nothing to make the push legal/, /\*\*never\*\* escalate to a bare `--force`/],
       ],
-      ["the lease as the remainder", "- **Otherwise** — every remaining state", [/whether or not this run rewrote history/]],
       [
         // The refusal is only followable if the shipped commands ask for the
         // field it reads, in both recipes a run follows.
@@ -1666,16 +1676,18 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         [/incomplete while the PR already carries part of this map/],
       ],
     ];
-    // Item 2's bullets are an ordered exclusion chain — "work these in order …
-    // each excludes the ones above it and the last is 'everything else'" — so
-    // presence is not enough: the lease MATCHES in exactly the states the two
-    // stops describe, so a stop stated below it is a stop no run reaches, and
-    // every bullet can be present and correctly phrased with the guard gone.
-    const anchorOf = (what) => wanted.find(([w]) => w === what)[1];
-    const orderedChain = [
-      "the proper-ancestor stop",
-      "the normal push the stops precede",
-      "the lease as the remainder",
+    // The helper's push is an ordered chain — the lease MATCHES in exactly the
+    // state the proper-ancestor stop describes, so a stop placed below the push
+    // is a stop no run reaches. Read the order out of the source, and the
+    // branch spelling with it: `git rev-parse --abbrev-ref HEAD` prints
+    // `heads/<name>` wherever a tag shares the branch's name.
+    const pushChain = [
+      ["the PR's reported head against the expected one", '[ "$P_OID" = "$EXPECT" ] || stop head-moved'],
+      ["the fetched ref against the expected one", '[ "$fetched" = "$EXPECT" ] || stop head-moved'],
+      ["the proper-ancestor stop", 'if [ "$tip" != "$EXPECT" ] && git merge-base --is-ancestor "$tip" "$EXPECT"; then'],
+      ["the one push, under its exact lease", 'git push --quiet "$remote" "--force-with-lease=refs/heads/$P_HEAD:$EXPECT" "HEAD:refs/heads/$P_HEAD" >&2 || refused=1'],
+      ["the read-back through every push URL", 'git remote get-url --push --all "$remote" >"$urlfile"'],
+      ["the refusal that the read-back confirmed", 'if [ "$refused" = 1 ] && [ "$landed" = 0 ]; then'],
     ];
     const missing = [];
     for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
@@ -1687,7 +1699,6 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         missing.push(`${path} cannot be read: ${err.message}`);
         continue;
       }
-      const lines = text.split("\n");
       for (const [what, anchor, phrases] of wanted) {
         const line = logicalLines(text).find((l) => l.includes(anchor));
         if (!line) {
@@ -1696,14 +1707,18 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         }
         for (const phrase of phrases) if (!phrase.test(line)) missing.push(`${path}'s ${what} does not state ${phrase}`);
       }
-      // An absent bullet is already reported above, so read the chain over the
-      // ones that are there: out of order is a separate failure from missing.
-      const placed = orderedChain
-        .map((what) => [what, lines.findIndex((l) => l.includes(anchorOf(what)))])
-        .filter(([, at]) => at !== -1);
-      for (let i = 1; i < placed.length; i += 1)
-        if (placed[i][1] < placed[i - 1][1]) missing.push(`${path} states ${placed[i][0]} before ${placed[i - 1][0]}`);
     }
+    let last = -1;
+    for (const [what, needle] of pushChain) {
+      const at = prBranchHelper.indexOf(needle);
+      if (at === -1) missing.push(`pr-branch.sh has no ${what}`);
+      else if (at < last) missing.push(`pr-branch.sh places ${what} out of order`);
+      else last = at;
+    }
+    if (/--abbrev-ref/.test(prBranchHelper)) missing.push("pr-branch.sh reads the branch with --abbrev-ref");
+    // Exactly one push in the helper, so nothing can force beside the lease.
+    const pushes = prBranchHelper.replace(/^\s*#.*$/gm, "").match(/\bgit push\b[^\n]*/g) || [];
+    if (pushes.length !== 1 || /\s(?:--force|-f)\s|"\+/.test(pushes[0])) missing.push(`pr-branch.sh must push exactly once and only under the lease; found: ${pushes.join(" | ")}`);
     check(
       "and the skill carries the same decisions in both mirrors, in the order that makes the stops reachable — the proper-ancestor stop ahead of both pushes, the fork refusal and the field both recipes read it from, the publication re-check, and the disposition record's carve-out, marker, supersession, SHA/patch-id and part-way-publication rules",
       missing.length === 0,
@@ -1929,12 +1944,13 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   const wanted = [
     [
       "the push read-back",
-      "confirm what actually landed against the ref itself",
-      [
-        /rather than `gh pr view --json headRefOid`/,
-        /for each URL `git remote get-url --push --all <remote>` lists/,
-        /exits 0 even when it prints nothing/,
-      ],
+      "It then reads the ref back with `git ls-remote` through every push URL",
+      [/after a refused push as well/, /since `gh pr view --json headRefOid` can report the pre-push head for a while/],
+    ],
+    [
+      "the read-back's stop",
+      "- **`unconfirmed`** → some push URL does not show the tip at the head ref, whether the push command returned or was refused",
+      [/whether it reached origin is unknown/, /render the disposition record as its read-back case/],
     ],
     [
       "the reviewer-request confirmation",
@@ -2969,12 +2985,13 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // gutted back to one arm, the rest of the suite stays green.
     const keepsTheStandingTarget = text.includes("A `rebase on top of <target>` target still standing") &&
       text.includes("not discarded by `no-rebase`, which suppresses the rebase and not the target");
-    const resolvesItWhereNamed = /resolves where it was named: locally, `git rev-parse --verify/.test(text);
-    const baseRefIsTheOtherArm = text.includes("pin `baseRefName`, resolved exactly as the rebasing path's default target is");
+    const resolvesItWhereNamed = text.includes("is pinned with `--target '<target>'` (quoted as ONE argument), which resolves it in this checkout and fetches nothing") &&
+      prBranchHelper.includes('git rev-parse --verify --quiet "$TARGET^{commit}"');
+    const baseRefIsTheOtherArm = text.includes("pin `baseRefName` with `--repo <owner>/<repo> --base <baseRefName>`, which fetches it fresh from the PR's own repository and moves no branch");
     // ...and it is the arm for a request that named NONE, never the fallback
     // for a named target that failed to resolve — the one silence that put
     // `baseRefName` right beside the failure as the apparent next step.
-    const failureIsNotTheBaseRef = text.includes("stop and report what you tried rather than substituting anything") &&
+    const failureIsNotTheBaseRef = text.includes("Where that reports `unresolved`, stop and report it rather than substituting anything") &&
       text.includes("never the fallback for one that failed to resolve");
     // ...and the flag rule that an agent reads FIRST must not have told it the
     // token was simply ignored, or it arrives at step 6 with nothing standing.

@@ -22,6 +22,7 @@ scripts/
   test-gh-review-threads.sh             # hermetic contract coverage for the review-thread helper
   test-dc-helpers.sh                    # hermetic contract coverage for the disposable-clone helpers
   test-prune-branches.sh                # hermetic coverage for the prune-branches helper
+  test-address-review-pr-branch.sh      # hermetic coverage for the address-review branch helper (reconcile, base pin, publication push)
   test-checkout-cleanliness-report.mjs  # regression coverage for the batch workflow's checkout report
   test-review-cycle-retirement.mjs      # behavior coverage for the review cycle's claim lifecycles, terminal gates, and packet measurement
   test-storage-probe-target.mjs         # regression coverage for the batch workflow's df-probe targeting and throttle retention
@@ -63,7 +64,7 @@ Why each of those is drawn where it is, and what bounds it, is documented in the
 
 ### Helpers bundled inside a skill
 
-A skill whose procedure is deterministic ships it as a script in its own folder and calls it by path, so the script arrives, updates, and is removed with the skill on every install route: Claude's plugin, powbox's seeding of either mirror, or a hand copy of the folder. Nothing has to be on `PATH`. `prune-branches/prune-branches.sh` is the first; the brief keeps only what needs judgement (reading the user's guidance, the confirmation, relaying the report). Such a script targets bash 3.2 and needs nothing beyond `git`, using `gh` and the powbox helpers only when present. Each mirror carries its own copy, held byte-identical by the script's test.
+A skill whose procedure is deterministic ships it as a script in its own folder and calls it by path, so the script arrives, updates, and is removed with the skill on every install route: Claude's plugin, powbox's seeding of either mirror, or a hand copy of the folder. Nothing has to be on `PATH`. `prune-branches/prune-branches.sh` is the first; the brief keeps only what needs judgement (reading the user's guidance, the confirmation, relaying the report). `address-review/pr-branch.sh` carries that skill's branch mechanics: the clean-and-idle check, reconciling the branch with the PR head, pinning a review base, and the publication push with its read-back. Such a script targets bash 3.2 and needs nothing beyond `git`, using `gh` and the powbox helpers only when present. Each mirror carries its own copy, held byte-identical by the script's test.
 
 ### `codex/`
 
@@ -160,6 +161,10 @@ Run `bash scripts/test-dc-helpers.sh` after any behavior change to `plugins/dev-
 ### `test-prune-branches.sh`
 
 Run `bash scripts/test-prune-branches.sh` after any change to `prune-branches.sh` in either mirror's `prune-branches` skill folder; the hermetic suite builds throwaway origins and clones under one `mktemp -d` root, drives `gh` and `wt-remove` through fakes, and also holds the two mirrors' copies of the helper to the same bytes.
+
+### `test-address-review-pr-branch.sh`
+
+Run `bash scripts/test-address-review-pr-branch.sh` after any change to `pr-branch.sh` in either mirror's `address-review` skill folder; the hermetic suite builds a throwaway origin and two clones per case under one `mktemp -d` root, answers `gh pr view` from a fake, and also holds the two mirrors' copies of the helper to the same bytes and to the executable bit. `test-address-review-reconcile.mjs` reads the same helper's source where it used to pin the brief's git recipes.
 
 ### `test-checkout-cleanliness-report.mjs`
 
