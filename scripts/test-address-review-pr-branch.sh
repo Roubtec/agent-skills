@@ -304,6 +304,16 @@ git -C "$R" remote set-url --push origin "https://github.com/acme/widgets/"
 run reconcile "${ARGS[@]}"
 is "3b: nor is one that only pushes to it" "$(val outcome)" no-remote
 
+# Only the first fetch URL is fetched from, so a mirror there is what decides.
+new_repo
+pr OPEN feature "$(tip HEAD)"
+git -C "$R" config --unset-all remote.origin.url
+git -C "$R" config --add remote.origin.url "https://github.com/someone/mirror.git"
+git -C "$R" config --add remote.origin.url "https://github.com/Acme/Widgets.git"
+git -C "$R" config remote.origin.pushurl "https://github.com/Acme/Widgets.git"
+run reconcile "${ARGS[@]}"
+is "3b: a remote whose first fetch URL is a mirror is not the PR's, whatever its second names" "$(val outcome)" no-remote
+
 # The host is part of the repository's name: a mirror elsewhere is not it.
 new_repo
 pr OPEN feature "$(tip HEAD)"

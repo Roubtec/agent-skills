@@ -1686,7 +1686,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       ["the fetched ref against the expected one", '[ "$fetched" = "$EXPECT" ] || stop head-moved'],
       ["the proper-ancestor stop", 'if [ "$tip" != "$EXPECT" ] && git merge-base --is-ancestor "$tip" "$EXPECT"; then'],
       ["every push URL listed before the push, so nothing can fail between a push and its account", 'git remote get-url --push --all "$remote" >"$urlfile"'],
-      ["the one push, under its exact lease", 'git push --quiet "$remote" "--force-with-lease=refs/heads/$P_HEAD:$EXPECT" "HEAD:refs/heads/$P_HEAD" >&2 || refused=1'],
+      ["the one push, under its exact lease", 'git push --quiet "$remote" "--force-with-lease=refs/heads/$P_HEAD:$EXPECT" "$tip:refs/heads/$P_HEAD" >&2 || refused=1'],
       ["the read-back through every push URL", 'if raw="$(git ls-remote "$url" "refs/heads/$P_HEAD" 2>/dev/null)"; then'],
       ["the refusal every URL answered and none contradicted", 'if [ "$refused" = 1 ] && [ "$urls" -gt 0 ] && [ "$unread" = 0 ] && [ "$landed" = 0 ]; then'],
     ];

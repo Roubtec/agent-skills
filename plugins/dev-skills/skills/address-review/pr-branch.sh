@@ -201,7 +201,8 @@ find_remote() {
 	want="$(lower "$REPO" | awk -F/ '{ print $(NF-1) "/" $NF }')"
 	host="$(wanted_host)"
 	for r in $(git remote); do
-		git config --get-all "remote.$r.url" | any_names_repo "$host" "$want" || continue
+		# `git fetch <remote>` reads the FIRST url only, so that one decides.
+		git config --get-all "remote.$r.url" | head -n 1 | any_names_repo "$host" "$want" || continue
 		{ git config --get-all "remote.$r.pushurl" || git config --get-all "remote.$r.url"; } |
 			any_names_repo "$host" "$want" || continue
 		matches="$matches$r
@@ -375,7 +376,9 @@ cmd_push() {
 	git remote get-url --push --all "$remote" >"$urlfile" 2>/dev/null
 	# The lease is exact on every push, the fast-forward included: the remote
 	# is only ever replaced where it still holds the head this run worked on.
-	git push --quiet "$remote" "--force-with-lease=refs/heads/$P_HEAD:$EXPECT" "HEAD:refs/heads/$P_HEAD" >&2 || refused=1
+	# What is pushed is the commit the checks above read, not whatever HEAD
+	# names by the time the fetch has returned.
+	git push --quiet "$remote" "--force-with-lease=refs/heads/$P_HEAD:$EXPECT" "$tip:refs/heads/$P_HEAD" >&2 || refused=1
 
 	# Read the ref back through every push URL, after a refused push as well:
 	# with several push URLs one can take the update before another refuses.
