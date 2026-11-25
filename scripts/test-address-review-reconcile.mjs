@@ -144,6 +144,14 @@ const here = dirname(fileURLToPath(import.meta.url));
 // git recipe, it now pins the command the brief orders and the helper source
 // that performs it; `scripts/test-address-review-pr-branch.sh` exercises the
 // behavior itself and holds the two mirrors' copies to the same bytes.
+// The `address-review` skill as an agent can come to hold it: its SKILL.md, then
+// the files beside it that SKILL.md sends a run to read in full when their case
+// arises. A rule the checks below pin may live in any of them, and the suite
+// `test-skill-bundled-files.mjs` holds each to being there in both mirrors.
+const ADDRESS_REVIEW_PARTS = ["SKILL.md", "misfired-findings.md", "disposition-record.md"];
+function readAddressReviewSkill(mirror) {
+  return ADDRESS_REVIEW_PARTS.map((file) => readFileSync(join(here, "..", mirror, "address-review", file), "utf8")).join("\n");
+}
 const prBranchHelper = readFileSync(
   join(here, "..", "plugins", "dev-skills", "skills", "address-review", "pr-branch.sh"),
   "utf8",
@@ -266,7 +274,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 285;
+const EXPECTED_CHECKS = 287;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1800,7 +1808,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       const path = `${mirror}/address-review/SKILL.md`;
       let text;
       try {
-        text = readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8");
+        text = readAddressReviewSkill(mirror);
       } catch (err) {
         missing.push(`${path} cannot be read: ${err.message}`);
         continue;
@@ -2098,7 +2106,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     const path = `${mirror}/address-review/SKILL.md`;
     let text;
     try {
-      text = readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8");
+      text = readAddressReviewSkill(mirror);
     } catch (err) {
       missing.push(`${path} cannot be read: ${err.message}`);
       continue;
@@ -5263,7 +5271,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   };
   const missingRules = [];
   for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
-    const text = readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8");
+    const text = readAddressReviewSkill(mirror);
     for (const [name, clause] of Object.entries(RULE_CLAUSES)) {
       if (!text.includes(clause)) missingRules.push(`${mirror}: ${name}`);
     }
@@ -5346,7 +5354,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   };
   const missingLifecycle = [];
   for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
-    const text = readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8");
+    const text = readAddressReviewSkill(mirror);
     for (const [name, clause] of Object.entries(LIFECYCLE_CLAUSES)) {
       if (!text.includes(clause)) missingLifecycle.push(`${mirror}: ${name}`);
     }
@@ -5409,7 +5417,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   const missingUnconfirmed = [];
   const printedUnconfirmed = renderRecord("--state", "unconfirmed");
   for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
-    const text = readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8");
+    const text = readAddressReviewSkill(mirror);
     for (const [name, clause] of Object.entries(UNCONFIRMED_PUSH_CLAUSES)) {
       // The two lines are the helper's wording; the route into them is the skill's.
       const where = name.startsWith("and the route") ? text : printedUnconfirmed;
@@ -6147,7 +6155,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     const path = `${mirror}/address-review/SKILL.md`;
     let text;
     try {
-      text = readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8");
+      text = readAddressReviewSkill(mirror);
     } catch (err) {
       missing.push(`${path} cannot be read: ${err.message}`);
       continue;
@@ -6443,7 +6451,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     redAddressed.status === "publish-aborted-incomplete-dispositions" && /lane failing on this head as already-addressed, the replay disposition of a lane the head shows green, running or absent/.test(defectsOf(redAddressed)) &&
       /is THAT replay's disposition alone, never a failing lane's: a lane failing on this head is judged by cause/.test(src) &&
       /a fix the tree carries for it is .{0,2}actionable-fixed.{0,2} with where it lives, since only the push re-runs the lane/.test(src) &&
-      ["plugins/dev-skills/skills", "codex/dev-skills/skills"].every((mirror) => /Those three are a failing lane's only dispositions — \*\*already-addressed\*\* is the replay disposition of a recorded lane this head shows green, running or absent/.test(readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8"))),
+      ["plugins/dev-skills/skills", "codex/dev-skills/skills"].every((mirror) => /Those three are a failing lane's only dispositions — \*\*already-addressed\*\* is the replay disposition of a recorded lane this head shows green, running or absent/.test(readAddressReviewSkill(mirror))),
     `${redAddressed.status}: ${defectsOf(redAddressed).slice(0, 300)}`,
   );
   // (2) The gathered url reaches the publisher on a lane entry that echoed none
@@ -6503,7 +6511,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   const standalonePara = brief.split("\n").find((l) => l.startsWith("- A standalone issue comment or review summary becomes its own item")) || "";
   const misfiredPara = brief.split("\n").find((l) => l.startsWith("- One more source qualifies on its own")) || "";
   const mirrorsState = ["plugins/dev-skills/skills", "codex/dev-skills/skills"].map((mirror) => {
-    const line = logicalLines(readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8")).find((l) => l.includes("**One more source qualifies on its own: a bot reviewer that misfired")) || "";
+    const line = logicalLines(readAddressReviewSkill(mirror)).find((l) => l.includes("**One more source qualifies on its own: a bot reviewer that misfired")) || "";
     return /One route per comment, never both: such a comment is never taken whole under the rule above, even where the maintainer names it/.test(line);
   });
   check(
@@ -6545,6 +6553,26 @@ check(
   recordRenders.refused.length === 0 && recordRenders.carried >= 20,
   recordRenders.refused.join("; ") || `only ${recordRenders.carried} carried out`,
 );
+// The moved rules are only as reachable as the sentences in SKILL.md that send
+// a run to them, so those are pinned against SKILL.md ALONE, in both mirrors:
+// read through the concatenation above, a deleted trigger would still pass on
+// the moved text.
+for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
+  const skillOnly = readFileSync(join(here, "..", mirror, "address-review", "SKILL.md"), "utf8");
+  const triggers = {
+    "the gather runs `record.sh find` and reads its answer": /`record\.sh find --repo <owner>\/<repo> --pr <N>`, beside this file and run by absolute path, answers `outcome=none`/,
+    "a found record sends the run to the file": /- \*\*Step 3's `record\.sh find` printed a record\*\* \(an `id=` line or an `other=` line\)/,
+    "a map not published in full sends the run to the file": /- \*\*This run holds a triaged disposition map and will not publish it in full\*\*/,
+    "a replayed record that was then published sends the run to the file": /- \*\*This run replayed a record and then published in full\*\*/,
+    "the file is read in full before acting": /Read that file in full, before acting, in each of these cases:/,
+    "published in full is defined where the run decides it": /\*\*Published in full\*\* means a publication whose own report can show it/,
+    "a failed reply is not published in full": /One reply that failed to post, one owed resolve or re-run that did not happen, or a missing Summary URL is a publication that stopped part-way/,
+    "a bot's top-level finding sends the gather to the misfired-findings file": /read `misfired-findings\.md`, beside this file, in full before triage/,
+  };
+  const absent = Object.entries(triggers).filter(([, pattern]) => !pattern.test(skillOnly)).map(([what]) => what);
+  check(`${mirror}/address-review/SKILL.md itself sends a run to its on-demand files`, absent.length === 0, absent.length ? `missing: ${absent.join("; ")}` : `${Object.keys(triggers).length} triggers`);
+}
+
 check(`suite ran all ${EXPECTED_CHECKS} checks`, ran === EXPECTED_CHECKS, `ran ${ran}`);
 
 if (failures) {
