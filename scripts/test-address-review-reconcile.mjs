@@ -1314,7 +1314,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
           const adoptAt = prBranchHelper.indexOf(viaHelper.adoption, rewindAt);
           if (
             !text.includes(viaHelper.rewind) ||
-            !prBranchHelper.includes('git merge-base --is-ancestor "$1" "$seen"; then') ||
+            !prBranchHelper.includes('is_ancestor "$1" "$seen"; then') ||
             !prBranchHelper.includes('for seen in "$P_OID" "$EXPECT"; do') ||
             !prBranchHelper.includes('stop rewind "the head ref now points at $1') ||
             rewindAt === -1 ||

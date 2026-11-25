@@ -336,7 +336,7 @@ refuse_rewind() { # fetched head, extra key=value line
 	# The head GitHub reports now, and one the caller read earlier.
 	for seen in "$P_OID" "$EXPECT"; do
 		[ -n "$seen" ] && [ "$1" != "$seen" ] || continue
-		if git cat-file -e "$seen^{commit}" 2>/dev/null && git merge-base --is-ancestor "$1" "$seen"; then
+		if git cat-file -e "$seen^{commit}" 2>/dev/null && is_ancestor "$1" "$seen"; then
 			stop rewind "the head ref now points at $1, which is behind the $seen recorded for PR #$PR. A maintainer decides; nothing was adopted." \
 				"fetched=$1" "reported=$seen" "$2"
 		fi
@@ -359,9 +359,9 @@ cmd_head() {
 		relation=absent
 	elif [ "$tip" = "$head" ]; then
 		relation=equal
-	elif git merge-base --is-ancestor "$tip" "$head"; then
+	elif is_ancestor "$tip" "$head"; then
 		relation=behind
-	elif git merge-base --is-ancestor "$head" "$tip"; then
+	elif is_ancestor "$head" "$tip"; then
 		relation=ahead
 	else
 		lost="$(unrepresented "$tip" "$head")" || fail "could not compare the local $P_HEAD with the PR head $head, so whether its commits are carried there is not established. Nothing was changed."
