@@ -5104,8 +5104,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /address-review-record find --repo <owner>\/<repo> --pr \d+/.test(recordBrief) &&
       // `find` names the latest record whether or not the failed write reached
       // it, so the retry decision rests on the body read back, not on its id.
-      /READ that comment's body \(`gh api repos\/<owner>\/<repo>\/issues\/comments\/<id> --jq \.body`\) and compare it with the record you composed/.test(recordBrief) &&
+      /READ that comment's body \(`gh api repos\/<owner>\/<repo>\/issues\/comments\/<id> --jq \.body`, with `--hostname <host>` off github\.com\) and compare it with the record you composed/.test(recordBrief) &&
       /where `find` or the read itself fails, report `posted: false`/.test(recordBrief) &&
+      // The host-prefixed slug is the helper's `--repo` form; a REST path built
+      // from it addresses no API at all, so a direct read names the host apart.
+      /that form is the helper's alone: a `gh api` read below keeps the plain `repos\/<owner>\/<repo>\/…` path and names the host with `--hostname <host>`/.test(recordBrief) &&
+      !/gh api repos\/<owner>\/<repo>\/issues\/comments\/<id> --jq \.body`(?!, with `--hostname <host>` off github\.com)/.test(recordBrief) &&
       !/gh pr comment/.test(recordBrief) &&
       !/repos\/\{owner\}\/\{repo\}/.test(recordBrief) &&
       /never the repository your working location resolves to/.test(recordBrief),
