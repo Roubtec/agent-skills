@@ -380,56 +380,41 @@ The counter is shared by every peer launch in this orchestration session, has no
 ## The delegated rebase step
 
 Bringing one entry's branch onto its freshest base — its own base ref, or its parent's new tip within a stack — is a **delegated** step with a single brief, defined here and referenced rather than restated by the skills that rebase: `address-review` and `address-reviews` name the points they run it at and the argument that opts out, and neither respecifies what the step does.
-A workflow brief handed to a subagent that has read no skill renders this section inline instead — the one sanctioned exception, and it may not restate it anywhere else.
+A workflow brief handed to a subagent that has read no skill renders this step inline instead — the one sanctioned exception, and it may not restate it anywhere else.
 The caller **never runs the rebase in its own turn**: it spawns a fresh subagent for it, exactly as it does for a fixer.
+
+**How the step is carried out is `rebase-brief.md`, beside this file, and the rebaser reads it rather than you restating it.**
+Open the rebaser's prompt with the destroy-boundary line, then tell it to read `<path>/rebase-brief.md` in full and carry it out.
+That file holds the recovery ref and its read-back, pinning the base to a commit, the `--no-update-refs --no-rebase-merges` shape of every replay, the guard that halts on a merge commit carrying its own content, hunk-level conflict resolution under `rebase-stack`, the clean halt, the validation, and what the step returns.
+What follows is the caller's half: what the prompt has to carry, and what to do with what comes back.
 
 **Where it runs is the caller's working location for that entry** — the checkout it works inline, or the worktree it attached — so the brief carries that absolute path, the branch, the pinned base below, and a destination for any build output under this cycle's artifact-directory rules.
 An inline location means the rebase rewrites a branch someone may be standing on: that is inline working's contract rather than a side effect, and the caller says which mode it is handing over.
-Before the first replay the step saves the pre-rebase tip (`git update-ref refs/pre-rebase/<branch>/<ts> HEAD`, timestamp `YYYYMMDD-HHMMSS`) as the recovery ref, spelled out in the brief because the destroy boundary otherwise forbids `update-ref`.
-It then reads that ref back (`git rev-parse --verify`) and reports the full ref path, the OID it resolved to, and the pre-rebase tip; a caller adopts the replay on that read-back rather than on the ref's shape.
+The prompt also spells out, as commands, the two ref writes the step makes, because the destroy boundary otherwise forbids `update-ref`: the recovery ref saved before the first replay (`git update-ref refs/pre-rebase/<branch>/<ts> HEAD`, timestamp `YYYYMMDD-HHMMSS`), and the snapshot that keeps a pinned base reachable where nothing else does (`git update-ref refs/pinned-base/<slug>/<ts> <oid>`).
+The step reads the recovery ref back and reports the full ref path, the OID it resolved to, and the pre-rebase tip; a caller adopts the replay on that read-back rather than on the ref's shape.
 
-**Pin the effective base before rebasing onto it, and pin it to a commit.**
-Resolve the target once (`git rev-parse`) and rebase onto that **OID**; the OID actually rebased onto is this entry's *effective base*, and it is what every delegation range afterwards names — `<effective base>..HEAD` — under the stable-refs rule above.
-Where the target is a ref name rather than a commit, fetch it fresh from the repository that ref **lives in**, which the caller names in the brief: for a PR's base that is the repository the PR itself is in (a PR's base always is), whose `<owner>/<repo>` is the one in the PR's own `url` — never the head's push remote, and never a bare `gh repo view --json nameWithOwner`, which with no repository argument answers for whatever repository the directory resolves to.
-That fetch is one of two arms and the caller says which it is handing over, because WHOSE ref the target is decides where it lives: a target the **request** named outright — `rebase on top of <target>` — is routinely a local branch, so it is resolved in the working location (`git rev-parse --verify`, the operand quoted as one argument) and fetched from nowhere.
-Never carry a movable remote-tracking name such as `origin/<base>` instead, under the same stable-refs rule.
-Never hard-code `origin/main` either: entries legitimately target other branches and other entries' heads.
-An OID is immutable, so recording it *is* the pin; where nothing the run keeps holds that commit reachable, save a snapshot ref for it (`git update-ref refs/pinned-base/<slug>/<ts> <oid>`) and spell that command out in the brief too.
+**The target is pinned to a commit, and the caller says whose ref it is.**
+The step resolves the target once and rebases onto that **OID**; the OID actually rebased onto is this entry's *effective base*, and it is what every delegation range afterwards names — `<effective base>..HEAD` — under the stable-refs rule above.
+Where the target is a ref name rather than a commit, it is fetched fresh from the repository that ref **lives in**, which the caller names in the prompt: for a PR's base that is the repository the PR itself is in, whose `<owner>/<repo>` is the one in the PR's own `url`.
+That fetch is one of two arms and the caller says which it is handing over, because WHOSE ref the target is decides where it lives: a target the **request** named outright — `rebase on top of <target>` — is routinely a local branch, so it is resolved in the working location and fetched from nowhere.
+Never hand over a movable remote-tracking name such as `origin/<base>`, and never hard-code `origin/main`: entries legitimately target other branches and other entries' heads.
 
 **Stacked entries rebase parent-first, in topological order.**
 What makes that possible is a parent map — each entry's PR base and head as **repository-qualified** pairs, from one `gh pr view --json baseRefName,headRefName,headRepository,headRepositoryOwner,isCrossRepository` per entry, the base side being that PR's own repository — specified here and held by the caller, since it spans entries and outlives any one delegation.
 Match child to parent on those pairs, never on bare branch names, exactly as `address-reviews` states it ("Detect a stack only when one entry's fully qualified …").
-A parent rebases onto its own base first; each child then rebases onto its parent's **new** tip with `git rebase --no-update-refs --no-rebase-merges --onto <new parent tip> <old parent tip>`, which replays the child's own commits alone, and git's patch-id dropping removes whatever the base already carries.
-That is also the shape of the parent that merely gained fix commits mid-run while its child still sits on the old tip.
+A parent rebases onto its own base first; each child is then handed its parent's **new** tip and its old one, and rebases onto the new with `--onto`.
 Restacking a whole chain after merges is `rebase-stack`'s job: this step names that skill and stops rather than growing into it.
 
-**The replay's shape is stated, never inherited: it moves one ref — the entry's own branch — and flattens what it replays.**
-So every rebase this step runs passes `--no-update-refs`, the ordinary onto-the-pinned-OID form and the stacked `--onto` form alike, whatever `rebase.updateRefs` the user or repository config sets; a sibling branch moves in its own parent-first turn, behind its own recovery ref.
-Merge topology is the other half of the statement — the replay flattens whatever `rebase.rebaseMerges` is set to — so the stated flags are `--no-update-refs --no-rebase-merges`, on the ordinary form and the stacked `--onto` form alike.
-
 **A no-op is the common outcome, and it is what makes a caller's two points safe.**
-Pinning first and rebasing onto a commit is idempotent over a linear range: against an OID already an ancestor of `HEAD`, `git rebase` replays nothing and the tip is unchanged.
-A pure-join merge still in range is the one exception — the replay flattens it, moving the tip even over an unmoved base — and only once, since flattened it is gone from the range (a content-bearing or octopus merge never reaches a replay at all: the guard below halts both); either way a second point cannot re-apply the first's work.
-Report the no-op as one, so the caller keeps its verdict over an unchanged tree and skips the validation below — and report the two tips beside it.
-That claim is the one that switches checks OFF, the validation below and any re-verification a caller runs over a replayed tree, so a caller adopts it on the unchanged tip it names rather than on the flag alone: a no-op naming a moved tip, or naming none, is unevidenced and stops that caller's run.
+Over a linear range, against a base already an ancestor of `HEAD`, the step replays nothing and the tip is unchanged; a pure-join merge still in range is the one exception, flattened once and then gone from the range, so either way a second point cannot re-apply the first's work.
+A reported no-op lets the caller keep its verdict over an unchanged tree and skip the validation.
+That claim is the one that switches checks OFF, the validation and any re-verification a caller runs over a replayed tree, so a caller adopts it on the unchanged tip it names rather than on the flag alone: a no-op naming a moved tip, or naming none, is unevidenced and stops that caller's run.
 
-**A merge commit that introduced its own content is never silently flattened.**
-A plain `git rebase` replays no merge commit, so before the first replay enumerate the merges in the range — `git rev-list --merges <effective base>..HEAD`.
-One that merely joined its parents flattens harmlessly: its content is its parents', and the replay carries it.
-One that introduced content of its own — a conflict resolution, or a hand edit made in the merge; `git show --remerge-diff <merge>` prints the delta — carries work no replayed commit holds, and where nothing replayed conflicts over the same lines the rebase drops that work silently, with the force-push that may follow making the loss permanent.
-That probe answers only for a two-parent merge: handed an octopus merge (more than two parents — `git rev-list --parents -n 1 <merge>` shows them), `git show --remerge-diff` prints no delta at all — just the commit header and `diff: warning: Skipping remerge-diff for octopus merges.` — and exits 0, silence that is the probe declining to answer rather than evidence of a pure join — so an octopus merge in range halts unprobed, exactly as if it carried content.
-Such a merge halts the entry clean, exactly like a conflict beyond competence below, the halt naming the merge and the files its delta touches (for an unprobed octopus, the files `git diff <merge>^1 <merge>` names): whether to flatten and re-resolve, preserve the topology (`git rebase --rebase-merges` re-creates the merge and resurfaces its conflicts), or leave the branch unrebased is the maintainer's call.
-
-**Conflicts are resolved by hunk**, under `rebase-stack` → "Step 5 — Conflict handling": that skill states the trivial/non-trivial classification, in-place hunk-level resolution, the verify-first condition on whole-file `--ours`/`--theirs`, and the `git rebase --skip` for a patch the new base already represents.
-Follow it as written; this step neither restates nor softens it.
-
-**A conflict beyond that competence halts the entry — and halts it clean.**
-`git rebase --abort`, then confirm the working location is clean and idle by the packet hard-check's two conditions: the step never returns leaving a tree mid-rebase.
-Report the halt as an open question in the format below (`origin: rebase`), naming the conflicting files, the offending commit, and what the judgment turns on, rather than guessing a resolution.
+**A halt comes back as an open question, with the tree left clean and idle.**
+A conflict beyond the step's competence, and a merge commit that introduced content of its own, both halt the entry rather than guess: the rebase is aborted, or never started, and the halt is reported in the format below (`origin: rebase`), naming the files, the offending commit or merge, and what the judgment turns on; the caller gives that question its `id` and round, and its `coupledWith` where it shares a decision with another.
 One entry's halt is one entry's: siblings proceed, and nothing of the halted entry is published.
 
-**Validate after a rebase that actually replayed something** — the delivery tier, per the validation tiers above.
-A no-op rebase earns no validation.
+**A rebase that actually replayed something is validated at the delivery tier**, per the validation tiers above; a no-op earns none.
 Where a caller rebases after its fixes, that point runs **before** its final reviewer round, so the passing verdict is rendered on the exact tree that will be pushed.
 
 **What the step returns:** the pinned effective base OID, the pre- and post-rebase tips, whether the tip changed at all, the conflicts it resolved and the commits it skipped, the validation outcome, and any halt with its open question.
