@@ -4394,6 +4394,10 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   check(
     "an incomplete record carries the displaced record's orphaned entries forward — fetched from the replayed record, keyed by thread identity, marked as carried — while a complete map and a prior-less incomplete one carry nothing",
     /CARRY the earlier record's orphaned entries into this one/.test(incompleteOverPrior) &&
+      // Its read of the replayed record names the host apart, like every direct read.
+      /that form is the helper's alone: a `gh api` read below keeps the plain `repos\/<owner>\/<repo>\/…` path and names the host with `--hostname <host>`/.test(incompleteOverPrior) &&
+      !/gh api repos\/<owner>\/<repo>\/issues\/comments\/<id> --jq \.body`(?!, with `--hostname <host>` off github\.com)/.test(incompleteOverPrior) &&
+      /gh api repos\/<owner>\/<repo>\/issues\/comments\/<id> --jq \.body`, with `--hostname <host>` off github\.com/.test(incompleteOverPrior) &&
       /whose identity \(`thread=<threadId, url \(finding N of M\), or lane>`\) no disposition below carries/.test(incompleteOverPrior) &&
       incompleteOverPrior.includes("marking each `carried unchanged from https://example.invalid/pr/42#issuecomment-9`") &&
       /the next run's gather replays only the MOST RECENT record/.test(incompleteOverPrior) &&
@@ -4466,6 +4470,10 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // The write itself, at the repository the PR is in and never as a new comment.
     /`address-review-record spend --repo <owner>\/<repo> --pr 42 --branch 'feature\/x' --id 9 /.test(spentBrief) &&
       !/repos\/\{owner\}\/\{repo\}/.test(spentBrief) &&
+      // The read after a failed spend is spelled, host apart, not left to the slug.
+      /that form is the helper's alone: a `gh api` read below keeps the plain `repos\/<owner>\/<repo>\/…` path and names the host with `--hostname <host>`/.test(spentBrief) &&
+      !/gh api repos\/<owner>\/<repo>\/issues\/comments\/<id> --jq \.body`(?!, with `--hostname <host>` off github\.com)/.test(spentBrief) &&
+      /gh api repos\/<owner>\/<repo>\/issues\/comments\/<id> --jq \.body`, with `--hostname <host>` off github\.com/.test(spentBrief) &&
       !/gh pr comment/.test(spentBrief) &&
       // And the record it targets is the one this run REPLAYED, named by the
       // url the gather reported, rather than "the most recent record of my
