@@ -29,7 +29,7 @@ The per-branch fallback naturally re-stacks them flatly: each rebased branch bec
   This skill does not implement squash-aware heuristics.
 - Auto-detected branches were created sequentially, each from the tip of its predecessor at branch-creation time.
   An explicit chain may instead contain independent disposable snapshots; each branch is still replayed onto the freshly rebased predecessor in the supplied order.
-- The user is responsible for fetch/pull hygiene; the skill uses local refs only.
+- The user is responsible for fetch/pull hygiene; the skill uses local refs only, except that detection asks `gh` which branches have an open PR.
 
 ## Invocation forms
 
@@ -91,7 +91,7 @@ Without all three guarantees — explicit chain, explicit authorization, and dis
 
 `stack.sh`, beside this file, does the ref arithmetic of the steps below; run it by absolute path.
 It prints `key=value` lines with `outcome=` first, exits 0 to proceed and 3 on a stop that needs a decision, and explains a stop on stderr; `stack.sh --help` lists every command and the lines it prints.
-It reads local refs only, and never fetches, pushes, rebases, or deletes a ref.
+It never fetches, pushes, rebases, or deletes a ref, and reads local refs only, except that `detect` also asks `gh` for the open PRs where it can.
 
 Run `stack.sh preflight [--source <branch>] [--target <ref>]`, passing whichever of the two the user named.
 
@@ -105,20 +105,24 @@ Run `stack.sh preflight [--source <branch>] [--target <ref>]`, passing whichever
 
 If the user supplied an explicit `chain` form (see Invocation forms), skip detection entirely and use the provided list as-is — the last branch is the source, the rest are chain branches in stacking order.
 
-Otherwise run `stack.sh detect --source <source> --target <target>`.
+Otherwise run `stack.sh detect --source <source> --target <target>`, adding `--repo <owner>/<repo>` where the user named the repository, or `--offline` to ask `gh` nothing.
 
 It computes the **effective frontier** `EF`: the newest commit on the source's history that is patch-equivalent to one reachable from the target, or their strict merge-base where there is none (`ef-kind=` says which, `equivalent=` how many source commits the target already carries).
-A chain candidate is a local branch that forks from the source's history past `EF` and holds at least one commit the source lacks; the candidates are ordered from the frontier up.
-The full ordered chain to be rebased is its `branch=` lines, in order, the source last: `[chain_branch_1, chain_branch_2, ..., chain_branch_M, source]`.
+A chain candidate is a local branch that forks from the source's history past `EF`, ordered from the frontier up, and the chain to rebase is the `branch=` lines in order, the source last.
+A branch holding a commit the source lacks is a candidate on that alone.
+One with none — a branch of a linear stack, or a snapshot ref left by an earlier workflow stage, which look alike — is a candidate only on the evidence its `evidence=` line names: an open PR publishes from it, or else it tracks an upstream (`prs=` says whether `gh` could be asked).
 
-This is **heuristic, not metadata**: it can also catch unrelated branches that happen to share a merge-base on the spine (e.g., `login-tests` accidentally branched from `feature/03`), which the confirmation listing lets the user filter out.
+This is **heuristic, not metadata**: it can also catch an unrelated branch that shares a merge-base on the spine (e.g., `login-tests` accidentally branched from `feature/03`), which the confirmation listing lets the user filter out.
 
-A `near=` line names a branch on the spine with no commit of its own past the source.
-Such tips are usually "snapshot" refs left behind from a prior workflow stage; leaving them out keeps such refs out of the chain, at the cost of also skipping a real chain branch that has no commits of its own — to carry those refs along too, use the explicit `chain` form (which bypasses this filter — that list is authoritative) or a deliberate manual `git rebase --update-refs --no-rebase-merges` after explicitly enumerating and approving every ref the replay would move and applying Step 4's all-worktree checkout check.
+- A `near=` line names a spine branch with no commit of its own, no open PR and no upstream: a snapshot ref, or a chain branch never published.
+  To carry it along, use the explicit `chain` form (that list is authoritative) or a deliberate manual `git rebase --update-refs --no-rebase-merges` after explicitly enumerating and approving every ref the replay would move and applying Step 4's all-worktree checkout check.
+- A `merged=` line names a spine branch whose every commit the target already carries: a merged predecessor left behind.
+  It is never a chain branch, but while it exists Step 4 replays the run it points into one branch at a time.
+  Offer in the listing to delete it first (`git branch -d`, or the `prune-branches` skill); delete nothing without the user's word, and never in delegated unattended mode.
 
 #### 2c. Detection corner cases
 
-- **Detection finds nothing** (`outcome=empty`): surface this clearly, show `EF` and the `near=` branches that *almost* qualified, and offer two paths: re-run with the explicit `chain` form, or proceed with just the source.
+- **Detection finds nothing** (`outcome=empty`): surface this clearly, show `EF` and the `near=` branches that *almost* qualified and offer two paths: re-run with the explicit `chain` form, or proceed with just the source.
   Don't silently treat "empty chain" as "rebase the source alone" — confirm.
 - **Source is a checkpoint, not a tip** (a `checkpoint=` line): the source is itself an ancestor of that other local branch, so the user probably meant that branch as the source.
   Note this in the confirmation listing as a `[!]` flag.
@@ -133,6 +137,7 @@ Include for each branch in the proposed chain:
 - Short SHA of its tip and tip subject line.
 - Count of commits unique to this branch versus the next-up candidate (or versus the source for the topmost).
   Use this to highlight likely fix commits — small numbers are normal; large numbers on a branch with a name like `login-tests` are a red flag.
+- For a branch taken on an `evidence=` line, that evidence (`PR #12`, `tracks origin/feature/05`).
 - For any branch that looks suspicious (e.g., an outlier in commit count or whose name doesn't fit the apparent chain pattern), flag it with `[!]` and a one-line reason.
 
 Also state that any qualifying contiguous linear run may be replayed once with `--update-refs`, moving exactly that run's listed branch refs together, while every run that fails the exact-ref, topology, or worktree checks falls back to branch-at-a-time replay.
@@ -376,7 +381,6 @@ Output:
   # Restore a single branch from its pre-rebase snapshot:
   git update-ref refs/heads/<branch> $(git rev-parse refs/pre-rebase/<branch>/<timestamp>)
 
-  # (Each run also leaves two small rebase-stack-<timestamp>.* files in the git dir; delete them with the refs.)
   # Delete only the pre-rebase refs created in THIS run. Every ref this run saved shares one <timestamp>,
   # so filter by that suffix — do NOT blanket-delete refs/pre-rebase/, which would also remove snapshots
   # from other branches and earlier runs:

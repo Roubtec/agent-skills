@@ -3,15 +3,16 @@
 #
 # Usage, from the tree the rebase runs in:
 #   stack.sh preflight [--source <branch>] [--target <ref>]
-#   stack.sh detect    --source <branch> --target <ref>
+#   stack.sh detect    --source <branch> --target <ref> [--repo <o/r>] [--offline]
 #   stack.sh segments  <b1> <b2> ... <bN>
 #   stack.sh qualify   --base <ref> <first> ... <last>
 #   stack.sh snapshot  --stamp <stamp> <branch>...
 #   stack.sh verify    --stamp <stamp> --base <ref> <first> ... <last>
 #   stack.sh restore   --stamp <stamp> <branch>...
 #
-# It reads local refs only: it never fetches, pushes, rebases, or deletes a
-# ref. `snapshot` creates refs under refs/pre-rebase/, and `restore` moves the
+# It never fetches, pushes, rebases, or deletes a ref, and reads local refs
+# only — but for `detect`, which also asks gh for the open PRs where it can.
+# `snapshot` creates refs under refs/pre-rebase/, and `restore` moves the
 # branches it is given back to those snapshots in one guarded transaction.
 #
 # preflight  Nothing is staged or modified and no rebase is in progress.
@@ -20,6 +21,8 @@
 #            every snapshot of this run shares. The target defaults to main,
 #            then master; the source to the current branch. Stops on:
 #              dirty | rebase-in-progress | no-target | no-source
+#            It also removes the tip records of earlier runs whose snapshots
+#            are all deleted (`swept=<n>` where it removed any).
 # detect     The chain between a source and a target, by the effective
 #            frontier: the newest source commit that is patch-equivalent to
 #            one on the target, else their merge-base.
@@ -29,7 +32,17 @@
 #              branch=<name> TAB <tip> TAB <n> TAB <next> TAB <subject>
 #                  one per chain branch in stacking order, the source last;
 #                  <n> is its commits past <next>, the branch above it
+#              evidence=<name> TAB <why>  a chain branch with no commit of
+#                  its own past the source, taken for one because an open PR
+#                  publishes from it, or else because it tracks an upstream
+#              prs=read|unavailable|skipped   whether gh listed the open PRs
+#                  (`--repo` names the repository to ask, else gh's own
+#                  default for this tree; `--offline` skips the question)
 #              near=<name> TAB <why>      on the spine, but not a candidate
+#              merged=<name>              on the spine, every commit already
+#                  carried by the target: a merged predecessor left behind,
+#                  which keeps a run from being replayed in one go until it
+#                  is deleted
 #              checkpoint=<name>          a branch the source is an ancestor of
 #              target-oid=, and where a cached origin/<target> exists:
 #              origin-oid=, origin-ahead=, origin-behind= (commits origin
@@ -45,10 +58,9 @@
 #                                 on a run branch
 #              outcome=per-branch reason=<which check failed>
 # snapshot   Saves refs/pre-rebase/<branch>/<stamp> for each branch, and the
-#            tips of every local branch as they stand, for `verify` and
-#            what each snapshot was first taken at, for `restore` (two small
-#            `rebase-stack-<stamp>.*` files in the git dir, safe to delete once
-#            the run is over).
+#            tips of every local branch as they stand, for `verify` (one
+#            small `rebase-stack-<stamp>.heads` file in the git dir, which a
+#            later preflight removes once the run's snapshots are deleted).
 #            `outcome=saved`, one `ref=` line each. Stops on `conflict` where
 #            that snapshot already exists with another commit.
 # verify     After a combined replay: exactly the run's branches moved, each
@@ -67,7 +79,7 @@
 # Output: `key=value` lines on stdout, `outcome=` first; the explanation of a
 # stop goes to stderr. Exit status: 0 to proceed, 3 on a stop that needs a
 # decision, 1 on a failure, 64 on a usage error. Written for bash 3.2 and
-# later; needs nothing beyond git.
+# later; needs nothing beyond git, and uses gh where it is there.
 set -u
 
 TAB="$(printf '\t')"
@@ -97,18 +109,23 @@ stop() {
 	exit 3
 }
 
-SOURCE="" TARGET="" BASE="" STAMP="" BRANCHES=""
+SOURCE="" TARGET="" BASE="" STAMP="" BRANCHES="" REPO="" OFFLINE=0
 
 parse() {
 	while [ $# -gt 0 ]; do
 		case "$1" in
-		--source | --target | --base | --stamp)
+		--offline)
+			OFFLINE=1
+			shift
+			;;
+		--source | --target | --base | --stamp | --repo)
 			[ $# -ge 2 ] || usage "$1 needs a value"
 			case "$1" in
 			--source) SOURCE="$2" ;;
 			--target) TARGET="$2" ;;
 			--base) BASE="$2" ;;
 			--stamp) STAMP="$2" ;;
+			--repo) REPO="$2" ;;
 			esac
 			shift 2
 			;;
@@ -153,9 +170,53 @@ rebasing() {
 heads() { git for-each-ref --format='%(refname) %(objectname)' refs/heads/ | sed 's|^refs/heads/||'; }
 # In the common git dir, so every worktree of the repository reads one record.
 frozen_file() { printf '%s/rebase-stack-%s.heads' "$(cd "$(git rev-parse --git-common-dir)" && pwd)" "$STAMP"; }
-# What each snapshot of this stamp was first taken at: appended to, never
-# rewritten, so a later segment's snapshot cannot change an earlier one's line.
-taken_file() { printf '%s/rebase-stack-%s.taken' "$(cd "$(git rev-parse --git-common-dir)" && pwd)" "$STAMP"; }
+# Removes the tip records of runs whose snapshots are all gone: no run can
+# verify against one any more. Nothing tells this script a run has ended, so
+# the next run's preflight clears up after it. Prints how many it removed.
+sweep() {
+	local dir refs f stamp n=0
+	dir="$(cd "$(git rev-parse --git-common-dir)" && pwd)" || return 0
+	refs="$(git for-each-ref --format='%(refname)' refs/pre-rebase/)" || return 0
+	for f in "$dir"/rebase-stack-[0-9]*-[0-9]*.heads "$dir"/rebase-stack-[0-9]*-[0-9]*.taken; do
+		[ -f "$f" ] || continue
+		stamp="${f##*/rebase-stack-}"
+		stamp="${stamp%.*}"
+		case "$stamp" in *[!0-9-]*) continue ;; esac
+		printf '%s\n' "$refs" | grep -q "/$stamp\$" && continue
+		rm -f "$f" && n=$((n + 1))
+	done
+	printf '%s' "$n"
+}
+# The open PRs of the repository, where gh can be asked: `<head branch> TAB
+# <number>` lines in PRS. It is evidence for one question only — whether a
+# branch on the source's own history is a branch of the stack — so a gh that
+# is missing, signed out or offline is no failure: PRS_STATE says which.
+PRS="" PRS_STATE=skipped
+read_prs() {
+	[ "$OFFLINE" = 0 ] || return 0
+	PRS_STATE=unavailable
+	command -v gh >/dev/null 2>&1 || return 0
+	local out
+	# shellcheck disable=SC2016 # the \(...) are jq's
+	set -- pr list --state open --limit 200 --json number,headRefName,isCrossRepository \
+		--jq '.[] | select(.isCrossRepository | not) | "\(.headRefName)\t\(.number)"'
+	[ -z "$REPO" ] || set -- "$@" --repo "$REPO"
+	out="$(gh "$@" 2>/dev/null)" || return 0
+	PRS="$out" PRS_STATE=read
+}
+# Why a branch with no commit of its own is still taken for a branch of the
+# stack: an open PR publishes from it, else it tracks an upstream. Empty where
+# neither holds, which leaves it a `near=` line.
+evidence() { # branch
+	local n up
+	n="$(printf '%s\n' "$PRS" | awk -F'\t' -v b="$1" '("b:" $1) == ("b:" b) { print $2; exit }')"
+	if [ -n "$n" ]; then
+		printf 'open PR #%s' "$n"
+		return 0
+	fi
+	up="$(git for-each-ref --format='%(upstream:short)' "refs/heads/$1")"
+	[ -z "$up" ] || printf 'upstream %s' "$up"
+}
 # Fails where a branch is checked out in a worktree other than this one,
 # printing that worktree.
 elsewhere() { # branch
@@ -181,7 +242,8 @@ cmd_preflight() {
 	parse "$@"
 	[ -z "$BRANCHES" ] || usage "preflight takes --source and --target only"
 	in_repo
-	local dirty t s
+	local dirty t s swept
+	swept="$(sweep)"
 	# The rebase first: a paused one leaves the tree dirty, and is the truer answer.
 	! rebasing || stop rebase-in-progress "a rebase is already in progress here. Finish or abort it first."
 	dirty="$(git status --porcelain --untracked-files=no 2>/dev/null)" || fail "git status failed here"
@@ -206,14 +268,15 @@ cmd_preflight() {
 	say "source-oid=$(tip "$s")"
 	say "untracked=$(git status --porcelain --untracked-files=all 2>/dev/null | grep -c '^??')"
 	say "stamp=$(date +%Y%m%d-%H%M%S)"
+	[ "${swept:-0}" = 0 ] || say "swept=$swept"
 }
 
 cmd_detect() {
 	parse "$@"
-	[ -z "$BRANCHES" ] || usage "detect takes --source and --target only"
+	[ -z "$BRANCHES" ] || usage "detect takes --source, --target, --repo and --offline only"
 	[ -n "$SOURCE" ] && [ -n "$TARGET" ] || usage "detect needs --source <branch> and --target <ref>"
 	in_repo
-	local s t ef kind marks equiv x xt mb n rows="" near="" sorted next
+	local s t ef kind marks equiv x xt mb n rows="" near="" sorted next left why found=""
 	s="$(tip "$SOURCE")" || fail "'$SOURCE' is not a local branch"
 	t="$(commit_of "$TARGET")" || fail "'$TARGET' does not resolve to a commit"
 	marks="$(git rev-list --right-only --cherry-mark --no-merges "$t...$s")" || fail "could not compare $SOURCE with $TARGET"
@@ -224,6 +287,7 @@ cmd_detect() {
 		ef="$(git merge-base "$s" "$t")" || fail "$SOURCE and $TARGET share no history"
 		kind=merge-base
 	fi
+	read_prs
 	while read -r x xt; do
 		[ -n "$x" ] || continue
 		[ "$x" != "$SOURCE" ] && [ "$x" != "$TARGET" ] || continue
@@ -235,28 +299,51 @@ cmd_detect() {
 checkpoint=$x"
 			continue
 		fi
+		# A branch on the source's history whose every commit the target already
+		# carries is a merged predecessor left behind. It is no chain branch,
+		# but it points into the range a combined replay moves, so it is named.
+		if [ "$mb" = "$xt" ] && ! git merge-base --is-ancestor "$xt" "$t"; then
+			left="$(git rev-list --right-only --cherry-pick "$t...$xt")" || fail "could not compare $x with $TARGET"
+			if [ -z "$left" ]; then
+				near="$near
+merged=$x"
+				continue
+			fi
+		fi
 		[ "$mb" != "$ef" ] || continue
 		git merge-base --is-ancestor "$ef" "$mb" || continue
+		n="$(git rev-list --count "$ef..$mb")"
 		if [ "$(git rev-list --count "$s..$xt")" = 0 ]; then
-			near="$near
-near=$x${TAB}no commits of its own past $SOURCE (a snapshot ref, or an empty chain branch: name it in an explicit chain to carry it)"
+			# On the source's own history with no commit past it: a branch of a
+			# linear stack, or a snapshot ref. Only evidence tells them apart.
+			why="$(evidence "$x")"
+			if [ -z "$why" ]; then
+				near="$near
+near=$x${TAB}no commits of its own past $SOURCE, no open PR and no upstream (a snapshot ref, or an unpublished chain branch: name it in an explicit chain to carry it)"
+				continue
+			fi
+			found="$found
+evidence=$x$TAB$why"
+			rows="$rows
+$n 0 $x"
 			continue
 		fi
-		n="$(git rev-list --count "$ef..$mb")"
 		rows="$rows
-$n $x"
+$n 1 $x"
 	done <<EOF
 $(heads)
 EOF
-	sorted="$(printf '%s\n' "$rows" | awk 'NF' | sort -k1,1n -k2,2)"
+	# From the frontier up; where a branch forks at another's tip, the tip first.
+	sorted="$(printf '%s\n' "$rows" | awk 'NF' | sort -k1,1n -k2,2n -k3,3)"
 	if [ -n "$sorted" ]; then say "outcome=chain"; else say "outcome=empty"; fi
 	say "ef=$ef"
 	say "ef-subject=$(git log --no-show-signature -1 --format=%s "$ef")"
 	say "ef-kind=$kind"
 	say "equivalent=$equiv"
+	say "prs=$PRS_STATE"
 	# Each chain branch against the one above it; the source closes the list.
 	# shellcheck disable=SC2046 # one branch name per word
-	set -- $(printf '%s\n' "$sorted" | awk 'NF { print $2 }') "$SOURCE"
+	set -- $(printf '%s\n' "$sorted" | awk 'NF { print $3 }') "$SOURCE"
 	while [ $# -gt 0 ]; do
 		if [ $# -gt 1 ]; then
 			next="$2"
@@ -268,6 +355,7 @@ EOF
 		say "branch=$1$TAB$(tip "$1")$TAB$n$TAB$next$TAB$(git log --no-show-signature -1 --format=%s "refs/heads/$1")"
 		shift
 	done
+	printf '%s\n' "$found" | awk 'NF'
 	printf '%s\n' "$near" | awk 'NF'
 	say "target-oid=$t"
 	local o read_at
@@ -396,10 +484,6 @@ cmd_snapshot() {
 ref=$ref $t"
 	done
 	heads >"$(frozen_file)" || fail "could not record the local branch tips"
-	for b in $BRANCHES; do
-		[ -f "$(taken_file)" ] && awk -v b="$b" '("b:" $1) == ("b:" b) { f = 1 } END { exit !f }' "$(taken_file)" && continue
-		printf '%s %s\n' "$b" "$(git rev-parse --verify --quiet "refs/pre-rebase/$b/$STAMP")" >>"$(taken_file)" || fail "could not record what $b was snapshotted at"
-	done
 	say "outcome=saved"
 	printf '%s\n' "$out" | awk 'NF'
 }
@@ -447,16 +531,12 @@ cmd_restore() {
 	need_branches 1
 	in_repo
 	! rebasing || stop rebase-in-progress "a rebase is in progress here. Abort it first; nothing was restored."
-	local b snap cur was frozen lines="" here wt
-	frozen="$(taken_file)"
-	[ -f "$frozen" ] || stop no-snapshot "there is no record of what stamp $STAMP's snapshots were taken at, so none can be checked against it. Nothing was restored."
+	local b snap cur lines="" here wt
 	for b in $BRANCHES; do
 		! wt="$(elsewhere "$b")" || stop checked-out "$b is checked out in another worktree ($wt): moving it from here would leave that tree's files on the rebased commit. Nothing was restored; restore from there, or free the branch first." "branch=$b"
 	done
 	for b in $BRANCHES; do
 		snap="$(git rev-parse --verify --quiet "refs/pre-rebase/$b/$STAMP")" || stop no-snapshot "$b has no snapshot for stamp $STAMP. Nothing was restored." "branch=$b"
-		was="$(awk -v b="$b" '("b:" $1) == ("b:" b) { print $2 }' "$frozen")"
-		[ "$was" = "$snap" ] || stop no-snapshot "$b's snapshot is $snap, not the ${was:-(nothing)} it was first taken at. Nothing was restored." "branch=$b"
 		cur="$(tip "$b")" || stop ref-moved "$b is no longer a local branch: it was deleted since this command read it. Nothing was restored; a restore never recreates a branch." "branch=$b"
 		lines="$lines
 update refs/heads/$b $snap $cur"

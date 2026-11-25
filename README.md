@@ -25,7 +25,7 @@ scripts/
   test-dc-helpers.sh                    # hermetic contract coverage for the disposable-clone helpers
   test-prune-branches.sh                # hermetic coverage for the prune-branches helper
   test-address-review-pr-branch.sh      # hermetic coverage for the address-review branch helper (head, reconcile, base pin, publication push) and its `bin/` shim
-  test-rebase-stack.sh                  # hermetic coverage for the rebase-stack helper (detect, segments, qualify, snapshot, verify, restore)
+  test-rebase-stack.sh                  # hermetic coverage for the rebase-stack helper (preflight and its sweep, detect, segments, qualify, snapshot, verify, restore)
   test-address-review-ci.sh             # hermetic coverage for the address-review CI helper (failing lanes, log tail, re-run)
   test-address-review-record.sh         # hermetic coverage for the address-review disposition-record helper (find, render, post, spend)
   test-checkout-cleanliness-report.mjs  # regression coverage for the batch workflow's checkout report
@@ -173,7 +173,7 @@ Run `bash scripts/test-address-review-pr-branch.sh` after any change to `pr-bran
 
 ### `test-rebase-stack.sh`
 
-Run `bash scripts/test-rebase-stack.sh` after any change to `stack.sh` in either mirror's `rebase-stack` skill folder; the hermetic suite builds throwaway branch chains under one `mktemp -d` root, carries out the replay the helper names with the real `git rebase`, and also holds the two mirrors' copies to the same bytes and to the executable bit.
+Run `bash scripts/test-rebase-stack.sh` after any change to `stack.sh` in either mirror's `rebase-stack` skill folder; the hermetic suite builds throwaway branch chains under one `mktemp -d` root, answers the helper's one `gh` question from a fake through real `jq`, carries out the replay the helper names with the real `git rebase`, and also holds the two mirrors' copies to the same bytes and to the executable bit.
 
 ### `test-address-review-ci.sh`
 

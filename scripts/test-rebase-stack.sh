@@ -17,6 +17,20 @@ WORKDIR="$(mktemp -d)"
 trap 'rm -rf "$WORKDIR"' EXIT
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.test GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.test
+# A fake `gh`, so no case reaches the network: it fails unless a case wrote
+# prs.json, and then answers `pr list` through real jq, logging its arguments.
+FAKE="$WORKDIR/bin"
+mkdir -p "$FAKE"
+# shellcheck disable=SC2016 # the fake's own $1/$* must reach it unexpanded
+{
+	printf '#!/usr/bin/env bash\n'
+	printf 'echo "$*" >>"%s/gh.log"\n' "$FAKE"
+	printf '[ "$1 $2" = "pr list" ] && [ -f "%s/prs.json" ] || exit 1\n' "$FAKE"
+	printf 'expr=.; while [ $# -gt 0 ]; do [ "$1" = --jq ] && expr="$2"; shift; done\n'
+	printf 'jq -r "$expr" "%s/prs.json"\n' "$FAKE"
+} >"$FAKE/gh"
+chmod +x "$FAKE/gh"
+export PATH="$FAKE:$PATH"
 
 checks=0
 fails=0
@@ -97,6 +111,24 @@ git -C "$R" tag main f1
 run preflight
 is "1: a tag named like the target does not answer for the branch" "$(val target-oid)" "$(tip main)"
 git -C "$R" tag -d main >/dev/null
+lacks "1: with no earlier run's record to remove, nothing is said of one" "$OUT" "swept="
+# Records of earlier runs: one whose snapshots are gone, one still standing.
+: >"$R/.git/rebase-stack-20200101-000000.heads"
+: >"$R/.git/rebase-stack-20200101-000000.taken"
+: >"$R/.git/rebase-stack-20200202-000000.heads"
+: >"$R/.git/rebase-stack-2020x-01.heads"
+git -C "$R" update-ref refs/pre-rebase/f1/20200202-000000 "$(tip f1)"
+run preflight
+is "1: the records of a run whose snapshots are all gone are removed" "$(val swept)" 2
+[ ! -e "$R/.git/rebase-stack-20200101-000000.heads" ] && [ ! -e "$R/.git/rebase-stack-20200101-000000.taken" ]
+ok "1: ...both of them" $?
+[ -e "$R/.git/rebase-stack-20200202-000000.heads" ]
+ok "1: ...while a run that still has a snapshot keeps its record" $?
+[ -e "$R/.git/rebase-stack-2020x-01.heads" ]
+ok "1: ...and a file that is no run's record is left alone" $?
+git -C "$R" update-ref -d refs/pre-rebase/f1/20200202-000000
+rm "$R/.git/rebase-stack-2020x-01.heads"
+run preflight
 case "$(val stamp)" in [0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]-[0-9][0-9][0-9][0-9][0-9][0-9]) ok "1: it hands out the run's one stamp" 0 ;; *) ok "1: it hands out the run's one stamp" 1 ;; esac
 echo x >"$R/stray"
 run preflight
@@ -152,6 +184,7 @@ git -C "$R" checkout -q f2
 commit f2-fix one
 git -C "$R" branch -q snap "f2~1"
 git -C "$R" branch -q unrelated main
+git -C "$R" branch -q old "$(git -C "$R" merge-base main f3)"
 git -C "$R" checkout -q -b above f3
 commit above one
 git -C "$R" checkout -q f3
@@ -171,6 +204,9 @@ has "2: a ref with no commits of its own is a near miss, not a chain branch" "$O
 is "2: a branch the source is an ancestor of is flagged as the likelier source" "$(val checkpoint)" above
 lacks "2: a branch off the target is neither" "$OUT" "unrelated"
 lacks "2: the landed branch is not in the chain" " $(vals branch | cut -f1 | tr '\n' ' ')" " f1 "
+is "2: ...but is named as a merged predecessor left behind" "$(vals merged | tr '\n' ' ')" "f1 "
+lacks "2: ...which a branch the target simply contains is not" "$OUT" "merged=old"
+is "2: a gh that cannot answer is said to be unavailable, and is no failure" "$(val prs) $RC" "unavailable 0"
 lacks "2: with no cached origin ref, nothing is said of one" "$OUT" "origin-oid"
 is "2: the frontier's subject is given for the listing" "$(val ef-subject)" "f1-b: one"
 git -C "$R" tag f2 main
@@ -191,6 +227,7 @@ commit f1-late one
 git -C "$R" checkout -q f3
 run detect --source f3 --target main
 lacks "2: a landed branch that grew a late commit forks AT the frontier, so it is still not a chain branch" " $(vals branch | cut -f1 | tr '\n' ' ')" " f1 "
+is "2: ...nor a merged one any more: it holds work main lacks" "$(vals merged)" ""
 
 # Nothing landed: the frontier is the plain merge-base.
 stack
@@ -212,6 +249,46 @@ stack
 run detect --source f3 --target main
 is "2: a chain whose branches hold nothing of their own is 'empty', to be confirmed" "$(val outcome)" empty
 is "2: ...with the source still listed" "$(vals branch | cut -f1)" f3
+# A linear stack: only evidence tells a branch of it from a snapshot ref.
+git -C "$R" branch -q snap f2
+git -C "$R" remote add origin https://example.test/acme/widgets.git
+git -C "$R" update-ref refs/remotes/origin/f1 "$(tip f1)"
+git -C "$R" config branch.f1.remote origin
+git -C "$R" config branch.f1.merge refs/heads/f1
+run detect --source f3 --target main
+is "2: a branch with no commit of its own that tracks an upstream is a chain branch" "$(vals branch | cut -f1 | tr '\n' ' ')" "f1 f3 "
+is "2: ...with the evidence it was taken on" "$(vals evidence)" "f1	upstream origin/f1"
+is "2: ...and the chain is no longer empty" "$(val outcome)" chain
+has "2: one with neither a PR nor an upstream stays a near miss" "$OUT" "near=f2	no commits of its own past f3, no open PR and no upstream"
+echo '[{"number":12,"headRefName":"f2","isCrossRepository":false},{"number":13,"headRefName":"snap","isCrossRepository":true},{"number":14,"headRefName":"f1","isCrossRepository":false}]' >"$FAKE/prs.json"
+: >"$FAKE/gh.log"
+run detect --source f3 --target main
+is "2: an open PR publishing from a branch makes it a chain branch too" "$(vals branch | cut -f1 | tr '\n' ' ')" "f1 f2 f3 "
+is "2: ...the PR outranking the upstream as the evidence named" "$(vals evidence | tr '\n' ' ')" "f1	open PR #14 f2	open PR #12 "
+is "2: ...each counted against the next, none holding a commit past it" "$(vals branch | cut -f3,4 | tr '\n' ' ')" "0	f2 0	f3 0	source "
+has "2: a fork's PR that happens to share a branch name is no evidence" "$OUT" "near=snap"
+is "2: ...and the PRs are said to have been read" "$(val prs)" read
+lacks "2: with no --repo, gh is left to its own default" "$(cat "$FAKE/gh.log")" "--repo"
+run detect --source f3 --target main --repo acme/widgets
+has "2: --repo names the repository gh is asked about" "$(cat "$FAKE/gh.log")" "--repo acme/widgets"
+: >"$FAKE/gh.log"
+run detect --source f3 --target main --offline
+is "2: --offline asks gh nothing" "$(cat "$FAKE/gh.log")" ""
+is "2: ...says so" "$(val prs)" skipped
+is "2: ...and falls back to the upstream alone" "$(vals branch | cut -f1 | tr '\n' ' ')" "f1 f3 "
+# A branch forking at a chain branch's tip comes after that branch.
+git -C "$R" checkout -q -b a-leaf f2
+commit leaf one
+git -C "$R" checkout -q f3
+run detect --source f3 --target main
+is "2: a branch forking at a chain branch's tip is ordered after it" "$(vals branch | cut -f1 | tr '\n' ' ')" "f1 f2 a-leaf f3 "
+rm "$FAKE/prs.json"
+# What detect proposed is a run the fast path takes.
+git -C "$R" branch -q -D a-leaf snap
+run segments f1 f2 f3
+is "2: the detected linear stack is one run" "$(vals segment)" "run f1 f2 f3"
+
+stack
 run detect --source f3
 is "2: detect needs both ends" "$RC" 64
 run detect --source nope --target main
@@ -377,14 +454,8 @@ is "5: ...that moved nothing, the branches it could have moved included" "$(tip 
 rm "$R/.git/refs/heads/f2.lock"
 run restore --stamp 20990101-000000 f1
 is "5: a run with no snapshot is not restored" "$(val outcome)" no-snapshot
-mv "$R/.git/rebase-stack-$STAMP.taken" "$WORKDIR/heads.keep"
-run restore --stamp "$STAMP" f1 f2 f3
-is "5: nor is one whose record of the frozen tips is gone" "$(val outcome)" no-snapshot
-sed "s/^f1 .*/f1 $(tip main)/" "$WORKDIR/heads.keep" >"$R/.git/rebase-stack-$STAMP.taken"
-run restore --stamp "$STAMP" f1 f2 f3
-is "5: ...or disagrees with a snapshot" "$(val outcome)" no-snapshot
-is "5: ...which moves nothing" "$(tip f1) $(tip f2) $(tip f3)" "$BEFORE"
-mv "$WORKDIR/heads.keep" "$R/.git/rebase-stack-$STAMP.taken"
+[ ! -e "$R/.git/rebase-stack-$STAMP.taken" ]
+ok "5: a snapshot keeps one record, of the branch tips, and none of its own refs" $?
 # A branch that moves after restore has read it and before the transaction:
 # the hook fires on restore's own detach.
 git -C "$R" checkout -q f3
