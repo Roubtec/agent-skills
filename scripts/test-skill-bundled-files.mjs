@@ -107,7 +107,11 @@ function audit(model, external = EXTERNAL) {
     for (const [skill, folder] of Object.entries(model.trees[s])) for (const file of Object.keys(folder).filter(isBundled)) (owners[s][file] ||= []).push(skill);
   }
 
-  const mentions = (line, skill) => new RegExp(`(?<![\\w-])${skill}(?![\\w-])`).test(line);
+  // A skill's name, not the stem of a file name: `prune-branches.sh` on a line
+  // does not say whose it is. A file's name, whole: `tool.sh` is not named by
+  // `updated-tool.sh`.
+  const mentions = (line, skill) => new RegExp(`(?<![\\w-])${skill}(?![\\w-]|\\.(?:sh|md)\\b)`).test(line);
+  const names = (text, file) => new RegExp(`(?<![\\w-])${file.replace(/[.]/g, "\\.")}(?![\\w-])`).test(text);
   function resolve(where, text, side, ownSkill) {
     const lines = text.split("\n");
     lines.forEach((line, i) => {
@@ -117,7 +121,7 @@ function audit(model, external = EXTERNAL) {
         if (ownSkill && own.includes(ownSkill)) continue;
         if (own.length) {
           // A workflow has no folder, so any skill's file is in reach by name.
-          if (!ownSkill || lines.some((l) => l.includes(name) && own.some((skill) => mentions(l, skill)))) continue;
+          if (!ownSkill || lines.some((l) => names(l, name) && own.some((skill) => mentions(l, skill)))) continue;
           problems.push(`resolves: ${at} names \`${name}\`, which ${ownSkill} does not bundle; ${own.join(", ")} does, and no line of the document names the file together with that skill`);
         } else if (name in external) usedExternal.add(name);
         else problems.push(`resolves: ${at} names \`${name}\`, which no skill folder bundles and EXTERNAL does not list`);
@@ -131,7 +135,7 @@ function audit(model, external = EXTERNAL) {
       for (const file of prose) resolve(`${s} ${skill}/${file}`, folder[file].text, s, skill);
       // NAMED
       for (const file of Object.keys(folder).filter(isBundled)) {
-        const named = prose.some((p) => p !== file && folder[p].text.includes(file));
+        const named = prose.some((p) => p !== file && names(folder[p].text, file));
         if (!named) problems.push(`named: ${s} ${skill}/${file} is bundled but nothing in the folder names it`);
       }
     }
@@ -220,6 +224,8 @@ fires("a helper committed without the executable bit is reported", (m) => (m.tre
 fires("a bundled file nothing names is reported", (m) => { for (const s of ["claude", "codex"]) m.trees[s].beta["stray-brief.md"] = f("Unreferenced.\n"); }, /^named: claude beta\/stray-brief\.md/);
 fires("a named file that no folder bundles is reported", (m) => (m.trees.claude.alpha["SKILL.md"].text += "Then read `missing-brief.md`.\n"), /^resolves: claude alpha\/SKILL\.md:2 names `missing-brief\.md`, which no skill folder bundles/);
 fires("another skill's file named without naming that skill is reported", (m) => (m.trees.claude.beta["SKILL.md"].text += "Run `tool.sh` too, as alphabet does.\n"), /^resolves: claude beta\/SKILL\.md:2 names `tool\.sh`, which beta does not bundle; alpha does/);
+fires("a file whose stem is its skill's name does not introduce itself", (m) => { for (const s of ["claude", "codex"]) { m.trees[s].gamma = { "SKILL.md": f("Run `gamma.sh`.\n"), "gamma.sh": f("#!/bin/sh\n", "100755") }; } m.trees.claude.beta["SKILL.md"].text += "Run `gamma.sh` beside this file.\n"; }, /^resolves: claude beta\/SKILL\.md:2 names `gamma\.sh`, which beta does not bundle; gamma does/);
+fires("a bundled file is not named by a longer name that ends in it", (m) => { for (const s of ["claude", "codex"]) { m.trees[s].alpha["updated-tool.sh"] = f("#!/bin/sh\n", "100755"); m.trees[s].alpha["SKILL.md"] = f("Run `updated-tool.sh` beside this file, then read `role-brief.md`.\n"); } }, /^named: claude alpha\/tool\.sh is bundled but nothing in the folder names it/);
 fires("a workflow naming a file no folder bundles is reported", (m) => (m.workflows["wf.js"] += "'read gone-brief.md'\n"), /^resolves: workflows\/wf\.js:2 names `gone-brief\.md`/);
 fires("a shim forwarding to a missing file is reported", (m) => (m.shims["alpha-gone"] = 'target="$here/../skills/alpha/gone.sh"\n'), /^shims: bin\/alpha-gone forwards to skills\/alpha\/gone\.sh/);
 fires("an EXTERNAL entry nothing names any more is reported", (m) => { for (const s of ["claude", "codex"]) m.trees[s].beta["SKILL.md"] = f("Hand the reviewer the alpha skill's `role-brief.md`.\n"); }, /^external: `far-away\.sh`/);
