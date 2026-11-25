@@ -231,7 +231,7 @@ Which routes reach the record's no-commit shape, and why the measurement log is 
 
 ### `test-address-review-reconcile.mjs`
 
-Run `node scripts/test-address-review-reconcile.mjs` after changing `wf-address-review.js`'s branch-reconciliation gate, working-location rules, delegated rebase points, zero-item exits, publication guard, or disposition record — or the paragraphs of the `address-review`/`address-reviews` skill mirrors that state those same rules in prose, which the suite reads beside the workflow so neither can drift alone.
+Run `node scripts/test-address-review-reconcile.mjs` after changing `wf-address-review.js`'s branch-reconciliation gate, working-location rules, delegated rebase points, zero-item exits, publication guard, or disposition record — or the paragraphs of the `address-review`/`address-reviews` skill mirrors that state those same rules in prose, which the suite reads beside the workflow so neither can drift alone. The record and spend briefs are read by carrying out the `address-review-record` command they order against the shipped `record.sh`, so the suite also needs `bash` and `jq`.
 
 It evaluates the shipped script with the runtime globals stubbed and drives scripted packets through it, so the gates are exercised as running code. The prose checks are phrase pins that catch a clause reworded, moved out of its step, or dropped, but cannot hold polarity — a rule reversed around a surviving phrase passes — so polarity stays the reviewer's to hold.
 
