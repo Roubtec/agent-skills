@@ -181,7 +181,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 281;
+const EXPECTED_CHECKS = 282;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -3087,6 +3087,27 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     briefs[0] === briefs[1] && briefs[0].length > 0 && handsOver,
     `identical: ${briefs[0] === briefs[1]}; handed over: ${handsOver}`,
   );
+  // The roles' own rules live in three more briefs beside the skill: each is one
+  // file shipped twice, the skill names each, and each still carries the rule the
+  // cycle's gates read its answer by.
+  const roleRules = {
+    "fixer-brief.md": ["**Dispose every finding you were handed, explicitly:**", "with `git status --porcelain` empty, every intended change committed, and no Git operation left in progress", "Launch no peer review of your own"],
+    "reviewer-brief.md": ["**Read whole touched files, not diffs or commit messages:**", "A failure at that tier is an automatic blocker", "**What you return:** **Pass**, or a numbered, actionable **Issues** list."],
+    "peer-brief.md": ["First line: `VERDICT: PASS` or `VERDICT: ISSUES`.", "each tagged `blocking` or `minor`", "something you must not attempt"],
+  };
+  const roleMisses = [];
+  for (const [file, rules] of Object.entries(roleRules)) {
+    const copies = Object.values(rcMirrors).map((path) => readFileSync(join(dirname(path), file), "utf8"));
+    if (copies[0] !== copies[1] || !copies[0].length) roleMisses.push(`${file} differs between the mirrors`);
+    for (const rule of rules) if (!copies[0].includes(rule)) roleMisses.push(`${file} lacks "${rule}"`);
+    for (const [name, path] of Object.entries(rcMirrors)) if (!readFileSync(path, "utf8").includes(`\`${file}\``)) roleMisses.push(`${name} does not name ${file}`);
+  }
+  for (const [name, path] of Object.entries(rcMirrors)) {
+    const text = readFileSync(path, "utf8");
+    if (!text.includes("tells it to read `<path>/fixer-brief.md` or `<path>/reviewer-brief.md` in full and carry it out")) roleMisses.push(`${name} does not hand the Fixer and Reviewer to their briefs`);
+    if (!text.includes("Its prompt is `peer-brief.md` copied in whole")) roleMisses.push(`${name} does not open the peer prompt with its brief`);
+  }
+  check("each role's brief is one file, byte-identical in both mirrors, named by both skills, and still carrying the rules the gates read its answer by", roleMisses.length === 0, roleMisses.join("; "));
   for (const [name, path] of Object.entries(rcMirrors)) {
     // The step's own rules live in `rebase-brief.md` beside the skill, which
     // the rebaser reads; the section and that file are read as one text.
