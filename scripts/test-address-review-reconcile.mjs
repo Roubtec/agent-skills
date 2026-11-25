@@ -1287,7 +1287,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
           const adoptAt = prBranchHelper.indexOf('tip="$start"');
           if (
             !text.includes("- **`rewind`** → the head ref is behind the head GitHub reports: block the entry for a maintainer decision without adopting either.") ||
-            !prBranchHelper.includes('git merge-base --is-ancestor "$head" "$P_OID"; then') ||
+            !prBranchHelper.includes('is_ancestor "$head" "$P_OID"; then') ||
             rewindAt === -1 ||
             adoptAt < rewindAt
           )
@@ -1684,7 +1684,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     const pushChain = [
       ["the PR's reported head against the expected one", '[ "$P_OID" = "$EXPECT" ] || stop head-moved'],
       ["the fetched ref against the expected one", '[ "$fetched" = "$EXPECT" ] || stop head-moved'],
-      ["the proper-ancestor stop", 'if [ "$tip" != "$EXPECT" ] && git merge-base --is-ancestor "$tip" "$EXPECT"; then'],
+      ["the proper-ancestor stop", 'if [ "$tip" != "$EXPECT" ] && is_ancestor "$tip" "$EXPECT"; then'],
       ["every push URL listed before the push, so nothing can fail between a push and its account", 'git remote get-url --push --all "$remote" >"$urlfile"'],
       ["the one push, under its exact lease", 'git push --quiet "$remote" "--force-with-lease=refs/heads/$P_HEAD:$EXPECT" "$tip:refs/heads/$P_HEAD" >&2 || refused=1'],
       ["the read-back through every push URL", 'if raw="$(git ls-remote "$url" "refs/heads/$P_HEAD" 2>/dev/null)"; then'],
