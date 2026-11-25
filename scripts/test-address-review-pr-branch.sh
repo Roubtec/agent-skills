@@ -503,6 +503,71 @@ is "5: a fork PR is never pushed to" "$(val outcome)" fork
 ! grep "pr view" "$FAKE/gh.log" | grep -qv -- "pr view 7 --repo acme/widgets"
 ok "5: every PR read names the number and the repository" $?
 
+# An ancestry probe that cannot run is neither "yes" nor "no".
+BLIND="$WORKDIR/blind"
+mkdir -p "$BLIND"
+# shellcheck disable=SC2016 # the shim's own $@ must reach it unexpanded
+{
+	printf '#!/usr/bin/env bash\n'
+	printf 'for a in "$@"; do [ "$a" = merge-base ] && exit 128; done\n'
+	printf 'exec "%s" "$@"\n' "$REAL_GIT"
+} >"$BLIND/git"
+chmod +x "$BLIND/git"
+new_repo
+HEAD0="$(tip HEAD)"
+pr OPEN feature "$HEAD0"
+commit "$R" f3 one
+OUT="$(cd "$R" && PATH="$BLIND:$PATH" bash "$HELPER" push "${ARGS[@]}" --expect "$HEAD0" 2>/dev/null)"
+RC=$?
+is "5: an ancestry probe that could not run fails the push" "$RC" 1
+is "5: ...with no outcome" "$(val outcome)" ""
+is "5: ...and nothing pushed down the rewrite arm" "$(remote_tip feature)" "$HEAD0"
+commit "$U" f4 theirs
+git -C "$U" push -q origin feature
+pr OPEN feature "$(tip HEAD "$U")"
+OUT="$(cd "$R" && PATH="$BLIND:$PATH" bash "$HELPER" reconcile "${ARGS[@]}" 2>/dev/null)"
+RC=$?
+is "5: ...and fails a reconcile the same way" "$RC" 1
+is "5: ...which reports no relation it did not establish" "$(val outcome)" ""
+
+# The checkout is switched while the fetch is on the network: the fast-forward
+# would move whichever branch is checked out by then.
+SWITCH="$WORKDIR/switch"
+mkdir -p "$SWITCH"
+# shellcheck disable=SC2016 # the shim's own $@ must reach it unexpanded
+{
+	printf '#!/usr/bin/env bash\n'
+	printf 'for a in "$@"; do [ "$a" = fetch ] && { "%s" "$@"; rc=$?; "%s" checkout -q main; exit $rc; }; done\n' "$REAL_GIT" "$REAL_GIT"
+	printf 'exec "%s" "$@"\n' "$REAL_GIT"
+} >"$SWITCH/git"
+chmod +x "$SWITCH/git"
+new_repo
+MAIN0="$(tip main)"
+commit "$U" f3 theirs
+git -C "$U" push -q origin feature
+pr OPEN feature "$(tip HEAD "$U")"
+OUT="$(cd "$R" && PATH="$SWITCH:$PATH" bash "$HELPER" reconcile "${ARGS[@]}" 2>/dev/null)"
+RC=$?
+is "5: (setup) the checkout was switched during the fetch" "$(git -C "$R" branch --show-current)" main
+is "5: a checkout switched during the fetch is a stop" "$(val outcome)" wrong-branch
+is "5: ...and the branch now checked out is not fast-forwarded" "$(tip main)" "$MAIN0"
+
+# ...or the branch itself gains a commit meanwhile.
+# shellcheck disable=SC2016 # the shim's own $@ must reach it unexpanded
+{
+	printf '#!/usr/bin/env bash\n'
+	printf 'for a in "$@"; do [ "$a" = fetch ] && { "%s" "$@"; rc=$?; "%s" commit -q --allow-empty -m meanwhile; exit $rc; }; done\n' "$REAL_GIT" "$REAL_GIT"
+	printf 'exec "%s" "$@"\n' "$REAL_GIT"
+} >"$SWITCH/git"
+new_repo
+commit "$U" f3 theirs
+git -C "$U" push -q origin feature
+pr OPEN feature "$(tip HEAD "$U")"
+OUT="$(cd "$R" && PATH="$SWITCH:$PATH" bash "$HELPER" reconcile "${ARGS[@]}" 2>/dev/null)"
+RC=$?
+is "5: a branch that moved during the fetch fails the reconcile" "$RC" 1
+is "5: ...with no relation reported for a tip it did not read" "$(val outcome)" ""
+
 # --- 6. the shipped files ---------------------------------------------------
 cmp -s "$SCRIPT_DIR/../plugins/dev-skills/skills/address-review/pr-branch.sh" "$MIRROR"
 ok "the Codex mirror ships the same helper, byte for byte" $?

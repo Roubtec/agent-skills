@@ -236,6 +236,15 @@ EOF
 	P_HOST="${url%%/*}"
 	[ -n "$P_HEAD" ] && [ -n "$P_OID" ] || fail "PR #$PR in $REPO answered without a head ref. Nothing was changed."
 }
+# Is $1 an ancestor of $2? A probe that could not run (a missing object, a
+# partial clone offline) is neither answer: it fails the command, since read as
+# "no" it would send a push down the rewrite arm.
+is_ancestor() {
+	local rc=0
+	git merge-base --is-ancestor "$1" "$2" 2>/dev/null || rc=$?
+	[ "$rc" -le 1 ] || fail "could not tell whether $1 is an ancestor of $2 (git merge-base failed). Nothing was changed, and nothing was pushed."
+	return "$rc"
+}
 # The checks every command that touches the head ref shares.
 require_head_branch() {
 	[ "$P_CROSS" != true ] || stop fork "PR #$PR is a fork PR: its head lives in another repository, which is not supported."
@@ -286,19 +295,23 @@ cmd_reconcile() {
 	remote="$(find_remote)" || stop no-remote "no remote of this checkout both fetches from and pushes to $REPO on $(wanted_host), so the head ref cannot be reconciled."
 	start="$(git rev-parse HEAD)"
 	head="$(fetch_ref "$remote" "$P_HEAD")" || fail "could not fetch refs/heads/$P_HEAD from $remote. Nothing was changed."
+	# The fetch took its time on the network: what follows moves whichever
+	# branch is checked out now, so it must still be the one read before it.
+	require_head_branch
+	[ "$(git rev-parse HEAD)" = "$start" ] || fail "this branch moved off $start while the head ref was being fetched. Nothing was changed."
 	if [ "$head" != "$P_OID" ] && git cat-file -e "$P_OID^{commit}" 2>/dev/null &&
-		git merge-base --is-ancestor "$head" "$P_OID"; then
+		is_ancestor "$head" "$P_OID"; then
 		stop rewind "the head ref now points at $head, which is behind the $P_OID GitHub reports for PR #$PR. A maintainer decides; nothing was adopted." \
 			"fetched=$head" "reported=$P_OID" "tip=$start"
 	fi
 	tip="$start"
 	if [ "$tip" = "$head" ]; then
 		say "outcome=equal"
-	elif git merge-base --is-ancestor "$tip" "$head"; then
+	elif is_ancestor "$tip" "$head"; then
 		git merge --quiet --ff-only "$head" >/dev/null 2>&1 || fail "could not fast-forward $P_HEAD to $head. Nothing was changed."
 		tip="$(git rev-parse HEAD)"
 		say "outcome=fast-forwarded"
-	elif git merge-base --is-ancestor "$head" "$tip"; then
+	elif is_ancestor "$head" "$tip"; then
 		say "outcome=ahead"
 	else
 		lost="$(unrepresented "$tip" "$head")" || fail "could not compare this branch with the PR head $head, so whether its commits are carried here is not established. Nothing was changed."
@@ -361,11 +374,11 @@ cmd_push() {
 	[ "$fetched" = "$EXPECT" ] || stop head-moved "refs/heads/$P_HEAD on $remote is now $fetched, not the $EXPECT this run worked against. Nothing was pushed." "now=$fetched" "expected=$EXPECT" "tip=$tip"
 
 	# One exclusion chain: the stop first, because the lease MATCHES there.
-	if [ "$tip" != "$EXPECT" ] && git merge-base --is-ancestor "$tip" "$EXPECT"; then
+	if [ "$tip" != "$EXPECT" ] && is_ancestor "$tip" "$EXPECT"; then
 		stop behind "this branch is behind the PR head: there is nothing of yours to publish, and a lease push would rewind the PR. Nothing was pushed." "expected=$EXPECT" "tip=$tip"
 	elif [ "$tip" = "$EXPECT" ]; then
 		mode=none
-	elif git merge-base --is-ancestor "$EXPECT" "$tip"; then
+	elif is_ancestor "$EXPECT" "$tip"; then
 		mode=fast-forward
 	else
 		mode=rewrite
