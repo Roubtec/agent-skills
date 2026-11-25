@@ -418,6 +418,7 @@ Publication runs in the working location: the re-check, the resolved push remote
    - **`behind`, `head-moved`, `rejected`** → nothing was pushed, and for `rejected` every push URL answered the read-back without the tip: stop and report.
      Reconcile nothing to make the push legal, and **never** escalate to a bare `--force`.
    - **`unconfirmed`** → some push URL does not show the tip at the head ref or did not answer, whether the push command returned or was refused (`push-command=`), so whether it reached origin is unknown: stop, and render the disposition record as its read-back case.
+   - **`refused`** → git refused the push although every push URL already shows the tip (a hook said no, or the same commit arrived another way): this run published nothing, so stop and report.
    - **`fork`, `closed`, `wrong-branch`, `no-remote`, `dirty`** → stop and report what it said.
 
 3. **Re-read unresolved threads after the push.**

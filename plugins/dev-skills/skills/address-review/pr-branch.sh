@@ -59,6 +59,9 @@
 #              rejected        git refused the push, and every push URL
 #                              answered the read-back without the tip; never
 #                              retried with --force
+#              refused         git refused the push, though every push URL
+#                              already shows the tip (a hook said no, or the
+#                              same commit arrived another way)
 #              unconfirmed     some push URL does not show the tip at the head
 #                              ref or did not answer, whatever the push command
 #                              answered
@@ -515,6 +518,11 @@ readback=$url no answer"
 		printf '%s\n' "$seen" | awk 'NF'
 		note "the head ref does not show $tip at every push URL ($landed of $urls do, $unread did not answer). Whether this push reached origin is not established; read the ref before going on."
 		exit 3
+	fi
+	# The ref shows the tip everywhere, yet the command that would have put it
+	# there was refused: not a push this run can claim.
+	if [ "$refused" = 1 ]; then
+		stop refused "git refused the push to refs/heads/$P_HEAD on $remote, though every push URL already shows $tip: a hook refused it, or the same commit arrived another way. This run published nothing; never retry with --force." "mode=$mode" "expected=$EXPECT" "tip=$tip"
 	fi
 	if [ "$mode" = none ]; then
 		say "outcome=up-to-date"

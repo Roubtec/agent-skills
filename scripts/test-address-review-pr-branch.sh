@@ -583,6 +583,21 @@ is "5: ...while the PR's repository does carry the tip" "$(remote_tip feature)" 
 is "5: ...and every push URL's answer is given, the one that took it included" "$(printf '%s\n' "$OUT" | grep -c '^readback=')" 2
 has "5: ...that one by the tip it shows" "$OUT" "readback=$O $(tip HEAD)"
 
+# A hook refuses a push of a tip origin already carries: the ref shows it,
+# but no push of this run's succeeded.
+new_repo
+HEAD0="$(tip HEAD)"
+pr OPEN feature "$HEAD0"
+printf '#!/bin/sh\nexit 1\n' >"$R/.git/hooks/pre-push"
+chmod +x "$R/.git/hooks/pre-push"
+run push "${ARGS[@]}" --expect "$HEAD0"
+is "5: a refused push is never 'up-to-date', even where the ref already shows the tip" "$(val outcome)" refused
+is "5: ...and is a stop" "$RC" 3
+commit "$R" f3 one
+run push "${ARGS[@]}" --expect "$HEAD0"
+is "5: ...and where it does not, it is 'rejected'" "$(val outcome)" rejected
+rm "$R/.git/hooks/pre-push"
+
 # A refused push whose read-back gets no answer has established nothing.
 new_repo
 HEAD0="$(tip HEAD)"
