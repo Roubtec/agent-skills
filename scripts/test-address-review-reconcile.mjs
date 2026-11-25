@@ -5102,6 +5102,10 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       recordBrief.includes("the PR's own URL `https://example.invalid/pr/42`") &&
       /address-review-record post --repo <owner>\/<repo> --pr \d+ /.test(recordBrief) &&
       /address-review-record find --repo <owner>\/<repo> --pr \d+/.test(recordBrief) &&
+      // `find` names the latest record whether or not the failed write reached
+      // it, so the retry decision rests on the body read back, not on its id.
+      /READ that comment's body \(`gh api repos\/<owner>\/<repo>\/issues\/comments\/<id> --jq \.body`\) and compare it with the record you composed/.test(recordBrief) &&
+      /where `find` or the read itself fails, report `posted: false`/.test(recordBrief) &&
       !/gh pr comment/.test(recordBrief) &&
       !/repos\/\{owner\}\/\{repo\}/.test(recordBrief) &&
       /never the repository your working location resolves to/.test(recordBrief),
