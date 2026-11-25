@@ -125,6 +125,7 @@ call lanes "${ARGS[@]}"
 is "1: every lane passing is green" "$(val outcome)" green
 is "1: the head the rollup describes is given" "$(val head)" abc123
 is "1: ...and no lane is listed" "$(vals lane)" ""
+is "1: every passing lane is named, once, so a recorded lane can be told green from gone" "$(vals passing | tr '\n' '|')" "ci/legacy|codecov / patch|tests / markdown|tests / scripts|"
 has "1: the query names the repository and the PR" "$(cat "$FAKE/gh.log")" "owner=acme -f name=widgets -F pr=7"
 
 fresh
@@ -140,6 +141,7 @@ has "1: another app's check is its slug and name, with no workflow run" "$OUT" "
 has "1: two apps emitting one check name stay two lanes" "$OUT" "lane=other-app / patch	external	TIMED_OUT"
 has "1: a commit status is its context" "$OUT" "lane=ci/legacy	status	FAILURE	https://legacy.example/1"
 is "1: what is still in progress is named as running, not as failing" "$(vals running | tr '\n' '|')" "ci/slow|tests / deploy|"
+is "1: a lane with one instance passing and one failing is listed under both" "$(vals passing | tr '\n' '|')" "tests / scripts|"
 
 fresh
 rollup page1.json 7 false "" "$(run_node tests scripts COMPLETED '"SUCCESS"' "$RUN"),$(run_node tests deploy QUEUED null "$RUN"),$(status_node ci/slow EXPECTED https://legacy.example/2)"

@@ -23,6 +23,9 @@
 #                         one per failing instance. An identity printed more
 #                         than once is ONE lane, failing while any instance is.
 #          running=<identity>
+#          passing=<identity>
+#                         every lane that passes, so a lane recorded earlier
+#                         can be told as green now from absent altogether
 #        <identity> is `<workflow> / <job>` for a GitHub Actions check run,
 #        `<app slug> / <check name>` for another app's check run (two apps
 #        emitting one check name stay two lanes), and the context of a commit
@@ -142,7 +145,7 @@ cmd_lanes() {
 	case "$PR" in
 	'' | *[!0-9]*) usage "--pr <N> is required" ;;
 	esac
-	local cursor="" out head="" more seen=0 lanes="" running="" kind f1 f2 f3 f4 f5 guard=0
+	local cursor="" out head="" more seen=0 lanes="" running="" passing="" kind f1 f2 f3 f4 f5 guard=0
 	while :; do
 		out="$(page "$cursor")" || fail "could not read the status rollup of PR #$PR in $REPO (gh failed). Nothing here says the lanes are green."
 		more=false
@@ -170,7 +173,11 @@ lane=$f2$TAB$kind$TAB$f4$TAB$f5"
 				running="$running
 running=$f2"
 				;;
-			pass) seen=$((seen + 1)) ;;
+			pass)
+				seen=$((seen + 1))
+				passing="$passing
+passing=$f2"
+				;;
 			esac
 		done <<EOF
 $out
@@ -193,6 +200,7 @@ EOF
 	say "head=$head"
 	printf '%s\n' "$lanes" | awk 'NF'
 	printf '%s\n' "$running" | awk 'NF' | sort -u
+	printf '%s\n' "$passing" | awk 'NF' | sort -u
 }
 
 R_REPO="" R_RUN="" R_JOB=""
