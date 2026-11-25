@@ -18,7 +18,8 @@ trap 'rm -rf "$WORKDIR"' EXIT
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.test GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.test
 # A fake `gh`, so no case reaches the network: it fails unless a case wrote
-# prs.json, and then answers `pr list` through real jq, logging its arguments.
+# prs.json, and then answers `pr list --head <branch>` with that branch's PRs
+# through real jq, logging its arguments.
 FAKE="$WORKDIR/bin"
 mkdir -p "$FAKE"
 # shellcheck disable=SC2016 # the fake's own $1/$* must reach it unexpanded
@@ -26,8 +27,9 @@ mkdir -p "$FAKE"
 	printf '#!/usr/bin/env bash\n'
 	printf 'echo "$*" >>"%s/gh.log"\n' "$FAKE"
 	printf '[ "$1 $2" = "pr list" ] && [ -f "%s/prs.json" ] || exit 1\n' "$FAKE"
-	printf 'expr=.; while [ $# -gt 0 ]; do [ "$1" = --jq ] && expr="$2"; shift; done\n'
-	printf 'jq -r "$expr" "%s/prs.json"\n' "$FAKE"
+	printf 'expr=.; head=; while [ $# -gt 0 ]; do [ "$1" = --jq ] && expr="$2"; [ "$1" = --head ] && head="$2"; shift; done\n'
+	printf '[ -n "$head" ] || exit 1\n'
+	printf 'jq --arg h "$head" "map(select(.headRefName == \\$h))" "%s/prs.json" | jq -r "$expr"\n' "$FAKE"
 } >"$FAKE/gh"
 chmod +x "$FAKE/gh"
 export PATH="$FAKE:$PATH"
@@ -112,6 +114,13 @@ run preflight
 is "1: a tag named like the target does not answer for the branch" "$(val target-oid)" "$(tip main)"
 git -C "$R" tag -d main >/dev/null
 lacks "1: with no earlier run's record to remove, nothing is said of one" "$OUT" "swept="
+: >"$R/.git/rebase-stack-20200101-000000.heads"
+echo x >>"$R/m1"
+run preflight
+is "1: (setup) a dirty tree stops the preflight" "$(val outcome)" dirty
+[ -e "$R/.git/rebase-stack-20200101-000000.heads" ]
+ok "1: a preflight that stops removes nothing" $?
+git -C "$R" checkout -q -- m1
 # Records of earlier runs: one whose snapshots are gone, one still standing.
 : >"$R/.git/rebase-stack-20200101-000000.heads"
 : >"$R/.git/rebase-stack-20200101-000000.taken"
@@ -259,6 +268,17 @@ run detect --source f3 --target main
 is "2: a branch with no commit of its own that tracks an upstream is a chain branch" "$(vals branch | cut -f1 | tr '\n' ' ')" "f1 f3 "
 is "2: ...with the evidence it was taken on" "$(vals evidence)" "f1	upstream origin/f1"
 is "2: ...and the chain is no longer empty" "$(val outcome)" chain
+git -C "$R" config branch.f2.remote origin
+git -C "$R" config branch.f2.merge refs/heads/f2
+git -C "$R" config branch.snap.remote .
+git -C "$R" config branch.snap.merge refs/heads/f1
+run detect --source f3 --target main
+is "2: an upstream that is gone, or is a local branch, is no evidence of a published one" "$(vals branch | cut -f1 | tr '\n' ' ')" "f1 f3 "
+git -C "$R" config --unset branch.f2.remote
+git -C "$R" config --unset branch.f2.merge
+git -C "$R" config --unset branch.snap.remote
+git -C "$R" config --unset branch.snap.merge
+run detect --source f3 --target main
 has "2: one with neither a PR nor an upstream stays a near miss" "$OUT" "near=f2	no commits of its own past f3, no open PR and no upstream"
 echo '[{"number":12,"headRefName":"f2","isCrossRepository":false},{"number":13,"headRefName":"snap","isCrossRepository":true},{"number":14,"headRefName":"f1","isCrossRepository":false}]' >"$FAKE/prs.json"
 : >"$FAKE/gh.log"
@@ -269,6 +289,7 @@ is "2: ...each counted against the next, none holding a commit past it" "$(vals 
 has "2: a fork's PR that happens to share a branch name is no evidence" "$OUT" "near=snap"
 is "2: ...and the PRs are said to have been read" "$(val prs)" read
 lacks "2: with no --repo, gh is left to its own default" "$(cat "$FAKE/gh.log")" "--repo"
+has "2: gh is asked by head branch, so no listing limit can hide a PR" "$(cat "$FAKE/gh.log")" "pr list --head f2 --state open"
 run detect --source f3 --target main --repo acme/widgets
 has "2: --repo names the repository gh is asked about" "$(cat "$FAKE/gh.log")" "--repo acme/widgets"
 : >"$FAKE/gh.log"
@@ -282,11 +303,32 @@ commit leaf one
 git -C "$R" checkout -q f3
 run detect --source f3 --target main
 is "2: a branch forking at a chain branch's tip is ordered after it" "$(vals branch | cut -f1 | tr '\n' ' ')" "f1 f2 a-leaf f3 "
-rm "$FAKE/prs.json"
-# What detect proposed is a run the fast path takes.
+# What detect proposed is a run the fast path takes, once main has moved.
 git -C "$R" branch -q -D a-leaf snap
-run segments f1 f2 f3
-is "2: the detected linear stack is one run" "$(vals segment)" "run f1 f2 f3"
+git -C "$R" checkout -q main
+commit m2 one
+git -C "$R" checkout -q f3
+echo '[{"number":12,"headRefName":"f2","isCrossRepository":false}]' >"$FAKE/prs.json"
+run detect --source f3 --target main
+CHAIN="$(vals branch | cut -f1 | tr '\n' ' ')"
+# shellcheck disable=SC2086 # one branch name per word
+run segments $CHAIN
+is "2: the linear stack detect proposed is one run" "$(vals segment)" "run f1 f2 f3"
+# shellcheck disable=SC2086 # one branch name per word
+run qualify --base main $CHAIN
+is "2: ...and one the single replay takes" "$(val outcome)" combined
+rm "$FAKE/prs.json"
+
+# No branch raises the question: gh is not asked at all.
+stack
+git -C "$R" checkout -q f1
+commit f1-fix one
+git -C "$R" checkout -q f2
+commit f2-fix one
+git -C "$R" checkout -q f3
+: >"$FAKE/gh.log"
+run detect --source f3 --target main
+is "2: where every branch holds a commit of its own, gh is not asked" "$(val prs) $(cat "$FAKE/gh.log")" "unneeded "
 
 stack
 run detect --source f3
@@ -454,7 +496,7 @@ is "5: ...that moved nothing, the branches it could have moved included" "$(tip 
 rm "$R/.git/refs/heads/f2.lock"
 run restore --stamp 20990101-000000 f1
 is "5: a run with no snapshot is not restored" "$(val outcome)" no-snapshot
-[ ! -e "$R/.git/rebase-stack-$STAMP.taken" ]
+[ -e "$R/.git/rebase-stack-$STAMP.heads" ] && [ ! -e "$R/.git/rebase-stack-$STAMP.taken" ]
 ok "5: a snapshot keeps one record, of the branch tips, and none of its own refs" $?
 # A branch that moves after restore has read it and before the transaction:
 # the hook fires on restore's own detach.

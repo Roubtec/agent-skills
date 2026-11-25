@@ -109,7 +109,7 @@ Otherwise run `stack.sh detect --source <source> --target <target>`, adding `--r
 It computes the **effective frontier** `EF`: the newest commit on the source's history that is patch-equivalent to one reachable from the target, or their strict merge-base where there is none (`ef-kind=` says which, `equivalent=` how many source commits the target already carries).
 A chain candidate is a local branch that forks from the source's history past `EF`, ordered from the frontier up, and the chain to rebase is the `branch=` lines in order, the source last.
 A branch holding a commit the source lacks is a candidate on that alone.
-One with none — a branch of a linear stack, or a snapshot ref left by an earlier workflow stage, which look alike — is a candidate only on the evidence its `evidence=` line names: an open PR publishes from it, or else it tracks an upstream (`prs=` says whether `gh` could be asked).
+One with none — a branch of a linear stack, or a snapshot ref left by an earlier workflow stage, which look alike — is a candidate only on the evidence its `evidence=` line names: an open PR publishes from it, or else it tracks a remote branch that exists (`prs=` says whether `gh` could be asked).
 
 This is **heuristic, not metadata**: it can also catch an unrelated branch that shares a merge-base on the spine (e.g., `login-tests` accidentally branched from `feature/03`), which the confirmation listing lets the user filter out.
 
@@ -136,7 +136,7 @@ Include for each branch in the proposed chain:
 - Short SHA of its tip and tip subject line.
 - Count of commits unique to this branch versus the next-up candidate (or versus the source for the topmost).
   Use this to highlight likely fix commits — small numbers are normal; large numbers on a branch with a name like `login-tests` are a red flag.
-- For a branch taken on an `evidence=` line, that evidence (`PR #12`, `tracks origin/feature/05`).
+- For a branch taken on an `evidence=` line, that evidence (`PR #12`, `tracks origin/feature/05`), with a `[!]` flag where it looks like a shared integration or release branch rather than a branch of this stack.
 - For any branch that looks suspicious (e.g., an outlier in commit count or whose name doesn't fit the apparent chain pattern), flag it with `[!]` and a one-line reason.
 
 Also state that any qualifying contiguous linear run may be replayed once with `--update-refs`, moving exactly that run's listed branch refs together, while every run that fails the exact-ref, topology, or worktree checks falls back to branch-at-a-time replay.
@@ -201,7 +201,7 @@ It never guesses a boundary: the run is replayed together only where every one o
   A run whose fork already is the segment base needs no combined replay, and that loop's iterations safely no-op as appropriate.
 
 Whenever the instructions below say to restore an entire run, run `stack.sh restore --stamp <stamp> <first> ... <last>`.
-It detaches this worktree if it stands on a run branch, checks each snapshot still holds the tip the run was frozen at, and moves every run branch back in one transaction, each update guarded by the commit the branch holds now, so it restores all of them or none.
+It detaches this worktree if it stands on a run branch, and moves every run branch back to its snapshot ref in one transaction, each update guarded by the commit the branch holds now, so it restores all of them or none.
 On `ref-moved`, or on any stop, report the concurrent or unexpected ref movement; do not start the fallback from a state that was not restored exactly.
 
 For a qualifying run:

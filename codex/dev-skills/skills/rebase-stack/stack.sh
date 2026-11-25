@@ -11,7 +11,7 @@
 #   stack.sh restore   --stamp <stamp> <branch>...
 #
 # It never fetches, pushes, rebases, or deletes a ref, and reads local refs
-# only — but for `detect`, which also asks gh for the open PRs where it can.
+# only — but for `detect`, which also asks gh for an open PR where it can.
 # `snapshot` creates refs under refs/pre-rebase/, and `restore` moves the
 # branches it is given back to those snapshots in one guarded transaction.
 #
@@ -21,8 +21,8 @@
 #            every snapshot of this run shares. The target defaults to main,
 #            then master; the source to the current branch. Stops on:
 #              dirty | rebase-in-progress | no-target | no-source
-#            It also removes the tip records of earlier runs whose snapshots
-#            are all deleted (`swept=<n>` where it removed any).
+#            Where it is ready, it also removes the tip records of earlier
+#            runs whose snapshots are all deleted (`swept=<n>` if any).
 # detect     The chain between a source and a target, by the effective
 #            frontier: the newest source commit that is patch-equivalent to
 #            one on the target, else their merge-base.
@@ -34,10 +34,12 @@
 #                  <n> is its commits past <next>, the branch above it
 #              evidence=<name> TAB <why>  a chain branch with no commit of
 #                  its own past the source, taken for one because an open PR
-#                  publishes from it, or else because it tracks an upstream
-#              prs=read|unavailable|skipped   whether gh listed the open PRs
-#                  (`--repo` names the repository to ask, else gh's own
-#                  default for this tree; `--offline` skips the question)
+#                  publishes from it, or else because it tracks a remote
+#                  branch that exists
+#              prs=read|unavailable|skipped|unneeded   whether gh answered
+#                  for those branches (`--repo` names the repository to ask,
+#                  else gh's own default for this tree; `--offline` skips the
+#                  question; `unneeded` where no branch raised it)
 #              near=<name> TAB <why>      on the spine, but not a candidate
 #              merged=<name>              on the spine, every commit already
 #                  carried by the target: a merged predecessor left behind,
@@ -173,49 +175,59 @@ frozen_file() { printf '%s/rebase-stack-%s.heads' "$(cd "$(git rev-parse --git-c
 # Removes the tip records of runs whose snapshots are all gone: no run can
 # verify against one any more. Nothing tells this script a run has ended, so
 # the next run's preflight clears up after it. Prints how many it removed.
+# The files are listed BEFORE the refs are read, so a run that starts in
+# another worktree meanwhile has its record judged by refs it already made.
 sweep() {
-	local dir refs f stamp n=0
+	local dir refs f stamp n=0 files=""
 	dir="$(cd "$(git rev-parse --git-common-dir)" && pwd)" || return 0
-	refs="$(git for-each-ref --format='%(refname)' refs/pre-rebase/)" || return 0
 	for f in "$dir"/rebase-stack-[0-9]*-[0-9]*.heads "$dir"/rebase-stack-[0-9]*-[0-9]*.taken; do
-		[ -f "$f" ] || continue
+		[ -f "$f" ] && files="$files
+$f"
+	done
+	refs="$(git for-each-ref --format='%(refname)' refs/pre-rebase/)" || return 0
+	while IFS= read -r f; do
+		[ -n "$f" ] || continue
 		stamp="${f##*/rebase-stack-}"
 		stamp="${stamp%.*}"
 		case "$stamp" in *[!0-9-]*) continue ;; esac
 		printf '%s\n' "$refs" | grep -q "/$stamp\$" && continue
 		rm -f "$f" && n=$((n + 1))
-	done
+	done <<EOF
+$files
+EOF
 	printf '%s' "$n"
 }
-# The open PRs of the repository, where gh can be asked: `<head branch> TAB
-# <number>` lines in PRS. It is evidence for one question only — whether a
-# branch on the source's own history is a branch of the stack — so a gh that
-# is missing, signed out or offline is no failure: PRS_STATE says which.
-PRS="" PRS_STATE=skipped
-read_prs() {
-	[ "$OFFLINE" = 0 ] || return 0
-	PRS_STATE=unavailable
-	command -v gh >/dev/null 2>&1 || return 0
-	local out
-	# shellcheck disable=SC2016 # the \(...) are jq's
-	set -- pr list --state open --limit 200 --json number,headRefName,isCrossRepository \
-		--jq '.[] | select(.isCrossRepository | not) | "\(.headRefName)\t\(.number)"'
-	[ -z "$REPO" ] || set -- "$@" --repo "$REPO"
-	out="$(gh "$@" 2>/dev/null)" || return 0
-	PRS="$out" PRS_STATE=read
-}
 # Why a branch with no commit of its own is still taken for a branch of the
-# stack: an open PR publishes from it, else it tracks an upstream. Empty where
-# neither holds, which leaves it a `near=` line.
+# stack, left in WHY: an open PR of this repository publishes from it, else it
+# tracks a remote branch that exists. Empty where neither holds, which leaves
+# it a `near=` line. gh is evidence for this one question only, so one that is
+# missing, signed out or offline is no failure: PRS_STATE says how it went,
+# and after one failed answer it is not asked again.
+PRS_STATE=unneeded WHY=""
+ask_pr() { # branch → the number of an open PR of this repository from it, if any
+	set -- pr list --head "$1" --state open --json number,isCrossRepository \
+		--jq '[.[] | select(.isCrossRepository | not) | .number][0] // empty'
+	[ -z "$REPO" ] || set -- "$@" --repo "$REPO"
+	gh "$@" 2>/dev/null </dev/null
+}
 evidence() { # branch
 	local n up
-	n="$(printf '%s\n' "$PRS" | awk -F'\t' -v b="$1" '("b:" $1) == ("b:" b) { print $2; exit }')"
-	if [ -n "$n" ]; then
-		printf 'open PR #%s' "$n"
-		return 0
+	WHY=""
+	if [ "$OFFLINE" = 0 ] && [ "$PRS_STATE" != unavailable ]; then
+		PRS_STATE=unavailable
+		if command -v gh >/dev/null 2>&1 && n="$(ask_pr "$1")"; then
+			PRS_STATE="read"
+			if [ -n "$n" ]; then
+				WHY="open PR #$n"
+				return 0
+			fi
+		fi
 	fi
-	up="$(git for-each-ref --format='%(upstream:short)' "refs/heads/$1")"
-	[ -z "$up" ] || printf 'upstream %s' "$up"
+	up="$(git for-each-ref --format='%(upstream)' "refs/heads/$1")"
+	case "$up" in
+	refs/remotes/*) ! git rev-parse --verify --quiet "$up^{commit}" >/dev/null || WHY="upstream ${up#refs/remotes/}" ;;
+	esac
+	return 0
 }
 # Fails where a branch is checked out in a worktree other than this one,
 # printing that worktree.
@@ -243,7 +255,6 @@ cmd_preflight() {
 	[ -z "$BRANCHES" ] || usage "preflight takes --source and --target only"
 	in_repo
 	local dirty t s swept
-	swept="$(sweep)"
 	# The rebase first: a paused one leaves the tree dirty, and is the truer answer.
 	! rebasing || stop rebase-in-progress "a rebase is already in progress here. Finish or abort it first."
 	dirty="$(git status --porcelain --untracked-files=no 2>/dev/null)" || fail "git status failed here"
@@ -261,6 +272,7 @@ cmd_preflight() {
 	s="${SOURCE:-$(git branch --show-current)}"
 	[ -n "$s" ] || stop no-source "HEAD is detached and no source was named."
 	tip "$s" >/dev/null || stop no-source "'$s' is not a local branch." "source=$s"
+	swept="$(sweep)"
 	say "outcome=ready"
 	say "target=$t"
 	say "target-oid=$(commit_of "$t")"
@@ -287,7 +299,7 @@ cmd_detect() {
 		ef="$(git merge-base "$s" "$t")" || fail "$SOURCE and $TARGET share no history"
 		kind=merge-base
 	fi
-	read_prs
+	[ "$OFFLINE" = 0 ] || PRS_STATE=skipped
 	while read -r x xt; do
 		[ -n "$x" ] || continue
 		[ "$x" != "$SOURCE" ] && [ "$x" != "$TARGET" ] || continue
@@ -316,7 +328,8 @@ merged=$x"
 		if [ "$(git rev-list --count "$s..$xt")" = 0 ]; then
 			# On the source's own history with no commit past it: a branch of a
 			# linear stack, or a snapshot ref. Only evidence tells them apart.
-			why="$(evidence "$x")"
+			evidence "$x"
+			why="$WHY"
 			if [ -z "$why" ]; then
 				near="$near
 near=$x${TAB}no commits of its own past $SOURCE, no open PR and no upstream (a snapshot ref, or an unpublished chain branch: name it in an explicit chain to carry it)"
