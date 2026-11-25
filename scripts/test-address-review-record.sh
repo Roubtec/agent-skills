@@ -209,6 +209,53 @@ reply with `@codex review` to re-run, or `gh pr comment --body "@claude review"`
 gh pr comment 7 --body "@copilot review"
 ```' run render "${R[@]}" --state not-published --reason r
 is "2: a mention in a code span or a fenced block, an address and a longer name are not one" "$RC" 0
+STDIN='## Threads
+## Summary comment
+~~~
+@codex review
+~~~
+use ``@claude `review` `` or `` `@copilot` ``
+````md
+```
+@codex review
+```
+````' run render "${R[@]}" --state not-published --reason r
+is "2: nor is one in a tilde fence, a longer fence or a double-backtick span" "$RC" 0
+STDIN='## Threads
+## Summary comment
+````md
+```
+quoted
+````
+@codex review' run render "${R[@]}" --state not-published --reason r
+is "2: a shorter fence inside a longer one does not close it, so what follows the real close is seen" "$(val outcome)" mention
+STDIN='## Threads
+## Summary comment
+```
+quoted
+~~~
+@codex review' run render "${R[@]}" --state not-published --reason r
+is "2: a fence of the other character closes nothing" "$RC" 0
+STDIN='## Threads
+## Summary comment
+an unclosed ` and then @claude' run render "${R[@]}" --state not-published --reason r
+is "2: an unclosed backtick quotes nothing" "$(val outcome)" mention
+STDIN='## Threads
+## Summary comment
+```example `code`
+@codex review' run render "${R[@]}" --state not-published --reason r
+is "2: a backtick fence with a backtick in its info string is no fence" "$(val outcome)" mention
+STDIN="$(printf '## Threads\n## Summary comment\n```\nquoted\n```\t\n@codex review')" run render "${R[@]}" --state not-published --reason r
+is "2: a closing fence followed by a tab still closes" "$(val outcome)" mention
+STDIN='## Threads
+## Summary comment
+escaped \` @codex review `' run render "${R[@]}" --state not-published --reason r
+is "2: an escaped backtick opens no span" "$(val outcome)" mention
+STDIN='## Threads
+## Summary comment
+use `@codex
+review` here' run render "${R[@]}" --state not-published --reason r
+is "2: where it cannot tell — a span over a line break — it stops" "$(val outcome)" mention
 for m in "@copilot" "@Codex flagged this" "see .@claude" "x/@COPILOT."; do
 	STDIN="## Threads
 ## Summary comment
@@ -332,7 +379,15 @@ has "4: ...sending the reader to look before posting again" "$ERR" "run find bef
 rm "$FAKE/fail-POST"
 run post "${P[@]}" --incomplete --state not-published --reason r
 lacks "4: an incomplete first record claims no predecessor" "$(body_of 2)" "an earlier record still stands"
-is "4: nothing is left behind in the temporary directory" "$(find "$WORKDIR/tmp" -type f | wc -l | tr -d ' ')" 0
+is "4: nothing is left behind in the temporary directory" "$(find "$WORKDIR/tmp" -mindepth 1 | wc -l | tr -d ' ')" 0
+# The body is readable by its owner alone while it exists, whatever the umask.
+printf '#!/usr/bin/env bash\nfor d in "%s"/tmp/record.*; do [ -d "$d" ] && ls -ld "$d"; done >>"%s/modes"\nexec "%s/gh.real" "$@"\n' "$WORKDIR" "$WORKDIR" "$FAKE" >"$FAKE/gh.spy"
+mv "$FAKE/gh" "$FAKE/gh.real"
+mv "$FAKE/gh.spy" "$FAKE/gh"
+chmod +x "$FAKE/gh"
+(umask 022 && printf '%s\n' "$BODY" | bash "$HELPER" post "${P[@]}" --state not-published --reason r >/dev/null 2>&1)
+mv "$FAKE/gh.real" "$FAKE/gh"
+is "4: while it exists, the record sits in a directory of the owner's alone, whatever the umask" "$(cut -c1-10 "$WORKDIR/modes" | sort -u)" "drwx------"
 
 # --- 5. spend ------------------------------------------------------------------
 fresh

@@ -211,19 +211,80 @@ word_state() {
 	ORIGIN_LINE="$origin"
 }
 
-TMPF="" STANDING=""
-cleanup() { [ -z "$TMPF" ] || rm -f "$TMPF" "$TMPF.body"; }
-trap cleanup EXIT
-new_tmp() {
-	TMPF="$(mktemp "${TMPDIR:-/tmp}/record.XXXXXX")" || fail "could not create a temporary file. Nothing was written."
+TMPD="" TMPF="" STANDING=""
+cleanup() {
+	[ -n "$TMPD" ] || return 0
+	rm -f "$TMPF" "$TMPF.body"
+	rmdir "$TMPD" 2>/dev/null
 }
-# A bare bot mention in the text on stdin: outside a fenced block or a code
-# span (GitHub notifies from neither), in any letter case.
+trap cleanup EXIT
+# A directory of our own, so the record and its body are owner-only whatever
+# the umask: they hold replies and findings verbatim.
+new_tmp() {
+	TMPD="$(mktemp -d "${TMPDIR:-/tmp}/record.XXXXXX")" || fail "could not create a temporary directory. Nothing was written."
+	TMPF="$TMPD/record"
+}
+# A bare bot mention in the text on stdin, in any letter case, outside the two
+# places GitHub notifies nobody from: a fenced block (backticks or tildes,
+# closed only by a fence of the same character at least as long) and a code
+# span (closed by a backtick run of the same length, on the same line).
+# It is a guardrail, not a Markdown parser, and where it cannot tell it stops:
+# a span that runs over a line break, or a fence inside a block quote, reads
+# as unquoted. A fence left open inside a list item is the one case read the
+# other way.
 # shellcheck disable=SC2016 # the backticks are Markdown's
 has_mention() {
-	awk '/^[ \t]*```/ { fence = !fence; next } !fence' |
-		sed 's/`[^`]*`//g' |
-		grep -Eiq '(^|[^A-Za-z0-9_])@(codex|claude|copilot)([^A-Za-z0-9_-]|$)'
+	awk '
+	function fence_of(line,   s) {
+		if (!match(line, /^ ? ? ?(```+|~~~+)/)) return ""
+		s = substr(line, RSTART, RLENGTH)
+		gsub(/ /, "", s)
+		# A backtick fence whose info string holds a backtick is no fence.
+		if (substr(s, 1, 1) == "`" && index(substr(line, RSTART + RLENGTH), "`")) return ""
+		return s
+	}
+	function strip_spans(t,   out, i, n, rest, pos, found) {
+		out = ""
+		# An escaped backtick opens and closes nothing.
+		gsub(/\\`/, " ", t)
+		while ((i = index(t, "`")) > 0) {
+			out = out substr(t, 1, i - 1)
+			t = substr(t, i)
+			match(t, /^`+/)
+			n = RLENGTH
+			rest = substr(t, n + 1)
+			pos = 1
+			found = 0
+			while (match(substr(rest, pos), /`+/)) {
+				if (RLENGTH == n) {
+					rest = substr(rest, pos + RSTART - 1 + n)
+					found = 1
+					break
+				}
+				pos = pos + RSTART - 1 + RLENGTH
+			}
+			if (found) {
+				out = out " "
+				t = rest
+			} else {
+				out = out substr(t, 1, n)
+				t = substr(t, n + 1)
+			}
+		}
+		return out t
+	}
+	{
+		f = fence_of($0)
+		if (open == "") {
+			if (f != "") {
+				open = f
+				next
+			}
+			print strip_spans($0)
+		} else if (f != "" && substr(f, 1, 1) == substr(open, 1, 1) && length(f) >= length(open) && $0 ~ /^ ? ? ?(`+|~+)[ \t]*$/) {
+			open = ""
+		}
+	}' | grep -Eiq '(^|[^A-Za-z0-9_])@(codex|claude|copilot)([^A-Za-z0-9_-]|$)'
 }
 # take_body: stdin → $TMPF.body, stopping on one that is not a record's body.
 take_body() {
