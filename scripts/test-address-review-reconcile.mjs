@@ -640,7 +640,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   const brief = gatherPrompt("#42");
   const cases = brief.split("\n\n").find((p) => p.includes("take the FIRST case that applies")) || "";
   const headOnly = /`workingBranch` must equal `branch`/.test(brief);
-  const refusesFork = /A FORK PR is not supported/.test(brief) && /isCrossRepository/.test(brief);
+  // The probe names the resolved PR and its repository: a bare `gh pr view`
+  // answers for the current branch's PR, which from `main` is none at all.
+  const refusesFork =
+    /A FORK PR is not supported/.test(brief) &&
+    brief.includes("`gh pr view <number> --repo <owner>/<repo> --json isCrossRepository`") &&
+    !brief.includes("`gh pr view --json isCrossRepository`");
   const retired = /off-shoot/i.test(brief) || /CARRIES the PR head/.test(brief) || /gh pr checkout/.test(brief);
   check(
     "the gather works on no branch but the PR's head ref and refuses a fork PR, with no off-shoot route or fork attach left in the brief",
