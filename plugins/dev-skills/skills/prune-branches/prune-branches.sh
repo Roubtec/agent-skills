@@ -28,7 +28,8 @@
 # Transient: not merged, but the tip stays reachable from a ref that remains (a
 # protected branch, a `refs/pre-rebase/**` ref, or a branch this plan keeps), or
 # it is a merge commit whose parents all are. Uncertain: everything else, and
-# any unmerged branch that heads an open PR in origin's repository; kept unless
+# any branch not already in the default that heads an open PR in origin's
+# repository, whatever a merged PR says of it; kept unless
 # `--delete-uncertain` names it. Every non-Merged deletion is preserved
 # first under `refs/pruned/<YYYYMMDD-UTC>/<branch>` (or the flat fallback
 # `refs/pruned/flat/<date>/<percent-encoded>`).
@@ -294,7 +295,9 @@ classify_branches() {
 
 	# PR evidence, within fixed budgets. forced.tsv holds branches a PR lookup
 	# settled: "Merged" on an exact base-and-head match, "Uncertain" when a
-	# merged PR for this branch name carries a different head.
+	# merged PR for this branch name carries a different head, and "Open" (with
+	# the PR number) when it heads an open PR. A branch can carry an "Open" row
+	# beside an earlier one; forced_verdict lets "Open" win.
 	: >"$WORK/forced.tsv"
 	if [ -n "$ORIGIN_SELECTOR" ] && [ -s "$WORK/cand.tsv" ]; then
 		local n=0 out verdict
@@ -588,10 +591,13 @@ EOF
 	fi
 
 	# A symbolic ref under refs/heads/ is another branch's alias, not a branch:
-	# deleting through it would delete its target, so it is never a candidate.
+	# deleting through it would delete its target, so it is never a candidate,
+	# and the branch it points at is kept so the alias is not left dangling.
 	SYMBOLIC="$(git for-each-ref --format='%(if)%(symref)%(then)%(refname:strip=2)%(end)' refs/heads/ | awk 'NF')"
+	SYMTARGETS="$(git for-each-ref --format='%(symref)' refs/heads/ | sed -n 's|^refs/heads/||p')"
 	[ -z "$SYMBOLIC" ] || PROTECTED="$PROTECTED
-$SYMBOLIC"
+$SYMBOLIC
+$SYMTARGETS"
 
 	classify_branches
 	classify_breadcrumbs
@@ -621,6 +627,8 @@ $SYMBOLIC"
 				why="current branch in invoking worktree"
 			elif in_list "$name" "$SYMBOLIC"; then
 				why="symbolic ref to $(git symbolic-ref --quiet "refs/heads/$name"), not a branch of its own"
+			elif in_list "$name" "$SYMTARGETS"; then
+				why="a symbolic ref under refs/heads/ points at it"
 			else
 				why="kept on request"
 			fi

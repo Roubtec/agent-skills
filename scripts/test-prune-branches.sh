@@ -386,6 +386,10 @@ commit "$R" "squash of lonely (#9)"
 git -C "$R" push -q origin main
 git -C "$R" branch racy main~2
 git -C "$R" symbolic-ref refs/heads/alias refs/heads/main
+git -C "$R" checkout -q -b aliased main
+commit "$R" a1
+git -C "$R" checkout -q main
+git -C "$R" symbolic-ref refs/heads/alias2 refs/heads/aliased
 LO_OID="$(git -C "$R" rev-parse lonely)"
 FAKE="$(dirname "$R")/bin"
 mkdir -p "$FAKE"
@@ -408,7 +412,10 @@ CASE_PATH="$FAKE:$REAL_PATH"
 plan
 has "5b: the subject fallback runs when no head lookup settled anything" "$(row lonely)" "Merged"
 has "5b: a symbolic ref under refs/heads/ is protected, not a candidate" "$(row alias)" "symbolic ref to refs/heads/main"
+has "5b: ...and so is the unmerged branch another one points at" "$(row aliased)" "symbolic ref under refs/heads/ points at it"
 apply --hands-off
+exists refs/heads/aliased && [ "$(git -C "$R" symbolic-ref refs/heads/alias2)" = refs/heads/aliased ]
+ok "5b: ...which survives with its alias" $?
 exists refs/heads/main && [ "$(git -C "$R" symbolic-ref refs/heads/alias)" = refs/heads/main ]
 ok "5b: ...so neither it nor its target is deleted" $?
 [ "$(git -C "$R" rev-parse --verify --quiet refs/heads/racy)" = "$LO_OID" ]
