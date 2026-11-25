@@ -21,19 +21,19 @@ Fix-ups and re-reviews always use a fresh subagent spawn — fixers as `worker` 
 A Fixer's or Reviewer's prompt opens with the boundary line below, then tells it to read `<path>/fixer-brief.md` or `<path>/reviewer-brief.md` in full and carry it out, then gives the facts of this run, which are all you compose:
 
 - **Fixer** (the implementer on round 1).
-  Its prompt carries the worktree and branch, the work item(s) verbatim, every previous-round finding verbatim as separately labeled blocks, the round's validation tier, the deviations that still stand, and the open-question shape below for anything it escalates — where output it redirects to a file goes is the all-roles rule under **Artifacts and hygiene** below.
+  Its prompt carries the worktree and branch, the work item(s) verbatim, every previous-round finding verbatim as separately labeled blocks, the round's validation tier, the deviations that still stand, the open questions still live with the shape below for a new one, and where output it redirects to a file goes — the all-roles rule under **Artifacts and hygiene** below, not something to compose per role.
   Do not give it your own or the reviewer's reasoning beyond the verbatim findings.
   It returns a packet: what changed, the disposition of every finding it was handed, and the final SHA, from a clean and idle tree, which the packet hard-check below confirms before review.
 - **Reviewer** — a fresh-eyes verification of the committed state, spawned only after the fixer's commits have landed.
-  Its prompt carries the work item(s) and any proposed dispositions verbatim, the effective review base and which range it is, the branch, the round's validation tier, the artifact type below, and where any output of its build goes — a path under the cycle's artifact directory or inside the reviewed worktree, never a fixed shared scratchpad name and never left to the reviewer to pick.
+  Its prompt carries the work item(s) and any proposed dispositions verbatim, the effective review base and which range it is, the branch, the round's validation tier, the artifact type below, where any output of its build goes — a path under the cycle's artifact directory or inside the reviewed worktree, never a fixed shared scratchpad name and never left to the reviewer to pick — and whatever the round has to adjudicate: declines, retired questions with the fixer's claim, deviations standing or claimed closed, and any evidenced-unrelated test failure with its evidence.
   Never the fixer's reasoning or report.
   It reports **Pass** or a numbered, actionable **Issues** list, with anything below that bar as a pass note.
 - **Peer** (best-effort, cross-harness) — a read-only `claude` review started at the same moment as the Reviewer, from the committed checkout.
   Give this role its own concurrent tool invocation and have that invocation run the `peer-review-run` call the peer step below prescribes in the foreground, taking the bounded direct-provider PID launch — and proving that PID dead before it returns — only where that step says so.
   Concurrency belongs between the Peer and Reviewer roles; the helper owns its provider's timeout, retry, and reaping on the primary path, and the Peer invocation owns them on the fallback.
-  Its prompt is `peer-brief.md` copied in whole — `cat`, never retyped — followed by the same evidence the Reviewer gets: items and dispositions verbatim, worktree, base, branch, and any GitHub thread text or diff it would otherwise need the network for.
+  Its prompt is `peer-brief.md` copied in whole — `cat`, never retyped — followed by the same evidence the Reviewer gets: items and dispositions verbatim, worktree, base, branch, artifact type, and, verbatim, any GitHub thread text or diff it would otherwise need the network for.
   No reasoning, no fixer report, and no Reviewer execution steps: a peer left to infer its job from the Reviewer's tries to do the Reviewer's, and the Reviewer alone owns execution, which is what makes the concurrent launch safe.
-  The brief tells it the implementer validated its commits at the round's tier; say beside the evidence what the packet in front of you says ran, or that the claim is carried.
+  The brief tells it the implementer validated its commits; say beside the evidence what the packet in front of you says ran, or that the claim is carried.
   It answers `VERDICT: PASS | ISSUES` on its first line, then numbered findings tagged `blocking` or `minor`, then optional advisory `NOTES`; both of its severities gate.
   The brief also has it read the repository's agent-context files as reference material: the helper keeps the reviewed tree's instruction auto-loading, hooks, skills, and MCP servers off, and that stays as it is, so nothing in the tree executes.
 - **Second peer** (optional, best-effort) — a `muse` review launched at the same moment as the Reviewer and the Peer, from the same committed checkout, only where the peer step's Muse preflight found it installed and logged in.
@@ -426,14 +426,11 @@ Open questions always surface structurally in the cycle's result — they exist 
 
 ## Artifact types
 
-The cycle reviews more than code; the invoker names the type and the Reviewer and peer briefs adapt:
+The cycle reviews more than code; the invoker names the type, the Reviewer's prompt and the peer's evidence carry it, and their briefs say what each is checked for:
 
-- **code** (default) — a committed diff.
-  Build/typecheck first at the round's stated tier, acceptance criteria where a task or spec is in scope, then the quality pass.
-- **prose** — a drafted task file or document.
-  The Reviewer checks verbiage, scoping, internal consistency, and the repo's house conventions (for task files: the documented numbering style); there is no build to run.
-- **decision** — an applied decision's diff.
-  The Reviewer verifies the diff implements exactly the locked option and nothing beyond it, then the quality pass on the touched files.
+- **code** (default) — a committed diff, built or typechecked first at the round's stated tier.
+- **prose** — a drafted task file or document; there is no build to run.
+- **decision** — an applied decision's diff, held to exactly the locked option.
 
 ## Artifacts and hygiene
 

@@ -1,7 +1,7 @@
 # The Reviewer's brief
 
 You were sent here by the prompt that started you, to verify the committed state of one branch with fresh eyes.
-That prompt names the working location and branch, the effective review base and which range it is, the work item(s) and any proposed dispositions verbatim, the round's validation tier, the artifact type, and where any build output goes.
+That prompt names the working location and branch, the effective review base and which range it is, the work item(s) and any proposed dispositions verbatim, the round's validation tier, the artifact type, where any build output goes, and whatever this round has to adjudicate: declines, retired questions with what is claimed to settle each, deviations standing or claimed closed, and any test failure documented as unrelated with its evidence.
 Everything below is how the review is carried out; where your prompt and this file disagree on a fact of the run — a path, a base, a tier — your prompt wins.
 You edit nothing, and you write to no shared task or plan tracker (the `TaskCreate`/`TaskUpdate`/`TaskList` tools, where your harness has them).
 
@@ -13,9 +13,12 @@ If `git diff --name-only <base>...HEAD` looks empty despite claimed work, report
 
 **For code, run the build/typecheck first, at the tier your prompt states,** writing any output only where your prompt says.
 A failure at that tier is an automatic blocker; do not block on a heavier suite the stated tier did not run, and with no tier stated run the full applicable set.
-A test failure the round's packet documents as unrelated, with evidence that it reproduces on the base or with the branch's changes held out, is non-blocking; any failure the branch plausibly caused, and one whose reproduction was inconclusive, stays blocking.
+A test failure your prompt documents as unrelated, with evidence that it reproduces on the base or with the branch's changes held out, is non-blocking; any failure the branch plausibly caused, and one whose reproduction was inconclusive, stays blocking.
 
-**Then verify the artifact as your prompt's artifact type directs, and do a quality pass on the touched files:** logic correctness, error handling, edge cases, dead code, consistency, duplication, type safety.
+**Then verify the artifact by its type, and do a quality pass on the touched files:** logic correctness, error handling, edge cases, dead code, consistency, duplication, type safety.
+For **code** (the default), a committed diff, check the acceptance criteria where a task or spec is in scope.
+For **prose**, a drafted task file or document, check verbiage, scoping, internal consistency, and the repo's house conventions (for task files: the documented numbering style); there is no build to run.
+For a **decision**, an applied decision's diff, verify the diff implements exactly the locked option and nothing beyond it.
 Weight what you find: real gaps and functional problems over style nits, and a divergence an ordinary run reaches over one only deliberately hand-crafted input produces.
 
 **A sweep is re-enumerated, never spot-checked.**
@@ -24,6 +27,9 @@ Where the fixer claims to have fixed a pattern everywhere, redo the enumeration 
 **Weight comments by whether they outlive the PR.**
 A comment that re-implements adjacent code in prose is removable noise to flag for deletion, not material to precision-edit.
 Absent behavior-narration is never a gap to report, unless a documented convention of the repository requires it (docstrings or API documentation on a public surface).
+
+**Nothing is final on the fixer's say-so.**
+Verify every decline, every retired question against what is claimed to settle it, and every pushed-back peer claim your prompt shows, and raise as an issue any you do not accept.
 
 **Assess every deviation your prompt lists,** each as its own item: whether an in-spec route existed, and a recommendation that is one of the two verdicts, ratify or conform — a hedge counts as no recommendation.
 A deviation is no license for unfinished work: grade completeness, tests, and regressions exactly as strictly.

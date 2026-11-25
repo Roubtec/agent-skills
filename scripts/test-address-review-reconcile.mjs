@@ -3091,9 +3091,9 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // file shipped twice, the skill names each, and each still carries the rule the
   // cycle's gates read its answer by.
   const roleRules = {
-    "fixer-brief.md": ["**Dispose every finding you were handed, explicitly:**", "with `git status --porcelain` empty, every intended change committed, and no Git operation left in progress", "Launch no peer review of your own"],
-    "reviewer-brief.md": ["**Read whole touched files, not diffs or commit messages:**", "A failure at that tier is an automatic blocker", "**What you return:** **Pass**, or a numbered, actionable **Issues** list."],
-    "peer-brief.md": ["First line: `VERDICT: PASS` or `VERDICT: ISSUES`.", "each tagged `blocking` or `minor`", "something you must not attempt"],
+    "fixer-brief.md": ["**Dispose every finding you were handed, explicitly:**", "with `git status --porcelain` empty, every intended change committed, and no Git operation left in progress", "Launch no peer review of your own", "**A sweep is enumerated, never asserted.**", "never end your turn waiting for a notification", "names that question's id among those it retires"],
+    "reviewer-brief.md": ["**Read whole touched files, not diffs or commit messages:**", "A failure at that tier is an automatic blocker", "**What you return:** **Pass**, or a numbered, actionable **Issues** list.", "**A sweep is re-enumerated, never spot-checked.**", "never end your turn waiting for a notification", "verify the diff implements exactly the locked option and nothing beyond it", "**Nothing is final on the fixer's say-so.**"],
+    "peer-brief.md": ["First line: `VERDICT: PASS` or `VERDICT: ISSUES`.", "each tagged `blocking` or `minor`", "something you must not attempt", "`NOTES (advisory; not necessarily fixes)`", "an explicit statement that you executed no tests and judged verification statically", "Finish inside this one turn"],
   };
   const roleMisses = [];
   for (const [file, rules] of Object.entries(roleRules)) {
