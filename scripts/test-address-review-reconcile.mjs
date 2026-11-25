@@ -181,7 +181,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 280;
+const EXPECTED_CHECKS = 281;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -3076,8 +3076,21 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "plugins review-cycle": join(here, "..", "plugins", "dev-skills", "skills", "review-cycle", "SKILL.md"),
     "codex review-cycle": join(here, "..", "codex", "dev-skills", "skills", "review-cycle", "SKILL.md"),
   };
+  // One brief, shipped twice: the rebaser of either mirror reads the same rules,
+  // and the section that hands the step over names the file it reads.
+  const briefs = Object.values(rcMirrors).map((path) => readFileSync(join(dirname(path), "rebase-brief.md"), "utf8"));
+  const handsOver = Object.values(rcMirrors).every((path) =>
+    readFileSync(path, "utf8").includes("tell it to read `<path>/rebase-brief.md` in full and carry it out"),
+  );
+  check(
+    "the delegated rebase brief is one file, byte-identical in both mirrors, and both skills hand the rebaser to it",
+    briefs[0] === briefs[1] && briefs[0].length > 0 && handsOver,
+    `identical: ${briefs[0] === briefs[1]}; handed over: ${handsOver}`,
+  );
   for (const [name, path] of Object.entries(rcMirrors)) {
-    const text = readFileSync(path, "utf8");
+    // The step's own rules live in `rebase-brief.md` beside the skill, which
+    // the rebaser reads; the section and that file are read as one text.
+    const text = readFileSync(path, "utf8") + "\n" + readFileSync(join(dirname(path), "rebase-brief.md"), "utf8");
     check(
       `${name}: the canonical nugget states the replay's shape on both axes and halts the octopus merge unprobed`,
       /So every rebase this step runs passes `--no-update-refs`/.test(text) &&
@@ -3121,7 +3134,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "plugins review-cycle": join(here, "..", "plugins", "dev-skills", "skills", "review-cycle", "SKILL.md"),
     "codex review-cycle": join(here, "..", "codex", "dev-skills", "skills", "review-cycle", "SKILL.md"),
   })) {
-    const text = readFileSync(path, "utf8");
+    const text = readFileSync(path, "utf8") + "\n" + readFileSync(join(dirname(path), "rebase-brief.md"), "utf8");
     check(
       `${name}: the canonical pin states both arms — a request-named target is resolved in the working location, not fetched`,
       text.includes("a target the **request** named outright") &&
