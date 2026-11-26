@@ -502,6 +502,7 @@ commit "$U" base moved
 git -C "$U" push -q origin main
 run pin-base --repo acme/widgets --base main
 is "4: the base is fetched fresh, not read from a stale tracking ref" "$(val base)" "$(tip main "$U")"
+is "4: ...naming the remote it matched" "$(val remote)" origin
 is "4: ...without moving the local base branch" "$(tip main)" "$LOCAL_MAIN"
 run pin-base --target feature~1
 is "4: a named target resolves in this checkout" "$(val base)" "$(tip feature~1)"

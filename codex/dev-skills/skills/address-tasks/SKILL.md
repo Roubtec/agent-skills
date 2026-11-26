@@ -294,7 +294,8 @@ Per the no-latched-flags rule, the task's result describes its final state after
 #### Task-number collisions across in-flight branches
 
 Run this guard before opening any PR that adds task files.
-It is defined once, in `address-tasks-serialized` → "Task-number collisions across in-flight branches", and is deliberately not restated here: the full-number parsing, the comparison set and what each member contributes, the base-refresh and PR-head enumeration recipes with their note-and-proceed degradations, the same-branch relocation pairing, the renumber-the-flagged-new-claimant rule, and the bounded-snapshot caveat with its `reap-tasks` backstop all apply verbatim.
+It is `address-tasks-serialized` → "Task-number collisions across in-flight branches": the `task-numbers.sh` call that section names, in the `write-tasks` skill's folder.
+A pipelined run tracks members of its own, so read `task-number-guard.md`, in that same `write-tasks` folder, in full before the first scan, and pass each reserved number as `--reserved` and each sibling or delivered branch with no open PR as `--member`.
 The one reading specific to this skill: where that definition establishes the first claimant in the *run's* deterministic delivery order, use the order in which tasks pass review and reach the serialized guard — first-ready-wins, which the one-at-a-time guard makes deterministic.
 A branch that cleared the guard but is still delivering is a *reserved* member of that definition, a delivered one a *delivered* member, and the branch under the guard is the second claimant that renumbers; the definition's rule that a delivered or reserved claimant is never rewritten decides every such case.
 
