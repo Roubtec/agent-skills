@@ -3,7 +3,7 @@
 #
 # Usage:
 #   train.sh survey --repo <owner>/<repo> <PR>...
-#   train.sh check  --repo <owner>/<repo> --pr <N> [--head <oid>] [--lanes <n>] [--since <time>]
+#   train.sh check  --repo <owner>/<repo> --pr <N> [--head <oid>] [--lane <identity>]... [--since <time>]
 #   train.sh rebase --repo <owner>/<repo> --pr <N> --head <oid> [--green <oid>] [--from <parent's old tip>]
 #   train.sh push   --repo <owner>/<repo> --pr <N> --expect <head-oid>
 #   train.sh merge  --repo <owner>/<repo> --pr <N> --head <oid> [--wait <seconds>]
@@ -19,8 +19,10 @@
 #                             item, every lane settled and green
 #           outcome=not-open  merged or closed (`state=`, `merge-commit=`)
 #           outcome=moved     the head is not `--head`: someone pushed
-#           outcome=review    an unresolved review thread, or a review
-#                             requesting changes
+#           outcome=review    an unresolved review thread, or a reviewer
+#                             whose latest review requests changes (read per
+#                             reviewer: `reviewDecision` stays empty where no
+#                             rule requires reviews)
 #           outcome=stacked   its base is another branch, so it waits for its
 #                             parent; merging it now would land nothing on the
 #                             default branch
@@ -28,12 +30,16 @@
 #           outcome=red       a lane settled on something other than SUCCESS,
 #                             NEUTRAL or SKIPPED: one `lane=` line each
 #           outcome=waiting   a lane is still running, the rollup is empty, or
-#                             it holds fewer passing lanes than `--lanes`
+#                             a `--lane` is not among its passing lanes: one
+#                             `missing=<identity>` line each
 #         and always: pr= state= head= branch= base= default= draft=
-#         mergeable= review= threads= ci= lanes= (the passing lanes: pass this
-#         count of a full green run as `--lanes` later, since a rollup read
-#         right after a push is empty or partial) and checked= (a time to pass
-#         as `--since` next time).
+#         mergeable= review= changes-requested= threads= ci= lanes= (how many
+#         lanes pass), one `passing=<identity>` line per passing lane, and
+#         checked= (a time to pass as `--since` next time).
+#         A rollup read right after a push is empty or partial, and green all
+#         the same. So keep the `passing=` lines of a full green run, and pass
+#         each as its own `--lane` when checking a later head: every one of
+#         them has to pass there, whatever else does.
 #         `--since` adds one line per top-level comment or submitted review
 #         newer than that time, of the latest 30 of each:
 #           new=<comment|review:STATE> TAB <author> TAB <time> TAB <url>
@@ -135,13 +141,17 @@ REPO="" PR="" HEAD="" LANES="" SINCE="" FROM="" EXPECT="" GREEN="" WAIT=90 PRS="
 parse() {
 	while [ $# -gt 0 ]; do
 		case "$1" in
-		--repo | --pr | --head | --lanes | --since | --from | --expect | --green | --wait)
+		--repo | --pr | --head | --lane | --since | --from | --expect | --green | --wait)
 			[ $# -ge 2 ] || usage "$1 needs a value"
 			case "$1" in
 			--repo) REPO="$2" ;;
 			--pr) PR="$2" ;;
 			--head) HEAD="$2" ;;
-			--lanes) LANES="$2" ;;
+			--lane)
+				[ -n "$2" ] || usage "--lane takes a lane as a \`passing=\` line printed it"
+				LANES="$LANES$2
+"
+				;;
 			--since) SINCE="$2" ;;
 			--from) FROM="$2" ;;
 			--expect) EXPECT="$2" ;;
@@ -191,6 +201,7 @@ query($owner:String!,$name:String!,$pr:Int!,$after:String){
     defaultBranchRef{ name }
     pullRequest(number:$pr){
       number state isDraft baseRefName headRefName headRefOid mergeable reviewDecision
+      latestOpinionatedReviews(first:100){ nodes{ state } }
       mergeCommit{ oid }
       reviewThreads(first:100,after:$after){
         pageInfo{ hasNextPage endCursor }
@@ -212,6 +223,7 @@ query($owner:String!,$name:String!,$pr:Int!,$after:String){
     "mergeable\t\($p.mergeable)",
     "decision\t\($p.reviewDecision // "NONE")",
     "merged\t\($p.mergeCommit.oid // "")",
+    "changes\t\([($p.latestOpinionatedReviews.nodes // [])[] | select(.state == "CHANGES_REQUESTED")] | length)",
     "page\t\($p.reviewThreads.pageInfo.hasNextPage)\t\($p.reviewThreads.pageInfo.endCursor // "")",
     "open\t\([$p.reviewThreads.nodes[] | select(.isResolved | not)] | length)",
     ( $p.comments.nodes[] | ["new", "comment", (.author.login // "ghost"), .createdAt, .url] | @tsv ),
@@ -219,7 +231,7 @@ query($owner:String!,$name:String!,$pr:Int!,$after:String){
       | ["new", "review:\(.state)", (.author.login // "ghost"), .submittedAt, .url] | @tsv )'
 }
 
-F_STATE="" F_DRAFT="" F_BASE="" F_DEFAULT="" F_BRANCH="" F_HEAD="" F_MERGEABLE="" F_DECISION="" F_MERGED="" F_THREADS=0 F_NEW=""
+F_STATE="" F_DRAFT="" F_BASE="" F_DEFAULT="" F_BRANCH="" F_HEAD="" F_MERGEABLE="" F_DECISION="" F_MERGED="" F_CHANGES=0 F_THREADS=0 F_NEW=""
 # Reads every page of the PR's standing into F_*. Every page re-reads the live
 # PR, so a head that moves between two pages fails the read.
 facts() { # [what a failed read leaves unknown]
@@ -246,6 +258,7 @@ facts() { # [what a failed read leaves unknown]
 			mergeable) F_MERGEABLE="$f2" ;;
 			decision) F_DECISION="$f2" ;;
 			merged) F_MERGED="$f2" ;;
+			changes) F_CHANGES="$f2" ;;
 			page)
 				more="$f2"
 				cursor="$f3"
@@ -277,7 +290,7 @@ blocker() {
 		printf not-open
 	elif [ -n "$HEAD" ] && [ "$F_HEAD" != "$HEAD" ]; then
 		printf moved
-	elif [ "$F_THREADS" -gt 0 ] || [ "$F_DECISION" = CHANGES_REQUESTED ]; then
+	elif [ "$F_THREADS" -gt 0 ] || [ "$F_CHANGES" -gt 0 ] || [ "$F_DECISION" = CHANGES_REQUESTED ]; then
 		printf review
 	elif [ "$F_BASE" != "$F_DEFAULT" ]; then
 		printf stacked
@@ -291,7 +304,7 @@ why() { # outcome
 	moved) printf "PR #%s's head is %s, not the %s you named: someone pushed. Put it back under watch; do not rebase or merge it." "$PR" "$F_HEAD" "$HEAD" ;;
 	stacked) printf "PR #%s is based on '%s', not on '%s': it waits for its parent, and merging it now would land nothing on '%s'." "$PR" "$F_BASE" "$F_DEFAULT" "$F_DEFAULT" ;;
 	draft) printf 'PR #%s is a draft.' "$PR" ;;
-	review) printf 'PR #%s has open review items (%s unresolved threads, review decision %s). They are the maintainer'"'"'s to settle: skip it, with every PR stacked on it.' "$PR" "$F_THREADS" "$F_DECISION" ;;
+	review) printf 'PR #%s has open review items (%s unresolved threads, %s reviewers requesting changes, review decision %s). They are the maintainer'"'"'s to settle: skip it, with every PR stacked on it.' "$PR" "$F_THREADS" "$F_CHANGES" "$F_DECISION" ;;
 	red) printf 'PR #%s has a failing lane. Read its log before re-running anything.' "$PR" ;;
 	waiting) printf 'PR #%s is not green yet: a lane is running, or the rollup does not hold the lanes of a full run.' "$PR" ;;
 	esac
@@ -301,14 +314,11 @@ cmd_check() {
 	parse "$@"
 	need_pr
 	[ -z "$HEAD" ] || need_oid --head "$HEAD"
-	case "$LANES" in
-	*[!0-9]*) usage "--lanes takes a number" ;;
-	esac
 	case "$SINCE" in
 	*[!0-9TZ:.+-]*) usage "--since takes a time as \`checked=\` printed it" ;;
 	esac
 	need_sibling "$CI"
-	local checked ci ciout cihead passing failing outcome
+	local checked ci ciout cihead passing failing outcome missing=""
 	# Two minutes back: a comment shown twice costs a glance, one skipped
 	# because two clocks disagree costs the review it carried.
 	checked="$(date -u -d '2 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" ||
@@ -319,7 +329,12 @@ cmd_check() {
 	ci="$(field outcome "$ciout")"
 	cihead="$(field head "$ciout")"
 	[ "$cihead" = "$F_HEAD" ] || fail "PR #$PR's head moved from $F_HEAD to $cihead between its two reads. Ask again."
-	passing="$(printf '%s\n' "$ciout" | awk 'index($0, "passing=") == 1' | sort -u | awk 'END { print NR }')"
+	passing="$(printf '%s\n' "$ciout" | awk 'index($0, "passing=") == 1' | sort -u)"
+	# Each lane of the full run, by name: a count would let a lane the rebase
+	# added stand in for one that has not shown yet.
+	[ -z "$LANES" ] || missing="$(printf '%s' "$LANES" | sort -u | HAVE="$passing" awk '
+		BEGIN { n = split(ENVIRON["HAVE"], a, "\n"); for (i = 1; i <= n; i++) have[substr(a[i], 9)] = 1 }
+		NF && !($0 in have) { print "missing=" $0 }')"
 	failing="$(printf '%s\n' "$ciout" | awk 'index($0, "lane=") == 1')"
 	outcome="$(blocker)"
 	if [ -z "$outcome" ]; then
@@ -327,7 +342,7 @@ cmd_check() {
 		failing) outcome=red ;;
 		green)
 			outcome=ready
-			[ -z "$LANES" ] || [ "$passing" -ge "$LANES" ] || outcome=waiting
+			[ -z "$missing" ] || outcome=waiting
 			;;
 		running | none) outcome=waiting ;;
 		*) fail "the status rollup of PR #$PR answered '$ci', which is no outcome this helper knows." ;;
@@ -344,9 +359,12 @@ cmd_check() {
 	say "draft=$F_DRAFT"
 	say "mergeable=$F_MERGEABLE"
 	say "review=$F_DECISION"
+	say "changes-requested=$F_CHANGES"
 	say "threads=$F_THREADS"
 	say "ci=$ci"
-	say "lanes=$passing"
+	say "lanes=$(printf '%s\n' "$passing" | awk 'NF' | awk 'END { print NR }')"
+	[ -z "$passing" ] || say "$passing"
+	[ -z "$missing" ] || say "$missing"
 	[ -z "$failing" ] || say "$failing"
 	printf '%s\n' "$ciout" | awk 'index($0, "running=") == 1'
 	[ -z "$SINCE" ] || printf '%s\n' "$F_NEW" | awk -F "$TAB" -v s="$SINCE" 'NF && ($3 "") > (s "") { print "new=" $0 }'
@@ -522,7 +540,7 @@ cmd_merge() {
 	done
 	tries=0
 	outcome="$(blocker)"
-	[ -z "$outcome" ] || stop "$outcome" "$(why "$outcome") Nothing was merged." "state=$F_STATE" "head=$F_HEAD" "base=$F_BASE" "threads=$F_THREADS" "review=$F_DECISION" ${F_MERGED:+"merge-commit=$F_MERGED"}
+	[ -z "$outcome" ] || stop "$outcome" "$(why "$outcome") Nothing was merged." "state=$F_STATE" "head=$F_HEAD" "base=$F_BASE" "threads=$F_THREADS" "review=$F_DECISION" "changes-requested=$F_CHANGES" ${F_MERGED:+"merge-commit=$F_MERGED"}
 	s="$(slug)"
 	h="$(host)"
 	while [ "$F_MERGEABLE" != MERGEABLE ]; do

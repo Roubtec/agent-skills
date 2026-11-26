@@ -45,7 +45,7 @@ Carry every such note through the run.
   When `main` itself becomes broken, open a standalone fix PR, give bots time to comment on it (usually takes less time than CI does), address any actionable feedback using `address-review`, and merge it inside the train to pre-empt those CI failures from blocking the other PRs.
   If the runners themselves keep failing and nothing in the code is at fault, stop the train and report rather than burn the queue.
 - **Never merge a PR with open review items.**
-  These are unresolved review threads or a review requesting changes: `outcome=review` from `train.sh check`.
+  These are unresolved review threads or a reviewer whose latest review requests changes: `outcome=review` from `train.sh check`, which reads the reviews themselves because GitHub's review decision stays empty where no rule requires reviews.
   They are the maintainer's to settle, and merging over them makes follow-up churn.
   A user who lists such a PR has most likely missed the open items.
   Do not address them yourself on a listed PR.
@@ -59,7 +59,6 @@ Carry every such note through the run.
 
 Run `train.sh survey --repo <owner>/<repo> <PR numbers…>`.
 It prints one line per PR (its `check` outcome, base, `parent=`, head, mergeability, review decision, open threads, CI, passing lanes, file count) and a `shared=` line for each file two or more of them touch.
-Note each green PR's `lanes=`: that is the lane count of its full run, which `check --lanes` needs later.
 From that, and from the diffs where a `shared=` line or a migration calls for a look, work out and tell the user:
 
 - **Stacks.**
@@ -100,8 +99,11 @@ An unresolved thread or a review requesting changes always blocks; read each `ne
 
 ## The loop
 
-Watch with a shell loop that polls `train.sh check --repo <owner>/<repo> --pr <N> --head <the head you expect> --lanes <its full run's lane count>` for the active PRs and exits the first time an outcome changes.
-`check` reads the rollup by what it positively says: `ready` means every lane has settled on `SUCCESS`, `NEUTRAL` or `SKIPPED`, and an empty or partial rollup right after a push is `waiting`, never green.
+Watch with a shell loop that polls `train.sh check --repo <owner>/<repo> --pr <N> --head <the head you expect> --lane <identity>…` for the active PRs and exits the first time an outcome changes.
+`check` reads the rollup by what it positively says: `ready` means every lane has settled on `SUCCESS`, `NEUTRAL` or `SKIPPED`.
+Right after a push the new head's rollup is empty or partial, and a partial one can be all green.
+So keep the `passing=` lines `check` printed for the PR's last full green run, and pass each as its own `--lane` on every check of a later head: a lane among them that has not shown yet makes the answer `waiting` with a `missing=` line, never `ready`.
+Leave `--lane` out only for a head whose full run you are reading for the first time.
 `moved` means someone pushed: put that PR back under watch on its new head instead of rebasing or merging it.
 Give the loop a deadline of its own, because the shell tool's wait hands control back without stopping the command.
 When a call returns with the loop still running, resume that session instead of starting a second loop, and start a new one only after the last has exited.

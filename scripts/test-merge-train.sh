@@ -136,17 +136,19 @@ fresh() {
 }
 # facts <file-suffix> key=value...  — an open, mergeable, clean PR by default.
 # Keys: pr state draft base branch head mergeable decision merged threads
-# (comma-separated true/false: resolved or not) more cursor comments reviews.
+# (comma-separated true/false: resolved or not) more cursor comments reviews
+# latest (comma-separated states: each reviewer's latest opinionated review).
 facts() {
 	local suffix="$1" kv
 	shift
-	local pr=7 state=OPEN draft=false base=main branch=feature head="$H1" mergeable=MERGEABLE decision=null merged=null threads="" more=false cursor="" comments="" reviews=""
+	local pr=7 state=OPEN draft=false base=main branch=feature head="$H1" mergeable=MERGEABLE decision=null merged=null threads="" more=false cursor="" comments="" reviews="" latest=""
 	for kv in "$@"; do local "${kv%%=*}"="${kv#*=}"; done
 	[ "$decision" = null ] || decision="\"$decision\""
 	[ "$merged" = null ] || merged="{\"oid\":\"$merged\"}"
 	threads="$(printf '%s' "$threads" | awk -F, '{ for (i = 1; i <= NF; i++) printf "%s{\"isResolved\":%s}", (i > 1 ? "," : ""), $i }')"
-	printf '{"data":{"repository":{"defaultBranchRef":{"name":"main"},"pullRequest":{"number":%s,"state":"%s","isDraft":%s,"baseRefName":"%s","headRefName":"%s","headRefOid":"%s","mergeable":"%s","reviewDecision":%s,"mergeCommit":%s,"reviewThreads":{"pageInfo":{"hasNextPage":%s,"endCursor":"%s"},"nodes":[%s]},"comments":{"nodes":[%s]},"reviews":{"nodes":[%s]}}}}}\n' \
-		"$pr" "$state" "$draft" "$base" "$branch" "$head" "$mergeable" "$decision" "$merged" "$more" "$cursor" "$threads" "$comments" "$reviews" >"$FAKE/facts.$suffix.json"
+	latest="$(printf '%s' "$latest" | awk -F, '{ for (i = 1; i <= NF; i++) printf "%s{\"state\":\"%s\"}", (i > 1 ? "," : ""), $i }')"
+	printf '{"data":{"repository":{"defaultBranchRef":{"name":"main"},"pullRequest":{"number":%s,"state":"%s","isDraft":%s,"baseRefName":"%s","headRefName":"%s","headRefOid":"%s","mergeable":"%s","reviewDecision":%s,"latestOpinionatedReviews":{"nodes":[%s]},"mergeCommit":%s,"reviewThreads":{"pageInfo":{"hasNextPage":%s,"endCursor":"%s"},"nodes":[%s]},"comments":{"nodes":[%s]},"reviews":{"nodes":[%s]}}}}}\n' \
+		"$pr" "$state" "$draft" "$base" "$branch" "$head" "$mergeable" "$decision" "$latest" "$merged" "$more" "$cursor" "$threads" "$comments" "$reviews" >"$FAKE/facts.$suffix.json"
 }
 # rollup <pr> <head> <nodes>
 rollup() {
@@ -179,11 +181,30 @@ is "1: ...its passing lanes" "$(val lanes)" 2
 is "1: ...and no review decision as NONE" "$(val review)" NONE
 has "1: ...with a time to pass as --since" "$OUT" "checked=20"
 has "1: the PR read names the PR and the repository" "$(cat "$FAKE/gh.log")" "owner=acme -f name=widgets -F pr=7"
-call check "${ARGS[@]}" --lanes 2
+has "1: ...each by name" "$OUT" "passing=Tests / a
+passing=Tests / b"
+call check "${ARGS[@]}" --lane "Tests / a" --lane "Tests / b"
 is "1: the lanes of a full run being present is still ready" "$(val outcome)" ready
-call check "${ARGS[@]}" --lanes 3
-is "1: a green rollup short of a full run's lanes is waiting, not ready" "$(val outcome)" waiting
+lacks "1: ...with none missing" "$OUT" "missing="
+rollup 7 "$H1" "$(lane a COMPLETED '"SUCCESS"'),$(lane c COMPLETED '"SUCCESS"')"
+call check "${ARGS[@]}" --lane "Tests / a" --lane "Tests / b"
+is "1: a new lane does not stand in for one of the full run's that is absent" "$(val outcome)" waiting
 is "1: ...with exit 3" "$RC" 3
+is "1: ...naming the absent lane" "$(val missing)" "Tests / b"
+is "1: ...and it alone" "$(printf '%s\n' "$OUT" | grep -c '^missing=')" 1
+call check "${ARGS[@]}" --lane "Tests / a" --lane "Tests / c"
+is "1: lanes beyond the named ones do not matter" "$(val outcome)" ready
+rollup 7 "$H1" "$(lane ab COMPLETED '"SUCCESS"')"
+call check "${ARGS[@]}" --lane "Tests / a"
+is "1: a lane is matched whole, not as a prefix" "$(val outcome)" waiting
+rollup 7 "$H1" "$(lane a COMPLETED '"SUCCESS"')"
+call check "${ARGS[@]}" --lane "Tests / ab"
+is "1: ...in either direction" "$(val outcome)" waiting
+call check "${ARGS[@]}" --lane ""
+is "1: an empty --lane is a usage error" "$RC" 64
+call check "${ARGS[@]}" --lanes 2
+is "1: the retired lane count is a usage error, not a silent pass" "$RC" 64
+rollup 7 "$H1" "$GREEN"
 rollup 7 "$H1" "$(lane a COMPLETED '"SUCCESS"'),$(lane b IN_PROGRESS null)"
 call check "${ARGS[@]}"
 is "1: a lane in progress is waiting" "$(val outcome)" waiting
@@ -212,9 +233,14 @@ rollup 7 "$H1" "$GREEN"
 facts 7 threads=true decision=CHANGES_REQUESTED
 call check "${ARGS[@]}"
 is "1: a review requesting changes blocks with no thread open" "$(val outcome)" review
-facts 7 threads=true decision=APPROVED
+facts 7 latest=APPROVED,CHANGES_REQUESTED
 call check "${ARGS[@]}"
-is "1: resolved threads and an approval do not block" "$(val outcome)" ready
+is "1: one reviewer's standing change request blocks where no rule sets a review decision" "$(val outcome)" review
+is "1: ...counted" "$(val changes-requested)" 1
+is "1: ...beside the empty decision" "$(val review)" NONE
+facts 7 threads=true decision=APPROVED latest=APPROVED,DISMISSED
+call check "${ARGS[@]}"
+is "1: resolved threads, an approval and a dismissed review do not block" "$(val outcome)" ready
 facts 7 draft=true
 call check "${ARGS[@]}"
 is "1: a draft is not ready" "$(val outcome)" draft
@@ -586,6 +612,12 @@ fresh
 facts 7 threads=false
 call merge "${MARGS[@]}"
 is "5: an open thread is not merged over" "$(val outcome)" review
+nomerge "5: ...and no merge is asked for"
+fresh
+facts 7 latest=CHANGES_REQUESTED
+call merge "${MARGS[@]}"
+is "5: a standing change request is not merged over, review decision or none" "$(val outcome)" review
+is "5: ...and is counted" "$(val changes-requested)" 1
 nomerge "5: ...and no merge is asked for"
 fresh
 facts 7 base=parent-branch
