@@ -46,8 +46,9 @@
 #              rewind          the fetched head is behind the one GitHub reports
 #              fork | closed | wrong-branch | no-remote | dirty
 # pin-base   Prints the commit a base resolves to right now: `--base` fetches
-#            that branch from the PR's repository, `--target` resolves a ref
-#            the request named in this checkout and substitutes nothing.
+#            that branch from the PR's repository (`remote=` is the remote it
+#            matched), `--target` resolves a ref the request named in this
+#            checkout and substitutes nothing.
 # push       Runs `check`, confirms the PR is open and its head is still
 #            `--expect`, then publishes HEAD to the head ref:
 #              up-to-date      the tip is already the PR head; the push was a
@@ -440,6 +441,7 @@ cmd_pin_base() {
 	oid="$(fetch_ref "$remote" "$BASE")" || fail "could not fetch refs/heads/$BASE from $remote. A stale ref is not a fallback."
 	say "outcome=pinned"
 	say "base=$oid"
+	say "remote=$remote"
 	say "source=$BASE, fetched from $remote ($REPO)"
 }
 

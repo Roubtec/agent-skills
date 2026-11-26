@@ -73,23 +73,15 @@ If there are existing task files in the target folder, continue the numbering se
 Use numbering to reflect intended order, even if some tasks could later be parallelized.
 
 Before allocating a number, resolve the repository's task folder (commonly `tasks/`), then recursively inventory task filenames across that entire working-tree subtree, including its `done/`, `deferred/`, and any future nested folders, and across every open PR head.
-Enumerate the heads, fetch each through the base repository's PR namespace, and read the exact enumerated OID as a recursive whole tree:
-
-```bash
-gh pr list --state open --limit 200 --json number,headRefOid
-git fetch origin "refs/pull/${number}/head"
-git ls-tree -r --name-only "${headRefOid}" -- "${task_folder}/"
-```
-
-Do not replace the PR-ref fetch with a bare head branch name: fork heads and heads that exist only on the remote may not resolve locally.
-If the enumeration returns as many entries as its pinned limit, report the returned count and mark the allocation scan incomplete because additional unreturned heads cannot be named.
-If the enumeration or a head fetch is unavailable, likewise report that allocation could not be checked completely instead of silently treating the missing heads as free.
+`task-numbers.sh taken --repo <owner>/<repo>`, beside this file, does both in one read-only call (`--folder <dir>` where the folder is not `tasks/`): it prints a `taken=` line for every file standing in the working tree's folder, and for every one in the whole recursive tree of each open PR head, with its full three-digit task number or `-` where the name carries none (read the paths themselves under another numbering style), fetched through the repository's PR namespace at the exact commit the enumeration named.
+`outcome=incomplete` (exit 3) means some head could not be read or the enumeration reached its bound of 200: report that allocation could not be checked completely, with its `skipped=` and `limit=` lines, instead of silently treating the missing heads as free.
 
 Two aspects of allocation deliberately differ from the pre-PR guard.
 In a repository with the documented three-digit convention, the allocator compares the three-digit **numeric slot**, so a suffix such as `001a` occupies slot `001` when choosing the next primary; the guard compares full numbers and correctly allows `001` and `001a` to coexist.
 For another documented numbering style, apply the same principle to that style's primary allocation unit rather than imposing three digits.
 The allocator also reads every open head's **whole recursive task tree**, including inherited files, because it must avoid any number standing on that head; the guard reads a non-base head's additions only because it asks which numbers that head newly claims.
 Do not normalize either difference.
+The guard itself is the same script's `claims` command, which the batch skills run before opening a PR; `task-number-guard.md`, beside this file, is what they read when it answers a collision or an incomplete scan.
 
 When a collision risk is visible, or multiple task-bearing PRs are in flight, prefer the next allocation unit clear across all of these trees.
 If that requires skipping the otherwise-next number, record the deliberate skip and its collision reason in the task-writing commit message so the next allocator understands that the gap is intentional.
