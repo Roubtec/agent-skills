@@ -21,11 +21,12 @@
 #         the repository first, never read from a local or remote-tracking
 #         ref. `--local-base` is for a base the repository cannot have (an
 #         unpushed dependency branch, a local-only run): that exact commit is
-#         read, and the answer says `degraded=`.
+#         read, and an answer with claims says `degraded=`.
 #         The branch claims every task file it adds against that base, less
 #         its own relocations: within one number, each file it removes pairs
-#         with one file it adds (the same basename first), so an archive, a
-#         deferral or a slug rename claims nothing.
+#         with one file it adds (the same basename first, then the one git
+#         reads as its rename), so an archive, a deferral or a slug rename
+#         claims nothing.
 #           claim=<number> TAB <path>
 #         Each claim is compared with every other holder of its number:
 #           collision=<number> TAB <path> TAB <holder> TAB <holder's path> TAB <same-path|other-path>
@@ -36,8 +37,8 @@
 #                       base (never its whole tree: a head inherits its base's
 #                       files without claiming them)
 #           member:<commit>
-#                       a `--member`, read the same way: a sibling of the same
-#                       run that has no pull request yet
+#                       a `--member`, read the same way: a branch of the same
+#                       run, whether or not it has a pull request yet
 #           reserved    a `--reserved` number, with `-` for the path
 #         `same-path` is the one case a plain add/add procedure can take.
 #         Then what the scan could not see:
@@ -46,7 +47,9 @@
 #                       enumeration itself
 #           limit=200   the enumeration returned as many pull requests as it
 #                       asks for, so later ones cannot be named
-#           self=pr:<N> an open pull request whose head is the scanned commit
+#           self=pr:<N> the scanned branch's own open pull request (its head
+#                       branch bears the branch's name, or its head is a
+#                       commit the scanned branch is or contains): not compared
 #         under
 #           outcome=clean       no collision, and nothing skipped (exit 0)
 #           outcome=collision   at least one (exit 3)
@@ -54,9 +57,11 @@
 #                               skipped=, limit= or degraded= line (exit 3)
 #         and always base= (the commit read) and claims= (how many).
 #         A branch that claims nothing answers `clean` without asking GitHub.
-# taken   For allocating a number. Every task file standing in the working
-#         tree's folder and in the whole tree of every open pull request head:
+# taken   For allocating a number. Every file standing in the working tree's
+#         folder and in the whole tree of every open pull request head:
 #           taken=<number> TAB <tree|pr:<N>> TAB <path>
+#         <number> is `-` for a file that carries no full task number as
+#         above: a repository numbering its tasks another way reads the paths.
 #         under outcome=listed, or outcome=incomplete (exit 3) with the same
 #         skipped= and limit= lines.
 #
@@ -72,6 +77,8 @@
 # usage error. Needs git, and gh for the remote reading. Written for bash 3.2
 # and later.
 set -u
+# Paths as they are, not C-quoted: they are compared and printed as names.
+export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.quotePath GIT_CONFIG_VALUE_0=false
 
 TAB="$(printf '\t')"
 case "$0" in
@@ -97,6 +104,12 @@ field() { # key, text
 }
 
 # Reads paths, prints `<number> TAB <path>` for each that is a task file.
+# Reads paths, prints `<number or -> TAB <path>` for every one.
+# shellcheck disable=SC2016 # the $names are awk's
+LISTED='{
+	b = $0; sub(/.*\//, "", b)
+	print (match(b, /^[0-9][0-9][0-9][a-z]?-/) ? substr(b, 1, RLENGTH - 1) : "-") "\t" $0
+}'
 # shellcheck disable=SC2016 # the $names are awk's
 NUMBERED='{
 	b = $0; sub(/.*\//, "", b)
@@ -152,19 +165,40 @@ need_common() {
 	esac
 	[ -n "$FOLDER" ] || usage "--folder cannot be empty"
 	git rev-parse --git-dir >/dev/null 2>&1 || fail "this is not a git repository."
+	# From the top of the working tree: the folder is a path from there, and
+	# a pathspec read from a subdirectory would match nothing and look clean.
+	local top
+	if top="$(git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ]; then
+		cd "$top" || fail "could not enter $top."
+	fi
 	tmp="$(mktemp -d "${TMPDIR:-/tmp}/task-numbers.XXXXXX")" || fail "could not create a temporary directory."
 	# shellcheck disable=SC2064 # expand now: the directory this run made
 	trap "rm -rf '$tmp'" EXIT
 	: >"$tmp/gaps"
+	: >"$tmp/bases"
+	: >"$tmp/pin.err"
 }
 gap() { say "$*" >>"$tmp/gaps"; }
 
-# A branch of the repository, fetched now: prints `<remote> TAB <oid>`.
+# A branch of the repository, fetched once per run: prints `<remote> TAB
+# <oid>`. Why it failed is left in $tmp/pin.err.
 pin() { # branch
-	local out
-	[ -f "$PRB" ] || return 1
-	out="$(bash "$PRB" pin-base --repo "$REPO" --base "$1" 2>/dev/null)" || return 1
-	[ -n "$(field base "$out")" ] && [ -n "$(field remote "$out")" ] || return 1
+	local out hit
+	hit="$(awk -F "$TAB" -v b="$1" '$1 == b { print $2 "\t" $3; exit }' "$tmp/bases")"
+	if [ -n "$hit" ]; then
+		[ "${hit##*"$TAB"}" != none ] || return 1
+		printf '%s\n' "$hit"
+		return 0
+	fi
+	if [ ! -f "$PRB" ]; then
+		say "$PRB is missing: this script runs beside the address-review skill's folder" >"$tmp/pin.err"
+		return 1
+	fi
+	if ! out="$(bash "$PRB" pin-base --repo "$REPO" --base "$1" 2>"$tmp/pin.err")" || [ -z "$(field base "$out")" ] || [ -z "$(field remote "$out")" ]; then
+		printf '%s\t-\tnone\n' "$1" >>"$tmp/bases"
+		return 1
+	fi
+	printf '%s\t%s\t%s\n' "$1" "$(field remote "$out")" "$(field base "$out")" >>"$tmp/bases"
 	printf '%s\t%s\n' "$(field remote "$out")" "$(field base "$out")"
 }
 
@@ -172,22 +206,23 @@ pin() { # branch
 # <base oid>` lines in $tmp/prs. A failure is a gap, not an empty list.
 REMOTE=""
 enumerate() {
-	local pinned
+	local pinned b
 	: >"$tmp/prs"
-	if ! gh pr list --repo "$REPO" --state open --limit "$LIMIT" --json number,headRefOid,baseRefName,baseRefOid \
-		--jq '.[] | [.number, .headRefOid, .baseRefName, .baseRefOid] | @tsv' >"$tmp/prs.raw" 2>"$tmp/err"; then
+	if ! gh pr list --repo "$REPO" --state open --limit "$LIMIT" --json number,headRefOid,baseRefName,baseRefOid,headRefName,isCrossRepository \
+		--jq '.[] | [.number, .headRefOid, .baseRefName, .baseRefOid, .headRefName, .isCrossRepository] | @tsv' >"$tmp/prs.raw" 2>"$tmp/err"; then
 		gap "skipped=prs${TAB}the open pull requests of $REPO could not be listed (gh failed)"
 		return 0
 	fi
-	awk -F "$TAB" 'NF == 4 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9a-f]+$/' "$tmp/prs.raw" >"$tmp/prs"
+	awk -F "$TAB" 'NF == 6 && $1 ~ /^[0-9]+$/ && $2 ~ /^[0-9a-f]+$/' "$tmp/prs.raw" >"$tmp/prs"
 	[ "$(awk 'END { print NR }' "$tmp/prs.raw")" = "$(awk 'END { print NR }' "$tmp/prs")" ] ||
 		gap "skipped=prs${TAB}the enumeration held lines that are no pull request"
 	[ "$(awk 'END { print NR }' "$tmp/prs")" -lt "$LIMIT" ] || gap "limit=$LIMIT"
 	[ -s "$tmp/prs" ] || return 0
-	if [ -z "$REMOTE" ]; then
-		# Any base names the remote: the first pull request's will do.
-		if pinned="$(pin "$(head -n 1 "$tmp/prs" | cut -f3)")"; then REMOTE="${pinned%%"$TAB"*}"; fi
-	fi
+	# Any base that can be fetched names the remote the heads come from.
+	cut -f3 "$tmp/prs" | sort -u >"$tmp/pr.bases"
+	while [ -z "$REMOTE" ] && IFS= read -r b; do
+		if pinned="$(pin "$b")"; then REMOTE="${pinned%%"$TAB"*}"; fi
+	done <"$tmp/pr.bases"
 }
 
 # Makes a head's commit readable here; fails where it cannot be.
@@ -205,18 +240,20 @@ print_gaps() {
 
 cmd_claims() {
 	need_common
-	local base_oid branch_oid pinned degraded="" n head pbase pbase_oid poid m mc mb claims collisions
+	local base_oid branch_oid branch_name pinned degraded="" n head pbase pbase_oid poid hname cross m mc mb moid claims collisions
 	if [ -n "$BASE" ] && [ -n "$LOCAL_BASE" ]; then usage "give --base or --local-base, not both"; fi
 	[ -n "$BASE$LOCAL_BASE" ] || usage "claims needs --base <branch>, or --local-base <commit> where the repository cannot have the base"
 	branch_oid="$(git rev-parse --verify --quiet "$BRANCH^{commit}")" || fail "the branch '$BRANCH' names no commit here. Nothing was scanned."
 	if [ -n "$BASE" ]; then
-		pinned="$(pin "$BASE")" || fail "could not fetch '$BASE' from $REPO. A stale ref is not a fallback, and a failed refresh is not a clean scan: where the base exists only locally, name its commit with --local-base."
+		pinned="$(pin "$BASE")" || fail "could not fetch '$BASE' from $REPO ($(tr '\n' ' ' <"$tmp/pin.err")). A stale ref is not a fallback, and a failed refresh is not a clean scan: where the base exists only locally, name its commit with --local-base."
 		REMOTE="${pinned%%"$TAB"*}"
 		base_oid="${pinned##*"$TAB"}"
 	else
 		base_oid="$(git rev-parse --verify --quiet "$LOCAL_BASE^{commit}")" || fail "the base '$LOCAL_BASE' names no commit here. Nothing was scanned."
 		degraded="degraded=the base was read from the local commit $base_oid, not fetched"
 	fi
+	# The branch's own name, where it has one: its open PR is no second claimant.
+	branch_name="$(git rev-parse --abbrev-ref "$BRANCH" 2>/dev/null)" || branch_name=""
 	# Three dots: against where the branch left its base, so what the base
 	# gained since is not read as the branch's removal.
 	if ! git diff --no-renames --diff-filter=A --name-only "$base_oid...$branch_oid" -- "$FOLDER/" >"$tmp/adds" ||
@@ -227,11 +264,17 @@ cmd_claims() {
 		fail "could not read the task folder of the base. Nothing was scanned."
 	awk "$NUMBERED" "$tmp/adds" | sort >"$tmp/adds.n"
 	awk "$NUMBERED" "$tmp/dels" | sort >"$tmp/dels.n"
-	{ sed "s/^/D$TAB/" "$tmp/dels.n" && sed "s/^/A$TAB/" "$tmp/adds.n"; } >"$tmp/tagged"
+	# git's own rename matches, as `R <old> <new>`, to choose among several
+	# additions of one number.
+	git diff -M --diff-filter=R --name-status "$base_oid...$branch_oid" -- "$FOLDER/" 2>/dev/null |
+		awk -F "$TAB" -v t="$TAB" 'NF == 3 { print "R" t $2 t $3 }' >"$tmp/renames"
+	{ cat "$tmp/renames" && sed "s/^/D$TAB/" "$tmp/dels.n" && sed "s/^/A$TAB/" "$tmp/adds.n"; } >"$tmp/tagged"
 	# Within a number, each removal takes one addition: the same basename
-	# first, then the first left. What is left over is a claim.
+	# first, then the one git reads as its rename, then the first left. What
+	# is left over is a claim.
 	awk -F "$TAB" '
 		function base(p) { sub(/.*\//, "", p); return p }
+		$1 == "R" { renamed[$2] = $3; next }
 		$1 == "D" { dels[$2] = dels[$2] "\n" $3; next }
 		{ adds[$2] = adds[$2] "\n" $3; seen[$2] = 1 }
 		END {
@@ -240,6 +283,10 @@ cmd_claims() {
 				nd = (n in dels) ? split(substr(dels[n], 2), d, "\n") : 0
 				for (i = 1; i <= nd; i++) {
 					for (j = 1; j <= na; j++) if (a[j] != "" && base(a[j]) == base(d[i])) { a[j] = ""; d[i] = ""; break }
+				}
+				for (i = 1; i <= nd; i++) {
+					if (d[i] == "" || !(d[i] in renamed)) continue
+					for (j = 1; j <= na; j++) if (a[j] != "" && a[j] == renamed[d[i]]) { a[j] = ""; d[i] = ""; break }
 				}
 				for (i = 1; i <= nd; i++) {
 					if (d[i] == "") continue
@@ -268,6 +315,9 @@ cmd_claims() {
 			[ -n "$m" ] || continue
 			mc="${m%%:*}"
 			mb="${m#*:}"
+			moid="$(git rev-parse --verify --quiet "$mc^{commit}")" || fail "the member '$mc' names no commit here. Nothing here says its numbers are free."
+			# The scanned branch named as a member holds nothing against itself.
+			[ "$moid" != "$branch_oid" ] || continue
 			if ! git diff --no-renames --diff-filter=A --name-only "$mb...$mc" -- "$FOLDER/" >"$tmp/member" 2>/dev/null; then
 				fail "could not read what the member '$mc' adds against '$mb'. Nothing here says its numbers are free."
 			fi
@@ -276,20 +326,24 @@ cmd_claims() {
 $MEMBERS
 EOF
 		enumerate
-		: >"$tmp/bases"
-		while IFS="$TAB" read -r n head pbase poid; do
+		while IFS="$TAB" read -r n head pbase poid hname cross; do
 			[ -n "$n" ] || continue
-			if [ "$head" = "$branch_oid" ]; then
+			# The branch's own PR: by its head branch's name, or a head the
+			# scanned commit is or contains. What such a head adds is the
+			# branch's own or already in its base, so nothing is lost.
+			if { [ "$cross" != true ] && [ -n "$branch_name" ] && [ "$hname" = "$branch_name" ]; } ||
+				{ git cat-file -e "$head^{commit}" 2>/dev/null && git merge-base --is-ancestor "$head" "$branch_oid"; }; then
 				gap "self=pr:$n"
 				continue
 			fi
 			# Each distinct base is refreshed once, whether or not a ref of
 			# that name is already here: presence says nothing of freshness.
-			pbase_oid="$(awk -F "$TAB" -v b="$pbase" '$1 == b { print $2; exit }' "$tmp/bases")"
-			if [ -z "$pbase_oid" ]; then
-				if pinned="$(pin "$pbase")"; then pbase_oid="${pinned##*"$TAB"}"; else pbase_oid=none; fi
-				printf '%s\t%s\n' "$pbase" "$pbase_oid" >>"$tmp/bases"
+			if pinned="$(pin "$pbase")"; then pbase_oid="${pinned##*"$TAB"}"; else pbase_oid=none; fi
+			if ! have_head "$n" "$head"; then
+				gap "skipped=pr:$n${TAB}its head $head could not be fetched"
+				continue
 			fi
+			# After the head: fetching it can bring the base commit along.
 			if [ "$pbase_oid" = none ]; then
 				if git cat-file -e "$poid^{commit}" 2>/dev/null; then
 					pbase_oid="$poid"
@@ -297,10 +351,6 @@ EOF
 					gap "skipped=pr:$n${TAB}its base '$pbase' could not be fetched, and the base commit it names is not here"
 					continue
 				fi
-			fi
-			if ! have_head "$n" "$head"; then
-				gap "skipped=pr:$n${TAB}its head $head could not be fetched"
-				continue
 			fi
 			if ! git diff --no-renames --diff-filter=A --name-only "$pbase_oid...$head" -- "$FOLDER/" >"$tmp/pr" 2>/dev/null; then
 				gap "skipped=pr:$n${TAB}its head and its base share no history here"
@@ -327,7 +377,8 @@ EOF
 			}
 		}' "$tmp/both" | sort -u >"$tmp/collisions"
 	collisions="$(awk 'END { print NR }' "$tmp/collisions")"
-	[ -z "$degraded" ] || gap "$degraded"
+	# A branch that claims nothing has nothing a stale base could hide.
+	[ -z "$degraded" ] || [ "$claims" -eq 0 ] || gap "$degraded"
 
 	if [ "$collisions" -gt 0 ]; then
 		say "outcome=collision"
@@ -354,14 +405,14 @@ EOF
 cmd_taken() {
 	need_common
 	[ -z "$BASE$LOCAL_BASE$RESERVED$MEMBERS" ] && [ "$BRANCH" = HEAD ] || usage "taken takes --repo and --folder only"
-	local top n head pbase poid
+	local top n head pbase poid hname cross
 	top="$(git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ] || fail "this checkout has no working tree to inventory."
 	: >"$tmp/taken"
 	if [ -d "$top/$FOLDER" ]; then
-		(cd "$top" && find "$FOLDER" -type f) | awk "$NUMBERED" | awk -F "$TAB" -v t="$TAB" '{ print "taken=" $1 t "tree" t $2 }' >>"$tmp/taken"
+		(cd "$top" && find "$FOLDER" -type f) | awk "$LISTED" | awk -F "$TAB" -v t="$TAB" '{ print "taken=" $1 t "tree" t $2 }' >>"$tmp/taken"
 	fi
 	enumerate
-	while IFS="$TAB" read -r n head pbase poid; do
+	while IFS="$TAB" read -r n head pbase poid hname cross; do
 		[ -n "$n" ] || continue
 		if ! have_head "$n" "$head"; then
 			gap "skipped=pr:$n${TAB}its head $head could not be fetched"
@@ -372,7 +423,7 @@ cmd_taken() {
 			gap "skipped=pr:$n${TAB}its tree could not be read"
 			continue
 		fi
-		awk "$NUMBERED" "$tmp/pr" | awk -F "$TAB" -v t="$TAB" -v h="pr:$n" '{ print "taken=" $1 t h t $2 }' >>"$tmp/taken"
+		awk "$LISTED" "$tmp/pr" | awk -F "$TAB" -v t="$TAB" -v h="pr:$n" '{ print "taken=" $1 t h t $2 }' >>"$tmp/taken"
 	done <"$tmp/prs"
 	if [ -s "$tmp/gaps" ]; then say "outcome=incomplete"; else say "outcome=listed"; fi
 	sort -u "$tmp/taken"

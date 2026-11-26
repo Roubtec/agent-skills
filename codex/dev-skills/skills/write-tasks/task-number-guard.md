@@ -10,15 +10,15 @@ A task file's basename starts with a **full task number**: three digits plus an 
 Two files collide whenever their full task numbers are identical, regardless of slug; `001`, `001a`, and `001b` are distinct and do not collide.
 
 The scanned branch claims every task file it adds against its own recorded base, less its own relocations.
-Within one number, each file it removes pairs with one file it adds, the same basename first, so an archive, a deferral, a promotion or an in-place slug rename is a net-zero claim, and a two-file number swap clears too.
+Within one number, each file it removes pairs with one file it adds, the same basename first and then the one git reads as its rename, so an archive, a deferral, a promotion or an in-place slug rename is a net-zero claim, and a two-file number swap clears too.
 A single removal cannot exempt both a relocation and a second new claimant, and no pairing ever crosses numbers.
 Because the pairing uses only removals against the branch's own base, it never releases a number another holder claims.
 
 The comparison set is the union of two groups.
 **Always:** the base branch and every open PR head, which the script reads itself.
 **In a pipelined run, additionally:** branches delivered earlier in the same run, anything merged since the run started, numbers reserved by a task that cleared this guard but has not finished delivering, and currently-ready siblings awaiting the guard.
-Track these run-local members as the pipeline advances, and hand the script the ones it cannot see for itself: `--reserved <number>` for each reserved number, and `--member <commit>:<its base commit>` for each sibling or delivered branch that has no open PR.
-A delivered branch with an open PR is already an open PR head, and a merged one is already on the fetched base.
+Track these run-local members as the pipeline advances, and hand them to the script: `--reserved <number>` for each reserved number, and `--member <commit>:<its base commit>` for each sibling or delivered branch of the run.
+A delivered branch with an open PR is an open PR head as well, and naming it as a member keeps it compared where the enumeration fails or skips its head; a merged one is already on the fetched base.
 
 What a holder contributes is decided by its kind.
 The base contributes its entire recursive task tree, so `done/`, `deferred/` and any future nested folder keep their numbers.
@@ -35,7 +35,8 @@ Never read a clean answer from the conventional folder as a clean scan when the 
 `--base <branch>` is the normal and required form: the script fetches the scanned branch's recorded base from the repository before reading it, because a local or remote-tracking ref can be stale.
 `--local-base <commit>` is the only fallback, for a recorded base the remote cannot represent because it exists only locally (an unpushed dependency base), or for a run already known to be local-only.
 Name the exact commit, and report the base read as degraded: the script answers `incomplete` with a `degraded=` line for that reason.
-A base that cannot be fetched fails the scan (exit 1); never turn that into an empty additions list or a silent pass.
+A base that cannot be fetched fails the scan (exit 1) and says why; never turn that into an empty additions list or a silent pass.
+Where the reason is that the remote or `gh` is unavailable rather than that the base is local, scan with `--local-base` on the last commit of that base you hold, and note and proceed as below.
 
 ## On `outcome=collision`
 

@@ -276,7 +276,7 @@ Per the no-latched-flags rule, the task's result describes its final state after
 
 Run this guard before opening any PR that adds task files.
 It is `address-tasks-serialized` → "Task-number collisions across in-flight branches": the `task-numbers.sh` call that section names, in the `write-tasks` skill's folder.
-A pipelined run tracks members of its own, so read `task-number-guard.md`, in that same `write-tasks` folder, in full before the first scan, and pass each reserved number as `--reserved` and each sibling or delivered branch with no open PR as `--member`.
+A pipelined run tracks members of its own, so read `task-number-guard.md`, in that same `write-tasks` folder, in full before the first scan, and pass each reserved number as `--reserved` and each sibling or delivered branch of the run as `--member`.
 The one reading specific to this skill: where that definition establishes the first claimant in the *run's* deterministic delivery order, use the order in which tasks pass review and reach the serialized guard — first-ready-wins, which the one-at-a-time guard makes deterministic.
 A branch that cleared the guard but is still delivering is a *reserved* member of that definition, a delivered one a *delivered* member, and the branch under the guard is the second claimant that renumbers; the definition's rule that a delivered or reserved claimant is never rewritten decides every such case.
 

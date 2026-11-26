@@ -73,7 +73,7 @@ If there are existing task files in the target folder, continue the numbering se
 Use numbering to reflect intended order, even if some tasks could later be parallelized.
 
 Before allocating a number, resolve the repository's task folder (commonly `tasks/`), then recursively inventory task filenames across that entire working-tree subtree, including its `done/`, `deferred/`, and any future nested folders, and across every open PR head.
-`task-numbers.sh taken --repo <owner>/<repo>`, beside this file, does both in one read-only call (`--folder <dir>` where the folder is not `tasks/`): it prints a `taken=` line for every task file standing in the working tree's folder, and for every one in the whole recursive tree of each open PR head, fetched through the repository's PR namespace at the exact commit the enumeration named.
+`task-numbers.sh taken --repo <owner>/<repo>`, beside this file, does both in one read-only call (`--folder <dir>` where the folder is not `tasks/`): it prints a `taken=` line for every file standing in the working tree's folder, and for every one in the whole recursive tree of each open PR head, with its full three-digit task number or `-` where the name carries none (read the paths themselves under another numbering style), fetched through the repository's PR namespace at the exact commit the enumeration named.
 `outcome=incomplete` (exit 3) means some head could not be read or the enumeration reached its bound of 200: report that allocation could not be checked completely, with its `skipped=` and `limit=` lines, instead of silently treating the missing heads as free.
 
 Two aspects of allocation deliberately differ from the pre-PR guard.

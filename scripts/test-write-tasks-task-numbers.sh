@@ -108,10 +108,11 @@ new_repo() {
 	git clone -q "$O" "$U"
 	git -C "$R" checkout -q -b feature
 }
-# pr <N> <head oid> <base name> [base oid]: add an open PR to the enumeration.
+# pr <N> <head oid> <base name> [base oid] [head branch name]: add an open PR
+# to the enumeration.
 pr() {
-	jq --argjson n "$1" --arg h "$2" --arg b "$3" --arg bo "${4:-$(git -C "$O" rev-parse "refs/heads/$3" 2>/dev/null || echo 0000000000000000000000000000000000000000)}" \
-		'. + [{number: $n, headRefOid: $h, baseRefName: $b, baseRefOid: $bo}]' "$FAKE/prs.json" >"$FAKE/prs.new" && mv "$FAKE/prs.new" "$FAKE/prs.json"
+	jq --argjson n "$1" --arg h "$2" --arg b "$3" --arg bo "${4:-$(git -C "$O" rev-parse "refs/heads/$3" 2>/dev/null || echo 0000000000000000000000000000000000000000)}" --arg hn "${5:-pr-$1-head}" \
+		'. + [{number: $n, headRefOid: $h, baseRefName: $b, baseRefOid: $bo, headRefName: $hn, isCrossRepository: false}]' "$FAKE/prs.json" >"$FAKE/prs.new" && mv "$FAKE/prs.new" "$FAKE/prs.json"
 }
 # other_pr <N> <branch> <base> <path>...: a PR from the other clone, adding
 # those files on a branch off <base>, its head published as refs/pull/<N>/head.
@@ -202,6 +203,20 @@ is "2: ...and it collides" "$(val outcome)" collision
 has "2: ...with the relocated file on the branch" "$OUT" "collision=001${TAB}tasks/001-second-claimant.md${TAB}branch${TAB}tasks/done/001-first.md${TAB}other-path"
 is "2: ...and not with the base's copy the branch removed" "$(count collision)" 1
 
+# An archive under a new slug beside a new file of the same number: the
+# archive is the relocation, whichever sorts first.
+new_repo
+printf 'a long enough body\nfor git to match\nthe renamed archive\nto its source\n' >"$R/tasks/005-old.md"
+git -C "$R" add tasks/005-old.md
+git -C "$R" commit -q -m seed
+git -C "$R" push -q origin feature:main
+git -C "$R" mv tasks/005-old.md tasks/done/005-renamed.md
+git -C "$R" commit -q -m "archive under a new slug"
+put "$R" tasks/005-brand-new.md "something else entirely"
+call claims "${ARGS[@]}"
+has "2: a renamed archive is the relocation, and the new file the claim" "$OUT" "claim=005${TAB}tasks/005-brand-new.md"
+is "2: ...the one claim" "$(val claims)" 1
+
 new_repo
 git -C "$R" rm -q tasks/001-first.md
 git -C "$R" commit -q -m drop
@@ -224,16 +239,23 @@ call claims --repo acme/widgets --base no-such-branch
 is "3: a base that cannot be fetched is a failure, not a clean scan" "$RC" 1
 is "3: ...with nothing on stdout" "$OUT" ""
 has "3: ...pointing at --local-base" "$ERR" "--local-base"
+has "3: ...and passing on why the fetch failed" "$ERR" "could not fetch refs/heads/no-such-branch"
 call claims --repo acme/widgets --local-base main
 is "3: a local base is read as it stands" "$(val base)" "$(tip main)"
 is "3: ...which misses what landed, and says the scan is incomplete" "$(val outcome)" incomplete
 is "3: ...with exit 3" "$RC" 3
 has "3: ...as degraded" "$OUT" "degraded=the base was read from the local commit"
 is "3: ...and no collision" "$(count collision)" 0
+git -C "$R" checkout -q -b plain main
+put "$R" src/more.txt
+call claims --repo acme/widgets --local-base main
+is "3: a branch that claims nothing is clean on a local base too" "$(val outcome)" clean
+git -C "$R" checkout -q feature
 call claims --repo acme/widgets --local-base no-such-commit
 is "3: a local base that names no commit is a failure" "$RC" 1
 call claims --repo other/elsewhere --base main
 is "3: a repository no remote fetches from is a failure" "$RC" 1
+has "3: ...saying that no remote matches" "$ERR" "no remote of this checkout fetches from other/elsewhere"
 
 # The base drops a task after the branch forked: the branch's inherited copy
 # is neither its addition nor a holder, and the number is free again.
@@ -306,6 +328,48 @@ pr 9 "$(tip feature)" main
 call claims "${ARGS[@]}"
 is "4: the scanned branch's own open PR is not a second claimant" "$(val outcome)" clean
 has "4: ...and is named" "$OUT" "self=pr:9"
+put "$R" tasks/061-more.md
+call claims "${ARGS[@]}"
+is "4: ...nor when the branch is a commit ahead of it" "$(val outcome)" clean
+has "4: ...still named" "$OUT" "self=pr:9"
+git -C "$R" reset -q --soft main
+git -C "$R" commit -q -m "rewritten, so the PR head is no ancestor"
+jq '.[0].headRefName = "feature"' "$FAKE/prs.json" >"$FAKE/prs.new" && mv "$FAKE/prs.new" "$FAKE/prs.json"
+call claims "${ARGS[@]}"
+is "4: ...nor after a rewrite, where the PR's head branch bears its name" "$(val outcome)" clean
+jq '.[0].isCrossRepository = true' "$FAKE/prs.json" >"$FAKE/prs.new" && mv "$FAKE/prs.new" "$FAKE/prs.json"
+call claims "${ARGS[@]}"
+is "4: a fork's branch of the same name is somebody else's" "$(val outcome)" collision
+call claims "${ARGS[@]}" --member feature:main
+lacks "4: the scanned branch named as a member holds nothing against itself" "$OUT" "member:feature"
+
+# From a subdirectory the folder is still read from the top.
+new_repo
+put "$R" tasks/002-other.md
+OUT="$(cd "$R/src" && bash "$HELPER" claims "${ARGS[@]}" 2>/dev/null)"
+is "4: a run from a subdirectory reads the same folder" "$(val outcome)" collision
+OUT="$(cd "$R/tasks" && bash "$HELPER" claims "${ARGS[@]}" 2>/dev/null)"
+is "4: ...from inside the task folder too" "$(val claims)" 1
+other_pr 5 theirs main tasks/090-theirs.md
+OUT="$(cd "$R/src" && bash "$HELPER" taken --repo acme/widgets 2>/dev/null)"
+has "4: ...and taken reads open heads from there as well" "$OUT" "taken=090${TAB}pr:5"
+
+# A name git would quote is printed as it is.
+new_repo
+put "$R" "tasks/006-café.md"
+call claims "${ARGS[@]}"
+has "4: a non-ASCII path is printed raw" "$OUT" "claim=006${TAB}tasks/006-café.md"
+
+# The remote is learned from any base that can be fetched.
+new_repo
+put "$R" tasks/070-mine.md
+git -C "$U" checkout -q -b fresh-base origin/main
+put "$U" tasks/070-far.md
+git -C "$U" push -q origin fresh-base:refs/pull/21/head
+pr 20 1111111111111111111111111111111111111111 aaa-gone
+pr 21 "$(tip fresh-base "$U")" main
+call claims --repo acme/widgets --local-base main
+has "4: a head is fetched though the first PR's base is gone" "$OUT" "pr:21${TAB}tasks/070-far.md"
 
 # --- 5. what the scan could not see -------------------------------------------
 new_repo
@@ -330,6 +394,23 @@ jq '.[0].baseRefName = "gone"' "$FAKE/prs.json" >"$FAKE/prs.new" && mv "$FAKE/pr
 call claims "${ARGS[@]}"
 is "5: a PR whose base branch is gone is read against the base commit it names" "$(val outcome)" collision
 has "5: ...and still collides" "$OUT" "pr:12"
+# The base commit a PR names may arrive only with its head.
+new_repo
+put "$R" tasks/070-mine.md
+git -C "$U" checkout -q -b gone-base origin/main
+put "$U" tasks/071-on-gone-base.md
+GONE="$(tip gone-base "$U")"
+put "$U" tasks/070-theirs.md
+git -C "$U" push -q origin gone-base:refs/pull/13/head
+pr 13 "$(tip gone-base "$U")" gone "$GONE"
+call claims "${ARGS[@]}"
+has "5: a base commit that arrives with the head is used" "$OUT" "collision=070${TAB}tasks/070-mine.md${TAB}pr:13${TAB}tasks/070-theirs.md"
+lacks "5: ...and what sits under it is not the PR's addition" "$OUT" "071"
+
+new_repo
+put "$R" tasks/070-mine.md
+other_pr 12 theirs main tasks/070-theirs.md
+jq '.[0].baseRefName = "gone"' "$FAKE/prs.json" >"$FAKE/prs.new" && mv "$FAKE/prs.new" "$FAKE/prs.json"
 jq '.[0].baseRefOid = "2222222222222222222222222222222222222222"' "$FAKE/prs.json" >"$FAKE/prs.new" && mv "$FAKE/prs.new" "$FAKE/prs.json"
 call claims "${ARGS[@]}"
 is "5: ...and is skipped where that commit is not here either" "$(val outcome)" incomplete
@@ -338,7 +419,7 @@ is "5: ...with no collision invented" "$(count collision)" 0
 
 new_repo
 put "$R" tasks/070-mine.md
-jq -n --arg h "$(tip main)" --arg b main '[range(1; 201) | {number: ., headRefOid: $h, baseRefName: $b, baseRefOid: $h}]' >"$FAKE/prs.json"
+jq -n --arg h "$(tip main)" --arg b main '[range(1; 201) | {number: ., headRefOid: $h, baseRefName: $b, baseRefOid: $h, headRefName: "pr-\(.)", isCrossRepository: false}]' >"$FAKE/prs.json"
 call claims "${ARGS[@]}"
 is "5: an enumeration at its bound is incomplete" "$(val outcome)" incomplete
 has "5: ...saying the bound" "$OUT" "limit=200"
@@ -403,7 +484,8 @@ has "8: ...the working tree's numbers at any depth" "$OUT" "taken=002${TAB}tree$
 has "8: ...an untracked task file too" "$OUT" "taken=091${TAB}tree${TAB}tasks/091-untracked.md"
 has "8: ...what an open head adds" "$OUT" "taken=090${TAB}pr:5${TAB}tasks/090-theirs.md"
 has "8: ...and what it inherits, since that number stands on the head" "$OUT" "taken=001${TAB}pr:5${TAB}tasks/001-first.md"
-lacks "8: ...but nothing that is no task file" "$OUT" "AGENTS.md"
+has "8: ...and a file with no full number, under a dash" "$OUT" "taken=-${TAB}tree${TAB}tasks/AGENTS.md"
+lacks "8: ...but nothing outside the folder" "$OUT" "src/004-not-a-task.md"
 touch "$FAKE/fail-list"
 call taken --repo acme/widgets
 is "8: an enumeration that fails is incomplete" "$(val outcome)" incomplete
@@ -441,6 +523,8 @@ is "9: -C names the checkout" "$(val outcome)" clean
 call --help
 is "9: --help exits 0" "$RC" 0
 has "9: ...printing the contract" "$OUT" "outcome=incomplete"
+OUT="$(cd "$R" && bash "$ROOT/plugins/dev-skills/bin/write-tasks-task-numbers" claims "${ARGS[@]}" 2>/dev/null)"
+is "9: the plugin's shim runs the same script" "$(val outcome)" clean
 cmp -s "$SHIPPED" "$MIRROR"
 ok "9: the two mirrors ship the same script" $?
 

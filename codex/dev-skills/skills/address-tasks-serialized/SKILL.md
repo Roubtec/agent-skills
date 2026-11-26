@@ -228,11 +228,12 @@ The serialized flow does not add a second repo-wide scan of every open PR's othe
 ### Task-number collisions across in-flight branches
 
 Run this guard before opening any PR.
-It is `task-numbers.sh` in the `write-tasks` skill's folder, a sibling of this skill's, run by its absolute path from the branch's working tree: `task-numbers.sh claims --repo <owner>/<repo> --base <the branch's recorded base>`, with `--folder <dir>` where the repository's task folder is not `tasks/`.
+It is `task-numbers.sh` in the `write-tasks` skill's folder, a sibling of this skill's, run by its absolute path from any checkout of the repository: `task-numbers.sh claims --repo <owner>/<repo> --base <the branch's recorded base>`, with `--branch <ref>` unless the branch under the guard is the one checked out there, and `--folder <dir>` where the repository's task folder is not `tasks/`.
+A run that tracks numbers or branches of its own (a pipelined batch) also passes each reserved number as `--reserved <number>` and each of its other branches as `--member <branch>:<its base>`.
 It fetches that base, reads what the branch adds and removes against it, and compares each task number the branch newly claims with the base's whole task tree and with what every open PR head adds.
 `outcome=clean` (exit 0) means go on, and a branch that adds no task file gets it without a remote read.
 On `outcome=collision` or `outcome=incomplete` (exit 3), read `task-number-guard.md`, in that same `write-tasks` folder, in full: it holds what collides, the comparison set and what each holder contributes, the renumber-the-flagged-new-claimant rule, the note-and-proceed reading of an incomplete scan, the local-base fallback, and what the snapshot does not promise.
-Exit 1 is a read that failed, such as a base that could not be fetched: never a clean scan.
+Exit 1 is a read that failed, such as a base that could not be fetched: never a clean scan, and where that base exists only locally or the remote cannot be reached, the same file says how to scan against a local base.
 
 ## Peer second opinion (best-effort)
 
