@@ -14,6 +14,7 @@ plugins/
     bin/dc-remove                  # drops one, and can reach nothing else
     bin/address-review-pr-branch   # a name on PATH for skills/address-review/pr-branch.sh, for workflow agents
     bin/address-review-record      # the same for skills/address-review/record.sh
+    bin/address-review-ping        # the same for skills/address-review/ping.sh
     skills/<name>/SKILL.md
     workflows/wf-*.js              # Claude dynamic workflows
 codex/
