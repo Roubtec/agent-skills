@@ -63,7 +63,7 @@ is() { # <label> <actual> <expected>
 }
 
 FAKE="$WORKDIR/bin"
-mkdir -p "$FAKE"
+mkdir -p "$FAKE" "$WORKDIR/tmp"
 export FAKE
 cat >"$FAKE/gh" <<'FAKEGH'
 #!/usr/bin/env bash
@@ -182,7 +182,7 @@ land() { # <branch> <file> <content> — a commit on origin's branch, from elsew
 }
 call() { # <command> [args...] → OUT (stdout), ERR (stderr), RC
 	rm -f "$FAKE/gh.log" "$FAKE"/reads.*
-	OUT="$(cd "${R:-$WORKDIR}" && ird=main bash "$HELPER" "$@" 2>"$WORKDIR/err")"
+	OUT="$(cd "${R:-$WORKDIR}" && ird=main TMPDIR="$WORKDIR/tmp" bash "$HELPER" "$@" 2>"$WORKDIR/err")"
 	RC=$?
 	ERR="$(cat "$WORKDIR/err")"
 	LOG="$(cat "$FAKE/gh.log" 2>/dev/null)"
@@ -255,7 +255,7 @@ REFS="$(git -C "$R" for-each-ref refs/heads)"
 call "${P[@]}" 2 '#1' 3
 is "2: a plan proceeds" "$RC" 0
 is "2: outcome= is the first line" "$(printf '%s\n' "$OUT" | head -n 1)" "outcome=planned"
-is "2: the repository is the one the PRs' URLs name" "$(val repo)" "Acme/Widgets"
+is "2: the repository is the one the PRs' URLs name, with its host" "$(val repo)" "github.com/Acme/Widgets"
 is "2: a stack is seen" "$(val stacked)" yes
 is "2: nothing is skipped" "$(val skipped)" 0
 lacks "2: no named= line without --target" "$OUT" "named="
@@ -281,7 +281,7 @@ is "2: the head GitHub reported is recorded beside the fetched one" "$(f reporte
 is "2: no local branch moved" "$(git -C "$R" for-each-ref refs/heads)" "$REFS"
 is "2: every gh call names the repository" "$(printf '%s\n' "$LOG" | grep -vc -- '--repo ')" 0
 is "2: ...and each PR is read by number" "$(printf '%s\n' "$LOG" | grep -c '^pr view [123] --repo ')" 6
-is "2: one base fetched once serves both roots" "$(printf '%s\n' "$ERR" | wc -c | tr -d ' ')" 1
+is "2: a clean plan says nothing on stderr" "$(printf '%s\n' "$ERR" | wc -c | tr -d ' ')" 1
 # A rerun of one entry alone is a root: it has no listed parent.
 call "${P[@]}" 2
 is "2: a dependent listed alone has no parent" "$(f parent 2)$(val stacked)" "-no"
@@ -415,7 +415,7 @@ is "6: a PR that is not open is skipped, not a stop" "$RC $(f skip 1)" "0 closed
 has "6: ...with pr-branch's explanation passed on" "$ERR" "PR #1 is MERGED, not open"
 is "6: ...and no pin" "$(f pin 1)$(f rebase 1)$(f head 1)" "---"
 is "6: its dependent still names it as parent" "$(f parent 2)$(f target 2)$(f skip 2)" "1parent-"
-is "6: a skipped parent is not a usable stack" "$(val stacked)$(val skipped)" yes1
+is "6: a skipped parent still makes the batch a stack" "$(val stacked)$(val skipped)" yes1
 is "6: the sibling is planned" "$(f skip 3)$(f target 3)" "-default"
 call "${P[@]}" 1
 is "6: a batch of skipped entries reports no stack" "$(val stacked)$(val skipped)" no1
@@ -423,6 +423,17 @@ pr 1 a main
 jq -c '.isCrossRepository = true' "$FAKE/pr.3.json" >"$FAKE/tmp" && mv "$FAKE/tmp" "$FAKE/pr.3.json"
 call "${P[@]}" 1 3
 is "6: a fork PR is skipped" "$(f skip 3)$(f skip 1)" "fork-"
+# A fork's head branch named like another entry's base or head is a coincidence.
+pr 1 a main
+pr 2 b a
+jq -c '.isCrossRepository = true' "$FAKE/pr.1.json" >"$FAKE/tmp" && mv "$FAKE/tmp" "$FAKE/pr.1.json"
+call "${P[@]}" 1 2
+is "6: a fork PR is the parent of nothing" "$(f skip 1)$(f parent 2)$(f target 2)$(f skip 2)" "fork-default-"
+is "6: ...and makes no stack" "$(val stacked)" no
+pr 9 a main
+call "${P[@]}" 1 9
+is "6: ...nor a shared head with a PR of this repository" "$(f same-head 9)$(f skip 9)" "--"
+pr 1 a main
 # The head ref rewound behind what GitHub reports.
 new_repo
 git -C "$U" push -q --force origin "$(tip main "$U"):refs/heads/a"
@@ -481,7 +492,7 @@ rm "$FAKE/fail.1"
 pr 1 a main url=https://github.com/Acme/Other/pull/1
 call "${P[@]}" 1
 is "7: a PR whose URL names another repository is a failure" "$RC$OUT" 1
-has "7: ...which says where it is" "$ERR" "is in Acme/Other by its own URL"
+has "7: ...which says where it is" "$ERR" "is in github.com/Acme/Other by its own URL"
 pr 1 a main url=https://github.com/Acme
 call "${P[@]}" 1
 is "7: a URL that names no repository is a failure" "$RC$OUT" 1
@@ -531,7 +542,7 @@ call repin --repo ghe.example/acme/widgets --pr 1
 is "8: repin on another host" "$(val outcome) $(val repo)" "pinned ghe.example/Acme/Widgets"
 new_repo
 call plan --repo github.com/acme/widgets 1
-is "8: github.com may be said outright" "$RC $(val repo)" "0 Acme/Widgets"
+is "8: github.com may be said outright" "$RC $(val repo)" "0 github.com/Acme/Widgets"
 call plan --repo ghe.example/acme/widgets 1
 is "8: a PR on github.com is not in a repository named on another host" "$RC$OUT" 1
 call "${P[@]}" 1
@@ -618,7 +629,7 @@ new_repo
 OUT="$(cd "$R" && bash "$ALONE/targets.sh" "${P[@]}" 1 2>&1)"
 is "10: a copy with no address-review folder beside it fails" "$?" 1
 has "10: ...saying what is missing" "$OUT" "address-review skill's scripts"
-find "${TMPDIR:-/tmp}" -maxdepth 1 -name 'targets.*' -newer "$FAKE/gh" 2>/dev/null | grep -q .
+find "$WORKDIR/tmp" -maxdepth 1 -name 'targets.*' 2>/dev/null | grep -q .
 is "10: no run left its temporary directory behind" "$?" 1
 
 if [ "$fails" -gt 0 ]; then

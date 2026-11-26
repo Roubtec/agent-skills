@@ -11,13 +11,16 @@
 #
 # plan   Reads every entry once, in the order given, and prints the batch:
 #          outcome=planned
-#          repo=      the repository as the PRs' own URLs name it: what every
-#                     later command for these entries is given
+#          repo=      the repository as the PRs' own URLs name it, always
+#                     `<host>/<owner>/<repo>`: what every later command for
+#                     these entries is given
 #          named=     the commit `--target` resolved to (only with `--target`)
-#          stacked=   yes | no: some usable entry is based on another's branch
+#          stacked=   yes | no: some usable entry is based on another listed
+#                     PR's branch, whether or not that parent is skipped
 #          skipped=   how many entries carry a `skip=` reason
-#        then one line per entry, TAB-separated `key=value` fields, parents
-#        ahead of their dependents and otherwise as listed:
+#        then one line per entry, TAB-separated `key=value` fields, every
+#        parent ahead of its dependents (by depth in the stack, then as
+#        listed):
 #          entry=     the entry as it was given
 #          kind=      pr | branch
 #          pr=        its PR number
@@ -74,7 +77,9 @@
 #          closed | fork | rewind | no-remote
 #                      as `pr-branch.sh head` of the address-review skill
 #                      stops on them; `no-remote` also where the base branch
-#                      has no remote to be fetched from
+#                      has no remote to be fetched from. A fork PR is the
+#                      parent of nothing: its head branch is not this
+#                      repository's.
 #        and stops, printing no entry, on:
 #          outcome=unresolved  `--target` does not resolve here (`target=`)
 #          outcome=cycle       the listed PRs are based on each other in a
@@ -93,7 +98,8 @@
 # Output: `key=value` lines on stdout, `outcome=` first; the explanation of a
 # stop or a skip goes to stderr. Exit status: 0 to proceed (skipped entries
 # included: read `skip=`), 3 on a stop that needs a decision, 1 on a failure
-# (network, gh: nothing is printed, since half a plan is not one), 64 on a
+# (network, gh, a base branch that cannot be fetched, a head that moves under
+# the fetch: nothing is printed, since half a plan is not one), 64 on a
 # usage error. Needs gh. Written for bash 3.2 and later.
 set -u
 
@@ -239,8 +245,9 @@ canon() { # url, what it is the URL of
 	owner="${path%%/*}"
 	path="${path#*/}"
 	name="${path%%/*}"
-	got="$owner/$name"
-	[ "$(lower "$host")" = github.com ] || got="$host/$got"
+	# Always with its host: a bare owner/name is read on whatever host
+	# GH_HOST names, which need not be the one this URL is on.
+	got="$host/$owner/$name"
 	want="$(lower "$REPO")"
 	# A selector without a host takes the host gh placed it on.
 	case "$want" in
@@ -406,7 +413,9 @@ cmd_plan() {
 		if [ "${E_DATA[i]}" -eq 1 ]; then
 			j=0
 			while [ "$j" -lt "$N" ]; do
-				if [ "$j" -ne "$i" ] && [ "${E_DATA[j]}" -eq 1 ]; then
+				# A fork's head branch is another repository's: its name
+				# meeting a base or a head here is a coincidence.
+				if [ "$j" -ne "$i" ] && [ "${E_DATA[j]}" -eq 1 ] && [ "${E_SKIP[j]}" != fork ]; then
 					[ "${E_PARENT[i]}" -ne -1 ] || [ "${E_HEADREF[j]}" != "${E_BASEREF[i]}" ] || E_PARENT[i]="$j"
 					[ "$j" -ge "$i" ] || [ "${E_SAME[i]}" != - ] || [ "${E_HEADREF[j]}" != "${E_HEADREF[i]}" ] || E_SAME[i]="${E_PR[j]}"
 				fi

@@ -74,7 +74,9 @@ The top-level orchestrator (you) may still consult the user for **batch-level** 
 The step itself is `review-cycle` → "The delegated rebase step": the brief, the base pinning, the parent-first `--onto` form, the hunk-level conflict rules, the clean halt, and the packet it returns are defined there, and nothing about them is restated here or in the entry's prompt.
 
 **One call plans the batch:** `targets.sh plan --repo <owner>/<repo> [--target <target>] [--no-rebase | --except <entry>…] <entries…>` — the helper beside this file, run by absolute path in the main tree, whose `--help` is the contract for every field named here.
-`--repo` is the repository the batch's PRs are in (`<host>/<owner>/<repo>` where that is not github.com), and the `repo=` it prints back, read from the PRs' own URLs, is what every later command for an entry names.
+`--repo` is the repository the batch's PRs are in (`<host>/<owner>/<repo>` where that is not github.com): take it from a PR URL the invocation gave, else from `gh repo view --json nameWithOwner` in the main tree, which is only a first guess, since the plan fails and names the right repository where a PR's own URL disagrees.
+The `repo=` it prints back, read from the PRs' own URLs and always host-qualified, is what every later command for an entry names.
+Exit 1 prints no plan at all (a PR, a head or a base that could not be read, a head that kept moving under the fetch): run it once more, then report it as a batch-level blocker, never work from part of a plan; `outcome=cycle` and `outcome=unresolved` (exit 3) are batch-level stops too.
 `--target` carries a `rebase on top of <target>` token, quoted as ONE argument; `--no-rebase` carries the batch-wide token; `--except` names each entry the invocation prose excluded.
 It prints one line per entry, parents first: the paired PR, its fetched head, its `parent=` in the batch, whether it rebases, and the exact commit it is pinned to (`pin=`), whose `target=` is `default` (the entry's own base ref), `named` (the invocation's) or `parent`.
 A line with a `skip=` reason is an entry to skip-and-record while the rest proceed; `no-remote` there is that entry's blocker, never a reason to pin `origin/<baseRefName>`.
@@ -208,7 +210,7 @@ Prefer a same-named local branch if you have one (so we still never bypass your 
 **A fetched-behind-reported head is a rewind, not an advance:** where the entry is `skip=rewind`, block the entry for a maintainer decision without adopting the fetched OID.
 Every other difference is adopted: create the entry's branch at `head=` on the path that creates one, and move nothing on the path where a usable local `<headRefName>` already exists, which `address-review` step 1 reconciles against this head instead.
 Its `relation=` field says how that local branch stands to the head — `absent`, `equal`, `behind`, `ahead`, `represented`, or `divergent` — read as step 1 reads them.
-Besides that rewind block, skip-and-record a `skip=closed` entry (the PR is not open), a `skip=fork` one (fork PRs are not supported), and one whose head keeps moving under you.
+Besides that rewind block, skip-and-record a `skip=closed` entry (the PR is not open) and a `skip=fork` one (fork PRs are not supported).
 
 **Attach**, from the entry's line:
 
