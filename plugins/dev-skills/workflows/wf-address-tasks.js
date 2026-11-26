@@ -5039,8 +5039,9 @@ async function runPipelinedBatch({ plan, remote, peerMode, statusBySlug, results
 
 // ============================================================================
 // Post-batch review stack — the integration check and merge-order guide the
-// `address-tasks` skill's "Post-batch restack: a local review stack (never
-// pushed)" section owns. Every rule below is that section's, not a second
+// `address-tasks` skill owns, in the `review-stack.md` its "Post-batch restack:
+// a local review stack (never pushed)" section sends a run to read. Every rule
+// below is that file's, not a second
 // rendering of it: what this file adds is the control flow the runtime owns
 // and the four briefs the Git work is delegated through — an inspection of the
 // canonical branches, the guide-branch and worktree creation, the delegated

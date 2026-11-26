@@ -1389,27 +1389,28 @@ if (!canonicalRule) {
 //      bullet arriving in a skill this table does not name fails as undeclared,
 //      and one leaving a declared skill fails the count.
 //   4. DELIBERATELY UNANCHORED restatements — a brief template that RESTATES an
-//      already-anchored allocation by pointing back at it:
-//      `address-tasks-serialized`'s "Any build or lint output that must land in a
-//      file goes to `<validation-output path allocated above>`, never anywhere
-//      else", twice per mirror. It names no destination of its own and carries no
-//      warning phrase, by design. What separates it from category 2 is that it
-//      imposes nothing: the rule it points at is anchored in the same file, in
+//      already-anchored allocation by pointing back at it ("goes to `<the path
+//      allocated above>`, never anywhere else"). None ships today: the example
+//      prompts in `address-tasks-serialized` that had this shape were removed
+//      when its roles moved to `review-cycle`'s brief files. Such a line names
+//      no destination of its own and carries no warning phrase, by design. What
+//      separates it from category 2 is that it imposes nothing: the rule it points at is anchored in the same file, in
 //      both mirrors, so deleting the restatement cannot delete the rule. That is
 //      why this shape is not guarded at all where categories 2 and 3 are.
-// A skill's brief is its `SKILL.md` plus the `subagent-boundary.md` beside it,
-// where one ships: the destroy boundary lives in that file, which the skill's
-// prompts send every subagent to read, so the guarded bullet is looked for there.
-// A missing `SKILL.md` still throws; a missing boundary file is simply absent.
+// A skill's brief is its `SKILL.md` plus every other Markdown file beside it:
+// `subagent-boundary.md`, which the skill's prompts send every subagent to read
+// and where the destroy boundary lives, and any file `SKILL.md` sends a run or a
+// subagent to read in full (a role brief, a procedure only some runs need). A
+// clause guarded here may live in any of them, and `test-skill-bundled-files.mjs`
+// holds each such file to being named in its folder, in both mirrors.
+// A missing `SKILL.md` still throws.
 function readSkill(dir, skill) {
   const brief = readFileSync(join(dir, skill, "SKILL.md"), "utf8");
-  let boundary = "";
-  try {
-    boundary = readFileSync(join(dir, skill, "subagent-boundary.md"), "utf8");
-  } catch {
-    boundary = "";
-  }
-  return `${brief}\n${boundary}`;
+  const beside = readdirSync(join(dir, skill))
+    .filter((name) => name.endsWith(".md") && name !== "SKILL.md")
+    .sort()
+    .map((name) => readFileSync(join(dir, skill, name), "utf8"));
+  return [brief, ...beside].join("\n");
 }
 const PROSE_MIRRORS = ["plugins/dev-skills/skills", "codex/dev-skills/skills"];
 // The warning every one of these clauses carries, and the census key. It is not
