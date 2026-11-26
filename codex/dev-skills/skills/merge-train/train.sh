@@ -36,8 +36,8 @@
 #         mergeable= review= changes-requested= threads= ci= lanes= (how many
 #         lanes pass), one `passing=<identity>` line per passing lane, and
 #         checked= (a time to pass as `--since` next time).
-#         A rollup read right after a push is empty or partial, and green all
-#         the same. So keep the `passing=` lines of a full green run, and pass
+#         A rollup read right after a push is empty or partial, and a partial
+#         one can be all green. So keep the `passing=` lines of a full green run, and pass
 #         each as its own `--lane` when checking a later head: every one of
 #         them has to pass there, whatever else does.
 #         `--since` adds one line per top-level comment or submitted review
@@ -362,7 +362,7 @@ cmd_check() {
 	say "changes-requested=$F_CHANGES"
 	say "threads=$F_THREADS"
 	say "ci=$ci"
-	say "lanes=$(printf '%s\n' "$passing" | awk 'NF' | awk 'END { print NR }')"
+	say "lanes=$(printf '%s\n' "$passing" | awk 'NF { n++ } END { print n + 0 }')"
 	[ -z "$passing" ] || say "$passing"
 	[ -z "$missing" ] || say "$missing"
 	[ -z "$failing" ] || say "$failing"

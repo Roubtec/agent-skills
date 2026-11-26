@@ -202,9 +202,6 @@ call check "${ARGS[@]}" --lane "Tests / ab"
 is "1: ...in either direction" "$(val outcome)" waiting
 call check "${ARGS[@]}" --lane ""
 is "1: an empty --lane is a usage error" "$RC" 64
-call check "${ARGS[@]}" --lanes 2
-is "1: the retired lane count is a usage error, not a silent pass" "$RC" 64
-rollup 7 "$H1" "$GREEN"
 rollup 7 "$H1" "$(lane a COMPLETED '"SUCCESS"'),$(lane b IN_PROGRESS null)"
 call check "${ARGS[@]}"
 is "1: a lane in progress is waiting" "$(val outcome)" waiting

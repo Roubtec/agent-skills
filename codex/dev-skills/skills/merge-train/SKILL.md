@@ -104,6 +104,7 @@ Watch with a shell loop that polls `train.sh check --repo <owner>/<repo> --pr <N
 Right after a push the new head's rollup is empty or partial, and a partial one can be all green.
 So keep the `passing=` lines `check` printed for the PR's last full green run, and pass each as its own `--lane` on every check of a later head: a lane among them that has not shown yet makes the answer `waiting` with a `missing=` line, never `ready`.
 Leave `--lane` out only for a head whose full run you are reading for the first time.
+`survey` prints the count alone, and a watch that reports only outcome changes drops the lines, so before rebasing a PR that reads `ready`, run `check` on that head once and keep its `passing=` lines.
 `moved` means someone pushed: put that PR back under watch on its new head instead of rebasing or merging it.
 Give the loop a deadline of its own, because the shell tool's wait hands control back without stopping the command.
 When a call returns with the loop still running, resume that session instead of starting a second loop, and start a new one only after the last has exited.
