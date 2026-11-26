@@ -375,7 +375,7 @@ None of this discourages a dependent PR that deliberately targets a feature bran
 
 **An entry that will not publish still leaves its record.**
 `delegated-fix` reaches neither of `address-review`'s publication steps and writes nothing to any PR, so for an entry that ends without a publisher the disposition record is **yours** to leave, from the packet you already hold: every entry of a `no-push` batch, an entry blocked at the `review-cycle` round cap or holding a blocker, and a held descendant whose parent's block leaves it unpublished.
-Post it per `address-review` → "The durable disposition record" — one per PR, superseding your own prior record rather than appending a second unless the map is one you already know is incomplete, which that section posts beside the earlier record rather than over it, drafted replies and the ready-to-post Summary body verbatim, the cited tips stated as local-only.
+Post it per the `address-review` skill's `disposition-record.md`, in that skill's folder beside this one, read in full first — one per PR, superseding your own prior record rather than appending a second unless the map is one you already know is incomplete, which that file posts beside the earlier record rather than over it, drafted replies and the ready-to-post Summary body verbatim, the cited tips stated as local-only.
 An entry whose publisher *did* run needs nothing from you even when publication aborted: that subagent reaches step 8 and leaves the record itself, and a second one here would be the stack that rule exists to prevent.
 An entry with no packet — skip-and-recorded at setup, or failed before triage — has no map to record; it belongs in the hands-off blockers instead.
 
