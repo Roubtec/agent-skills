@@ -12,6 +12,13 @@ The run is hands-off after a short preflight, and the deliverable is the final r
 It leaves anything that needs a human call unmerged, including PRs with unresolved review threads.
 For addressing review threads use `address-review`/`address-reviews` instead, for restacking branches without merging use `rebase-stack`.
 
+The mechanical steps are in `train.sh`, beside this file: reading a PR's standing, the rebase, the leased push, and the merge with its checks.
+Run it by its absolute path; `--help` prints its full contract.
+Where the PRs are on a host other than github.com, write `--repo` as `<host>/<owner>/<repo>`.
+It prints `key=value` lines with `outcome=` first, exits 0 to proceed and 3 on anything else it read cleanly, and explains itself on stderr.
+Exit 1 is a failure with no `outcome=` line (the network, `gh`): retry it once, then treat it as unread.
+Do not reproduce its steps by hand, and never work past one of its stops by running the rebase, push or merge yourself.
+
 **Arguments:** `<PR numbers…> [pause-on-review] [notes]`: the PRs to merge, plus anything the user says about them in the same message (which ones are already failing, an overlapping effort elsewhere, a shared counter to watch).
 Carry every such note through the run.
 `pause-on-review` changes what a review arriving mid-run does (see *Open review items*).
@@ -19,18 +26,14 @@ Carry every such note through the run.
 ## Ground rules
 
 - **Merge mechanics.**
-  Fetch, rebase the PR onto the latest `origin/main`, push with `--force-with-lease=<branch>:<the exact sha you rebased from>`, then `gh pr merge <N> --merge --match-head-commit <pushed sha>`.
-  Every rebase the train runs passes `--no-update-refs --no-rebase-merges`, so the replay moves this one branch and stays flat whatever `rebase.updateRefs` and `rebase.rebaseMerges` say in the user's config.
-  The fetched `origin/<branch>` must be the `headRefOid` whose rollup you read, whether or not a rebase follows: if it is anything else, someone pushed, so put the PR back under watch instead of rebasing or merging it.
-  Never squash, never merge a PR that is not on the current `origin/main`, and never merge one whose base branch is not `main`: a merge into a parent PR's branch reports success and lands nothing on `main`.
-  Never bypass what the repository enforces (`--admin`, `bypass_rules`): a merge the rules refuse is a human call.
-  Leave `--delete-branch` off, because your worktree still holds the branch: the merge succeeds, the local delete fails, and the non-zero exit says nothing about the merge.
+  `train.sh rebase` brings the PR onto the latest tip of `main`, `train.sh push --expect <before>` publishes it under an exact lease, and `train.sh merge --head <pushed head>` merges it with a merge commit on exactly that head.
+  `merge` refuses a PR that is not open, has moved, is based on another branch, has open review items, or is behind `main`.
+  Never squash, and never bypass what the repository enforces (`--admin`, `bypass_rules`): a merge the rules refuse is a human call.
 - **One writer.**
   Rebase in a task worktree, never in the main checkout: `wt-enter merge-train-<N> <branch> origin/<branch>` where the helper is on PATH, plain `git worktree add` otherwise.
-  A local branch of the same name may be stale, so bring it to the PR head with `git -C <wt> reset --hard origin/<branch>`, but only when that discards nothing: the worktree is clean with no git operation in progress, and the local branch is an ancestor of the PR head (`git merge-base --is-ancestor <branch> origin/<branch>`), so the reset is a fast-forward.
-  A dirty or mid-operation worktree is someone's unfinished work, a branch that is not an ancestor holds history the PR head lacks, and a branch checked out somewhere else cannot be attached at all.
+  `train.sh rebase` brings a stale local branch up to the PR head only where that discards nothing.
+  It stops where the PR head is not the `--head` whose rollup you read (`moved`), on a dirty or mid-operation worktree (`dirty`), and on a local branch holding commits the PR head lacks (`local-ahead`, `divergent`); a branch checked out somewhere else cannot be attached at all.
   All of these are the user's to sort out: leave that PR unmerged and report it, rather than reset, detach or switch anything.
-  State-changing git runs as `git -C <abs path>` in one sequential call.
 - **Leave the user's calls to the user.**
   A conflict whose resolution changes behavior, or a red lane whose fix needs a product or money decision: leave that PR unmerged and say why in the report.
   Abort the rebase first, so the branch stays as the PR has it.
@@ -42,7 +45,7 @@ Carry every such note through the run.
   When `main` itself becomes broken, open a standalone fix PR, give bots time to comment on it (usually takes less time than CI does), address any actionable feedback using `address-review`, and merge it inside the train to pre-empt those CI failures from blocking the other PRs.
   If the runners themselves keep failing and nothing in the code is at fault, stop the train and report rather than burn the queue.
 - **Never merge a PR with open review items.**
-  These are unresolved review threads (`gh-review-threads <N>`) or a review requesting changes.
+  These are unresolved review threads or a review requesting changes: `outcome=review` from `train.sh check`.
   They are the maintainer's to settle, and merging over them makes follow-up churn.
   A user who lists such a PR has most likely missed the open items.
   Do not address them yourself on a listed PR.
@@ -54,21 +57,23 @@ Carry every such note through the run.
 
 ## Preflight, before the user leaves
 
-Survey every PR: open or draft, base branch, mergeable state, review decision, check results, open threads, the files it touches, and any migrations it adds.
-From that, work out and tell the user:
+Run `train.sh survey --repo <owner>/<repo> <PR numbers…>`.
+It prints one line per PR (its `check` outcome, base, `parent=`, head, mergeability, review decision, open threads, CI, passing lanes, file count) and a `shared=` line for each file two or more of them touch.
+Note each green PR's `lanes=`: that is the lane count of its full run, which `check --lanes` needs later.
+From that, and from the diffs where a `shared=` line or a migration calls for a look, work out and tell the user:
 
 - **Stacks.**
-  A PR based on another PR's branch waits for its parent to merge.
+  A PR with a `parent=` waits for that PR to merge.
   It then needs a rebase onto `main` and a **full** CI run: its checks ran against the parent's branch, and a pipeline may deliberately skip the expensive lanes on a stacked PR while its parent churns.
 - **Unblockers.**
   A fix PR that other PRs' red lanes depend on goes first, whatever its readiness rank.
   Recognize these from the failure logs: the same lane red on several PRs for one cause outside all of them.
 - **Ordering hazards.**
-  Migration timestamps (see *Ordering*), shared counters several PRs bump, generated artifacts several PRs regenerate.
+  Migration timestamps (see *Ordering*), and among the `shared=` files the counters several PRs bump and the generated artifacts several PRs regenerate.
 - **The plan:** order, which PRs you expect to merge without a fresh CI run, and what you will leave unmerged.
   A PR that is passing on its own will likely pass after rebase, so expect to merge it right after the rebase unless *Merge now or wait* says a fresh run is advisable.
 
-If any listed PR has open review items, name those PRs and their items, together with any PRs stacked on them.
+If any listed PR shows `outcome=review`, name those PRs and their items, together with any PRs stacked on them.
 Ask the user to choose: skip those PRs and merge the rest, or not start the entire train at all.
 This is the one question the preflight always asks when it applies.
 Lead with it, because the user will likely leave.
@@ -90,29 +95,30 @@ The user is not expected to unblock it and does not care about the exact order, 
 
 Check for open items twice for each PR: when you pick it up, and again just before the merge call, since a review may land while its CI runs.
 With `pause-on-review`, both checks cover every PR still on the list, because that mode stops on a review item on any of them.
-Both checks look for the open items the ground rule names, plus any top-level review or comment that arrived since you last looked at that PR.
-An unresolved thread or a review requesting changes always blocks; a top-level review or comment blocks only when it carries actionable feedback.
+Each check is `train.sh check --since <the checked= of your last check of that PR>`: `outcome=review` is the open items the ground rule names, and each `new=` line is a top-level review or comment that arrived since.
+An unresolved thread or a review requesting changes always blocks; read each `new=` item, which blocks only when it carries actionable feedback.
 
 ## The loop
 
-Watch with a shell loop that polls `gh pr view <N> --json state,baseRefName,headRefOid,statusCheckRollup` for the active PRs and exits on the first terminal transition: all checks complete, a new failure, a merge.
-Read the rollup by what it positively says.
-A `CheckRun` has settled once its `status` is `COMPLETED`, and is green when its `conclusion` is `SUCCESS`, `NEUTRAL` or `SKIPPED`; a `StatusContext` is green only when its `state` is `SUCCESS`.
-An in-progress `CheckRun` reports `conclusion: ""`, and right after a push the new head's rollup is empty or partial, so neither "nothing failed" nor "nothing pending" means green: require the rollup to describe the head you expect and to hold the lanes its last full run had.
+Watch with a shell loop that polls `train.sh check --repo <owner>/<repo> --pr <N> --head <the head you expect> --lanes <its full run's lane count>` for the active PRs and exits the first time an outcome changes.
+`check` reads the rollup by what it positively says: `ready` means every lane has settled on `SUCCESS`, `NEUTRAL` or `SKIPPED`, and an empty or partial rollup right after a push is `waiting`, never green.
+`moved` means someone pushed: put that PR back under watch on its new head instead of rebasing or merging it.
 Give the loop a deadline of its own, because the shell tool's wait hands control back without stopping the command.
 When a call returns with the loop still running, resume that session instead of starting a second loop, and start a new one only after the last has exited.
 Widen what counts as a transition if the silence was unexpected.
 Nothing wakes a finished turn, so keep waiting in this one until the train is done or stopped.
 React to each event:
 
-1. **A PR goes green.**
+1. **A PR goes green** (`outcome=ready`).
    Check for open review items, and skip or pause as *Open review items* says.
-   Rebase it onto `origin/main`, unless it already sits there.
+   Run `train.sh -C <worktree> rebase --repo <owner>/<repo> --pr <N> --head <the head check called ready>`.
+   `moved` means the PR head is no longer that one: put the PR back under watch on its new head, whose rollup is the one that counts.
+   On `conflict`, resolve it and `git -C <worktree> rebase --continue`, or `git -C <worktree> rebase --abort`, as the ground rules say; the head to push is then the worktree's `HEAD`.
    Decide whether it needs another CI run (*Merge now or wait*).
    If it does, push and put it back under watch: it returns to this step when that run is green.
-   Otherwise push, wait for GitHub to report it `MERGEABLE` (right after a push it briefly reports "not mergeable"), and merge.
+   Otherwise push (nothing to push on `current`) and run `train.sh merge --head <head>`, which waits out the moment after a push when GitHub reports "not mergeable".
 2. **A PR goes red.**
-   Read the failed job's log before re-running anything.
+   Read the failed job's log before re-running anything: each `lane=` line of `check` carries the lane's URL, and `ci.sh log --url <url>` and `ci.sh rerun --url <url>` read the failing log's tail and re-run the failed jobs (that `ci.sh` is the `address-review` skill's, in the folder beside this skill's).
    Classify the failure: flaky or infrastructure, the PR's own, or `main`'s.
    Then act as the ground rules say.
 3. **After every merge,** re-assess the remaining PRs.
@@ -122,8 +128,10 @@ React to each event:
 
 The cost of a fresh CI run is hours when runners are scarce, so do not spend one by reflex.
 A PR **merges right after its rebase** when all of these hold: its last full CI run was green, the rebase was clean, and nothing merged into `main` since that run's base touches the files or mechanisms the PR depends on.
-To find what landed since, compare the run's `createdAt` with the merges' `mergedAt`, then intersect `git diff --name-only <run base>..origin/main` with the PR's files, where the run base is `git merge-base <that run's head> origin/main`.
-This shortcut needs a repository that lets a not-yet-checked head merge: where branch protection requires checks on the pushed head, the merge call refuses, so wait for the run.
+`train.sh rebase` prints the evidence: `landed=` counts the files changed on `main` since the green run forked from it, and each `overlap=` line is one of them that the PR touches too.
+It takes the green run's head as `--head` unless told otherwise, so once you have rebased and pushed a PR without a full run going green on that push, pass `--green <the head its last full green run was on>` on every later rebase: without it the lines cover only what landed since the previous rebase, and an overlap that called for a run would read as gone.
+No `overlap=` line rules out the files; the mechanisms (a counter, a registry, a generated artifact that reads other files) are yours to judge from what landed.
+This shortcut needs a repository that lets a not-yet-checked head merge: where branch protection requires checks on the pushed head, `merge` answers `refused`, so wait for the run.
 
 A PR **gets a full CI run** when the rebase resolved a conflict in code, when it is a stacked child whose parent just merged, or when what landed since overlaps a risk class the repository reviews conservatively (for example money, auth, migrations, the state of sensitive documents).
 
@@ -143,22 +151,22 @@ First green wins, with three exceptions (if applicable for the given repository)
   A migration tool that applies out-of-order stamps (Prisma does) makes this a preference: interleaved migrations are only harder to roll back by hand.
   A tool that refuses them makes it a constraint: merge those PRs in stamp order, or re-stamp the later one as part of its rebase and give it a full CI run.
 
-If another PR (especially one not on the list) has merged while you were waiting, this is not necessarily a blocker.
-Use judgment whether to start rebasing on top of the new `origin/main` tip immediately, wait (bounded) for conditions to be favorable for continuing, or stop the train if continuing would waste CI resources or violate the repository's merge policies.
+If another PR (especially one not on the list) has merged while you were waiting, this is not necessarily a blocker: `merge` answers `behind`, and a rebase puts the PR back on the tip.
+Use judgment whether to start rebasing on top of the new tip immediately, wait (bounded) for conditions to be favorable for continuing, or stop the train if continuing would waste CI resources or violate the repository's merge policies.
 Other contributors may not be aware that a merge train is in flight, so use judgment on how to proceed in a way that balances efficiency and coordination.
 
 ### Stacked PRs and the merge API
 
-A PR that GitHub considers part of a stack refuses `gh pr merge` ("must be merged using the asynchronous merge REST API") and refuses a base change.
+A PR that GitHub considers part of a stack refuses an ordinary merge and a base change: `train.sh merge` answers `async-required`.
 That holds for the bottom PR, and for a child even after its parent merged and GitHub retargeted it to `main`.
 Merge through `PUT repos/{owner}/{repo}/pulls/<N>/merge-async` with `merge_method=merge`, `merge_action=direct_merge` and `sha=<pushed head>`.
 Then poll `GET …/pulls/<N>/merge-async/<uuid>` until `status` is `merged` or `failed`.
 For a stacked request the async merge "includes all open downstack pull requests", which is nothing extra for the bottom PR.
 So request it only for a PR with no open PR beneath it: on a child it would merge the parents too, whatever state they are in.
 
-After the parent merges, rebase the child with `git rebase --no-update-refs --no-rebase-merges --onto origin/main <parent's old tip> <child>`, so the parent's pre-rebase commits do not replay.
-The old tip is the parent's head from before you rebased it, so note it then.
-A child outside GitHub's own stacks keeps its parent's branch as base unless GitHub retargeted it when that branch was deleted: confirm `baseRefName` reads `main` before pushing, and set it with `gh pr edit <N> --base main` if not.
+After the parent merges, rebase the child with `train.sh rebase --from <parent's old tip>`, so the parent's pre-rebase commits do not replay.
+The old tip is the parent's head from before you rebased it (the `before=` of its rebase, or its head where that answered `current`), so note it then.
+A child outside GitHub's own stacks keeps its parent's branch as base unless GitHub retargeted it when that branch was deleted: `rebase` then answers `stacked` and prints the `gh pr edit <N> --base main` that retargets it.
 The child then needs its full CI run.
 
 ### Runner economy
