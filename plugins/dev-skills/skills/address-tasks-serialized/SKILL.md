@@ -90,69 +90,28 @@ A subagent that may need to verify something in a way that could change state is
 
 The implementer receives a focused, self-contained prompt and works autonomously on a single task.
 It is spawned **on its own**: wait for its completion notification — however the harness delivers it — before starting any other checkout-dependent agent (see the shared-working-tree rule in Architecture).
+The implementer is `review-cycle`'s Fixer on round 1, and how a Fixer works is `fixer-brief.md` in the `review-cycle` skill's folder, beside this skill's: standing where it was sent, reading the repository's agent-context files, the deviation protocol for a decision the task marks LOCKED, committing and validating at the stated tier, finishing inside its own turn with no peer review and no shared tracker of its own, and what it returns.
+The implementer reads that file rather than you restating it, and every rule in it binds here, later additions included.
 
 ### What to include in the implementer prompt
 
-Construct a prompt that contains:
+Open the prompt with the boundary line ("Subagent destroy boundary" above), then tell the implementer to read `<review-cycle>/fixer-brief.md` in full and carry it out, where `<review-cycle>` is the absolute path of the `review-cycle` skill's folder, which sits beside this skill's own, then give the facts of this task, which are all you compose:
 
 - **The full task file content** — paste it into the prompt.
   Do not assume the agent has prior context.
-- **The branch name** it should be working on, and instruction to verify it is on the correct branch.
-- **Instruction to read `AGENTS.md`** at the start for full project context and conventions.
+- **The working tree and the branch name** it should be working on, which it verifies before starting.
 - **Relevant upstream context** — if this task depends on a previous task in the batch, briefly describe what the previous task introduced so the implementer can build on it.
-- **Commit and validation instructions:**
-  - Commit at logical milestones, keeping each commit buildable when practical.
-  - **An absolute path for validation output**, which you allocate — namespaced by this task's number or created with `mktemp -d`, and outside the working tree the implementer commits from.
-    Any build or lint output that must land in a file goes there, never a fixed shared scratchpad name: one session's agents share that directory.
-    Never leave the choice to the implementer.
-- **Coordination instructions** — remind the implementer that it is not alone in the codebase, must not revert unrelated edits made by others, and should accommodate concurrent changes.
-- **Finish inside your own turn.**
-  Nothing resumes a subagent, so tell the implementer never to end its turn waiting for a notification or for a child it launched: it bounds and waits on anything it starts and reaps it before returning, leaving no process of its own running.
-  It launches no peer review of its own either — the loop's peer step is the sanctioned second opinion (see `review-cycle`).
-- **No shared task-tracker.**
-  Tell the implementer not to use the `TaskCreate`/`TaskUpdate`/`TaskList` tools.
-  A subagent's entries leak into the orchestrator's task view and linger there as stale, misleading items.
-  The implementer should track its own steps however it likes and surface progress only in its final report.
-- **Reporting instructions** — when done, report back with:
-  - A concise summary of what was implemented.
-  - Any decisions, tradeoffs, or deviations from the task description.
-  - Any uncertainties or areas that may need focused review.
-- **The `review-cycle` Fixer contract, whole** — the implementer is that cycle's Fixer on round 1, so every rule that skill states for a Fixer binds here, later additions included; the bullets above are this loop's deltas, not a closed list.
-  It carries the deviation protocol: where the task hands down a decision the maintainer LOCKED and the implementer must deliver something else, it reports what it delivered instead and the constraint that forced it rather than conforming the deviation away — report, don't correct; the maintainer ratifies it or asks for conformance.
-  It buys no slack meanwhile: completeness, tests, and regressions are graded exactly as strictly.
+- **The validation tier of this round**, per `review-cycle`'s two validation tiers: the round tier on an intermediate round, the delivery tier — the full applicable sanity set — on the state that concludes the task, before its PR.
+- **An absolute path for validation output**, which you allocate — namespaced by this task's number or created with `mktemp -d`, and outside the working tree the implementer commits from.
+  Any build or lint output that must land in a file goes there, never a fixed shared scratchpad name: one session's agents share that directory.
+  Never leave the choice to the implementer.
+- **This loop's own instructions, which the brief does not carry:** commit at logical milestones, keeping each commit buildable when practical; it is not alone in the codebase, so it must not revert unrelated edits made by others and should accommodate concurrent changes; it says which validation tier it ran; and its report adds any decisions, tradeoffs, deviations from the task description, and areas that may need focused review.
+- **On a fix-up round**, what `review-cycle` hands a Fixer: every finding verbatim as separately labeled blocks, and the deviations and open questions that still stand.
 
 ### What the implementer should NOT receive
 
 - The full batch context or other unrelated task files.
 - Review feedback from unrelated prior tasks.
-
-### Example implementer prompt structure
-
-```text
-You are implementing a single task on branch `feature/task-slug`.
-Verify you are on this branch before starting.
-
-Read `AGENTS.md` first for project conventions.
-
-## Task
-
-<full task file content pasted here>
-
-## Context
-
-<any relevant info about prior tasks this builds on>
-
-## Instructions
-
-- Implement the task according to its description and acceptance criteria.
-- Commit at logical milestones. Aim for one commit per logical unit of work.
-- Do not revert unrelated or concurrent edits. Accommodate changes made by others.
-- Finish inside this turn: do not end it waiting to be resumed, block on and reap anything you launch, and do not launch your own peer review.
-- Validate at the tier this round's brief states, per `review-cycle`'s two validation tiers: the round tier on an intermediate round, the delivery tier — the full applicable sanity set — on the state that concludes the task, before its PR. Say which you ran.
-- Any build or lint output that must land in a file goes to `<validation-output path allocated above>`, never anywhere else.
-- If a decision the task marks LOCKED is one you cannot deliver, report what you delivered instead and the constraint that forced it — do not conform it away.
-- When done, report: what you did, any decisions/tradeoffs, any uncertainties.
-```
 
 ## Reviewer Agent
 
@@ -162,50 +121,24 @@ It must be a **new** `Agent` invocation — a fresh-eyes agent with no implement
 Ignore any `SendMessage` continuation footer from earlier `Agent` results; this harness does not expose that tool.
 Spawn it only **after** the implementer's commits are on disk (see the shared-working-tree rule in Architecture).
 Wait for its result before advancing branches or starting the next task — the feedback loop must complete first.
+How a Reviewer works is `reviewer-brief.md` in the `review-cycle` skill's folder, beside this skill's: whole touched files rather than diffs or commit messages, the build and type-check first at the stated tier, the acceptance criteria and then the quality pass (logic, error handling, edge cases, dead code, consistency, duplication, type safety), the empty-diff flag, editing nothing, no shared tracker, finishing inside its own turn, and **Pass** or a numbered **Issues** list.
+The reviewer reads that file rather than you restating it, and every rule in it binds here, later additions included.
 
 ### What to include in the reviewer prompt
 
-- **The full task file content** — same source of truth the implementer received.
-- **The PR base branch name** (the branch this task will be merged into).
-  The reviewer uses this to scope its review by listing files touched on the task branch versus the base.
-  If the orchestrator omits this, the reviewer should fall back to `main` and note the fallback in its report.
-- **Instruction to read the relevant areas of the codebase** and check each acceptance criterion against the actual code.
-- **A note that the implementation is already committed on the current branch** — the reviewer must read the actual files, and must NOT conclude "no implementation" without first confirming the diff is genuinely empty (an empty diff at this stage is far more likely an orchestration error than real absence; the reviewer should say so rather than spend its budget reviewing nothing).
-- **Instruction to perform a code quality pass** (see dimensions below) orthogonal to the criteria check.
-- **Scoping guidance** — the reviewer may run `git diff --name-only <base>...HEAD` to identify the set of touched files and prioritize quality review there.
-  It must still read each touched file in full (not just the diff) and may follow references into untouched files when needed to evaluate consistency or call sites.
+Open the prompt with the boundary line, then tell the reviewer to read `<review-cycle>/reviewer-brief.md` in full and carry it out, where `<review-cycle>` is the absolute path of the `review-cycle` skill's folder, which sits beside this skill's own, then give the facts of this review:
+
+- **The full task file content** — same source of truth the implementer received, as a **code** artifact.
+- **The current branch and the PR base branch name** (the branch this task will be merged into), which is what `git diff --name-only <base>...HEAD` scopes the touched files against.
+  Tell it that with no base named it falls back to `main` and notes the fallback in its report.
+- **That the implementation is already committed on the current branch**, so an empty diff at this stage is far more likely an orchestration error than real absence.
+- **The validation tier of this round.**
 - **An absolute path for validation output**, which you allocate — namespaced by this task's number or created with `mktemp -d`.
   Any build or check output that must land in a file goes there, never a fixed shared scratchpad name: one session's agents share that directory.
   This batch runs serially, but the session around it does not.
   Never leave the choice to the reviewer.
-- **Reporting format:**
-  - **Pass** — all acceptance criteria are met, build passes, and no material quality issues found.
-    State this clearly.
-  - **Issues** — a numbered list of specific, actionable findings.
-    Each finding must include: the category (criteria gap vs. quality), where in the code the gap is, and what needs to change.
-- **Instruction to be strict but fair** — flag genuine gaps and functional problems, not style preferences or minor nitpicks.
-- **Instruction NOT to edit any files** — the reviewer only reads and reports.
-  It must not create, update, or delete follow-up task files; any suggested follow-up work belongs in the review report only.
-- **The `review-cycle` Reviewer contract, whole** — every rule that skill states for a Reviewer binds here, later additions included; the bullets above are this loop's deltas, not a closed list.
-  It carries the lifecycle rule this prompt states outright: nothing resumes a subagent, so the reviewer never ends its turn waiting for a notification, a callback, or a child it launched, it bounds and reaps anything it starts before reporting, and it launches no review of its own beside the loop's sanctioned peer step.
-- **Instruction not to use the shared task-tracker** — like the implementer, tell the reviewer not to use the `TaskCreate`/`TaskUpdate`/`TaskList` tools; a subagent's task entries bleed into the orchestrator's view.
-
-#### Code quality dimensions to check
-
-These are checked **in addition to** the acceptance criteria, not instead of them.
-
-- **Logic correctness** — control flow, conditionals, and branching produce the right outcomes.
-  Look for off-by-one errors, inverted conditions, incorrect operator precedence, or logic that silently produces wrong results.
-- **Error handling** — errors are caught where they can occur, propagated with meaningful context, and never silently swallowed.
-  Return types and thrown types are accurate.
-- **Edge cases** — null/undefined inputs, empty collections, zero/negative numbers, and boundary values are handled gracefully or explicitly rejected with a clear error.
-- **Dead code and unreachable paths** — branches, parameters, or exported symbols that can never be reached or used should be flagged.
-  Defensive code for conditions that cannot occur should be questioned.
-- **Code consistency** — naming, patterns, and idioms are consistent with the surrounding codebase.
-  New abstractions follow the same conventions as existing ones.
-- **Avoid code duplication** — Reused patterns should ideally be implemented once and shared rather than duplicated (if practical) to reduce maintenance overhead and improve readability.
-- **Type safety** — types are precise and not widened unnecessarily.
-  Casts, `any`, or `as unknown` that could hide real type errors should be flagged.
+- **This loop's own instructions, which the brief does not carry:** it may follow references from touched files into untouched ones to judge consistency and call sites; it launches no review of its own beside the loop's sanctioned peer step; it must not create, update, or delete follow-up task files, and any suggested follow-up work belongs in the review report only; and each issue names its category (criteria gap, or which quality dimension), where in the code it is, and what needs to change.
+- **Whatever the round has to adjudicate**, as `review-cycle` hands it to a Reviewer: declines, retired questions, and deviations still standing — each with the implementer's stated claim and nothing more of its report, the one exception to the list below.
 
 ### What the reviewer should NOT receive
 
@@ -213,42 +146,6 @@ These are checked **in addition to** the acceptance criteria, not instead of the
 - Instruction to read commit messages or diffs.
   The reviewer may use git to list touched files (for scoping), but it should not read commit messages or `git diff` output, since both anchor the reviewer to the implementer's intent and to a line-by-line view that hides issues spanning the boundary between changed and unchanged code.
   Read whole files instead.
-
-### Example reviewer prompt structure
-
-```text
-You are reviewing a task implementation. You have no prior knowledge of how it was built.
-Your job is to evaluate the current codebase on two orthogonal dimensions:
-1. Acceptance criteria compliance — does the code do what was specified?
-2. Implementation quality — is the code correct, robust, and consistent?
-
-The implementation is already committed on the current branch — read the actual files. Do not
-report "no implementation": if `git diff --name-only <base-branch>...HEAD` looks empty, say so as a
-flag to the orchestrator (it signals a likely race or wrong branch) rather than reviewing nothing.
-
-DO NOT edit, create, or delete any files — the validation-output path named below is the sole exception. Only read, search, and run validation commands.
-Do not write follow-up task files; put any suggested follow-up work in your review report only.
-
-The PR base branch for this task is `<base-branch>`. The current branch is `<task-branch>`.
-
-## Task
-
-<full task file content pasted here>
-
-## Instructions
-
-- Run the build and type-check before checking anything else, at the validation tier this round states. A failure at that tier is an automatic blocker; a heavier suite the stated tier did not run is not.
-- Any build or check output that must land in a file goes to `<validation-output path allocated above>`, never anywhere else.
-- Identify the touched files with `git diff --name-only <base-branch>...HEAD`. Use this list to scope your code quality review. If no base branch was provided above, fall back to `main` and mention the fallback in your report.
-- Do NOT read commit messages (`git log`) and do NOT read diffs (`git diff` with content); read each touched file in full instead. You may follow references from touched files into untouched files when needed to evaluate consistency, call sites, or downstream effects.
-- Read the relevant areas of the codebase and check each acceptance criterion.
-- Perform a code quality pass on the touched files:
-  <paste the "Code quality dimensions to check" list from above>
-- Report either:
-  - **Pass**: all criteria met, build passes, no material quality issues.
-  - **Issues**: numbered list. For each: category (criteria gap / logic / error-handling / edge-case / dead-code / consistency / duplication / types), file and line, what is wrong, and what should change instead.
-- Be strict but fair. Flag real gaps and functional problems. Do not flag style preferences or superficial nitpicks.
-```
 
 ## Execution Model
 
