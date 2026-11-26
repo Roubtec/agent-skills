@@ -40,7 +40,7 @@ Trust yourself to extract intent, then sanity-check against the PR.
 | `peer-opinions=off` | Disable the best-effort `claude` second opinion for this run. By default it runs beside every fresh Reviewer round while the peer remains available. |
 | `ping-codex` | After a push that advances the PR branch, post a dedicated top-level `@codex review` comment to summon a fresh review round. |
 | `ping-claude` | After a push that advances the PR branch, post a dedicated top-level `@claude review` comment. |
-| `ping-copilot` | After a push that advances the PR branch, request a fresh Copilot review via `gh pr edit <PR#> --repo <owner>/<repo> --add-reviewer @copilot` (the canonical CLI request; needs gh ≥ 2.88.0) — **never** an `@copilot review` comment, which drives Copilot's coding agent (it can start editing the branch) rather than its reviewer. |
+| `ping-copilot` | After a push that advances the PR branch, request a fresh Copilot review (a reviewer request; needs gh ≥ 2.88.0) — **never** an `@copilot review` comment, which drives Copilot's coding agent (it can start editing the branch) rather than its reviewer. |
 | `ping-contributing` | **The default** — a bare run behaves exactly as if you passed this. As a **modifier** on the ping set: re-ping a bot only if it **brought a new finding this round.** Combined with explicit `ping-codex`/`ping-claude`/`ping-copilot`, it filters that named set down to the contributors; supplied **alone** (or as the bare default), it falls back to every known bot (codex/claude/copilot) that reviewed this round. *Brought a new finding* = authored ≥1 thread this round that surfaces a real concern not raised before on this PR (typically `actionable-fixed`, or a genuinely new `follow-up-task`/`already-addressed`); it does **not** count a `push-back` (the comment was wrong), a re-raise of a concern already captured in a committed task, or a bot re-arguing a push-back it already lost — **unless** that thread carries a genuinely new angle this round. |
 
 ### Flag interactions
@@ -54,7 +54,7 @@ Ping the named bot(s) if any were named (filtered to contributors when `ping-con
   If this run produces nothing new to push — every disposition was already-addressed or push-back, or the branch was already up to date — **skip the pings.**
 - **`ping-contributing` prunes the ping set per this round's triage** (its table row defines what counts as a new finding).
   It never adds a bot you did not name, and a round in which no candidate bot brought a new finding pings no bot — even while the push itself advanced (e.g. you fixed a human's thread).
-- **Multiple pings present** → perform each as its own dedicated action (a separate comment per named bot; the `gh pr edit --add-reviewer @copilot` request for Copilot), never a single comment mentioning several.
+- **Multiple pings present** → each is its own dedicated action (a separate comment per named bot; a reviewer request for Copilot), never a single comment mentioning several, which is how `ping.sh` makes them.
   They are also separate from the Summary comment.
 - **`hands-off` + the default rebase** is the ordinary unattended combination now that rebasing is not opt-in, and its sharp edge is a decision nobody can be consulted about: whatever halts the delegated rebase — step 2's "A halt is a stop, not a guess" defines the cases, and this bullet does not restate them — leaves the tree clean and idle, and the run stops with that open question rather than guessing (see "Hands-off mode").
   `no-rebase` is how an unattended run avoids the edge entirely.
@@ -276,8 +276,9 @@ If either rebase changed the branch tip, expect the eventual push to be a force-
 
 Fetch the **unresolved** review threads and enough context to judge them (see "GitHub API recipes"):
 
-- **Review threads** (inline comments): fetch every **unresolved** thread exactly per "GitHub API recipes" below — prefer the `gh-review-threads` helper when it is on PATH, else run the GraphQL query by hand as fresh single-shot per-page queries — keep only `isResolved == false`, and **validate every response before acting** as the recipes specify, failing closed on any identity, shape, or scope failure.
-  For each thread, capture the thread `id`, `path`, `line`, `isOutdated`, and every comment's `databaseId`, author login/type, `body`, `diffHunk`, and `url`.
+- **Review threads** (inline comments): run `gh-review-threads.sh --repo <owner>/<repo> <N>` — beside this file, run by absolute path — which prints every **unresolved** thread as a JSON array: each thread's `id`, `path`, `line`, `isOutdated`, and every comment's `databaseId`, author login/type, `body`, `diffHunk`, and `url`.
+  It pages by hand and checks that every response names this repository and PR and that every comment `url` belongs to this PR, because a paginated query run beside other `gh` calls has returned **another PR's** threads.
+  Exit 3 with nothing on stdout is a response that failed that check twice: stop, and never reply to or resolve a thread from a list fetched some other way.
 - **CI on the PR head:** run `ci.sh lanes --repo <owner>/<repo> --pr <N>` — beside this file, run by absolute path, and answering like the other helpers.
   It reads the head's status rollup the way README's *Contributing* reads it — by `__typename`, terminal values tested positively — and prints a `lane=` line for every instance whose verdict is not `SUCCESS`/`NEUTRAL`/`SKIPPED`: its identity, its kind, its verdict and its details URL.
   Every such lane is a review item too, gathered with that identity — `<workflow> / <job>` for a GitHub Actions check run, `<app slug> / <check name>` for another app's, so two apps emitting one check name stay two lanes, and the `context` of a commit status; an identity printed more than once, one workflow fired by several events on the head, holds one lane there, failing while any instance is.
@@ -290,7 +291,7 @@ Fetch the **unresolved** review threads and enough context to judge them (see "G
   They are not automatically actionable because they have no resolved/unresolved state; include a standalone item only when the maintainer explicitly identifies it as outstanding in the request or discussion — or when a prior disposition record already holds a standalone disposition for it, which is an earlier run having gathered it — by the request that identified it or as a misfired finding that qualified on its own — and is what makes that entry replayable at all ("Replaying a record").
   **One more source qualifies on its own: a bot reviewer that misfired and posted findings into a top-level review summary or issue comment instead of threads.**
   One route per comment, never both: such a comment is never taken whole under the rule above, even where the maintainer names it — it is split into per-finding items here, the maintainer's naming settling that its findings are taken rather than re-judged by the freshness test below — since a whole-comment item on the url alone beside per-finding items on the url plus ordinal would let one finding be addressed twice, or contradictorily.
-  Such a finding cannot be replied to or resolved, but it is still the review this run was summoned to address, so take each one as a standalone item where it is **fresh and applicable** — all of: the review's `commit_id` — read from the REST review object, `gh api --paginate repos/<owner>/<repo>/pulls/<N>/reviews`, which also carries the `html_url` permalink and the `user.type` that the Summary comment and the disposition record need; `gh pr view --json reviews` names the commit `commit.oid` and carries neither, so a test written against `commit_id` there matches nothing and misfiles every such finding as stale — or for an issue comment the head its body names (a bot usually states the commit it reviewed; one naming no head is the ambiguous case below, and `created_at` cannot stand in for it: a review begun against the previous head lands after the push that replaced it and still describes the old code), is the current head, so it was written against the code you are addressing; no thread on this PR, resolved or unresolved, already raises it — a comparison that needs the resolved threads too, so fetch them for it alone (`gh-review-threads --all`, or the GraphQL query without dropping `isResolved == true`) while the work items stay the unresolved set gathered above, since a finding an earlier round already closed as a thread is exactly what this excludes; no maintainer reply dismisses it and the review's own `state` is not `DISMISSED` — a review dismissed through GitHub's UI keeps its body, its `commit_id` and the code it names, so nothing else here trips on it, and that dismissal is the maintainer discarding every finding in it; and the code it names still exists on the branch.
+  Such a finding cannot be replied to or resolved, but it is still the review this run was summoned to address, so take each one as a standalone item where it is **fresh and applicable** — all of: the review's `commit_id` — read from the REST review object, `gh api --paginate repos/<owner>/<repo>/pulls/<N>/reviews`, which also carries the `html_url` permalink and the `user.type` that the Summary comment and the disposition record need; `gh pr view --json reviews` names the commit `commit.oid` and carries neither, so a test written against `commit_id` there matches nothing and misfiles every such finding as stale — or for an issue comment the head its body names (a bot usually states the commit it reviewed; one naming no head is the ambiguous case below, and `created_at` cannot stand in for it: a review begun against the previous head lands after the push that replaced it and still describes the old code), is the current head, so it was written against the code you are addressing; no thread on this PR, resolved or unresolved, already raises it — a comparison that needs the resolved threads too, so fetch them for it alone (`gh-review-threads.sh --all`) while the work items stay the unresolved set gathered above, since a finding an earlier round already closed as a thread is exactly what this excludes; no maintainer reply dismisses it and the review's own `state` is not `DISMISSED` — a review dismissed through GitHub's UI keeps its body, its `commit_id` and the code it names, so nothing else here trips on it, and that dismissal is the maintainer discarding every finding in it; and the code it names still exists on the branch.
   A finding failing any of those is stale context and stays out.
   Where it is only ambiguous which of the bot's comments are fresh, take none and say so in the Summary comment — or in step 8's report where the run ends as the terminal no-op below, which posts none — rather than re-addressing a round that is done.
   Its disposition rides the Summary comment alone, per step 7, and its identity is the comment's permalink **plus its ordinal within that comment** (`<html_url>`, finding N of M, counted in the order the body presents them): every finding one body holds shares the one permalink, so an identity of the url alone could carry only one of them into the disposition record and would collapse the rest.
@@ -447,16 +448,11 @@ Publication runs in the working location: the re-check, the resolved push remote
    Structure: what was fixed (with proactive same-pattern fixes called out), a **prominent "Pushed back — please re-examine" section** for every push-back with its rationale, a **"Follow-up tasks" section** listing each item with its committed task file (explicitly flag deferred placement and flag agent-proposed follow-ups for confirmation), a **"Top-level findings"** section for every standalone item taken from a bot's misfired top-level comment (step 3), each with its disposition and the permalink of the comment it came from, since no thread carries the reply — a **"CI"** section where step 3 gathered a failing lane or a replayed record carried one — each lane with the cause found and its disposition (fixed, re-run as an evidenced flake, or left for the maintainer's choice) — any ambiguous/skipped or newly-arrived items still needing a decision, and (in hands-off runs) every automatic low-stakes decision and every item skipped for lack of feedback.
    In this comment, avoid bare `@codex`/`@claude`/`@copilot` mentions (write "codex"/"claude"/"copilot" plain) so only the dedicated ping comments below trigger a review.
 6. **Pings** — only after the push and summary succeeded, **and only when the push actually advanced the branch** (skip all pings on an "Everything up-to-date" no-op push, even when `ping-*` was supplied).
-   `ping-codex` → a dedicated comment whose body is `@codex review`; `ping-claude` → a dedicated comment whose body is `@claude review` — both posted with `gh pr comment <PR#> --repo <owner>/<repo>`; `ping-copilot` → `gh pr edit <PR#> --repo <owner>/<repo> --add-reviewer @copilot`, never an `@copilot review` comment (its table row says why).
-   **Guard first:** check `gh --version` against the `ping-copilot` row's gh floor; if the request errors on an older `gh`, **skip the Copilot request without failing the run** — the push and summary already succeeded — and report that Copilot was not summoned (upgrade `gh`, or re-request from the PR's web reviewer menu).
-   **Confirm the request from the timeline, never from `gh pr view --json reviewRequests`:** that GraphQL-backed field reads back empty on a request that succeeded, and REST `gh api repos/<owner>/<repo>/pulls/NUMBER/requested_reviewers` lists the request only while it is still pending, so it can confirm one but never refute one — the durable evidence is a `review_requested` event in `gh api --paginate repos/<owner>/<repo>/issues/NUMBER/timeline`.
-   Match that event to *this* request by identity: a repeatedly reviewed PR already carries older `review_requested` events for the same reviewer, so snapshot the `id`s of the events naming the intended reviewer *before* issuing the request, and afterwards require one that is not in that snapshot.
-   Compare by event id, never against your own clock.
-   Paginate **both** reads: the timeline is oldest-first and pages at 30.
-   If no unseen event appears, record that request as unconfirmed and carry on with any pings that remain — do not fail the run, and do not issue this one again: the timeline is eventually consistent.
-   An empty `reviewRequests` read is not a failed request — do not re-issue on the strength of it.
+   Run `ping.sh --repo <owner>/<repo> --pr <N> <the reviewers to ping>` — beside this file, run by absolute path — naming `codex`, `claude` and `copilot` as the ping set holds them.
+   It makes each ping as its own dedicated action (an `@codex review` or `@claude review` comment; a reviewer request for Copilot, never an `@copilot review` comment) and prints one line per reviewer: `pinged=`, `unconfirmed=`, `skipped=` or `failed=`.
+   Anything but `pinged=` (exit 3, `outcome=partial`) never fails the run — the push and summary already succeeded — so report it as the line gives it and carry on: `unconfirmed=` as requested but unconfirmed, `skipped=` and `failed=` as not summoned, with the reason.
+   Never issue an `unconfirmed` Copilot request again: the helper confirms it from the PR's timeline, which is eventually consistent, and a second request is a second review.
    When `ping-contributing` is in effect — including on a bare default run — determine which bots brought a new finding this round (its table row defines what counts) and ping only those; note each skipped bot in the summary.
-   If more than one bot remains, perform each as its own dedicated action.
 
 ### Step 8 — Final report
 
@@ -624,74 +620,24 @@ Reach the orchestrator if you can, but otherwise drive to a best-effort completi
 For GraphQL, pass real values — the `<owner>`/`<repo>` of the PR's own URL.
 Qualify every PR-scoped call with the `<owner>/<repo>` of the PR's own URL (`repos/<owner>/<repo>/…`, `--repo <owner>/<repo>`) rather than letting it default to whatever repository the directory resolves to.
 
-**List unresolved review threads** (id for resolve, comment `databaseId` for replies).
-
-**Primary — run the GraphQL query by hand.**
-Single-shot query — do **not** use `--paginate` here: run concurrently with other `gh` GraphQL calls (e.g. an `address-reviews` fan-out), `gh api graphql --paginate` has returned **another PR's** review threads, which unguarded would misfile replies/resolves onto the wrong PR.
-One page covers most PRs (`totalCount` ≤ 100); when `reviewThreads.pageInfo.hasNextPage` is true, fetch the next page as a fresh single-shot call passing the returned `endCursor` via `-F after=CURSOR`, and likewise fetch a thread's remaining comments when its nested `comments.pageInfo.hasNextPage` is true — always before triage:
-
-```sh
-gh api graphql -f query='
-query($owner:String!,$repo:String!,$pr:Int!,$after:String){
-  repository(owner:$owner,name:$repo){
-    nameWithOwner
-    pullRequest(number:$pr){
-      number url
-      reviewThreads(first:100,after:$after){ totalCount nodes{
-        id isResolved isOutdated path line
-        comments(first:100){
-          nodes{ databaseId author{ login __typename } body diffHunk url }
-          pageInfo{ hasNextPage endCursor }
-        }
-      } pageInfo{ hasNextPage endCursor }}
-    }
-  }
-}' -F owner=OWNER -F repo=REPO -F pr=NUMBER   # for pages after the first, add: -F after=CURSOR
-```
-
-**Optional accelerator — if `gh-review-threads` is available on PATH** (`command -v gh-review-threads`), prefer it: it encodes the query above plus the whole validation contract below (fresh single-shot per-page pagination, nested comment fetch-up, identity/shape/scope checks), retrying once and then failing closed with exit code `3` and nothing on stdout when validation keeps failing; ordinary `gh` API failures remain ordinary fatal errors.
-`gh-review-threads <PR#>` prints the unresolved threads as a JSON array on stdout — each thread with `id isResolved isOutdated path line` and `comments[]` (`databaseId`, `author { login __typename }`, `body`, `diffHunk`, `url`); add `--all` to include resolved threads.
-Qualify it like every call here — `--repo <owner>/<repo>` from the PR's own URL.
-
-Outside powbox, Codex users can copy `plugins/dev-skills/bin/gh-review-threads` onto their PATH.
-
-```sh
-gh-review-threads --repo <owner>/<repo> NUMBER | jq '...'   # unresolved threads, scope-checked
-gh-review-threads --all --repo <owner>/<repo> NUMBER        # include resolved threads too
-```
-
-**Validate identity, shape, pagination, and scope before acting** (the helper, where used, does this for you; this governs the hand-run recipe): on every page, compare `repository.nameWithOwner` to `OWNER/REPO` case-insensitively and `pullRequest.number` to `NUMBER` exactly before inspecting comments; this positive identity check catches crossed responses even when there are zero comments.
-Require `reviewThreads.nodes` and every comment `nodes` value to be arrays, every `hasNextPage` to be a JSON boolean, and every cursor promised by a true value to be a non-empty string.
-Then require every returned comment `url` to match the exact repo-qualified PR path for the PR you are addressing, for example `https://github.com/OWNER/REPO/pull/NUMBER#...`.
-Implement the URL check as a boundary-safe match on `OWNER/REPO` plus `/pull/NUMBER` followed by `#`, `/`, `?`, or end; do not use a plain substring check, because `/pull/12` also appears inside `/pull/123`.
-An identity mismatch, malformed thread/comment shape or pagination metadata, comment-URL extraction failure, or URL mismatch means the response is untrusted — discard the entire result, retry once with a fresh single-shot query, and if it repeats fail closed; never reply to or resolve a thread from an unvalidated response.
-
 **Reply to a review comment** (REST, threads the reply under the original):
 
 ```sh
 gh api --method POST repos/<owner>/<repo>/pulls/NUMBER/comments/COMMENT_DATABASE_ID/replies -f body='Fixed in <sha>: ...'
 ```
 
-**Resolve a thread** (GraphQL, using the thread `id` from the query above).
-This mutation takes a global node id and has no repository argument to qualify, so what qualifies it is that id's **provenance**: it comes from the thread list above, whose scope check already required every comment `url` to name this PR in this repository.
+**Resolve a thread** (GraphQL, using the thread `id` that `gh-review-threads.sh` printed).
+This mutation takes a global node id and has no repository argument to qualify, so what qualifies it is that id's **provenance**: it comes from that thread list, whose scope check already required every comment `url` to name this PR in this repository.
 So pass an id that list gave you and never one re-derived in some other way — a thread id fetched without that check is a thread resolved in whatever repository the working location answers for:
 
 ```sh
 gh api graphql -f query='mutation($id:ID!){ resolveReviewThread(input:{threadId:$id}){ thread{ isResolved } } }' -F id=THREAD_NODE_ID
 ```
 
-**Top-level comments** (summary and codex/claude pings):
+**Top-level comment** (the summary; the pings are `ping.sh`'s):
 
 ```sh
 gh pr comment NUMBER --repo <owner>/<repo> --body '...'        # Summary of Review Fixes
-gh pr comment NUMBER --repo <owner>/<repo> --body '@codex review'
-gh pr comment NUMBER --repo <owner>/<repo> --body '@claude review'
-```
-
-**Request a Copilot review** — this request, never an `@copilot review` comment (the `ping-copilot` table row says why and carries the gh version floor):
-
-```sh
-gh pr edit NUMBER --repo <owner>/<repo> --add-reviewer @copilot
 ```
 
 **Read context:** `gh pr view NUMBER --repo <owner>/<repo> --json reviews,comments,headRefName,headRefOid,isCrossRepository,baseRefName,url,state` and `gh api --paginate repos/<owner>/<repo>/issues/NUMBER/comments`.

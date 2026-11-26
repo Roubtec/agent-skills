@@ -148,6 +148,10 @@ const prBranchHelper = readFileSync(
   join(here, "..", "plugins", "dev-skills", "skills", "address-review", "pr-branch.sh"),
   "utf8",
 );
+const pingHelper = readFileSync(
+  join(here, "..", "plugins", "dev-skills", "skills", "address-review", "ping.sh"),
+  "utf8",
+);
 const prBranchHelperTest = readFileSync(join(here, "test-address-review-pr-branch.sh"), "utf8");
 // The disposition record's header is worded by a second bundled script, so the
 // checks that held the skill's prose to the workflow's record brief now read
@@ -1945,22 +1949,24 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     (abortedExample.match(/`push not confirmed[^`]*`/) || ["no example for this stop"])[0],
   );
 
-  // The reviewer request, whose confirmation the brief gave no instruction for at
-  // all: the read that looks authoritative is empty on a request that succeeded,
-  // so an agent left to its own devices re-issues a request that landed. Read
-  // from the pings step, and only under the flag that orders the request.
+  // The pings, which the brief hands to `address-review-ping` rather than
+  // describe: the Copilot request's confirmation in particular is a read that
+  // looks authoritative and is empty on a request that succeeded, so an agent
+  // left to its own devices re-issues one that landed. The brief names the
+  // command and how to record its answers; the script is what confirms, so the
+  // clauses that used to be prose here are pinned on the script.
   const step6 = brief.slice(brief.indexOf("6. Pings"));
   const confirmation = {
-    "confirms from the timeline": /`review_requested` event in `gh api --paginate/.test(step6),
-    "refuses the GraphQL read": /never from `gh pr view --json reviewRequests`/.test(step6) && /reads back empty on a request that succeeded/.test(step6),
-    "says REST can confirm but not refute": /can confirm a request but never refute one/.test(step6),
-    "matches by snapshot rather than by clock":
-      /Snapshot the `id`s of the events naming that reviewer BEFORE issuing the request/.test(step6) &&
-      /require one that is NOT in that snapshot/.test(step6) &&
-      /matching by event id rather than against your own clock/.test(step6),
-    "paginates both reads": /paginate BOTH reads/.test(step6),
-    "an unconfirmed request neither fails nor re-issues":
-      /do not fail publication, and do NOT issue the request again/.test(step6) && /requested, unconfirmed/.test(step6),
+    "runs the ping script on the PR, in its repository, for the flagged reviewer": /`address-review-ping --repo <owner>\/<repo> --pr \d+ copilot`/.test(step6),
+    "says what to record where the shell cannot find the script": /where the shell cannot find it, record 'ping helper not found' in `pings`, keep `published: true`, and post no ping by hand/.test(step6),
+    "forbids the @copilot comment": /never an `@copilot review` comment/.test(step6),
+    "leaves posting and confirming to the script": /Post no ping any other way, and do not confirm the Copilot request yourself/.test(step6),
+    "records an unconfirmed request and a skipped one": /`unconfirmed=copilot` as 'copilot: requested, unconfirmed'/.test(step6) && /`skipped=copilot` as 'copilot: skipped \(gh too old\)'/.test(step6),
+    "an unconfirmed request neither fails nor re-issues": /do not fail publication, and do NOT issue an unconfirmed request again/.test(step6),
+    "the script requests a review rather than commenting": pingHelper.includes('gh pr edit "$PR" --repo "$REPO" --add-reviewer @copilot'),
+    "the script confirms from the timeline's review_requested events": /issues\/\$PR\/timeline/.test(pingHelper) && pingHelper.includes('select(.event == "review_requested")'),
+    "the script matches by snapshot rather than by clock": /before="\$\(copilot_events\)"/.test(pingHelper) && /!\(\$0 in seen\)/.test(pingHelper),
+    "the script paginates the timeline": /--paginate "repos\/\$SLUG\/issues\/\$PR\/timeline"/.test(pingHelper),
   };
   const confirmationMissing = Object.entries(confirmation).filter(([, ok]) => !ok).map(([what]) => what);
   check(
@@ -2083,14 +2089,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     ],
     [
       "the reviewer-request confirmation",
-      "**Confirm the request from the timeline, never from `gh pr view --json reviewRequests`:**",
-      [
-        /the durable evidence is a `review_requested` event/,
-        /snapshot the `id`s of the events naming the intended reviewer/,
-        /Compare by event id, never against your own clock/,
-        /Paginate \*\*both\*\* reads/,
-        /do not fail the run, and do not issue this one again/,
-      ],
+      "Never issue an `unconfirmed` Copilot request again:",
+      [/the helper confirms it from the PR's timeline, which is eventually consistent/, /a second request is a second review/],
     ],
   ];
   const missing = [];
@@ -5148,7 +5148,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // agent that reads THIS text. Both halves are asserted, and the negative one
   // is the point — a re-introduced `{owner}`/`{repo}` placeholder or a bare
   // `gh pr comment` fails here rather than passing on the recipes' prose.
-  // Every ping flag is set so the arms that carry three of these calls render.
+  // Every ping flag is set so step 6 names all three reviewers to the ping
+  // script, which makes those calls itself and qualifies them the same way.
   const qualifiedPub = publishPrompt(
     gathered({ reconcile: { outcome: "work" } }),
     [],
@@ -5173,15 +5174,10 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /has no repository argument to qualify, so what qualifies it is the id's PROVENANCE/.test(qualifiedPub) &&
       /never re-fetch or re-derive a thread id in your own turn/.test(qualifiedPub),
     "step 5's Summary comment": /gh pr comment 42 --repo <owner>\/<repo>/.test(qualifiedPub),
-    "step 6's codex and claude pings, each naming the command it posts with":
-      (qualifiedPub.match(/gh pr comment <PR#> --repo <owner>\/<repo>/g) || []).length === 2,
-    "step 6's Copilot request and both of its timeline reads":
-      /gh pr edit <PR#> --repo <owner>\/<repo> --add-reviewer @copilot/.test(qualifiedPub) &&
-      /repos\/<owner>\/<repo>\/pulls\/<PR#>\/requested_reviewers/.test(qualifiedPub) &&
-      /repos\/<owner>\/<repo>\/issues\/<PR#>\/timeline/.test(qualifiedPub),
+    "step 6's pings, through the script, naming the repository and the PR": /`address-review-ping --repo <owner>\/<repo> --pr 42 codex claude copilot`/.test(qualifiedPub),
     "no `{owner}`/`{repo}` placeholder left anywhere in it": !/\{owner\}\/\{repo\}/.test(qualifiedPub),
     "and no ordered `gh pr` call left bare":
-      orderedPrCalls.length >= 4 && orderedPrCalls.every((call) => call.includes("--repo <owner>/<repo>")),
+      orderedPrCalls.length >= 1 && orderedPrCalls.every((call) => call.includes("--repo <owner>/<repo>")),
   };
   const publishAbsent = Object.entries(publishClauses).filter(([, present]) => !present).map(([name]) => name);
   check(
@@ -6111,7 +6107,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /`gh pr view --json reviews` names the commit `commit\.oid` and carries neither/.test(misfiredPara) &&
       /`created_at` cannot stand in for it/.test(misfiredPara) &&
       /no thread on this PR, resolved or unresolved, already raises it/.test(misfiredPara) &&
-      /`gh-review-threads --all`/.test(misfiredPara) &&
+      /`gh-review-threads --all --repo <owner>\/<repo> <PR#>`/.test(misfiredPara) && !/or the GraphQL query/.test(misfiredPara) &&
       /no maintainer reply dismisses it and the review's own `state` is not `DISMISSED`/.test(misfiredPara) &&
       /the code it names still exists on the branch/.test(misfiredPara) &&
       /take NONE of them and say so in `detail`/.test(misfiredPara) &&

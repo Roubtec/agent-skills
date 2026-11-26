@@ -13,16 +13,15 @@
 # comment `url` points at the requested PR before emitting anything — failing
 # closed with a distinct exit code if a response is contaminated or malformed.
 #
-# The GraphQL query below is kept textually in sync with the "GitHub API recipes"
-# → "List unresolved review threads" recipe in both address-review skills:
-# plugins/dev-skills/skills/address-review/SKILL.md and
-# codex/dev-skills/skills/address-review/SKILL.md. A drift between them is exactly
-# the inconsistency this helper exists to remove. Update all three together.
-#
 # This vendored plugin copy is canonical. Any behavior change to this helper
 # must update scripts/test-gh-review-threads.sh in the same PR. Powbox keeps an
 # importable copy of that suite as its bake-time consumer-contract check and
 # bakes this helper from the canonical plugin copy.
+#
+# Both address-review skill folders carry a byte-identical copy as
+# `gh-review-threads.sh`, so the skill has this fetcher on every install route
+# and carries no hand-run query of its own. After editing this file, copy it
+# over both; scripts/test-skill-bundled-files.mjs fails until they match.
 #
 # Usage: gh-review-threads [--all] [--repo <owner>/<repo>] <PR#>
 #
@@ -156,7 +155,6 @@ EXPECTED_LC="$(printf '%s' "$EXPECTED" | tr '[:upper:]' '[:lower:]')"
 EXPECTED_REPO_LC="$(printf '%s' "${OWNER}/${REPO}" | tr '[:upper:]' '[:lower:]')"
 
 # --- GraphQL queries ---------------------------------------------------------
-# Kept textually in sync with the address-review SKILL.md recipe (see header).
 # shellcheck disable=SC2016  # $owner/$repo/$pr/$after are GraphQL variables, resolved server-side — must NOT expand in the shell
 THREADS_QUERY='
 query($owner:String!,$repo:String!,$pr:Int!,$after:String){

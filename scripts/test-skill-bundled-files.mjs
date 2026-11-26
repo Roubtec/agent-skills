@@ -26,6 +26,9 @@
 //                sibling skill's script says whose it is. The same
 //                goes for the workflow scripts, which have no folder of their
 //                own and so may name any skill's.
+//   COPIES     — a bundled file listed in COPIES below is byte-identical to the
+//                `bin/` script it copies, where that script has to stay a
+//                real file for a consumer outside this repository.
 //   SHIMS      — each `plugins/dev-skills/bin/` shim that forwards into a skill
 //                folder points at a bundled file that exists.
 //
@@ -58,6 +61,13 @@ const EXTERNAL = {
   "shadow-refresh.sh": "powbox's shadow re-mount script, on PATH in a powbox container",
 };
 
+// Bundled files that are copies of a `bin/` script, as `<skill>/<file>: <bin name>`.
+const COPIES = {
+  // powbox bakes bin/gh-review-threads into its image by copying that one file,
+  // so it cannot become a shim onto the skill folder's copy.
+  "address-review/gh-review-threads.sh": "gh-review-threads",
+};
+
 const NAME = /(?<![\w./=-])[a-z][a-z0-9-]*\.(?:sh|md)\b/g;
 
 let failures = 0;
@@ -78,7 +88,7 @@ function isBundled(file) {
   return file !== "SKILL.md" && !file.startsWith("agents/");
 }
 
-function audit(model, external = EXTERNAL) {
+function audit(model, external = EXTERNAL, copies = COPIES) {
   const problems = [];
   const sides = Object.keys(model.trees);
   const usedExternal = new Set();
@@ -145,6 +155,18 @@ function audit(model, external = EXTERNAL) {
   }
   for (const [file, text] of Object.entries(model.workflows)) resolve(`workflows/${file}`, text, sides[0], null);
 
+  // COPIES
+  for (const [bundled, bin] of Object.entries(copies)) {
+    const [skill, file] = bundled.split("/");
+    const original = model.shims[bin];
+    if (original === undefined) problems.push(`copies: bin/${bin}, which ${bundled} copies, does not exist`);
+    for (const s of sides) {
+      const copy = (model.trees[s][skill] || {})[file];
+      if (!copy) problems.push(`copies: ${s} ${bundled} is listed in COPIES but is not bundled`);
+      else if (original !== undefined && copy.text !== original) problems.push(`copies: ${s} ${bundled} differs from bin/${bin}`);
+    }
+  }
+
   // SHIMS
   for (const [name, text] of Object.entries(model.shims)) {
     const m = text.match(/^target="\$here\/\.\.\/skills\/([^/"]+)\/([^"]+)"$/m);
@@ -210,10 +232,10 @@ function fixture(edit) {
     alpha: { "SKILL.md": f("Run `tool.sh` beside this file, then read `role-brief.md`.\n"), "tool.sh": f("#!/bin/sh\n", "100755"), "role-brief.md": f("Be careful.\n") },
     beta: { "SKILL.md": f("Hand the reviewer the alpha skill's `role-brief.md`, and run `far-away.sh`.\n") },
   });
-  const model = { trees: { claude: side(), codex: side() }, workflows: { "wf.js": "const p = 'read role-brief.md';\n" }, shims: { "alpha-tool": 'target="$here/../skills/alpha/tool.sh"\n' } };
+  const model = { trees: { claude: side(), codex: side() }, workflows: { "wf.js": "const p = 'read role-brief.md';\n" }, shims: { "alpha-tool": 'target="$here/../skills/alpha/tool.sh"\n', tool: "#!/bin/sh\n" } };
   model.trees.codex.alpha["agents/openai.yaml"] = f("name: alpha\n");
   if (edit) edit(model);
-  return audit(model, { "far-away.sh": "lives elsewhere" });
+  return audit(model, { "far-away.sh": "lives elsewhere" }, { "alpha/tool.sh": "tool" });
 }
 const fires = (name, edit, pattern) => {
   const got = fixture(edit);
@@ -231,6 +253,8 @@ fires("a file whose stem is its skill's name does not introduce itself", (m) => 
 fires("a bundled file is not named by a longer name that ends in it", (m) => { for (const s of ["claude", "codex"]) { m.trees[s].alpha["updated-tool.sh"] = f("#!/bin/sh\n", "100755"); m.trees[s].alpha["SKILL.md"] = f("Run `updated-tool.sh` beside this file, then read `role-brief.md`.\n"); } }, /^named: claude alpha\/tool\.sh is bundled but nothing in the folder names it/);
 fires("a script calling another skill's script without naming that skill is reported", (m) => { for (const s of ["claude", "codex"]) m.trees[s].beta["run.sh"] = f('# Hands over to tool.sh.\nexec "$sibling/tool.sh"\n', "100755"), (m.trees[s].beta["SKILL.md"].text += "Run `run.sh`.\n"); }, /^resolves: claude beta\/run\.sh:1 names `tool\.sh`, which beta does not bundle/);
 fires("a workflow naming a file no folder bundles is reported", (m) => (m.workflows["wf.js"] += "'read gone-brief.md'\n"), /^resolves: workflows\/wf\.js:2 names `gone-brief\.md`/);
+fires("a bundled copy that drifted from its bin/ original is reported", (m) => (m.shims.tool += "echo newer\n"), /^copies: claude alpha\/tool\.sh differs from bin\/tool/);
+fires("a listed copy whose bin/ original is gone is reported", (m) => delete m.shims.tool, /^copies: bin\/tool, which alpha\/tool\.sh copies, does not exist/);
 fires("a shim forwarding to a missing file is reported", (m) => (m.shims["alpha-gone"] = 'target="$here/../skills/alpha/gone.sh"\n'), /^shims: bin\/alpha-gone forwards to skills\/alpha\/gone\.sh/);
 fires("an EXTERNAL entry nothing names any more is reported", (m) => { for (const s of ["claude", "codex"]) m.trees[s].beta["SKILL.md"] = f("Hand the reviewer the alpha skill's `role-brief.md`.\n"); }, /^external: `far-away\.sh`/);
 check("fixture: another skill's file introduced once with its skill may be named bare afterwards", fixture((m) => { for (const s of ["claude", "codex"]) m.trees[s].beta["SKILL.md"].text += "Then `role-brief.md` again.\n"; }).length === 0);
