@@ -450,7 +450,7 @@ cmd_rebase() {
 	fork="$(git merge-base "$tip" "$base")" || fail "this branch and '$default' share no history. Nothing was rebased."
 	ran="$fork"
 	if [ -n "$GREEN" ]; then
-		if ! git cat-file -e "$GREEN^{commit}" 2>/dev/null || ! ran="$(git merge-base "$GREEN" "$base")"; then
+		if ! ran="$(git merge-base "$GREEN" "$base" 2>/dev/null)"; then
 			stop bad-green "--green $GREEN is not a commit this worktree holds on a history shared with '$default', so what landed since its run cannot be listed. Nothing was rebased." "tip=$tip"
 		fi
 	fi

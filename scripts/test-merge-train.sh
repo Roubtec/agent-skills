@@ -448,6 +448,7 @@ call rebase "${ARGS[@]}" --head "$PRHEAD" --from "$PARENT_OLD"
 is "3: a child is rebased past its merged parent" "$(val outcome)" rebased
 is "3: ...replaying its own commit alone" "$(val commits)" 1
 has "3: ...which is the child's" "$(git -C "$R" log -1 --format=%s)" "c1"
+lacks "3: ...and the parent's files are not counted as the child's" "$OUT" "overlap="
 
 new_repo
 pr OPEN feature "$(tip HEAD)" parent-branch
@@ -501,6 +502,8 @@ is "3: with --green, what landed is counted from the green run's fork" "$(val la
 git -C "$R" reset -q --hard "$PRHEAD"
 call rebase "${ARGS[@]}" --head "$PRHEAD" --green "$H1"
 is "3: a --green this worktree does not hold is a stop" "$(val outcome)" bad-green
+call rebase "${ARGS[@]}" --head "$PRHEAD" --green not-a-commit
+is "3: a --green that is no commit id is a usage error" "$RC" 64
 
 new_repo
 git -C "$R" reset -q --hard HEAD~1
