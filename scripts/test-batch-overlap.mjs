@@ -43,7 +43,7 @@ function load({ agent, phase, log }) {
   return new Function("args", "agent", "phase", "log", body)("", agent, phase, log);
 }
 
-const EXPECTED_CHECKS = 120;
+const EXPECTED_CHECKS = 128;
 let failures = 0;
 let ran = 0;
 function check(name, cond, detail) {
@@ -242,6 +242,14 @@ const out = (...lines) => `${lines.join("\n")}\n`;
   refused("a truncated pair list", conflict.replace(`pair=task/b${T}task/c${T}clean\n`, ""), three, /2 `pair=` line\(s\) for 3 unmerged branch\(es\), which make 3/);
   refused("an outcome its own lines do not add up to (conflict printed as clean)", conflict.replace("outcome=conflict", "outcome=clean"), three, /add up to `conflict`/);
   refused("an outcome its own lines do not add up to (clean printed as overlap)", clean.replace("outcome=clean", "outcome=overlap"), ["task/a", "task/b"], /add up to `clean`/);
+  // A verdict its own file lines do not bear out is a garbled or cut-off relay.
+  refused("a shared file under a clean pair", `${clean}shared=task/a${T}task/b${T}x\n`, ["task/a", "task/b"], /reads `clean` with 1 `shared=` and 0 `conflict=`/);
+  refused("a conflict file under a clean pair", `${clean}conflict=task/a${T}task/b${T}x\n`, ["task/a", "task/b"], /reads `clean` with 0 `shared=` and 1 `conflict=`/);
+  refused("an overlap that names no shared file", clean.replace("outcome=clean", "outcome=overlap").replace(`task/b${T}clean\n`, `task/b${T}overlap\n`), ["task/a", "task/b"], /reads `overlap` with 0 `shared=`/);
+  refused("a pair conflict that names no file", clean.replace("outcome=clean", "outcome=conflict").replace(`task/b${T}clean\n`, `task/b${T}conflict\n`), ["task/a", "task/b"], /reads `conflict` with 0 `shared=` and 0 `conflict=`/);
+  refused("a base conflict that names no file", conflict.replace(`base-conflict=task/b${T}src/x.js\n`, ""), three, /`task\/b` reads `conflict` with 0 `base-conflict=`/);
+  refused("a file under a stacked pair", `${stacked}shared=task/b${T}task/c${T}x\n`, three, /reads `stacked` with 1 `shared=`/);
+  refused("a pair naming a branch the base already contains", stacked.replace(`pair=task/b${T}task/c${T}stacked\n`, `pair=task/a${T}task/c${T}clean\n`), three, /names a branch the base already contains/);
 }
 
 // --- The real script, on a throwaway repository ----------------------------------
@@ -374,6 +382,9 @@ for (const bad of ["task/042-a$b", "task/042-a;rm", "task/042-`a`", "-task/042-a
   const r = await fns.runOverlapCheck({ plan: plan3, results: results3 });
   check("one low-effort agent, under the stage's label and schema", calls.length === 1 && calls[0].label === "overlap:check" && calls[0].effort === "low" && calls[0].schema === fns.OVERLAP_SCHEMA);
   check("the command names the batch's default base and the branches in the recommended merge order", calls[0].prompt.includes("--base 'main' 'task/042-a' 'task/043-b' 'task/044-c'`"));
+  const far = stage({ ran: true, exitStatus: 0, stdout: stdoutOverlap });
+  const rr = await far.fns.runOverlapCheck({ plan: plan3, results: results3, remote: true });
+  check("on a remote run the base is the remote's, which a merged sibling's refresh moves and the local branch does not follow", far.calls[0].prompt.includes("--base 'origin/main' 'task/042-a'") && rr.base === "origin/main", rr.base);
   check("overlap: reported with the merge order, the outcome, the base verdicts, and the pairs", r.ran === true && r.skipped === false && r.outcome === "overlap" && r.exitStatus === 0 && r.base === "main" && r.baseOid === oid(0) && same(r.mergeOrder, order3) && same(r.branches.map((b) => b.verdict), ["clean", "clean", "clean"]) && same(r.pairs[2], { a: "task/043-b", b: "task/044-c", verdict: "overlap", shared: ["README.md"], conflicts: [] }) && r.excluded.length === 0, JSON.stringify(r));
   check("overlap: the log names the outcome, the order, and the overlapping pair's files", same(fns.overlapLogLines(r), ["Overlap check: overlap. Recommended merge order: task/042-a, task/043-b, task/044-c.", "Overlap check: `task/043-b` and `task/044-c` touch the same files and still merge — README.md."]), JSON.stringify(fns.overlapLogLines(r)));
 }
@@ -429,7 +440,7 @@ for (const bad of ["task/042-a$b", "task/042-a;rm", "task/042-`a`", "-task/042-a
   check("the resolver-failure and empty-batch results are skipped with a stated reason", /overlapSkippedUnresolved = \(\) => \(\{ ran: false, skipped: true, reason: "the task pointers were not resolved/.test(body) && /overlap: \{ ran: false, skipped: true, reason: "the batch resolved no task/.test(body));
   const summary = body.slice(body.lastIndexOf('phase("Summary");'));
   check("the stage renders under Summary: no phase of its own", !/phase\("Overlap/.test(src) && !/title: "Overlap/.test(src));
-  check("the stage runs before the closing main-checkout reading, with the placement justified, and its lines are logged", summary.indexOf("await runOverlapCheck({ plan, results })") !== -1 && summary.indexOf("runOverlapCheck(") < summary.indexOf("await finalMainCheckoutReport()") && /BEFORE the closing main-checkout reading, deliberately/.test(summary) && /for \(const line of overlapLogLines\(overlap\)\) log\(line\);/.test(summary));
+  check("the stage runs before the closing main-checkout reading, with the placement justified, and its lines are logged", summary.indexOf("await runOverlapCheck({ plan, results, remote })") !== -1 && summary.indexOf("runOverlapCheck(") < summary.indexOf("await finalMainCheckoutReport()") && /BEFORE the closing main-checkout reading, deliberately/.test(summary) && /for \(const line of overlapLogLines\(overlap\)\) log\(line\);/.test(summary));
   check("nothing of the review stack is left in the workflow", !/review.?stack|rebase-stack|guide branch|pre-rebase\/review/i.test(src));
 }
 

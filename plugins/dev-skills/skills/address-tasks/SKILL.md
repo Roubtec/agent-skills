@@ -403,7 +403,7 @@ Its `--help` prints what every line means.
 It trial-merges each branch into the base and every pair of branches with `git merge-tree`, so it fetches nothing and touches no ref, index or working tree.
 Report what it answers, and act on none of it:
 
-- `outcome=clean`: one line saying no two branches touch the same file.
+- `outcome=clean`: one line saying no two independent branches touch the same file.
 - `outcome=overlap`: the pairs and their `shared=` files, as a note for whoever reviews them side by side.
 - `outcome=conflict` (exit 3): each conflicting pair with its `conflict=` files, and each branch with a `base-conflict=` file, which already needs a rebase onto the base as it stands.
   Whichever of a conflicting pair merges second is the one that will need the rebase, so say which you would merge first and why.

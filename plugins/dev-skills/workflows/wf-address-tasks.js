@@ -5264,6 +5264,20 @@ function parseOverlapOutput(stdout, expected) {
   // list is a truncated output rather than a quiet one.
   const live = branches.filter((b) => b.verdict !== "merged").length;
   if (pairs.length !== (live * (live - 1)) / 2) return bad(`it printed ${pairs.length} \`pair=\` line(s) for ${live} unmerged branch(es), which make ${(live * (live - 1)) / 2}`);
+  // Each verdict has to be borne out by its own file lines: a `clean` pair
+  // with a file under it, or a `conflict` with none, is a garbled or cut-off
+  // output, and neither may pass for the forecast.
+  for (const b of branches) {
+    if ((b.verdict === "conflict") !== (b.conflicts.length > 0)) return bad(`the branch \`${b.branch}\` reads \`${b.verdict}\` with ${b.conflicts.length} \`base-conflict=\` line(s)`);
+  }
+  for (const p of pairs) {
+    if (branchByName.get(p.a).verdict === "merged" || branchByName.get(p.b).verdict === "merged") return bad(`the pair \`${p.a}\` / \`${p.b}\` names a branch the base already contains`);
+    const wantShared = p.verdict === "overlap";
+    const wantConflict = p.verdict === "conflict";
+    if ((p.conflicts.length > 0) !== wantConflict || (wantShared && !p.shared.length) || ((p.verdict === "clean" || p.verdict === "stacked") && p.shared.length)) {
+      return bad(`the pair \`${p.a}\` / \`${p.b}\` reads \`${p.verdict}\` with ${p.shared.length} \`shared=\` and ${p.conflicts.length} \`conflict=\` line(s)`);
+    }
+  }
   const derived = branches.some((b) => b.verdict === "conflict") || pairs.some((p) => p.verdict === "conflict")
     ? "conflict"
     : pairs.some((p) => p.verdict === "overlap") ? "overlap" : "clean";
@@ -5277,10 +5291,13 @@ function parseOverlapOutput(stdout, expected) {
 // true only for an output that parsed whole and agrees with its exit status;
 // every other ending carries a `reason` and no `outcome`, so nothing short of
 // a real answer can be read as clean.
-async function runOverlapCheck({ plan, results }) {
+async function runOverlapCheck({ plan, results, remote }) {
   const { order, excluded, cycle } = recommendedMergeOrder(plan, results);
   const mergeOrder = order.map((t) => t.branch);
-  const base = plan.defaultBase;
+  // On a remote run the PRs are headed for the remote's base, which the
+  // bootstrap fetched and the rebase step refreshes when a sibling merges
+  // mid-run; the local branch of that name is moved by neither.
+  const base = remote ? `origin/${plan.defaultBase}` : plan.defaultBase;
   const report = { ran: false, skipped: false, reason: "", base, mergeOrder, excluded };
   // A cycle leaves its members out of `order`, so it is judged before the
   // count is, or a cyclic pair would read as a batch that reached too few.
@@ -5530,7 +5547,7 @@ const orphans = { acted: pipeline.orphanReconciliation, survivors: orphanSurvivo
 // never throws, so the reading below still runs on every one of its paths.
 // A member that merged during the run is excluded by `overlapMergeable`: its
 // content is on the base already.
-const overlap = await runOverlapCheck({ plan, results });
+const overlap = await runOverlapCheck({ plan, results, remote });
 for (const line of overlapLogLines(overlap)) log(line);
 // Post-batch snapshot of the shared main checkout, compared against the
 // baseline (see finalMainCheckoutReport, which the empty-batch return and the

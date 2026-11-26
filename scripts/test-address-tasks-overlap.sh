@@ -155,6 +155,19 @@ call --base a a b d
 is "3: ...leaving the others to pair up" "$(count pair)" 1
 has "3: ...as themselves" "$OUT" "pair=b${TAB}d${TAB}clean"
 
+# A rename is a touch of both names, whatever diff.renames is set to.
+branch ren "$INIT"
+git -C "$R" mv f f-renamed
+git -C "$R" commit -q -m rename
+git -C "$R" checkout -q main
+call --base "$INIT" ren b
+has "3: a branch that renames a file shares it with one that edits it" "$OUT" "shared=ren${TAB}b${TAB}f"
+lacks "3: ...so the pair is never clean" "$OUT" "pair=ren${TAB}b${TAB}clean"
+call --base "$INIT" b ren
+has "3: ...whichever of the two is named first" "$OUT" "shared=b${TAB}ren${TAB}f"
+OUT="$(cd "$R" && git config diff.renames false && bash "$HELPER" --base "$INIT" ren b 2>/dev/null; git config --unset diff.renames)"
+has "3: ...and the same with rename detection configured off" "$OUT" "shared=ren${TAB}b${TAB}f"
+
 # --- 4. a base that moved -----------------------------------------------------
 # main gains a change to g line 1 and f line 1; e forks after it and touches
 # g line 5. b forked before it.

@@ -24,15 +24,18 @@
 #                  merge does not.
 #   shared=<a> TAB <b> TAB <path>
 #                  one per file both touch, counted from where each left the
-#                  base or the other branch, whichever is nearer
+#                  base or the other branch, whichever is nearer. A renamed
+#                  file is touched under its old name and its new one.
 #   conflict=<a> TAB <b> TAB <path>
-#                  one per file the trial merge of the two conflicts in. Where
-#                  the base moved between the two branches' fork points, a file
-#                  here that is no `shared=` file is the base's change meeting
-#                  one branch, which that branch's `base-conflict=` also shows.
+#                  one per file the trial merge of the two conflicts in. A
+#                  file here that is no `shared=` file is the far end of a
+#                  rename, or, where the base moved between the two branches'
+#                  fork points, the base's change meeting one branch, which
+#                  that branch's `base-conflict=` also shows.
 # under
-#   outcome=clean     no pair touches a file in common, and every branch
-#                     merges into the base
+#   outcome=clean     no compared pair touches a file in common (a stacked
+#                     pair is not compared), and every branch merges into the
+#                     base
 #   outcome=overlap   some pair touches a file in common; everything merges
 #   outcome=conflict  a pair, or a branch and the base, does not merge (exit 3)
 #
@@ -182,8 +185,12 @@ while IFS="$TAB" read -r a aoid; do
 		if ! afork="$(git merge-base "$aoid" "$boid" "$BASE_OID")" || ! bfork="$(git merge-base "$boid" "$aoid" "$BASE_OID")"; then
 			fail "'$a' and '$b' share no history. Nothing was compared."
 		fi
-		git diff --name-only "$afork" "$aoid" | sort -u >"$tmp/a" || fail "could not list what '$a' touches."
-		git diff --name-only "$bfork" "$boid" | sort -u >"$tmp/b" || fail "could not list what '$b' touches."
+		# Without rename detection, so a renamed file is touched under both
+		# its names whatever `diff.renames` says here.
+		git diff --no-renames --name-only "$afork" "$aoid" >"$tmp/a.raw" || fail "could not list what '$a' touches."
+		git diff --no-renames --name-only "$bfork" "$boid" >"$tmp/b.raw" || fail "could not list what '$b' touches."
+		sort -u "$tmp/a.raw" >"$tmp/a"
+		sort -u "$tmp/b.raw" >"$tmp/b"
 		comm -12 "$tmp/a" "$tmp/b" >"$tmp/shared"
 		verdict=clean
 		[ ! -s "$tmp/shared" ] || verdict=overlap
