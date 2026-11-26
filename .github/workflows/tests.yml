@@ -24,6 +24,7 @@ jobs:
       - run: bash scripts/test-address-review-pr-branch.sh
       - run: bash scripts/test-address-review-record.sh
       - run: bash scripts/test-address-review-ping.sh
+      - run: bash scripts/test-address-tasks-overlap.sh
       - run: bash scripts/test-address-review-ci.sh
       - run: bash scripts/test-rebase-stack.sh
       - run: bash scripts/test-merge-train.sh
@@ -39,5 +40,5 @@ jobs:
       - run: node scripts/test-resolve-tasks-contract.mjs
       - run: node scripts/test-skill-mirror-parity.mjs
       - run: node scripts/test-skill-bundled-files.mjs
-      - run: node scripts/test-review-stack-plan.mjs
+      - run: node scripts/test-batch-overlap.mjs
       - run: node scripts/test-pipelined-batch.mjs
