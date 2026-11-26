@@ -40,6 +40,7 @@ scripts/
   test-resolve-tasks-contract.mjs       # pins the shared task-pointer packet, consumer policies, mirror parity, and workflow hands-off exclusions
   test-skill-mirror-parity.mjs          # asserts the two skill mirrors agree in structure — skill presence, heading sequence, per-section list-item counts — with legitimate deltas pinned in skill-mirror-parity-allowlist.json
   skill-mirror-parity-allowlist.json    # the pinned structural deltas the parity suite excuses, one harness reason each
+  test-skill-bundled-files.mjs          # asserts every file a skill ships beside its SKILL.md is mirrored, committed with the right mode, named by the skill, and that every file a skill or workflow names exists
   test-review-stack-plan.mjs            # behavior coverage for the batch workflow's post-batch review stack: mergeable predicate, merge order, safe prefix, and the stage's reclaim-on-every-path control flow
   verify-014-peer-strength-pin.md       # harness-neutral prompt: observe the peer step's pinned review strength (task 014)
   verify-015-peer-review-run.md         # harness-neutral prompt: exercise the peer-review-run primary launch, its reviewFile relay, the stub-helper degradation route, strength, and evidence (tasks 015, 050)
@@ -254,6 +255,12 @@ Run `node scripts/test-resolve-tasks-contract.mjs` after changing `resolve-tasks
 Run `node scripts/test-skill-mirror-parity.mjs` after adding, removing, or editing any `SKILL.md` in either mirror — `plugins/dev-skills/skills/` or `codex/dev-skills/skills/` — or after editing `scripts/skill-mirror-parity-allowlist.json`.
 
 The mirrors are hand-edited in lockstep and legitimately differ in prose, so this suite compares structure only: every skill exists in both trees, the ordered sequence of ATX headings (level and text, fenced blocks excluded) matches, and each shared section holds the same number of ordered-list items and top-level bullets. It replaces the divergence count a PR summary used to recite, which no check ever depended on. A legitimate structural difference is pinned in the allowlist as an exact delta — the skill, the heading, and the one-sided heading or both mirrors' counts — with a one-line harness reason; an unlisted divergence, a divergence that drifted from its entry, and an entry whose divergence has vanished all fail, and a failure names the skill, the heading, the element, and the side. Each entry excuses exactly one divergence, so a pinned one-sided heading duplicated within its mirror fails, and a one-sided section's list items are counted against an empty counterpart, so the heading entry excuses the heading alone and each item beneath it is a delta of its own. The three clause-scoped suites above keep pinning what they pin; this one only notices a whole step, bullet, or section arriving on one side.
+
+### `test-skill-bundled-files.mjs`
+
+Run `node scripts/test-skill-bundled-files.mjs` after adding, renaming, or removing any file beside a `SKILL.md` — a helper script or a brief — in either mirror, after adding a `bin/` shim that forwards into a skill folder, or after naming such a file in a skill or workflow.
+
+A skill folder is copied whole to wherever its harness installs it, so a sentence like "read `reviewer-brief.md`, beside this file" works only when the file is really there, in both mirrors, with the mode the sentence assumes; nothing else fails when one is forgotten. The suite asserts each bundled file is byte-identical across the mirrors, committed `100755` when it is a `*.sh` and `100644` otherwise, and named by its own skill; that every bare `name.sh` or `name.md` a skill or workflow mentions is bundled where the text says it is; and that each forwarding shim's target exists. A file another skill owns must be introduced once, on a line naming that skill. A script that deliberately lives outside the skill folders goes in the suite's `EXTERNAL` list with the reason, and an entry nothing names any more fails. Adding a bundled file needs no edit to the suite: put it in both mirrors and name it in the `SKILL.md`.
 
 ### `test-review-stack-plan.mjs`
 
