@@ -1,7 +1,7 @@
 # Post-batch restack: a local review stack (never pushed)
 
 This file is part of the `address-tasks` skill, and the sections it names (Delivery, Cleanup, Scheduling, Session Bootstrap's `$WT_BASE`) are that skill's `SKILL.md`, beside it.
-It is read in full once the batch's last task has settled, by a batch that delivered two or more mergeable branches.
+It is read in full only when the invocation carries `review-stack` or the user asks for the stack afterwards, by a batch that delivered two or more mergeable branches; no batch builds the stack by default.
 
 After Delivery and Cleanup, build one linear **local** stack in the order you recommend reviewing and merging the PRs.
 This is an integration check and merge-order guide; it is **never pushed**.
@@ -15,11 +15,8 @@ The guide refs persist in the repo's `.git`, while the PR branches and remote PR
 Exclude branches that failed review, that the user asked to skip, or whose PR merged during the run — its content is on the base already, so a guide snapshot of it would rebase to nothing; report it as merged rather than stacking it.
 If the batch was already a linear dependency chain, still build the guide stack: it verifies the chain against the current local base without risking the PR refs.
 
-**Compute the order yourself.**
-Reuse the dependency graph and emit a topological order: every dependency precedes its dependents.
-Break ties between independent branches deterministically: keep closely related areas adjacent, then fall back to task number.
+**The order** is the merge order `SKILL.md` → "Post-batch overlap check" already had you compute.
 Record the order using the canonical task branches as `b1 → b2 → … → bN`, rooted at the chosen local base, where `b1` is the recommended first merge.
-Dependency edges are binding; the relative order of independent branches is only a stable review recommendation, not a newly invented dependency.
 
 Before creating guide branches, inspect each canonical branch's unique history relative to its recorded PR base for merge commits.
 If the batch used a synthetic multi-parent integration branch, or `git rev-list --merges <pr-base>..<branch>` is non-empty, do not automatically rebase that branch or any dependent suffix: plain `rebase-stack` intentionally linearizes history and could discard merge-only conflict resolutions.

@@ -5,10 +5,11 @@ description: A batch of pre-planned task files is ready to be implemented. Trigg
 
 Implement a set of pre-planned task files using a **parallel, worktree-isolated** delegated subagent workflow.
 
-**Arguments:** `<mixed-list of task numbers, task-file paths, and globs to implement> [peer-opinions=off]`
+**Arguments:** `<mixed-list of task numbers, task-file paths, and globs to implement> [peer-opinions=off] [review-stack]`
 
 `peer-opinions=off` is the only accepted explicit peer-opinion setting.
 Omit it to use the default, which enables best-effort peer opinions.
+`review-stack` asks for the local review stack after the batch, which is otherwise not built (see Post-batch overlap check).
 
 ## Task-pointer preflight
 
@@ -103,7 +104,7 @@ Your responsibilities:
 4. For each task, the moment it is ready: create its worktree on the right base branch and drive its implement→review→fix loop to a pass — every ready task's loop runs **concurrently** with its siblings', each task one end-to-end pipeline.
 5. Run each passing task through the **serialized pre-delivery guard**, then push its branch, open its PR against the resolved base, and reclaim its worktree — without waiting for any sibling (see Per-task pipeline and Delivery).
 6. Clean up each finished worktree as its task delivers; act on a pushed branch left without a PR the moment its delivery settles, inside that task's own pipeline and before its terminal state reaches its dependents (see Delivery).
-7. Build a **local review stack** from disposable copies of the mergeable branches — delegated to the `rebase-stack` skill in a subagent, never pushed and never rewriting the PR branches (see Post-batch restack).
+7. Run the **overlap check** over the mergeable branches: a read-only script that says which of them touch the same files and which would conflict (see Post-batch overlap check).
 8. Produce the final batch summary.
 
 **Trivial-task escape hatch:** for a genuinely trivial task (single obvious change, unambiguous criteria) you may implement it directly in its worktree without an implementer subagent — but still spawn a fresh reviewer.
@@ -387,13 +388,36 @@ Name any branch that survives both attempts in the final summary beside the task
 - After removing a worktree, run `git worktree prune` to clear its stale registration.
 - Removing a worktree does not delete its branch; a dependent can still branch from that ref after the worktree is gone.
 
-## Post-batch restack: a local review stack (never pushed)
+## Post-batch overlap check
 
-After Delivery and Cleanup, build one linear **local** stack of disposable `review-stack/...` branches in the order you recommend reviewing and merging the PRs.
-It is an integration check and merge-order guide: it is **never pushed**, and it never rebases the task/PR branch names themselves.
+After Delivery and Cleanup, a batch that delivered two or more mergeable branches ends with a read-only forecast of how they will meet.
+A mergeable branch is one that passed review, that the user did not ask to skip, and whose PR did not merge during the run.
 
-**Skip it when** the batch produced **0 or 1** mergeable branch — one that passed review, that the user did not ask to skip, and whose PR did not merge during the run.
-Otherwise read `review-stack.md`, beside this file, in full once the last task has settled, and carry it out: it holds the order, the merge-commit guard, the guide branches and their worktree, the delegated restack's prompt contract, the checks after it, and the teardown.
+**Compute the merge order yourself.**
+Reuse the dependency graph and emit a topological order: every dependency precedes its dependents.
+Break ties between independent branches deterministically: keep closely related areas adjacent, then fall back to task number.
+Dependency edges are binding; the relative order of independent branches is only a stable review recommendation, not a newly invented dependency.
+
+Then run `overlap.sh`, beside this file, from the main checkout: `overlap.sh --base <base> <b1> … <bN>`, the branches in that order and `<base>` the commit the PRs are headed for as the batch last fetched it.
+Its `--help` prints what every line means.
+It trial-merges each branch into the base and every pair of branches with `git merge-tree`, so it fetches nothing and touches no ref, index or working tree.
+Report what it answers, and act on none of it:
+
+- `outcome=clean`: one line saying no two branches touch the same file.
+- `outcome=overlap`: the pairs and their `shared=` files, as a note for whoever reviews them side by side.
+- `outcome=conflict` (exit 3): each conflicting pair with its `conflict=` files, and each branch with a `base-conflict=` file, which already needs a rebase onto the base as it stands.
+  Whichever of a conflicting pair merges second is the one that will need the rebase, so say which you would merge first and why.
+- Exit 1: the check did not run, with what it printed, never as a clean result.
+
+**On a conflict, offer to stack the pair, and do it only when the user says so.**
+The offer is one closing line of the summary: rebase the later branch of the pair onto the earlier one now, while the batch's context is still at hand, resolve the conflict there, push it, and repoint its PR's base to the earlier branch (`gh pr edit <N> --repo <owner>/<repo> --base <earlier branch>`), which makes the two a stacked pair like any other.
+It rewrites a delivered PR's branch and turns advice about order into a dependency, so it is never done unasked, and a batch that nobody is watching leaves the offer in its report.
+When the user takes it, the rebase is `rebase-stack`'s, the changed branch goes back through its review gate before the push, and the push is a leased one.
+
+### The local review stack, on request
+
+A full integration check is available and is not part of a batch: one linear **local** stack of disposable `review-stack/...` branches, rebased in the recommended order and never pushed.
+Build it only when the invocation carries `review-stack` or the user asks for it afterwards; then read `review-stack.md`, beside this file, in full and carry it out.
 
 ## Main-checkout cleanliness report
 
@@ -423,8 +447,9 @@ After the batch, provide a concise summary:
 - How many review rounds each task needed, and any task that hit the `review-cycle` round cap without passing (with its outstanding findings).
 - Whether the peer participated; if it was unavailable or forfeited any rounds, note the reason once without treating it as a failure.
 - The dependency graph actually used, the order in which tasks reached the guard, any base a merged sibling advanced (and the rebases it caused), and any base-branch/stacking choices worth flagging.
-- The **recommended merge order** using canonical PR branch names — `b1 → … → bN`, merge `b1` first — plus the corresponding local `review-stack/...` guide refs, the integration-checked prefix, any stop point or merge-history guard, reproducible conflict notes, and any empty guide branch.
-  Make clear the guide stack is local only and not pushed; the canonical PR branches were not rewritten, and independent-branch tie ordering is advisory.
+- The **recommended merge order** using canonical PR branch names — `b1 → … → bN`, merge `b1` first — with the overlap check's answer: the pairs that share files, the pairs and branches that conflict, or that the check did not run.
+  Independent-branch tie ordering is advisory.
+  On a conflict, close with the offer to stack the pair; where a review stack was asked for, add its guide refs, the integration-checked prefix, any stop point or merge-history guard, reproducible conflict notes and any empty guide branch, and make clear it is local only.
 - The main-checkout cleanliness report: what appeared, what disappeared, and what was pre-existing — carried with the claim bound that section states, never as an assurance the batch left the tree untouched.
 - Any pushed branch that survived its orphan reconciliation, and any held branch whose durability push sits on origin without a PR, each named beside the task numbers it still holds — a held branch is outside the same-number comparison set, so the maintainer is the one who sees its number.
 - Any blockers, local branches that still need pushing, or uncertainties that remain.

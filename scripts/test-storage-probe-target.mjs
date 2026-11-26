@@ -114,9 +114,8 @@ const GIB = 1024 ** 3;
   // A path with a space is legal and must survive; the probe prompt shell-quotes it.
   const spaced = validateBootstrapWtBase({ ok: true, wtBase: "/work space/repo/.worktrees/a" });
   check("absolute wtBase containing a space → accepted unmangled", spaced.ok === true && spaced.wtBase === "/work space/repo/.worktrees/a");
-  // A trailing slash is dropped: the review-stack stage joins the base with
-  // `/<slug>` into a path it then matches EXACTLY against what git reports,
-  // and git collapses the `//` such a base would produce.
+  // A trailing slash is dropped, so the base has one spelling: git collapses
+  // the `//` a path joined onto such a base would produce.
   const slashed = validateBootstrapWtBase({ ok: true, wtBase: "/workspace/repo/.worktrees/agent-1/" });
   check("absolute wtBase with a trailing slash → accepted with the slash dropped", slashed.ok === true && slashed.wtBase === "/workspace/repo/.worktrees/agent-1");
   const doubled = validateBootstrapWtBase({ ok: true, wtBase: "/workspace/repo/.worktrees/agent-1//\n" });
