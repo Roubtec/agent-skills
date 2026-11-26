@@ -277,7 +277,7 @@ Never hand over a movable remote-tracking name such as `origin/<base>`, and neve
 
 **Stacked entries rebase parent-first, in topological order.**
 What makes that possible is a parent map — each entry's PR base and head as **repository-qualified** pairs, from one `gh pr view --json baseRefName,headRefName,headRepository,headRepositoryOwner,isCrossRepository` per entry, the base side being that PR's own repository — specified here and held by the caller, since it spans entries and outlives any one delegation.
-Match child to parent on those pairs, never on bare branch names, exactly as `address-reviews` states it ("Detect a stack only when one entry's fully qualified …").
+Match child to parent on those pairs, never on bare branch names, exactly as `address-reviews` does it: its `targets.sh plan` holds a batch to the one repository its PRs' own URLs name before it matches a base branch to a head branch.
 A parent rebases onto its own base first; each child is then handed its parent's **new** tip and its old one, and rebases onto the new with `--onto`.
 Restacking a whole chain after merges is `rebase-stack`'s job: this step names that skill and stops rather than growing into it.
 
