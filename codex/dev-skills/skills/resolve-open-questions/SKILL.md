@@ -39,7 +39,8 @@ Where `address-review`, `address-reviews`, and batch executors *document and sto
 
 Optional trailing flags, honored only by the review layer's apply phase for items chosen to fix now, mirror the review skills: `push` and `ping-codex` / `ping-claude` / `ping-copilot` / `ping-contributing` (re-request bot review after the follow-up push).
 This is a **fully interactive** skill, so it does **not** assume publication: even for a fix-now item it **asks the maintainer to confirm before pushing and before editing any review threads** (the flags merely pre-answer that prompt).
-Each `ping-*` flag, when supplied, performs the re-request the `address-review` skill's argument table defines for it; `ping-copilot` in particular is the `gh pr edit <PR#> --add-reviewer @copilot` request, never an `@copilot review` comment.
+Each `ping-*` flag, when supplied, means what the `address-review` skill's argument table says, and the re-request itself is made by `ping.sh` in that skill's folder, a sibling of this one: `ping.sh --repo <owner>/<repo> --pr <N> <codex|claude|copilot>…`, run by its absolute path.
+It summons each reviewer by its own action and answers one line per reviewer; report any it did not summon, and never issue an `unconfirmed` request again or post an `@copilot review` comment in its place.
 
 For any code-writing decision, whether generic or review-derived, the optional `peer-opinions=off` flag disables cross-harness second opinions.
 Otherwise, lazily run the `review-cycle` skill's peer preflight once per run, in the orchestrator's main working tree, when the first resolution needs an implementation.
