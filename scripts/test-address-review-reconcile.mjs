@@ -161,6 +161,10 @@ const pingHelper = readFileSync(
   "utf8",
 );
 const prBranchHelperTest = readFileSync(join(here, "test-address-review-pr-branch.sh"), "utf8");
+// The batch skill's own helper, which makes that `head` call and the target
+// pins for every entry, and the suite that drives it.
+const targetsHelper = readFileSync(join(here, "..", "plugins", "dev-skills", "skills", "address-reviews", "targets.sh"), "utf8");
+const targetsHelperTest = readFileSync(join(here, "test-address-reviews-targets.sh"), "utf8");
 // The disposition record's header is worded by a second bundled script, so the
 // checks that held the skill's prose to the workflow's record brief now read
 // what that script PRINTS for a state; `scripts/test-address-review-record.sh`
@@ -1359,14 +1363,18 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         },
       ],
       // The batch skill reads the same head from a tree that is not on the
-      // branch, through the helper's `head` command.
+      // branch, through the helper's `head` command — which its own
+      // `targets.sh plan` runs for every entry, handing it the head it had
+      // just read as `--expect`, and turns a `rewind` stop into `skip=rewind`.
       [
         "address-reviews",
         "The canonical path.",
         /prints the entry's head as `head=` — what the fetch brought \*now\*, which is not necessarily the OID `gh pr view` just reported/,
         {
-          command: "`pr-branch.sh head --repo <owner>/<repo> --pr <N> --expect <the headRefOid step 1 recorded>`",
-          rewind: "**A fetched-behind-reported head is a rewind, not an advance:** where it stops on `rewind`, block the entry for a maintainer decision without adopting the fetched OID.",
+          command: "`targets.sh plan` fetches the PR's exact head ref, moves nothing, and prints the entry's head as `head=`",
+          via: 'prb head --repo "$CANON" --pr "$R_NUM" --expect "$R_OID"',
+          viaDriven: '"6: a rewind GitHub reports by the second read is still a rewind"',
+          rewind: "**A fetched-behind-reported head is a rewind, not an advance:** where the entry is `skip=rewind`, block the entry for a maintainer decision without adopting the fetched OID.",
           refusal: 'refuse_rewind "$head" "local=${tip:-absent}"',
           adoption: "relation=absent",
           driven: '"2b: the head is what the fetch brought, not what the PR reported"',
@@ -1401,6 +1409,9 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
           // difference (its own suite drives that case).
           paragraphs.set(`${mirror}/${skill}`, para);
           if (!para.includes(viaHelper.command)) unread.push(`${path}'s rule paragraph does not order ${viaHelper.command}`);
+          if (viaHelper.via && !targetsHelper.includes(viaHelper.via)) unread.push("targets.sh does not read each entry's head through pr-branch.sh with the head it first read");
+          if (viaHelper.via && !targetsHelper.includes('E_SKIP[i]="$(field outcome "$PRB_OUT")"')) unclassifiedRewinds.push("targets.sh does not turn a stop of the head read into the entry's skip reason");
+          if (viaHelper.viaDriven && !targetsHelperTest.includes(viaHelper.viaDriven)) unclassifiedRewinds.push("the targets suite no longer drives a rewind between the two reads");
           if (!prBranchHelper.includes('oid="$(git ls-remote "$1" "refs/heads/$2" 2>/dev/null | cut -f1)"')) unread.push("pr-branch.sh does not read the head the remote names now");
           if (!phrase.test(para)) unphrased.push(`${path} does not state ${phrase}`);
           const rewindAt = prBranchHelper.indexOf(viaHelper.refusal);
@@ -3263,7 +3274,14 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       text.includes("[rebase on top of <target>]") &&
         text.includes("| `rebase on top of <target>` |") &&
         text.includes("resolved WHERE IT WAS NAMED") &&
-        text.includes("Fetch nothing for it, and never send it at the PR's repository") &&
+        // The resolution itself is `targets.sh plan`'s: in this checkout,
+        // through the `--target` arm of `pin-base`, which fetches nothing, and
+        // its suite drives a target that exists only on the remote.
+        text.includes("with nothing fetched for it") &&
+        targetsHelper.includes('prb pin-base --target "$TARGET"') &&
+        targetsHelper.includes('[ "$PRB_RC" -eq 0 ] || stop unresolved') &&
+        targetsHelperTest.includes('"3: a target that is only on the remote stops the batch"') &&
+        targetsHelperTest.includes('"3: ...and nothing fetched for it"') &&
         // The failure mode is half the rule: a named ref that does not resolve
         // must stop the batch, since the one substitution available is the very
         // base-ref fetch the sentence before it forbids.
@@ -3290,7 +3308,13 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         // so a prose-excluded entry takes `baseRefName` even where a target was
         // named — bounding it at a target it was deliberately not moved onto is
         // the same wrong-boundary harm by the other road.
-        text.includes("excluding it is the statement that THAT branch stays on its own base") &&
+        // That one is the helper's now: `--except` is how the exclusion is
+        // said, and only a `--no-rebase` batch hands an entry the named target
+        // as its effective base.
+        text.includes("`--except` names each entry the invocation prose excluded") &&
+        targetsHelper.includes('if [ "$NO_REBASE" -eq 1 ] && [ "$HAS_TARGET" -eq 1 ]; then E_TARGET[i]=named; else E_TARGET[i]=default; fi') &&
+        targetsHelperTest.includes('"4: ...and stays on its own base, whatever the target"') &&
+        targetsHelperTest.includes('"4: with a target, no-rebase keeps it as every effective base"') &&
         // The checklist states the same rule in its own words, so counting the
         // rule's phrasing does not reach it: gutted back to an unconditional
         // `baseRefName` it would audit a run as correct that bounded every
