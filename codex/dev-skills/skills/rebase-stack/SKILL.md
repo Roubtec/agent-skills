@@ -199,7 +199,8 @@ For a candidate run `<first> ... <last>`, run `stack.sh qualify --base <segment-
 
 **To restore a run**, wherever these instructions call for it, run `stack.sh restore --stamp <stamp> <first> ... <last>`.
 On `restored`, every run branch is back on its snapshot.
-On any stop (`ref-moved`, `checked-out`, `no-snapshot`, `rebase-in-progress`) nothing was restored: report it, and the concurrent or unexpected ref movement it names, and do not start a fallback from a state that was not restored exactly.
+On `rebase-in-progress`, abort the rebase still open in this worktree and run it again.
+On any other stop (`ref-moved`, `checked-out`, `no-snapshot`) nothing was restored: report it, and the concurrent or unexpected ref movement it names, and do not start a fallback from a state that was not restored exactly.
 
 **The per-branch loop** takes every branch `X` not replayed in a run, in confirmed-chain order, each onto its `<new-base>` under the base rule above:
 
