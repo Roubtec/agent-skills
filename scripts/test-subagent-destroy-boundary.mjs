@@ -26,8 +26,8 @@
 //
 //   CONTENT, checked per boundary constant, against the clause list below.
 //   Task 017's criterion is about what the constants SAY, and they say it once
-//   each; asserting eleven clauses against all sixty-six renders re-derived the
-//   same five answers sixty-six times over. The constants are evaluated out of the
+//   each; asserting every clause against every render re-derived the same five
+//   answers once per render. The constants are evaluated out of the
 //   same declaration prefix the builders come from, so this is the value the
 //   briefs actually interpolate rather than the source text of the literal.
 //
@@ -422,11 +422,11 @@ function shippedWorkflows() {
 // phrase that carries it rather than by a byte comparison of the whole
 // constant. This must fail when a clause is LOST. What that buys is narrow, and
 // measured rather than hoped for: summing each phrase's match length over each
-// evaluated constant, the phrases pin seven tenths of the constants IN AGGREGATE
-// in contiguous literal runs — 69.7% over the five, which is 68.4% of a
-// `CYCLE_DESTROY_BOUNDARY` and 70.6% of a `DESTROY_BOUNDARY`, so no single
+// evaluated constant, the phrases pin three quarters of the constants IN AGGREGATE
+// in contiguous literal runs — 74.7% over the five, which is 73.8% of a
+// `CYCLE_DESTROY_BOUNDARY` and 75.3% of a `DESTROY_BOUNDARY`, so no single
 // fraction is true of EACH constant and the aggregate is the honest way to state
-// it. It was 58.5% before task 046b retired the no-helper fallback clause and
+// it. It was 69.7% before task 067 added its five entries, 58.5% before task 046b retired the no-helper fallback clause and
 // folded its neighbour into one longer span, 60.0% before that task's review
 // round pinned the guarded `cd`, and 66.8% before its third round pinned the
 // install remedy at the invocation as well. So it is the unpinned remainder —
@@ -583,8 +583,11 @@ const REQUIRED = [
 // every skill-spawned role reads first. The copies are held byte-identical
 // below, which says nothing about what the one text says, so each span here must
 // sit in it exactly once. The disposable-clone bullet is not repeated: the prose
-// census anchors it per skill.
+// census anchors it per skill. The first entry is not one of the four: it is the
+// sentence that squares the probe-directory exemption with the "not in a temp
+// directory" beside it, and without it the file contradicts itself.
 const BOUNDARY_FILE_CLAUSES = [
+  "What your prompt spelled out, the disposable location below, and the probe directory in the next bullet are the only exemptions.",
   "**A probe directory you made is yours to remove, and nothing else is.** That is a directory you yourself created this turn with `mktemp -d` under a destination your prompt named, removed by the exact path `mktemp` printed, held in a variable guarded against being empty: `rm -rf -- \"${P:?}\"`. Nothing found by a glob or by name, nothing outside that destination, and no other command on the list.",
   "**Uncommitted work is never discarded, yours or anyone else's.** `git checkout -- <path>`, `git restore`, and a bare `git stash` have each thrown it away. The one use that stands is putting a committed file back after a control you ran on it, once your own work is committed and the file holds nothing uncommitted but that control's edit.",
   "**Install nothing system-wide or global.** Every agent in the session shares this machine, so a system package (`apt-get`) or a global one (`npm -g`, `pip` outside a virtual environment) you install or upgrade changes it for all of them: report the need instead.",
@@ -596,7 +599,7 @@ const BOUNDARY_FILE_CLAUSES = [
 // instructs anything, so the gutting this closes is the one that keeps the
 // vocabulary and destroys the instruction — but NOT on REQUIRED's terms, and the
 // difference was demonstrated rather than reasoned. REQUIRED matches each clause
-// by the phrase that carries it because it spans eleven clauses over five
+// by the phrase that carries it because it spans sixteen clauses over five
 // constants, where a byte comparison would turn every wording tweak into a
 // failure. That tolerance does not survive one sentence: three phrase regexes
 // over this constant ("output you redirect to a file", "goes under that same
@@ -1648,8 +1651,9 @@ if (emptyTables.length || blankSpans.length) {
 }
 
 // The boundary file is one text shipped beside every skill that sends subagents
-// to it. Held here to two things the prose guard above cannot see: every copy is
-// the same bytes, and a brief that names the file ships it.
+// to it. Held here to three things the prose guard above cannot see: every copy
+// is the same bytes, a brief that names the file ships it, and the one text
+// carries each `BOUNDARY_FILE_CLAUSES` span exactly once.
 {
   const copies = new Map();
   const orphans = [];
