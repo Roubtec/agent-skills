@@ -56,7 +56,7 @@
 #                                   `unknown` where no positive figure could
 #                                   be read
 #     fstype=<type>|unknown         via=git only; `unknown` where `findmnt`
-#                                   is not installed
+#                                   is not installed or could not answer
 #     host-shared=yes|no|unknown    via=git only. `yes` where that type is
 #                                   9p, drvfs or virtiofs: worktrees will sit
 #                                   on a filesystem shared with a host, slower
@@ -148,7 +148,7 @@ case "$COMMON" in
 *'
 '*) fail "this repository's path holds a newline, which a key=value answer cannot carry." ;;
 */.git) ROOT="${COMMON%/.git}" ;;
-*) stop "cannot find the main checkout from $COMMON: a bare repository or a submodule has none to hold .worktrees/." ;;
+*) stop "cannot find the main checkout from $COMMON: a bare repository, a submodule or a --separate-git-dir repository has none to hold .worktrees/; run from an ordinary clone." ;;
 esac
 
 tmp="$(mktemp -d "${TMPDIR:-/tmp}/bootstrap.XXXXXX")" || fail "could not create a temporary directory."
@@ -192,7 +192,7 @@ ensure_ignored() {
 by_helper() {
 	local json rc=0 base avail
 	command -v jq >/dev/null 2>&1 || stop "jq not found on PATH, and wt-bootstrap's answer cannot be read without it."
-	json="$(wt-bootstrap 2>"$tmp/helper-err")" || rc=$?
+	json="$(cd "$ROOT" && wt-bootstrap 2>"$tmp/helper-err")" || rc=$?
 	cat "$tmp/helper-err" >&2
 	printf '%s' "$json" | jq -e 'type == "object" and (.ok | type == "boolean")' >/dev/null 2>&1 ||
 		fail "wt-bootstrap (exit $rc) did not answer with its JSON object: $json"
@@ -223,13 +223,18 @@ by_git() {
 	WT_BASE="$ROOT/.worktrees${CONTAINER_NAME:+/$CONTAINER_NAME}"
 	# A base that is not on disk yet is no mount of its own: it will sit on
 	# whatever holds the nearest directory above it that exists.
-	where="$ROOT/.worktrees"
+	where="$WT_BASE"
+	[ -d "$where" ] || where="$ROOT/.worktrees"
 	[ -d "$where" ] || where="$ROOT"
 	type=unknown shared=unknown
 	if command -v findmnt >/dev/null 2>&1; then
-		type="$(findmnt -nro FSTYPE -T "$where" 2>"$tmp/err")" && [ -n "$type" ] ||
-			fail "findmnt could not name the filesystem under $where: $(cat "$tmp/err")"
+		# A read that failed is no evidence the base is not shared.
+		type="$(findmnt -nro FSTYPE -T "$where" 2>"$tmp/err")" || type=""
 		case "$type" in
+		'')
+			type=unknown
+			note "findmnt could not name the filesystem under $where: $(cat "$tmp/err")"
+			;;
 		9p | drvfs | virtiofs) shared=yes ;;
 		*) shared=no ;;
 		esac

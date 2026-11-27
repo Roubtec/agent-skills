@@ -83,9 +83,14 @@ while [ $# -gt 0 ]; do
 	case "$1" in -T) target="${2:-}" ;; esac
 	shift
 done
+printf '%s\n' "$target" >>"$FAKE_STATE/findmnt-asked"
 [ -e "$target" ] || { echo "findmnt: $target: can't find in /etc/fstab or mountinfo" >&2; exit 1; }
 type="$(cat "$FAKE_STATE/fstype")"
-[ "$type" != FAIL ] || { echo "findmnt: no such mount" >&2; exit 1; }
+case "$type" in
+FAIL) echo "findmnt: no such mount" >&2; exit 1 ;;
+FAIL-LOUD) echo ext4; echo "findmnt: no such mount" >&2; exit 1 ;;
+EMPTY) exit 0 ;;
+esac
 printf '%s\n' "$type"
 FAKE
 cat >"$WORKDIR/fake-df/df" <<'FAKE'
@@ -96,6 +101,7 @@ FAKE
 cat >"$WORKDIR/fake-helper/wt-bootstrap" <<'FAKE'
 #!/usr/bin/env bash
 echo called >>"$FAKE_STATE/helper-calls"
+pwd -P >"$FAKE_STATE/helper-cwd"
 echo "helper diagnostic" >&2
 cat "$FAKE_STATE/helper-json"
 exit "$(cat "$FAKE_STATE/helper-rc")"
@@ -126,6 +132,7 @@ call() { # [args...] → OUT (stdout), ERR (stderr), RC; run from $DIR on PATH $
 	RC=$?
 	ERR="$(cat "$WORKDIR/err")"
 }
+asked() { tail -n 1 "$FAKE_STATE/findmnt-asked"; } # the path findmnt was last asked about
 val() { printf '%s\n' "$OUT" | sed -n "s/^$1=//p" | head -n 1; }
 first() { printf '%s\n' "$OUT" | head -n 1; }
 rules() { grep -c -Fx -- '/.worktrees/' "$1" 2>/dev/null || true; }
@@ -283,6 +290,7 @@ is "git: the rule was added" "$(val ignore)" added
 is "git: origin answered" "$(val remote)" yes
 is "git: the filesystem is named, on a first run with no base on disk yet" "$(val fstype)" ext4
 is "git: ...and is not a host share" "$(val host-shared)" no
+is "git: ...read from the main checkout, the nearest directory there is" "$(asked)" "$R"
 case "$(val avail-bytes)" in '' | *[!0-9]* | 0) ok "git: free space is a positive figure" 1 ;; *) ok "git: free space is a positive figure" 0 ;; esac
 present "git: the base exists afterwards" "$R/.worktrees"
 ignored_everywhere git
@@ -293,6 +301,7 @@ ok "git: the user's git configuration is untouched" $?
 call run
 is "git: a second run is ready" "$RC" 0
 is "git: ...and finds the rule present" "$(val ignore)" present
+is "git: ...and reads the filesystem of the base itself, now it exists" "$(asked)" "$R/.worktrees"
 
 echo 2048 >"$FAKE_STATE/df"
 USE="$WORKDIR/fake-df:$P_GIT"
@@ -323,9 +332,13 @@ call run
 is "git: a directory named origin is not the remote" "$(val remote)" no
 
 fresh
+mkdir "$R/.worktrees"
 OUT="$(cd "$R" && CONTAINER_NAME=box PATH="$USE" bash "$HELPER" run 2>/dev/null)"
 is "git: CONTAINER_NAME scopes the base" "$(val wt-base)" "$R/.worktrees/box"
 present "git: ...and that is the directory created" "$R/.worktrees/box"
+is "git: ...its filesystem read from .worktrees while the base is not on disk" "$(asked)" "$R/.worktrees"
+OUT="$(cd "$R" && CONTAINER_NAME=box PATH="$USE" bash "$HELPER" run 2>/dev/null)"
+is "git: ...and from the base itself once it is, which may be a mount of its own" "$(asked)" "$R/.worktrees/box"
 
 fresh
 git -C "$R" worktree add -q -b gone "$WORKDIR/gone$n"
@@ -389,14 +402,21 @@ for type in 9p drvfs virtiofs; do
 	is "host share: $type is reported as one" "$(val host-shared)" yes
 	present "host share: $type still gets its base" "$R/.worktrees"
 done
+: >"$FAKE_STATE/findmnt-asked"
 call ignore
-lacks "host share: ignore alone does not read the filesystem" "$OUT" "host-shared="
-echo FAIL >"$FAKE_STATE/fstype"
-fresh
-call run
-is "findmnt failing is a failure, not an unknown" "$RC" 1
-is "...with nothing on stdout" "$OUT" ""
-is "...and nothing written" "$(rules "$R/.git/info/exclude")" 0
+lacks "host share: ignore alone reports nothing of the filesystem" "$OUT" "host-shared="
+is "host share: ...and does not ask findmnt about it" "$(wc -l <"$FAKE_STATE/findmnt-asked" | tr -d ' ')" 0
+# A read that failed says nothing either way, so it is never `host-shared=no`.
+for mode in FAIL FAIL-LOUD EMPTY; do
+	echo "$mode" >"$FAKE_STATE/fstype"
+	fresh
+	call run
+	is "findmnt $mode: ready, not a failure" "$RC:$(first)" "0:outcome=ready"
+	is "findmnt $mode: the filesystem is unknown" "$(val fstype)" unknown
+	is "findmnt $mode: ...and so is whether it is a host share" "$(val host-shared)" unknown
+	has "findmnt $mode: ...with a note on stderr" "$ERR" "findmnt could not name the filesystem under $R"
+	[ "$mode" = EMPTY ] || has "findmnt $mode: ...carrying findmnt's own words" "$ERR" "no such mount"
+done
 echo ext4 >"$FAKE_STATE/fstype"
 
 fresh
@@ -441,6 +461,10 @@ lacks "helper: no plain-git keys" "$OUT" "fstype="
 lacks "helper: ...neither of them" "$OUT" "host-shared="
 has "helper: its diagnostics reach stderr" "$ERR" "helper diagnostic"
 is "helper: called once" "$(wc -l <"$FAKE_STATE/helper-calls" | tr -d ' ')" 1
+DIR="$R/sub"
+call run
+is "helper: run from the main checkout's root, wherever the caller stands" "$(cat "$FAKE_STATE/helper-cwd")" "$R"
+DIR="$R"
 ignored_everywhere helper
 clean helper
 

@@ -69,11 +69,11 @@ The same bootstrap serves this skill and `address-reviews`:
 
 1. **Run the worktree bootstrap:** `bootstrap.sh run`, beside this file, and do none of what it does by hand.
    It settles the worktree base directory (`$WT_BASE`), makes that base ignored, prunes stale worktree state, probes push access and measures free space, then answers in `key=value` lines with `outcome=` first.
-   Where a `wt-bootstrap` helper is on PATH the script runs it for all of that but the ignore rule — the helper establishes no ignore rule, and reports `ok` whether or not one exists — and where it is absent plain git does the job, refusing nothing on the powbox layout checks that are the helper's alone; the ignore rule is the script's own on both paths.
+   Where a `wt-bootstrap` helper is on PATH the script runs it for all of that but the ignore rule — the helper establishes no ignore rule, and reports `ok` whether or not one exists — and where it is absent plain git does the job; the ignore rule is the script's own on both paths.
    That rule goes in the repo-local exclude file, untracked and so dirtying nothing itself, and NOT in the tracked `.gitignore` — an ignore edit dirties the main checkout mid-run.
    `outcome=stop` is a blocker: report its `blocker=` line, which names its own remedy, and create no worktree — never work around it by choosing another base or by listing the rule yourself.
    Any other non-zero exit arrives with no `outcome=` line and is a blocker too: report what the script printed on stderr, and create no worktree.
-   `host-shared=yes`, which only the plain-git path prints, is **not** a blocker: tell the user once that the worktrees will live on a filesystem shared with the host — slower, and visible there — and proceed.
+   `host-shared=yes` is **not** a blocker: tell the user once that the worktrees will live on a filesystem shared with the host, and proceed.
    On `outcome=ready`, `$WT_BASE` is the `wt-base=` path and no other: it is `<repo>/.worktrees/` or a path beneath it (`<repo>/.worktrees/$CONTAINER_NAME` in a container), the one name the script's rule covers.
    `remote=no` is **not** a blocker: decide the fallback now, not mid-wave — **local reviewed branches only**, with a note in the final summary that PRs/pushes were skipped.
    `avail-bytes=` is the starting input for Adaptive throttling below; where it reads `unknown`, measure it yourself (`df -k "$WT_BASE"`) before fanning out.
