@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# Hermetic test for the address-tasks skill's bundled `overlap.sh`: real git in
-# a throwaway repository, no network. `OVERLAP_HELPER` points the suite at
-# another copy of the script (a mutant, say).
+# Hermetic test for the address-tasks skill's bundled `overlap.sh`, and for
+# `added-files.sh` beside it: real git in a throwaway repository, no network.
+# `OVERLAP_HELPER` and `ADDED_FILES_HELPER` point the suite at another copy of
+# either script (a mutant, say).
 set -u
 
 ROOT="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -253,6 +254,151 @@ is "6: outside a repository is a failure" "$?" 1
 call --help
 is "6: --help exits 0" "$RC" 0
 has "6: ...printing the contract" "$OUT" "outcome=conflict"
+
+# --- 7. added-files.sh: what more than one branch adds --------------------------
+ADDED_SHIPPED="$ROOT/plugins/dev-skills/skills/address-tasks/added-files.sh"
+ADDED="${ADDED_FILES_HELPER:-$ADDED_SHIPPED}"
+A="$WORKDIR/added"
+acall() { # [args...] → OUT (stdout), ERR (stderr), RC
+	OUT="$(cd "$A" && bash "$ADDED" "$@" 2>"$WORKDIR/err")"
+	RC=$?
+	ERR="$(cat "$WORKDIR/err")"
+}
+# on <branch> <base> <path>...: a branch off <base> that adds those files.
+on() {
+	local b="$1" p
+	git -C "$A" checkout -q -b "$b" "$2"
+	shift 2
+	for p in "$@"; do
+		mkdir -p "$A/$(dirname "$p")"
+		printf '%s\n' "$b" >"$A/$p"
+		git -C "$A" add "$p"
+	done
+	git -C "$A" commit -q -m "$b"
+}
+# The scan the skill's body used to print, kept here as the reference the
+# script must agree with: duplicated paths, then every added file by basename.
+old_paths() { # <branch>:<base>...
+	local s
+	for s in "$@"; do git -C "$A" diff --diff-filter=A --name-only "${s#*:}...${s%%:*}"; done | sort | uniq -d
+}
+old_names() {
+	local s
+	for s in "$@"; do
+		git -C "$A" diff --diff-filter=A --name-only "${s#*:}...${s%%:*}" |
+			awk -v branch="${s%%:*}" '{ n=split($0, p, "/"); print p[n] "\t" branch "\t" $0 }'
+	done | sort
+}
+git init -q -b main "$A"
+mkdir "$A/src" && printf 'x\n' >"$A/src/existing.ts" && printf 'x\n' >"$A/README.md"
+git -C "$A" add . && git -C "$A" commit -q -m init
+on one main src/controller.ts src/one-only.ts docs/notes.md
+on two main src/controller.ts lib/util.ts
+on three main pkg/util.ts pkg/deep/notes.md src/three-only.ts
+on alone main src/alone.ts
+# Stacked on `one`: it inherits one's files and adds one of its own.
+on stacked one src/stacked.ts
+git -C "$A" checkout -q main
+A_REFS="$(git -C "$A" for-each-ref)"
+
+acall one:main alone:main
+is "7: branches that add different files are clean" "$(val outcome)" clean
+is "7: ...with exit 0" "$RC" 0
+is "7: outcome is the first line" "$(printf '%s\n' "$OUT" | head -n 1)" "outcome=clean"
+has "7: ...each branch named with its base and how many files it adds" "$OUT" "branch=one${TAB}main${TAB}3"
+has "7: ...every added file listed for the caller's own comparison" "$OUT" "added=alone${TAB}src/alone.ts"
+is "7: ...all of them" "$(count added)" 4
+lacks "7: ...and no file the base already had" "$OUT" "existing.ts"
+
+SPECS=(one:main two:main three:main alone:main)
+acall "${SPECS[@]}"
+is "7: a path two branches add is a duplicate" "$(val outcome)" duplicate
+is "7: ...with exit 3" "$RC" 3
+has "7: ...named once per holder" "$OUT" "path=src/controller.ts${TAB}one"
+has "7: ...the other holder too" "$OUT" "path=src/controller.ts${TAB}two"
+is "7: ...and no other path" "$(count path)" 2
+has "7: a basename two branches add at different paths is named with each path" "$OUT" "basename=util.ts${TAB}two${TAB}lib/util.ts"
+has "7: ...on the other branch too" "$OUT" "basename=util.ts${TAB}three${TAB}pkg/util.ts"
+has "7: ...a duplicated path is a duplicated basename as well" "$OUT" "basename=controller.ts${TAB}one${TAB}src/controller.ts"
+is "7: ...and a basename one branch alone adds is not listed" "$(count basename)" 6
+has "7: ...the caller is told the decision is its own" "$ERR" "caller's to decide"
+old_names "${SPECS[@]}" >"$WORKDIR/old-names"
+is "7: the duplicated paths are the ones the skill's old scan printed" \
+	"$(printf '%s\n' "$OUT" | sed -n 's/^path=//p' | cut -f1 | sort -u)" "$(old_paths "${SPECS[@]}")"
+is "7: ...and the repeated basenames are the rows of its second scan that repeat across branches" \
+	"$(printf '%s\n' "$OUT" | sed -n 's/^basename=//p' | sort)" \
+	"$(awk -F "$TAB" 'NR == FNR { if (!(($1, $2) in s)) { s[$1, $2] = 1; c[$1]++ } next } c[$1] > 1' "$WORKDIR/old-names" "$WORKDIR/old-names")"
+is "7: ...whose every row is an added= line" \
+	"$(printf '%s\n' "$OUT" | sed -n 's/^added=//p' | awk -F "$TAB" -v t="$TAB" '{ n = split($2, p, "/"); print p[n] t $1 t $2 }' | sort)" "$(cat "$WORKDIR/old-names")"
+
+acall one:main stacked:one
+is "7: a branch stacked on a sibling does not re-list what it inherited" "$(val outcome)" clean
+has "7: ...it adds its own file only" "$OUT" "branch=stacked${TAB}one${TAB}1"
+acall one:main stacked:main
+is "7: ...which the wrong base would have made a duplicate" "$(val outcome)" duplicate
+
+# One branch adding one basename twice is no second holder.
+on twice main x/index.ts y/index.ts
+git -C "$A" checkout -q main
+acall twice:main alone:main
+is "7: one branch holding a basename twice is not two branches holding it" "$(val outcome)" clean
+on third main z/index.ts
+git -C "$A" checkout -q main
+acall twice:main third:main
+is "7: ...and with a second branch every one of its files is listed" "$(count basename)" 3
+
+# A rename into place is an added path, whatever diff.renames says.
+git -C "$A" checkout -q -b mover main
+git -C "$A" mv src/existing.ts src/alone.ts
+git -C "$A" commit -q -m move
+git -C "$A" checkout -q main
+acall mover:main alone:main
+has "7: a file renamed into place is a file the branch adds" "$OUT" "path=src/alone.ts${TAB}mover"
+
+acall one:main
+is "7: one branch alone is clean, not a usage error" "$(val outcome)" clean
+is "7: no ref was created or moved" "$(git -C "$A" for-each-ref | grep -v -e mover -e twice -e third)" "$A_REFS"
+is "7: the working tree is clean" "$(git -C "$A" status --porcelain)" ""
+OUT="$(cd "$WORKDIR" && bash "$ADDED" -C "$A" one:main two:main 2>/dev/null)"
+is "7: -C names the repository" "$(val outcome)" duplicate
+cmp -s "$ADDED_SHIPPED" "$ROOT/codex/dev-skills/skills/address-tasks/added-files.sh"
+ok "7: the two mirrors ship the same script" $?
+
+acall
+is "7: no branch is a usage error" "$RC" 64
+has "7: ...with the usage line" "$ERR" "added-files.sh [-C <dir>] <branch>:<its base>"
+acall one
+is "7: a branch with no base is a usage error" "$RC" 64
+acall one:main one:main
+is "7: a branch named twice is a usage error" "$RC" 64
+has "7: ...saying so" "$ERR" "named twice"
+acall one:main --frobnicate
+is "7: an unknown option is a usage error" "$RC" 64
+acall one:main nope:main
+is "7: a branch that names no commit is a failure, not a clean answer" "$RC" 1
+is "7: ...with nothing on stdout" "$OUT" ""
+has "7: ...naming it" "$ERR" "the branch 'nope' names no commit"
+acall one:main two:nope
+is "7: a base that names no commit is a failure" "$RC" 1
+has "7: ...naming whose it is" "$ERR" "the base 'nope' of 'two'"
+# The fixture is the working directory, so a base git read as an option would
+# leave a file there.
+acall "one:--output=added-files-leak" two:main
+is "7: a base that is an option to git is a failure" "$RC" 1
+is "7: ...and it reached git as no option" "$(find "$A" -maxdepth 1 -name '*added-files-leak*')" ""
+git -C "$A" checkout -q --orphan island
+git -C "$A" rm -q -rf .
+printf 'x\n' >"$A/island" && git -C "$A" add island && git -C "$A" commit -q -m island
+git -C "$A" checkout -q main
+acall one:main island:main
+is "7: a branch with no history in common with its base is a failure" "$RC" 1
+is "7: ...with nothing on stdout" "$OUT" ""
+has "7: ...saying so" "$ERR" "share no history"
+OUT="$(cd "$WORKDIR" && bash "$ADDED" one:main 2>/dev/null)"
+is "7: outside a repository is a failure" "$?" 1
+acall --help
+is "7: --help exits 0" "$RC" 0
+has "7: ...printing the contract" "$OUT" "outcome=duplicate"
 
 if [ "$fails" -gt 0 ]; then
 	printf 'address-tasks overlap helper test FAILED (%s of %s checks).\n' "$fails" "$checks" >&2

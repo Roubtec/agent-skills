@@ -249,34 +249,13 @@ The task-number guard that follows extends the pre-PR check to task-number claim
   When you fan out two independent tasks that both introduce the same *kind* of new surface (a "reconciliation controller", a "work-list endpoint", a migration helper), assign each a **distinct file and class name** in its implementer prompt.
   The implementers can't see each other, so the disambiguation has to come from you.
 - **Catch it before the PR — one task at a time.**
-  The moment a task passes review and **before** its PR, run it through the guard, serialized so that only one branch is ever under it (first-ready-wins, in the order tasks pass): compare what it newly added against every branch the run has **delivered or reserved** so far, by ref and from the main checkout — the scan enters no worktree, so it never becomes the new barrier:
-
-  ```bash
-  # The branch under the guard, plus every branch this run has delivered or reserved.
-  guard_branches=("task/001-first" "task/002-second")
-  declare -A branch_bases=(
-    ["task/001-first"]="main"
-    ["task/002-second"]="main"
-  )
-
-  # Exact same new path.
-  for branch in "${guard_branches[@]}"; do
-    base="${branch_bases[$branch]}"
-    git diff --diff-filter=A --name-only "$base...$branch"
-  done | sort | uniq -d
-
-  # Same new basename at any path; inspect repeated first columns.
-  for branch in "${guard_branches[@]}"; do
-    base="${branch_bases[$branch]}"
-    git diff --diff-filter=A --name-only "$base...$branch" |
-      awk -v branch="$branch" '{ n=split($0, p, "/"); print p[n] "\t" branch "\t" $0 }'
-  done | sort
-  ```
-
+  The moment a task passes review and **before** its PR, run it through the guard, serialized so that only one branch is ever under it (first-ready-wins, in the order tasks pass): compare what it newly added against every branch the run has **delivered or reserved** so far, by ref and from the main checkout — the scan enters no worktree, so it never becomes the new barrier.
+  Run `added-files.sh`, beside this file, from the main checkout: `added-files.sh <branch>:<its base> …`, naming the branch under the guard and every branch this run has delivered or reserved, each with its own base.
+  It prints a `path=` line for every path, and a `basename=` line for every file name, that more than one of those branches adds, and an `added=` line for every file any of them adds, which is where the symbol comparison starts.
   A duplicated path (or basename, or a shared exported top-level class/function/const/interface/type/enum name across two added files) is a collision.
   Hold the branch under the guard before PR delivery, then **deconflict — that call is yours to make** (a bounded exception to "the orchestrator doesn't implement", like building an integration branch): the branch under the guard is the side that changes — a delivered or reserved sibling is never rewritten — so rename enough files and/or symbols on it that no other holder shares the original colliding value, regenerate anything derived (e.g. contracts), and **re-review it with fresh eyes at the delivery tier** before its PR (the rename and the regeneration are a post-run change, so they void that task's own delivery-tier pass and owe it again); the sibling it clashed with is untouched and delivers, or has delivered, unchanged.
   If the shared name is **imperative** — a framework-mandated path, an external/published contract, or a name a task file explicitly pins — do **not** invent a divergent name: keep that branch held and surface it as a design decision for a human; a held branch holds only itself, and the pipeline keeps flowing around it.
-  Diff each branch against **its own base** with the three-dot form so a dependent branch that legitimately builds on a sibling isn't flagged — it never re-lists an inherited file.
+  Name each branch with **its own base**, which the script reads in the three-dot form, so a dependent branch that legitimately builds on a sibling isn't flagged — it never re-lists an inherited file.
 
 **Clearing the guard is a claim, held through delivery.**
 A branch that clears the guard reserves what it claims — its added surfaces and every task number its new task files claim — and the reservation stands until its delivery settles, because delivery is not atomic.

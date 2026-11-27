@@ -31,12 +31,40 @@
 //                real file for a consumer outside this repository.
 //   SHIMS      — each `plugins/dev-skills/bin/` shim that forwards into a skill
 //                folder points at a bundled file that exists.
+//   PLACEHOLDER — no Claude-mirror SKILL.md holds a positional argument
+//                placeholder, which is what keeps a shell or awk snippet with
+//                a positional parameter out of a skill body: it belongs in a
+//                bundled script. See "What Claude Code substitutes" below.
 //
 // A name is a bare lowercase `kebab-case.sh|.md` token: one with a path in
 // front of it (`tasks/foo.md`), a numeric prefix (`024-foo.md`), an `=` before
 // it (`peer-opinions=off.md`), or capitals
 // (`AGENTS.md`, `SKILL.md`) is an example or a repository file, not a claim
 // about the skill folder.
+//
+// What Claude Code substitutes. A SKILL.md is not literal text: the harness
+// rewrites it with the invocation's arguments before the model reads it. Probed
+// on Claude Code 2.1.332 with a throwaway skill, reading the expanded body from
+// the session transcript:
+//   - `$N` (any run of digits, `$0` the first argument, `$01` read as 1) and
+//     `$ARGUMENTS[N]` become argument N wherever they stand: in prose, in
+//     inline code and inside a fenced block alike, and whatever precedes them
+//     (`US$1`, `"$1"`, `$$1`).
+//   - `$N` followed by a word character (`$1st`, `$1_x`) is left alone, and so
+//     is `\$N`, which the harness prints as `$N` with the backslash removed
+//     (a backslash that itself follows a backslash escapes nothing).
+//   - An index the invocation has no argument for is left as written, so an
+//     invocation with no arguments shows the body intact: the defect only
+//     appears when the skill is called with enough arguments.
+//   - `$ARGUMENTS` becomes the whole argument string, empty when there is
+//     none. It is the deliberate form and this check leaves it alone.
+//   - `${0}`, `${1}`, `${ARGUMENTS}`, `$@`, `$*` and `$#` are not replaced.
+//   - A bundled file the skill tells a role to read or run by path reaches the
+//     model as it is on disk: nothing in it is replaced. So the check reads
+//     SKILL.md only, and a `$1` in a bundled script is what it looks like.
+// Only the Claude mirror is checked: the substitution is Claude Code's.
+// Not probed: named placeholders, which need an `arguments:` key in the
+// frontmatter that no skill here declares.
 //
 // When adding a file to a skill folder: add it to both mirrors, name it in the
 // SKILL.md, and this suite needs no edit. When a skill starts naming a script
@@ -69,6 +97,9 @@ const COPIES = {
 };
 
 const NAME = /(?<![\w./=-])[a-z][a-z0-9-]*\.(?:sh|md)\b/g;
+
+// What the harness would replace, per "What Claude Code substitutes" above.
+const PLACEHOLDER = /(?<!(?<!\\)\\)\$(?:ARGUMENTS\[\d+\]|\d+(?!\w))/g;
 
 let failures = 0;
 function check(name, condition, detail = "") {
@@ -155,6 +186,14 @@ function audit(model, external = EXTERNAL, copies = COPIES) {
   }
   for (const [file, text] of Object.entries(model.workflows)) resolve(`workflows/${file}`, text, sides[0], null);
 
+  // PLACEHOLDER
+  for (const [skill, folder] of Object.entries(model.trees.claude || {})) {
+    if (!folder["SKILL.md"]) continue;
+    folder["SKILL.md"].text.split("\n").forEach((line, i) => {
+      for (const [token] of line.matchAll(PLACEHOLDER)) problems.push(`placeholder: claude ${skill}/SKILL.md:${i + 1} holds \`${token}\`, which Claude Code replaces with an argument of the invocation; move the snippet into a bundled script`);
+    });
+  }
+
   // COPIES
   for (const [bundled, bin] of Object.entries(copies)) {
     const [skill, file] = bundled.split("/");
@@ -220,6 +259,7 @@ const realProblems = audit(real);
 check("every bundled skill file is mirrored, moded, named and resolvable", realProblems.length === 0, `\n  ${realProblems.join("\n  ")}`);
 const bundledCount = Object.values(real.trees.claude).reduce((n, folder) => n + Object.keys(folder).filter(isBundled).length, 0);
 check("the audit saw bundled files to check", bundledCount > 0, `${bundledCount} found`);
+check("the audit saw Claude-mirror SKILL.md files to check for placeholders", Object.values(real.trees.claude).filter((folder) => folder["SKILL.md"]).length > 0);
 check("the audit saw forwarding shims to check", Object.values(real.shims).some((t) => /^target="\$here\/\.\.\/skills\//m.test(t)));
 
 // --------------------------------------------------------------- fixtures --
@@ -257,6 +297,14 @@ fires("a bundled copy that drifted from its bin/ original is reported", (m) => (
 fires("a listed copy whose bin/ original is gone is reported", (m) => delete m.shims.tool, /^copies: bin\/tool, which alpha\/tool\.sh copies, does not exist/);
 fires("a shim forwarding to a missing file is reported", (m) => (m.shims["alpha-gone"] = 'target="$here/../skills/alpha/gone.sh"\n'), /^shims: bin\/alpha-gone forwards to skills\/alpha\/gone\.sh/);
 fires("an EXTERNAL entry nothing names any more is reported", (m) => { for (const s of ["claude", "codex"]) m.trees[s].beta["SKILL.md"] = f("Hand the reviewer the alpha skill's `role-brief.md`.\n"); }, /^external: `far-away\.sh`/);
+const awkSnippet = "```bash\ngit diff --name-only \"$base...$branch\" |\n  awk -v branch=\"$branch\" '{ n=split($0, p, \"/\"); print p[n] \"\\t\" branch }'\n```\n";
+fires("a positional parameter in a fenced snippet of a Claude SKILL.md is reported, with its line", (m) => (m.trees.claude.alpha["SKILL.md"].text += awkSnippet), /^placeholder: claude alpha\/SKILL\.md:4 holds `\$0`/);
+for (const [token, shown] of [["$1", "$1"], ["`$2`", "$2"], ["US$10.", "$10"], ["$ARGUMENTS[3]", "$ARGUMENTS[3]"], ["\\\\$1", "$1"]]) {
+  fires(`a ${shown} written as ${token} in prose is reported`, (m) => (m.trees.claude.beta["SKILL.md"].text += `Pass ${token} on.\n`), new RegExp(`^placeholder: claude beta/SKILL\\.md:2 holds \`${shown.replace(/[$[\]]/g, "\\$&")}\``));
+}
+check("fixture: what the harness leaves alone is not a placeholder", fixture((m) => (m.trees.claude.beta["SKILL.md"].text += "Use $1st, $1_x, \\$0, ${0}, ${1}, $@, $*, $#, $ARGUMENTS, ${ARGUMENTS}, $branch and $.\n")).length === 0);
+check("fixture: the Codex mirror's SKILL.md is not checked for placeholders", fixture((m) => (m.trees.codex.alpha["SKILL.md"].text += awkSnippet)).length === 0);
+check("fixture: a positional parameter in a bundled script or brief is not a placeholder", fixture((m) => { for (const s of ["claude", "codex"]) { m.trees[s].alpha["tool.sh"].text = m.shims.tool = '#!/bin/sh\necho "$1" "$0"\n'; m.trees[s].alpha["role-brief.md"].text += "Run `awk '{ print $1 }'`.\n"; } }).length === 0);
 check("fixture: another skill's file introduced once with its skill may be named bare afterwards", fixture((m) => { for (const s of ["claude", "codex"]) m.trees[s].beta["SKILL.md"].text += "Then `role-brief.md` again.\n"; }).length === 0);
 check("fixture: paths, numbered examples and capitalised repository files are not names", fixture((m) => { for (const s of ["claude", "codex"]) m.trees[s].beta["SKILL.md"].text += "See `tasks/done/foo.md`, `024-foo.md`, `AGENTS.md`, `tasks/039-peer-opinions=off.md` and `docs/x/build-notes.md`.\n"; }).length === 0);
 
