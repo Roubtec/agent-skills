@@ -13,7 +13,7 @@
 #
 # `<owner>/<repo>` is the repository the pull requests are in; write it
 # `<host>/<owner>/<repo>` where that is not github.com. `--folder` is the
-# repository's task folder (`tasks`, no trailing slash). A task file is one whose basename starts
+# repository's task folder (`tasks`, no trailing slash; `./-x` for a name that starts with a dash). A task file is one whose basename starts
 # with a full task number and a dash: three digits and an optional lowercase
 # letter (`001-`, `001a-`, `042b-`), at any depth under the folder, so
 # `done/` and `deferred/` keep their numbers. `001` and `001a` are two numbers.
@@ -81,8 +81,8 @@
 #                       its tasks another way reads these paths
 #         under outcome=clean (exit 0) or outcome=duplicate (exit 3), and
 #         always numbered= (how many files carried a full number). A folder
-#         that is missing or could not be read whole is a failure, not a
-#         clean answer.
+#         that is missing, is no folder, or could not be read whole is a
+#         failure, not a clean answer; one that is a symlink is read through.
 #
 # One enumeration, `gh pr list --state open --limit 200`, is the whole remote
 # reading, and each head is read at the commit it named: a head that moves
@@ -186,6 +186,11 @@ need_common() {
 }
 need_tree() {
 	[ -n "$FOLDER" ] || usage "--folder cannot be empty"
+	# The folder reaches find as its starting point, where a leading dash
+	# would be read as an expression.
+	case "$FOLDER" in
+	-*) usage "--folder takes a path, not an option: write ./$FOLDER for a folder so named" ;;
+	esac
 	git rev-parse --git-dir >/dev/null 2>&1 || fail "this is not a git repository."
 	# From the top of the working tree: the folder is a path from there, and
 	# a pathspec read from a subdirectory would match nothing and look clean.
@@ -461,16 +466,19 @@ cmd_duplicates() {
 	need_tree
 	local top duplicates
 	top="$(git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ] || fail "this checkout has no working tree to inventory."
-	(cd "$top" && find "$FOLDER" -type f) >"$tmp/files" 2>"$tmp/err" ||
+	[ -d "$top/$FOLDER" ] ||
+		fail "'$FOLDER' is no folder in this working tree. That is not a clean sweep: name the task folder with --folder where it is another."
+	# -H: a task folder that is a symlink is read, not passed over as one file.
+	(cd "$top" && find -H "$FOLDER" -type f) >"$tmp/files" 2>"$tmp/err" ||
 		fail "could not read the folder '$FOLDER' whole ($(tr '\n' ' ' <"$tmp/err")). That is not a clean sweep: name the task folder with --folder where it is another."
 	awk "$LISTED" "$tmp/files" | sort >"$tmp/tree"
-	awk -F "$TAB" '$1 != "-" { n = $1; sub(/^[^\t]*\t/, ""); count[n]++; paths[n] = paths[n] "duplicate=" n "\t" $0 "\n" }
+	awk -F "$TAB" '$1 != "-" { count[$1]++; paths[$1] = paths[$1] "duplicate=" $1 "\t" substr($0, length($1) + 2) "\n" }
 		END { for (n in count) if (count[n] > 1) printf "%s", paths[n] }' "$tmp/tree" | sort >"$tmp/duplicates"
 	duplicates="$(cut -f1 "$tmp/duplicates" | sort -u | awk 'END { print NR }')"
 	if [ "$duplicates" -gt 0 ]; then say "outcome=duplicate"; else say "outcome=clean"; fi
 	say "numbered=$(awk -F "$TAB" '$1 != "-"' "$tmp/tree" | awk 'END { print NR }')"
 	cat "$tmp/duplicates"
-	awk -F "$TAB" '$1 == "-" { sub(/^-\t/, ""); print "unnumbered=" $0 }' "$tmp/tree"
+	awk -F "$TAB" '$1 == "-" { print "unnumbered=" substr($0, 3) }' "$tmp/tree"
 	[ "$duplicates" -eq 0 ] || {
 		note "$duplicates task number(s) stand on more than one file in this working tree. Report every path for explicit remediation; a done or deferred task is never renumbered to repair one."
 		exit 3

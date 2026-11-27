@@ -587,6 +587,31 @@ is "10: duplicates takes no repository" "$RC" 64
 has "10: ...with the usage lines" "$ERR" "task-numbers.sh duplicates"
 call duplicates --branch main
 is "10: ...and no branch" "$RC" 64
+call duplicates --reserved 001
+is "10: ...and no reserved number" "$RC" 64
+# A folder value that find would read as an expression. The fixture is the
+# working directory and the expression a harmless one, so a script that let
+# it through would print paths and nothing more.
+call duplicates --folder -print
+is "10: a --folder that starts with a dash is a usage error" "$RC" 64
+is "10: ...with no outcome" "$OUT" ""
+has "10: ...saying how a folder so named is written" "$ERR" "./-print"
+[ -d "$R/.git" ] && [ -f "$R/tasks/001-first.md" ]
+ok "10: ...and the checkout is as it was" $?
+mkdir "$R/-print" && printf 'x\n' >"$R/-print/008-a.md"
+call taken --repo acme/widgets --folder -print
+is "10: ...for taken too, even where a folder bears that name" "$RC" 64
+call claims --repo acme/widgets --base main --folder -print
+is "10: ...and for claims" "$RC" 64
+call duplicates --folder ./-print
+is "10: ...while ./ names that folder" "$(val numbered)" 1
+ln -s tasks "$R/tk"
+call duplicates --folder tk
+is "10: a task folder that is a symlink is read through" "$(val outcome)" duplicate
+has "10: ...under the name it was given" "$OUT" "duplicate=001${TAB}tk/done/001-again.md"
+call duplicates --folder tasks/001-first.md
+is "10: a --folder that names a file is a failure, not a clean sweep" "$RC" 1
+is "10: ...with no outcome" "$OUT" ""
 OUT="$(cd "$R" && bash "$ROOT/plugins/dev-skills/bin/write-tasks-task-numbers" duplicates 2>/dev/null)"
 is "10: the plugin's shim runs it" "$(count duplicate)" 5
 call --help
