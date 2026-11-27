@@ -78,7 +78,7 @@ function check(name, cond, detail) {
 // does not count. Bump it deliberately when adding or removing one — a check
 // that silently stops running is invisible to a suite that only gates on
 // failures.
-const EXPECTED_CHECKS = 51;
+const EXPECTED_CHECKS = 59;
 
 // Evaluate a workflow's declaration prefix up to its documented cut marker and
 // hand back the named ones. Each is returned by an explicit reference, so a
@@ -216,6 +216,16 @@ const cycleResult = (extra) => ({
   check("a record with no commit behind it still gets the recorded-not-reviewed section", /Delivery-run failure — recorded, not reviewed/.test(cited) && cited.includes(CITED_NOTE), "pr prompt");
   check("and names no final commit, saying only that the record points at none and asserting no reason why", !/final commit/.test(cited) && /no post-run commit this record points you at, so cite none/.test(cited) && !/of its own/.test(cited), "pr prompt");
   check("and hands the writer no empty range check to copy", !/rangeCheck/.test(cited), "pr prompt");
+
+  // The close-out's record: the batch grants the close-out, so the body shows
+  // what shipped without a re-review.
+  const withCloseOut = prPrompt(task, { notes: "reviewer caveat", deviations: [], closeOut: CLOSE_OUT }, true);
+  check("the PR body brief carries the shipped-without-re-review section, with the edits, the range and the diff check's line", /Shipped without re-review — wording-level fixes/.test(withCloseOut) && withCloseOut.includes(CLOSE_OUT.edits[0]) && withCloseOut.includes(CLOSE_OUT.range) && withCloseOut.includes(CLOSE_OUT.verified), "pr prompt");
+  check("a cycle that closed out nothing gets no such section", !/Shipped without re-review/.test(withoutRecord), "pr prompt");
+  const { taskCycleConfig } = loadDeclarations("wf-address-tasks.js", "\nconst peerMode = /", ["taskCycleConfig"]);
+  check("the batch grants the close-out to every task's cycle", taskCycleConfig({ ...task, content: "c" }, true, "on").closeOut === "on");
+  const reports = cycleCarried(cycleResult({ undisposed: ["a stray remark"], addedPaths: [{ pass: 1, path: "src/unbriefed.ts" }] }));
+  check("the batch carrier forwards the undisposed remarks and the added paths, and only when there are any", JSON.stringify(reports.undisposed) === JSON.stringify(["a stray remark"]) && reports.addedPaths.length === 1 && !("undisposed" in plain) && !("addedPaths" in plain) && !("undisposed" in cycleCarried(cycleResult({ undisposed: [] }))), JSON.stringify(reports));
 
   // The no-remote branch opens no PR at all, so it must not be handed a record
   // it has nowhere to put.
@@ -489,6 +499,9 @@ const cycleResult = (extra) => ({
   const measured = carriedOf(cycleResult({ packetChecks: PACKET_CHECKS }));
   check("and the measurement log the refusal message names, whose failed-cycle return is where that message reaches the maintainer", JSON.stringify(measured.packetChecks) === JSON.stringify(PACKET_CHECKS) && !("packetChecks" in plain), JSON.stringify(measured.packetChecks));
 
+  const reports = carriedOf(cycleResult({ undisposed: ["a stray remark"], addedPaths: [{ pass: 1, path: "src/unbriefed.ts" }] }));
+  check("and the undisposed remarks and the added paths, only when there are any", JSON.stringify(reports.undisposed) === JSON.stringify(["a stray remark"]) && reports.addedPaths.length === 1 && !("undisposed" in plain) && !("addedPaths" in plain), JSON.stringify(reports));
+
   const { publishPrompt } = loadDeclarations("wf-address-review.js", "\nconst raw = flattenArgs(args);", ["publishPrompt"]);
   const pkt = { pr: { number: 42, url: "https://example.invalid/pr/42", branch: "b", workingBranch: "b", base: "main", headOid: "deadbeef", rebased: false }, items: [] };
   const withRecord = publishPrompt(pkt, [], { push: true }, [], [], RECORD);
@@ -521,6 +534,16 @@ const cycleResult = (extra) => ({
   );
   const cited = publishPrompt(pkt, [], { push: true }, [], [], CITED_RECORD);
   check("the no-commit record reaches the summary comment too, naming no commit and no empty range check", /Delivery-run failure — recorded, not reviewed/.test(cited) && cited.includes(CITED_NOTE) && !/final commit/.test(cited) && /no post-run commit this record points you at, so cite none/.test(cited) && !/of its own/.test(cited) && !/rangeCheck/.test(cited), "publish prompt");
+}
+
+{
+  const { publishPrompt } = loadDeclarations("wf-address-review.js", "\nconst raw = flattenArgs(args);", ["publishPrompt"]);
+  const pkt = { pr: { number: 7, branch: "feature/x" } };
+  const closed = publishPrompt(pkt, [], { push: true }, [], [], undefined, undefined, CLOSE_OUT);
+  check("the summary comment brief carries the close-out's record: heading, edits, range and the diff check's line", /## Shipped without re-review — wording-level fixes/.test(closed) && /plus the shipped-without-re-review section defined below/.test(closed) && closed.includes(CLOSE_OUT.edits[0]) && closed.includes(CLOSE_OUT.range) && closed.includes(CLOSE_OUT.verified), "publish prompt");
+  const open = publishPrompt(pkt, [], { push: true, pingCodex: true }, [], []);
+  check("and no such section where the cycle closed out nothing", !/Shipped without re-review/.test(open), "publish prompt");
+  check("a push of wording-level fixes alone summons no review round", /SKIP all pings where everything this run pushed is wording-level/.test(open) && /judged by reading the pushed diff/.test(open), "publish prompt");
 }
 
 check(`suite ran all ${EXPECTED_CHECKS} checks`, ran === EXPECTED_CHECKS, `ran ${ran}`);

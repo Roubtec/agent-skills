@@ -50,6 +50,8 @@ Ping the named bot(s) if any were named (filtered to contributors when `ping-con
   Combined with `push`/`ping-*` (a contradiction), honor `no-push` and note the ignored flag.
 - **A ping fires only when the push actually advanced the branch.**
   If this run produces nothing new to push — every disposition was already-addressed or push-back, or the branch was already up to date — **skip the pings.**
+- **A push whose only content is wording-level fixes summons no fresh review round.**
+  Where everything pushed is wording, grammar, typos, comment phrasing or formatting — judged on the pushed diff, as `review-cycle`'s close-out is — skip the pings and say so in the summary.
 - **`ping-contributing` prunes the ping set per this round's triage** (its table row defines what counts as a new finding).
   It never adds a bot you did not name, and a round in which no candidate bot brought a new finding pings no bot — even while the push itself advanced (e.g. you fixed a human's thread).
 - **Multiple pings present** → each is its own dedicated action (a separate comment per named bot; a reviewer request for Copilot), never a single comment mentioning several, which is how `ping.sh` makes them.

@@ -1119,11 +1119,12 @@ const CYCLE_FIX_SCHEMA = {
     proactive: { type: "string", description: "Same-pattern fixes made beyond the literal items, or empty." },
     closeOutEdits: { type: "array", items: { type: "string" }, description: "OFFER of a trivial-round close-out (only where the assignment says the invoker granted it): one entry per NON-SEMANTIC edit — wording, typos, comment phrasing, formatting; nothing touching behavior, logic, or the meaning of an acceptance criterion — in the fixes portion BEFORE any final record-only suffix. Ordinarily the whole pass diff must be those non-semantic edits. The SOLE exception is an exact FINAL diagnosis-only record commit required by the unrelated-flake rule: report that delivery failure in `flakeRecord`, but do NOT list the record in `closeOutEdits`. That report merely lets you OFFER the split; it cannot certify one. The cycle independently reads the diff and measures the final commit and its parent to decide whether that exact suffix qualifies. Empty otherwise. The offer is not the license: any other executable, behavioral, or semantic change anywhere in the pass diff, however it got there or how `flakeRecord` describes it, forfeits the close-out for a normal reviewer round — as does an empty fixes portion, an edit listed here that the fixes portion does not actually carry, or a finding disposed `fixed` that the fixes portion holds no change for, since this list cannot vouch for a fix it does not mention." },
     flakeRecord: { type: "string", description: "REQUIRED when this pass's own validation run hit a failure the cycle's flake rule defers as evidenced-unrelated: what failed, the evidence that established unrelatedness, and the follow-up task carrying it — the NEW one this pass committed, or the ACTIVE existing one it cites instead of editing. Empty otherwise, and never a restatement of an earlier pass's record — report only what YOUR OWN run surfaced. The cycle keeps every pass's, so copying an earlier one forward would republish it as your run's; a failure your own run hit AGAIN is your run's record and no restatement at all, so report it. This is the maintainer's only notice that a validation run FAILED, so the cycle carries EVERY pass's record in the run report it returns (the batch summary, where the consumer has one), and publishes the CONCLUDING pass's in the PR body or summary comment besides — including where citing an existing task left that pass with nothing to commit. It buys no exit and skips no round of its own — what a conclusion may skip is licensed by a read of the DIFF — but omitting a record your run owes costs the round that record would have skipped." },
+    addedPaths: { type: "array", items: { type: "string" }, description: "Every repo-relative path THIS pass added or renamed (a rename's NEW path), read from `git diff --name-status --diff-filter=AR <the HEAD you started this pass on>..HEAD` rather than recalled. Empty where the pass added and renamed nothing. List them all: the cycle itself drops the ones your assignment or a finding you were handed names, and reports the rest to the maintainer — a report, never a gate." },
     finalSha: { type: "string", description: "HEAD sha after this pass, with everything committed." },
     clean: { type: "boolean", description: "True only if the worktree is CLEAN and IDLE: `git status --porcelain` empty with every intended change committed, AND no Git operation in progress (`git rev-parse --git-path rebase-merge` / `rebase-apply`, `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`). A packet returned mid-rebase or mid-cherry-pick can print empty porcelain; the cycle refuses it either way. This is a self-report and is not taken as the answer: the cycle MEASURES the same worktree itself the moment your packet returns, so a `clean` the measurement contradicts costs the pass." },
     artifactDir: { type: "string", description: "Absolute path of this cycle's unique artifact directory — REQUIRED every pass: round 1 creates it (outside the worktree) and reports it, later passes echo the directory they were given. The result contract promises full round history reachable through it." },
   },
-  required: ["changed", "dispositions", "openQuestions", "deviations", "flakeRecord", "clean", "artifactDir"],
+  required: ["changed", "dispositions", "openQuestions", "deviations", "flakeRecord", "addedPaths", "clean", "artifactDir"],
 };
 
 // The INDEPENDENT measurement of the worktree a fix packet came back from —
@@ -1172,8 +1173,9 @@ const CYCLE_REVIEW_SCHEMA = {
           location: { type: "string", description: "file:line, or the item/section the finding concerns." },
           problem: { type: "string" },
           fix: { type: "string" },
+          weight: { type: "string", description: "material | wording — `wording` ONLY where the finding and its fix are non-semantic (wording, grammar, typos, comment phrasing, formatting; nothing touching behavior, logic, or the meaning of an acceptance criterion), `material` for everything else and whenever in doubt. It gates nothing: it tells the cycle's reader which findings are which without re-deriving it." },
         },
-        required: ["category", "location", "problem", "fix"],
+        required: ["category", "location", "problem", "fix", "weight"],
       },
     },
     emptyDiffFlag: { type: "boolean", description: "True if the diff against the base looked empty despite claimed work — signals a race/wrong-worktree, not real absence." },
@@ -1458,12 +1460,13 @@ const CYCLE_COMMENT_REVIEW = `Weight code comments by whether they outlive the P
 // Which validation tier a pass owes, decided by position: an intermediate pass
 // owes the ROUND tier (the cheapest signal covering what it changed), while any
 // pass that can be the cycle's LAST owes the DELIVERY tier — the confirmation
-// pass, and every pass under `light`, which skips that confirmation pass and so
-// can end the cycle on any passing round. A pass offering a trivial-round
+// pass, every pass under `light`, which skips that confirmation pass and so
+// can end the cycle on any passing round, and the pass heading into the last
+// round the cap permits, which concludes the same way. A pass offering a trivial-round
 // close-out is the third such case; its brief says so rather than being
 // detectable here, since the offer arrives with the packet.
 function cycleValidationTier(cycle, state) {
-  return state.confirming || cycle.mode === "light" ? "delivery" : "round";
+  return state.confirming || state.lastRound || cycle.mode === "light" ? "delivery" : "round";
 }
 
 // Subagent lifecycle, carried by every role that can start a process. A subagent
@@ -1705,7 +1708,7 @@ ${CYCLE_FINISH_IN_TURN} ${CYCLE_NO_SELF_PEER}
 
 Scope with \`git diff --name-only ${cycleShq(cycle.base)}...HEAD\` — deliberately the CUMULATIVE range, the whole change against \`base\` rather than an incremental since-the-last-round diff, because each round re-reviews the work as a whole. Then read each touched file IN FULL — do not read commit messages or diff content (both anchor you to the fixer's intent); follow references into untouched files when needed. If the diff looks empty despite claimed work, set \`emptyDiffFlag\` and stop — that signals a wrong worktree/branch, not real absence.
 ${persistLine}${cycle.scope && cycle.scope.reviewInstructions ? `\n## Consumer review criteria (verify each item against these too)\n\n${cycle.scope.reviewInstructions}\n` : ""}${cycleItemsBlock(cycle)}${handedBlock}${dispositionsBlock}${proposedRetirementsBlock}${workBlock}${deviationsBlock}
-Return \`pass: true\` only if everything holds and no material issue remains; else \`pass: false\` with numbered, actionable \`issues\`. Be strict but fair — real gaps and functional problems, not style nits. Put pass-worthy caveats in \`notes\` (the cycle disposes them rather than dropping them).`;
+Return \`pass: true\` only if everything holds and no material issue remains; else \`pass: false\` with numbered, actionable \`issues\`. Be strict but fair — real gaps and functional problems, not style nits. Tag each issue's \`weight\`: \`wording\` only where the finding and its fix are non-semantic, \`material\` otherwise. Put pass-worthy caveats in \`notes\` (the cycle disposes them rather than dropping them).`;
 }
 
 // The peer invocation happens INSIDE this subagent prompt, never in the
@@ -2343,8 +2346,8 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //   entry the passing round could use, and only while no later pass adopted
 //   work that round never saw), deviationHistory (only once some
 //   pass reported one), workReport, workReportReviewed (whether a reviewer
-//     round actually passed over THAT map ON THAT TREE — true on an error or
-//     cap exit taken past a passing round, since the confirmation pass can stop
+//     round actually passed over THAT map ON THAT TREE — true on an error
+//     exit taken past a passing round, since the confirmation pass can stop
 //     the cycle over the very map that just passed, and false where no round
 //     ever judged the map being carried out, a later pass having replaced the
 //     map or committed a new `finalSha` under it),
@@ -2365,7 +2368,15 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     plus teardownFailure on the one round that carried it — a provider the
 //     peer stage could not prove dead, which ends the cycle as an `error`
 //     rather than degrading to a non-blocking outcome), peerThrottle,
-//   discardedPeerFindings, undisposed, outstanding, artifactDir,
+//   discardedPeerFindings, outstanding, artifactDir,
+//   undisposed (present only where a passing round ENDED the cycle with no
+//     confirmation pass after it — under `light`, and on the last round the cap
+//     permits: that round's pass-notes, which no fixer pass considered),
+//   addedPaths (present only when some pass added or renamed a path that
+//     neither the scope nor a finding handed to that pass names: one
+//     { pass, path } entry per path, on every exit. The match is textual and
+//     the list is the pass's own, so it is a report for the maintainer and
+//     never a gate),
 //   closeOut (present only when a trivial-round close-out ENDED the cycle:
 //     the pass, the range, and the non-semantic edits that shipped unreviewed),
 //   recordOnly (present only when the cycle concluded over a delivery run that
@@ -2449,6 +2460,7 @@ async function runReviewCycle(cycle) {
   // rather than take it. It is a log, so it rides every exit — the refusals
   // most of all, since the entry that REFUSED a packet is the one worth reading.
   const packetChecks = [];
+  const addedPaths = [];
   // Drops claimed but not yet adjudicated, re-presented to each round until one
   // passes over them — the retirement machinery's rule, for its reason too.
   let pendingDeviationDrops = [];
@@ -2519,11 +2531,12 @@ async function runReviewCycle(cycle) {
       ...(deviationHistory.some((h) => h.deviations.length) ? { deviationHistory } : {}),
       ...(flakeHistory.length ? { flakeHistory } : {}),
       ...(packetChecks.length ? { packetChecks } : {}),
+      ...(addedPaths.length ? { addedPaths } : {}),
       workReport: carriedReport,
       // Whether a reviewer round passed over THAT map on THAT tree, not over
       // some earlier one: false before any round finished, false again once a
       // pass replaced the map, false where a pass kept the map and committed a
-      // new tip under it, and true on an error/cap exit taken past a passing
+      // new tip under it, and true on an error exit taken past a passing
       // round. No snapshot at all is the first of those, so it needs no second
       // condition beyond the one that says a round passed.
       workReportReviewed:
@@ -2551,7 +2564,7 @@ async function runReviewCycle(cycle) {
 
   while (true) {
     fixerPasses += 1;
-    const fix = await agent(cycleFixPrompt(cycle, { round: fixerPasses, findings, confirming, artifactDir, openQuestions, deviations }), {
+    const fix = await agent(cycleFixPrompt(cycle, { round: fixerPasses, findings, confirming, lastRound: rounds + 1 >= cap, artifactDir, openQuestions, deviations }), {
       label: `${lp}fix#${fixerPasses}`,
       schema: CYCLE_FIX_SCHEMA,
     });
@@ -2676,6 +2689,12 @@ async function runReviewCycle(cycle) {
     }
 
     for (const d of fix.dispositions || []) findingDispositions.push({ ...d, pass: fixerPasses });
+    // A path counts as briefed where its text occurs anywhere in what this
+    // pass was handed. Coarse on purpose: the list is read by a person.
+    const briefText = JSON.stringify([cycle.scope || {}, findings || {}]);
+    for (const path of new Set((Array.isArray(fix.addedPaths) ? fix.addedPaths : []).map((x) => String(x || "").trim()).filter(Boolean))) {
+      if (!briefText.includes(JSON.stringify(path).slice(1, -1)) && !addedPaths.some((a) => a.path === path)) addedPaths.push({ pass: fixerPasses, path });
+    }
     // The questions a disposition in THIS packet may retire: the ones live
     // before the pass's own are appended below — a question an earlier claim
     // already covers, accepted or still pending, is not retirable again.
@@ -2939,35 +2958,17 @@ async function runReviewCycle(cycle) {
     // branch: the fixer has changed it (or its claims) since the round that
     // judged it — even where it restates the same deviation text, which is the
     // deviation still matching, not the packet. Invalidated HERE, before
-    // either cap exit below, so no exit ships a pre-change in-spec-route
+    // the cap exit below, so no exit ships a pre-change in-spec-route
     // judgment and recommendation beside work no round approved; the round
     // that passes over this work re-records the reviewer's half in full below,
     // since the assessment gate holds a round open while any standing
     // deviation lacks one.
     deviationAssessments = [];
 
-    // Anything else needs a (re-)review — bounded by the cap. This check is
-    // reachable at the cap only through a confirmation pass that produced new
-    // work: changed content, dispositions of its own, or a move it made to the
-    // deviation set — dropping one or first stating one — that no round has
-    // adjudicated (a FAILED round at the cap returns below, before another
-    // fixer could run and leave never-reviewed changes behind).
-    //
-    // Those dispositions can themselves breach a contract, and the retirement
-    // guard binds on a pass handed nothing — so a confirmation pass that names
-    // an unknown (or already-claimed) question id lands its `retire:<id>` entry
-    // in `undisposed` on exactly this path. Carrying it out under the SAME
-    // `outstanding.carried` key the failed-round cap exit below uses is what
-    // makes the breach structurally reportable rather than a generic note; a
-    // consumer reading one exit's shape reads this one's.
-    if (rounds >= cap) {
-      return result("review-cap", `hit the ${cap}-round cap without convergence`, {
-        outstanding: {
-          note: "final confirmation pass produced work (content changes, dispositions of its own, or a move to the deviation set — a drop, or a newly stated deviation — that no round adjudicated) that could not be re-reviewed within the cap",
-          ...(undisposed.length ? { carried: undisposed } : {}),
-        },
-      });
-    }
+    // Anything else needs a (re-)review. A round is always left for it: a
+    // failed round at the cap returns below before another fixer could run,
+    // and a passing one concludes there, so no pass starts work the cap
+    // leaves unreviewed.
     rounds += 1;
 
     const state = {
@@ -2975,7 +2976,7 @@ async function runReviewCycle(cycle) {
       packet: { ...packet, dispositions: fix.dispositions || [] },
       artifactDir,
       handedFindings: findings,
-      tier: cycleValidationTier(cycle, { confirming }),
+      tier: cycleValidationTier(cycle, { confirming, lastRound: rounds >= cap }),
       proposedRetirements: pendingRetirements,
       peerState,
       peerThrottle,
@@ -3187,8 +3188,14 @@ async function runReviewCycle(cycle) {
     // and the reviewer round that just passed is no substitute carrier, since
     // its brief is never shown this pass's `flakeRecord` and its notes were
     // written without it.
-    if (cycle.mode === "light") {
-      return result("pass", "reviewer passed (light mode: final confirmation pass skipped)", {
+    //
+    // A pass on the LAST round the cap permits ends here the same way, and for
+    // the same tier reason (`cycleValidationTier`): a confirmation pass that
+    // fixed anything would leave work no round could review, and the passed
+    // tree would be lost to a `review-cap`. `reviewedFinalSha` names the commit
+    // the reviewer passed, which is the tip this exit leaves.
+    if (cycle.mode === "light" || rounds >= cap) {
+      return result("pass", cycle.mode === "light" ? "reviewer passed (light mode: final confirmation pass skipped)" : `reviewer passed on round ${rounds}, the last the ${cap}-round cap permits: final confirmation pass skipped, its pass-notes recorded undisposed`, {
         ...flakeCarried,
         undisposed: [review.notes].filter(Boolean),
       });
@@ -3255,6 +3262,10 @@ function taskCycleConfig(task, remote, peerMode) {
     artifactType: "code",
     peer: peerMode,
     mode: "full",
+    // The convergence judgement an orchestrator applies by hand: a pass whose
+    // whole change is wording-level does not buy another reviewer-plus-peer
+    // round. The cycle's own diff check decides whether a pass qualifies.
+    closeOut: "on",
     peerState: batchPeerState,
     peerThrottle: batchPeerThrottle,
     labelPrefix: `${task.slug}:`,
@@ -3314,7 +3325,11 @@ function prBodySections(ready) {
   const flakeRecord = rec
     ? `\n\nThe cycle concluded over a FAILED delivery run, on the flake rule's evidenced-unrelated disposition${rec.range ? `, and over a final commit (\`${rec.range}\`) no fresh reviewer saw — the diagnosis-only follow-up task that failure earned` : ", and over no post-run commit this record points you at, so cite none"}. Carry a "Delivery-run failure — recorded, not reviewed" section in the body with these verbatim, so the maintainer sees the gap here and decides how to absorb it; do not re-diagnose, soften, or omit it:\n${JSON.stringify({ note: rec.note || "", ...(rec.range ? { rangeCheck: rec.verified || "" } : {}) }, null, 2)}`
     : "";
-  return `${deviationLead}${flakeRecord}${caveats}`;
+  const co = (ready && ready.closeOut) || null;
+  const closeOutRecord = co
+    ? `\n\nThe review cycle concluded through its trivial-round close-out: its last fixer pass (\`${co.range || ""}\`) held only non-semantic fixes, which a read-only diff check confirmed and no reviewer round of the cycle re-read. Carry a "Shipped without re-review — wording-level fixes" section in the body listing these verbatim, so the maintainer sees what that was; do not soften or omit it:\n${JSON.stringify({ edits: co.edits || [], diffCheck: co.verified || "" }, null, 2)}`
+    : "";
+  return `${deviationLead}${flakeRecord}${closeOutRecord}${caveats}`;
 }
 
 function prPrompt(task, ready, remote) {
@@ -3636,15 +3651,12 @@ Do NOT open any PR and do NOT remove any worktree — the workflow re-scans the 
 // record cannot cover: it speaks for the CONCLUDING pass, so an intermediate
 // pass's evidenced-unrelated failure would reach the maintainer nowhere once a
 // later pass concluded clean — the batch Summary this carrier feeds is where it
-// does. A cycle this workflow
-// configures cannot report `closeOut` today — `taskCycleConfig` grants no
-// close-out and only the invoker's grant opens that exit — so that conditional
-// forwards nothing yet; it is written anyway because the two records are one
-// rule, and granting the close-out later then needs no second edit HERE;
-// `prPrompt` below renders `recordOnly` and not `closeOut`, so it would still
-// need teaching, exactly as `wf-address-review.js`'s twin of this note says of
-// its own publish brief.
+// does. `taskCycleConfig` grants the close-out, and `prBodySections` renders
+// both records.
 // Both present only when that exit actually ended the cycle.
+// `undisposed` and `addedPaths` are the cycle's two reports for the reader:
+// pass-notes no fixer pass considered, and paths a pass added or renamed
+// beyond its brief.
 // `packetChecks` rides for a reason the others do not have: the cycle's own
 // refusal message points the reader at that entry BY NAME ("see the
 // `packetChecks` entry for the list"), and the batch Summary this carrier feeds
@@ -3671,6 +3683,8 @@ function cycleCarried(result) {
     ...(result.recordOnly ? { recordOnly: result.recordOnly } : {}),
     ...(result.flakeHistory ? { flakeHistory: result.flakeHistory } : {}),
     ...(result.packetChecks ? { packetChecks: result.packetChecks } : {}),
+    ...(result.undisposed && result.undisposed.length ? { undisposed: result.undisposed } : {}),
+    ...(result.addedPaths ? { addedPaths: result.addedPaths } : {}),
   };
 }
 

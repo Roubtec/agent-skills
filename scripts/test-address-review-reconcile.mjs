@@ -282,7 +282,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 300;
+const EXPECTED_CHECKS = 302;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -869,6 +869,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     working.seen.cycleOpts && working.seen.cycleOpts.name === "dev-skills:wf-review-cycle" && working.seen.cycleOpts.opts.branch === "feature/x",
     JSON.stringify(working.seen.cycleOpts && working.seen.cycleOpts.opts && working.seen.cycleOpts.opts.branch),
   );
+  check("and grants it the trivial-round close-out", working.seen.cycleOpts && working.seen.cycleOpts.opts.closeOut === "on", JSON.stringify(working.seen.cycleOpts && working.seen.cycleOpts.opts.closeOut));
   const ffClean = await run(gathered({ reconcile: { outcome: "fast-forwarded" } }));
   check("same-branch `fast-forwarded` with no threads is a plain no-op", ffClean.status === "no-op", JSON.stringify(ffClean.result));
   // A no-op that had nothing to address may still have MOVED the branch, which
@@ -2721,6 +2722,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       restatementRequired: !!second && /Require the restatement as a blocking issue/.test(second.reviewInstructions),
     }),
   );
+  check("the re-verification cycle is granted the close-out too", !!replayed.seen.cycleCalls[1] && replayed.seen.cycleCalls[1].opts.closeOut === "on");
   const cap = replayed.seen.cycleCalls[1] ? replayed.seen.cycleCalls[1].opts.maxRounds : undefined;
   check(
     "and bounds it with a lowered round cap, so two cycles cannot double the run's worst case",

@@ -33,3 +33,4 @@ A consumer may raise the threshold for a section under heavy churn, but must sta
 ## At the round cap
 
 If issues persist after the last round the cap allows — round 12, or the lower number an invoker set — stop iterating, do not deliver or publish, and surface every outstanding finding set verbatim.
+A round that passes there concludes the cycle on that pass as `light` does, its remarks recorded as undisposed: a final pass that fixed anything would leave work no round can review.
