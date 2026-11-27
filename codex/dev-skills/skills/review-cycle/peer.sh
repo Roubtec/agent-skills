@@ -66,10 +66,11 @@
 # `peer-review-run` applies: a verdict line naming issues decides wherever it
 # stands, and a pass counts only unquoted, outside code, with no issue word
 # after it. A review with no such line is forfeited (`garbled output`, or
-# `empty output` for an empty one), also where the helper called it a pass. A
-# passed review whose evidence proof is missing or wrong becomes
-# forfeited with reason `diff evidence unreadable or proof absent`; an issues
-# review keeps its outcome and takes that reason.
+# `empty output` for an empty one), also where the helper called it a pass.
+# What the helper called issues stays issues, with its review, unless the
+# review file is empty. A passed review whose evidence proof is missing or
+# wrong becomes forfeited with reason `diff evidence unreadable or proof
+# absent`; an issues review keeps its outcome and takes that reason.
 #
 # Exit status: 0 for every outcome above; 3 when a provider this script
 # launched could not be proved dead (`outcome=failed`, `teardown=survivor`,
@@ -371,31 +372,36 @@ proof_holds() { # <review file>
 verdict_of() { # <review file>: prints passed or issues, or nothing where no line decides
 	awk '
 		BEGIN {
-			lead = "^[ \t>*#`-]*verdict[ \t]*[:=][ \t]*"
-			plain = "^[ \t*#-]*verdict[ \t]*[:=][ \t]*"
-			issue = "(issues?|changes?|blocking|block|reject|rejected|fail|failed|request[ \t_-]*changes?)"
-			pass = "(passed|pass|approved|approve|lgtm|no[ \t_-]*issues?)"
+			# The blanks [[:space:]] matches in peer-review-run, spelt out for
+			# awks without character classes.
+			b = " \t\r\f\v"
+			lead = "^[" b ">*#`-]*verdict[" b "]*[:=][" b "]*"
+			plain = "^[" b "*#-]*verdict[" b "]*[:=][" b "]*"
+			issue = "(issues?|changes?|blocking|block|reject|rejected|fail|failed|request[" b "_-]*changes?)"
+			pass = "(passed|pass|approved|approve|lgtm|no[" b "_-]*issues?)"
 			nw = "[^a-z0-9_]"
+			quote = "^>[" b "]*"
+			marker = "^([*+-]|[0-9]+[.)])[" b "]*"
 		}
 		{
 			l = tolower($0)
 			sub(/\r$/, "", l)
 			if (l ~ (lead issue)) { v = "issues"; exit }
 			s = l
-			sub(/^[ \t]*/, "", s)
+			sub("^[" b "]*", "", s)
 			depth = 0
-			while (match(s, /^>[ \t]*/)) { depth++; s = substr(s, RLENGTH + 1) }
+			while (match(s, quote)) { depth++; s = substr(s, RLENGTH + 1) }
 			if (fence != "") {
 				# Closed only by a longer-or-equal run of the same character, alone
 				# on its line, at the quote depth the fence opened at.
 				run = ""
 				if (match(s, /^`+/) || match(s, /^~+/)) run = substr(s, 1, RLENGTH)
 				tail = substr(s, length(run) + 1)
-				sub(/[ \t]+$/, "", tail)
+				sub("[" b "]+$", "", tail)
 				if (depth == fdepth && length(run) >= flen && substr(run, 1, 1) == fence && tail == "") fence = ""
 				next
 			}
-			while (sub(/^([*+-]|[0-9]+[.)])[ \t]*/, "", s)) continue
+			while (sub(marker, "", s)) continue
 			run = ""
 			if (match(s, /^`+/) || match(s, /^~+/)) run = substr(s, 1, RLENGTH)
 			if (length(run) >= 3 && (substr(run, 1, 1) == "~" || index(substr(s, length(run) + 1), "`") == 0)) {
@@ -405,9 +411,9 @@ verdict_of() { # <review file>: prints passed or issues, or nothing where no lin
 			if ($0 ~ /^(    |\t| \t|  \t|   \t)/) next
 			if (l !~ (plain pass "(" nw "|$)")) next
 			sub(plain, "", l)
-			if (match(l, /^no[ \t_-]*issues?/)) l = "pass" substr(l, RLENGTH + 1)
+			if (match(l, "^no[" b "_-]*issues?")) l = "pass" substr(l, RLENGTH + 1)
 			l = " " l
-			gsub(nw "(no|zero|without)([ \t_-]+[a-z0-9]+)?[ \t_-]+(issues?|changes?|blockers?|blocking|problems?|failures?)", " ", l)
+			gsub(nw "(no|zero|without)([" b "_-]+[a-z0-9]+)?[" b "_-]+(issues?|changes?|blockers?|blocking|problems?|failures?)", " ", l)
 			match(l, "^ " pass)
 			if (substr(l, RLENGTH + 1) ~ (nw issue "(" nw "|$)")) { v = "issues"; exit }
 			v = "passed"
@@ -469,14 +475,17 @@ run_helper() { # returns 0 when it emitted a result, 1 when the direct launch mu
 	passed | issues)
 		if [ -n "$review" ] && [ -f "$review" ] && [ -r "$review" ]; then
 			seen="$(verdict_of "$review")"
-			if [ "$seen" = "$outcome" ]; then
-				emit_verdict "$outcome" "$reason" "$review"
+			if ! grep -q '[^[:space:]]' "$review" 2>/dev/null; then
+				emit forfeited 'empty output'
+			elif [ "$outcome" = issues ]; then
+				# Its findings reach the caller however this script reads the text.
+				emit_verdict issues "$reason" "$review"
+			elif [ "$seen" = passed ]; then
+				emit_verdict passed "$reason" "$review"
 			elif [ "$seen" = issues ]; then
 				emit_verdict issues '' "$review"
-			elif grep -q '[^[:space:]]' "$review" 2>/dev/null; then
-				emit forfeited 'garbled output'
 			else
-				emit forfeited 'empty output'
+				emit forfeited 'garbled output'
 			fi
 		elif [ "$MANUAL" = 1 ]; then
 			R_FALLBACK="$UNUSABLE_REVIEW" R_MODEL="" R_EFFORT="" R_PIN=""

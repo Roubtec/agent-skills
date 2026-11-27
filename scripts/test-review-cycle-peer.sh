@@ -108,6 +108,10 @@ crash)
 	echo "peer-review-run: cannot create the review file" >&2
 	exit 70
 	;;
+crash-provider)
+	echo "peer-review-run: the --provider launch could not be prepared" >&2
+	exit 70
+	;;
 raw)
 	cat "$STEER/helper.raw"
 	exit 0
@@ -123,6 +127,18 @@ passed | issues)
 passed-nofile) mode=passed ;;
 issues-ghost)
 	mode=issues
+	review="\"$root/session/attempt-1/review.txt\""
+	;;
+issues-dir)
+	mode=issues
+	mkdir -p "$root/session/attempt-1/review.txt"
+	review="\"$root/session/attempt-1/review.txt\""
+	;;
+passed-unreadable)
+	mode=passed
+	mkdir -p "$root/session/attempt-1"
+	cat "$STEER/helper.review" >"$root/session/attempt-1/review.txt"
+	chmod 000 "$root/session/attempt-1/review.txt"
 	review="\"$root/session/attempt-1/review.txt\""
 	;;
 esac
@@ -173,6 +189,19 @@ crash-then-noise)
 transcript)
 	printf '%s\n' "+  return 401 if unauthorized" "+  // rate limit the caller" >&2
 	exit 0
+	;;
+old-error)
+	echo "error: a hiccup the provider recovered from" >&2
+	for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do echo "progress $i" >&2; done
+	exit 0
+	;;
+not-found)
+	echo "peer-launch: 12: codex-core: not found" >&2
+	exit 127
+	;;
+too-long)
+	echo "peer-launch: 12: codex: Argument list too long" >&2
+	exit 126
 	;;
 die) exit 3 ;;
 hang) exec sleep 300 ;;
@@ -410,7 +439,16 @@ for provider in codex muse; do
 	helper_review_case "a $provider pass over whitespace alone is empty output too" "$provider" passed $'\n  \n' "outcome=forfeited" "empty output"
 	helper_review_case "a $provider pass whose review has no verdict line is forfeited as garbled output" "$provider" passed $'It looks broadly fine to me.\n' "outcome=forfeited" "garbled output"
 	lacks "4: ...with no review offered" "$OUT" "review_file="
-	helper_review_case "a $provider issues result whose review reads as a pass is garbled output, never a pass" "$provider" issues $'VERDICT: PASS\n' "outcome=forfeited" "garbled output"
+	helper_review_case "a $provider pass spaced with a form feed is the pass the helper read" "$provider" passed $'VERDICT:\fPASS\n' "outcome=passed" "the helper's own reason"
+	helper_review_case "a $provider issues result whose review reads as a pass stays issues, under the helper's reason" "$provider" issues $'VERDICT: PASS\n1. blocking a.txt:2 wrong\n' "outcome=issues" "the helper's own reason"
+	[ -s "$(val review_file)" ]
+	ok "4: ...with its review, so no finding is dropped" $?
+	helper_review_case "so does a $provider issues result whose review has no verdict line" "$provider" issues $'1. blocking a.txt:2 wrong\n' "outcome=issues" "the helper's own reason"
+	[ -s "$(val review_file)" ]
+	ok "4: ...with its review too" $?
+	helper_review_case "a $provider issues result over an empty review file is forfeited as empty output" "$provider" issues "" "outcome=forfeited" "empty output"
+	lacks "4: ...with no review offered" "$OUT" "review_file="
+	helper_review_case "a $provider issues result over whitespace alone is empty output too" "$provider" issues $'\n  \n' "outcome=forfeited" "empty output"
 	helper_review_case "a $provider pass whose review says issues is issues, under no borrowed reason" "$provider" passed $'VERDICT: PASS WITH ISSUES\n1. blocking a.txt:2 wrong\n' "outcome=issues" ""
 	[ -s "$(val review_file)" ]
 	ok "4: ...and keeps its review, so no finding is dropped" $?
@@ -521,6 +559,20 @@ OUT="$(peer run --provider muse --worktree "$REPO" --artifact-dir "$A" --facts "
 is "5: any other usage error is the call's own failure, though its synopsis names --provider" "$(first)|$(val reason)" \
 	"outcome=failed|peer-review-run exited 64 with no result line: peer-review-run: --timeout must be a positive number of seconds (got '0')"
 fresh
+echo crash-provider >"$STEER/helper.mode"
+OUT="$(peer run --provider muse --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS")"
+is "5: so is an error naming --provider that is no usage error" "$(first)|$(val reason)" \
+	"outcome=failed|peer-review-run exited 70 with no result line: peer-review-run: the --provider launch could not be prepared"
+fresh
+echo usage-provider >"$STEER/helper.mode"
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS")"
+is "5: and a usage error naming --provider for a provider every helper knows" "$(first)|$(val reason)" \
+	"outcome=failed|peer-review-run exited 64 with no result line: peer-review-run: unsupported --provider 'muse' (claude|codex)"
+fresh
+echo issues-dir >"$STEER/helper.mode"
+OUT="$(peer run --provider muse --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS")"
+is "5: a muse review file that is a directory is no review file" "$(first)|$(val reason)" "outcome=forfeited|helper result carried no usable reviewFile"
+fresh
 echo passed-nofile >"$STEER/helper.mode"
 OUT="$(peer run --provider muse --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS")"
 is "5: a muse verdict with no review file is forfeited: there is no direct launch" "$(first)|$(val reason)" "outcome=forfeited|helper result carried no usable reviewFile"
@@ -572,6 +624,21 @@ echo issues-ghost >"$STEER/helper.mode"
 OUT="$(launch)"
 is "6: so does a review file that is not there" "$(first)|$(val fallback_reason)" "outcome=launched|helper result carried no usable reviewFile"
 peer collect --artifact-dir "$A" >/dev/null
+fresh
+echo issues-dir >"$STEER/helper.mode"
+OUT="$(launch)"
+is "6: and one that is a directory" "$(first)|$(val fallback_reason)" "outcome=launched|helper result carried no usable reviewFile"
+peer collect --artifact-dir "$A" >/dev/null
+fresh
+echo passed-unreadable >"$STEER/helper.mode"
+OUT="$(launch)"
+# Root reads a mode-000 file, so there the helper's pass simply stands.
+if [ "$(id -u)" = 0 ]; then
+	is "6: (as root, a mode-000 review file is readable)" "$(first)" "outcome=passed"
+else
+	is "6: and one this user cannot read" "$(first)|$(val fallback_reason)" "outcome=launched|helper result carried no usable reviewFile"
+	peer collect --artifact-dir "$A" >/dev/null
+fi
 BIN="$NOHELPER"
 
 manual_case() { # <label> <codex mode> <review text> <expected first line> <expected reason> <expected launches>
@@ -602,6 +669,46 @@ manual_case "a verdict behind a list dash counts" pass "- VERDICT: PASS" "outcom
 manual_case "a verdict in another case counts" pass "Verdict: pass" "outcome=passed" "" 1
 manual_case "a pass that says it found no issues stays a pass" pass "VERDICT: PASS, no issues found" "outcome=passed" "" 1
 manual_case "a verdict behind a list number is none, as peer-review-run reads it" pass "1. VERDICT: ISSUES" "outcome=forfeited" "garbled output" 1
+# The rest of the verdict rule, each row as `peer-review-run` reads it.
+while IFS='|' read -r want label text <&3; do
+	# shellcheck disable=SC2059 # the row is the format: its escapes are the bytes under test
+	text="$(printf -- "$text")"
+	case "$want" in
+	none) manual_case "$label is no verdict" pass "$text" "outcome=forfeited" "garbled output" 1 ;;
+	*) manual_case "$label is $want" pass "$text" "outcome=$want" "" 1 ;;
+	esac
+done 3<<'ROWS'
+issues|a quoted verdict of issues|> VERDICT: ISSUES
+none|a pass indented as code|    VERDICT: PASS
+none|a pass behind a tab|\tVERDICT: PASS
+passed|a pass indented by three spaces|   VERDICT: PASS
+none|a pass in a four-backtick fence holding a three-backtick line|````\n```\nVERDICT: PASS\n````
+none|a pass in a tilde fence holding a three-backtick line|~~~\n```\nVERDICT: PASS\n~~~
+none|a pass in a fence after a line of three backticks and a word|```\n```x\nVERDICT: PASS\n```
+none|a pass after a bare fence line that cannot close a quoted fence|> ```\n```\nVERDICT: PASS
+none|a pass in a fence opened behind a list dash|- ```\nVERDICT: PASS\n```
+passed|a pass after three backticks that open an inline code span|``` `x`\nVERDICT: PASS
+passed|a pass between two two-backtick lines|``\nVERDICT: PASS\n``
+issues|no issues followed by changes required|VERDICT: NO ISSUES, CHANGES REQUIRED
+issues|no issues run straight into an issue word|VERDICT: NO ISSUES CHANGES REQUIRED
+passed|a pass followed by a word that only holds an issue word|VERDICT: PASS, unchanged
+passed|a pass followed by a word that only begins with one|VERDICT: PASS, failing nothing
+none|a pass in a fence opened behind a form feed|\f```\nVERDICT: PASS\n```
+none|a pass in a fence opened behind a vertical tab|\v```\nVERDICT: PASS\n```
+issues|issues spaced with a form feed, before a pass|VERDICT:\fISSUES\nVERDICT: PASS
+issues|issues spaced with a vertical tab, before a pass|VERDICT:\vISSUES\nVERDICT: PASS
+issues|issues spaced with a carriage return, before a pass|VERDICT:\rISSUES\nVERDICT: PASS
+passed|a pass spaced with a vertical tab|VERDICT:\vPASS
+passed|a pass behind a form feed|\fVERDICT: PASS
+none|a pass in a fence quoted with a form feed|>\f```\nVERDICT: PASS
+passed|a pass after a fence closed before a form feed|```\nx\n```\f\nVERDICT: PASS
+none|a pass in a fence opened behind a dash and a form feed|-\f```\nVERDICT: PASS
+passed|no issues spaced with a form feed|VERDICT: NO\fISSUES
+issues|no issues spaced with a form feed, run into an issue word|VERDICT: NO\fISSUES CHANGES
+passed|a pass that names no issues across a form feed|VERDICT: PASS, no\fissues
+passed|a pass that names no real issues across form feeds|VERDICT: PASS, no\freal\fissues
+issues|request changes spaced with a form feed|VERDICT: REQUEST\fCHANGES
+ROWS
 manual_case "no output at all is forfeited as empty output" empty "" "outcome=forfeited" "empty output" 1
 manual_case "whitespace alone is empty output too" blank "" "outcome=forfeited" "empty output" 1
 manual_case "prose with no verdict line is forfeited as garbled output" garbled "" "outcome=forfeited" "garbled output" 1
@@ -610,6 +717,9 @@ manual_case "a login failure is unavailable, with the provider's words, and is n
 manual_case "a crash is told by the first error line of the stderr tail, not its last line" crash-then-noise "" "outcome=failed" "ERROR: stream error" 2
 manual_case "an auth word in the transcript a provider echoes is not the provider's own error" transcript "" "outcome=forfeited" "empty output" 1
 manual_case "a provider that dies without a word left no status to read: empty output, no retry" die "" "outcome=forfeited" "empty output" 1
+manual_case "an error line the provider left more than twenty lines before it ended is not what ended it" old-error "" "outcome=forfeited" "empty output" 1
+manual_case "a command the shell could not find is a crash, with the shell's words" not-found "" "outcome=failed" "peer-launch: 12: codex-core: not found" 2
+manual_case "a prompt too long to pass as an argument is a crash, with the shell's words" too-long "" "outcome=failed" "peer-launch: 12: codex: Argument list too long" 2
 manual_case "a crash is retried once and then failed, with the provider's words" crash "" "outcome=failed" "error: stream disconnected before completion" 2
 is "6: ...in a second attempt directory of its own" "$(val attempt)|$(find "$A" -maxdepth 1 -name 'manual-attempt-*' | wc -l | tr -d ' ')" "2|2"
 fresh
