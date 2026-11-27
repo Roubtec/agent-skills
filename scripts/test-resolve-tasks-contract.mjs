@@ -82,6 +82,7 @@ function section(text, start, end) {
   return text.slice(from, to < 0 ? text.length : to);
 }
 
+const inlineExceptions = [];
 for (const skill of ["address-tasks", "address-tasks-serialized", "reap-tasks"]) {
   const plugin = read("plugins", "dev-skills", "skills", skill, "SKILL.md");
   const codex = read("codex", "dev-skills", "skills", skill, "SKILL.md");
@@ -106,7 +107,19 @@ for (const skill of ["address-tasks", "address-tasks-serialized", "reap-tasks"])
   check(`${skill} hands-off policy keeps active numbers and explicit inputs`, /hands-off run[\s\S]*(execute|verify) only the number-selected unambiguous `active` paths plus every explicit path\/glob selection/.test(pluginPreflight));
   check(`${skill} hands-off policy documents all exclusions`, /Exclude and document every number-selected[\s\S]*every `not-found` input; never guess an ambiguous number/.test(pluginPreflight));
   check(`${skill} does not restate resolver mechanics`, !/three digits|optional lowercase|Inventory well-formed|Parse each task filename/.test(pluginPreflight));
+  // The inline exception is one paragraph, in the same words in every consumer:
+  // a consumer that widened it alone would resolve inline what its siblings
+  // send to the resolver.
+  const inline = section(pluginPreflight, "\nThe one exception is a list that needs no resolving", "\n\n");
+  inlineExceptions.push(inline);
+  check(`${skill} states the inline exception after the delegation and the reconciliation`, inline.length > 0 && pluginPreflight.indexOf(inline) > pluginPreflight.indexOf("never extra work to admit."));
+  check(`${skill} limits inline resolution to a list of numbers alone`, /where every pointer is a task number/.test(inline));
+  check(`${skill} limits it to numbers on exactly one active file`, /each of those numbers on exactly one file, directly in the active folder — none in `done\/` or `deferred\/`, none matching twice/.test(inline));
+  check(`${skill} has an inline resolution reported`, /says in its report that it resolved the list inline/.test(inline));
+  check(`${skill} keeps inline results under the number-selected policy`, /treating each such file as a number-selected unambiguous `active` path/.test(inline));
+  check(`${skill} sends everything else to the resolver, whole`, /Any path, glob, miss, duplicate, or match outside the active folder sends the whole list to the resolver as above\.$/.test(inline));
 }
+check("the inline exception is byte-identical across the three consumers", inlineExceptions.length === 3 && inlineExceptions[0].length > 0 && inlineExceptions.every((text) => text === inlineExceptions[0]));
 
 const reap = read("plugins", "dev-skills", "skills", "reap-tasks", "SKILL.md");
 const reapPreflight = section(reap, "## Task-pointer preflight", "\n## ");
