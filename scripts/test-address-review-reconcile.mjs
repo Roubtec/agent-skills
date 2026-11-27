@@ -282,7 +282,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 292;
+const EXPECTED_CHECKS = 300;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -625,7 +625,7 @@ const ITEM = {
 // location pair is written the same way: `locationMode` defaults to the inline
 // mode every reconciliation scenario runs in, and passing `null` omits the
 // field, which the working-location gate below rejects.
-function gathered({ workingBranch = "feature/x", items = [], reconcile, locationMode = "inline", worktree, baseOid = GATHERED_BASE_OID, priorRecord, startingHead = "deadbeef", finalHead = "deadbeef", rebased = false, detail }) {
+function gathered({ workingBranch = "feature/x", items = [], reconcile, locationMode = "inline", worktree, baseOid = GATHERED_BASE_OID, priorRecord, startingHead = "deadbeef", finalHead = "deadbeef", rebased = false, detail, undelivered }) {
   const packet = {
     ok: true,
     // Every `ok: true` gather the caller can CONTINUE on owes this echo —
@@ -654,6 +654,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   };
   if (baseOid !== null) packet.pr.baseOid = baseOid;
   if (detail !== undefined) packet.detail = detail;
+  if (undelivered !== undefined) packet.undelivered = undelivered;
   if (locationMode !== null) packet.pr.locationMode = locationMode;
   if (worktree !== undefined) packet.pr.worktree = worktree;
   if (reconcile !== undefined) packet.reconcile = reconcile;
@@ -6195,17 +6196,84 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   check(
     "the gather brief takes a bot's misfired top-level findings as standalone items only where fresh and applicable under all four conditions, one item per finding by permalink plus ordinal, and none where freshness is only ambiguous",
     /\*\*fresh and applicable\*\* — ALL of:/.test(misfiredPara) &&
-      /the review's `commit_id` — read from the REST review object, `gh api --paginate repos\/<owner>\/<repo>\/pulls\/<PR>\/reviews`/.test(misfiredPara) &&
+      /the review's `commit` in the listing above, which is the REST review object's `commit_id`/.test(misfiredPara) &&
       /`gh pr view --json reviews` names the commit `commit\.oid` and carries neither/.test(misfiredPara) &&
       /`created_at` cannot stand in for it/.test(misfiredPara) &&
       /no thread on this PR, resolved or unresolved, already raises it/.test(misfiredPara) &&
       /`gh-review-threads --all --repo <owner>\/<repo> <PR#>`/.test(misfiredPara) && !/or the GraphQL query/.test(misfiredPara) &&
-      /no maintainer reply dismisses it and the review's own `state` is not `DISMISSED`/.test(misfiredPara) &&
+      /the review's own `state` is not `DISMISSED`/.test(misfiredPara) &&
       /the code it names still exists on the branch/.test(misfiredPara) &&
       /take NONE of them and say so in `detail`/.test(misfiredPara) &&
       /`finding` its ordinal within that comment, exactly `N of M`, counted in the order the body presents them/.test(misfiredPara) &&
       /Nothing replies on the bot's comment/.test(misfiredPara),
     misfiredPara ? misfiredPara.slice(0, 240) : "the gather brief has no misfired-findings bullet",
+  );
+  // Task 070: the gather reads the reviews through the listing helper, a
+  // superseded head no longer discards a finding unread, and the guards that
+  // keep a finished round closed stand beside the relaxed rule.
+  const reviewsPara = brief.split("\n").find((l) => l.startsWith("- Submitted reviews:")) || "";
+  check(
+    "the gather brief lists the PR's reviews through `address-review-reviews` against the reconciled head, and fails closed where the listing does",
+    /run `address-review-reviews --repo <owner>\/<repo> --pr <PR#> --head <R>` in the working location/.test(reviewsPara) &&
+      /`suppressed` — null, or the suppressed-comment block of its body as `declared`, `parsed` and `entries\[\]`, each entry with its `file`, `line`, `text` and `changed`/.test(reviewsPara) &&
+      /Exit 3 \(`outcome=foreign` or `malformed`\) is a listing that failed that check twice: fail closed with `ok: false`, and never read the reviews some other way in its place/.test(reviewsPara),
+    reviewsPara.slice(0, 240) || "the gather brief has no submitted-reviews bullet",
+  );
+  check(
+    "a finding written against a superseded head is taken only where its file is unchanged since, a suppressed entry is one finding of its review, an unparsed block is read rather than treated as empty, and one left out for a changed file is named",
+    /is the current head, OR is an earlier head and the file the finding cites is unchanged since, which a suppressed entry's `changed: "same"` says/.test(misfiredPara) &&
+      /`git diff --quiet <that commit> <R> -- <file>` exiting 0 in the working location/.test(misfiredPara) &&
+      /each entry of the listing's `suppressed\.entries` is one finding of that review under the same tests/.test(misfiredPara) &&
+      /Where `parsed` is false the block is there and the helper could not read it: open the review's `url` and read the block yourself, and never treat it as empty/.test(misfiredPara) &&
+      /Where an entry's `changed` is `unknown` the review's commit is not in this repository: .* where it cannot be had the finding's freshness is ambiguous/.test(misfiredPara) &&
+      /one left out ONLY because its file changed since the superseded head it was written against is named in `detail` with that reason/.test(misfiredPara) &&
+      !/is the current head, so it was written against the code you are addressing/.test(misfiredPara),
+    misfiredPara.slice(0, 240),
+  );
+  check(
+    "the relaxed head rule reopens no finished round: a finding a thread raises, the prior record holds, an earlier Summary comment answered, a maintainer dismissed, or a dismissed review held is not taken",
+    /no thread on this PR, resolved or unresolved, already raises it/.test(misfiredPara) &&
+      /NO EARLIER ROUND DISPOSED IT — one the prior record holds is reintroduced under the previous bullet rather than taken here, and an earlier Summary comment that lists it under "Top-level findings", found among the review's `cited` comments, is that round's answer to it, whether a fix, a push-back or a follow-up, so it is not taken again/.test(misfiredPara) &&
+      /no maintainer reply dismisses it \(`cited` names the top-level comments that mention the review\) and the review's own `state` is not `DISMISSED`/.test(misfiredPara) &&
+      /the code it names still exists on the branch/.test(misfiredPara),
+    misfiredPara.slice(0, 240),
+  );
+  const undeliveredPara = brief.split("\n").find((l) => l.startsWith("- Review input that never arrived:")) || "";
+  check(
+    "the gather brief names a bot review that claims findings and delivered none as `undelivered`, never as an item, and the schema carries its permalink, author and claim",
+    /a review with `bot: true` whose `body` advertises findings .* beside `inline: 0`, with no suppressed entry and no finding text of its own/.test(undeliveredPara) &&
+      /where that bot authored no inline comment under another review of the same `commit` either/.test(undeliveredPara) &&
+      /Judge only each bot's most recent review, and skip one an earlier Summary comment among its `cited` already named/.test(undeliveredPara) &&
+      /it is NEVER an item: report each in `undelivered` with its `url`, its `author` and the `claim` its body made/.test(undeliveredPara) &&
+      JSON.stringify(PACKET_SCHEMA.properties.undelivered.items.required) === JSON.stringify(["url", "author", "claim"]) &&
+      !PACKET_SCHEMA.required.includes("undelivered"),
+    undeliveredPara.slice(0, 240) || "the gather brief has no undelivered bullet",
+  );
+  // Both skill mirrors state the same rules, in SKILL.md and the file it
+  // sends the gather to.
+  const skill070 = ["plugins/dev-skills/skills", "codex/dev-skills/skills"].flatMap((mirror) => {
+    const text = readAddressReviewSkill(mirror);
+    const lines = logicalLines(text);
+    const need = [
+      ["- **Submitted reviews:**", [/run `reviews\.sh --repo <owner>\/<repo> --pr <N> --head <the head step 1 reconciled against>`/, /exit 3 is a listing that failed that check twice: stop rather than read the reviews some other way/]],
+      ["Where a bot's top-level review or comment on this PR states a finding of its own", [/or the listing shows a `suppressed` block, or a bot's review with a body beside `inline: 0`, read `misfired-findings\.md`/]],
+      ["**One more source qualifies on its own: a bot reviewer that misfired", [/is the current head, or is an earlier head and the file the finding cites is unchanged since, which a suppressed entry's `changed: "same"` says/, /no earlier round disposed it — a prior disposition record that holds it is replayed under the rule above rather than taken here, and an earlier Summary comment that lists it under "Top-level findings"/, /One left out only because its file changed since the superseded head it was written against is named with that reason/, /the finding's freshness is ambiguous/]],
+      ["**A suppressed-comment block is such a body.**", [/each entry is one finding of that review under the tests above/, /Where `parsed` is false the block is there and the script could not read it: open the review's `url` and read the block yourself, and never treat it as empty/]],
+      ["**A bot review that claims findings and delivered none is review input that never arrived.**", [/beside `inline: 0`, with no suppressed entry and no finding text of its own/, /so it is no item; it is named instead/, /under a "Review input that never arrived" heading in the Summary comment, and in step 8's report, which is the only place it is named where the run ends as the terminal no-op below/, /name none that an earlier Summary comment among its `cited` already named/]],
+      ["A bot review that claims findings it never delivered (`misfired-findings.md`) is no item and changes neither exit", [/a terminal no-op that read one names it in step 8's report rather than reporting only that there was nothing to address/]],
+      ["5. **Summary comment** — post a top-level", [/a \*\*"Review input that never arrived"\*\* section for every bot review step 3 found claiming findings it delivered none of, with its permalink/]],
+      ["- Anything blocked or skipped for lack of an authoritative decision", [/a finding left out because its file changed since the superseded head it was written against, and every bot review that claimed findings it never delivered, named as review input that never arrived/]],
+    ];
+    return need.flatMap(([anchor, phrases]) => {
+      const line = lines.find((l) => l.includes(anchor));
+      if (!line) return [`${mirror}: no line holds ${JSON.stringify(anchor)}`];
+      return phrases.filter((ph) => !ph.test(line)).map((ph) => `${mirror}: ${JSON.stringify(anchor.slice(0, 50))} does not state ${ph}`);
+    });
+  });
+  check(
+    "both skill mirrors read the review listing in step 3, take a superseded-head finding only on an unchanged file behind the earlier-round guards, and name an undelivered bot review in the Summary comment, the final report and the terminal no-op",
+    skill070.length === 0,
+    skill070.join("; "),
   );
   const standalonePara = brief.split("\n").find((l) => l.startsWith("- A standalone issue comment or review summary becomes its own item")) || "";
   const zeroPara = brief.split("\n").find((l) => l.startsWith("If there are no unresolved threads")) || "";
@@ -6438,6 +6506,32 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   check(
     "a gather that left nothing out adds no section and no result field",
     !/Left out of this run's gather/.test(flakeBrief) && !("gatherLeftOut" in (flake.result || {})),
+    flakeBrief.slice(0, 100),
+  );
+  // Task 070: a bot review that claimed findings and delivered none is no
+  // item, and is named wherever the run ends.
+  const UNDELIVERED = [{ url: "https://github.com/acme/widgets/pull/42#pullrequestreview-77", author: "claude[bot]", claim: "Found 3 issues: 2 bugs, 1 nit" }];
+  const silent = await run(gathered({ items: [], reconcile: { outcome: "work" }, undelivered: UNDELIVERED }), { args: "push no-rebase" });
+  check(
+    "a terminal no-op names a bot review that claimed findings and delivered none, in its detail and its result, rather than ending as a silent no-op",
+    silent.status === "no-op" &&
+      (silent.result.detail || "").includes('Review input that never arrived — 1 bot review(s) claimed findings and delivered none, so nothing here addressed them: https://github.com/acme/widgets/pull/42#pullrequestreview-77 by claude[bot], claiming "Found 3 issues: 2 bugs, 1 nit".') &&
+      JSON.stringify(silent.result.undeliveredReviews) === JSON.stringify(UNDELIVERED),
+    JSON.stringify(silent.result).slice(0, 500),
+  );
+  const named = await run(gathered({ ...packet, undelivered: [...UNDELIVERED, "not an entry", null] }), { args: "push no-rebase", cycles: [withReport(CYCLE_PASS.workReport[0], LANE_ENTRY, ABSENT_ENTRY)] });
+  const namedBrief = named.seen.publishPrompts[0] || "";
+  check(
+    "an itemful run's publish brief puts such a review under \"Review input that never arrived\" in the Summary comment, its result carries it, and it adds no item",
+    named.status === "fixed-published" &&
+      /under a "Review input that never arrived" heading — every bot review the gather found claiming findings it delivered none of, each with its permalink/.test(namedBrief) &&
+      namedBrief.includes(JSON.stringify(UNDELIVERED)) &&
+      JSON.stringify(named.result.undeliveredReviews) === JSON.stringify(UNDELIVERED),
+    `${named.status}: ${namedBrief.includes(JSON.stringify(UNDELIVERED))} ${JSON.stringify(named.result.undeliveredReviews)}`,
+  );
+  check(
+    "a gather that found no such review adds no section, no result field, and nothing to the no-op's detail",
+    !/Review input that never arrived/.test(flakeBrief) && !("undeliveredReviews" in (flake.result || {})) && !/Review input that never arrived/.test(noop.result.detail || "") && !("undeliveredReviews" in noop.result),
     flakeBrief.slice(0, 100),
   );
 }
