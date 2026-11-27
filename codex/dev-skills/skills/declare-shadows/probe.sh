@@ -413,8 +413,14 @@ mount_fs() { # absolute path: the filesystem mounted exactly there, `none`, or `
 		printf unknown
 		return
 	}
+	# The listing already read says whether anything is mounted there, so a
+	# lookup that then fails is a failed read, not an absent mount.
+	printf '%s\n' "$MOUNT_TARGETS" | grep -Fxq -- "$1" || {
+		printf none
+		return
+	}
 	fs="$(findmnt -no FSTYPE -M "$1" 2>/dev/null | tail -n 1)"
-	printf '%s' "${fs:-none}"
+	printf '%s' "${fs:-unknown}"
 }
 mounts_below() { # absolute path: prints the mount targets under it
 	[ -n "$MOUNT_TARGETS" ] || return 0
@@ -738,9 +744,7 @@ cmd_worktrees() {
 		fi
 		# findmnt fails for a path that is not there, which is no failed read.
 		if [ "$MOUNTS_READABLE" = 1 ] && [ -e "$p" ]; then
-			if fs="$(findmnt -nro FSTYPE -T "$p" 2>/dev/null)" && [ -n "$fs" ]; then
-				fs="${fs##*"$NL"}"
-			else
+			if ! fs="$(findmnt -nro FSTYPE -T "$p" 2>/dev/null)" || [ -z "$fs" ]; then
 				note "findmnt could not name the filesystem holding $root; the mount verdict reads unknown."
 				known=0 fs=-
 			fi

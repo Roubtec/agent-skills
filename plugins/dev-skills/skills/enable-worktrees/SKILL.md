@@ -79,7 +79,7 @@ Every edit is idempotent and surgical — preserve unrelated content, comments, 
    With `override=none` the committed list is the effective one and this step is done; the rest of it applies only to `override=active`.
    If all three roots read `override=yes`, the effective list is compliant and there is nothing to resolve (step 5 still verifies it) — but `.powbox.yml` is still replaced wholesale, so record that too and name its entries the override lacks, the `override_drops=` lines: those are the declarations that stay unmounted.
    Otherwise say plainly that what you wrote is inert, and confirm one of two resolutions before editing a user-local file: add the three entries to the override's `shadow:` list, keeping its existing entries and its other keys untouched; or have the user retire the override by dropping its `shadow:` key so the committed list takes effect.
-   Retiring is not free: name the entries it would stop declaring — the `override_only=` lines, every path the override holds and `.powbox.yml` does not — and note that `shadow-refresh.sh` only adds mounts, so each keeps its tmpfs, and its host-invisible writes, until the next container start.
+   Retiring is not free: name the entries it would stop declaring — the `override_only=` lines less any root you have just added to `.powbox.yml`, every path the override holds and `.powbox.yml` does not — and note that `shadow-refresh.sh` only adds mounts, so each keeps its tmpfs, and its host-invisible writes, until the next container start.
 
 3. **Reconcile `.gitignore`.**
    `$ROOT/.gitignore` has to ignore `.worktrees/` and `.claude/worktrees/`, and `ignored=shared` on a root's line says a committed rule already does.

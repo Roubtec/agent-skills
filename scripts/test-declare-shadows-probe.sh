@@ -95,7 +95,9 @@ list)
 	[ ! -f "$FAKE/findmnt-fails" ] || exit 1
 	awk -F '\t' '{ print $1 }' "$FAKE/mounts"
 	;;
-exact) P="$path" awk -F '\t' '$1 == ENVIRON["P"] { print $2; found = 1 } END { exit !found }' "$FAKE/mounts" ;;
+exact)
+	[ ! -f "$FAKE/findmnt-exact-fails" ] || exit 1
+	P="$path" awk -F '\t' '$1 == ENVIRON["P"] { print $2; found = 1 } END { exit !found }' "$FAKE/mounts" ;;
 holding)
 	[ ! -f "$FAKE/findmnt-holding-fails" ] || exit "$(cat "$FAKE/findmnt-holding-fails")"
 	[ -e "$path" ] || exit 1
@@ -143,7 +145,7 @@ export TMPDIR="$EMPTYTMP"
 R="" OUT="" RC=0
 new_repo() {
 	R="$(mktemp -d "$WORKDIR/case.XXXXXX")/repo"
-	rm -f "$FAKE/mounts" "$FAKE/findmnt-fails" "$FAKE/findmnt-holding-fails" "$FAKE/detect" "$FAKE/detect-fails" "$FAKE/yq.log"
+	rm -f "$FAKE/mounts" "$FAKE/findmnt-fails" "$FAKE/findmnt-exact-fails" "$FAKE/findmnt-holding-fails" "$FAKE/detect" "$FAKE/detect-fails" "$FAKE/yq.log"
 	git init -q -b main "$R"
 	printf 'x\n' >"$R/README"
 	git -C "$R" add README
@@ -611,6 +613,12 @@ is "mount: and no mount fact is claimed" "$(cand apps/web/dist mount) $(cand dat
 lacks "mount: nor any live mount listed" "$OUT" "mounted="
 has "mount: and it is explained" "$(cat "$WORKDIR/stderr")" "findmnt could not list the mounts"
 rm "$FAKE/findmnt-fails"
+# Nor is a lookup that fails for a path the listing named: only a path the
+# listing does not name reads `none`.
+: >"$FAKE/findmnt-exact-fails"
+run shadows
+is "mount: a listed mount whose lookup fails is unknown, an unlisted path none" "$(cand apps/web/dist mount) $(cand data mount)" "unknown none"
+rm "$FAKE/findmnt-exact-fails"
 
 # ------------------------------------------------------------------ derived --
 new_repo
