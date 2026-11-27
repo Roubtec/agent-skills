@@ -62,10 +62,11 @@
 #                    asked with a trailing slash, as a directory; the index is
 #                    not consulted, `tracked` says that). `-` where the guard
 #                    failed on something git will not look past. `shared` is
-#                    a rule whose exact line is in a file of the HEAD commit;
-#                    `unshared` is any other source (a global excludes file,
-#                    the repository's own exclude file, an uncommitted edit),
-#                    which teammates do not have.
+#                    a rule from a file that is in the HEAD commit and has no
+#                    uncommitted change; `unshared` is any other source (a
+#                    global excludes file, the repository's own exclude file,
+#                    an ignore file edited since HEAD, every rule in it), which
+#                    teammates do not have as it stands.
 #           tracked  whether the root index holds anything at or below it.
 #           guard    `ok`, or the first ownership check it fails:
 #                    `outside-root`, `is-root`, `symlink:<component>`,
@@ -75,14 +76,19 @@
 #                    `nested-git:<path>` (a `.git` somewhere below an existing
 #                    leaf), `unscanned` (the walk below it stopped at the scan
 #                    limit or could not read a directory), or `preauthorized`
-#                    for a declared `.worktrees`, `.claude/worktrees` or
-#                    `.git/worktrees`, exactly so spelled. The path is resolved
-#                    lexically; no symlink is followed.
+#                    for `.worktrees`, `.claude/worktrees` or `.git/worktrees`
+#                    declared as that literal entry (a glob matching one does
+#                    not count). The path is resolved lexically; no symlink is
+#                    followed.
 #           mount    the filesystem mounted exactly there; `below` counts the
-#                    mounts under it.
+#                    mounts under it. `unknown` and `-` where the mount table
+#                    could not be read: no `findmnt`, or it failed (stderr
+#                    says so). No `mounted=` line is printed then.
 #           derived  `yes` when `detect-shadows.sh` emits the path and no entry
 #                    of the effective list accounts for it: powbox shadows it
 #                    from a manifest already. A declared path never reads `yes`.
+#                    `unknown` where `detect-shadows.sh` is absent or failed
+#                    (stderr says so); no `derived=` line is printed then.
 #           And around them:
 #             glob=<committed|override> TAB <matches> TAB <pattern>
 #             derived=<path>      every such path, on disk or not
@@ -93,9 +99,10 @@
 #             limit=<n>           with `outcome=incomplete`: more candidates
 #                                 than `--limit` (default 200); the declared
 #                                 and named ones come first
-#           The walk below existing candidates stops after `--scan-limit`
-#           entries in all (default 100000), so a very large ignored tree costs
-#           a bounded read and answers `unscanned`.
+#           The walk below existing candidates is cut off after
+#           `--scan-limit` entries in all (default 100000), or at the first
+#           nested `.git`, so a very large ignored tree costs a bounded read
+#           and answers `unscanned`.
 #
 # worktrees Then one line per worktree root:
 #             worktree_root=<.worktrees|.claude/worktrees|.git/worktrees>
@@ -346,7 +353,7 @@ read_config() {
 # rule over a directory with tracked files in it is still a rule, and what is
 # tracked is reported on its own.
 ignore_state() { # path, exists (dir|absent|...)
-	local ask="$1" out rc src rest line pattern
+	local ask="$1" out rc src pattern head
 	IGN=no RULE=""
 	[ "$2" != absent ] || ask="$1/"
 	out="$(git -C "$ROOT" check-ignore --no-index -v -- "$ask" 2>/dev/null)"
@@ -355,28 +362,28 @@ ignore_state() { # path, exists (dir|absent|...)
 	[ "$rc" = 0 ] || return 0
 	RULE="${out%"$TAB"*}"
 	src="${RULE%%:*}"
-	rest="${RULE#*:}"
-	line="${rest%%:*}"
-	pattern="${rest#*:}"
+	pattern="${RULE#*:}"
+	pattern="${pattern#*:}"
 	# `check-ignore -v` answers 0 for a negated rule too: that is the rule that
 	# un-ignores the path.
 	case "$pattern" in '!'*) return 0 ;; esac
 	IGN=unshared
-	case "$line" in '' | *[!0-9]*) return 0 ;; esac
-	if git -C "$ROOT" show "HEAD:$src" 2>/dev/null | tr -d '\r' |
-		LINE="$pattern" awk '$0 == ENVIRON["LINE"] { found = 1 } END { exit !found }'; then
-		IGN=shared
-	fi
+	# The whole source file has to be the committed one, not just the matching
+	# line: a rule's effect depends on the lines around it (a negation removed
+	# but not committed leaves the same line ignoring more than HEAD does).
+	head="$(git -C "$ROOT" rev-parse -q --verify "HEAD:$src" 2>/dev/null)" || return 0
+	[ "$(git -C "$ROOT" hash-object -- "$src" 2>/dev/null)" != "$head" ] || IGN=shared
 }
 
 MOUNT_TARGETS=""
-HAVE_FINDMNT=0
+# 1 while there is a mount table to ask.
+MOUNTS_READABLE=0
 if have findmnt; then
-	HAVE_FINDMNT=1
+	MOUNTS_READABLE=1
 fi
 mount_fs() { # absolute path: the filesystem mounted exactly there, `none`, or `unknown`
 	local fs
-	[ "$HAVE_FINDMNT" = 1 ] || {
+	[ "$MOUNTS_READABLE" = 1 ] || {
 		printf unknown
 		return
 	}
@@ -436,16 +443,17 @@ guard() { # path, declared (0|1)
 	GUARD=ok
 	p="$ROOT/$rel"
 	[ -d "$p" ] || return 0
+	# awk leaving at its verdict is what ends the walk: find dies on its next
+	# write, and the status line of a find stopped that way is never read.
 	scan="$({
-		find "$p" -print 2>/dev/null
+		find "$p" -print
 		printf 'find-status %s\n' "$?"
-	} | MAX="$SCAN_LEFT" awk '
+	} 2>/dev/null | MAX="$SCAN_LEFT" awk '
 		BEGIN { max = ENVIRON["MAX"] + 0 }
-		done { next }
 		/^find-status / { if ($2 != 0) verdict = "unreadable"; next }
 		{ n++ }
-		/\/\.git$/ { verdict = "git\t" $0; done = 1; next }
-		n > max { verdict = "limit"; done = 1 }
+		/\/\.git$/ { verdict = "git\t" $0; exit }
+		n > max { verdict = "limit"; exit }
 		END { print n + 0 "\t" (verdict == "" ? "clear" : verdict) }')"
 	walked="${scan%%"$TAB"*}"
 	verdict="${scan#*"$TAB"}"
@@ -492,8 +500,22 @@ add_written() { # path as written, source
 	fi
 }
 
+# Prints, NUL-terminated, the directories a declared glob matches now. Meant
+# for a process substitution: the directory and the shell options stay there.
+glob_matches() { # pattern
+	local pattern="$1" m IFS=
+	cd "$ROOT" || exit
+	shopt -s nullglob
+	shopt -s globstar 2>/dev/null
+	while [ "${pattern#/}" != "$pattern" ]; do pattern="${pattern#/}"; done
+	# shellcheck disable=SC2086 # the expansion is the point
+	for m in $pattern; do
+		[ ! -d "$m" ] || printf '%s\0' "$m"
+	done
+}
+
 cmd_shadows() {
-	local named="" e kind matches m i rel from exists tracked below derived fs dropped=0 seen_end=0 derived_all="" root_real line
+	local named="" e kind matches m i rel from exists tracked below derived fs dropped=0 seen_end=0 derived_all="" derived_known=0 root_real line
 	while [ $# -gt 0 ]; do
 		case "$1" in
 		--candidate | --limit | --scan-limit)
@@ -517,8 +539,9 @@ cmd_shadows() {
 
 	GITLINKS="$(git -C "$ROOT" ls-files --stage)" || fail "git could not list the index."
 	GITLINKS="$(printf '%s\n' "$GITLINKS" | awk -F '\t' 'substr($1, 1, 6) == "160000" { print $2 }')"
-	if [ "$HAVE_FINDMNT" = 1 ]; then
-		MOUNT_TARGETS="$(findmnt -lno TARGET 2>/dev/null)" || MOUNT_TARGETS=""
+	if [ "$MOUNTS_READABLE" = 1 ] && ! MOUNT_TARGETS="$(findmnt -lno TARGET 2>/dev/null)"; then
+		note "findmnt could not list the mounts; every mount fact reads unknown."
+		MOUNTS_READABLE=0 MOUNT_TARGETS=""
 	fi
 
 	# detect-shadows.sh emits the effective list's own paths beside the ones it
@@ -526,10 +549,10 @@ cmd_shadows() {
 	if have detect-shadows.sh; then
 		root_real="$(cd -P -- "$ROOT" && pwd)"
 		if line="$(detect-shadows.sh "$ROOT" 2>/dev/null)"; then
+			derived_known=1
 			derived_all="$(printf '%s\n' "$line" | PREFIX="$root_real/" awk 'index($0, ENVIRON["PREFIX"]) == 1 { print substr($0, length(ENVIRON["PREFIX"]) + 1) }')"
 		else
-			note "detect-shadows.sh failed; no path is reported as derived."
-			derived_all=""
+			note "detect-shadows.sh failed; whether a path is derived reads unknown."
 		fi
 	fi
 
@@ -552,18 +575,7 @@ cmd_shadows() {
 					else
 						add_candidate "$m" glob || true
 					fi
-				done < <(
-					cd "$ROOT" || exit
-					shopt -s nullglob
-					shopt -s globstar 2>/dev/null
-					IFS=
-					pattern="$line"
-					while :; do case "$pattern" in /*) pattern="${pattern#/}" ;; *) break ;; esac done
-					# shellcheck disable=SC2086 # the expansion is the point
-					for m in $pattern; do
-						[ ! -d "$m" ] || printf '%s\0' "$m"
-					done
-				)
+				done < <(glob_matches "$line")
 				say "glob=$from$TAB$matches$TAB$line"
 				;;
 			esac
@@ -623,7 +635,7 @@ cmd_shadows() {
 			exists=absent
 		fi
 		case ",$from," in
-		*,committed,* | *,override,* | *,glob,*) guard "$rel" 1 ;;
+		*,committed,* | *,override,*) guard "$rel" 1 ;;
 		*) guard "$rel" 0 ;;
 		esac
 		# git refuses a path beyond a symlink or inside a submodule, which the
@@ -639,8 +651,8 @@ cmd_shadows() {
 			tracked=-
 		fi
 		fs="$(mount_fs "$ROOT/$rel")"
-		if [ "$HAVE_FINDMNT" = 1 ]; then below="$(count_lines "$(mounts_below "$ROOT/$rel")")"; else below=-; fi
-		if ! have detect-shadows.sh; then
+		if [ "$MOUNTS_READABLE" = 1 ]; then below="$(count_lines "$(mounts_below "$ROOT/$rel")")"; else below=-; fi
+		if [ "$derived_known" = 0 ]; then
 			derived=unknown
 		elif has_line "$derived_all" "$rel" && ! has_line "$EFFECTIVE_NORM" "$rel"; then
 			derived=yes
@@ -671,10 +683,10 @@ cmd_shadows() {
 # ---------------------------------------------------------------- worktrees --
 
 cmd_worktrees() {
-	local root committed override effective tracked mp fs p known=1 problems="" wt_fs="" git_fs="" wt_mp=""
+	local root committed override effective tracked mp fs p known=1 problems="" wt_fs="" git_fs=""
 	[ $# -eq 0 ] || usage "worktrees takes no argument: $1"
 	read_config
-	[ "$HAVE_FINDMNT" = 1 ] || known=0
+	[ "$MOUNTS_READABLE" = 1 ] || known=0
 	split "$WT_ROOTS"
 	for root in "${ROWS[@]}"; do
 		p="$ROOT/$root"
@@ -697,22 +709,22 @@ cmd_worktrees() {
 		mp=unknown fs=-
 		if have mountpoint; then
 			if mountpoint -q "$p" 2>/dev/null; then mp=yes; else mp=no; fi
-		elif [ "$HAVE_FINDMNT" = 1 ]; then
+		elif [ "$MOUNTS_READABLE" = 1 ]; then
 			if [ "$(mount_fs "$p")" != none ]; then mp=yes; else mp=no; fi
 		fi
-		if [ "$HAVE_FINDMNT" = 1 ] && [ -e "$p" ]; then
+		if [ "$MOUNTS_READABLE" = 1 ] && [ -e "$p" ]; then
 			fs="$(findmnt -nro FSTYPE -T "$p" 2>/dev/null | tail -n 1)"
 			fs="${fs:--}"
 		fi
 		say "worktree_root=$root${TAB}committed=$committed${TAB}override=$override${TAB}effective=$effective${TAB}ignored=$IGN${TAB}tracked=$tracked${TAB}mountpoint=$mp${TAB}fs=$fs${TAB}rule=$RULE"
 		[ "$mp" != no ] || problems="${problems}unhealthy=$root${TAB}not-a-mountpoint$NL"
 		case "$root" in
-		.worktrees) wt_fs="$fs" wt_mp="$mp" ;;
+		.worktrees) wt_fs="$fs" ;;
 		.claude/worktrees) [ "$mp" != yes ] || [ "$fs" = tmpfs ] || problems="${problems}unhealthy=$root${TAB}expected-tmpfs$NL" ;;
 		.git/worktrees) git_fs="$fs" ;;
 		esac
 	done
-	if [ "$wt_mp" = yes ] && [ "$wt_fs" != tmpfs ] && [ "$git_fs" = tmpfs ]; then
+	if [ "$wt_fs" != tmpfs ] && [ "$git_fs" = tmpfs ]; then
 		problems="${problems}unhealthy=.git/worktrees${TAB}not-durable$NL"
 	fi
 	case "$wt_fs" in

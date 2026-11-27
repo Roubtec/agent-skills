@@ -29,6 +29,8 @@ export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.invalid GIT_COMMITTER_NAME=t
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
 unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE
 TAB="$(printf '\t')"
+NL='
+'
 
 checks=0
 fails=0
@@ -72,7 +74,8 @@ cat >"$FAKE/yq" <<'FAKEYQ'
 printf '%s\n' "$*" >>"$FAKE/yq.log"
 exec "$REAL_YQ" "$@"
 FAKEYQ
-# $FAKE/mounts holds `<target> TAB <fstype>` lines.
+# $FAKE/mounts holds `<target> TAB <fstype>` lines; $FAKE/findmnt-fails makes
+# the listing of every mount fail.
 cat >"$FAKE/findmnt" <<'FAKEFINDMNT'
 #!/usr/bin/env bash
 mode=list path=""
@@ -86,7 +89,10 @@ while [ $# -gt 0 ]; do
 done
 [ -f "$FAKE/mounts" ] || : >"$FAKE/mounts"
 case "$mode" in
-list) awk -F '\t' '{ print $1 }' "$FAKE/mounts" ;;
+list)
+	[ ! -f "$FAKE/findmnt-fails" ] || exit 1
+	awk -F '\t' '{ print $1 }' "$FAKE/mounts"
+	;;
 exact) P="$path" awk -F '\t' '$1 == ENVIRON["P"] { print $2; found = 1 } END { exit !found }' "$FAKE/mounts" ;;
 holding)
 	P="$path" awk -F '\t' '
@@ -133,7 +139,7 @@ export TMPDIR="$EMPTYTMP"
 R="" OUT="" RC=0
 new_repo() {
 	R="$(mktemp -d "$WORKDIR/case.XXXXXX")/repo"
-	rm -f "$FAKE/mounts" "$FAKE/detect" "$FAKE/detect-fails" "$FAKE/yq.log"
+	rm -f "$FAKE/mounts" "$FAKE/findmnt-fails" "$FAKE/detect" "$FAKE/detect-fails" "$FAKE/yq.log"
 	git init -q -b main "$R"
 	printf 'x\n' >"$R/README"
 	git -C "$R" add README
@@ -301,7 +307,7 @@ printf 'everywhere/\n' >"$WORKDIR/global-excludes"
 printf '[core]\n\texcludesFile = %s\n' "$WORKDIR/global-excludes" >"$WORKDIR/gitconfig"
 put everywhere/x
 OUT="$(cd "$R" && GIT_CONFIG_GLOBAL="$WORKDIR/gitconfig" bash "$HELPER" shadows --candidate apps/keep/build 2>/dev/null)"
-is "sources: a committed rule is shared" "$(cand apps/a/build ignored)" shared
+is "sources: a committed rule in a file edited since is unshared" "$(cand apps/a/build ignored)" unshared
 is "sources: the repository's own exclude file is unshared" "$(cand private ignored)" unshared
 has "sources: and is named" "$(cand private rule)" "info/exclude:1:private/"
 is "sources: an uncommitted .gitignore line is unshared" "$(cand scratch ignored)" unshared
@@ -311,6 +317,34 @@ has "sources: the negation is shown" "$(cand apps/keep/build rule)" "!apps/keep/
 git -C "$R" commit -q -am "ignore scratch"
 run shadows
 is "sources: the same line once committed is shared" "$(cand scratch ignored)" shared
+is "sources: a committed rule is shared" "$(cand apps/a/build ignored)" shared
+is "sources: the exclude file stays unshared" "$(cand private ignored)" unshared
+
+# The matching line being in HEAD is not enough: what it ignores depends on
+# the rest of the file.
+new_repo
+commit .gitignore 'd/\n!d/\ntrail/   \n'
+commit apps/.gitignore 'out/\n'
+put d/x
+put trail/x
+put apps/out/x
+run shadows
+is "sources: a committed negation is no ignore" "$(row candidate=d)" ""
+is "sources: a pattern with trailing spaces is shared" "$(cand trail ignored)" shared
+is "sources: a nested ignore file is compared by its own path" "$(cand apps/out ignored)" shared
+printf 'd/\ntrail/   \n' >"$R/.gitignore"
+run shadows
+is "sources: a negation removed but not committed leaves the rule unshared" "$(cand d ignored)" unshared
+is "sources: and so is every other rule of that file" "$(cand trail ignored)" unshared
+is "sources: another ignore file is unaffected" "$(cand apps/out ignored)" shared
+git -C "$R" add .gitignore
+run shadows
+is "sources: a staged edit is still not in HEAD" "$(cand d ignored)" unshared
+new_repo
+commit .gitignore 'dist/\r\nout/\r\n'
+put dist/x
+run shadows
+is "sources: a committed CRLF ignore file is shared" "$(cand dist ignored)" shared
 
 # An unborn branch has no commit to share a rule from.
 R="$(mktemp -d "$WORKDIR/case.XXXXXX")/repo"
@@ -382,6 +416,12 @@ put .powbox.yml 'shadow: []\n'
 run shadows --candidate .git/worktrees --candidate .worktrees
 is "guard: an undeclared .git/worktrees is not pre-authorized" "$(cand .git/worktrees guard)" "git-boundary:.git"
 is "guard: an undeclared .worktrees is judged like any path" "$(cand .worktrees guard)" ok
+mkdir -p "$R/.worktrees"
+put .powbox.yml 'shadow:\n  - ".wor*"\n'
+run shadows
+is "guard: a glob matching .worktrees is seen" "$(cand .worktrees from)" glob
+is "guard: and does not pre-authorize it" "$(cand .worktrees guard)" ok
+put .powbox.yml 'shadow: []\n'
 
 for n in 1 2 3 4 5 6; do put "many/out/$n"; done
 put other/out/1
@@ -400,6 +440,36 @@ if [ "$(id -u)" != 0 ]; then
 	is "guard: an unreadable directory is not read as clear" "$(cand locked/out guard)" unscanned
 	chmod 755 "$R/locked/out/sub"
 fi
+
+# A find that never runs out before any limit used here, and records reaching
+# its end: the walk has to be cut off, not merely left uncounted.
+mkdir -p "$WORKDIR/findbin"
+cat >"$WORKDIR/findbin/find" <<'FAKEFIND'
+#!/usr/bin/env bash
+START="$1" LEAD="${FAKE_FIND_LEAD:-}" awk 'BEGIN {
+	print ENVIRON["START"]
+	if (ENVIRON["LEAD"] != "") print ENVIRON["START"] "/" ENVIRON["LEAD"]
+	for (i = 0; i < 400000; i++) print ENVIRON["START"] "/f" i
+}' || exit
+: >"$FAKE/find.finished"
+FAKEFIND
+chmod +x "$WORKDIR/findbin/find"
+endless() { # <FAKE_FIND_LEAD> <probe arguments>
+	local lead="$1"
+	shift
+	rm -f "$FAKE/find.finished"
+	OUT="$(cd "$R" && PATH="$WORKDIR/findbin:$PATH" FAKE_FIND_LEAD="$lead" bash "$HELPER" "$@" 2>"$WORKDIR/stderr")"
+	RC=$?
+}
+endless "" shadows --scan-limit 5 --candidate many/out
+is "scan limit: an endless tree answers unscanned" "$RC$(cand many/out guard)" 0unscanned
+is "scan limit: and the walk is stopped there" "$(ls "$FAKE/find.finished" 2>/dev/null)" ""
+endless deep/.git shadows --candidate many/out
+is "scan: a nested .git ends the walk, and a find stopped so is no failed scan" "$(cand many/out guard)" "nested-git:many/out/deep/.git"
+is "scan: the walk is stopped at the nested .git" "$(ls "$FAKE/find.finished" 2>/dev/null)" ""
+endless "" shadows --scan-limit 400001 --candidate many/out
+is "scan: the same find read to its end is clear" "$(cand many/out guard)" ok
+is "scan: and is seen finishing" "$(ls "$FAKE/find.finished" 2>/dev/null)" "$FAKE/find.finished"
 
 # -------------------------------------------------- the override, both halves --
 new_repo
@@ -520,6 +590,14 @@ is "mount: none" "$(cand data mount)" none
 is "mount: mounts below are counted" "$(cand data below)" 2
 is "mount: none below" "$(cand apps/web/dist below)" 0
 is "mount: every live mount under the root, and no other" "$(printf '%s\n' "$OUT" | grep '^mounted=' | LC_ALL=C sort | tr '\n' ' ')" "mounted=apps/web/dist${TAB}tmpfs mounted=data/cache${TAB}tmpfs mounted=data/uploads${TAB}tmpfs mounted=node_modules${TAB}ext4 "
+# A mount table that cannot be read is not an empty one.
+: >"$FAKE/findmnt-fails"
+run shadows
+is "mount: an unreadable mount table is not fatal" "$RC$(first_line)" "0outcome=probed"
+is "mount: and no mount fact is claimed" "$(cand apps/web/dist mount) $(cand data mount) $(cand data below)" "unknown unknown -"
+lacks "mount: nor any live mount listed" "$OUT" "mounted="
+has "mount: and it is explained" "$(cat "$WORKDIR/stderr")" "findmnt could not list the mounts"
+rm "$FAKE/findmnt-fails"
 
 # ------------------------------------------------------------------ derived --
 new_repo
@@ -537,7 +615,8 @@ is "derived: a declared glob's match is not" "$(cand apps/api/dist derived)" no
 : >"$FAKE/detect-fails"
 run shadows
 is "derived: a failing detector is not fatal" "$RC" 0
-lacks "derived: and derives nothing" "$OUT" "derived=yes"
+is "derived: and leaves the question open" "$(cand packages/a/node_modules derived) $(cand apps/web/dist derived)" "unknown unknown"
+lacks "derived: and lists no derived path" "$OUT" "${NL}derived="
 has "derived: and is explained" "$(cat "$WORKDIR/stderr")" "detect-shadows.sh failed"
 
 # -------------------------------------------------------------------- limit --
@@ -715,7 +794,7 @@ refused "the ignore question fails for a listed folder" check-ignore shadows
 OUT="$(cd "$R" && PATH="$WORKDIR/gitbin:$PATH" FAKE_GIT_REFUSES=nothing-at-all bash "$HELPER" shadows 2>/dev/null)"
 is "the refusing git is otherwise the real one" "$?" 0
 # The probe's promise not to take a lock rests on which git commands it runs.
-is "git is asked only read-only questions" "$(awk '{ for (i = 1; i <= NF; i++) if ($i !~ /^-/ && $i != ENVIRON["R"] && !(i > 1 && $(i - 1) == "-C")) { print $i; break } }' "$FAKE/git.log" | LC_ALL=C sort -u | tr '\n' ' ')" "check-ignore ls-files rev-parse show "
+is "git is asked only read-only questions" "$(awk '{ for (i = 1; i <= NF; i++) if ($i !~ /^-/ && $i != ENVIRON["R"] && !(i > 1 && $(i - 1) == "-C")) { print $i; break } }' "$FAKE/git.log" | LC_ALL=C sort -u | tr '\n' ' ')" "check-ignore hash-object ls-files rev-parse "
 
 printf '%s checks, %s failed\n' "$checks" "$fails"
 [ "$fails" = 0 ]

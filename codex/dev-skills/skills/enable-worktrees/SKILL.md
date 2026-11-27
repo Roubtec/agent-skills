@@ -63,9 +63,9 @@ Every edit is idempotent and surgical — preserve unrelated content, comments, 
    Run `probe.sh worktrees` from the repository's main checkout; `repo=` is the root, `$ROOT` below.
    Only `outcome=probed` lets the run continue.
    On `not-a-repository`, stop and tell the user — worktrees require git.
-   On `malformed`, a `shadow:` value in `.powbox.yml` or in an active override is not a list of non-empty string paths — null, a scalar, a mapping, or a list containing a null, a collection, or an empty string — and each `malformed=` line names the file: stop, report, and write **nothing at all** — not `.powbox.yml`, not `.gitignore` — rather than coercing a pathname or inventing a list inside a user-local file.
+   On `malformed`, `.powbox.yml` does not parse or is not a mapping, or a `shadow:` value in it or in an active override is not a list of non-empty string paths — null, a scalar, a mapping, or a list containing a null, a collection, or an empty string — and each `malformed=` line names the file: stop, report, and write **nothing at all** — not `.powbox.yml`, not `.gitignore` — rather than coercing a pathname or inventing a list inside a user-local file.
    An empty list is well-formed, and deliberately so — it disables the committed declarations, exactly the case step 2 exists to catch.
-   On `no-yq`, a powbox file exists and nothing here can read it.
+   On `no-yq`, a powbox file exists and nothing here can read it: stop and ask the user to install `yq` or to run this inside the powbox container.
    `checkout=linked` is a linked worktree, which powbox never mounts on: run the probe from the main checkout instead.
 
 2. **Reconcile `.powbox.yml` — reading the override first.**
@@ -80,18 +80,20 @@ Every edit is idempotent and surgical — preserve unrelated content, comments, 
      **Keep every existing entry** (other shadow paths, monorepo `node_modules` globs, etc.) untouched.
 
    `.powbox.yml` gets the three entries either way — it is the durable, shared record every teammate and future container inherits — but an active override's list is the one that mounts.
-   If all three roots read `effective=yes`, the effective list is compliant and there is nothing to resolve (step 5 still verifies it) — but `.powbox.yml` is still replaced wholesale, so record that too and name its entries the override lacks, the `override_drops=` lines: those are the declarations that stay unmounted.
+   With `override=none` the committed list is the effective one and this step is done; the rest of it applies only to `override=active`.
+   If all three roots read `override=yes`, the effective list is compliant and there is nothing to resolve (step 5 still verifies it) — but `.powbox.yml` is still replaced wholesale, so record that too and name its entries the override lacks, the `override_drops=` lines: those are the declarations that stay unmounted.
    Otherwise say plainly that what you wrote is inert, and confirm one of two resolutions before editing a user-local file: add the three entries to the override's `shadow:` list, keeping its existing entries and its other keys untouched; or have the user retire the override by dropping its `shadow:` key so the committed list takes effect.
    Retiring is not free: name the entries it would stop declaring — the `override_only=` lines, every path the override holds and `.powbox.yml` does not — and note that `shadow-refresh.sh` only adds mounts, so each keeps its tmpfs, and its host-invisible writes, until the next container start.
 
 3. **Reconcile `.gitignore`.**
    `$ROOT/.gitignore` has to ignore `.worktrees/` and `.claude/worktrees/`, and `ignored=shared` on a root's line says a committed rule already does.
    - The probe asks git rather than matching text, so an existing equivalent entry is accepted (`.worktrees` without a trailing slash also matches the directory).
-     Only add what reads `no`, or `unshared` — a rule teammates do not have, whose source `rule=` names — under a short comment such as `# powbox git worktrees (container-local; never commit working trees)`.
+     Every rule of an ignore file with any uncommitted change reads `unshared`, so when `rule=` names `.gitignore` itself the rule is already written and only needs committing in step 6.
+     Otherwise add what reads `no`, or `unshared` — a rule teammates do not have, whose source `rule=` names — under a short comment such as `# powbox git worktrees (container-local; never commit working trees)`.
    - Do **not** add `.git/worktrees`.
 
 4. **Guard against leaked tracking.**
-   A root whose line reads other than `tracked=0` has files in the index.
+   A root whose line reads a `tracked=` count above zero has files in the index; `.git/worktrees` always reads `tracked=-`, and is never in it.
    `git -C "$ROOT" rm -r --cached -- <root>` them (keeping the working copy) so worktree contents stop being committed.
    Report what you untracked.
 

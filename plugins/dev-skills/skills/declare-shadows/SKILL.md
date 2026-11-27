@@ -89,9 +89,11 @@ Every edit is idempotent and surgical — preserve unrelated content, comments, 
    Run `probe.sh shadows` from inside the repository; `repo=` is the root, `$ROOT` below.
    Only `outcome=probed` lets the run continue.
    On `not-a-repository`, stop and tell the user.
-   On `malformed`, a `shadow:` value in `.powbox.yml` or in an active override is not a list of non-empty string paths — null, a scalar, a mapping, or a list containing a null, collection, or empty string — and each `malformed=` line names the file: stop and report rather than coercing a pathname or editing a list you would have to invent.
+   On `malformed`, `.powbox.yml` does not parse or is not a mapping, or a `shadow:` value in it or in an active override is not a list of non-empty string paths — null, a scalar, a mapping, or a list containing a null, collection, or empty string — and each `malformed=` line names the file: stop and report rather than coercing a pathname or editing a list you would have to invent.
    An empty list is well-formed, and deliberately so: it disables the committed declarations.
-   On `no-yq`, a powbox file exists and nothing here can read it; on `incomplete`, run it again with a larger `--limit`.
+   On `no-yq`, a powbox file exists and nothing here can read it: stop and ask the user to install `yq` or to run this inside the powbox container.
+   On `incomplete`, run it again with a larger `--limit`.
+   `checkout=linked` is a linked worktree, which powbox never mounts on: run the probe from the main checkout instead.
 
    The probe lists what exists, so a project that has never been built shows nothing.
    Read each file a `gitignore=` line names for directory patterns that have not materialized yet, enumerate the project paths they would produce, and run the probe again with one `--candidate <path>` per path so they are judged on the same facts.
@@ -112,6 +114,7 @@ Every edit is idempotent and surgical — preserve unrelated content, comments, 
 
    - `ignored=shared`.
      Because the declaration you would commit is shared, the ignore rule has to be shared too: `rule=` names the matching source, and a rule that is not part of the committed tree (`unshared`) — a personal global excludes file, `.git/info/exclude`, or an uncommitted `.gitignore` edit — does not ignore the path for teammates, so treat such a candidate as unignored.
+     Every rule of an ignore file with any uncommitted change reads `unshared`, because a rule's effect depends on the lines around it: when `rule=` names such a file, the rule only needs committing, not adding again.
    - `tracked=no`.
      A shadow would mask committed files.
    - `guard=ok`.
@@ -119,11 +122,15 @@ Every edit is idempotent and surgical — preserve unrelated content, comments, 
      This deliberately surfaces a candidate with a nested `.git` anywhere below it even when that nested checkout is disposable, such as an editable package inside `.venv`; accept that conservative false negative rather than risk hiding human-owned repository content.
      `unscanned` is the same answer until a run with a larger `--scan-limit` clears it.
    - `mount=none` and `below=0`.
+     `mount=unknown` with `below=-` means the mount table could not be read, and no `mounted=` line is printed either.
+     Where `tools=` reads `findmnt:absent`, this is not a powbox container and nothing here is a shadow: judge the candidate on the other facts and report that its mounts were not verified.
+     Where it reads `findmnt:present`, the read failed, as stderr says: treat the candidate as you would a mounted one, below.
      Anything else means the visible contents belong to a mount rather than the underlying host tree, so mark the host view unverifiable; a mount below the candidate means part of its view is the child mount's, and a tmpfs over the parent would occlude that live mount.
      Do not approve or retain a declaration for such a path, and do not propose removing an existing one, from this mounted view; ask the user to inspect the host path outside the container or restart in an environment where that mount is absent and rerun before deciding.
      When `mount=` is a filesystem other than `tmpfs`, also report that the path is not an active shadow: powbox skips an existing mountpoint, so a declaration there is ineffective and writes continue to the existing bind mount or volume.
    - `derived=no`.
      `yes`, like every `derived=` line, is a path powbox already shadows from a manifest.
+     `unknown` means `detect-shadows.sh` was absent or failed, so the probe cannot say and prints no `derived=` line: leave the manifest-derived folders of the list above undeclared on your own reading, judge the rest on the other facts, and report that the check was not made.
 
    `guard=preauthorized` is the one exemption from those facts: the exact, already-declared `enable-worktrees` roots (`.worktrees`, `.claude/worktrees`, and `.git/worktrees`).
    Preserve them exactly, and never propose removing them from either list in this audit.
@@ -163,7 +170,7 @@ Every edit is idempotent and surgical — preserve unrelated content, comments, 
 
    Removal is not symmetrical, and this part applies even when you skip the refresh above.
    `shadow-refresh.sh` only adds mounts, and an unprivileged shell cannot unmount one, so a path that step 5 leaves undeclared — whether you dropped it from a list or it fell out when the override carrying it was retired — keeps its tmpfs for the rest of the session.
-   The probe's `mounted=` lines name every live mount under the repository, so read them after the edit rather than testing the paths you removed: a removed **glob** has no path of its own to test, and the concrete mounts powbox created from it stay live.
+   The probe's `mounted=` lines name every live mount under the repository (none are printed while `mount=` reads `unknown`, which is no evidence of absence), so read them after the edit rather than testing the paths you removed: a removed **glob** has no path of its own to test, and the concrete mounts powbox created from it stay live.
    While a removed path is still listed as `tmpfs`, writes there still land in the ephemeral mount and stay invisible from the host — which, for the database or upload directory that made the declaration unsafe in the first place, is the whole problem.
    Copy out anything that has to survive, and tell the user plainly that the removal itself only takes effect at the next container start.
 
