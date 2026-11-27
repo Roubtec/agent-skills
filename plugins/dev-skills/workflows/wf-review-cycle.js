@@ -2477,12 +2477,12 @@ const peerOff = structured
 // regex it replaced, and every part of it fails CLOSED: the spaced `close out`,
 // the unhyphenated `closeout`, and the assigned `close-out=on` no longer grant
 // — the documented spelling is the bare HYPHENATED token, the only one the
-// "Recognized tokens" line above, both SKILL mirrors' Arguments line, and the
-// task behind this rule name — and neither does `close-out=off`, which the old
-// regex read as a grant, turning an explicit refusal into the very grant it
-// refused. An alias no enumeration of the tokens mentions is a discretion
-// nobody asked for and nobody could have asked for: the scope agent, not told
-// the spelling is reserved, folds it into the TARGET.
+// "Recognized tokens" line above and the task behind this rule name — and
+// neither does `close-out=off`, which the old regex read as a grant, turning
+// an explicit refusal into the very grant it refused. An alias no enumeration
+// of the tokens mentions is a discretion nobody asked for and nobody could
+// have asked for: the scope agent, not told the spelling is reserved, folds it
+// into the TARGET.
 // What the rule does NOT close, and cannot: a target that IS the bare token, or
 // names it as its own word — `review branch close-out`, `review the close-out
 // section`, a branch named `light`. One prose string carries both the reserved
