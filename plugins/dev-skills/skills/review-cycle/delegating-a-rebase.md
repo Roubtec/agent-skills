@@ -14,7 +14,7 @@ It reads objects and writes nothing, so it is one cheap call per point, and its 
 Its `outcome=` decides what the point is:
 
 - **`noop`: spawn no rebaser.**
-  Report the point as skipped on that proof, quoting `branch=`, `onto=` and `fork-point=`, and take `onto=` as the entry's effective base.
+  That answer is the proof: report the point as skipped on it, quoting `branch=`, `onto=` and `fork-point=`, and take `onto=` as the entry's effective base.
   That proof is the only thing that skips a point; an impression that the base has not moved skips nothing.
 - **`stale-parent` (exit 3): delegate nothing.**
   The entry goes to `rebase-stack`, or halts as an open question naming both tips.
