@@ -916,7 +916,7 @@ is "13: ...with exit 0" "$RC" 0
 is "13: ...each one looked up" "$(val checked)" 11
 
 cite_repo
-task "$T" 'Run `git diff --stat`, pass `--force` or `-n`, set `key=value`, name `<owner>/<repo>`.' \
+task "$T" 'Run `git diff --stat`, pass `--force`, `--out.json` or `-n`, set `key=value`, name `<owner>/<repo>`.' \
 	'Globs `*.md` and `src/*.sh`; words `main`, `HEAD`, `claims`, `write-tasks`; numbers `3.2`, `024`, `0/3/1/64`.' \
 	'An extension `.md`; `/abs/gone.sh`; `../up/gone.sh`; `origin/main`; `refs/pull/5/head`; `$HOME/gone.sh`; `"gone.sh"`.' \
 	'```sh' 'cat `src/fenced-gone.sh`' '```' '    ~~~' '`src/also-fenced-gone.sh`' '    ~~~' \
@@ -927,7 +927,7 @@ is "13: ...and none was looked up" "$(val checked)" 0
 
 cite_repo
 task "$T" 'Create `src/lib/new-helper.sh` and `brand_new_function()`.' 'Not a directory of the tree: `nolib/thing`; but `src/nothing` starts in one.' \
-	'Only tasks say `onlyInTasks`.' 'Twice: `src/lib/gone.sh` and `src/lib/gone.sh`.' 'A method on a file: `core.js`, `process.env`.'
+	'Only tasks say `onlyInTasks`.' 'Twice: `src/lib/gone.sh` and `src/lib/gone.sh`.' 'A method on a file: `core.js`, `process.env`.' 'Part of a name: `render_widge`.'
 cite "$T"
 has "13: a file the task asks for is listed" "$OUT" "unresolved=path${TAB}$T${TAB}src/lib/new-helper.sh"
 has "13: ...and a function it asks for" "$OUT" "unresolved=identifier${TAB}$T${TAB}brand_new_function()"
@@ -936,7 +936,8 @@ lacks "13: ...and not where it is none" "$OUT" "nolib/thing"
 has "13: an identifier that stands only in the task folder is unresolved" "$OUT" "unresolved=identifier${TAB}$T${TAB}onlyInTasks"
 is "13: a span cited twice is listed once" "$(printf '%s\n' "$OUT" | grep -c "src/lib/gone.sh")" 1
 has "13: a dotted name with a short lowercase tail reads as a file" "$OUT" "unresolved=path${TAB}$T${TAB}process.env"
-is "13: ...and that is the whole list" "$(count unresolved)" 6
+has "13: a name that is only part of a word in the tree is unresolved" "$OUT" "unresolved=identifier${TAB}$T${TAB}render_widge"
+is "13: ...and that is the whole list" "$(count unresolved)" 7
 
 # The ref's tree is what is read, not the working tree.
 cite_repo
