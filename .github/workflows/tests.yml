@@ -31,6 +31,7 @@ jobs:
       - run: bash scripts/test-address-review-pr-branch.sh
       - run: bash scripts/test-address-review-record.sh
       - run: bash scripts/test-address-review-ping.sh
+      - run: bash scripts/test-address-review-publish.sh
       - run: bash scripts/test-write-tasks-task-numbers.sh
       - run: bash scripts/test-address-tasks-overlap.sh
       - run: bash scripts/test-address-tasks-bootstrap.sh

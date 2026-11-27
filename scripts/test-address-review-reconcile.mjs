@@ -160,6 +160,10 @@ const pingHelper = readFileSync(
   join(here, "..", "plugins", "dev-skills", "skills", "address-review", "ping.sh"),
   "utf8",
 );
+const publishHelper = readFileSync(
+  join(here, "..", "plugins", "dev-skills", "skills", "address-review", "publish.sh"),
+  "utf8",
+);
 const prBranchHelperTest = readFileSync(join(here, "test-address-review-pr-branch.sh"), "utf8");
 // The batch skill's own helper, which makes that `head` call and the target
 // pins for every entry, and the suite that drives it.
@@ -278,7 +282,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 287;
+const EXPECTED_CHECKS = 288;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -1654,16 +1658,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   {
     const wanted = [
       [
-        // The push is the helper's: the brief orders it with the head this run
-        // reconciled against, and states what the helper re-checks and how it
-        // chooses between the plain push and the lease.
+        // The push is the helper's: the skill orders it with the head this run
+        // reconciled against, and what the helper re-checks and how it pushes
+        // is read from its source below (`pushChain`) rather than restated.
         "the publication push",
         "1. **Re-check and push:** run `pr-branch.sh push --repo <owner>/<repo> --pr <N> --expect <headRefOid>`",
-        [
-          /the tree clean, idle and still on the head branch/,
-          /its head and the head ref itself both still the expected commit/,
-          /under an exact `--force-with-lease` on the expected head, whether that push is a fast-forward, a rewrite, or the no-op/,
-        ],
+        [/naming the head step 1 reconciled against/],
       ],
       [
         // The CONSEQUENCE of a stop, not only its name: a line that names the
@@ -1799,6 +1799,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // branch spelling with it: `git rev-parse --abbrev-ref HEAD` prints
     // `heads/<name>` wherever a tag shares the branch's name.
     const pushChain = [
+      ["the tree clean and idle, the PR open and unforked, and the tree on its head branch, ahead of everything else", "\trequire_idle\n\tread_pr\n\trequire_head_branch\n\tlocal remote tip fetched mode"],
       ["the PR's reported head against the expected one", '[ "$P_OID" = "$EXPECT" ] || stop head-moved'],
       ["the fetched ref against the expected one", '[ "$fetched" = "$EXPECT" ] || stop head-moved'],
       ["the proper-ancestor stop", 'if [ "$tip" != "$EXPECT" ] && is_ancestor "$tip" "$EXPECT"; then'],
@@ -2089,11 +2090,6 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // fails rather than passing on the file's other mentions of `ls-remote` or
   // `--add-reviewer`.
   const wanted = [
-    [
-      "the push read-back",
-      "It then reads the ref back with `git ls-remote` through every push URL",
-      [/after a refused push as well/, /since `gh pr view --json headRefOid` can report the pre-push head for a while/],
-    ],
     [
       "the read-back's stop",
       "- **`unconfirmed`** → some push URL does not show the tip at the head ref or did not answer, whether the push command returned or was refused",
@@ -5083,11 +5079,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /True ONLY if the reply is ON THE PR when your turn ends/.test(outcomeItem.properties.replied.description) &&
       /Never what you intended or attempted/.test(outcomeItem.properties.resolved.description) &&
       // And the one shape in which "what SUCCEEDED" and "what is on the PR"
-      // differ: a reply step 4's duplicate rule told the publisher to SKIP,
-      // an equivalent one of its own already being there. Reported false, the
+      // differ: a reply the publish script SKIPPED as a duplicate, an equal
+      // one of the publisher's own already being there. Reported false, the
       // caller reads a complete publication as still owing that reply — which
       // the completion gate now refuses over — and a later turn posts it twice.
-      /a reply you skipped under step 4's duplicate rule, an equivalent one of yours already being there, is on the PR/.test(outcomeItem.properties.replied.description) &&
+      /a reply the publish command skipped as `reply=present`, one of yours already being there, is on the PR/.test(outcomeItem.properties.replied.description) &&
       /true likewise for a thread you found already resolved rather than resolving yourself/.test(outcomeItem.properties.resolved.description) &&
       /MANDATORY on a `review-thread` item's entry/.test(outcomeItem.properties.threadId.description) &&
       /two threads a re-review left on the same line by the same author share it, so it can key nothing/.test(outcomeItem.properties.ref.description) &&
@@ -5099,7 +5095,25 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /`landed` is what the PR CARRIES rather than what this run put there/.test(PUBLISH_SCHEMA.properties.threadOutcomes.description) &&
       /NOT evidence that anything this run did reached origin/.test(PUBLISH_SCHEMA.properties.pushed.description) &&
       /set that entry's `replied` and `resolved` to the state of the thread ON THE PR when your turn ends rather than to what you attempted/.test(pubBrief) &&
-      /a reply you skipped under the duplicate rule above, an equivalent one of yours already being there, is `replied: true`/.test(pubBrief) &&
+      /a reply the command skipped as `reply=present`, one of yours already being there, is `replied: true`/.test(pubBrief) &&
+      /`reply=posted` and `reply=present` are `replied: true`, `reply=failed` is false; `resolve=done` and `resolve=already` are `resolved: true`/.test(pubBrief) &&
+      // The duplicate rule itself is the script's now: an equal reply of the
+      // authenticated user's is `present`, and nothing is posted over it. Where
+      // an earlier turn's reply stands under other words — its SHA re-derived —
+      // the line carries `-` and the script stands on any reply of theirs.
+      publishHelper.includes('select(.author.login == $me and ($only == "1" or ((.body // "") | norm) == $want))') &&
+      // The rule is conditioned on the THREAD, not on the record: an `unknown`
+      // record carries no ALREADY POSTED line, and a turn that died after
+      // posting may have left no record at all.
+      /look at the thread before composing: in step 3's list, or, where that does not show it \(it was resolved since triage\), in what step 3's command prints with `--all` ahead of `--repo`\./.test(pubBrief) &&
+      /Where it already holds a reply of the authenticated user \(`gh api user --jq \.login`\) giving this disposition — the same fix under another SHA is the same reply — or the disposition's `detail` carries an earlier turn's record saying the reply is ALREADY POSTED, compose no second one and write `-` in place of the reply file, on the same `resolve` or `reply` line/.test(pubBrief) &&
+      /A reply answering a comment made AFTER yours on that thread is a new reply, not a second one: compose it and give its file/.test(pubBrief) &&
+      !/give the thread no line and report it/.test(pubBrief) &&
+      // A failed second invocation prints no `thread=` line, and the replies
+      // the first one landed are still on the PR.
+      /Take `threadOutcomes` from the LAST answer that printed `thread=` lines/.test(pubBrief) &&
+      /or still no outcome at all \(after exit 1, which you retry once, or exit 64, a miswritten command, which you correct once\) → that invocation wrote nothing/.test(pubBrief) &&
+      /if \[ -n "\$prior" \]; then\n\t\treply=present url="\$prior"\n\telif url="\$\(gh api --method POST/.test(publishHelper) &&
       /Report them even where publication stops part-way, and report EXACTLY ONE entry per item you were given/.test(pubBrief) &&
       /an account keyed on it cannot say which of them was replied to/.test(pubBrief),
     JSON.stringify({ required: outcomeItem.required, brief: /threadOutcomes/.test(pubBrief) }),
@@ -5187,28 +5201,63 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // quotes them as the defaults it is warning against, and steps 2 and 6 name
   // `gh pr view --json …` as an evidence channel they forbid outright.
   const orderedPrCalls = qualifiedPub.match(/gh pr (?:view|comment|edit) (?:\d+|<PR#>)[^`]*/g) || [];
+  const orderedScriptCalls = qualifiedPub.match(/`(?:address-review-(?:pr-branch|publish|ping)|gh-review-threads) [^`]*`/g) || [];
   const publishClauses = {
     "the WHICH REPOSITORY paragraph, naming the repository from the PR's own URL":
       qualifiedPub.includes("the PR's own URL `https://example.invalid/pr/42`") &&
       /never the repository your working location resolves to/.test(qualifiedPub) &&
       /Do not re-derive it from a bare `gh repo view --json nameWithOwner`/.test(qualifiedPub),
-    "step 4's reply POST": /gh api --method POST repos\/<owner>\/<repo>\/pulls\/42\/comments\/<commentId>\/replies/.test(qualifiedPub),
-    // The resolve mutation has no repository argument to carry, so the brief
-    // says what stands in for one rather than leaving it implied.
-    "step 4's resolve, qualified by the thread id's provenance rather than by an argument it has none of":
-      /has no repository argument to qualify, so what qualifies it is the id's PROVENANCE/.test(qualifiedPub) &&
-      /never re-fetch or re-derive a thread id in your own turn/.test(qualifiedPub),
-    "step 5's Summary comment": /gh pr comment 42 --repo <owner>\/<repo>/.test(qualifiedPub),
+    // Steps 4 and 5 hand their writes to the publish script, so the brief is
+    // held to the command and the script to each call the brief used to spell.
+    "step 5's one command for the replies, the resolves and the Summary, through the script, naming the repository and the PR":
+      /`address-review-publish --repo <owner>\/<repo> --pr 42 --dispositions <file> --summary <file>`/.test(qualifiedPub) &&
+      /never hand-run a reply, a resolve or the Summary comment in its place/.test(qualifiedPub),
+    "no reply or resolve left for the publisher to make by hand":
+      !/comments\/<commentId>\/replies/.test(qualifiedPub) && !/resolveReviewThread/.test(qualifiedPub) && !/gh pr comment 42/.test(qualifiedPub) &&
+      /you post no reply and resolve no thread yourself/.test(qualifiedPub),
+    "the script's reply POST, in the PR's repository, under the listed thread's own first comment":
+      publishHelper.includes('gh api --method POST "repos/$REPO/pulls/$PR/comments/$cid/replies" -F "body=@$file"'),
+    // The resolve mutation has no repository argument to carry, so what stands
+    // in for one is the id's provenance: the brief hands the id over as the
+    // gather fetched it, and the script refuses one this PR's own scope-checked
+    // list does not hold, before its first write.
+    "the resolve, qualified by the thread id's provenance rather than by an argument it has none of":
+      /never re-fetched or re-derived in your own turn; the command refuses, before any write, an id this PR's own thread list does not hold/.test(qualifiedPub) &&
+      publishHelper.includes('bash "$HERE/gh-review-threads.sh" --all --repo "$REPO" "$PR"') &&
+      publishHelper.includes('[ -z "$FOREIGN" ] || stop foreign-thread') &&
+      publishHelper.indexOf('[ -z "$FOREIGN" ] || stop foreign-thread') < publishHelper.indexOf("gh api --method POST") &&
+      publishHelper.includes("resolveReviewThread(input:{threadId:$id})"),
+    "the script's Summary comment, in the PR's repository": publishHelper.includes('gh api --method POST "repos/$REPO/issues/$PR/comments" -F "body=@$SUMMARY"'),
     "step 6's pings, through the script, naming the repository and the PR": /`address-review-ping --repo <owner>\/<repo> --pr 42 codex claude copilot`/.test(qualifiedPub),
     "no `{owner}`/`{repo}` placeholder left anywhere in it": !/\{owner\}\/\{repo\}/.test(qualifiedPub),
-    "and no ordered `gh pr` call left bare":
-      orderedPrCalls.length >= 1 && orderedPrCalls.every((call) => call.includes("--repo <owner>/<repo>")),
+    // The brief orders no `gh pr` call of its own any more: every PR write is a
+    // script's. The negative stays, for the day one comes back.
+    "and no ordered `gh pr` call left bare": orderedPrCalls.every((call) => call.includes("--repo <owner>/<repo>")),
+    "nor any script it orders": orderedScriptCalls.length === 4 && orderedScriptCalls.every((call) => call.includes("--repo <owner>/<repo>")),
   };
   const publishAbsent = Object.entries(publishClauses).filter(([, present]) => !present).map(([name]) => name);
   check(
     "and the publish brief qualifies every PR-scoped call it orders at the repository the PR is in, named from its own URL",
     publishAbsent.length === 0,
-    publishAbsent.length ? `missing: ${publishAbsent.join("; ")}` : `all ${orderedPrCalls.length} ordered \`gh pr\` calls carry --repo, and no placeholder survives`,
+    publishAbsent.length ? `missing: ${publishAbsent.join("; ")}` : `all ${orderedScriptCalls.length} ordered script calls carry --repo, and no placeholder survives`,
+  );
+
+  // The command the brief orders is carried to the real script rather than
+  // read: a flag the script does not take is a usage error (64) there, however
+  // well the sentence reads. With files that do not exist it must get as far as
+  // refusing them, `malformed`, which is past the argument parse and ahead of
+  // any `gh` call. A brief naming no command at all fails here too.
+  const publishCommand = (qualifiedPub.match(/`address-review-publish ([^`]*)`/) || [])[1] || "";
+  const carryPublish = (args) =>
+    spawnSync("bash", [join(here, "..", "plugins", "dev-skills", "skills", "address-review", "publish.sh"), ...args.replace("<owner>/<repo>", "acme/widgets").replace(/<file>/g, "/nonexistent/t053").split(" ")], { encoding: "utf8" });
+  const carried = publishCommand ? carryPublish(publishCommand) : { status: null, stdout: "" };
+  const carriedBare = publishCommand && /`--no-threads` in place of `--dispositions <file>`/.test(qualifiedPub)
+    ? carryPublish(publishCommand.replace("--dispositions <file>", "--no-threads"))
+    : { status: null, stdout: "" };
+  check(
+    "and the publish command it orders, in both its forms, is one the real script accepts",
+    carried.status === 3 && carried.stdout.trim() === "outcome=malformed" && carriedBare.status === 3 && carriedBare.stdout.trim() === "outcome=malformed",
+    `\`${publishCommand || "no command in the brief"}\` → ${carried.status}: ${carried.stdout.trim()}; with --no-threads → ${carriedBare.status}: ${carriedBare.stdout.trim()}`,
   );
 
   // `starting HEAD` is part of the record's single canonical content, so it
@@ -6248,7 +6297,10 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /SKIP an id the disposition's `detail` names as ALREADY ORDERED/.test(flakeBrief) &&
       /ordering only the run ids `rerunAccepted` does not carry, which is why an accepted id is reported even beside a rejected one/.test(flakeBrief) &&
       /rerunAccepted: \{ type: "array", items: \{ type: "string" \}/.test(src) &&
-      /carry that line's accepted run ids into the entry's \\`detail\\`, since publication orders only the rest/.test(src),
+      /carry that line's accepted run ids into the entry's \\`detail\\`, since publication orders only the rest/.test(src) &&
+      // The same carriage for a thread: the publisher composes no second reply
+      // only where the entry's `detail` tells it one is already there.
+      /Where a replayed thread entry's standing line says its reply is ALREADY POSTED, carry that line into the entry's \\`detail\\` word for word/.test(src),
     flakeBrief.slice(flakeBrief.indexOf("SKIP an id") - 40, flakeBrief.indexOf("SKIP an id") + 200),
   );
   // The caller's per-id half: one of the repeated lane's two runs accepted and
