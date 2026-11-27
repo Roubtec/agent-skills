@@ -5,7 +5,7 @@ description: A change, worktree, or drafted document should be reviewed and fixe
 
 Run one complete review cycle — fix → own fresh-eyes review → best-effort peer review → fix — on a single artifact.
 
-**Arguments:** `[<target: worktree, branch, diff range, task/doc file, or nothing for the current change>] [artifact-type: code | prose | decision] [light] [close-out] [peer-opinions=off] [max-rounds=N]`
+**Arguments:** `[<target: worktree, branch, diff range, task/doc file, or nothing for the current change>] [artifact-type: code | prose | decision] [light] [peer-opinions=off] [max-rounds=N]`
 
 Explicit Codex invocation uses `$review-cycle`; natural-language equivalents are fine.
 

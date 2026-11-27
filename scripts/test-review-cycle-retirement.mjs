@@ -95,7 +95,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 246;
+const CHECKS_PER_LEG = 247;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -2371,6 +2371,15 @@ for (const name of WORKFLOWS) {
     const none = await run(src, { fixes: [{ ...PASS_PACKET, addedPaths: [] }, idle], reviews: [OK] });
     check("a cycle whose passes added nothing unbriefed carries no such field", none.res.verdict === "pass" && !("addedPaths" in none.res), JSON.stringify(none.res.addedPaths));
     const stopped = await run(src, { fixes: [{ ...PASS_PACKET, addedPaths: ["src/unbriefed.ts"] }], reviews: [FAIL("r1")], cycle: { maxRounds: 1 } });
+    // Whole paths, not substrings: a brief naming `src/README.md` or
+    // `README.md.bak` names neither the root `README.md` nor `src/README`,
+    // while `./` and the sentence's own punctuation are not part of a path.
+    const whole = await run(src, {
+      fixes: [{ ...PASS_PACKET, addedPaths: ["README.md", "src/README", "docs/dotted.md", "docs/ended.md", "lib/a.ts"] }, idle],
+      reviews: [OK],
+      cycle: { scope: { title: "t", instructions: "fix src/README.md and README.md.bak, write ./docs/dotted.md and docs/ended.md.\nlib/a.ts", items: [] } },
+    });
+    check("a path the brief names only inside a longer path is still listed, and one it names whole is not", JSON.stringify(whole.res.addedPaths) === JSON.stringify([{ pass: 1, path: "README.md" }, { pass: 1, path: "src/README" }]), JSON.stringify(whole.res.addedPaths));
     check("the report rides a stopped exit too", stopped.res.verdict === "review-cap" && (stopped.res.addedPaths || []).length === 1, `${stopped.res.verdict}/${JSON.stringify(stopped.res.addedPaths)}`);
     const { CYCLE_FIX_SCHEMA, CYCLE_REVIEW_SCHEMA } = loadCycle(src, async () => null);
     check("the fixer's packet owes the list", CYCLE_FIX_SCHEMA.required.includes("addedPaths") && CYCLE_FIX_SCHEMA.properties.addedPaths.type === "array");

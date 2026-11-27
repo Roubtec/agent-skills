@@ -1857,11 +1857,27 @@ async function runReviewCycle(cycle) {
     }
 
     for (const d of fix.dispositions || []) findingDispositions.push({ ...d, pass: fixerPasses });
-    // A path counts as briefed where its text occurs anywhere in what this
-    // pass was handed. Coarse on purpose: the list is read by a person.
-    const briefText = JSON.stringify([cycle.scope || {}, findings || {}]);
+    // A path counts as briefed where what this pass was handed names it WHOLE:
+    // an occurrence that only ends or begins a longer path (`src/README.md`
+    // for `README.md`) names another file. A leading `./` and the punctuation
+    // of the sentence around it are not part of a path.
+    const briefStrings = [];
+    const collectBrief = (v) => {
+      if (typeof v === "string") briefStrings.push(v);
+      else if (v && typeof v === "object") Object.values(v).forEach(collectBrief);
+    };
+    collectBrief([cycle.scope, findings]);
+    const briefText = briefStrings.join("\n");
+    const briefed = (path) => {
+      for (let i = briefText.indexOf(path); i !== -1; i = briefText.indexOf(path, i + 1)) {
+        const before = briefText.slice(Math.max(0, i - 3), i).replace(/(^|[^\w./-])\.\/$/, "$1");
+        const after = briefText.slice(i + path.length, i + path.length + 2);
+        if (!/[\w./-]$/.test(before) && !/^(?:[\w/-]|\.\w)/.test(after)) return true;
+      }
+      return false;
+    };
     for (const path of new Set((Array.isArray(fix.addedPaths) ? fix.addedPaths : []).map((x) => String(x || "").trim()).filter(Boolean))) {
-      if (!briefText.includes(JSON.stringify(path).slice(1, -1)) && !addedPaths.some((a) => a.path === path)) addedPaths.push({ pass: fixerPasses, path });
+      if (!briefed(path) && !addedPaths.some((a) => a.path === path)) addedPaths.push({ pass: fixerPasses, path });
     }
     // The questions a disposition in THIS packet may retire: the ones live
     // before the pass's own are appended below — a question an earlier claim

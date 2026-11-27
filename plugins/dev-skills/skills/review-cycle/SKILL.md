@@ -5,7 +5,7 @@ description: A change, worktree, or drafted document should be reviewed and fixe
 
 Run one complete review cycle — fix → own fresh-eyes review → best-effort peer review → fix — on a single artifact.
 
-**Arguments:** `[<target: worktree, branch, diff range, task/doc file, or nothing for the current change>] [artifact-type: code | prose | decision] [light] [close-out] [peer-opinions=off] [max-rounds=N]`
+**Arguments:** `[<target: worktree, branch, diff range, task/doc file, or nothing for the current change>] [artifact-type: code | prose | decision] [light] [peer-opinions=off] [max-rounds=N]`
 
 This skill is two things at once.
 It is the **canonical definition** of the review protocol the other dev-skills share — `address-review`, `address-reviews`, `address-tasks`, `address-tasks-serialized`, `resolve-open-questions`, and `write-tasks` reference this skill for the roles, gates, peer step, delegated rebase step, round cap, and disposition rule, and state only their own deltas — and it is a **drop-in**: invoked directly, it runs the full cycle on an ad-hoc change with no batch scaffolding.
