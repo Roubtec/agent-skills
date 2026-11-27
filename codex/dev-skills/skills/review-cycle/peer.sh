@@ -670,7 +670,6 @@ cmd_run() {
 	provider_setup
 	[ -n "$WORKTREE" ] || usage "--worktree <abs dir> is required"
 	if [ -n "$AROOT" ] && [ -n "$ADIR" ]; then usage "give --artifact-root or --artifact-dir, not both"; fi
-	[ -n "$AROOT$ADIR" ] || usage "give --artifact-root <abs dir> or --artifact-dir <abs dir>"
 	if [ -n "$FACTS" ] && [ -n "$PROMPT_SRC" ]; then usage "give --facts or --prompt-file, not both"; fi
 	[ -n "$FACTS$PROMPT_SRC" ] || usage "give --facts <file> or --prompt-file <file>"
 	[ -s "$FACTS$PROMPT_SRC" ] || usage "not a readable, non-empty file: $FACTS$PROMPT_SRC"

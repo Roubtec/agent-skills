@@ -417,8 +417,9 @@ lacks "4: ...and a directory the caller named is not answered back" "$(peer run 
 # The script picks the attempt directory itself under --artifact-root.
 fresh
 OUT="$(peer run --provider codex --worktree "$REPO" --artifact-root "$A/not/yet/there" --facts "$FACTS")"
+RC=$?
 D1="$(val artifact_dir)"
-is "4: under an artifact root the review runs as before" "$?|$(first)|$(val path)" "0|outcome=passed|helper"
+is "4: under an artifact root the review runs as before" "$RC|$(first)|$(val path)" "0|outcome=passed|helper"
 case "$D1" in "$A/not/yet/there"/peer-run.??????) [ -d "$D1" ] ;; *) false ;; esac
 ok "4: ...in a directory the script made directly under that root, which it answers" $?
 is "4: ...holding the prompt" "$(val prompt_file)" "$D1/peer-review.prompt"
@@ -426,12 +427,14 @@ is "4: ...and everything the helper was handed" "$(cat "$STEER/helper.calls")" \
 	"--provider codex --worktree $REPO --prompt-file $D1/peer-review.prompt --artifact-root $D1/peer-review-run --timeout 260 --effort medium"
 is "4: ...its review included" "$(val review_file)" "$D1/peer-review-run/session/attempt-1/review.txt"
 OUT="$(peer run --provider codex --worktree "$REPO" --artifact-root "$A/not/yet/there" --facts "$FACTS")"
+RC=$?
 D2="$(val artifact_dir)"
-[ "$?|$(first)" = "0|outcome=passed" ] && [ -n "$D2" ] && [ "$D2" != "$D1" ] && [ -f "$D2/peer-review.prompt" ]
+[ "$RC|$(first)" = "0|outcome=passed" ] && [ -n "$D2" ] && [ "$D2" != "$D1" ] && [ -f "$D2/peer-review.prompt" ]
 ok "4: a second run under the same root gets a directory of its own" $?
 OUT="$(peer run --provider codex --worktree "$REPO" --artifact-root "$WORKDIR" --facts "$FACTS")"
+RC=$?
 D3="$(val artifact_dir)"
-case "$D3" in "$WORKDIR"/peer-run.??????) [ -z "$(git -C "$REPO" status --porcelain --ignored)" ] ;; *) false ;; esac
+case "$RC|$D3" in "0|$WORKDIR"/peer-run.??????) [ -z "$(git -C "$REPO" status --porcelain --ignored)" ] ;; *) false ;; esac
 ok "4: a root that holds the worktree still puts the attempt beside it, not in it" $?
 fresh
 for _ in 1 2 3 4 5 6 7 8; do
@@ -680,8 +683,9 @@ is "6: a second collect repeats the answer without a new launch" "$(peer collect
 
 fresh
 OUT="$(peer run --provider codex --worktree "$REPO" --artifact-root "$A" --facts "$FACTS")"
+RC=$?
 D1="$(val artifact_dir)"
-is "6: a direct launch under an artifact root answers the directory it made" "$?|$(first)|$(dirname "$D1")" "0|outcome=launched|$A"
+is "6: a direct launch under an artifact root answers the directory it made" "$RC|$(first)|$(dirname "$D1")" "0|outcome=launched|$A"
 OUT="$(peer collect --artifact-dir "$D1")"
 is "6: ...and collect works with it" "$?|$(first)|$(val review_file)" "0|outcome=passed|$D1/manual-attempt-1/peer-review.out"
 OUT="$(peer collect --artifact-root "$D1" 2>&1)"
