@@ -29,9 +29,9 @@ A Fixer's or Reviewer's prompt opens with the boundary line below, then tells it
   Never the fixer's reasoning or report.
   It reports **Pass** or a numbered, actionable **Issues** list, with anything below that bar as a pass note.
 - **Peer** (best-effort, cross-harness) — a read-only `claude` review started at the same moment as the Reviewer, from the committed checkout.
-  Give this role its own concurrent tool invocation and have that invocation run the `peer-review-run` call the peer step below prescribes in the foreground, taking the bounded direct-provider PID launch — and proving that PID dead before it returns — only where that step says so.
-  Concurrency belongs between the Peer and Reviewer roles; the helper owns its provider's timeout, retry, and reaping on the primary path, and the Peer invocation owns them on the fallback.
-  Its prompt is `peer-brief.md` copied in whole — `cat`, never retyped — followed by the same evidence the Reviewer gets: items and dispositions verbatim, worktree, base, branch, artifact type, and, verbatim, any GitHub thread text or diff it would otherwise need the network for.
+  Give this role its own concurrent tool invocation and have that invocation run the `peer.sh` launch the peer step below prescribes in the foreground, collecting a direct launch to an answer other than `pending` before it returns.
+  Concurrency belongs between the Peer and Reviewer roles; `peer.sh` owns the provider's timeout, retry, and reaping on either path.
+  Its prompt is `peer-brief.md` copied in whole — by `peer.sh`, never retyped — followed by the facts file you write, holding the same evidence the Reviewer gets: items and dispositions verbatim, worktree, base, branch, artifact type, and, verbatim, any GitHub thread text or diff it would otherwise need the network for.
   No reasoning, no fixer report, and no Reviewer execution steps: a peer left to infer its job from the Reviewer's tries to do the Reviewer's, and the Reviewer alone owns execution, which is what makes the concurrent launch safe.
   The brief tells it the implementer validated its commits; say beside the evidence what the packet in front of you says ran, or that the claim is carried.
   It answers `VERDICT: PASS | ISSUES` on its first line, then numbered findings tagged `blocking` or `minor`, then optional advisory `NOTES`; both of its severities gate.
@@ -140,217 +140,68 @@ Any move the final confirmation pass makes to that set — dropping one, or firs
 
 ## The peer step
 
-**Preflight once per run**, unless `peer-opinions=off`.
-Classify the probe explicitly:
+The mechanics of a peer review — the probe, the prompt file, the launch, the wait, the teardown, and the classified result — are `peer.sh`, beside this file: run it by path, and read `peer.sh --help` only when an answer surprises you.
+It answers in `key=value` lines with `outcome=` first, and exits 0 for every outcome a cycle continues past.
 
-- If `command -v claude` fails, mark the peer unavailable.
-- If `claude auth status` succeeds, mark the peer available.
-- If `claude auth status` fails while `ANTHROPIC_API_KEY` is set, defer classification to the first real invocation because the environment key may authenticate it without a saved login.
-- If the failure says this older CLI does not support the `auth status` subcommand, likewise defer classification to the first real invocation because no probe is available.
-- For any other `claude auth status` failure, mark the peer unavailable and retain the failure reason.
-
-In either deferred-classification path, an auth/usage failure at the first real invocation marks the peer unavailable for the rest of the run.
-Record an unavailable peer's reason for one final-summary note.
+**Preflight once per run**, unless `peer-opinions=off`: `peer.sh preflight --provider claude`.
+`available` and `deferred` both mean launch: `deferred` is a probe that could not tell (a set `ANTHROPIC_API_KEY` beside a failed `claude auth status`, or a CLI too old to have that subcommand), so there an auth/usage `unavailable` from the first real launch marks the peer unavailable for the rest of the run.
+`unavailable` means no peer this run; record its `reason` for one final-summary note.
 A batch orchestrator preflights once for the whole batch and never repeats the probe inside entries.
 
+**What the peer is told is a facts file and nothing else.**
+Write the evidence the Peer role above lists to a file of its own, and never the implementer's reasoning: the script builds the prompt from `peer-brief.md` and that file alone.
+Give every launch a fresh `artifact_dir` of its own under this cycle's artifact directory, outside the reviewed worktree.
+
+**Launch** inside the Peer role, started at the same moment as the Reviewer: `peer.sh run --provider claude --worktree "$worktree" --artifact-dir "$artifact_dir" --facts "$facts_file" --evidence-base "$effective_base"`, exactly once, in the foreground.
+Managed hooks and organization settings policy can still apply to that `claude`, so an operator in a managed environment must disable peer opinions or first ensure those hooks cannot mutate the worktree before launching a peer concurrently with the Reviewer.
+Set the caller-side tool wait to at least 570 seconds but strictly below its roughly 600-second cap, and do not background, poll, retry, or externally signal the call: where `peer-review-run` is on PATH the script runs it, and that helper owns timeout, transient-only retry, and provider-tree reaping inside that wait.
+`outcome=launched` means the script started the provider directly instead, because the helper is absent or its verdict named no review file this cycle could relay; `fallback_reason` says which, and a run states it once rather than every round.
+Then run `peer.sh collect --artifact-dir "$artifact_dir"` under the same wait, again for as long as it answers `pending`.
+A direct launch gets a loose 12 minutes per attempt; pass `--deadline <seconds>` to `run` where visible progress or review size justifies waiting longer.
+
+**The evidence travels in the prompt.**
+This peer's read-only tools cannot run git, so `--evidence-base`, the already-selected effective review base, has the script embed the log and diff of that base against `HEAD` in the prompt and ask the peer to prove it read them.
+A `passed` whose proof is missing or wrong comes back `forfeited` with reason exactly `diff evidence unreadable or proof absent`; an `issues` keeps its outcome and every finding verbatim, and you attach that reason and an evidence-failure note (`evidence=unproved`) instead of dropping grounded findings.
+A base the script cannot resolve forfeits the launch rather than handing the peer partial evidence.
+
 **Review strength is pinned per invocation.**
-This codex-led side reviews with `claude` and pins both dimensions, `--model opus --effort medium` (the helper's own effort default is `high`), and it reads back the `model`/`effort` the helper result reports and records them as the round's strength note.
-The pin is per-invocation and never writes back to the saved configuration.
+The script pins both dimensions for `claude`, `opus` at an explicit medium effort, and the pin never writes back to the saved configuration.
+Record the reported `model` and `effort` as the round's strength note, and say in it where `strength_pin=differs`: the helper then reviewed at another strength than the one pinned.
 
-**Prepare literal review evidence.**
-Create one unique owner-only `invocation_dir` outside the reviewed worktree in session-scoped scratch space, then allocate every path explicitly beneath it: `prompt_file="$invocation_dir/peer-review.prompt"`, `diff_evidence_file="$invocation_dir/diff-evidence.txt"`, `artifact_root="$invocation_dir/peer-review-run"` for the helper, and, for the fallback launch only, `outfile="$invocation_dir/peer-review.json"`, `errfile="$invocation_dir/peer-review.stderr"`, and `peer_pid_file="$invocation_dir/peer-review.pid"`.
-Resolve the already-selected effective review base and the worktree's current `HEAD` to full commit OIDs as `effective_base_oid` and `review_tip_oid`, then, before starting either reviewer and under `umask 077`, render exactly `git -C "$worktree" log --oneline "$effective_base_oid..$review_tip_oid"` followed by `git -C "$worktree" diff "$effective_base_oid...$review_tip_oid"` into `diff_evidence_file` and make that retained audit copy read-only with `chmod 400`; any resolution, render, write, or mode-setting failure forfeits the peer launch rather than handing it partial evidence.
-Construct `prompt_file` from two precisely separated classes of content: copy `peer-brief.md` in with `cat` and write any further static instructions verbatim with quoted heredocs (`<<'PEER_PROMPT'`), then append generated review data only as literal bytes with `printf -- '%s\n' "$value"` or `cat -- "$file"`, never by interpolation into an unquoted heredoc and never through `eval`.
-Open that second class with a fixed `BEGIN GENERATED REVIEW DATA` marker, append the full per-round work items, findings, and proposed dispositions, then the lines `Effective base OID: $effective_base_oid` and `Review tip OID: $review_tip_oid`, followed by a fixed `BEGIN EMBEDDED GIT EVIDENCE` marker, the complete bytes of `diff_evidence_file`, a fixed `END EMBEDDED GIT EVIDENCE` marker, and finally `END GENERATED REVIEW DATA`.
-No generated review content belongs outside the outer generated-data markers, and nothing except the exact log/diff bytes belongs between the inner git-evidence markers.
-The static instructions must order the peer to inspect that embedded section before rendering its verdict and to copy all three proof lines into its final response: `EVIDENCE_BASE_OID: <full OID>`, `EVIDENCE_TIP_OID: <full OID>`, and `EVIDENCE_TOKEN: <token>`, choosing the token as an exact distinctive non-whitespace token from an added or removed diff line that occurs exactly once between the evidence markers.
-The caller reveals no expected token in the prompt.
-The provider receives the evidence in `prompt_file` itself and never has to read `diff_evidence_file`; preserve that file only as the caller's audit copy and grant only `invocation_dir`, never a shared scratch parent.
+**Reading the result.**
+For `passed` or `issues`, `review_file` is the peer's full review as plain text: read that file in full before applying verdict logic and relay every finding from it verbatim.
+Never look for the review anywhere else, guess a filename, or parse a provider-specific envelope.
 
-**Primary launch through `peer-review-run`.**
-At the same moment the Reviewer starts, start the Peer role concurrently.
-Create `artifact_root` as above — private, outside the worktree, under the session scratch directory; the helper creates its owner-only per-invocation session directory beneath it — and, when `command -v peer-review-run` succeeds, run exactly one supervised foreground call inside the concurrently started Peer role: `peer-review-run --provider claude --worktree "$worktree" --prompt-file "$prompt_file" --artifact-root "$artifact_root" --timeout 260 --model opus --effort medium`.
-Set the caller-side tool wait to at least 570 seconds but strictly below its roughly 600-second cap: the helper may make two 260-second attempts and spend roughly five seconds reaping each one, leaving at least 40 seconds for setup, polling, parsing, and result emission.
-Do not background, poll, or externally signal it; the helper owns timeout, transient-only retry, provider-tree reaping, and the final one-line JSON result.
-Read only that final stdout line, require schema `powbox.peer-review-run/v1`, verify its reported `model` is `opus` and `effort` is `medium` and record both as the round's strength note, and carry its outcome and `reason` into the vocabulary below.
-Before applying verdict logic, read the complete review through the documented provider-neutral field: for a `passed` or `issues` result, `reviewFile` is the absolute path of the peer's full review as plain text — read that file in full and relay every finding from it verbatim.
-Never infer the review from `artifactDir`, guess a filename below it, or parse a provider-specific envelope.
-The prompt rides through `--prompt-file` unchanged, so the embedded-evidence contract above and the OID/token proof rules below apply to that complete review exactly as they apply on the fallback.
-
-**Capability degradation is read from the result, not from the binary or the schema string.**
-`reviewFile` is additive within schema v1, so the schema cannot say whether a helper carries it, and an older baked image may have either.
-A `passed` or `issues` result whose `reviewFile` is null or names a file that is not there is a result this cycle cannot relay verbatim — an old helper is only one of the things that absence can mean — so that round takes the direct launch below, and the run states the reason once rather than repeating it every round.
-
-**Hardened direct launch (fallback).**
-Taken when `command -v peer-review-run` fails, and on the capability-degradation route above; a run that takes it says so once, naming which.
-Managed hooks and organization settings policy can still apply under `--safe-mode`, so an operator in a managed environment must disable peer opinions or first ensure those hooks cannot mutate the worktree before launching a peer concurrently with the Reviewer.
-The launch pins `--model opus --effort medium`, uses `nohup claude -p ... < "$prompt_file" > "$outfile" 2> "$errfile" &`, and records `$!` as the direct provider PID plus its `/proc/<pid>/stat` start time in the owner-only identity file; do not insert a shell wrapper, wait supervisor, session, or process-group leader.
-The launching shell changes into the reviewed worktree before starting the provider, and forfeits the launch if that fails: `claude -p` has no working-directory flag and the peer prompt speaks of the current directory, so dropping the wrapper that used to `cd` there would otherwise leave the peer reading whichever checkout the caller stood in while the embedded evidence describes this one — a verdict over the wrong files, which is worse than no peer opinion.
-Grant `--add-dir "$invocation_dir"` beside it and nothing else: that directory is outside the worktree by construction, and the cwd covers the reviewed files.
-
-```sh
-# `claude -p` has no working-directory flag, so the shell that launches it is
-# what decides which checkout the peer reads. Move to the reviewed worktree
-# first and forfeit the launch if that fails: reviewing whichever checkout the
-# caller happened to stand in, while the embedded evidence describes this one,
-# is a verdict over the wrong files rather than a missing peer opinion.
-cd -- "${worktree:?peer launch requires the reviewed worktree path}" || exit 125
-
-peer_start_time() {
-  stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
-  rest=${stat##*) }
-  [ "$rest" != "$stat" ] || return 1
-  set -- $rest
-  [ "$#" -ge 20 ] || return 1
-  shift 19
-  case $1 in ""|0|*[!0-9]*) return 1 ;; esac
-  printf '%s\n' "$1"
-}
-
-peer_load_identity() {
-  IFS=' ' read -r peer_identity_pid peer_identity_start peer_identity_extra < "$peer_pid_file" || return 1
-  for value in "$peer_identity_pid" "$peer_identity_start"; do
-    case $value in ""|0|*[!0-9]*) return 1 ;; esac
-  done
-  [ -z "$peer_identity_extra" ] || return 1
-  peer_identity_now=$(peer_start_time "$peer_identity_pid") || return 1
-  [ "$peer_identity_now" = "$peer_identity_start" ]
-}
-
-peer_pid_alive() {
-  peer_load_identity && kill -0 "$peer_identity_pid" 2>/dev/null
-}
-
-peer_signal_pid() {
-  signal=$1
-  peer_load_identity && kill "-$signal" "$peer_identity_pid" 2>/dev/null
-}
-
-peer_stop_pid() {
-  peer_signal_pid TERM || :
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    peer_pid_alive || break
-    sleep 1
-  done
-  if peer_pid_alive; then
-    peer_signal_pid KILL || :
-  fi
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    peer_pid_alive || break
-    sleep 1
-  done
-  ! peer_pid_alive
-}
-
-# Cleanup before a valid identity file exists. With a start token, every probe
-# and signal verifies it. Without one, TERM and KILL are consecutive operations
-# on the freshly captured direct child `$!`; after that immediate boundary this
-# function only probes and a reused PID can at worst force a survivor stop.
-peer_abort_unhanded() {
-  if [ -z "${peer_start:-}" ]; then
-    kill -TERM "$peer_pid" 2>/dev/null || :
-    kill -KILL "$peer_pid" 2>/dev/null || :
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-      kill -0 "$peer_pid" 2>/dev/null || return 0
-      sleep 1
-    done
-    return 1
-  fi
-  peer_signal_direct() {
-    direct_now=$(peer_start_time "$peer_pid") || return 1
-    [ "$direct_now" = "$peer_start" ] || return 1
-    kill "-$1" "$peer_pid" 2>/dev/null
-  }
-  peer_alive_direct() {
-    direct_now=$(peer_start_time "$peer_pid") || return 1
-    [ "$direct_now" = "$peer_start" ] || return 1
-    kill -0 "$peer_pid" 2>/dev/null
-  }
-  peer_signal_direct TERM || :
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    peer_alive_direct || break
-    sleep 1
-  done
-  if peer_alive_direct; then
-    peer_signal_direct KILL || :
-  fi
-  for _ in 1 2 3 4 5 6 7 8 9 10; do
-    peer_alive_direct || break
-    sleep 1
-  done
-  ! peer_alive_direct
-}
-
-nohup claude -p --model opus --effort medium --safe-mode --tools "Read,Glob,Grep" \
-  --disallowedTools "mcp__*" --add-dir "$invocation_dir" --output-format json \
-  < "$prompt_file" > "$outfile" 2> "$errfile" &
-peer_pid=$!
-peer_launch_status=0
-peer_start=$(peer_start_time "$peer_pid") || peer_start=
-if [ -n "$peer_start" ]; then
-  (umask 077 && printf '%s %s\n' "$peer_pid" "$peer_start" > "$peer_pid_file") || peer_launch_status=125
-else
-  peer_launch_status=125
-fi
-if [ "${peer_launch_status:-0}" -ne 0 ]; then
-  if peer_abort_unhanded; then
-    exit 125
-  fi
-  printf '%s\n' 'peer handoff failed and the direct provider PID survived TERM/KILL' >&2
-  exit 126
-fi
-```
-
-The provider is already live once `$!` is captured, so a start-time read failure or identity-file write failure immediately calls `peer_abort_unhanded` in that same shell, before any handoff or return.
-When the start token exists, cleanup verifies it before every probe and signal and uses the normal bounded TERM/KILL sequence.
-When the first start-time read itself failed, the only safe ownership fact is the freshly launched direct child `$!`: TERM and KILL are issued consecutively to that positive PID at the immediate launch boundary, then later checks only probe it, so a recycled number is never signalled after a delay.
-The irreducible race between capturing `$!` and those next same-shell operations is the direct-launch boundary; no shell PID protocol can remove it.
-Failure to prove death sets a teardown failure.
-Either handoff failure stops the entire cycle even when cleanup succeeds: do not retry, decide the round, advance another entry, or publish.
-
-Every later probe or signal after a successful handoff reloads the two-field identity and compares the current start time before touching the PID, so PID reuse is death of the original and never a target.
-Poll until the loose roughly 12-minute deadline.
-At timeout, send TERM to that identity-checked PID, poll for at most ten seconds, send KILL only if the identity still matches, then poll for at most ten more seconds.
-A surviving identity stops the entire cycle for operator intervention: do not retry, decide the round, advance another entry, or publish.
-Retry a timeout or transient failure once with entirely fresh paths only after death is proved; auth/usage errors are `unavailable` without retry.
-Never infer or signal a process group, target a supervisor, use `pkill -f`, or replace this fallback with a capped foreground call.
-This best-effort fallback proves only the direct provider PID dead and makes no descendant-group guarantee.
-
-After the PID is dead, a non-empty result artifact containing a `VERDICT:` line is authoritative.
-Parse the captured JSON only far enough to extract the final message, proof lines, and verdict; on the helper path the same authority is the plain-text bytes of `reviewFile`, with no envelope to parse.
-Missing or mismatched OID/token proof changes `passed` to `forfeited` with reason exactly `diff evidence unreadable or proof absent`; for `issues`, keep the `issues` outcome and every finding verbatim, attaching that exact reason and an evidence-failure note instead of dropping grounded findings.
+**The one stop is exit status 3.**
+It means a provider the script launched could not be proved dead (`teardown=survivor`, with its `pid`): stop the cycle and escalate for operator intervention, with no retry, next entry, or publication.
+Any other non-zero exit is the script's own failure, never a verdict: record that round's peer as `failed` with the script's stderr line and continue.
 
 **Optional second peer: Muse.**
 Muse Code is a third harness some containers carry and most do not, so it is strictly additive: everything above describes the cycle without it, and nothing here changes the Peer.
-Preflight it once per run beside the Peer's own preflight, unless `peer-opinions=off`, which disables both: run `command -v muse`, then `muse usage`.
-A missing binary or a non-zero exit means there is no second peer this run; say so once in the final summary only when the binary was present, since a container without Muse has nothing to report.
+Preflight it once per run beside the Peer's own preflight, unless `peer-opinions=off`, which disables both: `peer.sh preflight --provider muse`.
+`absent` means this container has no Muse and the run says nothing about it; `unavailable` means no second peer this run, said once in the final summary.
 A batch orchestrator preflights it once for the whole batch, like the Peer.
-It runs through `peer-review-run` only — there is no manual launch for it: `peer-review-run --provider muse --worktree "$worktree" --prompt-file "$prompt_file" --artifact-root "$muse_artifact_root" --timeout 540 --attempts 1 --effort medium`, exactly once, in the foreground, inside its own role started at the same moment as the Peer's, under the same caller-side wait.
-One long attempt rather than two short ones: a Muse review routinely outlasts 260 seconds, and a retry would start it over inside the same wait.
-Give it the Peer's `prompt_file` and an `artifact_root` of its own beside the Peer's, so the two results never share a directory.
-A missing helper, or one that answers that call with a usage error and no result line because it predates the `muse` provider or `--attempts`, means no second peer for the rest of the run — state that once rather than every round.
-Pass no `--model`: the helper prefers the strongest Muse model the account's plan includes and falls back to that plan's floor on its own, so the applied `model` and `effort` it reports are this peer's strength note, recorded beside the Peer's.
-Contributor mode is the user's saved Muse setting, which also decides how fast their Muse allowance is spent, so leave it alone: set no `MUSE_CONTRIBUTOR_MODE` for the call and offer no argument that overrides it.
-Its result lands in the outcome vocabulary below and feeds the gate, the grounding spot-check, the verbatim relay, and the pass-note consumption on the Peer's terms, and its launches count toward the same batch throttle.
+Launch it with `peer.sh run --provider muse` on the Peer's facts file and `--evidence-base`, with an `artifact_dir` of its own, exactly once, in the foreground, inside its own role started at the same moment as the Peer's, under the same caller-side wait.
+It runs through `peer-review-run` only, as one long attempt rather than two short ones, so it never answers `launched`; an `unavailable` from the launch itself (the helper is missing, or predates Muse) means no second peer for the rest of the run, stated once.
+Contributor mode is the user's saved Muse setting, which also decides how fast their Muse allowance is spent, so leave it alone: set no `MUSE_CONTRIBUTOR_MODE` for the call.
+Its result lands in the outcome vocabulary below and feeds the gate, the grounding spot-check, the verbatim relay, and the pass-note consumption on the Peer's terms, its `model` and `effort` are recorded beside the Peer's, and its launches count toward the same batch throttle.
 
 **Compact pass-note consumption.**
-Read the review — the documented `reviewFile` payload on the helper path, the provider's captured result artifact on the fallback — and copy only the bounded bullets below its exact `NOTES (advisory; not necessarily fixes)` heading into the structured peer `notes`; do not import the verification line, issue prose, reasoning, or any text outside that section.
+Read the review at `review_file` and copy only the bounded bullets below its exact `NOTES (advisory; not necessarily fixes)` heading into the structured peer `notes`; do not import the verification line, issue prose, reasoning, or any text outside that section.
 The workflow consumer revalidates the structured value independently: preserve at most three exact `- path:line — note` bullets whose note is at most 15 words, discard every malformed, over-budget, or surplus bullet, and return an empty value when none survive — and drop the value whole for any outcome other than `passed`/`issues`, since a peer that reached no verdict wrote no NOTES section, so bullets arriving beside `unavailable`, `timeout`, `failed` or `forfeited` (which is also where an unrecognized outcome lands) are a misparse of output the stage judged unusable rather than advice.
 Surface the surviving bullets under that round's peer entry in the cycle result; the standalone summary logs those bullets compactly, the batch summary returns them in each task's `peerRounds`, and a clean pass remains only the usual one-line outcome.
-The extraction reads those two sources and nothing else.
+The extraction reads that file and nothing else.
 Pass-notes remain advisory human-facing output in every mode: never include them in a fixer or final-confirmation prompt, and never let them open a fix round or cause edits.
 
 **Outcome vocabulary.**
-Whatever launches the peer, its result lands in one vocabulary: `passed` and `issues` feed the gate; `unavailable` (missing binary, logged out, auth/usage exhaustion), `timeout` (after the one retry), `forfeited` (empty or unintelligible output), and `failed` (provider crash or exhausted retry) are explicit non-blocking round outcomes.
-Carry the helper result's `reason` exactly.
-On the fallback path, carry the exact provider diagnostic when it supplies the cause; use the literal reason `empty output` or `garbled output` only after observing that condition, and otherwise leave `reason` empty rather than inventing one.
-That exact carried value is what the batch throttle reads.
+Whichever path launched the peer, `peer.sh` reports one vocabulary: `passed` and `issues` feed the gate; `unavailable` (missing binary, logged out, auth/usage exhaustion), `timeout` (after the one retry), `forfeited` (empty or unintelligible output), and `failed` (provider crash or exhausted retry) are explicit non-blocking round outcomes.
+Carry its `reason` exactly, an empty one included, and never invent or paraphrase one: that exact value is what the batch throttle reads.
 Anything that is not `passed` or `issues` is non-blocking — normalize an unrecognized outcome the same way rather than letting it fall through.
 
 **Batch concurrency is an optimistic session-local adaptive throttle.**
 Start with no cap.
 A `timeout` or `failed` outcome is trouble.
-A `forfeited` outcome is trouble only when its exact retained reason maps to empty/garbled output: the fallback-path literals `empty output` and `garbled output`, or the helper literals `provider exited 0 with an empty final message` and `provider exited 0 but produced a malformed/unparseable response`.
+A `forfeited` outcome is trouble only when its exact retained reason maps to empty/garbled output: the script's own literals `empty output` and `garbled output`, or the helper literals `provider exited 0 with an empty final message` and `provider exited 0 but produced a malformed/unparseable response`.
 Do not substring-match or paraphrase reasons; in particular, `provider exited 0 but emitted no recognizable VERDICT token`, other forfeitures, and auth/usage `unavailable` outcomes are not throttle events.
 On the first trouble, cap new launches at `max(2, min(8, current in-flight))`; never kill calls already in flight, and queue launches beyond the cap.
 Each later trouble cluster halves the cap as `max(2, floor(cap / 2))`: a cluster is one cap generation, so only trouble from a call launched under the current cap can step it down and results from calls already in flight at the prior step cannot collapse it again.

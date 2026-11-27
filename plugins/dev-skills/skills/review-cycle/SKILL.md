@@ -26,8 +26,8 @@ A Fixer's or Reviewer's prompt opens with the boundary line below, then tells it
   Its prompt carries the work item(s) and any proposed dispositions verbatim, the effective review base and which range it is, the branch, the round's validation tier, the artifact type below, where any output of its build goes — a path under the cycle's artifact directory or inside the reviewed worktree, never a fixed shared scratchpad name and never left to the reviewer to pick — and whatever the round has to adjudicate: declines, retired questions with the fixer's claim, deviations standing or claimed closed, and any evidenced-unrelated test failure with its evidence.
   Never the fixer's reasoning or report.
   It reports **Pass** or a numbered, actionable **Issues** list, with anything below that bar as a pass note.
-- **Peer** (best-effort, cross-harness) — a read-only `codex` review launched at the same moment as the Reviewer, from the committed checkout, through the `peer-review-run` call the peer step below prescribes (its hardened manual launch is the fallback, taken only where that step says so).
-  Its prompt is `peer-brief.md` copied in whole — `cat`, never retyped — followed by the same evidence the Reviewer gets: items and dispositions verbatim, worktree, base, branch, artifact type, and, verbatim, any GitHub thread text or diff it would otherwise need the network for.
+- **Peer** (best-effort, cross-harness) — a read-only `codex` review launched at the same moment as the Reviewer, from the committed checkout, through the `peer.sh` launch the peer step below prescribes.
+  Its prompt is `peer-brief.md` copied in whole — by `peer.sh`, never retyped — followed by the facts file you write, holding the same evidence the Reviewer gets: items and dispositions verbatim, worktree, base, branch, artifact type, and, verbatim, any GitHub thread text or diff it would otherwise need the network for.
   No reasoning, no fixer report, and no Reviewer execution steps: a peer left to infer its job from the Reviewer's tries to do the Reviewer's, and the Reviewer alone owns execution, which is what makes the concurrent launch safe.
   The brief tells it the implementer validated its commits; say beside the evidence what the packet in front of you says ran, or that the claim is carried.
   It answers `VERDICT: PASS | ISSUES` on its first line, then numbered findings tagged `blocking` or `minor`, then optional advisory `NOTES`; both of its severities gate.
@@ -136,117 +136,63 @@ Any move the final confirmation pass makes to that set — dropping one, or firs
 
 ## The peer step
 
-**Preflight once per run**, unless `peer-opinions=off`: run `command -v codex`; when missing, mark the peer unavailable.
-Otherwise run `codex login status`: a non-zero exit marks it unavailable when `CODEX_API_KEY` is unset, while a set `CODEX_API_KEY` means classify availability at the first real invocation instead — an auth/usage failure there marks the peer unavailable for the rest of the run.
-Record an unavailable peer's reason for one final-summary note.
+The mechanics of a peer review — the probe, the prompt file, the launch, the wait, the teardown, and the classified result — are `peer.sh`, beside this file: run it by path, and read `peer.sh --help` only when an answer surprises you.
+It answers in `key=value` lines with `outcome=` first, and exits 0 for every outcome a cycle continues past.
+
+**Preflight once per run**, unless `peer-opinions=off`: `peer.sh preflight --provider codex`.
+`available` and `deferred` both mean launch: `deferred` is a probe that could not tell (a set `CODEX_API_KEY` beside a failed login probe), so there an auth/usage `unavailable` from the first real launch marks the peer unavailable for the rest of the run.
+`unavailable` means no peer this run; record its `reason` for one final-summary note.
 A batch orchestrator preflights once for the whole batch and never repeats the probe inside entries.
 
+**What the peer is told is a facts file and nothing else.**
+Write the evidence the Peer role above lists to a file of its own, and never the implementer's reasoning: the script builds the prompt from `peer-brief.md` and that file alone.
+Give every launch a fresh `artifact_dir` of its own under this cycle's artifact directory, outside the reviewed worktree.
+
+**Launch** inside the concurrently started Peer role: `peer.sh run --provider codex --worktree "$worktree" --artifact-dir "$artifact_dir" --facts "$facts_file"`, exactly once, in the foreground.
+Set the caller-side Bash/tool wait to at least 570 seconds but strictly below its roughly 600-second cap, and do not background, poll, retry, or externally signal the call: where `peer-review-run` is on PATH the script runs it, and that helper owns timeout, transient-only retry, and provider-tree reaping inside that wait.
+`outcome=launched` means the script started the provider directly instead, because the helper is absent, `jq` is not there to read its result, or its verdict named no review file this cycle could relay; `fallback_reason` says which, and a run states it once rather than every round.
+Then run `peer.sh collect --artifact-dir "$artifact_dir"` under the same wait, again for as long as it answers `pending`.
+A direct launch gets a loose 12 minutes per attempt; pass `--deadline <seconds>` to `run` where visible progress or review size justifies waiting longer.
+
 **Review strength is pinned per invocation.**
-This Claude-led side reviews with codex and always passes an explicit `--effort medium` to `peer-review-run` (its own default is `high`), or `-c model_reasoning_effort=medium` on the manual fallback, and passes no `--model`: codex exposes no stable non-dated alias to pin and naming a concrete id is barred by the never-dated-model-IDs rule, so the model is the peer's configured high-capability default (the root `model` of `${CODEX_HOME:-~/.codex}/config.toml` — that configuration is what "configured high-capability model" means wherever these skills say it), which the helper passes through and the fallback reads directly.
-The pin is per-invocation and never writes back to the saved configuration.
+The script reviews at an explicit medium effort and names no model for codex: codex exposes no stable non-dated alias to pin and naming a concrete id is barred by the never-dated-model-IDs rule, so the model is the peer's configured high-capability default (the root `model` of `${CODEX_HOME:-~/.codex}/config.toml` — that configuration is what "configured high-capability model" means wherever these skills say it).
+The pin never writes back to the saved configuration.
+Record the reported `model` and `effort` as the round's strength note; `model=null` is that note and never a reason to launch again.
 
-**Primary launch through `peer-review-run`.**
-First establish `artifact_root` as a unique, private, session-scoped directory outside the reviewed worktree — a directory of this cycle's own under its artifact directory satisfies that, and the helper creates its owner-only per-invocation session directory beneath it — and write the complete peer prompt to a unique per-attempt `prompt_file` beside it: `peer-brief.md` copied in with `cat`, then the evidence appended with a quoted heredoc (`<<'PEER_PROMPT'`), never assembled through shell interpolation.
-Then, when `command -v peer-review-run` succeeds, run `peer-review-run --provider codex --worktree "$worktree" --prompt-file "$prompt_file" --artifact-root "$artifact_root" --timeout 260 --effort medium` exactly once, in the foreground, inside the concurrently started Peer role.
-Set the caller-side Bash/tool wait to at least 570 seconds but strictly below its roughly 600-second cap: the helper may make two 260-second attempts and spend roughly five seconds reaping each one, leaving at least 40 seconds for setup, parsing, and result emission.
-Do not background, poll, retry, or externally signal it; the helper owns timeout, transient-only retry, provider-tree reaping, and the final one-line JSON result (schema `powbox.peer-review-run/v1`; final stdout line one JSON object with `outcome ∈ passed | issues | unavailable | timeout | forfeited | failed`, the applied `model` and `effort`, `artifactDir`, `reviewFile`, and `reason`).
-Read only that final line, require the schema, carry its outcome and `reason` into the vocabulary below, and record `model`/`effort` as the round's strength note.
-A reported `model: null` is that note and never a fallback trigger.
-For a `passed` or `issues` result, `reviewFile` is the peer's full review as plain text: read that file in full before applying verdict logic and relay every finding from it verbatim.
-Never infer the review from `artifactDir`, guess a filename below it, or parse a provider-specific envelope.
+**Reading the result.**
+For `passed` or `issues`, `review_file` is the peer's full review as plain text: read that file in full before applying verdict logic and relay every finding from it verbatim.
+Never look for the review anywhere else, guess a filename, or parse a provider-specific envelope.
 
-**Capability degradation is read from the result, not from the binary or the schema string.**
-`reviewFile` is additive within schema v1, so the schema cannot say whether a helper carries it, and an older baked image may have either.
-A `passed` or `issues` result whose `reviewFile` is null or names a file that is not there is a result this cycle cannot relay verbatim — an old helper is only one of the things that absence can mean — so that round takes the manual fallback below, and the run states the reason once rather than repeating it every round.
-
-**Hardened manual launch (fallback).**
-Taken when `command -v peer-review-run` fails, and on the capability-degradation route above; a run that takes it says so once, naming which.
-Reuse the `prompt_file` written above and allocate the remaining unique per-attempt paths in this cycle's artifact directory:
-
-```bash
-worktree="/absolute/path/to/committed-checkout-or-worktree"
-artifact_dir="/absolute/path/outside/the/worktree/<cycle-slug-segment>/round-1"
-mkdir -p "${artifact_dir}"
-
-# prompt_file: already written above, before the primary launch.
-outfile="${artifact_dir}/peer-review.out"
-stderr_file="${artifact_dir}/peer-review.stderr"
-pid_file="${artifact_dir}/peer-review.pid"
-
-# Pin peer effort per invocation; this never changes the container's configuration.
-peer_args=(-c model_reasoning_effort=medium)
-
-nohup sh -c '
-  pid_file=$1
-  shift
-  proc_identity() {
-    stat=$(cat "/proc/$1/stat" 2>/dev/null) || return 1
-    rest=${stat##*) }
-    [ "$rest" != "$stat" ] || return 1
-    set -- $rest
-    [ "$#" -ge 20 ] || return 1
-    pgrp=$3
-    session=$4
-    shift 19
-    start_time=$1
-    for value in "$start_time" "$pgrp" "$session"; do
-      case $value in ""|0|*[!0-9]*) return 1 ;; esac
-    done
-    printf "%s %s %s\n" "$start_time" "$pgrp" "$session"
-  }
-  identity=$(proc_identity "$$") || exit 125
-  printf "%s %s\n" "$$" "$identity" > "$pid_file" || exit 125
-  exec "$@"
-' peer-launch "${pid_file}" \
-  codex exec --sandbox read-only --cd "${worktree}" -o "${outfile}" \
-    -c mcp_servers={} "${peer_args[@]}" "$(<"${prompt_file}")" \
-  < /dev/null > /dev/null 2> "${stderr_file}" &
-```
-
-Stdin is closed, ordinary stdout is detached from the launching tool without being merged into the result or stderr, the output paths are unique per attempt, and stderr is captured separately so progress stays inspectable; the `-o` result remains authoritative.
-The handoff file records the peer PID plus Linux `/proc/<pid>/stat` fields 22 (start time), 5 (process group), and 6 (session).
-In every later shell, parse the stat record by removing everything through its final closing parenthesis plus following space before counting fields (the comm field may contain spaces or `)`), require exactly those four positive-decimal handoff values, and compare all three current stat fields with the persisted values **before every** `kill -0`, TERM, or KILL.
-A missing `/proc` record or mismatch means this peer incarnation is dead: never probe or signal that reused numeric PID.
-On timeout send TERM to the identity-checked PID, poll for at most ten seconds with the same identity check, then send KILL only if that check still identifies the original direct provider PID; poll for at most ten more seconds.
-A survivor is a teardown failure: stop the cycle and escalate for operator intervention, with no retry, next entry, or publication.
-Only confirmed death permits the one retry, using wholly new paths and a new identity handoff.
-Never infer a process group from a plain `nohup … &` launch, target a wait supervisor, or use `pkill -f`.
-If a tree instead has to recover liveness from codex's unique `-o` path, resolve `pgrep -f` to the peer binary itself, excluding the probing shell and all its ancestors; exactly one survivor means alive, none means dead, and more than one is indeterminate and signals nothing.
-Persist that resolved PID's complete identity before any later-shell handoff; the identity-checked match is both the liveness answer and the only permitted signal target.
-Use a loose roughly 12-minute timeout, waiting longer when visible progress or review size justifies it; never substitute a capped foreground call.
-A non-empty result containing a `VERDICT:` line is authoritative only after confirmed teardown.
+**The one stop is exit status 3.**
+It means a provider the script launched could not be proved dead (`teardown=survivor`, with its `pid`): stop the cycle and escalate for operator intervention, with no retry, next entry, or publication.
+Any other non-zero exit is the script's own failure, never a verdict: record that round's peer as `failed` with the script's stderr line and continue.
 
 **Optional second peer: Muse.**
 Muse Code is a third harness some containers carry and most do not, so it is strictly additive: everything above describes the cycle without it, and nothing here changes the Peer.
-Preflight it once per run beside the Peer's own preflight, unless `peer-opinions=off`, which disables both: run `command -v muse`, then `muse usage`.
-A missing binary or a non-zero exit means there is no second peer this run; say so once in the final summary only when the binary was present, since a container without Muse has nothing to report.
+Preflight it once per run beside the Peer's own preflight, unless `peer-opinions=off`, which disables both: `peer.sh preflight --provider muse`.
+`absent` means this container has no Muse and the run says nothing about it; `unavailable` means no second peer this run, said once in the final summary.
 A batch orchestrator preflights it once for the whole batch, like the Peer.
-It runs through `peer-review-run` only — there is no manual launch for it: `peer-review-run --provider muse --worktree "$worktree" --prompt-file "$prompt_file" --artifact-root "$muse_artifact_root" --timeout 540 --attempts 1 --effort medium`, exactly once, in the foreground, inside its own role started at the same moment as the Peer's, under the same caller-side wait.
-One long attempt rather than two short ones: a Muse review routinely outlasts 260 seconds, and a retry would start it over inside the same wait.
-Give it the Peer's `prompt_file` and an `artifact_root` of its own beside the Peer's, so the two results never share a directory.
-A missing helper, or one that answers that call with a usage error and no result line because it predates the `muse` provider or `--attempts`, means no second peer for the rest of the run — state that once rather than every round.
-Pass no `--model`: the helper prefers the strongest Muse model the account's plan includes and falls back to that plan's floor on its own, so the applied `model` and `effort` it reports are this peer's strength note, recorded beside the Peer's.
-Contributor mode is the user's saved Muse setting, which also decides how fast their Muse allowance is spent, so leave it alone: set no `MUSE_CONTRIBUTOR_MODE` for the call and offer no argument that overrides it.
-Its result lands in the outcome vocabulary below and feeds the gate, the grounding spot-check, the verbatim relay, and the pass-note consumption on the Peer's terms, and its launches count toward the same batch throttle.
+Launch it with `peer.sh run --provider muse` on the Peer's facts file and an `artifact_dir` of its own, exactly once, in the foreground, inside its own role started at the same moment as the Peer's, under the same caller-side wait.
+It runs through `peer-review-run` only, as one long attempt rather than two short ones, so it never answers `launched`; an `unavailable` from the launch itself (the helper is missing, or predates Muse) means no second peer for the rest of the run, stated once.
+Contributor mode is the user's saved Muse setting, which also decides how fast their Muse allowance is spent, so leave it alone: set no `MUSE_CONTRIBUTOR_MODE` for the call.
+Its result lands in the outcome vocabulary below and feeds the gate, the grounding spot-check, the verbatim relay, and the pass-note consumption on the Peer's terms, its `model` and `effort` are recorded beside the Peer's, and its launches count toward the same batch throttle.
 
 **Compact pass-note consumption.**
-Read the review — the documented `reviewFile` payload on the helper path, the provider's captured result artifact on the fallback — and copy only the bounded bullets below its exact `NOTES (advisory; not necessarily fixes)` heading into the structured peer `notes`; do not import the verification line, issue prose, reasoning, or any text outside that section.
+Read the review at `review_file` and copy only the bounded bullets below its exact `NOTES (advisory; not necessarily fixes)` heading into the structured peer `notes`; do not import the verification line, issue prose, reasoning, or any text outside that section.
 The workflow consumer revalidates the structured value independently: preserve at most three exact `- path:line — note` bullets whose note is at most 15 words, discard every malformed, over-budget, or surplus bullet, and return an empty value when none survive — and drop the value whole for any outcome other than `passed`/`issues`, since a peer that reached no verdict wrote no NOTES section, so bullets arriving beside `unavailable`, `timeout`, `failed` or `forfeited` (which is also where an unrecognized outcome lands) are a misparse of output the stage judged unusable rather than advice.
 Surface the surviving bullets under that round's peer entry in the cycle result; the standalone summary logs those bullets compactly, the batch summary returns them in each task's `peerRounds`, and a clean pass remains only the usual one-line outcome.
-The extraction reads those two sources and nothing else.
+The extraction reads that file and nothing else.
 Pass-notes remain advisory human-facing output in every mode: never include them in a fixer or final-confirmation prompt, and never let them open a fix round or cause edits.
 
 **Outcome vocabulary.**
-Whatever launches the peer, its result lands in one vocabulary: `passed` and `issues` feed the gate; `unavailable` (missing binary, logged out, auth/usage exhaustion), `timeout` (after the one retry), `forfeited` (empty or unintelligible output), and `failed` (provider crash or exhausted retry) are explicit non-blocking round outcomes.
-Carry the helper result's `reason` exactly.
-On the fallback path, carry the exact provider diagnostic when it supplies the cause; use the literal reason `empty output` or `garbled output` only after observing that condition, and otherwise leave `reason` empty rather than inventing one.
-That exact carried value is what the batch throttle reads.
+Whichever path launched the peer, `peer.sh` reports one vocabulary: `passed` and `issues` feed the gate; `unavailable` (missing binary, logged out, auth/usage exhaustion), `timeout` (after the one retry), `forfeited` (empty or unintelligible output), and `failed` (provider crash or exhausted retry) are explicit non-blocking round outcomes.
+Carry its `reason` exactly, an empty one included, and never invent or paraphrase one: that exact value is what the batch throttle reads.
 Anything that is not `passed` or `issues` is non-blocking — normalize an unrecognized outcome the same way rather than letting it fall through.
 
 **Batch concurrency is an optimistic session-local adaptive throttle.**
 Start with no cap.
 A `timeout` or `failed` outcome is trouble.
-A `forfeited` outcome is trouble only when its exact retained reason maps to empty/garbled output: the fallback-path literals `empty output` and `garbled output`, or the helper literals `provider exited 0 with an empty final message` and `provider exited 0 but produced a malformed/unparseable response`.
+A `forfeited` outcome is trouble only when its exact retained reason maps to empty/garbled output: the script's own literals `empty output` and `garbled output`, or the helper literals `provider exited 0 with an empty final message` and `provider exited 0 but produced a malformed/unparseable response`.
 Do not substring-match or paraphrase reasons; in particular, `provider exited 0 but emitted no recognizable VERDICT token`, other forfeitures, and auth/usage `unavailable` outcomes are not throttle events.
 On the first trouble, cap new launches at `max(2, min(8, current in-flight))`; never kill calls already in flight, and queue launches beyond the cap.
 Each later trouble cluster halves the cap as `max(2, floor(cap / 2))`: a cluster is one cap generation, so only trouble from a call launched under the current cap can step it down and results from calls already in flight at the prior step cannot collapse it again.

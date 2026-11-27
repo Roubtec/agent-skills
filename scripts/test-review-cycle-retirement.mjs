@@ -38,15 +38,14 @@
 // own scenario below. The SHARED PEER PREFLIGHT latch — exactly-once under
 // first-wave concurrency, reset after a synthesized throw — with the adaptive
 // throttle's exact helper/raw forfeiture-reason mapping and its negative
-// near-matches, on both workflow copies. The Codex-side prose's DIRECT-PROVIDER
-// PID/start-time helpers, extracted and driven to simulate `/proc` reuse,
-// start-read and identity-file-write cleanup, bounded TERM/KILL, survivor
-// failure, and missing-process death without signalling a real process; the
-// same section pins that both mirrors launch the peer through `peer-review-run`
-// as the primary path, read its review from `reviewFile`, and keep the direct
-// launch as the fallback the result — never the binary or the schema string —
-// selects, and parses the fallback's passed-versus-issues evidence-failure
-// contract. The peer prompt's own launch shape and degradation route are pinned
+// near-matches, on both workflow copies. The PEER LAUNCH's prose and script
+// pins: both mirrors launch the peer through the bundled `peer.sh` and hold no
+// launch command of their own, the script carries the exact `peer-review-run`
+// line and the direct launch each provider keeps, and the Codex mirror states
+// the passed-versus-issues evidence-failure contract the script enforces. What
+// that script DOES — the identity checks under `/proc` reuse, bounded
+// TERM/KILL, the survivor stop, every outcome on both paths — is driven in
+// scripts/test-review-cycle-peer.sh. The peer prompt's own launch shape is pinned
 // beside the shared-preflight scenario, on both workflow copies. And
 // `wf-review-cycle.js`'s parse of the INVOKER'S GRANT of the close-out, which
 // decides whether that gate is reachable at all.
@@ -96,7 +95,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 230;
+const CHECKS_PER_LEG = 231;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -1700,51 +1699,58 @@ for (const name of WORKFLOWS) {
       "pass-note bar",
     );
     check(
-      "the consumer extracts notes from the helper's reviewFile or the fallback's outfile and from nothing else",
+      "the consumer extracts notes from the review file the script names and from nothing else",
       /copy into `notes` ONLY valid bullets/.test(renderedPeer) &&
-        /the bytes of `\$reviewFile` on the helper path, or `\$outfile` on the fallback/.test(renderedPeer) &&
-        /documented `reviewFile` payload only/.test(renderedPeer) &&
-        /never enumerate `artifactDir`, guess a filename/.test(renderedPeer) &&
+        /read the file `review_file` names in full — the peer's complete review as plain text — and nothing else/.test(renderedPeer) &&
+        /never enumerate the artifact directory, guess a filename/.test(renderedPeer) &&
         !/reviewText/.test(renderedPeer),
-      "reviewFile/outfile payload split",
+      "review_file payload",
     );
-    // Task 050: the helper is the PRIMARY launch. The shape is pinned exactly —
-    // `--effort medium` explicit because the helper's own default is `high`,
-    // no `--model` because codex gives no stable non-dated alias — and the
-    // direct launch survives complete (the `nohup sh -c` identity wrapper and
-    // the `codex exec` line), reachable only from the two named triggers.
-    const primaryLaunch = renderedPeer.match(/peer-review-run --provider codex --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --effort medium/g) || [];
+    // Task 055: the launch is `review-cycle-peer`, the shim onto the skill's
+    // `peer.sh`. The prompt names that one command and assembles nothing: the
+    // exact `peer-review-run` line (medium effort explicit, no model for
+    // codex) and the complete direct launch are pinned where they now live, in
+    // scripts/test-review-cycle-peer.sh, against the script that runs them.
+    const launchLine = renderedPeer.match(/review-cycle-peer run --provider codex --worktree "\$worktree" --artifact-dir "\$artifact_dir" --prompt-file "\$prompt_file"/g) || [];
     check(
-      "the peer prompt launches the helper first, once, in the foreground, at medium effort and with no model flag",
-      primaryLaunch.length === 1 &&
-        /4\. Primary launch, when `command -v peer-review-run` succeeds/.test(renderedPeer) &&
+      "the peer prompt launches through the script, once, in the foreground, under a wait that covers the helper's retry",
+      launchLine.length === 1 &&
+        /4\. Launch: run `review-cycle-peer run/.test(renderedPeer) &&
         /exactly once, in the foreground/.test(renderedPeer) &&
-        !/peer-review-run --provider codex[^`]*--model/.test(renderedPeer) &&
-        /Pass `--effort medium` explicitly \(the helper's own default is `high`\) and no `--model`/.test(renderedPeer),
-      "primary helper launch shape",
+        /caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap/.test(renderedPeer) &&
+        /at medium effort and with no model named/.test(renderedPeer),
+      "launch shape",
     );
     check(
-      "the prompt reads the review from reviewFile and falls back only on an absent helper or a passed/issues result with no usable reviewFile",
-      /For a `passed` or `issues` result, `reviewFile` is the peer's complete review as plain text: it must be non-null and name a readable file/.test(renderedPeer) &&
-        /whose `reviewFile` is null or names a file that is not there is a result this stage cannot relay verbatim, whatever produced it: take the fallback in step 5 for this round with `fallbackReason` exactly `helper result carried no usable reviewFile`/.test(renderedPeer) &&
-        /5\. Fallback launch, ONLY when `command -v peer-review-run` fails \(`fallbackReason` exactly `peer-review-run absent from PATH`\) or step 4 found no usable `reviewFile`/.test(renderedPeer) &&
-        /nohup sh -c '[\s\S]*codex exec --sandbox read-only --cd "\$worktree" -o "\$outfile"[\s\S]*-c model_reasoning_effort=medium/.test(renderedPeer),
-      "capability probe on the result; complete fallback",
+      "the prompt assembles no provider command of its own",
+      !/peer-review-run --provider/.test(renderedPeer) && !/nohup/.test(renderedPeer) && !/codex exec/.test(renderedPeer) && !/kill -0/.test(renderedPeer),
+      "no hand-assembled launch",
     );
     check(
-      "a reported model: null is a strength note, never a fallback trigger, and no deferral prose survives",
-      /a reported `model: null` is a strength note and never a fallback trigger/.test(renderedPeer) &&
-        /Set `strength` to `model=<model> effort=<effort>` exactly as the result reports them/.test(renderedPeer) &&
+      "a direct launch is collected through the script, which also supplies the reason it was taken",
+      /5\. If the answer is `outcome=launched`, the script started the provider directly, because the helper is absent, `jq` is not there to read its result, or its verdict named no usable review file: set `fallbackReason` to the `fallback_reason` value exactly/.test(renderedPeer) &&
+        /run `review-cycle-peer collect --artifact-dir "\$artifact_dir"` under the same wait, and again for as long as it answers `outcome=pending`/.test(renderedPeer) &&
+        /never probe or signal the provider yourself/.test(renderedPeer) &&
+        /On any other answer `fallbackReason` stays empty/.test(renderedPeer),
+      "direct launch collection",
+    );
+    check(
+      "a reported model=null is a strength note, never a reason to launch again, and no deferral prose survives",
+      /a `model=null` is a strength note and never a reason to launch again/.test(renderedPeer) &&
+        /Set `strength` to `model=<model> effort=<effort>` exactly as its `model` and `effort` lines report them, to `effort=<effort>` alone where it has no `model` line \(a direct launch that named no model\), or to the empty string where it has neither/.test(renderedPeer) &&
+        /On the helper path that is what the helper result reports; on the direct launch it is what the launch pinned, `effort=<effort>` alone where it named no model\./.test(src) && !/empty on the direct launch/.test(src) &&
         !/prerequisite/i.test(renderedPeer) &&
         !/issues\/145/.test(renderedPeer) &&
         !/retain(?:s|ed)? the (?:pinned )?raw launch/.test(renderedPeer),
-      "model:null note; deferral prose gone",
+      "model=null note; deferral prose gone",
     );
     check(
-      "the primary and fallback triggers are the only ones the prompt names",
-      (renderedPeer.match(/`fallbackReason` exactly `/g) || []).length === 2 &&
-        /Every other helper outcome \(`unavailable`, `timeout`, `forfeited`, `failed`\) is returned as reported, with its `reason` verbatim and `fallbackReason` empty/.test(renderedPeer),
-      "fallback trigger census",
+      "the survivor stop is the one exit that sets teardownFailure, and the script's own failure is failed rather than a verdict",
+      /Carry the final answer's `outcome` and `reason` exactly/.test(renderedPeer) &&
+        /Exit status 3 is the one stop: the script could not prove a provider it launched dead/.test(renderedPeer) &&
+        /return immediately with `teardownFailure` true, outcome `failed`, and a `detail` naming the surviving `pid`/.test(renderedPeer) &&
+        /Any other non-zero exit, or an answer with no `outcome=` line, is the script's own failure and never a verdict: return `failed`/.test(renderedPeer),
+      "survivor stop and script failure",
     );
     const calls = Array.from({ length: 6 }, (_, i) => runCyclePeerStage(cycle, state(i + 1)));
     await ownerEntered;
@@ -1861,19 +1867,22 @@ for (const name of WORKFLOWS) {
       if (label.startsWith("packet#")) return { measured: true, dirty: [], operation: "", detail: "" };
       if (label.startsWith("review#")) return { ...OK };
       if (label === "peer-preflight:codex") return { outcome: "available", detail: "" };
-      if (label === "peer:codex#1") return { outcome: "issues", findings: [{ claim: "fix the defect" }], notes: "", detail: "", reason: "", teardownFailure: false, strength: "", fallbackReason: "helper result carried no usable reviewFile" };
+      if (label === "peer:codex#1") return { outcome: "issues", findings: [{ claim: "fix the defect" }], notes: "", detail: "", reason: "", teardownFailure: false, strength: "effort=medium", fallbackReason: "helper result carried no usable reviewFile" };
       if (label === "peer:codex#2") return { outcome: "passed", findings: [], notes: "", detail: "", reason: "", teardownFailure: false, strength: "", fallbackReason: "helper result carried no usable reviewFile" };
       if (label === "ground#1") return { verdicts: [] };
       return null;
     };
     const fallbackLoaded = loadCycle(src, museAbsent(fallbackAgent), (line) => fallbackLogs.push(String(line)));
     const fallbackResult = await fallbackLoaded.runReviewCycle({ ...CYCLE, peer: "on" });
-    const fallbackLines = fallbackLogs.filter((line) => /manual fallback taken/.test(line));
+    const fallbackLines = fallbackLogs.filter((line) => /direct launch taken/.test(line));
     check(
-      "a round that took the manual fallback still gates on its findings, and the run states the reason once",
+      "a round that took the direct launch still gates on its findings, and the run states the reason once",
       fallbackResult.verdict === "pass" && fallbackResult.rounds === 2 &&
         fallbackResult.peerRounds.length === 2 &&
-        fallbackResult.peerRounds.every((r) => r.fallbackReason === "helper result carried no usable reviewFile" && !("strength" in r)) &&
+        fallbackResult.peerRounds.every((r) => r.fallbackReason === "helper result carried no usable reviewFile") &&
+        // The direct codex launch pins an effort and names no model: the record
+        // carries exactly that, and an empty strength leaves no field at all.
+        fallbackResult.peerRounds[0].strength === "effort=medium" && !("strength" in fallbackResult.peerRounds[1]) &&
         fallbackLines.length === 1 && /helper result carried no usable reviewFile/.test(fallbackLines[0]),
       `${JSON.stringify(fallbackResult.peerRounds)} / ${JSON.stringify(fallbackLines)}`,
     );
@@ -1894,7 +1903,7 @@ for (const name of WORKFLOWS) {
       nullModelResult.verdict === "pass" && nullModelResult.rounds === 1 &&
         nullModelResult.peerRounds.length === 1 && nullModelResult.peerRounds[0].outcome === "passed" &&
         nullModelResult.peerRounds[0].strength === "model=null effort=medium" && !("fallbackReason" in nullModelResult.peerRounds[0]) &&
-        !nullModelLogs.some((line) => /manual fallback taken/.test(line)),
+        !nullModelLogs.some((line) => /direct launch taken/.test(line)),
       JSON.stringify(nullModelResult.peerRounds),
     );
     const { normalizeCyclePeerResult: normalizePeer } = fallbackLoaded;
@@ -2102,28 +2111,24 @@ for (const name of WORKFLOWS) {
     check(
       "each stage launches its own provider, on the worktree it is told to name, from a directory of its own",
       [musePrompt, codexPrompt].every((p) => /2\. Set `worktree` to the absolute worktree path the contract above names/.test(p)) &&
-        /peer-review-run --provider muse --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 540 --attempts 1 --effort medium/.test(musePrompt) &&
-        /the helper makes one 540-second attempt/.test(musePrompt) &&
-        /--artifact-root "\$artifact_root" --timeout 260 --effort medium/.test(codexPrompt) &&
-        /the helper may make two 260-second attempts/.test(codexPrompt) &&
+        /review-cycle-peer run --provider muse --worktree "\$worktree" --artifact-dir "\$artifact_dir" --prompt-file "\$prompt_file"/.test(musePrompt) &&
+        /review-cycle-peer run --provider codex --worktree "\$worktree" --artifact-dir "\$artifact_dir" --prompt-file "\$prompt_file"/.test(codexPrompt) &&
         !/--provider codex/.test(musePrompt) && /round-1\/peer-muse'/.test(musePrompt) &&
-        /--provider codex /.test(codexPrompt) && !/--provider muse/.test(codexPrompt) && /round-1\/peer-codex'/.test(codexPrompt),
+        !/--provider muse/.test(codexPrompt) && /round-1\/peer-codex'/.test(codexPrompt),
       "launch line and round directory per provider",
     );
+    // Which budget each provider's helper call gets, and what a helper too old
+    // for a provider comes back as, are the script's: test-review-cycle-peer.sh.
     check(
-      "a provider with no manual launch gets none: no raw launch, no fallback trigger, and a missing or too-old helper is unavailable",
-      !/nohup/.test(musePrompt) && !/codex exec/.test(musePrompt) && !/`fallbackReason` exactly `/.test(musePrompt) &&
-        /5\. There is no manual launch for this provider/.test(musePrompt) &&
-        /the helper rejects the `--provider` value itself, or a flag of this launch such as `--attempts`, with a usage error and no result line \(a helper that predates this provider or that flag\), return `unavailable`/.test(musePrompt) &&
-        /Any other usage error is a mistake in the call rather than a helper too old for it: return `failed`/.test(musePrompt) &&
-        /4\. Launch, when `command -v peer-review-run` succeeds/.test(musePrompt) && !/Primary launch/.test(musePrompt) &&
-        /return `forfeited` with `detail` exactly `helper result carried no usable reviewFile`/.test(musePrompt) &&
-        /nohup sh -c '/.test(codexPrompt),
+      "a provider with no direct launch gets none: nothing to collect, no fallback reason, and a missing or too-old helper is unavailable",
+      !/outcome=launched/.test(musePrompt) && !/review-cycle-peer collect/.test(musePrompt) && !/fallback_reason/.test(musePrompt) &&
+        /5\. This provider has no direct launch, so the script never answers `launched` and `fallbackReason` stays empty: a missing helper, or one too old for this provider, comes back `unavailable`/.test(musePrompt) &&
+        /5\. If the answer is `outcome=launched`/.test(codexPrompt) && /review-cycle-peer collect/.test(codexPrompt),
       "helper-only stage shape",
     );
     check(
       "the Muse stage leaves contributor mode as saved and pins no model",
-      /Set no `MUSE_CONTRIBUTOR_MODE` for the call either/.test(musePrompt) && !/peer-review-run --provider muse[^`]*--model/.test(musePrompt),
+      /Set no `MUSE_CONTRIBUTOR_MODE` for the call/.test(musePrompt) && !/MUSE_CONTRIBUTOR_MODE/.test(codexPrompt) && !/--model/.test(musePrompt),
       "muse launch notes",
     );
     const peerPromptOf = (stagePrompt) => stagePrompt.slice(stagePrompt.indexOf("## Peer prompt"), stagePrompt.indexOf("## Output"));
@@ -2419,95 +2424,22 @@ const BATCH_CONTRACT_CHECKS = 5;
   check(`batch contract checks ran all ${BATCH_CONTRACT_CHECKS}`, n === BATCH_CONTRACT_CHECKS, `ran ${n}`);
 }
 
-// The Claude-provider rendering is prose rather than executable workflow code,
-// so exercise the exact direct-PID helpers it ships by extracting their code.
-// A fake proc root lets the test replace field 22 while keeping the PID
-// constant — the reuse failure this guard exists for — without ever probing or
-// signalling a real process. The fake `kill` records every operand and can
-// model TERM resistance, KILL death, or a teardown survivor.
-const PEER_LIFECYCLE_CHECKS = 22;
+// The peer launch is the bundled `peer.sh`, in both mirrors and behind the
+// workflows' shim. What it does is driven in scripts/test-review-cycle-peer.sh;
+// here are the pins that tie the prose and the workflow cores to it, so that a
+// launch rule cannot drift back into text a run has to assemble by hand, and
+// the few literals the prose and the script must agree on stay agreed.
+const PEER_LAUNCH_CHECKS = 15;
 {
-  console.log("# codex review-cycle prose — peer lifecycle negative controls");
+  console.log("# review-cycle prose and peer.sh — peer launch pins");
   const before = legOk + legFail;
-  const prose = readFileSync(join(here, "..", "codex", "dev-skills", "skills", "review-cycle", "SKILL.md"), "utf8");
-  const blockStart = prose.indexOf("peer_start_time() {");
-  const blockEnd = prose.indexOf("\nnohup claude", blockStart);
-  const helperBlock = blockStart >= 0 && blockEnd > blockStart ? prose.slice(blockStart, blockEnd) : "";
-  check("the canonical direct-provider identity block is extractable", helperBlock.length > 0, `${blockStart}/${blockEnd}`);
+  const skillDir = (tree) => join(here, "..", tree, "dev-skills", "skills", "review-cycle");
+  const prose = readFileSync(join(skillDir("codex"), "SKILL.md"), "utf8");
+  const pluginsProse = readFileSync(join(skillDir("plugins"), "SKILL.md"), "utf8");
+  const script = readFileSync(join(skillDir("plugins"), "peer.sh"), "utf8");
+  const peerStep = (text) => text.slice(text.indexOf("\n## The peer step"), text.indexOf("\n## ", text.indexOf("\n## The peer step") + 1));
+  const [codexStep, pluginsStep] = [prose, pluginsProse].map(peerStep);
 
-  const scratch = mkdtempSync(join(tmpdir(), "peer-incarnation-test-"));
-  try {
-    const procRoot = join(scratch, "proc");
-    const pidDir = join(procRoot, "731");
-    const identityFile = join(scratch, "peer.pid");
-    const signalLog = join(scratch, "signals.log");
-    // mkdir is kept inside the dynamic shell fixture because the test itself
-    // imports no recursive directory-writing helper just for this one path.
-    execFileSync("mkdir", ["-p", pidDir]);
-    const statLine = (start) => `731 (peer ) name with spaces) S 1 731 731 ${Array(15).fill("0").join(" ")} ${start} 0\n`;
-    const runnableBlock = helperBlock.replaceAll('"/proc/$1/stat"', '"$peer_proc_root/$1/stat"');
-    const runFixture = (actions, survivor = false) => {
-      writeFileSync(signalLog, "");
-      let status = 0;
-      try {
-        execFileSync("sh", ["-c", `${runnableBlock}\npeer_proc_root=$1\npeer_pid_file=$2\nsignal_log=$3\nsurvivor=$4\nkill() { printf '%s\\n' "$*" >> "$signal_log"; if [ "$1" = -0 ]; then [ -f "$peer_proc_root/$2/stat" ]; return; fi; if [ "$1" = -KILL ] && [ "$survivor" != yes ]; then rm -f "$peer_proc_root/$2/stat"; fi; return 0; }\nsleep() { :; }\n${actions}`, "peer-test", procRoot, identityFile, signalLog, survivor ? "yes" : "no"]);
-      } catch (err) {
-        status = Number(err.status || 1);
-      }
-      return { signals: readFileSync(signalLog, "utf8").trim().split("\n").filter(Boolean), status };
-    };
-
-    writeFileSync(join(pidDir, "stat"), statLine("424242"));
-    writeFileSync(identityFile, "731 424242\n");
-    const live = runFixture("peer_pid_alive; peer_signal_pid TERM");
-    check("the robust parser accepts field 22 after a comm containing spaces and a closing parenthesis", live.signals.length === 2, JSON.stringify(live));
-    check("probe and TERM target only the identity-checked positive provider PID", JSON.stringify(live.signals) === JSON.stringify(["-0 731", "-TERM 731"]), JSON.stringify(live));
-
-    writeFileSync(join(pidDir, "stat"), statLine("999999"));
-    const reused = runFixture("peer_pid_alive || :; peer_signal_pid TERM || :");
-    check("a reused PID with a different start time is never probed or signalled", reused.signals.length === 0, JSON.stringify(reused));
-
-    rmSync(join(pidDir, "stat"));
-    const dead = runFixture("peer_pid_alive || :; peer_signal_pid TERM || :");
-    check("a missing proc identity is treated as original-process death without a signal", dead.signals.length === 0, JSON.stringify(dead));
-
-    writeFileSync(join(pidDir, "stat"), statLine("424242"));
-    writeFileSync(identityFile, "731 424242 surplus\n");
-    const malformed = runFixture("peer_pid_alive || :; peer_signal_pid TERM || :");
-    check("a malformed handoff with extra fields fails closed before every kill", malformed.signals.length === 0, JSON.stringify(malformed));
-
-    writeFileSync(join(pidDir, "stat"), statLine("424242"));
-    const startReadFailure = runFixture("peer_pid=731; peer_start=; peer_abort_unhanded");
-    check(
-      "a start-time read failure immediately TERM/KILLs the fresh direct child and leaves no survivor",
-      startReadFailure.status === 0 &&
-        startReadFailure.signals.slice(0, 2).join("|") === "-TERM 731|-KILL 731" &&
-        !startReadFailure.signals.some((s) => /^-(TERM|KILL) (?!731$)/.test(s)) &&
-        /peer_start=\$\(peer_start_time "\$peer_pid"\) \|\| peer_start=[\s\S]*peer_launch_status=125[\s\S]*peer_abort_unhanded[\s\S]*exit 125[\s\S]*exit 126/.test(prose),
-      JSON.stringify(startReadFailure),
-    );
-
-    writeFileSync(join(pidDir, "stat"), statLine("424242"));
-    const identityWriteFailure = runFixture("peer_pid=731; peer_start=424242; peer_abort_unhanded");
-    check(
-      "an identity-file write failure uses the acquired start token for bounded cleanup and leaves no survivor",
-      identityWriteFailure.status === 0 && identityWriteFailure.signals.includes("-TERM 731") && identityWriteFailure.signals.includes("-KILL 731") && /Either handoff failure stops the entire cycle even when cleanup succeeds/.test(prose),
-      JSON.stringify(identityWriteFailure),
-    );
-
-    writeFileSync(join(pidDir, "stat"), statLine("424242"));
-    writeFileSync(identityFile, "731 424242\n");
-    const killed = runFixture("peer_stop_pid");
-    check("TERM resistance reaches KILL on the same positive PID and confirmed death succeeds", killed.status === 0 && killed.signals.includes("-TERM 731") && killed.signals.includes("-KILL 731"), JSON.stringify(killed));
-
-    writeFileSync(join(pidDir, "stat"), statLine("424242"));
-    const survivor = runFixture("peer_stop_pid", true);
-    check("an identity that survives TERM and KILL makes teardown fail", survivor.status !== 0 && survivor.signals.includes("-TERM 731") && survivor.signals.includes("-KILL 731"), JSON.stringify(survivor));
-  } finally {
-    rmSync(scratch, { recursive: true, force: true });
-  }
-
-  const pluginsProse = readFileSync(join(here, "..", "plugins", "dev-skills", "skills", "review-cycle", "SKILL.md"), "utf8");
   check(
     "both prose mirrors send only fresh Reviewer remarks to confirmation and keep peer notes human-summary-only",
     [prose, pluginsProse].every(
@@ -2518,90 +2450,111 @@ const PEER_LIFECYCLE_CHECKS = 22;
     ),
     "confirmation/pass-note boundary",
   );
-  check("the direct Codex provider gets bounded TERM, death verification, safe KILL, and a survivor stop", /send TERM[\s\S]*at most ten seconds[\s\S]*send KILL only if[\s\S]*ten more seconds[\s\S]*stop the cycle and escalate/.test(pluginsProse), "raw Codex lifecycle prose");
-  // The envelope's phrases were written against a one-line paragraph, so they carry
-  // literal spaces where the prose now breaks lines. Rejoin paragraphs rather than
-  // flattening the file: the negative pin inside is line-scoped.
-  const pluginsProseRejoined = logicalLines(pluginsProse).join(String.fromCharCode(10));
   check(
-    "the Codex helper launch is primary in the Claude mirror, at medium effort, with no model flag, from a private session artifact root, with a caller wait that covers retry plus reaping",
-    /\*\*Primary launch through `peer-review-run`\.\*\* First establish `artifact_root` as a unique, private, session-scoped directory outside the reviewed worktree[\s\S]*peer-review-run --provider codex --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --effort medium`[\s\S]*caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(pluginsProseRejoined) &&
-      !/peer-review-run --provider codex[^\n]*--model/.test(pluginsProseRejoined) &&
-      /`reviewFile` is the peer's full review as plain text: read that file in full before applying verdict logic/.test(pluginsProseRejoined) &&
-      /A reported `model: null` is that note and never a fallback trigger/.test(pluginsProseRejoined),
-    "primary Codex helper envelope",
-  );
-  const primaryHelperStart = prose.indexOf("**Primary launch through `peer-review-run`.**");
-  const degradationStart = prose.indexOf("**Capability degradation is read from the result, not from the binary or the schema string.**", primaryHelperStart);
-  const fallbackStart = prose.indexOf("**Hardened direct launch (fallback).**", degradationStart);
-  const primaryHelperProse = primaryHelperStart >= 0 && degradationStart > primaryHelperStart ? prose.slice(primaryHelperStart, degradationStart) : "";
-  check(
-    "the Claude-provider helper launch is primary and exact, pins and reads back both strength dimensions, relays reviewFile verbatim, and the direct launch follows as the fallback",
-    primaryHelperStart >= 0 && degradationStart > primaryHelperStart && fallbackStart > degradationStart &&
-      /peer-review-run --provider claude --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" --timeout 260 --model opus --effort medium/.test(primaryHelperProse) &&
-      /caller-side tool wait to at least 570 seconds[\s\S]*two 260-second attempts[\s\S]*five seconds reaping each one/.test(primaryHelperProse) &&
-      /require schema `powbox\.peer-review-run\/v1`[\s\S]*reported `model` is `opus` and `effort` is `medium`/.test(primaryHelperProse) &&
-      /`reviewFile` is the absolute path of the peer's full review as plain text — read that file in full and relay every finding from it verbatim/.test(primaryHelperProse) &&
-      /Never infer the review from `artifactDir`/.test(primaryHelperProse) &&
-      /embedded-evidence contract above and the OID\/token proof rules below apply to that complete review/.test(primaryHelperProse) &&
-      (prose.match(/peer-review-run --provider claude/g) || []).length === 1 &&
-      /Taken when `command -v peer-review-run` fails, and on the capability-degradation route above/.test(prose.slice(fallbackStart)) &&
-      /nohup claude -p --model opus --effort medium/.test(prose.slice(fallbackStart)),
-    "primary Claude helper launch",
+    "neither mirror's peer step holds a launch command a run has to assemble by hand",
+    [codexStep, pluginsStep].every((text) => text.length > 1000 && !/nohup|codex exec|claude -p|peer-review-run --provider|kill -0|```/.test(text)) &&
+      script === readFileSync(join(skillDir("codex"), "peer.sh"), "utf8"),
+    "launch commands in prose",
   );
   check(
-    "both mirrors probe capability on the result, not the binary or the schema string, and no deferral prose survives",
-    [prose, pluginsProse].map((text) => text.slice(text.indexOf("\n## The peer step"), text.indexOf("\n## ", text.indexOf("\n## The peer step") + 1))).every(
+    "a teardown survivor is the one stop in both mirrors: no retry, next entry, or publication",
+    [codexStep, pluginsStep].every((text) => /\*\*The one stop is exit status 3\.\*\*\nIt means a provider the script launched could not be proved dead \(`teardown=survivor`, with its `pid`\): stop the cycle and escalate for operator intervention, with no retry, next entry, or publication\.\nAny other non-zero exit is the script's own failure, never a verdict/.test(text)) &&
+      /R_TEARDOWN=survivor R_PID="\$1"\n\temit failed "PID \$1 \$2"\n\texit 3\n/.test(script),
+    "survivor stop",
+  );
+  check(
+    "the script stops a provider by bounded TERM, death verification, and a KILL only the identity check permits",
+    /peer_stop\(\) \{[^}]*peer_signal TERM "\$1" \|\| :[\s\S]*?if peer_alive "\$1"; then\n\t\tpeer_signal KILL "\$1" \|\| :[\s\S]*?! peer_alive "\$1"\n\}/.test(script) &&
+      /peer_signal\(\) \{[^}]*peer_load_identity "\$2" && kill "-\$1" "\$PEER_PID"/.test(script) &&
+      !/pkill|peer_group_alive|peer_signal_group|setsid/.test(script),
+    "teardown shape",
+  );
+  check(
+    "the Claude mirror launches codex through the script, once, in the foreground, with no model flag, under a caller wait that covers the helper's retry",
+    /`peer\.sh run --provider codex --worktree "\$worktree" --artifact-dir "\$artifact_dir" --facts "\$facts_file"`, exactly once, in the foreground\.\nSet the caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap/.test(pluginsStep) &&
+      !/--model/.test(pluginsStep) &&
+      /`review_file` is the peer's full review as plain text: read that file in full before applying verdict logic and relay every finding from it verbatim/.test(pluginsStep) &&
+      /`model=null` is that note and never a reason to launch again/.test(pluginsStep),
+    "Claude mirror launch",
+  );
+  check(
+    "the Codex mirror launches claude through the script with its evidence base, reads back both pinned strength dimensions, and relays the review file verbatim",
+    /`peer\.sh run --provider claude --worktree "\$worktree" --artifact-dir "\$artifact_dir" --facts "\$facts_file" --evidence-base "\$effective_base"`, exactly once, in the foreground\./.test(codexStep) &&
+      /Set the caller-side tool wait to at least 570 seconds but strictly below its roughly 600-second cap/.test(codexStep) &&
+      /The script pins both dimensions for `claude`, `opus` at an explicit medium effort/.test(codexStep) &&
+      /say in it where `strength_pin=differs`/.test(codexStep) &&
+      /`review_file` is the peer's full review as plain text: read that file in full before applying verdict logic and relay every finding from it verbatim/.test(codexStep) &&
+      (prose.match(/peer\.sh run --provider claude/g) || []).length === 1,
+    "Codex mirror launch",
+  );
+  // The exact helper call, moved out of both mirrors' prose. Its arguments as
+  // a provider receives them are asserted against a stub in the shell suite;
+  // this holds the source line, so the per-provider budget and the model rule
+  // (claude names `opus`, codex and muse name none) cannot change unnoticed.
+  check(
+    "the script carries the exact peer-review-run call, each provider's budget, and each side's model rule",
+    script.includes('peer-review-run --provider "$PROVIDER" --worktree "$WORKTREE" --prompt-file "$ADIR/peer-review.prompt" --artifact-root "$ADIR/peer-review-run" $BUDGET --model "$MODEL" --effort "$EFFORT"') &&
+      script.includes('peer-review-run --provider "$PROVIDER" --worktree "$WORKTREE" --prompt-file "$ADIR/peer-review.prompt" --artifact-root "$ADIR/peer-review-run" $BUDGET --effort "$EFFORT"') &&
+      /\n\tcodex\) BUDGET="--timeout 260" MODEL="" MANUAL=1 ;;\n\tclaude\) BUDGET="--timeout 260" MODEL=opus MANUAL=1 ;;\n\tmuse\) BUDGET="--timeout 540 --attempts 1" MODEL="" MANUAL=0 ;;\n/.test(script) &&
+      /\nEFFORT=medium\n/.test(script) &&
+      /\nSCHEMA='powbox\.peer-review-run\/v1'\n/.test(script),
+    "helper call in the script",
+  );
+  check(
+    "both mirrors take the direct launch on the result, not the binary or the schema string, say why once, and no deferral prose survives",
+    [codexStep, pluginsStep].every(
       (text) =>
-        /`reviewFile` is additive within schema v1, so the schema cannot say whether a helper carries it/.test(text) &&
-        /whose `reviewFile` is null or names a file that is not there is a result this cycle cannot relay verbatim/.test(text) &&
-        /the run states the reason once rather than repeating it every round/.test(text) &&
+        /`outcome=launched` means the script started the provider directly instead, because the helper is absent(?:, `jq` is not there to read its result,)? or its verdict named no review file this cycle could relay; `fallback_reason` says which, and a run states it once rather than every round/.test(text) &&
+        /run `peer\.sh collect --artifact-dir "\$artifact_dir"` under the same wait, again for as long as it answers `pending`/.test(text) &&
         !/prerequisite/i.test(text) &&
         !/issues\/145/.test(text) &&
         !/reviewText/.test(text) &&
         !/deferred conversion/.test(text),
-    ),
+    ) &&
+      /absent, `jq` is not there to read its result, or its verdict/.test(pluginsStep) && !/`jq`/.test(codexStep.slice(codexStep.indexOf("`outcome=launched` means"), codexStep.indexOf("`fallback_reason` says which"))) &&
+      /\nHELPER_ABSENT='peer-review-run absent from PATH'\nUNUSABLE_REVIEW='helper result carried no usable reviewFile'\nJQ_ABSENT='jq absent from PATH, so no peer-review-run result could be read'\n/.test(script),
     "capability probe and deferral census",
   );
-  check("the retained Claude launch is direct-PID only and stops on a survivor", /records `\$!` as the direct provider PID[\s\S]*peer_stop_pid[\s\S]*A surviving identity stops the entire cycle/.test(prose) && !/peer_group_alive|peer_signal_group|setsid --fork/.test(prose), "Claude direct-PID lifecycle prose");
-  // Dropping the wrapper took its guarded `cd` with it, and `claude -p` has no
-  // working-directory flag of its own: without this the peer inspects whichever
-  // checkout the launching shell stood in while the embedded evidence describes
-  // the reviewed worktree — a verdict over the wrong files rather than a
-  // missing one. Both halves are asserted because either alone is satisfiable
-  // by prose that does not run, or by a `cd` nothing explains.
+  check(
+    "the direct launches keep their read-only flags, and the provider is the recorded PID itself",
+    /codex exec --sandbox read-only --cd "\$WORKTREE" -o "\$dir\/peer-review\.out" \\\n\t\t\t-c 'mcp_servers=\{\}' -c "model_reasoning_effort=\$EFFORT"/.test(script) &&
+      /claude -p --model "\$MODEL" --effort "\$EFFORT" --safe-mode --tools "Read,Glob,Grep" \\\n\t\t\t--disallowedTools "mcp__\*" --add-dir "\$ADIR" --output-format json/.test(script) &&
+      /printf "%s %s\\n" "\$\$" "\$start" > "\$pid_file" \|\| exit 125\nexec "\$@"\n/.test(script),
+    "direct launch flags",
+  );
+  // `claude -p` has no working-directory flag of its own: without the guarded
+  // `cd` the peer inspects whichever checkout the launching shell stood in
+  // while the embedded evidence describes the reviewed worktree — a verdict
+  // over the wrong files rather than a missing one.
   check(
     "and it runs from the reviewed worktree, guarded, before the provider starts",
-    /\ncd -- "\$\{worktree:\?[^"\n]*\}" \|\| exit 125\n[\s\S]*\nnohup claude -p /.test(prose) &&
-      /The launching shell changes into the reviewed worktree before starting the provider, and forfeits the launch if that fails/.test(prose),
+    /\ncd -- "\$3" \|\| exit 125\n[\s\S]*\nexec "\$@"\n/.test(script.slice(script.indexOf("LAUNCH_WRAPPER='"))) &&
+      /a failed `cd` ends\n# the launch rather than reviewing wherever the caller stood/.test(script),
     "peer launch working directory",
   );
   check(
-    "the fallback verdict is proved from literal embedded evidence and exact pinned OIDs",
-    /BEGIN GENERATED REVIEW DATA/.test(prose) &&
-      /END GENERATED REVIEW DATA/.test(prose) &&
-      /BEGIN EMBEDDED GIT EVIDENCE/.test(prose) &&
-      /END EMBEDDED GIT EVIDENCE/.test(prose) &&
-      /EVIDENCE_BASE_OID: <full OID>/.test(prose) &&
-      /EVIDENCE_TIP_OID: <full OID>/.test(prose) &&
-      /`printf -- '%s\\n' "\$value"`/.test(prose) &&
-      !/`printf '%s\\n' -- "\$value"`/.test(prose) &&
-      /The provider receives the evidence in `prompt_file` itself and never has to read `diff_evidence_file`/.test(prose) &&
-      /diff evidence unreadable or proof absent/.test(prose) &&
-      /Missing or mismatched OID\/token proof changes `passed` to `forfeited`/.test(prose) &&
-      /for `issues`, keep the `issues` outcome and every finding verbatim/.test(prose) &&
+    "the evidence is embedded literally between fixed markers, with the proof lines asked for and the exact failure reason shared by script and prose",
+    /BEGIN GENERATED REVIEW DATA/.test(script) &&
+      /END GENERATED REVIEW DATA/.test(script) &&
+      /BEGIN EMBEDDED GIT EVIDENCE/.test(script) &&
+      /END EMBEDDED GIT EVIDENCE/.test(script) &&
+      /EVIDENCE_BASE_OID: <full OID>/.test(script) &&
+      /EVIDENCE_TIP_OID: <full OID>/.test(script) &&
+      /printf -- '%s\\n' "Effective base OID: \$base_oid"/.test(script) &&
+      /\nPROOF_ABSENT='diff evidence unreadable or proof absent'\n/.test(script) &&
+      /diff evidence unreadable or proof absent/.test(codexStep) &&
       !/Read the complete diff evidence at:/.test(prose) &&
       !/native read-only tools may read the one absolute out-of-worktree evidence path/.test(prose),
     "embedded evidence contract",
   );
-  const evidenceContractLine = logicalLines(prose).find((line) => line.startsWith("After the PID is dead")) || "";
-  const passedContract = evidenceContractLine.match(/Missing or mismatched OID\/token proof changes `([^`]+)` to `([^`]+)` with reason exactly `([^`]+)`/);
-  const issuesContract = evidenceContractLine.match(/for `([^`]+)`, keep the `([^`]+)` outcome and every finding verbatim[\s\S]*attaching that exact reason and an evidence-failure note/);
+  const evidenceContractLine = logicalLines(prose).find((line) => line.includes("A `passed` whose proof is missing or wrong")) || "";
+  const passedContract = evidenceContractLine.match(/A `([^`]+)` whose proof is missing or wrong comes back `([^`]+)` with reason exactly `([^`]+)`/);
+  const issuesContract = evidenceContractLine.match(/an `([^`]+)` keeps its outcome and every finding verbatim[\s\S]*attach that reason and an evidence-failure note/);
   const parsedEvidenceContract = passedContract && issuesContract
     ? {
         proofFailureReason: passedContract[3],
         [passedContract[1]]: { outcome: passedContract[2], preserveFindings: false, attachNote: false },
-        [issuesContract[1]]: { outcome: issuesContract[2], preserveFindings: true, attachNote: true },
+        [issuesContract[1]]: { outcome: issuesContract[1], preserveFindings: true, attachNote: true },
       }
     : null;
   const applyShippedEvidenceContract = (outcome, findings) => {
@@ -2628,13 +2581,13 @@ const PEER_LIFECYCLE_CHECKS = 22;
   });
   check("the two executable review-cycle cores remain byte-identical", workflowCores[0] === workflowCores[1], `${workflowCores[0].length}/${workflowCores[1].length}`);
   check(
-    "both workflow cores pin the primary helper launch, its private artifact root, and the caller wait budget",
-    workflowCores.every((core) => /4\. \$\{manual \? "Primary launch" : "Launch"\}, when \\`command -v peer-review-run\\` succeeds: run \\`peer-review-run --provider \$\{provider\.id\} --worktree "\$worktree" --prompt-file "\$prompt_file" --artifact-root "\$artifact_root" \$\{\(provider\.budget \|\| CYCLE_PEER_DEFAULT_BUDGET\)\.flags\} --effort medium\\`[\s\S]*caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap: \$\{\(provider\.budget \|\| CYCLE_PEER_DEFAULT_BUDGET\)\.wait\}/.test(core) && /flags: "--timeout 260",\n  wait: "the helper may make two 260-second attempts and spend roughly five seconds reaping each one/.test(core) && /flags: "--timeout 540 --attempts 1",\n      wait: "the helper makes one 540-second attempt and spends roughly five seconds reaping it/.test(core) && !/prerequisite/i.test(core.slice(core.indexOf("function cyclePeerPrompt")))),
-    "primary helper envelope in workflow cores",
+    "both workflow cores launch and preflight through the shim, under the caller wait budget, and assemble no provider command",
+    workflowCores.every((core) => /4\. Launch: run \\`review-cycle-peer run --provider \$\{provider\.id\} --worktree "\$worktree" --artifact-dir "\$artifact_dir" --prompt-file "\$prompt_file"\\` exactly once, in the foreground, inside this Peer stage\. Set the caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap\./.test(core) && /Run \\`review-cycle-peer preflight --provider \$\{provider\.id\}\\`/.test(core) && !/nohup|model_reasoning_effort|--timeout 260|codex login status|muse usage/.test(core) && !/prerequisite/i.test(core.slice(core.indexOf("function cyclePeerPrompt")))),
+    "shim launch in workflow cores",
   );
 
   const n = legOk + legFail - before;
-  check(`peer lifecycle checks ran all ${PEER_LIFECYCLE_CHECKS}`, n === PEER_LIFECYCLE_CHECKS, `ran ${n}`);
+  check(`peer launch checks ran all ${PEER_LAUNCH_CHECKS}`, n === PEER_LAUNCH_CHECKS, `ran ${n}`);
 }
 
 if (failures) {
