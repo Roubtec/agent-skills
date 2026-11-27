@@ -569,6 +569,37 @@ for shape in fast-forward rewrite; do
 	is "5: ...and origin keeps the other writer's commit ($shape)" "$(remote_tip feature)" "$THEIRS"
 done
 
+# The same instant, and this checkout also learns of the move before the push:
+# a fetch from elsewhere (a sibling worktree, an editor's background fetch)
+# brings the remote-tracking ref up to the other writer's commit. A lease that
+# names no commit takes its expectation from that ref, so it would match and
+# overwrite; only one exact on `--expect` still refuses. The helper's own fetch
+# must see the expected head, so the move rides in on a git that makes it just
+# ahead of the real `git push`.
+LAPPED="$WORKDIR/lapped"
+mkdir -p "$LAPPED"
+for shape in fast-forward rewrite; do
+	new_repo
+	HEAD0="$(tip HEAD)"
+	pr OPEN feature "$HEAD0"
+	commit "$U" f7 theirs
+	THEIRS="$(tip HEAD "$U")"
+	# shellcheck disable=SC2016 # the shim's own $@ must reach it unexpanded
+	{
+		printf '#!/usr/bin/env bash\n'
+		printf 'for a in "$@"; do [ "$a" = push ] && { "%s" -C "%s" push -q origin feature; "%s" fetch -q origin; echo moved >>"%s/moved"; break; }; done\n' "$REAL_GIT" "$U" "$REAL_GIT" "$LAPPED"
+		printf 'exec "%s" "$@"\n' "$REAL_GIT"
+	} >"$LAPPED/git"
+	chmod +x "$LAPPED/git"
+	: >"$LAPPED/moved"
+	if [ "$shape" = rewrite ]; then git -C "$R" commit -q --amend -m "f2 reworded"; else commit "$R" f8 mine; fi
+	OUT="$(cd "$R" && PATH="$LAPPED:$PATH" bash "$HELPER" push "${ARGS[@]}" --expect "$HEAD0" 2>/dev/null)"
+	is "5: (setup) the helper reached its push, once ($shape)" "$(grep -c moved "$LAPPED/moved")" 1
+	is "5: the remote-tracking ref names the other writer's commit, which a lease read from it would match ($shape)" "$(tip refs/remotes/origin/feature)" "$THEIRS"
+	is "5: a $shape push is 'rejected' on the expected head, whatever the remote-tracking ref says" "$(val outcome)" rejected
+	is "5: ...and origin keeps the other writer's commit, lease by commit ($shape)" "$(remote_tip feature)" "$THEIRS"
+done
+
 # Two push URLs, and the second refuses: the first has already taken the push.
 new_repo
 HEAD0="$(tip HEAD)"
