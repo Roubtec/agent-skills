@@ -33,9 +33,12 @@
 #            Otherwise, or where its passed/issues result names no readable
 #            review file, codex and claude are launched directly, detached,
 #            and `run` answers `outcome=launched` at once; muse has no direct
-#            launch and is `unavailable` without the helper.
+#            launch and is `unavailable` without the helper. A launch that
+#            fails its identity handoff started no provider: it answers
+#            `failed` and exits 0. A launch that cannot be recorded is stopped
+#            again before `run` answers.
 #
-# collect    After `outcome=launched`: wait up to --wait seconds (default 540)
+# collect    After `outcome=launched`: wait up to --wait seconds (default 520)
 #            for the detached provider. `outcome=pending` means it is still
 #            running inside its deadline (--deadline on `run`, default 720
 #            seconds per attempt): call `collect` again. At the deadline the
@@ -43,7 +46,9 @@
 #            more), each signal sent only to a PID whose /proc start time
 #            still matches the one recorded at launch. A timeout or a crash is
 #            retried once, in a fresh attempt directory, only after the first
-#            provider is confirmed dead.
+#            provider is confirmed dead. A detached provider leaves no exit
+#            status, so a crash is one that left an error line on stderr; one
+#            that left nothing at all is `forfeited` with `empty output`.
 #            Only that one PID is ever signalled and proved dead: no process
 #            group, no supervisor, and no promise about its descendants.
 #
@@ -57,7 +62,12 @@
 #
 # The review outcomes are passed, issues, unavailable, timeout, forfeited and
 # failed. Only passed and issues carry a review; none of the six blocks the
-# caller. A passed review whose evidence proof is missing or wrong becomes
+# caller. The verdict is read from the review text on both paths, by the rule
+# `peer-review-run` applies: a verdict line naming issues decides wherever it
+# stands, and a pass counts only unquoted, outside code, with no issue word
+# after it. A review with no such line is forfeited (`garbled output`, or
+# `empty output` for an empty one), also where the helper called it a pass. A
+# passed review whose evidence proof is missing or wrong becomes
 # forfeited with reason `diff evidence unreadable or proof absent`; an issues
 # review keeps its outcome and takes that reason.
 #
@@ -66,17 +76,21 @@
 # `pid=`): stop and ask the operator, start nothing else; 1 when the script
 # itself failed before it could classify anything; 64 on a usage error.
 #
-# Needs jq wherever `peer-review-run` or the claude launch is used, and Linux
-# /proc for the direct launch. Written for bash 3.2 and later.
+# Needs jq to read a `peer-review-run` or claude result (without it codex is
+# launched directly), and Linux /proc for the direct launch. Written for bash
+# 3.2 and later.
 set -u
 umask 077
 
 EFFORT=medium
 DEADLINE_DEFAULT=720
-WAIT_DEFAULT=540
+# The stop (20 s) and the retry handoff (5 s, 10 s more to abort it) can follow
+# the last poll, and the sum has to fit the caller's 570-second tool wait.
+WAIT_DEFAULT=520
 SCHEMA='powbox.peer-review-run/v1'
 HELPER_ABSENT='peer-review-run absent from PATH'
 UNUSABLE_REVIEW='helper result carried no usable reviewFile'
+JQ_ABSENT='jq absent from PATH, so no peer-review-run result could be read'
 PROOF_ABSENT='diff evidence unreadable or proof absent'
 PEER_PROC_ROOT=/proc
 POLL="${REVIEW_CYCLE_PEER_POLL_SECONDS:-2}"
@@ -133,7 +147,10 @@ provider_setup() {
 	esac
 }
 
-# The same signals `peer-review-run` classifies as an unavailable peer.
+# The same signals `peer-review-run` classifies as an unavailable peer, applied
+# only to what the provider itself reported as an error, never to the transcript
+# it echoes on stderr.
+ERROR_LINE_RE='^[^[:alnum:]]*(error|fatal|panic)|: not found$|argument list too long'
 UNAVAILABLE_RE='not (logged|signed) ?in|missing [a-z]+ credentials|please (run )?[^ ]*login|log ?in (again|required)|re-?authenticate|unauthorized|(^|[^0-9])401([^0-9]|$)|(^|[^0-9])429([^0-9]|$)|usage limit|rate.?limit|too many requests|quota (exceeded|exhausted|reached)|(credits?|usage|balance) (exhausted|exceeded|depleted)|insufficient (quota|credit)'
 
 # --- preflight ---------------------------------------------------------------
@@ -199,6 +216,9 @@ peer_start_time() { # <pid>
 	# shellcheck disable=SC2086 # the fields are split on purpose
 	set -- $rest
 	[ "$#" -ge 20 ] || return 1
+	# A zombie has exited and only awaits its parent: where PID 1 does not reap,
+	# it would answer `kill -0` under its old start time for ever.
+	[ "$1" != Z ] || return 1
 	shift 19
 	case "$1" in '' | 0 | *[!0-9]*) return 1 ;; esac
 	printf '%s\n' "$1"
@@ -261,11 +281,18 @@ resolve_dirs() {
 	case "$ADIR" in /*) ;; *) usage "--artifact-dir must be an absolute path" ;; esac
 	case "$WORKTREE" in /*) ;; *) usage "--worktree must be an absolute path" ;; esac
 	[ -d "$WORKTREE" ] || usage "--worktree is not a directory: $WORKTREE"
-	mkdir -p "$ADIR" || die "cannot create $ADIR"
-	local wt ad
+	case "$ADIR/" in */../*) usage "--artifact-dir must not contain a .. component" ;; esac
+	local wt ad there="$ADIR" rest=""
 	wt="$(cd -P -- "$WORKTREE" && pwd)" || die "cannot enter $WORKTREE"
+	# Judged before anything is created, from the deepest directory that exists.
+	while [ ! -d "$there" ]; do
+		rest="/${there##*/}$rest" there="${there%/*}"
+		[ -n "$there" ] || there=/
+	done
+	ad="$(cd -P -- "$there" && pwd)" || die "cannot enter $there"
+	case "${ad%/}$rest/" in "$wt"/*) usage "--artifact-dir must be outside the reviewed worktree" ;; esac
+	mkdir -p "$ADIR" || die "cannot create $ADIR"
 	ad="$(cd -P -- "$ADIR" && pwd)" || die "cannot enter $ADIR"
-	case "$ad/" in "$wt"/*) usage "--artifact-dir must be outside the reviewed worktree" ;; esac
 	WORKTREE="$wt" ADIR="$ad"
 	[ ! -e "$ADIR/peer-review.prompt" ] || usage "--artifact-dir already holds a peer run: give each attempt a directory of its own"
 }
@@ -336,10 +363,56 @@ proof_holds() { # <review file>
 		END { exit !(n == 1 && changed == 1) }' "$ADIR/diff-evidence.txt"
 }
 
-verdict_of() { # <review file>: prints passed or issues for the first verdict line
+# The one verdict rule, for both paths; it follows `peer-review-run`. A verdict
+# line naming issues decides wherever it stands, quoted or not, because reading
+# one too many can never pass a review. A pass counts only on a line of its own
+# outside fenced and indented code, behind no quote marker, as a whole word with
+# no issue word after it ("no issues" aside).
+verdict_of() { # <review file>: prints passed or issues, or nothing where no line decides
 	awk '
-		/^[ \t*`#>]*VERDICT:[ \t]*PASS/ { print "passed"; exit }
-		/^[ \t*`#>]*VERDICT:[ \t]*ISSUES/ { print "issues"; exit }' "$1" 2>/dev/null
+		BEGIN {
+			lead = "^[ \t>*#`-]*verdict[ \t]*[:=][ \t]*"
+			plain = "^[ \t*#-]*verdict[ \t]*[:=][ \t]*"
+			issue = "(issues?|changes?|blocking|block|reject|rejected|fail|failed|request[ \t_-]*changes?)"
+			pass = "(passed|pass|approved|approve|lgtm|no[ \t_-]*issues?)"
+			nw = "[^a-z0-9_]"
+		}
+		{
+			l = tolower($0)
+			sub(/\r$/, "", l)
+			if (l ~ (lead issue)) { v = "issues"; exit }
+			s = l
+			sub(/^[ \t]*/, "", s)
+			depth = 0
+			while (match(s, /^>[ \t]*/)) { depth++; s = substr(s, RLENGTH + 1) }
+			if (fence != "") {
+				# Closed only by a longer-or-equal run of the same character, alone
+				# on its line, at the quote depth the fence opened at.
+				run = ""
+				if (match(s, /^`+/) || match(s, /^~+/)) run = substr(s, 1, RLENGTH)
+				tail = substr(s, length(run) + 1)
+				sub(/[ \t]+$/, "", tail)
+				if (depth == fdepth && length(run) >= flen && substr(run, 1, 1) == fence && tail == "") fence = ""
+				next
+			}
+			while (sub(/^([*+-]|[0-9]+[.)])[ \t]*/, "", s)) continue
+			run = ""
+			if (match(s, /^`+/) || match(s, /^~+/)) run = substr(s, 1, RLENGTH)
+			if (length(run) >= 3 && (substr(run, 1, 1) == "~" || index(substr(s, length(run) + 1), "`") == 0)) {
+				fence = substr(run, 1, 1); flen = length(run); fdepth = depth
+				next
+			}
+			if ($0 ~ /^(    |\t| \t|  \t|   \t)/) next
+			if (l !~ (plain pass "(" nw "|$)")) next
+			sub(plain, "", l)
+			if (match(l, /^no[ \t_-]*issues?/)) l = "pass" substr(l, RLENGTH + 1)
+			l = " " l
+			gsub(nw "(no|zero|without)([ \t_-]+[a-z0-9]+)?[ \t_-]+(issues?|changes?|blockers?|blocking|problems?|failures?)", " ", l)
+			match(l, "^ " pass)
+			if (substr(l, RLENGTH + 1) ~ (nw issue "(" nw "|$)")) { v = "issues"; exit }
+			v = "passed"
+		}
+		END { if (v != "") print v }' "$1" 2>/dev/null
 }
 
 # Report a verdict, applying the evidence proof where this run embedded evidence.
@@ -360,7 +433,7 @@ emit_verdict() { # <passed|issues> <reason> <review file>
 # --- the helper path ---------------------------------------------------------
 
 run_helper() { # returns 0 when it emitted a result, 1 when the direct launch must take over
-	local out="$ADIR/peer-review-run.out" err="$ADIR/peer-review-run.stderr" rc last outcome reason review
+	local out="$ADIR/peer-review-run.out" err="$ADIR/peer-review-run.stderr" rc last outcome reason review seen
 	R_PATH=helper
 	# shellcheck disable=SC2086 # BUDGET is a fixed flag list, split on purpose
 	if [ -n "$MODEL" ]; then
@@ -371,11 +444,13 @@ run_helper() { # returns 0 when it emitted a result, 1 when the direct launch mu
 	rc=$?
 	last="$(awk 'NF { l = $0 } END { print l }' "$out" 2>/dev/null)"
 	if ! printf '%s' "$last" | jq -e --arg schema "$SCHEMA" 'type == "object" and .schema == $schema and (.outcome | type == "string")' >/dev/null 2>&1; then
-		reason="$(awk 'NF { l = $0 } END { print l }' "$err" 2>/dev/null)"
+		# The helper's own diagnostic is its first `peer-review-run:` line; a
+		# usage error follows it with a synopsis that names every flag.
+		reason="$(grep -m 1 '^peer-review-run:' "$err" 2>/dev/null)" || reason="$(awk 'NF { l = $0 } END { print l }' "$err" 2>/dev/null)"
 		# A helper that predates this provider, or a flag of its launch, answers
 		# with a usage error and no result: the provider is unavailable for the
 		# run. Any other error is this call's own failure.
-		if [ "$MANUAL" = 0 ] && [ "$rc" = 64 ] && grep -Eq -- '--provider|--attempts' "$err" 2>/dev/null; then
+		if [ "$MANUAL" = 0 ] && [ "$rc" = 64 ] && printf '%s\n' "$reason" | grep -Eq -- '--provider|--attempts'; then
 			emit unavailable "peer-review-run predates this launch: $reason"
 		else
 			emit failed "peer-review-run exited $rc with no result line${reason:+: $reason}"
@@ -393,7 +468,16 @@ run_helper() { # returns 0 when it emitted a result, 1 when the direct launch mu
 	case "$outcome" in
 	passed | issues)
 		if [ -n "$review" ] && [ -f "$review" ] && [ -r "$review" ]; then
-			emit_verdict "$outcome" "$reason" "$review"
+			seen="$(verdict_of "$review")"
+			if [ "$seen" = "$outcome" ]; then
+				emit_verdict "$outcome" "$reason" "$review"
+			elif [ "$seen" = issues ]; then
+				emit_verdict issues '' "$review"
+			elif grep -q '[^[:space:]]' "$review" 2>/dev/null; then
+				emit forfeited 'garbled output'
+			else
+				emit forfeited 'empty output'
+			fi
 		elif [ "$MANUAL" = 1 ]; then
 			R_FALLBACK="$UNUSABLE_REVIEW" R_MODEL="" R_EFFORT="" R_PIN=""
 			return 1
@@ -442,10 +526,11 @@ exec "$@"
 '
 
 # 0 launched; 1 not launched and nothing left running (LAUNCH_ERROR says why);
-# 3 the launch failed and its process could not be proved dead (R_PID names it).
+# 3 the launch failed and its process could not be proved dead (R_PID names it,
+# LAUNCH_SURVIVED says after what).
 launch_manual() { # <attempt>
 	local dir="$ADIR/manual-attempt-$1" prompt="$ADIR/peer-review.prompt" child pid start extra gone=0
-	LAUNCH_ERROR=""
+	LAUNCH_ERROR="" LAUNCH_SURVIVED='a failed launch handoff'
 	if ! command -v "$PROVIDER" >/dev/null 2>&1; then
 		LAUNCH_ERROR='missing binary'
 		return 1
@@ -469,8 +554,12 @@ launch_manual() { # <attempt>
 	for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20 21 22 23 24 25; do
 		pid="" start="" extra=""
 		if IFS=' ' read -r pid start extra 2>/dev/null <"$dir/peer-review.pid" && [ "$pid" = "$child" ] && is_count "$start" && [ -z "$extra" ]; then
-			state_put "$1" "$(date +%s)" || die "cannot write $ADIR/manual.state"
-			return 0
+			if state_put "$1" "$(date +%s)"; then return 0; fi
+			# No later `collect` could find this provider, so it is stopped here.
+			LAUNCH_ERROR="cannot write $ADIR/manual.state" LAUNCH_SURVIVED='a launch that could not be recorded'
+			if peer_stop "$dir/peer-review.pid"; then return 1; fi
+			R_PID="$child"
+			return 3
 		fi
 		if ! kill -0 "$child" 2>/dev/null; then
 			gone=1
@@ -499,7 +588,7 @@ start_manual() { # <attempt>: emits `launched`, or the outcome of a launch that 
 	rc=$?
 	case "$rc" in
 	0) emit launched '' ;;
-	3) emit_survivor "$R_PID" "survived TERM and KILL after a failed launch handoff" ;;
+	3) emit_survivor "$R_PID" "survived TERM and KILL after $LAUNCH_SURVIVED" ;;
 	*) if [ "$LAUNCH_ERROR" = 'missing binary' ]; then emit unavailable "$LAUNCH_ERROR"; else emit failed "$LAUNCH_ERROR"; fi ;;
 	esac
 }
@@ -509,13 +598,15 @@ start_manual() { # <attempt>: emits `launched`, or the outcome of a launch that 
 classify_dead() { # <attempt dir> <timed out: 0|1>
 	local dir="$1" out="$1/peer-review.out" err="$1/peer-review.stderr" text="" garbled=0 errored=0 diag
 	C_OUTCOME="" C_REASON="" C_REVIEW=""
+	# What the provider itself reported as an error: the error-shaped lines of
+	# its last stderr, and a claude error result.
 	diag="$dir/diagnostic.txt"
-	tail -n 20 "$err" >"$diag" 2>/dev/null || :
+	tail -n 20 "$err" 2>/dev/null | grep -Ei -- "$ERROR_LINE_RE" >"$diag" || :
 	case "$PROVIDER" in
 	codex) text="$out" ;;
 	claude)
 		if [ -s "$out" ]; then
-			if jq -e 'type == "object"' "$out" >/dev/null 2>&1; then
+			if jq -e 'type == "object" and .type == "result"' "$out" >/dev/null 2>&1; then
 				text="$dir/review.txt"
 				jq -r '.result // "" | tostring' "$out" >"$text"
 				if jq -e '.is_error == true' "$out" >/dev/null 2>&1; then
@@ -543,8 +634,8 @@ classify_dead() { # <attempt dir> <timed out: 0|1>
 		C_OUTCOME=failed C_REASON="$(awk 'NF { print; exit }' "$text")"
 	elif [ "$garbled" = 1 ] || { [ -n "$text" ] && grep -q '[^[:space:]]' "$text" 2>/dev/null; }; then
 		C_OUTCOME=forfeited C_REASON='garbled output'
-	elif C_REASON="$(awk 'NF { l = $0 } END { print l }' "$diag" | grep -Ei -- '^[^[:alnum:]]*(error|fatal|panic)|: not found$|argument list too long')"; then
-		C_OUTCOME=failed
+	elif [ -s "$diag" ]; then
+		C_OUTCOME=failed C_REASON="$(head -n 1 "$diag")"
 	else
 		C_OUTCOME=forfeited C_REASON='empty output'
 	fi
@@ -565,9 +656,11 @@ cmd_run() {
 		emit forfeited "$EVIDENCE_ERROR"
 		return 0
 	fi
-	if command -v peer-review-run >/dev/null 2>&1; then
-		command -v jq >/dev/null 2>&1 || die "jq is required to read the peer-review-run result"
+	if command -v peer-review-run >/dev/null 2>&1 && command -v jq >/dev/null 2>&1; then
 		if run_helper; then return 0; fi
+	elif command -v peer-review-run >/dev/null 2>&1; then
+		[ "$PROVIDER" = codex ] || die "jq is required to read the $PROVIDER result"
+		R_FALLBACK="$JQ_ABSENT"
 	elif [ "$MANUAL" = 1 ]; then
 		R_FALLBACK="$HELPER_ABSENT"
 	else
@@ -622,7 +715,7 @@ cmd_collect() {
 				rc=$?
 				if [ "$rc" = 0 ]; then continue; fi
 				R_ATTEMPT=2
-				if [ "$rc" = 3 ]; then emit_survivor "$R_PID" "survived TERM and KILL after a failed launch handoff"; fi
+				if [ "$rc" = 3 ]; then emit_survivor "$R_PID" "survived TERM and KILL after $LAUNCH_SURVIVED"; fi
 				C_OUTCOME=failed C_REASON="$LAUNCH_ERROR"
 			fi
 			;;
