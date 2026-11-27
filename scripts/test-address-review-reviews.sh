@@ -63,9 +63,9 @@ printf '%s\n' "$*" >>"$FAKE/gh.log"
 shift
 [ "$1" != --hostname ] || shift 2
 case "$1" in
-repos/acme/widgets/pulls/7/reviews\?per_page=100\&page=*) kind=reviews ;;
-repos/acme/widgets/pulls/7/comments\?per_page=100\&page=*) kind=comments ;;
-repos/acme/widgets/issues/7/comments\?per_page=100\&page=*) kind=toplevel ;;
+repos/[Aa]cme/[Ww]idgets/pulls/7/reviews\?per_page=100\&page=*) kind=reviews ;;
+repos/[Aa]cme/[Ww]idgets/pulls/7/comments\?per_page=100\&page=*) kind=comments ;;
+repos/[Aa]cme/[Ww]idgets/issues/7/comments\?per_page=100\&page=*) kind=toplevel ;;
 *) exit 1 ;;
 esac
 [ ! -f "$FAKE/fail-$kind" ] || exit 1
@@ -235,6 +235,8 @@ fresh
 page reviews.1.json "$(review 309 alice User COMMENTED "$A" ok https://github.com/Acme/Widgets/pull/7#pullrequestreview-309)"
 call "${ARGS[@]}"
 is "3: the repository's casing is not a mismatch" "$(val outcome)" "listed"
+call --repo Acme/Widgets --pr 7
+is "3: ...whichever side carries the capitals" "$(val outcome)" "listed"
 call --repo ghe.example.com/acme/widgets --pr 7
 foreign "a github.com url where another host was asked" foreign
 has "3: ...the listing having been read on that host" "$(log)" "api --hostname ghe.example.com repos/acme/widgets/pulls/7/reviews?per_page=100&page=1"
@@ -243,6 +245,10 @@ fresh
 echo '{"message":"Not Found"}' >"$FAKE/reviews.1.json"
 call "${ARGS[@]}"
 foreign "an answer that is no list" malformed
+fresh
+echo null >"$FAKE/reviews.1.json"
+call "${ARGS[@]}"
+foreign "an empty answer that is no list either" malformed
 fresh
 touch "$FAKE/fail-reviews"
 call "${ARGS[@]}"
