@@ -454,7 +454,7 @@ Then, in worktree mode, reclaim the worktree, per "Working location" — never i
 Always produce a report (it doubles as the body of the Summary comment on push runs):
 
 - The PR, the branch, before/after tip SHAs, and what each of step 2's two rebase points did — replayed, replayed with the validation carried (the tip it ran on, the tip it was carried to, and the `outcome=carry` answer), skipped as a proved no-op (with the proof), or suppressed by `no-rebase` — plus the pinned effective base the run ended on and how any conflicts went.
-  In `delegated-fix`, where those points are the orchestrator's, report the pinned effective base you were handed and carried rather than a rebase of your own.
+  In `delegated-fix`, where those points are the orchestrator's, report the pinned effective base you were handed and carried rather than a rebase of your own; in `publish-reviewed`, report any carry the packet names, with its two tips and its answer.
 - **The working location and how it was selected** — inline on the target branch, forced `inline`, or a worktree (created or reused) — plus whether that worktree was reclaimed, or its absolute path where a halt left it standing.
   Say nothing about where the main checkout points now: a worktree run neither moved it nor watched it.
 - Each addressed comment with a **stable reference** — file:line, comment author, the thread's GraphQL node id, and the comment permalink — and its disposition (fixed / already-addressed / pushed-back / follow-up-task / skipped).

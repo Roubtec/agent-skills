@@ -33,7 +33,7 @@ Out of scope:
 - `wf-address-review.js` → `rebasePrompt`, `REBASE_SCHEMA`, `rebasePoint`, and the pre-push block that calls `rebaseReverifyInstructions` and `rebaseReverifyCriteria`; the no-op adoption under the `rebase-unevidenced-noop` stop is the existing model for adopting a claim on its evidence.
 - `wf-address-tasks.js` → `taskRebasePrompt`, `TASK_REBASE_SCHEMA` and `rebaseOntoAdvancedBase`.
 - `scripts/test-address-review-reconcile.mjs` and `scripts/test-pipelined-batch.mjs`, which drive those stages and carry absolute check-count literals.
-- `plugins/dev-skills/workflows/README.md`, which describes both workflows' rebase behavior.
+- `plugins/dev-skills/workflows/README.md`, which describes both workflows' rebase behavior and still calls "the exact tree being pushed" the skill's acceptance condition, which task 063 relaxed.
 
 ## Target files or areas
 

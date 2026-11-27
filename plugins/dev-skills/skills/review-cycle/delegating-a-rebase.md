@@ -14,10 +14,9 @@ It reads objects and writes nothing, so it is one cheap call per point, and its 
 Its `outcome=` decides what the point is:
 
 - **`noop`: spawn no rebaser.**
-  The target is the fork point and the range holds no merge, so a replay would move nothing: report the point as skipped on that proof, quoting `branch=`, `onto=` and `fork-point=`, and take `onto=` as the entry's effective base.
+  Report the point as skipped on that proof, quoting `branch=`, `onto=` and `fork-point=`, and take `onto=` as the entry's effective base.
   That proof is the only thing that skips a point; an impression that the base has not moved skips nothing.
 - **`stale-parent` (exit 3): delegate nothing.**
-  The old parent tip is not an ancestor of the child, so it bounds nothing and `--onto` from it would replay the parent's superseded commits as the child's own.
   The entry goes to `rebase-stack`, or halts as an open question naming both tips.
 - **`replay`: delegate the step.**
   Its `onto-path=` lines decide whether the replay's validation may be carried, below.
@@ -25,12 +24,12 @@ Its `outcome=` decides what the point is:
 
 **A verdict crosses a replay that changed nothing it was rendered on.**
 `rebase-facts.sh -C <working location> after --old-base <fork-point> --old-tip <pre-rebase tip> --new-base <effective base>` answers for a replayed tip, its three commits being `before`'s `fork-point=`, `branch=` and `onto=`.
-`outcome=carry` is both halves of one proof: the replay is patch-identical — the same commits carrying the same patches, none dropped, skipped, altered or flattened — and the files that changed between the old base and the new are none of the branch's.
+`outcome=carry` is both halves of one proof: the replay is patch-identical, whitespace included, and the files that changed between the old base and the new are none of the branch's.
 Then whatever was rendered on the old tip stands for the new one, the validation run and a reviewer's passing verdict alike: no delivery-tier validation and no reviewer or peer round is owed on account of the rebase.
 Judgement stays yours, exercised on `before`'s `onto-path=` lines ahead of the spawn: a change there that reaches beyond its own file — build or lint configuration, a dependency, a generated contract, what the validation-tiers bullet under **The loop and its gates** singles out — is the reason to refresh the verdict whatever the helper says.
 Where you see none, the rebaser's prompt says its validation may be carried and spells out that `after` command by the script's absolute path, so the rebaser skips a run the answer makes unnecessary; where you see one, the prompt says to validate regardless.
 When the rebaser returns, run the same call yourself and act on that answer, never on the rebaser's account of it.
-`outcome=verify` (exit 3), and no answer, leave the replay to be verified in full.
+`outcome=unchanged` is a tip the replay did not move, which keeps its verdict as a no-op does; `outcome=verify` (exit 3), and no answer, leave the replay to be verified in full.
 A carried verdict is reported as one: the cycle's result and any summary name the tip the verdict was rendered on, the tip it was carried to, and the `outcome=carry` answer it was carried on, so the maintainer can see a tree was published on a carried verdict.
 
 **Where it runs is the caller's working location for that entry** — the checkout it works inline, or the worktree it attached — so the brief carries that absolute path, the branch, the pinned base below, and a destination for any build output under this cycle's artifact-directory rules.
