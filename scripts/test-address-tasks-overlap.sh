@@ -364,7 +364,16 @@ git -C "$A" config --unset diff.renames
 
 acall one:main
 is "7: one branch alone is clean, not a usage error" "$(val outcome)" clean
-is "7: no ref was created or moved" "$(git -C "$A" for-each-ref | grep -v -e mover -e twice -e third)" "$A_REFS"
+# The base gains a file a branch added, and loses one the branch still has:
+# read from where the branch left it, neither changes what the branch adds.
+git -C "$A" checkout -q -b moved main
+printf 'landed\n' >"$A/src/one-only.ts" && git -C "$A" add src/one-only.ts && git -C "$A" rm -q README.md
+git -C "$A" commit -q -m "the base moves"
+git -C "$A" checkout -q main
+acall one:moved
+has "7: a branch is read from where it left its base, not against the base's tip" "$OUT" "added=one${TAB}src/one-only.ts"
+has "7: ...so it adds what it added" "$OUT" "branch=one${TAB}moved${TAB}3"
+is "7: no ref was created or moved" "$(git -C "$A" for-each-ref | grep -v -e mover -e twice -e third -e moved)" "$A_REFS"
 is "7: the working tree is clean" "$(git -C "$A" status --porcelain)" ""
 OUT="$(cd "$WORKDIR" && bash "$ADDED" -C "$A" one:main two:main 2>/dev/null)"
 is "7: -C names the repository" "$(val outcome)" duplicate
