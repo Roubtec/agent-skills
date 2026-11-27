@@ -162,7 +162,7 @@ Three top-level subagent roles plus one CLI peer:
 ### Codex subagent execution
 
 Use the subagent interface exposed in the current session.
-In tool-enabled sessions this is a spawn tool and a wait tool, seen as `collaboration.spawn_agent` and `collaboration.wait_agent`, and in earlier releases as `multi_agent_v1.spawn_agent`, `multi_agent_v1.wait_agent`, and `multi_agent_v1.close_agent`; read the current tool listing before the first spawn and use only the names and parameters present in it.
+In tool-enabled sessions this is a spawn tool and a wait tool, seen as `collaboration.spawn_agent` and `collaboration.wait_agent`, or as `multi_agent_v1.spawn_agent`, `multi_agent_v1.wait_agent`, and `multi_agent_v1.close_agent` where the session runs the older tool set, which the same release still carries; read the current tool listing before the first spawn and use only the names and parameters present in it.
 Spawn fixers and rebasers as `worker` agents and reviewers as `explorer` agents where the spawn takes a role; where it takes none, the two words name what the prompt must say: a `worker` may edit and commit in the location it is assigned, and an `explorer` edits nothing.
 Pass self-contained prompts; do not fork the orchestrator's context, and omit model overrides unless the user asks for one.
 Where the spawn carries a fork parameter (`fork_turns`), set it to none: it defaults to the whole history.

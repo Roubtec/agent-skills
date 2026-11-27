@@ -643,7 +643,7 @@ const CYCLE_FINISH_IN_TURN = "Finish inside your own turn: nothing resumes you a
 // On top of that, for every role except the peer stage itself: an implementer
 // that launched its own detached second opinion outlived it, orphaned, and
 // wandered into an unrelated sibling worktree for want of a tight working dir.
-const CYCLE_NO_SELF_PEER = "The cycle runs its reviewer and the sanctioned second opinion itself — do not launch a peer review of your own, and spawn no reviewer of your own under a round cap of your own, which is the same thing by another route. A helper you do spawn is briefed to report to you alone, and you collect it before you return.";
+const CYCLE_NO_SELF_PEER = "The cycle runs its reviewer and the sanctioned second opinion itself — do not launch a peer review of your own, and spawn no reviewer of your own, capped or not, which is the same thing by another route. A helper you do spawn is briefed to report to you alone, and you collect it before you return.";
 
 // Default worktree/branch contract when the consumer supplies none. A consumer
 // with its own worktree lifecycle (wt-enter etc.) passes richer per-role
