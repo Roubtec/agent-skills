@@ -2722,7 +2722,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       restatementRequired: !!second && /Require the restatement as a blocking issue/.test(second.reviewInstructions),
     }),
   );
-  check("the re-verification cycle is granted the close-out too", !!replayed.seen.cycleCalls[1] && replayed.seen.cycleCalls[1].opts.closeOut === "on");
+  check("the re-verification cycle is called by the same qualified name, and granted the close-out too", !!replayed.seen.cycleCalls[1] && replayed.seen.cycleCalls[1].name === "dev-skills:wf-review-cycle" && replayed.seen.cycleCalls[1].opts.closeOut === "on");
   const cap = replayed.seen.cycleCalls[1] ? replayed.seen.cycleCalls[1].opts.maxRounds : undefined;
   check(
     "and bounds it with a lowered round cap, so two cycles cannot double the run's worst case",
