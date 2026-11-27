@@ -17,7 +17,10 @@
 #     the folder holds a SKILL.md
 #   plugins/dev-skills/bin/*, where the first line is a bash shebang
 #
-# A parse check only: it runs none of them. Uses bash builtins alone, because
+# A parse check only: it runs none of them, and bash 3.2's `-n` does not parse
+# the body of a double-quoted "$(...)", so an unparenthesised `case` pattern
+# there passes this check and fails only when run; parenthesise patterns inside
+# substitutions. Uses bash builtins alone, because
 # the bash:3.2 image carries busybox tools and no git.
 #
 # Exit: 0 every script parses; 1 one does not, a location held no script, or
@@ -43,7 +46,7 @@ while [ $# -gt 0 ]; do
 	shift
 done
 
-cd "$(dirname "$0")/.." || exit 1
+case "$0" in */*) cd "${0%/*}/.." || exit 1 ;; *) cd .. || exit 1 ;; esac
 echo "bash $BASH_VERSION ($BASH)"
 case "$BASH_VERSION" in
 "$REQUIRE"*) ;;
