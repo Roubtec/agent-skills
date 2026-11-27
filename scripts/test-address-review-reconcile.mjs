@@ -282,7 +282,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 290;
+const EXPECTED_CHECKS = 292;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -3260,15 +3260,28 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "codex address-reviews": join(here, "..", "codex", "dev-skills", "skills", "address-reviews", "SKILL.md"),
   })) {
     const text = readFileSync(path, "utf8");
+    // The rules a named target, `no-rebase` or an excluded entry bring live in
+    // `rebase-arguments.md` beside the skill, read only by a batch that carries
+    // one of them. Each clause is looked for in the file that now holds it, so
+    // neither a clause deleted from that file nor a stub that stops sending the
+    // reader there can pass on the other's text.
+    const rules = readFileSync(join(dirname(path), "rebase-arguments.md"), "utf8");
+    check(
+      `${name}: the stub sends a batch carrying a named target, no-rebase or an excluded entry to rebase-arguments.md before the plan runs`,
+      text.includes(
+        "Where the invocation carries `rebase on top of <target>` or `no-rebase`, or its prose keeps an entry out of rebasing",
+      ) && text.includes("read `rebase-arguments.md`, beside this file, in full before you run `targets.sh plan`"),
+      "the stub's trigger or its read-in-full order is gone, so nothing sends a run to the rules that moved",
+    );
     check(
       `${name}: an invocation-named target is a documented argument and a named REF resolves where it was named`,
       text.includes("[rebase on top of <target>]") &&
         text.includes("| `rebase on top of <target>` |") &&
-        text.includes("resolved WHERE IT WAS NAMED") &&
+        rules.includes("resolved WHERE IT WAS NAMED") &&
         // The resolution itself is `targets.sh plan`'s: in this checkout,
         // through the `--target` arm of `pin-base`, which fetches nothing, and
         // its suite drives a target that exists only on the remote.
-        text.includes("with nothing fetched for it") &&
+        rules.includes("with nothing fetched for it") &&
         targetsHelper.includes('prb pin-base --target "$TARGET"') &&
         targetsHelper.includes('[ "$PRB_RC" -eq 0 ] || stop unresolved') &&
         targetsHelperTest.includes('"3: a target that is only on the remote stops the batch"') &&
@@ -3276,8 +3289,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         // The failure mode is half the rule: a named ref that does not resolve
         // must stop the batch, since the one substitution available is the very
         // base-ref fetch the sentence before it forbids.
-        text.includes("stop the batch and report what you tried rather than substituting anything") &&
-        !text.includes("A target the invocation itself named as an exact commit is pinned as given"),
+        rules.includes("stop the batch and report what you tried rather than substituting anything") &&
+        !(text + rules).includes("A target the invocation itself named as an exact commit is pinned as given"),
       "the exact-commit-only exemption is back, the token is undocumented, or a target that does not resolve no longer stops the batch",
     );
     check(
@@ -3287,14 +3300,17 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       // re-resolving it per entry per point would land concurrent entries on
       // whatever that ref carried when each of them got there.
       text.includes("It is the DEFAULT target this governs, and only it") &&
-        text.includes("that single OID serves every rebase-enabled entry at both of its points") &&
+        rules.includes("that single OID serves every rebase-enabled entry at both of its points") &&
         // `no-rebase` suppresses the rebase, not the token — bounding a
         // named-target run's ranges at `baseRefName` would hand every reviewer
         // the underlying branch's commits as this PR's diff. Counted rather
         // than merely found: the rule and the Phase B brief that consumes it
         // are two sites, and a positive fragment anywhere in the file passed
-        // while the second one still said `baseRefName` unconditionally.
-        (text.match(/the invocation-named target's own pinned OID/g) || []).length >= 2 &&
+        // while the second one still said `baseRefName` unconditionally. The
+        // rule is in `rebase-arguments.md` and the brief in the skill, so each
+        // file is asked for its own.
+        rules.includes("the invocation-named target's own pinned OID") &&
+        text.includes("the invocation-named target's own pinned OID") &&
         // The exclusion is the statement that THAT branch stays on its own base,
         // so a prose-excluded entry takes `baseRefName` even where a target was
         // named — bounding it at a target it was deliberately not moved onto is
@@ -3302,7 +3318,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         // That one is the helper's now: `--except` is how the exclusion is
         // said, and only a `--no-rebase` batch hands an entry the named target
         // as its effective base.
-        text.includes("`--except` names each entry the invocation prose excluded") &&
+        rules.includes("`--except` names each entry the invocation prose excluded") &&
         targetsHelper.includes('if [ "$NO_REBASE" -eq 1 ] && [ "$HAS_TARGET" -eq 1 ]; then E_TARGET[i]=named; else E_TARGET[i]=default; fi') &&
         targetsHelperTest.includes('"4: ...and stays on its own base, whatever the target"') &&
         targetsHelperTest.includes('"4: with a target, no-rebase keeps it as every effective base"') &&
@@ -3311,12 +3327,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         // `baseRefName` it would audit a run as correct that bounded every
         // range at the wrong commit.
         text.includes("that named target's pinned OID on a `no-rebase` batch") &&
-        text.includes("since `no-rebase` suppresses the rebase without discarding the token") &&
+        rules.includes("since `no-rebase` suppresses the rebase without discarding the token") &&
         // A named target cannot drift, so the second point normally reports a
         // no-op — but the canonical step still flattens a pure-join merge in
         // range, so "guaranteed" would license skipping the point itself.
-        !/guaranteed no-op for a named target/.test(text) &&
-        text.includes("never a reason for you not to spawn it"),
+        !/guaranteed no-op for a named target/.test(text + rules) &&
+        rules.includes("never a reason for you not to spawn it"),
       "the named target is re-resolved per point, a site still falls back to `baseRefName` under `no-rebase`, or the second point is claimed to be a guaranteed no-op",
     );
     // This file's frontmatter `description` is what the harness loads the skill
