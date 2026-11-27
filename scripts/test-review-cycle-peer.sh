@@ -22,7 +22,7 @@ SHIM="$SCRIPT_DIR/../plugins/dev-skills/bin/review-cycle-peer"
 WORKDIR="$(cd -P "$(mktemp -d)" && pwd)"
 cleanup() {
 	local f pid
-	for f in "$WORKDIR"/art/*/manual-attempt-*/peer-review.pid; do
+	for f in "$WORKDIR"/art/*/manual-attempt-*/peer-review.pid "$WORKDIR"/art/*/peer-run.*/manual-attempt-*/peer-review.pid; do
 		[ -f "$f" ] || continue
 		read -r pid _ <"$f" || continue
 		case "$pid" in '' | *[!0-9]*) continue ;; esac
@@ -328,6 +328,20 @@ usage_case "an artifact directory that climbs back into the worktree past a dire
 [ ! -e "$REPO/.peer" ] && [ ! -e "$WORKDIR/art/nope" ]
 ok "2: ...and nothing on that path is created" $?
 usage_case "the worktree itself as artifact directory" run --provider codex --worktree "$REPO" --artifact-dir "$REPO" --facts "$FACTS"
+usage_case "neither an artifact root nor an artifact directory" run --provider codex --worktree "$REPO" --facts "$FACTS"
+usage_case "an artifact root beside an artifact directory" run --provider codex --worktree "$REPO" --artifact-root "$WORKDIR/art/both-root" --artifact-dir "$A" --facts "$FACTS"
+has "2: ...named as the choice it is" "$OUT" "give --artifact-root or --artifact-dir, not both"
+[ ! -e "$WORKDIR/art/both-root" ] && [ ! -e "$A" ]
+ok "2: ...and neither is created" $?
+usage_case "a relative artifact root" run --provider codex --worktree "$REPO" --artifact-root art --facts "$FACTS"
+has "2: ...named by its own flag" "$OUT" "--artifact-root must be an absolute path"
+usage_case "an artifact root inside the worktree" run --provider codex --worktree "$REPO" --artifact-root "$REPO/.peer/deeper" --facts "$FACTS"
+usage_case "the worktree itself as artifact root" run --provider codex --worktree "$REPO" --artifact-root "$REPO" --facts "$FACTS"
+usage_case "an artifact root reaching the worktree through a symlink" run --provider codex --worktree "$REPO" --artifact-root "$WORKDIR/repo-link" --facts "$FACTS"
+usage_case "an artifact root that climbs back into the worktree past a directory not yet there" run --provider codex --worktree "$REPO" --artifact-root "$WORKDIR/art/nope/../../repo" --facts "$FACTS"
+[ ! -e "$REPO/.peer" ] && [ ! -e "$WORKDIR/art/nope" ] && [ -z "$(git -C "$REPO" status --porcelain --ignored)" ]
+ok "2: ...and no root left anything in the worktree" $?
+usage_case "collect handed an artifact root" collect --artifact-root "$WORKDIR/art"
 usage_case "neither facts nor prompt" run --provider codex --worktree "$REPO" --artifact-dir "$A"
 usage_case "both facts and prompt" run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --prompt-file "$FACTS"
 has "2: ...named as the choice it is" "$OUT" "give --facts or --prompt-file, not both"
@@ -399,6 +413,34 @@ ok "4: a complete prompt is handed over unchanged, with no brief added" $?
 OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" 2>&1)"
 is "4: an artifact directory is never used twice" "$?" 64
 is "4: ...and the helper ran once, not twice" "$(wc -l <"$STEER/helper.calls" | tr -d ' ')" 1
+lacks "4: ...and a directory the caller named is not answered back" "$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A-named" --facts "$FACTS")" "artifact_dir="
+
+# The script picks the attempt directory itself under --artifact-root.
+fresh
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-root "$A/not/yet/there" --facts "$FACTS")"
+D1="$(val artifact_dir)"
+is "4: under an artifact root the review runs as before" "$?|$(first)|$(val path)" "0|outcome=passed|helper"
+case "$D1" in "$A/not/yet/there"/peer-run.??????) [ -d "$D1" ] ;; *) false ;; esac
+ok "4: ...in a directory the script made directly under that root, which it answers" $?
+is "4: ...holding the prompt" "$(val prompt_file)" "$D1/peer-review.prompt"
+is "4: ...and everything the helper was handed" "$(cat "$STEER/helper.calls")" \
+	"--provider codex --worktree $REPO --prompt-file $D1/peer-review.prompt --artifact-root $D1/peer-review-run --timeout 260 --effort medium"
+is "4: ...its review included" "$(val review_file)" "$D1/peer-review-run/session/attempt-1/review.txt"
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-root "$A/not/yet/there" --facts "$FACTS")"
+D2="$(val artifact_dir)"
+[ "$?|$(first)" = "0|outcome=passed" ] && [ -n "$D2" ] && [ "$D2" != "$D1" ] && [ -f "$D2/peer-review.prompt" ]
+ok "4: a second run under the same root gets a directory of its own" $?
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-root "$WORKDIR" --facts "$FACTS")"
+D3="$(val artifact_dir)"
+case "$D3" in "$WORKDIR"/peer-run.??????) [ -z "$(git -C "$REPO" status --porcelain --ignored)" ] ;; *) false ;; esac
+ok "4: a root that holds the worktree still puts the attempt beside it, not in it" $?
+fresh
+for _ in 1 2 3 4 5 6 7 8; do
+	peer run --provider codex --worktree "$REPO" --artifact-root "$A" --facts "$FACTS" >"$(mktemp "$WORKDIR/racer.XXXXXX")" &
+done
+wait
+is "4: eight runs started together under one root get eight directories" \
+	"$(sed -n 's/^artifact_dir=//p' "$WORKDIR"/racer.* | sort -u | wc -l | tr -d ' ')|$(find "$A" -name peer-review.prompt | wc -l | tr -d ' ')|$(grep -c '^outcome=passed$' "$WORKDIR"/racer.* | grep -c ':1$')" "8|8|8"
 
 for outcome in issues unavailable timeout forfeited failed; do
 	fresh
@@ -636,6 +678,13 @@ is "6: ...standing in the worktree with stdin closed" "$(tr '\n' '|' <"$STEER/co
 has "6: ...and that prompt is the assembled one" "$(cat "$STEER/codex.args.1")" "$(cat "$A/peer-review.prompt")"
 has "6: its stderr is kept apart from the result" "$(cat "$A/manual-attempt-1/peer-review.stderr")" "codex stub progress on stderr"
 is "6: a second collect repeats the answer without a new launch" "$(peer collect --artifact-dir "$A" | head -n 1)|$(cat "$STEER/codex.count")" "outcome=passed|1"
+
+fresh
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-root "$A" --facts "$FACTS")"
+D1="$(val artifact_dir)"
+is "6: a direct launch under an artifact root answers the directory it made" "$?|$(first)|$(dirname "$D1")" "0|outcome=launched|$A"
+OUT="$(peer collect --artifact-dir "$D1")"
+is "6: ...and collect works with it" "$?|$(first)|$(val review_file)" "0|outcome=passed|$D1/manual-attempt-1/peer-review.out"
 
 fresh
 echo passed-nofile >"$STEER/helper.mode"
