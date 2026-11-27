@@ -196,7 +196,7 @@ snapshot() {
 cmp -s "$SHIPPED" "$MIRROR"
 ok "the two mirrors ship the same probe" $?
 for f in plugins/dev-skills/skills/declare-shadows/probe.sh codex/dev-skills/skills/declare-shadows/probe.sh; do
-	is "$f is committed executable" "$(git -C "$ROOT" ls-files -s -- "$f" | cut -c1-6)" 100755
+	is "$f is committed executable" "$(git -c safe.directory='*' -C "$ROOT" ls-files -s -- "$f" | cut -c1-6)" 100755
 done
 OUT="$(bash "$HELPER" --help 2>&1)"
 is "--help exits 0" "$?" 0
