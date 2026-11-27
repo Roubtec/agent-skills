@@ -55,7 +55,7 @@ Do not use this skill to file ordinary product bugs, code-review findings, or fe
    A known-limitations document records friction its provider has accepted and does not want filed again; any environment or project may provide one, and this step is the whole convention for doing so.
    Read every one of these that exists: each file the `AGENT_KNOWN_LIMITATIONS` environment variable names (one or more paths, separated the way `PATH` is on the platform), then `KNOWN-LIMITATIONS.md` at the repository root (the current directory when there is no repository), then `docs/KNOWN-LIMITATIONS.md` beneath it.
    The expected shape is Markdown with one short titled entry per limitation, holding enough words to recognise the friction when it is met again.
-   Read a richer document for its entries, and treat one that cannot be read or made sense of as absent, noting it for step 10.
+   Read a richer document for its entries, and treat one that cannot be read or made sense of as absent, to be mentioned to the user in step 10 and not in the report.
    Finding none is the ordinary case: carry on, and say nothing about it in the report.
    Leave an issue out only when it plainly is a recorded limitation and the run adds nothing to it — no new trigger, no higher cost, no workaround worth recording — and note the entry it matched.
    Where the run does add something, keep the issue and cite the entry in its Evidence.
@@ -120,7 +120,7 @@ Do not use this skill to file ordinary product bugs, code-review findings, or fe
 
    Omit empty sections, and the left-out line when step 3 left nothing out.
    `Target` names where a fix would land — the environment or container the agent ran in, the skills or workflows it followed, the project's own code and tooling, or an upstream tool such as the harness — and is the reporting agent's best reading, binding nobody.
-   Name both where an issue spans two targets, and write `unknown` rather than guess where the target is not easy to determine.
+   Name both, comma-separated, where an issue spans two targets, and write `unknown` rather than guess where the target is not easy to determine.
    Add a short "No concrete issues found" summary only when the user explicitly requested a report even if nothing went wrong.
 
 8. **Commit and publish only the report (ferry mode only).**
