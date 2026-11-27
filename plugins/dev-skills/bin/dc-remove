@@ -17,8 +17,8 @@
 # must carry dc-enter's marker file, whose recorded clone path AND source
 # repository must both match what this invocation derived, or it refuses rather
 # than deleting a stranger's directory that happens to sit at the same place.
-# dc-enter applies the identical proof before it discards anything, so the
-# destructive helper is never the more permissive of the two.
+# `dc-enter --replace` discards on that exact match and on nothing wider; the
+# search described next is this helper's alone.
 #
 # A MISS IS SEARCHED FOR, because the derived directory depends on the worktree
 # and agent name of the call: run from the main checkout after the work moved to
@@ -53,9 +53,13 @@
 #   dc-remove probe        # remove the clone dc-enter created for slug `probe`
 #
 # Removing a slug that has no clone anywhere under the clone root is a no-op and
-# succeeds, so a cleanup trap can call it unconditionally. Nothing is ever
-# written to stdout; diagnostics go to stderr, and the exit status is the whole
-# result.
+# succeeds, so a cleanup trap can call it unconditionally — for a slug no other
+# worktree of the repository is using. The search above makes that a condition:
+# a call with no clone in its own scope (a trap firing after a failed dc-enter,
+# or a second time) removes the single clone a sibling worktree holds under the
+# same slug, one still being created included, since dc-enter writes the marker
+# before it clones. Nothing is ever written to stdout; diagnostics go to stderr,
+# and the exit status is the whole result.
 #
 # This is also how a slug is freed: `dc-enter` refuses a slug that already has a
 # clone, because a concurrent sibling may be using it. Calling dc-remove when a
