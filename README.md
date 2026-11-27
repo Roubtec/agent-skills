@@ -15,6 +15,7 @@ plugins/
     bin/address-review-pr-branch   # a name on PATH for skills/address-review/pr-branch.sh, for workflow agents
     bin/address-review-record      # the same for skills/address-review/record.sh
     bin/address-review-ping        # the same for skills/address-review/ping.sh
+    bin/address-review-reviews     # the same for skills/address-review/reviews.sh
     bin/address-review-publish     # the same for skills/address-review/publish.sh
     bin/review-cycle-peer          # the same for skills/review-cycle/peer.sh
     bin/address-tasks-overlap      # the same for skills/address-tasks/overlap.sh
@@ -39,6 +40,7 @@ scripts/
   test-write-tasks-task-numbers.sh      # hermetic coverage for the write-tasks task-number helper (a branch's claims against the base and every open PR head, relocation pairing, the allocator's inventory, the sweep's duplicates)
   test-review-cycle-peer.sh             # hermetic coverage for the review-cycle peer helper (preflight, prompt and evidence, both launch paths, every outcome, teardown) and its `bin/` shim
   test-address-review-ping.sh           # hermetic coverage for the address-review ping helper (comment pings, the Copilot request and its timeline confirmation) and its `bin/` shim
+  test-address-review-reviews.sh        # hermetic coverage for the address-review review-listing helper (the listing, the suppressed-comment block in each shape and unrecognised, the scope check, paging, the comparison with a head) and its `bin/` shim
   test-address-review-record.sh         # hermetic coverage for the address-review disposition-record helper (find, render, post, spend)
   test-address-review-publish.sh        # hermetic coverage for the address-review publication helper (thread replies, resolves, the Summary comment, the re-run that repeats nothing, the thread that is not this PR's) and its `bin/` shim
   test-declare-shadows-probe.sh         # hermetic coverage for the read-only probe behind declare-shadows and enable-worktrees (the override test, malformed lists, candidates and their guard, mount health, and that nothing is written)
@@ -94,6 +96,7 @@ A workflow agent holds a brief rather than a skill folder, so where a workflow n
 - `address-review-pr-branch`
 - `address-review-record`
 - `address-review-ping`
+- `address-review-reviews`
 - `address-review-publish`
 - `address-tasks-overlap`
 - `address-tasks-bootstrap`
@@ -107,6 +110,7 @@ The scripts, likewise one per line:
 - `address-review/record.sh` words the disposition record's header for each publish state and makes its one write: finding a prior record by its marker, writing over the run's own, or spending the one it replayed.
 - `address-review/ci.sh` reads the status rollup of a PR's head into failing lanes with their identities, tails a failing job's log, and re-runs a run's failed jobs, taking the repository and the run from the lane's own URL.
 - `address-review/ping.sh` summons the next review round, one reviewer per action: a dedicated `@codex review` or `@claude review` comment, and for Copilot a reviewer request that it confirms from the PR's timeline by the id of an event that was not there before.
+- `address-review/reviews.sh` lists a PR's submitted reviews for the gather, each with its author, the commit it was written against, the inline comments it authored, the top-level comments that cite it, and the entries of a suppressed-comment block in its body, and with `--head` says whether each entry's file changed since the review's commit; like the thread fetcher it pages by hand and lists nothing where an object belongs to another pull request.
 - `address-review/publish.sh` makes a publication's other PR writes from a dispositions file and a Summary file: one reply per triaged thread, the resolve where the line asks for one, then the Summary comment; it takes the threads from `gh-review-threads.sh` beside it and refuses, before any write, a thread id that list does not hold, and it posts no reply or Summary that is already there, so a run that stopped part-way is finished by running it again.
 - `address-review/gh-review-threads.sh` is a byte-identical copy of `bin/gh-review-threads`, there so the skill has the scope-checked thread fetcher on every install route and carries no hand-run query; the `bin/` file stays the original because powbox bakes it by copying that one file.
 - `rebase-stack/stack.sh` does that skill's ref arithmetic: the preflight, chain detection by the effective frontier, splitting a chain into runs, deciding whether a run may be replayed once with `--update-refs`, the pre-rebase snapshots, the post-replay verification, and the guarded restore; the rebases themselves, and every conflict, stay with the agent.
@@ -254,6 +258,10 @@ Run `bash scripts/test-write-tasks-task-numbers.sh` after any change to `task-nu
 ### `test-address-review-ping.sh`
 
 Run `bash scripts/test-address-review-ping.sh` after any change to `ping.sh` in either mirror's `address-review` skill folder or to `bin/address-review-ping`; the hermetic suite logs every `gh` call a fake receives, answers the timeline from canned JSON run through real `jq` with the helper's own program, and also holds the two mirrors' copies to the same bytes and to the executable bit.
+
+### `test-address-review-reviews.sh`
+
+Run `bash scripts/test-address-review-reviews.sh` after any change to `reviews.sh` in either mirror's `address-review` skill folder or to `bin/address-review-reviews`; the hermetic suite answers the three REST listings from canned JSON behind a fake `gh`, a page at a time, and covers both shapes Copilot's reviews gave the suppressed-comment block, a block the parser does not recognise, a review, inline comment or top-level comment of another pull request, and the comparison with a head in a throwaway repository. It also holds the two mirrors' copies to the same bytes and to the executable bit. `REVIEWS_HELPER` points it at another copy.
 
 ### `test-address-review-publish.sh`
 
