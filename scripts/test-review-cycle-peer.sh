@@ -601,10 +601,21 @@ ok "5: ...and nothing was launched for it" $?
 # --- 6: the direct launch -------------------------------------------------------
 launch() { peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" "$@"; }
 pid_of() { cut -d' ' -f1 "$A/manual-attempt-$1/peer-review.pid"; }
+# A zombie has exited and only awaits its parent. Where PID 1 does not reap
+# (a container started on some other command), a provider this suite stopped
+# stays one and answers `kill -0` for ever, so "still there" is read the way
+# peer.sh reads it: by the state in /proc as well.
+alive() { # <pid>: it answers, and is not a zombie
+	local stat
+	kill -0 "$1" 2>/dev/null || return 1
+	stat="$(cat "/proc/$1/stat" 2>/dev/null)" || return 0
+	case "${stat##*) }" in Z*) return 1 ;; esac
+	return 0
+}
 gone() { # <pid>: wait briefly for it to leave
 	local _
 	for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-		kill -0 "$1" 2>/dev/null || return 0
+		alive "$1" || return 0
 		sleep 0.1
 	done
 	return 1
@@ -749,14 +760,14 @@ launch --deadline 600 >/dev/null
 OUT="$(peer collect --artifact-dir "$A" --wait 1)"
 is "6: a provider still inside its deadline is pending, not timed out" "$?|$(first)|$(val attempt)" "0|outcome=pending|1"
 PID="$(pid_of 1)"
-kill -0 "$PID" 2>/dev/null
+alive "$PID"
 ok "6: ...and was left running" $?
 # The same PID under another start time is another process: never signalled.
 read -r _ START <"$A/manual-attempt-1/peer-review.pid"
 echo "$PID $((START + 1))" >"$A/manual-attempt-1/peer-review.pid"
 OUT="$(peer collect --artifact-dir "$A" --wait 1)"
 is "6: a PID whose start time no longer matches is the old peer's death" "$(first)|$(val reason)" "outcome=forfeited|empty output"
-kill -0 "$PID" 2>/dev/null
+alive "$PID"
 ok "6: ...and the process now holding that number is not touched" $?
 kill -KILL "$PID" 2>/dev/null
 for bad in one-field surplus-field zero-pid not-numbers; do
@@ -774,7 +785,7 @@ for bad in one-field surplus-field zero-pid not-numbers; do
 	esac >"$A/manual-attempt-1/peer-review.pid"
 	echo pass >"$STEER/codex.mode"
 	OUT="$(peer collect --artifact-dir "$A" --wait 5)"
-	kill -0 "$PID" 2>/dev/null
+	alive "$PID"
 	ok "6: a malformed handoff ($bad) signals nothing, even past the deadline" $?
 	kill -KILL "$PID" 2>/dev/null
 done
