@@ -40,4 +40,5 @@ Whether or not your harness would resume you, never end your turn waiting for a 
 A suite longer than your tool's default timeout runs in the foreground with an explicit timeout that covers it, never in the background with the turn ended.
 
 **What you return:** **Pass**, or a numbered, actionable **Issues** list.
+Mark each issue **material** or **wording** — wording only where the finding and its fix are non-semantic (wording, grammar, typos, comment phrasing, formatting), material whenever in doubt — so the round decision can tell them apart without re-deriving it.
 Anything below that bar travels as a pass note, never as an issue.

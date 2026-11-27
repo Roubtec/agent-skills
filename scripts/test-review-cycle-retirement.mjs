@@ -95,7 +95,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 231;
+const CHECKS_PER_LEG = 247;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -135,7 +135,7 @@ function loadCycle(src, agent, logSink) {
   // every renderer outside a cycle today, so driving the cycle can never
   // exercise the default and only a direct call can.
   // eslint-disable-next-line no-new-func
-  return new Function("agent", "parallel", "pipeline", "log", "phase", `${section}\nreturn { runReviewCycle, cycleReviewChecks, cyclePeerPrompt, runCyclePeerStage, createCyclePeerThrottle, createCyclePeerState, cyclePeerProviderState, cyclePeerTrouble, normalizeCyclePeerResult, CYCLE_PEER_SCHEMA, CYCLE_PEER_PROVIDERS };`)(
+  return new Function("agent", "parallel", "pipeline", "log", "phase", `${section}\nreturn { runReviewCycle, CYCLE_REVIEW_SCHEMA, CYCLE_FIX_SCHEMA, cycleReviewChecks, cyclePeerPrompt, runCyclePeerStage, createCyclePeerThrottle, createCyclePeerState, cyclePeerProviderState, cyclePeerTrouble, normalizeCyclePeerResult, CYCLE_PEER_SCHEMA, CYCLE_PEER_PROVIDERS };`)(
     agent,
     parallel,
     pipeline,
@@ -644,21 +644,19 @@ for (const name of WORKFLOWS) {
     check("a doubly-claimed question is proposed to the reviewer once", proposedCount(seen.reviewPrompts[2]) === 1, `${proposedCount(seen.reviewPrompts[2])} proposed`);
   });
 
-  // 15. The round cap reached through the FINAL CONFIRMATION pass. That pass
-  //     is handed nothing, but the retirement guard binds anyway — a
-  //     retirement is a claim about the cycle's accumulated questions, not
-  //     about a round's findings — so its breach must leave by the same
-  //     `outstanding.carried` door the failed-round cap exit uses. A generic
-  //     note here would drop the only structural record that the last thing
-  //     the cycle did was claim to settle a question that does not exist.
-  await scenario("15. cap reached on the confirmation pass", async () => {
+  // 15. A breach on the FINAL CONFIRMATION pass. That pass is handed nothing,
+  //     but the retirement guard binds anyway — a retirement is a claim about
+  //     the cycle's accumulated questions, not about a round's findings — so
+  //     its breach holds open the round the pass earned and, at the cap, leaves
+  //     by the failed round's `outstanding.carried`.
+  await scenario("15. a confirmation-pass breach at the cap", async () => {
     const { res, carried, carriedIds } = await run(src, {
       fixes: [escalate, retireOn("r1-1", ["nope"])],
-      reviews: [OK],
-      cycle: { maxRounds: 1 },
+      reviews: [OK, OK],
+      cycle: { maxRounds: 2 },
     });
-    check("confirmation-pass cap exit reports the retirement breach", res.verdict === "review-cap" && carriedIds.includes("retire:nope"), `${res.verdict}/${carried}`);
-    check("confirmation-pass cap exit still says why it stopped", /could not be re-reviewed within the cap/.test((res.outstanding || {}).note || ""), carried);
+    check("a confirmation-pass retirement breach is reported at the cap", res.verdict === "review-cap" && carriedIds.includes("retire:nope"), `${res.verdict}/${carried}`);
+    check("the breach fails the round its pass earned, whatever the reviewer said", res.rounds === 2, `${res.rounds} round(s)`);
   });
 
   // 16. ACCEPTANCE CRITERION 3, on the path the criterion is about: a question
@@ -696,7 +694,7 @@ for (const name of WORKFLOWS) {
     const { res, entriesOf, stateOf, carried, carriedIds } = await run(src, {
       fixes: [escalate, retireOn("r1-1"), confirmEscalateOntoRetired],
       reviews: [FAIL("r1"), OK],
-      cycle: { maxRounds: 2 },
+      cycle: { maxRounds: 3 },
     });
     check("escalating onto a settled question is reported", carriedIds.includes("question:q1"), carried);
     check("a confirmation-pass escalation neither revives nor forks a retired question", entriesOf("q1").length === 1 && stateOf("q1") === "retired", `${entriesOf("q1").length} entries / ${stateOf("q1")}`);
@@ -726,7 +724,7 @@ for (const name of WORKFLOWS) {
     const { q, carriedIds, carried, stateOf, seen } = await run(src, {
       fixes: [escalate, retireOn("r1-1"), confirmRetireAgain],
       reviews: [FAIL("r1"), OK],
-      cycle: { maxRounds: 2 },
+      cycle: { maxRounds: 3 },
     });
     check("re-retiring a SETTLED question is reported", carriedIds.includes("retire:q1"), carried);
     check("a settled question is not re-offered as live", !/Open questions still live/.test(seen.fixPrompts[2] || ""));
@@ -745,7 +743,7 @@ for (const name of WORKFLOWS) {
     const { res, carried, carriedIds } = await run(src, {
       fixes: [escalate, confirmEscalateNowhere],
       reviews: [OK],
-      cycle: { maxRounds: 1 },
+      cycle: { maxRounds: 2 },
     });
     check("an escalation onto an unknown question id is reported", res.verdict === "review-cap" && carriedIds.includes("question:ghost"), `${res.verdict}/${carried}`);
     check("an escalation with no question id at all is reported", carriedIds.includes("question:"), carried);
@@ -775,9 +773,9 @@ for (const name of WORKFLOWS) {
   //     itself does reach the maintainer, so the back-reference points at
   //     something real.
   await scenario("22. a live question back-reference is no breach", async () => {
-    const own = await run(src, { fixes: [escalate, confirmEscalateRaisingOwn], reviews: [OK], cycle: { maxRounds: 1 } });
+    const own = await run(src, { fixes: [escalate, confirmEscalateRaisingOwn], reviews: [OK], cycle: { maxRounds: 2 } });
     check("escalating onto the question this same packet raises is accepted", own.carriedIds.length === 0 && own.stateOf("q2") === "live", `${JSON.stringify(own.carriedIds)}/${own.stateOf("q2")}`);
-    const live = await run(src, { fixes: [escalate, confirmEscalateOntoLive], reviews: [OK], cycle: { maxRounds: 1 } });
+    const live = await run(src, { fixes: [escalate, confirmEscalateOntoLive], reviews: [OK], cycle: { maxRounds: 2 } });
     check("escalating onto an earlier pass's still-live question is accepted", live.carriedIds.length === 0 && live.stateOf("q1") === "live", `${JSON.stringify(live.carriedIds)}/${live.stateOf("q1")}`);
   });
 
@@ -792,7 +790,7 @@ for (const name of WORKFLOWS) {
     const { carried, carriedIds, stateOf } = await run(src, {
       fixes: [escalate, fixOn("r1-1"), confirmRetireAndEscalateSame],
       reviews: [FAIL("r1"), OK],
-      cycle: { maxRounds: 2 },
+      cycle: { maxRounds: 3 },
     });
     check("escalating onto a question the same pass retires is reported", carriedIds.includes("question:q1"), carried);
     check("the same pass's own retirement still takes effect as a claim", stateOf("q1") === "pending", stateOf("q1"));
@@ -881,11 +879,11 @@ for (const name of WORKFLOWS) {
     check("an ADD is not presented as a drop", !/no longer restates/.test(added.seen.reviewPrompts[1] || ""), "round-2 review prompt");
     check("and the reviewed deviation ships as the final state", added.res.verdict === "pass" && JSON.stringify(added.res.deviations) === JSON.stringify([DEV]), `${added.res.verdict}/${JSON.stringify(added.res.deviations)}`);
 
-    // At the cap the move exits `review-cap` naming itself, exactly as a drop
-    // does — the deviation still standing, never silently passed off as judged.
-    const addedAtCap = await run(src, { fixes: [PASS_PACKET, confirmDeviate], reviews: [OK], cycle: { maxRounds: 1 } });
-    check("an add the cap leaves unreviewed exits review-cap, deviation standing", addedAtCap.res.verdict === "review-cap" && JSON.stringify(addedAtCap.res.deviations) === JSON.stringify([DEV]), `${addedAtCap.res.verdict}/${JSON.stringify(addedAtCap.res.deviations)}`);
-    check("and the cap exit's note names the deviation-set move", /newly stated deviation/.test(((addedAtCap.res.outstanding || {}).note) || ""), JSON.stringify(addedAtCap.res.outstanding || {}));
+    // At the cap the round the move earned still wants the Reviewer's half: a
+    // round that returns none fails there, the deviation standing and unjudged.
+    const addedAtCap = await run(src, { fixes: [PASS_PACKET, confirmDeviate], reviews: [OK, OK], cycle: { maxRounds: 2 } });
+    check("an add the last round leaves unassessed exits review-cap, deviation standing", addedAtCap.res.verdict === "review-cap" && JSON.stringify(addedAtCap.res.deviations) === JSON.stringify([DEV]) && addedAtCap.res.deviationAssessments === undefined, `${addedAtCap.res.verdict}/${JSON.stringify(addedAtCap.res.deviations)}`);
+    check("and the cap exit carries the missing assessment as the outstanding finding", /no usable `deviationAssessments` entry/.test(JSON.stringify((addedAtCap.res.outstanding || {}).reviewer || [])), JSON.stringify(addedAtCap.res.outstanding || {}));
   });
 
   // 25. The OTHER half of the same protocol, and the reason scenario 24's
@@ -987,15 +985,15 @@ for (const name of WORKFLOWS) {
     });
     check("adopting changed work invalidates the accepted assessment", staleAtFailedCap.res.verdict === "review-cap" && JSON.stringify(staleAtFailedCap.res.deviations) === JSON.stringify([DEV]) && staleAtFailedCap.res.deviationAssessments === undefined, `${staleAtFailedCap.res.verdict}/${JSON.stringify(staleAtFailedCap.res.deviationAssessments)}`);
 
-    // The same invalidation on the OTHER cap exit — a confirmation pass whose
-    // adopted work the cap leaves no round to review. Nothing re-judged the
-    // changed packet, so nothing rides beside it.
-    const staleAtAdoptCap = await run(src, {
+    // A PASS on the last permitted round is the other side of that: no pass
+    // follows it, so the assessment that round accepted describes the tip the
+    // cycle leaves and ships beside the deviation.
+    const assessedAtCap = await run(src, {
       fixes: [deviate, deviate],
       reviews: [OK_DEV],
       cycle: { maxRounds: 1 },
     });
-    check("the cap exit before any re-review ships no stale assessment either", staleAtAdoptCap.res.verdict === "review-cap" && JSON.stringify(staleAtAdoptCap.res.deviations) === JSON.stringify([DEV]) && staleAtAdoptCap.res.deviationAssessments === undefined, `${staleAtAdoptCap.res.verdict}/${JSON.stringify(staleAtAdoptCap.res.deviationAssessments)}`);
+    check("a pass on the last permitted round ships the assessment that round accepted", assessedAtCap.res.verdict === "pass" && assessedAtCap.seen.fixPrompts.length === 1 && JSON.stringify(assessedAtCap.res.deviationAssessments) === JSON.stringify([ASSESS]), `${assessedAtCap.res.verdict}/${assessedAtCap.seen.fixPrompts.length} fixer pass(es)/${JSON.stringify(assessedAtCap.res.deviationAssessments)}`);
 
     // A deviation the pass CLAIMS no longer stands is exempt: passing the round
     // is what removes it, so demanding a ratify-or-conform recommendation on
@@ -2333,6 +2331,63 @@ for (const name of WORKFLOWS) {
       off.result.verdict === "pass" && entries(off.result) === "1:-:disabled" && !off.calls.some((c) => c.startsWith("peer")),
       `${entries(off.result)} / ${off.calls.filter((c) => c.startsWith("peer")).join(" ")}`,
     );
+  });
+
+  // A passed tree survives the cap. The last round the cap permits concludes
+  // on its pass as `light` does: no confirmation pass runs, since nothing could
+  // review what it fixed, and the passed tree is what the result names.
+  await scenario("a pass on the last permitted round", async () => {
+    const NOTED = { pass: true, issues: [], notes: "a stray remark" };
+    const capped = await run(src, { fixes: [PASS_PACKET, fixOn("r1-1")], reviews: [FAIL("r1"), NOTED], cycle: { maxRounds: 2 } });
+    check("a pass on the last permitted round returns the pass", capped.res.verdict === "pass" && capped.res.rounds === 2, `${capped.res.verdict}/${capped.res.rounds}`);
+    check("and starts no confirmation pass the cap could not review", capped.seen.fixPrompts.length === 2, `${capped.seen.fixPrompts.length} fixer pass(es)`);
+    check("it names the commit the reviewer passed, which is the tip it leaves", capped.res.reviewedFinalSha === "sha" && capped.res.finalSha === capped.res.reviewedFinalSha && capped.res.workReportReviewed === true, `${capped.res.reviewedFinalSha}/${capped.res.finalSha}/${capped.res.workReportReviewed}`);
+    check("and records the pass-notes no fixer pass considered", JSON.stringify(capped.res.undisposed) === JSON.stringify(["a stray remark"]) && /last the 2-round cap permits/.test(capped.res.detail), `${JSON.stringify(capped.res.undisposed)}/${capped.res.detail}`);
+    check("the pass that can end the cycle there owes the DELIVERY tier, as does its reviewer", /DELIVERY TIER/.test(capped.seen.fixPrompts[1] || "") && /DELIVERY tier/.test(capped.seen.reviewPrompts[1] || "") && /ROUND TIER/.test(capped.seen.fixPrompts[0] || ""), "pass-2 fix prompt / round-2 review prompt");
+    const roomy = await run(src, { fixes: [PASS_PACKET, fixOn("r1-1"), idle], reviews: [FAIL("r1"), NOTED], cycle: { maxRounds: 3 } });
+    check("below the cap the same round is followed by the confirmation pass, at the round tier before it", roomy.res.verdict === "pass" && roomy.seen.fixPrompts.length === 3 && roomy.res.undisposed === undefined && /ROUND TIER/.test(roomy.seen.fixPrompts[1] || ""), `${roomy.seen.fixPrompts.length} fixer pass(es)/${JSON.stringify(roomy.res.undisposed)}`);
+    const failed = await run(src, { fixes: [PASS_PACKET, fixOn("r1-1")], reviews: [FAIL("r1"), FAIL("r2")], cycle: { maxRounds: 2 } });
+    check("a FAILED last round still returns review-cap with its findings", failed.res.verdict === "review-cap" && ((failed.res.outstanding || {}).reviewer || []).length === 1 && failed.res.undisposed === undefined, `${failed.res.verdict}/${failed.carried}`);
+    // The pass at the cap is a ROUND's pass: one the reviewer passed over an
+    // undisposed finding is no pass, and nothing reports it as one.
+    const uncovered = await run(src, { fixes: [PASS_PACKET, PASS_PACKET], reviews: [FAIL("r1"), NOTED], cycle: { maxRounds: 2 } });
+    check("a last round that leaves a finding undisposed is no pass", uncovered.res.verdict === "review-cap" && uncovered.carriedIds.includes("r1-1"), `${uncovered.res.verdict}/${uncovered.carried}`);
+  });
+
+  // The added-paths report: what a pass added or renamed beyond its brief.
+  await scenario("paths a pass added beyond its brief", async () => {
+    const named = { pass: false, issues: [{ category: "logic", location: "src/from-finding.ts:1", problem: "missing", fix: "add src/from-finding.ts", weight: "material" }], notes: "" };
+    const { res } = await run(src, {
+      fixes: [
+        { ...PASS_PACKET, addedPaths: ["src/unbriefed.ts", "docs/briefed.md", "src/unbriefed.ts", " "] },
+        { ...fixOn("r1-1"), addedPaths: ["src/from-finding.ts", "src/extra.ts"] },
+        idle,
+      ],
+      reviews: [named, OK],
+      cycle: { scope: { title: "t", instructions: "write docs/briefed.md", items: [] } },
+    });
+    check("a path neither the scope nor a handed finding names is listed against its pass", JSON.stringify(res.addedPaths) === JSON.stringify([{ pass: 1, path: "src/unbriefed.ts" }, { pass: 2, path: "src/extra.ts" }]), JSON.stringify(res.addedPaths));
+    check("and it is a report, never a gate", res.verdict === "pass", res.verdict);
+    const none = await run(src, { fixes: [{ ...PASS_PACKET, addedPaths: [] }, idle], reviews: [OK] });
+    check("a cycle whose passes added nothing unbriefed carries no such field", none.res.verdict === "pass" && !("addedPaths" in none.res), JSON.stringify(none.res.addedPaths));
+    const stopped = await run(src, { fixes: [{ ...PASS_PACKET, addedPaths: ["src/unbriefed.ts"] }], reviews: [FAIL("r1")], cycle: { maxRounds: 1 } });
+    // Whole paths, not substrings: a brief naming `src/README.md` or
+    // `README.md.bak` names neither the root `README.md` nor `src/README`,
+    // while `./` and the sentence's own punctuation are not part of a path.
+    const whole = await run(src, {
+      fixes: [{ ...PASS_PACKET, addedPaths: ["README.md", "src/README", "docs/dotted.md", "docs/ended.md", "lib/a.ts"] }, idle],
+      reviews: [OK],
+      cycle: { scope: { title: "t", instructions: "fix src/README.md and README.md.bak, write ./docs/dotted.md and docs/ended.md.\nlib/a.ts", items: [] } },
+    });
+    check("a path the brief names only inside a longer path is still listed, and one it names whole is not", JSON.stringify(whole.res.addedPaths) === JSON.stringify([{ pass: 1, path: "README.md" }, { pass: 1, path: "src/README" }]), JSON.stringify(whole.res.addedPaths));
+    check("the report rides a stopped exit too", stopped.res.verdict === "review-cap" && (stopped.res.addedPaths || []).length === 1, `${stopped.res.verdict}/${JSON.stringify(stopped.res.addedPaths)}`);
+    const { CYCLE_FIX_SCHEMA, CYCLE_REVIEW_SCHEMA } = loadCycle(src, async () => null);
+    check("the fixer's packet owes the list", CYCLE_FIX_SCHEMA.required.includes("addedPaths") && CYCLE_FIX_SCHEMA.properties.addedPaths.type === "array");
+    // Material versus wording-level, without re-deriving it from the prose.
+    const issue = CYCLE_REVIEW_SCHEMA.properties.issues.items;
+    check("every reviewer issue carries its weight", issue.required.includes("weight") && /material \| wording/.test(issue.properties.weight.description), JSON.stringify(issue.required));
+    const { seen } = await run(src, { fixes: [PASS_PACKET, idle], reviews: [OK] });
+    check("and the reviewer's brief asks for it", /Tag each issue's `weight`: `wording` only where the finding and its fix are non-semantic, `material` otherwise/.test(seen.reviewPrompts[0] || ""), "round-1 review prompt");
   });
 
   const ran = legOk + legFail;

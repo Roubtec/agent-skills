@@ -877,7 +877,7 @@ You may reclassify any item.`;
 // re-reading the threads after, so restating it would be the copy commit
 // 390156a declined, and items 3 and 4 are pre-merge check polling and
 // `gh pr merge --delete-branch`, which nothing in this pipeline performs.
-function publishPrompt(packet, dispositions, flags, deviations, deviationAssessments, recordOnly, preRebaseRecordOnly) {
+function publishPrompt(packet, dispositions, flags, deviations, deviationAssessments, recordOnly, preRebaseRecordOnly, closeOut) {
   // The reviewers step 6 names to `address-review-ping`, in a fixed order.
   const pingSet = [flags.pingCodex && "codex", flags.pingClaude && "claude", flags.pingCopilot && "copilot"].filter(Boolean);
   // What the gather left out and why, per its `detail`: it reaches the PR
@@ -928,6 +928,9 @@ function publishPrompt(packet, dispositions, flags, deviations, deviationAssessm
           : []),
       ].join("\n\n")}`
     : "";
+  const closeOutRecord = closeOut
+    ? `\n\n## Shipped without re-review — wording-level fixes\n\nThe review cycle concluded through its trivial-round close-out: its last fixer pass (\`${closeOut.range || ""}\`) held only non-semantic fixes, which a read-only diff check confirmed and no reviewer round re-read. Carry a section under this exact heading in the summary comment listing these verbatim, so the maintainer sees what that was; do not soften or omit it.\n\n${JSON.stringify({ edits: closeOut.edits || [], diffCheck: closeOut.verified || "" }, null, 2)}`
+    : "";
   // Where publication happens is the gather step's choice, not this brief's:
   // in worktree mode the branch is checked out THERE, and the main checkout is
   // on something else entirely — so a publisher that resolved the branch itself
@@ -975,7 +978,7 @@ Report a STRUCTURED result: set \`published: true\` ONLY if the push and every r
      - whichever of those it is, look at the thread before composing: in step 3's list, or, where that does not show it (it was resolved since triage), in what step 3's command prints with \`--all\` ahead of \`--repo\`. Where it already holds a reply of the authenticated user (\`gh api user --jq .login\`) giving this disposition — the same fix under another SHA is the same reply — or the disposition's \`detail\` carries an earlier turn's record saying the reply is ALREADY POSTED, compose no second one and write \`-\` in place of the reply file, on the same \`resolve\` or \`reply\` line the kind above calls for. A reply answering a comment made AFTER yours on that thread is a new reply, not a second one: compose it and give its file. The command posts no reply on a \`-\` line, reports the reply already there as \`reply=present\`, and refuses the line before any write (\`no-reply\`) where the thread holds no reply of yours.
    - \`standalone\` items (no thread to resolve): address them only in the Summary comment below; they get NO line in the dispositions file, and you post NOTHING on the comment they came from — a misfired bot finding (one carrying \`finding\`) included. Record their outcome by \`url\`, with the \`finding\` ordinal echoed beside it where the disposition carries one.
    - \`ci-failure\` items (no thread at all): address them only in the Summary comment's "CI" section below; step 3 is the only action a lane gets. Record their outcome by \`lane\`.
-5. Summary comment: write a top-level "Summary of Review Fixes" to a file — ${dev.length ? "opening with the locked-decision deviation section defined below, then " : ""}what was fixed (with proactive same-pattern fixes), a prominent "Pushed back — please re-examine" section, a "Deferred to follow-up tasks" section listing each deferral with its committed task file (agent-proposed deferrals flagged for confirmation), a "Top-level findings" section for every \`standalone\` disposition taken from a bot's misfired top-level comment (one carrying \`finding\`) — each with its disposition and the permalink of the comment it came from plus its \`N of M\` ordinal, since no thread carries the reply — a "CI" section where any \`ci-failure\` disposition is below — each lane named by its identity with the cause found and its disposition (fixed, re-run as an evidenced flake, or left for the maintainer's choice), a replayed lane with its recorded cause and disposition — and any ambiguous/skipped or newly-arrived items${recordOnly || preRebaseRecordOnly ? ", plus the delivery-run failure section defined below" : ""}${gatherLeftOut ? `, and — under a "Left out of this run's gather" heading — what the gather step reported it left out and why, VERBATIM: ${JSON.stringify(gatherLeftOut)} (a lane still in progress, a misfired finding whose freshness was only ambiguous and so was taken as none, a recorded comment that is gone — the maintainer-facing explanation the gather rules require, which reaches the PR through this comment alone)` : ""}${undelivered.length ? `, and — under a "Review input that never arrived" heading — every bot review the gather found claiming findings it delivered none of, each with its permalink, the bot (named plain, no @-mention) and what its body claimed, saying that nothing in this run addressed them because no thread and no finding text ever arrived: ${JSON.stringify(undelivered)}` : ""}. Write "codex"/"claude"/"copilot" plain (no bare @-mentions) so only the dedicated pings below trigger a re-review.
+5. Summary comment: write a top-level "Summary of Review Fixes" to a file — ${dev.length ? "opening with the locked-decision deviation section defined below, then " : ""}what was fixed (with proactive same-pattern fixes), a prominent "Pushed back — please re-examine" section, a "Deferred to follow-up tasks" section listing each deferral with its committed task file (agent-proposed deferrals flagged for confirmation), a "Top-level findings" section for every \`standalone\` disposition taken from a bot's misfired top-level comment (one carrying \`finding\`) — each with its disposition and the permalink of the comment it came from plus its \`N of M\` ordinal, since no thread carries the reply — a "CI" section where any \`ci-failure\` disposition is below — each lane named by its identity with the cause found and its disposition (fixed, re-run as an evidenced flake, or left for the maintainer's choice), a replayed lane with its recorded cause and disposition — and any ambiguous/skipped or newly-arrived items${recordOnly || preRebaseRecordOnly ? ", plus the delivery-run failure section defined below" : ""}${closeOut ? ", plus the shipped-without-re-review section defined below" : ""}${gatherLeftOut ? `, and — under a "Left out of this run's gather" heading — what the gather step reported it left out and why, VERBATIM: ${JSON.stringify(gatherLeftOut)} (a lane still in progress, a misfired finding whose freshness was only ambiguous and so was taken as none, a recorded comment that is gone — the maintainer-facing explanation the gather rules require, which reaches the PR through this comment alone)` : ""}${undelivered.length ? `, and — under a "Review input that never arrived" heading — every bot review the gather found claiming findings it delivered none of, each with its permalink, the bot (named plain, no @-mention) and what its body claimed, saying that nothing in this run addressed them because no thread and no finding text ever arrived: ${JSON.stringify(undelivered)}` : ""}. Write "codex"/"claude"/"copilot" plain (no bare @-mentions) so only the dedicated pings below trigger a re-review.
 
    Then publish it, and step 4's lines with it, by ONE command: \`address-review-publish --repo <owner>/<repo> --pr ${packet.pr.number} --dispositions <file> --summary <file>\`, with \`--no-threads\` in place of \`--dispositions <file>\` where step 4 wrote no line. It is the dev-skills plugin's own script, on PATH for this session; where the shell cannot find it, set \`published: false\`, \`aborted: "publish helper not found"\`, and STOP — never hand-run a reply, a resolve or the Summary comment in its place. It reads the PR's threads afresh through the scope-checked thread list and checks every thread id of yours against it before its first write; it threads each reply under the listed thread's own first comment, posts none where an equal reply of yours is already there, resolves only once the reply is on the thread, and posts the Summary last, only once every line succeeded and only where no comment of yours already holds it. So running it a second time with the same files repeats nothing. It prints \`key=value\` lines with \`outcome=\` first — a \`thread=\` line per disposition line, an \`unlisted=\` line per unresolved thread the file left out, which it never writes to, and \`summary=\`:
    - \`published\` → every reply, resolve and the Summary are on the PR. Put the URL of its \`summary=\` line in \`summaryCommentUrl\`.
@@ -983,7 +986,7 @@ Report a STRUCTURED result: set \`published: true\` ONLY if the push and every r
    - \`malformed\`, \`no-reply\` → it wrote nothing and says which line, file or thread: correct it — a \`no-reply\` thread's line takes its reply file after all — and run the command again.
    - \`foreign-thread\`, \`contaminated\`, or still no outcome at all (after exit 1, which you retry once, or exit 64, a miswritten command, which you correct once) → that invocation wrote nothing: \`published: false\`, \`aborted\` with what it said, and STOP. A thread it refuses is not replied to or resolved any other way.
    Take \`threadOutcomes\` from the LAST answer that printed \`thread=\` lines — the first invocation's, where the retry printed none: \`reply=posted\` and \`reply=present\` are \`replied: true\`, \`reply=failed\` is false; \`resolve=done\` and \`resolve=already\` are \`resolved: true\`, anything else false. Name each \`unlisted=\` thread that is not an ambiguous-skipped item of this run in your report as feedback that arrived after triage.${dispositions.length ? "" : ` This is a ZERO-ITEM publication — the run gathered no unresolved thread, no standalone item and no failing CI lane, and continued because at gather time ${finalTip === recordedTip ? `the tip had moved under the run: it started on \`${startTip}\` and the gather ended on the recorded PR head \`${recordedTip}\`` : `the local tip stood at \`${finalTip}\` while the PR recorded \`${recordedTip}\``} — so the Summary comment STILL POSTS (it is what makes this zero-item run legible on the PR) and says exactly that in place of the per-item sections, naming those tips as the gather-time readings they are. Do NOT assert from them what the push above moved or which tip was reviewed — this run's rebase points may have rewritten the tip after the gather read those OIDs, and what actually landed is already stated by your own step-2 read-back and \`pushedNewCommits\`. Step 4 above has NOTHING to act on: the command runs with \`--no-threads\`, so no reply is posted and no thread resolved — there is no item to serve — and you report \`threadOutcomes: []\`, the complete account of a zero-item publication.`}
-6. Pings (only after push + summary succeeded, AND only when the push ACTUALLY advanced the remote branch with new commits or rewritten history — never on an \`Everything up-to-date\` no-op push): ${pingSet.length ? `run \`address-review-ping --repo <owner>/<repo> --pr ${packet.pr.number} ${pingSet.join(" ")}\`. It is the dev-skills plugin's own script, on PATH for this session; where the shell cannot find it, record 'ping helper not found' in \`pings\`, keep \`published: true\`, and post no ping by hand. Where this PR's URL is not on github.com its \`--repo\` takes \`<host>/<owner>/<repo>\`. It makes each ping as its own dedicated action (a comment holding only \`@codex review\` or \`@claude review\`; a reviewer REQUEST for Copilot, never an \`@copilot review\` comment — a bare \`@copilot\` mention drives Copilot's coding agent, which can start editing the branch, not its reviewer) and prints one line per reviewer. Post no ping any other way, and do not confirm the Copilot request yourself: the script confirms it from the PR's timeline, by the id of a \`review_requested\` event that was not there before the request. Record every line in \`pings\`: \`pinged=\` as posted; \`unconfirmed=copilot\` as 'copilot: requested, unconfirmed'; \`skipped=copilot\` as 'copilot: skipped (gh too old)', noting that the base image needs refreshing (\`agent-update\`) or a one-off manual re-request from the PR's web reviewer menu; \`failed=\` with the reason it gives. Anything but \`pinged=\` (exit 3, \`outcome=partial\`) is non-fatal — the push and summary already succeeded, so keep \`published: true\`: do not fail publication, and do NOT issue an unconfirmed request again. ` : "none requested. "}If nothing new was pushed this run (the remote ref already pointed at your HEAD — e.g. every disposition was already-addressed/push-back, or the branch was up to date), SKIP all pings even if requested above: re-requesting a review with nothing new to look at would spin the review->address->review loop forever. Set \`pushedNewCommits\` to whether the push advanced the branch, and record which pings (if any) you posted in \`pings\`.${deviationLead}${flakeRecord}
+6. Pings (only after push + summary succeeded, AND only when the push ACTUALLY advanced the remote branch with new commits or rewritten history — never on an \`Everything up-to-date\` no-op push): ${pingSet.length ? `run \`address-review-ping --repo <owner>/<repo> --pr ${packet.pr.number} ${pingSet.join(" ")}\`. It is the dev-skills plugin's own script, on PATH for this session; where the shell cannot find it, record 'ping helper not found' in \`pings\`, keep \`published: true\`, and post no ping by hand. Where this PR's URL is not on github.com its \`--repo\` takes \`<host>/<owner>/<repo>\`. It makes each ping as its own dedicated action (a comment holding only \`@codex review\` or \`@claude review\`; a reviewer REQUEST for Copilot, never an \`@copilot review\` comment — a bare \`@copilot\` mention drives Copilot's coding agent, which can start editing the branch, not its reviewer) and prints one line per reviewer. Post no ping any other way, and do not confirm the Copilot request yourself: the script confirms it from the PR's timeline, by the id of a \`review_requested\` event that was not there before the request. Record every line in \`pings\`: \`pinged=\` as posted; \`unconfirmed=copilot\` as 'copilot: requested, unconfirmed'; \`skipped=copilot\` as 'copilot: skipped (gh too old)', noting that the base image needs refreshing (\`agent-update\`) or a one-off manual re-request from the PR's web reviewer menu; \`failed=\` with the reason it gives. Anything but \`pinged=\` (exit 3, \`outcome=partial\`) is non-fatal — the push and summary already succeeded, so keep \`published: true\`: do not fail publication, and do NOT issue an unconfirmed request again. ` : "none requested. "}If nothing new was pushed this run (the remote ref already pointed at your HEAD — e.g. every disposition was already-addressed/push-back, or the branch was up to date), SKIP all pings even if requested above: re-requesting a review with nothing new to look at would spin the review->address->review loop forever. Likewise SKIP all pings where everything this run pushed is wording-level — wording, grammar, typos, comment phrasing, formatting, nothing touching behavior, logic, or the meaning of an acceptance criterion — judged by reading the pushed diff, not its commit messages: such a push summons no fresh review round, and the Summary says which reviewers were not pinged for that reason. Set \`pushedNewCommits\` to whether the push advanced the branch, and record which pings (if any) you posted in \`pings\`.${deviationLead}${flakeRecord}${closeOutRecord}
 
 ## Dispositions to publish
 
@@ -2074,6 +2077,10 @@ let cycle = await workflow("dev-skills:wf-review-cycle", {
   artifactType: "code",
   peer: flags.peerOff ? "off" : "on",
   mode: "full",
+  // The convergence judgement an orchestrator applies by hand: a pass whose
+  // whole change is wording-level does not buy another reviewer-plus-peer
+  // round. The cycle's own diff check decides whether a pass qualifies.
+  closeOut: "on",
   scope: {
     title: `pr-${packet.pr.number}`,
     // The prior record goes to the ROUND-1 fixer only, which is the one round
@@ -2110,11 +2117,13 @@ if (!cycle) {
 // the carrier is where that fact reaches them, and every return of this run's
 // RESULT spreads it — spread at each return rather than swept up in one place,
 // since not every return below is one of this run's results.
-// The nested cycle is granted no close-out above, so `closeOut` cannot arise
-// here today — it rides in the same conditional because the two records are one
-// rule, and granting the close-out later then needs no second edit HERE; the
-// publish brief below renders `recordOnly` and not `closeOut`, so it would
-// still need teaching.
+// The nested cycle is granted the close-out above, and the publish brief
+// renders the record of the cycle that judged the pushed tree. A superseded
+// cycle's close-out edits were read by the re-verification's own rounds, so
+// `preRebaseCloseOut` stays in the result and out of that brief.
+// `undisposed` and `addedPaths` are the cycle's two reports for the reader:
+// pass-notes no fixer pass considered, and paths a pass added or renamed
+// beyond its brief.
 // `flakeHistory` rides beside them for the half `recordOnly` cannot cover: that
 // record speaks for the CONCLUDING pass, so an intermediate pass's
 // evidenced-unrelated failure would reach the maintainer nowhere once a later
@@ -2138,6 +2147,8 @@ const carriedOf = (c) => ({
   ...(c.recordOnly ? { recordOnly: c.recordOnly } : {}),
   ...(c.flakeHistory ? { flakeHistory: c.flakeHistory } : {}),
   ...(c.packetChecks ? { packetChecks: c.packetChecks } : {}),
+  ...(c.undisposed && c.undisposed.length ? { undisposed: c.undisposed } : {}),
+  ...(c.addedPaths ? { addedPaths: c.addedPaths } : {}),
   // The four keys `mergedCycle` below adds, so a re-verified run reports both
   // cycles rather than only the one that judged the pushed tree.
   ...(c.roundsByCycle ? { roundsByCycle: c.roundsByCycle } : {}),
@@ -2237,6 +2248,7 @@ function mergedCycle(before, after) {
     ...both("discardedPeerFindings"),
     ...both("flakeHistory"),
     ...both("packetChecks"),
+    ...both("addedPaths"),
     ...both("artifactDirAnomalies"),
     ...(proactive ? { proactive } : {}),
     ...(before.artifactDir && before.artifactDir !== after.artifactDir ? { preRebaseArtifactDir: before.artifactDir } : {}),
@@ -2572,6 +2584,7 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
       artifactType: "code",
       peer: flags.peerOff ? "off" : "on",
       mode: "full",
+      closeOut: "on",
       maxRounds: reverifyBudget,
       scope: {
         title: `pr-${packet.pr.number}-post-rebase`,
@@ -3211,7 +3224,7 @@ const publishDispositions = workReport.map((d) => {
   const withUrl = typeof gathered.url === "string" && gathered.url ? { ...entry, url: gathered.url } : entry;
   return instances ? { ...withUrl, instances } : withUrl;
 });
-const publishReport = await agent(publishPrompt(packet, publishDispositions, publishFlags, cycle.deviations, cycle.deviationAssessments, cycle.recordOnly, cycle.preRebaseRecordOnly), {
+const publishReport = await agent(publishPrompt(packet, publishDispositions, publishFlags, cycle.deviations, cycle.deviationAssessments, cycle.recordOnly, cycle.preRebaseRecordOnly, cycle.closeOut), {
   label: "publish",
   schema: PUBLISH_SCHEMA,
 });

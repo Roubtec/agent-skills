@@ -282,7 +282,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 300;
+const EXPECTED_CHECKS = 303;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -869,6 +869,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     working.seen.cycleOpts && working.seen.cycleOpts.name === "dev-skills:wf-review-cycle" && working.seen.cycleOpts.opts.branch === "feature/x",
     JSON.stringify(working.seen.cycleOpts && working.seen.cycleOpts.opts && working.seen.cycleOpts.opts.branch),
   );
+  check("and grants it the trivial-round close-out", working.seen.cycleOpts && working.seen.cycleOpts.opts.closeOut === "on", JSON.stringify(working.seen.cycleOpts && working.seen.cycleOpts.opts.closeOut));
   const ffClean = await run(gathered({ reconcile: { outcome: "fast-forwarded" } }));
   check("same-branch `fast-forwarded` with no threads is a plain no-op", ffClean.status === "no-op", JSON.stringify(ffClean.result));
   // A no-op that had nothing to address may still have MOVED the branch, which
@@ -2721,6 +2722,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       restatementRequired: !!second && /Require the restatement as a blocking issue/.test(second.reviewInstructions),
     }),
   );
+  check("the re-verification cycle is called by the same qualified name, and granted the close-out too", !!replayed.seen.cycleCalls[1] && replayed.seen.cycleCalls[1].name === "dev-skills:wf-review-cycle" && replayed.seen.cycleCalls[1].opts.closeOut === "on");
   const cap = replayed.seen.cycleCalls[1] ? replayed.seen.cycleCalls[1].opts.maxRounds : undefined;
   check(
     "and bounds it with a lowered round cap, so two cycles cannot double the run's worst case",
@@ -2926,6 +2928,20 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       labelled: /cycle before the pre-push rebase/.test(publishBrief),
       crossReferenced: /plus the delivery-run failure section defined below/.test(publishBrief),
     }),
+  );
+  // A close-out that ENDED the cycle the run publishes over is driven through
+  // the workflow, not handed to the renderer: the brief is the only path by
+  // which edits no reviewer re-read reach the Summary comment.
+  const closedOut = await run(gathered(withWork), { args: "push no-rebase", cycles: [CYCLE_PASS_RECORD_ONLY] });
+  const closedOutBrief = closedOut.seen.publishPrompts[0] || "";
+  check(
+    "a cycle that concluded through the close-out hands the publisher its record, under the shipped-without-re-review heading with the edits and the range",
+    /## Shipped without re-review — wording-level fixes/.test(closedOutBrief) &&
+      closedOutBrief.includes(CYCLE_PASS_RECORD_ONLY.closeOut.edits[0]) &&
+      closedOutBrief.includes(CYCLE_PASS_RECORD_ONLY.closeOut.range) &&
+      closedOutBrief.includes(CYCLE_PASS_RECORD_ONLY.closeOut.verified) &&
+      /plus the shipped-without-re-review section defined below/.test(closedOutBrief),
+    `${closedOut.status}: ${closedOut.seen.publishPrompts.length} publish prompt(s)`,
   );
   // The replacement is what makes the verdict honest; it must not also make the
   // first cycle's for-the-human records disappear. A parked question or a
