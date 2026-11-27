@@ -219,7 +219,7 @@ Run `bash scripts/test-address-review-record.sh` after any change to `record.sh`
 
 ### `test-declare-shadows-probe.sh`
 
-Run `bash scripts/test-declare-shadows-probe.sh` after any change to `probe.sh` in either mirror's `declare-shadows` skill folder, which `enable-worktrees` calls too; the hermetic suite builds throwaway repositories under one `mktemp -d` root, uses real git and the real `yq` (it passes with the jq-wrapper `yq` and with mikefarah's v4, and needs one of them on `PATH`), answers `findmnt`, `mountpoint` and `detect-shadows.sh` from fakes so each case states its own mount table, and compares every byte, mode and timestamp of a repository, `.git` included, before and after a run. It also holds the two mirrors' copies to the same bytes and to the executable bit. `PROBE_HELPER` points it at another copy of the script.
+Run `bash scripts/test-declare-shadows-probe.sh` after any change to `probe.sh` in either mirror's `declare-shadows` skill folder, which `enable-worktrees` calls too; the hermetic suite builds throwaway repositories under one `mktemp -d` root, uses real git and the real `yq` (it passes with the jq-wrapper `yq` and with mikefarah's v4, and needs one of them on `PATH`), answers `findmnt`, `mountpoint` and `detect-shadows.sh` from fakes so each case states its own mount table, puts a never-ending `find` and a refusing `git` in front of the real ones for the scan bound and the failure paths, and compares every byte, mode and timestamp of a repository, `.git` included, before and after a run. It also holds the two mirrors' copies to the same bytes and to the executable bit. `PROBE_HELPER` points it at another copy of the script.
 
 ### `test-checkout-cleanliness-report.mjs`
 

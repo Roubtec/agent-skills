@@ -75,7 +75,9 @@ printf '%s\n' "$*" >>"$FAKE/yq.log"
 exec "$REAL_YQ" "$@"
 FAKEYQ
 # $FAKE/mounts holds `<target> TAB <fstype>` lines; $FAKE/findmnt-fails makes
-# the listing of every mount fail.
+# the listing of every mount fail, and $FAKE/findmnt-holding-fails holds the
+# status `-T` leaves with, printing nothing. As the real one does, `-T` fails
+# for a path that is not there.
 cat >"$FAKE/findmnt" <<'FAKEFINDMNT'
 #!/usr/bin/env bash
 mode=list path=""
@@ -95,6 +97,8 @@ list)
 	;;
 exact) P="$path" awk -F '\t' '$1 == ENVIRON["P"] { print $2; found = 1 } END { exit !found }' "$FAKE/mounts" ;;
 holding)
+	[ ! -f "$FAKE/findmnt-holding-fails" ] || exit "$(cat "$FAKE/findmnt-holding-fails")"
+	[ -e "$path" ] || exit 1
 	P="$path" awk -F '\t' '
 		($1 == ENVIRON["P"] || index(ENVIRON["P"], $1 "/") == 1) && length($1) > best { best = length($1); fs = $2 }
 		END { print (fs == "" ? "overlay" : fs) }' "$FAKE/mounts"
@@ -139,7 +143,7 @@ export TMPDIR="$EMPTYTMP"
 R="" OUT="" RC=0
 new_repo() {
 	R="$(mktemp -d "$WORKDIR/case.XXXXXX")/repo"
-	rm -f "$FAKE/mounts" "$FAKE/findmnt-fails" "$FAKE/detect" "$FAKE/detect-fails" "$FAKE/yq.log"
+	rm -f "$FAKE/mounts" "$FAKE/findmnt-fails" "$FAKE/findmnt-holding-fails" "$FAKE/detect" "$FAKE/detect-fails" "$FAKE/yq.log"
 	git init -q -b main "$R"
 	printf 'x\n' >"$R/README"
 	git -C "$R" add README
@@ -174,6 +178,8 @@ wroot() { fld "worktree_root=$1" "$2"; }
 first_line() { printf '%s\n' "$OUT" | sed -n 1p; }
 # Everything a write could change: every file's bytes, and every entry's mode
 # and modification time, `.git` included.
+ls -ld --time-style=full-iso . >/dev/null 2>&1 ||
+	echo "test-declare-shadows-probe: SKIP the mode and timestamp half of the read-only proof: this ls has no --time-style" >&2
 snapshot() {
 	(
 		cd "$1" || exit
@@ -429,6 +435,8 @@ run shadows --scan-limit 3 --candidate many/out --candidate other/out
 is "scan limit: the walk stops and says so" "$(cand many/out guard)" unscanned
 is "scan limit: exit is still 0" "$RC" 0
 is "scan limit: the budget is shared, so nothing is left for the next" "$(cand other/out guard)" unscanned
+run shadows --scan-limit 6 --candidate many/out
+is "scan limit: one entry too many is not clear" "$(cand many/out guard)" unscanned
 run shadows --scan-limit 7 --candidate many/out --candidate other/out
 is "scan limit: a walk that just fits is clear" "$(cand many/out guard)" ok
 is "scan limit: and leaves the next one nothing" "$(cand other/out guard)" unscanned
@@ -545,6 +553,7 @@ for file in .powbox.local.yml .powbox.yml; do
 	malformed "empty entry between others" "$file" 'shadow:\n  - a\n  - ""\n  - b\n'
 	malformed "only an empty entry" "$file" 'shadow:\n  - ""\n'
 	malformed "multi-line entry" "$file" 'shadow:\n  - "a\\nb"\n'
+	malformed "entry with a tab" "$file" 'shadow:\n  - dist\n  - "a\\tb"\n'
 done
 new_repo
 malformed "unparseable" .powbox.yml 'shadow: [unclosed\n'
@@ -622,6 +631,13 @@ is "derived: a failing detector is not fatal" "$RC" 0
 is "derived: and leaves the question open" "$(cand packages/a/node_modules derived) $(cand apps/web/dist derived)" "unknown unknown"
 lacks "derived: and lists no derived path" "$OUT" "${NL}derived="
 has "derived: and is explained" "$(cat "$WORKDIR/stderr")" "detect-shadows.sh failed"
+# Only the effective list accounts for a path: what the replaced list declares
+# is not mounted from it.
+rm "$FAKE/detect-fails"
+put .powbox.local.yml 'shadow:\n  - elsewhere\n'
+run shadows
+is "derived: a literal only the replaced list declares is derived" "$(cand apps/web/dist derived)" yes
+is "derived: and so is a match of a glob only the replaced list declares" "$(cand apps/api/dist derived)" yes
 
 # -------------------------------------------------------------------- limit --
 new_repo
@@ -684,6 +700,28 @@ for hostfs in 9p drvfs virtiofs; do
 done
 remount - - -
 is "nothing mounted names all three" "$(complaints)" "unhealthy=.worktrees${TAB}not-a-mountpoint unhealthy=.claude/worktrees${TAB}not-a-mountpoint unhealthy=.git/worktrees${TAB}not-a-mountpoint "
+
+# A mount table that cannot be read gives no verdict, healthy or not.
+: >"$FAKE/findmnt-fails"
+remount ext4 tmpfs ext4
+is "a failed mount listing leaves the verdict open" "$(row mounts=unknown)" "mounts=unknown"
+is "a failed mount listing names no filesystem" "$(wroot .worktrees fs)$(wroot .claude/worktrees fs)$(wroot .git/worktrees fs)" "---"
+has "a failed mount listing is explained" "$(cat "$WORKDIR/stderr")" "findmnt could not list the mounts"
+rm "$FAKE/findmnt-fails"
+for status in 1 0; do
+	printf '%s\n' "$status" >"$FAKE/findmnt-holding-fails"
+	remount ext4 tmpfs ext4
+	is "findmnt naming no filesystem (status $status) leaves the verdict open" "$RC$(row mounts=unknown)" "0mounts=unknown"
+	lacks "findmnt naming no filesystem (status $status) raises no complaint" "$OUT" "unhealthy="
+	is "findmnt naming no filesystem (status $status) reads -" "$(wroot .claude/worktrees fs)" "-"
+	has "findmnt naming no filesystem (status $status) is explained" "$(cat "$WORKDIR/stderr")" "findmnt could not name the filesystem holding .worktrees"
+done
+rm "$FAKE/findmnt-holding-fails"
+rm -r "$R/.worktrees" "$R/.claude" "$R/.git/worktrees"
+rm -f "$FAKE/mounts"
+run worktrees
+is "a root that is not there is unhealthy, not an unreadable mount table" "$(row mounts=unhealthy)$(wroot .worktrees fs)" "mounts=unhealthy-"
+is "a root that is not there raises no note" "$(cat "$WORKDIR/stderr")" ""
 
 put .powbox.local.yml 'shadow:\n  - .worktrees\n  - data/db\n'
 run worktrees
@@ -790,6 +828,18 @@ refused "the tracked question fails for a candidate" --literal-pathspecs shadows
 refused "the .gitignore listing fails" ":(glob)**/.gitignore" shadows
 refused "the ignore question fails for a root" check-ignore worktrees
 refused "the tracked question fails for a root" --literal-pathspecs worktrees
+# A refusal is forgiven only where the guard already named what git will not
+# look past; every other guard answer leaves it a failure.
+put nest/out/sub/.git/HEAD
+for q in check-ignore --literal-pathspecs; do
+	refused "git refusing $q below a nested .git" "$q" shadows --candidate nest/out
+	refused "git refusing $q on an unscanned candidate" "$q" shadows --scan-limit 0 --candidate nest/out
+done
+put .powbox.yml 'shadow:\n  - .worktrees\n'
+for q in check-ignore --literal-pathspecs; do
+	refused "git refusing $q on a pre-authorized root" "$q" shadows
+done
+rm "$R/.powbox.yml"
 put .powbox.local.yml 'ctx: 1\n'
 refused "the local file's ignore question fails" -q worktrees
 rm "$R/.powbox.local.yml"

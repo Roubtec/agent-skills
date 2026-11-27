@@ -42,7 +42,7 @@
 #   tools=yq:<present|absent> TAB findmnt:<..> TAB mountpoint:<..> TAB detect-shadows.sh:<..>
 # `outcome=malformed` (with `malformed=<file> TAB <reason>` lines, and nothing
 # after the configuration) is a `shadow:` value that is not a list of non-empty
-# one-line strings, in `.powbox.yml` or in an active override, or a
+# one-line strings without a tab, in `.powbox.yml` or in an active override, or a
 # `.powbox.yml` that does not parse or is not a mapping. An empty list is well
 # formed. `outcome=no-yq` is a powbox file with no `yq` to read it.
 #
@@ -66,7 +66,9 @@
 #                    uncommitted change; `unshared` is any other source (a
 #                    global excludes file, the repository's own exclude file,
 #                    an ignore file edited since HEAD, every rule in it), which
-#                    teammates do not have as it stands.
+#                    teammates do not have as it stands. An ignore file under
+#                    a directory with a colon in its name always reads
+#                    `unshared`: the source is cut at the first colon.
 #           tracked  whether the root index holds anything at or below it.
 #           guard    `ok`, or the first ownership check it fails:
 #                    `outside-root`, `is-root`, `symlink:<component>`,
@@ -86,23 +88,33 @@
 #                    says so). No `mounted=` line is printed then.
 #           derived  `yes` when `detect-shadows.sh` emits the path and no entry
 #                    of the effective list accounts for it: powbox shadows it
-#                    from a manifest already. A declared path never reads `yes`.
+#                    from a manifest already. A path in the effective list
+#                    never reads `yes`.
 #                    `unknown` where `detect-shadows.sh` is absent or failed
 #                    (stderr says so); no `derived=` line is printed then.
 #           And around them:
 #             glob=<committed|override> TAB <matches> TAB <pattern>
+#                                 expanded by the shell from the root, as
+#                                 powbox expands it. `globstar` is set only to
+#                                 match powbox; bash 3.2 has none, and `**`
+#                                 there matches as `*` does, one level.
 #             derived=<path>      every such path, on disk or not
 #             mounted=<path> TAB <fstype>   every live mount below the root
 #             gitignore=<path>    every `.gitignore` in the tree, to read for
 #                                 directory patterns nothing on disk matches yet
 #             skipped=<path, shell-quoted> TAB <reason>
 #             limit=<n>           with `outcome=incomplete`: more candidates
-#                                 than `--limit` (default 200); the declared
-#                                 and named ones come first
+#                                 than `--limit` (default 200). They are taken
+#                                 in this order: the `.powbox.yml` entries, the
+#                                 override's (a glob's matches at its place),
+#                                 the named ones, the ignored ones on disk.
 #           The walk below existing candidates is cut off after
 #           `--scan-limit` entries in all (default 100000), or at the first
-#           nested `.git`, so a very large ignored tree costs a bounded read
-#           and answers `unscanned`.
+#           nested `.git`, and answers `unscanned`. That bounds the probe's own
+#           nested-`.git` walk only, and only where SIGPIPE is not ignored (the
+#           answer is the same either way). Expanding a declared glob, and
+#           `detect-shadows.sh` where present, read as much of the tree as the
+#           pattern or the manifests ask for.
 #
 # worktrees Then one line per worktree root:
 #             worktree_root=<.worktrees|.claude/worktrees|.git/worktrees>
@@ -115,8 +127,9 @@
 #           `.git/worktrees` needs no ignore rule and reads `-` for both.
 #             mounts=healthy|unhealthy|unknown
 #             unhealthy=<root> TAB <reason>
-#           `unknown` is no `findmnt` to ask, or a linked checkout.
-#           where a reason is `not-a-mountpoint`; `expected-tmpfs`
+#           `unknown` is a linked checkout, no `findmnt` to ask, or a
+#           `findmnt` that failed (stderr says so; `fs` then reads `-`). A
+#           reason is `not-a-mountpoint`; `expected-tmpfs`
 #           (`.claude/worktrees` on anything else); `not-durable`
 #           (`.git/worktrees` on tmpfs while `.worktrees` is not: per-worktree
 #           metadata would not survive a recycle); `host-filesystem`
@@ -247,6 +260,12 @@ read_shadow() { # file, its name
 		MALFORMED=1
 		return
 	fi
+	case "$lines" in *"$TAB"*)
+		say "malformed=$2${TAB}a shadow entry holds a tab"
+		MALFORMED=1
+		return
+		;;
+	esac
 	ENTRIES="$lines"
 }
 
@@ -381,6 +400,13 @@ MOUNTS_READABLE=0
 if have findmnt; then
 	MOUNTS_READABLE=1
 fi
+# A mount table that cannot be listed is not an empty one.
+read_mounts() {
+	[ "$MOUNTS_READABLE" = 1 ] || return 0
+	MOUNT_TARGETS="$(findmnt -lno TARGET 2>/dev/null)" && return 0
+	note "findmnt could not list the mounts; every mount fact reads unknown."
+	MOUNTS_READABLE=0 MOUNT_TARGETS=""
+}
 mount_fs() { # absolute path: the filesystem mounted exactly there, `none`, or `unknown`
 	local fs
 	[ "$MOUNTS_READABLE" = 1 ] || {
@@ -492,7 +518,7 @@ printable() {
 	case "$1" in *"$TAB"* | *"$NL"*) return 1 ;; esac
 }
 # A declared or named path: it is reported even where it resolves nowhere.
-add_written() { # path as written, source
+add_written() { # source, path as written
 	if norm "$2" && [ -n "$NORM" ]; then
 		add_candidate "$NORM" "$1" || true
 	else
@@ -539,10 +565,7 @@ cmd_shadows() {
 
 	GITLINKS="$(git -C "$ROOT" ls-files --stage)" || fail "git could not list the index."
 	GITLINKS="$(printf '%s\n' "$GITLINKS" | awk -F '\t' 'substr($1, 1, 6) == "160000" { print $2 }')"
-	if [ "$MOUNTS_READABLE" = 1 ] && ! MOUNT_TARGETS="$(findmnt -lno TARGET 2>/dev/null)"; then
-		note "findmnt could not list the mounts; every mount fact reads unknown."
-		MOUNTS_READABLE=0 MOUNT_TARGETS=""
-	fi
+	read_mounts
 
 	# detect-shadows.sh emits the effective list's own paths beside the ones it
 	# derives from manifests; the declared ones are taken out below.
@@ -686,6 +709,7 @@ cmd_worktrees() {
 	local root committed override effective tracked mp fs p known=1 problems="" wt_fs="" git_fs=""
 	[ $# -eq 0 ] || usage "worktrees takes no argument: $1"
 	read_config
+	read_mounts
 	[ "$MOUNTS_READABLE" = 1 ] || known=0
 	split "$WT_ROOTS"
 	for root in "${ROWS[@]}"; do
@@ -712,9 +736,14 @@ cmd_worktrees() {
 		elif [ "$MOUNTS_READABLE" = 1 ]; then
 			if [ "$(mount_fs "$p")" != none ]; then mp=yes; else mp=no; fi
 		fi
+		# findmnt fails for a path that is not there, which is no failed read.
 		if [ "$MOUNTS_READABLE" = 1 ] && [ -e "$p" ]; then
-			fs="$(findmnt -nro FSTYPE -T "$p" 2>/dev/null | tail -n 1)"
-			fs="${fs:--}"
+			if fs="$(findmnt -nro FSTYPE -T "$p" 2>/dev/null)" && [ -n "$fs" ]; then
+				fs="${fs##*"$NL"}"
+			else
+				note "findmnt could not name the filesystem holding $root; the mount verdict reads unknown."
+				known=0 fs=-
+			fi
 		fi
 		say "worktree_root=$root${TAB}committed=$committed${TAB}override=$override${TAB}effective=$effective${TAB}ignored=$IGN${TAB}tracked=$tracked${TAB}mountpoint=$mp${TAB}fs=$fs${TAB}rule=$RULE"
 		[ "$mp" != no ] || problems="${problems}unhealthy=$root${TAB}not-a-mountpoint$NL"

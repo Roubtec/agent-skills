@@ -70,7 +70,6 @@ Every edit is idempotent and surgical — preserve unrelated content, comments, 
 
 2. **Reconcile `.powbox.yml` — reading the override first.**
    `override=active` is the local override described above: `detect-shadows.sh` reads `$ROOT/.powbox.local.yml` instead of the committed list and logs `detect-shadows: shadow list overridden by .powbox.local.yml`.
-   The probe uses powbox's own test, not a variant of it, and keeps both of its halves — the file is there, and `yq -r 'has("shadow")'` on it prints `true` — so presence alone is not enough: a local file with only `ctx:` overrides nothing, and the committed list stays the effective one.
    `powbox_local_yml=unparseable` is no override either, because powbox takes none from a file it cannot parse: it falls back to `.powbox.yml`, which is then genuinely the effective list.
    Whenever `powbox_local_yml_ignored=no` — override or not — tell the user: the file is user-local, powbox's launcher only *warns* about the gap, and this skill never stages or commits it (see step 6).
 
@@ -88,12 +87,12 @@ Every edit is idempotent and surgical — preserve unrelated content, comments, 
 3. **Reconcile `.gitignore`.**
    `$ROOT/.gitignore` has to ignore `.worktrees/` and `.claude/worktrees/`, and `ignored=shared` on a root's line says a committed rule already does.
    - The probe asks git rather than matching text, so an existing equivalent entry is accepted (`.worktrees` without a trailing slash also matches the directory).
-     Every rule of an ignore file with any uncommitted change reads `unshared`, so when `rule=` names `.gitignore` itself the rule is already written and only needs committing in step 6.
+     Every rule of an ignore file with any uncommitted change reads `unshared`, so when `rule=` names `.gitignore` itself the rule needs nothing added; it reads `shared` once that file's pending change is committed, which may be the user's own edit rather than yours.
      Otherwise add what reads `no`, or `unshared` — a rule teammates do not have, whose source `rule=` names — under a short comment such as `# powbox git worktrees (container-local; never commit working trees)`.
    - Do **not** add `.git/worktrees`.
 
 4. **Guard against leaked tracking.**
-   A root whose line reads a `tracked=` count above zero has files in the index; `.git/worktrees` always reads `tracked=-`, and is never in it.
+   A root whose line reads a `tracked=` count above zero has files in the index.
    `git -C "$ROOT" rm -r --cached -- <root>` them (keeping the working copy) so worktree contents stop being committed.
    Report what you untracked.
 
@@ -101,11 +100,11 @@ Every edit is idempotent and surgical — preserve unrelated content, comments, 
    Committed declarations take effect automatically at the *next* container start.
    To shadow the directories now, in the running container, without relaunching, run `shadow-refresh.sh "$ROOT"` and then the probe again.
 
-   `mounts=healthy` is the answer to require; each `unhealthy=` line names a root and what is wrong with it.
+   `mounts=healthy` is the answer to require.
    `.worktrees` is healthy when it is its own mount on any container-local filesystem — normally the per-project volume, or tmpfs as a fallback.
    `.git/worktrees` must be a mountpoint and, when `.worktrees` is the persistent volume, durable (non-tmpfs, bound from it); `.claude/worktrees` must be tmpfs.
    If a check fails, tell the user to rebuild the powbox image on the host (`./build.sh all`) and relaunch; the repo config you wrote is still correct.
-   `mounts=unknown` is a machine with no mount table to ask, which is not a powbox container: say so, and that nothing was verified.
+   `mounts=unknown` means the mount table was not read — no `findmnt` (`tools=`), which is not a powbox container, or one that failed, as stderr says: say which, and that nothing was verified.
 
    Skip this step only when step 2 found no override.
    A repo whose declarations may be inert is the one case where skipping the verification hides the failure completely — so once step 2 is settled — resolution applied, or the override already carrying the three roots — run these checks rather than deferring them to the next container start, and treat a failure as the run's outcome.

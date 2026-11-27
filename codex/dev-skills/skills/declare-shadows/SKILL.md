@@ -100,21 +100,19 @@ Every edit is idempotent and surgical — preserve unrelated content, comments, 
 
 2. **Read the override first.**
    `override=active` means `$ROOT/.powbox.local.yml` has a top-level `shadow:` key and **replaces the committed `.powbox.yml` list wholesale** — the override's list, not the committed one, is what this container mounts (`effective=`).
-   The probe uses powbox's own test, not a variant of it, and keeps both of its halves — the file is there, and `yq -r 'has("shadow")'` on it prints `true` — so presence alone is not enough: a local file with only `ctx:` overrides nothing, and the committed list stays the effective one.
    `powbox_local_yml=unparseable` is a different condition from `malformed`, with the opposite outcome: powbox takes no override from a file it cannot parse and falls back to `.powbox.yml`, which is then genuinely the effective list, so the run continues.
    Audit an active override: a cache or database declared there is exactly as live as one in `.powbox.yml`, which is why its entries are candidates too (`from=override`).
    Say so and confirm how to proceed before editing — the committed file stays the durable record of the agreed set, but nothing you write there takes effect while the override stands, so the user has to either retire the override or accept the same change in it.
    `powbox_local_yml_ignored=no` is a gap to surface whenever it appears: the file is user-local, and powbox's launcher only *warns* about it.
 
 3. **Classify each candidate** against the three "do not shadow" lists above.
-   Each `candidate=` line is one literal path with its facts.
    Paths already declared in either list are candidates too (`from=committed`, `override`, or `glob` for a directory a declared glob matches): a review or fix run has to re-judge what is declared, not only what is missing, and either list can end up the effective one.
    Judge an already-declared path by the same lists — one that now lands in a "do not shadow" list is a finding, not a fixture.
    Keep a candidate, new or declared, only when every fact below holds; a declared one that fails is a finding and must not be approved or retained.
 
    - `ignored=shared`.
      Because the declaration you would commit is shared, the ignore rule has to be shared too: `rule=` names the matching source, and a rule that is not part of the committed tree (`unshared`) — a personal global excludes file, `.git/info/exclude`, or an uncommitted `.gitignore` edit — does not ignore the path for teammates, so treat such a candidate as unignored.
-     Every rule of an ignore file with any uncommitted change reads `unshared`, because a rule's effect depends on the lines around it: when `rule=` names such a file, the rule only needs committing, not adding again.
+     Every rule of an ignore file with any uncommitted change reads `unshared`, because a rule's effect depends on the lines around it: when `rule=` names such a file, the rule needs nothing added; it reads `shared` once that file's pending change is committed, which may be the user's own edit rather than yours.
    - `tracked=no`.
      A shadow would mask committed files.
    - `guard=ok`.
@@ -122,7 +120,7 @@ Every edit is idempotent and surgical — preserve unrelated content, comments, 
      This deliberately surfaces a candidate with a nested `.git` anywhere below it even when that nested checkout is disposable, such as an editable package inside `.venv`; accept that conservative false negative rather than risk hiding human-owned repository content.
      `unscanned` is the same answer until a run with a larger `--scan-limit` clears it.
    - `mount=none` and `below=0`.
-     `mount=unknown` with `below=-` means the mount table could not be read, and no `mounted=` line is printed either.
+     `mount=unknown` with `below=-` means the mount table could not be read.
      Where `tools=` reads `findmnt:absent`, this is not a powbox container and nothing here is a shadow: judge the candidate on the other facts and report that its mounts were not verified.
      Where it reads `findmnt:present`, the read failed, as stderr says: treat the candidate as you would a mounted one, below.
      Anything else means the visible contents belong to a mount rather than the underlying host tree, so mark the host view unverifiable; a mount below the candidate means part of its view is the child mount's, and a tmpfs over the parent would occlude that live mount.
@@ -130,14 +128,13 @@ Every edit is idempotent and surgical — preserve unrelated content, comments, 
      When `mount=` is a filesystem other than `tmpfs`, also report that the path is not an active shadow: powbox skips an existing mountpoint, so a declaration there is ineffective and writes continue to the existing bind mount or volume.
    - `derived=no`.
      `yes`, like every `derived=` line, is a path powbox already shadows from a manifest.
-     `unknown` means `detect-shadows.sh` was absent or failed, so the probe cannot say and prints no `derived=` line: leave the manifest-derived folders of the list above undeclared on your own reading, judge the rest on the other facts, and report that the check was not made.
+     `unknown` means `detect-shadows.sh` was absent or failed: leave the manifest-derived folders of the list above undeclared on your own reading, judge the rest on the other facts, and report that the check was not made.
 
    `guard=preauthorized` is the one exemption from those facts: the exact, already-declared `enable-worktrees` roots (`.worktrees`, `.claude/worktrees`, and `.git/worktrees`).
    Preserve them exactly, and never propose removing them from either list in this audit.
 
    Do not approve a glob as one literal path.
-   Each `glob=` line gives a declared glob and how many directories it matches now; those matches are the `from=glob` candidates.
-   Surface the glob even when every match passes and propose replacing it with those audited literals in step 4.
+   Surface each `glob=` line even when every match passes, and propose replacing the glob with its audited `from=glob` candidates in step 4.
    A glob with no current matches is unverifiable, so surface it too.
 
 4. **Confirm the judgment calls with the user.**
