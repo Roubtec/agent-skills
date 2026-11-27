@@ -118,6 +118,7 @@ Write the head into a PR's line after every `train.sh push`, and drop the line o
 Right after a push the new head's rollup is empty or partial, and a partial one can be all green.
 The watch covers that from the state file: it holds every later head of a PR to the lanes of that PR's last full green run, and answers `waiting` until each of them has passed there.
 It cannot do so for a head it has never seen green, so list a PR that was pushed moments ago only once its lanes have shown.
+`unscheduled` means the head is green on every lane it has and lacks a lane of that full run whose workflow did not run on this head and will not (one that runs when a PR opens and not on a later push): each `unscheduled=` line of `train.sh check` names one, and whether the head merges without it is yours to judge.
 `moved` means someone else pushed: that entry is finished, and the PR is watched again only when you write its new head into the list, which you do instead of rebasing or merging it.
 Whenever you need what the train knows (after a wakeup, after your context was compacted, in a new session), run `train.sh state --state <state>` instead of trusting what you remember: its `green=` line for a PR carries the `--green` head for `rebase`.
 A scheduled wakeup's prompt names the two files, never a list of PRs.
@@ -205,7 +206,8 @@ Consider freeing what the train will not use:
 
 After the last merge, watch `main`'s own CI run on the final tip: write `commit <that tip>` into the list and start the watch, which reports that commit's lanes as `green`, `red` or `waiting`.
 `ci.sh lanes --repo <owner>/<repo> --commit <that tip>` gives the URL of each lane that failed there.
-Where the repository's workflows run on pull requests only, no such run will appear: say so in the report instead of waiting for one.
+Where the repository's workflows run on pull requests only, no such run will appear: the watch answers `outcome=no-run` for that commit ten minutes after first reading it, so say so in the report instead of waiting for one.
+In such a repository the last PR's own run on its rebased head is the only run any runner will make of the combined tree, so let that last PR wait for it rather than merge on local checks.
 Where each push to `main` cancels the previous `main` run, that one run covers the whole train.
 A lane cancelled with no newer push behind it, or failed for an infrastructure reason, gets a re-run once the run completes: `ci.sh rerun` answers `in-progress` until then.
 Use reasonable effort on further re-runs, taking into account infrastructure issues, runner contention, and the history and state of the train.

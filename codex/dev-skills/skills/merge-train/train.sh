@@ -35,6 +35,18 @@
 #           outcome=waiting   a lane is still running, the rollup is empty, or
 #                             a `--lane` is not among its passing lanes: one
 #                             `missing=<identity>` line each
+#           outcome=unscheduled
+#                             every lane this head has is green, and each
+#                             `--lane` it lacks will not come: one
+#                             `unscheduled=<identity>` line each. Such a lane
+#                             belongs to a workflow that has no run on this
+#                             head, though the head has workflow runs and all
+#                             of them have completed (a workflow that runs
+#                             when a PR opens and not on a later push).
+#                             Whether the head merges without it is yours.
+#                             A lane of no workflow of the repository (another
+#                             app's check, a commit status) is never told so:
+#                             it stays `missing=`
 #         and always: pr= state= head= branch= base= default= draft=
 #         mergeable= review= changes-requested= threads= ci= lanes= (how many
 #         lanes pass), one `passing=<identity>` line per passing lane, and
@@ -125,12 +137,16 @@
 #           pr=<N> TAB head=<oid> TAB outcome=<as check> TAB ...   and then
 #             ci=<rollup>, or state= and merge-commit= (not-open), or now=<the
 #             head it moved to>
-#           commit=<oid> TAB outcome=<green|red|waiting> TAB ci=<rollup>
+#           commit=<oid> TAB outcome=<green|red|waiting|no-run> TAB ci=<rollup>
+#             no-run: ten minutes after the watch first read it the commit has
+#             neither a lane nor a workflow run, so none is coming (workflows
+#             that run on pull requests only)
 #           entry=<line> TAB outcome=bad-entry   a line it cannot read, or a
 #                                                PR listed twice; said once
 #         The first time an entry's lanes are all green it keeps their names,
 #         and holds every later head of that PR to them as `check --lane`
-#         does, so a rollup still filling after a push is `waiting`. It cannot
+#         does, so a rollup still filling after a push is `waiting`, and a
+#         lane that will not come is `unscheduled`, said once. It cannot
 #         tell a first rollup that is still filling: list a head that has
 #         never had a full green run only once its lanes have shown.
 #         It stops by itself, and its last line says why:
@@ -205,6 +221,9 @@ POLL="${TRAIN_POLL_SECONDS:-5}"
 UNREADABLE_AFTER=5
 # The longest one entry's read may take, where `timeout` is there to cut it.
 READ_SECONDS=300
+# How long a commit may show neither a lane nor a workflow run before the
+# watch says none is coming. GitHub registers a push's runs within seconds.
+NO_RUN_AFTER="${TRAIN_NO_RUN_SECONDS:-600}"
 
 say() { printf '%s\n' "$*"; }
 note() { printf 'train: %s\n' "$*" >&2; }
@@ -423,8 +442,39 @@ why() { # outcome
 	draft) printf 'PR #%s is a draft.' "$PR" ;;
 	review) printf 'PR #%s has open review items (%s unresolved threads, %s reviewers requesting changes, review decision %s). They are the maintainer'"'"'s to settle: skip it, with every PR stacked on it.' "$PR" "$F_THREADS" "$F_CHANGES" "$F_DECISION" ;;
 	red) printf 'PR #%s has a failing lane. Read its log before re-running anything.' "$PR" ;;
+	unscheduled) printf 'PR #%s is green on every lane this head has, and the lanes of its full run it lacks belong to workflows that did not run on this head and will not: every workflow run it has is complete. Whether it merges without them is yours to judge.' "$PR" ;;
 	waiting) printf 'PR #%s is not green yet: a lane is running, or the rollup does not hold the lanes of a full run.' "$PR" ;;
 	esac
+}
+
+# Of the missing lanes on stdin, the ones that will not come: `unscheduled=`
+# for those, `missing=` for the rest.
+sort_missing() {
+	local s h runs flows
+	s="$(slug)"
+	h="$(host)"
+	runs="$(gh api ${h:+--hostname} ${h:+"$h"} "repos/$s/actions/runs?head_sha=$F_HEAD&per_page=100" --jq '.workflow_runs[] | "\(.workflow_id)\t\(.status)"' </dev/null)" ||
+		fail "could not list the workflow runs on $F_HEAD in $REPO (gh failed). Nothing here says which lanes are still to come."
+	flows="$(gh api ${h:+--hostname} ${h:+"$h"} "repos/$s/actions/workflows?per_page=100" --jq '.workflows[] | "\(.id)\t\(.name)"' </dev/null)" ||
+		fail "could not list the workflows of $REPO (gh failed). Nothing here says which lanes are still to come."
+	RUNS="$runs" FLOWS="$flows" awk '
+		BEGIN {
+			n = split(ENVIRON["RUNS"], r, "\n")
+			for (i = 1; i <= n; i++) if (r[i] != "") {
+				split(r[i], f, "\t"); ran[f[1]] = 1; runs++
+				if (f[2] != "completed") going = 1
+			}
+			m = split(ENVIRON["FLOWS"], w, "\n")
+		}
+		{
+			lane = substr($0, 9); id = ""; len = 0
+			for (i = 1; i <= m; i++) {
+				t = index(w[i], "\t"); name = substr(w[i], t + 1)
+				if (name != "" && index(lane, name " / ") == 1 && length(name) > len) { id = substr(w[i], 1, t - 1); len = length(name) }
+			}
+			if (id != "" && !(id in ran) && runs > 0 && !going) print "unscheduled=" lane
+			else print $0
+		}'
 }
 
 cmd_check() {
@@ -435,7 +485,7 @@ cmd_check() {
 	*[!0-9TZ:.+-]*) usage "--since takes a time as \`checked=\` printed it" ;;
 	esac
 	need_sibling "$CI"
-	local checked ci ciout cihead passing failing outcome missing=""
+	local checked ci ciout cihead passing failing outcome missing="" unscheduled=""
 	# Two minutes back: a comment shown twice costs a glance, one skipped
 	# because two clocks disagree costs the review it carried.
 	checked="$(date -u -d '2 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" ||
@@ -453,12 +503,18 @@ cmd_check() {
 		BEGIN { n = split(ENVIRON["HAVE"], a, "\n"); for (i = 1; i <= n; i++) have[substr(a[i], 9)] = 1 }
 		NF && !($0 in have) { print "missing=" $0 }')"
 	failing="$(printf '%s\n' "$ciout" | awk 'index($0, "lane=") == 1')"
+	if [ "$ci" = green ] && [ -n "$missing" ]; then
+		missing="$(printf '%s\n' "$missing" | sort_missing)" || exit 1
+		unscheduled="$(printf '%s\n' "$missing" | awk 'index($0, "unscheduled=") == 1')"
+		missing="$(printf '%s\n' "$missing" | awk 'index($0, "missing=") == 1')"
+	fi
 	outcome="$(blocker)"
 	if [ -z "$outcome" ]; then
 		case "$ci" in
 		failing) outcome=red ;;
 		green)
 			outcome=ready
+			[ -z "$unscheduled" ] || outcome=unscheduled
 			[ -z "$missing" ] || outcome=waiting
 			;;
 		running | none) outcome=waiting ;;
@@ -482,6 +538,7 @@ cmd_check() {
 	say "lanes=$(printf '%s\n' "$passing" | awk 'NF { n++ } END { print n + 0 }')"
 	[ -z "$passing" ] || say "$passing"
 	[ -z "$missing" ] || say "$missing"
+	[ -z "$unscheduled" ] || say "$unscheduled"
 	[ -z "$failing" ] || say "$failing"
 	printf '%s\n' "$ciout" | awk 'index($0, "running=") == 1'
 	[ -z "$SINCE" ] || printf '%s\n' "$F_NEW" | awk -F "$TAB" -v s="$SINCE" 'NF && ($3 "") > (s "") { print "new=" $0 }'
@@ -764,7 +821,13 @@ last_of() { # pr|commit, id
 		END { print r }' "$STATE"
 }
 
-W_PENDING="" W_UNREAD="" W_LISTED="" GUARD=""
+W_PENDING="" W_UNREAD="" W_LISTED="" GUARD="" W_START=0 W_WAITED=0 W_ELAPSED=0 W_NONE=""
+# The longer of the clock and the waits asked for, so a bound holds whatever
+# a sleep really took.
+tick() {
+	W_ELAPSED=$((SECONDS - W_START))
+	[ "$W_WAITED" -le "$W_ELAPSED" ] || W_ELAPSED="$W_WAITED"
+}
 # Says a record, and writes it to the state file with its time.
 report() {
 	say "$1"
@@ -828,7 +891,7 @@ EOF
 	case "$o" in
 	not-open | moved) ;;
 	*)
-		if [ "$ci" = green ] && ! printf '%s\n' "$out" | grep -q '^missing='; then
+		if [ "$ci" = green ] && ! printf '%s\n' "$out" | grep -q -e '^missing=' -e '^unscheduled='; then
 			green="green=$id${TAB}head=$head$(printf '%s\n' "$out" | awk -v t="$TAB" 'index($0, "passing=") == 1 { printf "%slane=%s", t, substr($0, 9) }')"
 			[ "$green" = "$kept" ] || journal "$green" || fail "cannot write the state file $STATE."
 		fi
@@ -837,7 +900,7 @@ EOF
 	[ "$o" != waiting ] || W_PENDING="$W_PENDING $id"
 }
 watch_commit() { # oid
-	local id="$1" last lhead="" lout="" out ci o
+	local id="$1" last lhead="" lout="" out ci o s h since runs
 	last="$(last_of commit "$id")"
 	IFS="$TAB" read -r lhead lout <<EOF
 $last
@@ -850,7 +913,25 @@ EOF
 	case "$ci" in
 	green) o=green ;;
 	failing) o=red ;;
-	running | none) o=waiting ;;
+	running) o=waiting ;;
+	none)
+		o=waiting
+		case "$W_NONE " in
+		*" $id="*) ;;
+		*) W_NONE="$W_NONE $id=$W_ELAPSED" ;;
+		esac
+		since="${W_NONE##*" $id="}"
+		since="${since%% *}"
+		if [ $((W_ELAPSED - since)) -ge "$NO_RUN_AFTER" ]; then
+			s="$(slug)"
+			h="$(host)"
+			if ! runs="$($GUARD gh api ${h:+--hostname} ${h:+"$h"} "repos/$s/actions/runs?head_sha=$id&per_page=1" --jq .total_count 2>/dev/null)"; then
+				W_UNREAD="$W_UNREAD $id"
+				return 0
+			fi
+			[ "$runs" != 0 ] || o=no-run
+		fi
+		;;
 	*)
 		W_UNREAD="$W_UNREAD $id"
 		return 0
@@ -941,13 +1022,15 @@ cmd_watch() {
 	# A read that hangs would hold the watch past its bound.
 	GUARD=""
 	if command -v timeout >/dev/null 2>&1; then GUARD="timeout $READ_SECONDS"; fi
-	local start="$SECONDS" waited=0 elapsed fails=0 reason wait n h limit rec
+	local elapsed fails=0 reason wait n h limit rec
+	W_START="$SECONDS" W_WAITED=0 W_NONE=""
 	h="$(host)"
 	while :; do
 		if [ ! -r "$LIST" ]; then
 			reason=no-list
 			break
 		fi
+		tick
 		poll
 		if [ -n "$W_UNREAD" ]; then
 			fails=$((fails + 1))
@@ -962,10 +1045,8 @@ cmd_watch() {
 				break
 			fi
 		fi
-		# The longer of the clock and the waits asked for, so the bound holds
-		# whatever a sleep really took.
-		elapsed=$((SECONDS - start))
-		[ "$waited" -le "$elapsed" ] || elapsed="$waited"
+		tick
+		elapsed="$W_ELAPSED"
 		if [ "$elapsed" -ge "$MAX" ]; then
 			reason=expired
 			break
@@ -988,7 +1069,7 @@ cmd_watch() {
 		fi
 		[ "$wait" -le $((MAX - elapsed)) ] || wait=$((MAX - elapsed))
 		sleep "$wait"
-		waited=$((waited + wait))
+		W_WAITED=$((W_WAITED + wait))
 	done
 	rec="reason=$reason${TAB}pending=$(printf '%s' "${W_PENDING# }" | tr ' ' ',')${TAB}unread=$(printf '%s' "${W_UNREAD# }" | tr ' ' ',')"
 	say "outcome=stopped${TAB}$rec"

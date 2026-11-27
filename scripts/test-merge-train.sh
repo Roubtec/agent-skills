@@ -76,6 +76,9 @@ cat >"$FAKE/gh" <<'FAKEGH'
 #   crollup.json           a commit's rollup (crollup.<n>.json on the n-th)
 #   hook.<pr>.<n>          sourced on the PR's n-th read, before it is answered
 #   ratelimit.json         the rate_limit API's answer; none is a failed call
+#   runs.json              the workflow runs on a head (none: no runs at all;
+#                          fail-runs: the call fails)
+#   workflows.json         the repository's workflows (none: it has none)
 printf '%s\n' "$*" >>"$FAKE/gh.log"
 expr=. pr="" oid="" after="" query="" args=("$@")
 i=0
@@ -131,6 +134,13 @@ case "$1 $2" in
 "api rate_limit" | "api --hostname")
 	[ -f "$FAKE/ratelimit.json" ] || exit 1
 	jq -r "$expr" "$FAKE/ratelimit.json"
+	;;
+"api "*"/actions/runs?head_sha="*)
+	[ ! -f "$FAKE/fail-runs" ] || exit 1
+	if [ -f "$FAKE/runs.json" ]; then jq -r "$expr" "$FAKE/runs.json"; else printf '{"total_count":0,"workflow_runs":[]}' | jq -r "$expr"; fi
+	;;
+"api "*"/actions/workflows?"*)
+	if [ -f "$FAKE/workflows.json" ]; then jq -r "$expr" "$FAKE/workflows.json"; else printf '{"workflows":[]}' | jq -r "$expr"; fi
 	;;
 "api "*)
 	file="$FAKE/compare.json"
@@ -237,6 +247,60 @@ call check "${ARGS[@]}" --lane "Tests / ab"
 is "1: ...in either direction" "$(val outcome)" waiting
 call check "${ARGS[@]}" --lane ""
 is "1: an empty --lane is a usage error" "$RC" 64
+# A lane whose workflow did not run on this head, every run it has being done.
+# runs <workflow id>=<status>...
+runs() {
+	local kv sep=""
+	{
+		printf '{"total_count":%s,"workflow_runs":[' "$#"
+		for kv in "$@"; do
+			printf '%s{"workflow_id":%s,"status":"%s"}' "$sep" "${kv%%=*}" "${kv#*=}"
+			sep=,
+		done
+		printf ']}\n'
+	} >"$FAKE/runs.json"
+}
+printf '{"workflows":[{"id":1,"name":"Tests"},{"id":2,"name":"Review"},{"id":3,"name":"Review / deep"}]}\n' >"$FAKE/workflows.json"
+rollup 7 "$H1" "$GREEN"
+runs 1=completed
+call check "${ARGS[@]}" --lane "Tests / a" --lane "Review / bot"
+is "1: a lane whose workflow has no run on this head, all its runs being done, is unscheduled, not waiting" "$(val outcome)" unscheduled
+is "1: ...a stop for the caller to judge" "$RC" 3
+is "1: ...naming the lane" "$(val unscheduled)" "Review / bot"
+lacks "1: ...which is not also missing" "$OUT" "missing="
+has "1: ...the runs asked for by this head" "$(cat "$FAKE/gh.log")" "repos/acme/widgets/actions/runs?head_sha=$H1"
+has "1: ...and said to be the caller's to judge" "$ERR" "yours to judge"
+runs 1=completed 2=completed
+call check "${ARGS[@]}" --lane "Review / bot"
+is "1: a lane whose workflow did run here is still to come" "$(val outcome)" waiting
+is "1: ...and missing" "$(val missing)" "Review / bot"
+runs 1=in_progress
+call check "${ARGS[@]}" --lane "Review / bot"
+is "1: while a run of this head is still going, a lane with none yet is still to come" "$(val outcome)" waiting
+rm "$FAKE/runs.json"
+call check "${ARGS[@]}" --lane "Review / bot"
+is "1: a head with no workflow run at all says nothing about what is coming" "$(val outcome)" waiting
+runs 1=completed
+call check "${ARGS[@]}" --lane "codecov / patch"
+is "1: a lane of no workflow of the repository is never told unscheduled" "$(val outcome)" waiting
+runs 1=completed 2=completed
+call check "${ARGS[@]}" --lane "Review / deep / scan"
+is "1: a lane belongs to the workflow with the longest name that starts it" "$(val outcome)" unscheduled
+runs 1=completed
+call check "${ARGS[@]}" --lane "Review / bot" --lane "codecov / patch"
+is "1: one lane still to come keeps the head waiting beside an unscheduled one" "$(val outcome)" waiting
+is "1: ...each said as what it is" "$(val missing)|$(val unscheduled)" "codecov / patch|Review / bot"
+rollup 7 "$H1" "$(lane a COMPLETED '"SUCCESS"'),$(lane b IN_PROGRESS null)"
+: >"$FAKE/gh.log"
+call check "${ARGS[@]}" --lane "Review / bot"
+is "1: a head with a lane still running is waiting" "$(val outcome)" waiting
+lacks "1: ...without the runs being asked for" "$(cat "$FAKE/gh.log")" "actions/runs"
+rollup 7 "$H1" "$GREEN"
+touch "$FAKE/fail-runs"
+call check "${ARGS[@]}" --lane "Review / bot"
+is "1: runs that could not be listed are a failure, not a verdict" "$RC" 1
+is "1: ...with nothing on stdout" "$OUT" ""
+rm "$FAKE/fail-runs" "$FAKE/runs.json"
 rollup 7 "$H1" "$(lane a COMPLETED '"SUCCESS"'),$(lane b IN_PROGRESS null)"
 call check "${ARGS[@]}"
 is "1: a lane in progress is waiting" "$(val outcome)" waiting
@@ -998,6 +1062,31 @@ is "7: every line: two first readings, the push, the green run, the stop" "$(pri
 call state --state "$S"
 is "7: the state read down gives the head of the last full green run, for rebase --green" "$(printf '%s\n' "$OUT" | grep -c "^green=7	head=$H2")" 1
 
+# A lane of the full green run whose workflow does not run on a re-pushed head
+# (one that runs when the PR opens only) must not hold that head for ever.
+wfresh
+printf '7 %s\n8\n' "$H1" >"$L"
+facts 7
+facts 7.h2 head="$H2"
+facts 8 pr=8
+rollup 8 "$H1" "$RUNNING"
+rollup 8.4 "$H1" "$GREEN"
+printf '{"workflows":[{"id":1,"name":"Tests"},{"id":2,"name":"Review"}]}\n' >"$FAKE/workflows.json"
+REVIEW="$(lane bot COMPLETED '"SUCCESS"' | sed 's/"name":"Tests"/"name":"Review"/')"
+rollup 7 "$H1" "$GREEN,$REVIEW"
+rollup 7.h2run "$H2" "$(lane a COMPLETED '"SUCCESS"'),$(lane b IN_PROGRESS null)"
+rollup 7.h2done "$H2" "$GREEN"
+runs 1=in_progress
+hook 8 1 'printf "7 '"$H2"'\n8\n" >"$L.new" && mv "$L.new" "$L"; cp "$FAKE/facts.7.h2.json" "$FAKE/facts.7.json"; cp "$FAKE/rollup.7.h2run.json" "$FAKE/rollup.7.json"'
+hook 7 4 'cp "$FAKE/rollup.7.h2done.json" "$FAKE/rollup.7.json"; printf "{\"total_count\":1,\"workflow_runs\":[{\"workflow_id\":1,\"status\":\"completed\"}]}" >"$FAKE/runs.json"'
+call watch "${WARGS[@]}"
+is "7: (setup) the full green run kept the lane of the workflow that runs once" "$(grep -c "^green=7	head=$H1	lane=Review / bot	lane=Tests / a	lane=Tests / b\$" "$S")" 1
+is "7: a re-pushed head is waiting while its lanes run" "$(lines "pr=7	head=$H2	outcome=waiting	ci=running")" 1
+is "7: ...and once they are green is not left waiting for a workflow that never ran on it" "$(lines "pr=7	head=$H2	outcome=unscheduled	ci=green")" 1
+is "7: ...and the watch ends, nothing being waited for" "$(printf '%s\n' "$OUT" | tail -n 1)" "outcome=stopped	reason=idle	pending=	unread="
+is "7: ...the head that lacks a lane is not kept as a full green run" "$(grep -c "^green=7	head=$H2" "$S")" 0
+is "7: every line: two first readings, the new head waiting, unscheduled, the other PR green, the stop" "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" 6
+
 # A poll that cannot be read says nothing, waits longer each time, and gives up.
 wfresh
 printf '7\n' >"$L"
@@ -1066,6 +1155,28 @@ printf 'commit %s\n' "$MC" >"$L"
 crollup "" ""
 call watch "${WARGS[@]}" --max 240
 is "7: a commit with no run yet is waiting, never green" "$(printf '%s\n' "$OUT" | sed -n 1p)" "commit=$MC	outcome=waiting	ci=none"
+# No run is coming: workflows that run on pull requests only.
+wfresh
+printf 'commit %s\n' "$MC" >"$L"
+crollup "" ""
+call watch "${WARGS[@]}"
+is "7: a commit that gets no workflow run is answered no-run, and the watch ends" "$(printf '%s\n' "$OUT" | tr '\n' '|')" "commit=$MC	outcome=waiting	ci=none|commit=$MC	outcome=no-run	ci=none|outcome=stopped	reason=idle	pending=	unread=|"
+is "7: ...with exit 0" "$RC" 0
+is "7: ...ten minutes after it was first read, not sooner" "$(sleeps)" "120 120 120 120 120 "
+has "7: ...having asked whether the commit has any workflow run" "$(cat "$FAKE/gh.log")" "repos/acme/widgets/actions/runs?head_sha=$MC"
+wfresh
+printf 'commit %s\n' "$MC" >"$L"
+crollup "" ""
+runs 1=queued
+call watch "${WARGS[@]}" --max 1200
+is "7: a commit with a workflow run queued and no lane yet stays waiting" "$(printf '%s\n' "$OUT" | tr '\n' '|')" "commit=$MC	outcome=waiting	ci=none|outcome=stopped	reason=expired	pending=$MC	unread=|"
+wfresh
+printf 'commit %s\n' "$MC" >"$L"
+crollup "" ""
+call watch "${WARGS[@]}"
+crollup "" "$GREEN"
+call watch "${WARGS[@]}"
+is "7: a run that shows up after no-run was said is reported by the next watch" "$(printf '%s\n' "$OUT" | sed -n 1p)" "commit=$MC	outcome=green	ci=green"
 
 # Lines the watch cannot read, and a list that goes away.
 wfresh
