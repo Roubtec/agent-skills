@@ -44,6 +44,8 @@
 #            still matches the one recorded at launch. A timeout or a crash is
 #            retried once, in a fresh attempt directory, only after the first
 #            provider is confirmed dead.
+#            Only that one PID is ever signalled and proved dead: no process
+#            group, no supervisor, and no promise about its descendants.
 #
 # Output: `key=value` lines on stdout, `outcome=` first, then `reason=` (the
 # helper's reason verbatim; on the direct launch the provider's own diagnostic,

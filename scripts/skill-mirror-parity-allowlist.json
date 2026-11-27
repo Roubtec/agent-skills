@@ -30,13 +30,5 @@
     "claude": 0,
     "codex": 2,
     "reason": "Codex chooses between a structured user-input tool and a numbered chat list per question, stated as two bullets; Claude has only the chat surface and states it in prose."
-  },
-  {
-    "skill": "review-cycle",
-    "heading": "## The peer step",
-    "element": "bullets",
-    "claude": 0,
-    "codex": 5,
-    "reason": "Codex's peer is the claude CLI, whose preflight (command -v, auth status, ANTHROPIC_API_KEY, older-CLI) is a five-rung classification ladder; Claude's codex preflight is one sentence of prose."
   }
 ]
