@@ -57,7 +57,7 @@ So:
 Worktrees are disposable working directories: the shared `.git` object store keeps every commit and branch ref even after a worktree directory is deleted.
 The operating discipline that follows:
 
-- Keep worktrees under a **gitignored base directory** (e.g. `.worktrees/` at the repo root) or outside the repository entirely, so worktree contents never show up in the main tree's status or get committed.
+- Keep worktrees under a **gitignored base directory** (e.g. `.worktrees/` at the repo root), so worktree contents never show up in the main tree's status or get committed.
 - **Commit early and often**, and **push after every commit** while the remote is available — a worktree's working tree is more volatile than committed-and-pushed history, and pushing provides remote durability and keeps the PR current.
   In the local-only fallback (Session Bootstrap's remote probe failed), commits are the durability boundary — push when access returns.
 - Package managers with a content-addressed store (e.g. pnpm) make per-worktree installs cheap: when the store and the worktree share a filesystem, installs hardlink package files from the store instead of copying them, so many worktrees can install concurrently without multiplying disk usage.

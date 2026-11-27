@@ -159,6 +159,7 @@ const STEPS = [
       ["runs it before the first attach", /before the first attach run `bootstrap\.sh ignore`/],
       ["says what this skill does with a stop", /`outcome=stop` does not halt this run/],
       ["carries the stop into the final report", /`blocker=` line into the final report/],
+      ["makes a stop that names no base attach nothing", /A stop with no `wt-base=` line[^\n]*attach nothing/],
       ["makes a failure that printed no outcome attach nothing", /Any other non-zero exit[^\n]*no `outcome=` line[^\n]*attach nothing/],
     ],
     absent: ABSENT_REPROBE,
