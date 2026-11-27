@@ -273,6 +273,12 @@ DIR="$B"
 call ignore
 is "bare: no main checkout is a stop" "$RC" 3
 has "bare: ...saying so" "$(val blocker)" "cannot find the main checkout"
+git init -q -b main --separate-git-dir "$WORKDIR/apart.git" "$WORKDIR/apart"
+DIR="$WORKDIR/apart"
+call ignore
+is "separate git dir: no main checkout to be found is a stop" "$RC" 3
+has "separate git dir: the blocker names the shape" "$(val blocker)" "a --separate-git-dir repository"
+has "separate git dir: ...and a remedy" "$(val blocker)" "run from an ordinary clone"
 
 # ------------------------------------------------------------- run, plain git --
 ORIGIN="$WORKDIR/origin.git"
