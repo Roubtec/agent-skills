@@ -55,11 +55,12 @@ A reap sweep has no worktree isolation at all — every subagent you spawn share
 
 For a sweep, if the repo's deferred task subfolder exists (for example, `tasks/deferred/`), inspect it and report entries whose recorded condition appears to have arrived; promotion into the active task folder remains a maintainer decision, so do not move them automatically.
 
-As part of every cleanup sweep, resolve the repository's task folder (commonly `tasks/`), recursively inventory task filenames across that whole subtree, including its `done/`, `deferred/`, and any future nested folders, and flag duplicate **full task numbers**.
-Under the three-digit convention, parse the full number as three digits plus an optional lowercase letter suffix: two `024` files collide regardless of slug or folder, while `001`, `001a`, and `001b` are distinct and may coexist; apply the repository's documented equivalent when its naming convention differs.
+As part of every cleanup sweep, run `task-numbers.sh duplicates`, in the `write-tasks` skill's folder beside this skill's, by its absolute path from the checkout being swept (`--folder <dir>` where the task folder is not `tasks/`): it reads the working tree's whole task subtree and nothing remote, so no unreadable PR head can fail a sweep.
+`outcome=duplicate` (exit 3) prints a `duplicate=` line for every file whose **full task number** stands on more than one (two `024` files collide regardless of slug or folder, while `001`, `001a`, and `001b` may coexist), and exit 1 is a folder that could not be read, never a clean sweep.
+Apply the repository's documented equivalent to the `unnumbered=` paths, which were compared with nothing, when its naming convention differs: `numbered=0` means the script compared nothing at all.
 Report every colliding path.
 Do not renumber or rename an archived or deferred task to repair a duplicate — the stable number preserves historical references; report the collision for explicit remediation instead.
-Repeat the inventory after creating any follow-up tasks and before committing the cleanup, so the sweep also catches a number allocated during the current run.
+Run it again after creating any follow-up tasks and before committing the cleanup, so the sweep also catches a number allocated during the current run.
 
 For every task file:
 
@@ -97,6 +98,7 @@ Instead, create one or more new follow-up task files in the same task folder usi
 
 - Continue the numbering sequence within the same phase.
   For example, if reaping six `01-*` tasks, a follow-up file might be `01-07-phase-01-follow-ups.md`.
+  Allocate the number by that skill's "File naming and ordering" and its `task-numbers.sh taken --repo <owner>/<repo>` call, never a hand inventory; a head it could not read (`outcome=incomplete`) leaves the allocation reported as not fully checked and fails nothing.
 - If the remaining items are small and span multiple original tasks, prefer a single consolidated follow-up task (e.g. "Phase 01 minor fixes and gaps") over one file per original task.
   Group by theme or proximity, not by origin.
 - If a gap is substantial enough to warrant its own task, give it its own file with a descriptive name.

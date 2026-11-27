@@ -349,7 +349,7 @@ For the **follow-up-task** items, write the task file(s) following the `write-ta
   Default to its task folder (commonly `tasks/`): a planned follow-up stays queued and numbered there even when it has prerequisites, which the task must state so its ordering remains visible.
 - Use the deferred subfolder (for example, `tasks/deferred/`) only for deliberately unscheduled work: it depends on functionality that is not certain to arrive; it addresses a condition that cannot occur yet or has not manifested, and fixing it would be costly; or it awaits a spike or decision between competing options.
 - When unsure, prefer `tasks/`: a mis-queued task can be reprioritized during a batch, while a mis-deferred task is easily forgotten.
-- Number each file to continue the folder's existing sequence, slotted by priority/intended order.
+- Number each file to continue the folder's existing sequence, slotted by priority/intended order, by the allocation rule in that skill's "File naming and ordering": `task-numbers.sh taken --repo <owner>/<repo>`, in the `write-tasks` skill's folder beside this skill's, lists every number standing in the working tree and on every open PR head, so a number a head holds is not reused; `outcome=incomplete` means the allocation is not fully checked, which is reported and stops nothing.
 - Each task must stand alone: restate the concern and link the PR thread; an implementer should not need to re-read the review.
   The link permanently anchors the exact line under review, so the task body anchors to named symbols per the `write-tasks` conventions and stays true after the branch moves.
 - **Commit task files on the current branch, separately from code-fix commits** (when practical).

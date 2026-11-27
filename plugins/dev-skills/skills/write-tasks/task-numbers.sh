@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # task-numbers.sh — which task numbers a branch newly claims, and who else
-# holds them: the base it is headed for, and every open pull request.
+# holds them: the base it is headed for, and every open pull request; and which
+# numbers stand twice in the working tree.
 #
 # Usage, from the checkout that holds the branch, or with `-C <dir>` ahead of
 # the command, as git takes it:
@@ -8,10 +9,11 @@
 #                          [--branch <commit>] [--folder <dir>]
 #                          [--reserved <number>]... [--member <commit>:<its base commit>]...
 #   task-numbers.sh taken  --repo <owner>/<repo> [--folder <dir>]
+#   task-numbers.sh duplicates [--folder <dir>]
 #
 # `<owner>/<repo>` is the repository the pull requests are in; write it
 # `<host>/<owner>/<repo>` where that is not github.com. `--folder` is the
-# repository's task folder (`tasks`, no trailing slash). A task file is one whose basename starts
+# repository's task folder (`tasks`, no trailing slash; `./-x` for a name that starts with a dash). A task file is one whose basename starts
 # with a full task number and a dash: three digits and an optional lowercase
 # letter (`001-`, `001a-`, `042b-`), at any depth under the folder, so
 # `done/` and `deferred/` keep their numbers. `001` and `001a` are two numbers.
@@ -63,7 +65,26 @@
 #         <number> is `-` for a file that carries no full task number as
 #         above: a repository numbering its tasks another way reads the paths.
 #         under outcome=listed, or outcome=incomplete (exit 3) with the same
-#         skipped= and limit= lines.
+#         skipped= and limit= lines. A folder that is not in the working tree
+#         lists nothing from it (the first task has no folder yet); one that
+#         could not be read whole is a failure, and a symlink is read through.
+# duplicates
+#         For a cleanup sweep. The working tree's folder alone, tracked or
+#         not, and nothing remote: no pull request is read, so none can fail
+#         it. Full numbers are compared, as the guard does and the allocator
+#         does not: two `024` files are a duplicate whatever their slugs or
+#         subfolders, `001` beside `001a` is none.
+#           duplicate=<number> TAB <path>
+#                       once for every file of a number that stands on more
+#                       than one
+#           unnumbered=<path>
+#                       a file that carries no full task number as above, and
+#                       so was compared with nothing: a repository numbering
+#                       its tasks another way reads these paths
+#         under outcome=clean (exit 0) or outcome=duplicate (exit 3), and
+#         always numbered= (how many files carried a full number). A folder
+#         that is missing, is no folder, or could not be read whole is a
+#         failure, not a clean answer; one that is a symlink is read through.
 #
 # One enumeration, `gh pr list --state open --limit 200`, is the whole remote
 # reading, and each head is read at the commit it named: a head that moves
@@ -72,10 +93,10 @@
 # and from the remote it matched; no FETCH_HEAD is read.
 #
 # Output: `key=value` lines on stdout, `outcome=` first; an explanation goes to
-# stderr. Exit status: 0 on clean and listed, 3 on collision and incomplete, 1
-# on a failure (the scanned branch or its base could not be read), 64 on a
-# usage error. Needs git, and gh for the remote reading. Written for bash 3.2
-# and later.
+# stderr. Exit status: 0 on clean and listed; 3 on collision, incomplete and
+# duplicate; 1 on a failure (the scanned branch, its base or the folder could
+# not be read); 64 on a usage error. Needs git, and gh for the remote reading.
+# Written for bash 3.2 and later.
 set -u
 # Paths as they are, not C-quoted: they are compared and printed as names.
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.quotePath GIT_CONFIG_VALUE_0=false
@@ -96,20 +117,20 @@ fail() {
 }
 usage() {
 	note "$*"
-	sed -n '5,10p' "$SELF" | sed 's/^# \{0,1\}//' >&2
+	sed -n '6,12p' "$SELF" | sed 's/^# \{0,1\}//' >&2
 	exit 64
 }
 field() { # key, text
 	printf '%s\n' "$2" | awk -v k="$1=" 'index($0, k) == 1 { print substr($0, length(k) + 1); exit }'
 }
 
-# Reads paths, prints `<number> TAB <path>` for each that is a task file.
 # Reads paths, prints `<number or -> TAB <path>` for every one.
 # shellcheck disable=SC2016 # the $names are awk's
 LISTED='{
 	b = $0; sub(/.*\//, "", b)
 	print (match(b, /^[0-9][0-9][0-9][a-z]?-/) ? substr(b, 1, RLENGTH - 1) : "-") "\t" $0
 }'
+# Reads paths, prints `<number> TAB <path>` for each that is a task file.
 # shellcheck disable=SC2016 # the $names are awk's
 NUMBERED='{
 	b = $0; sub(/.*\//, "", b)
@@ -121,7 +142,12 @@ CMD="${1:-}"
 case "$CMD" in
 -C)
 	[ $# -ge 2 ] || usage "-C needs a directory and a command"
-	cd "$1" 2>/dev/null || fail "could not enter $1."
+	# Behind ./ a relative name is a directory and nothing else: not an
+	# option, not `-` for the previous directory, not a CDPATH lookup.
+	case "$1" in
+	/*) cd "$1" 2>/dev/null || fail "could not enter $1." ;;
+	*) cd "./$1" 2>/dev/null || fail "could not enter $1." ;;
+	esac
 	CMD="$2"
 	shift 2
 	;;
@@ -163,7 +189,15 @@ need_common() {
 	?*/?*) ;;
 	*) usage "--repo <owner>/<repo> is required (the repository the pull requests are in)" ;;
 	esac
+	need_tree
+}
+need_tree() {
 	[ -n "$FOLDER" ] || usage "--folder cannot be empty"
+	# The folder reaches find as its starting point, where a leading dash
+	# would be read as an expression.
+	case "$FOLDER" in
+	-*) usage "--folder takes a path, not an option: write ./$FOLDER for a folder so named" ;;
+	esac
 	git rev-parse --git-dir >/dev/null 2>&1 || fail "this is not a git repository."
 	# From the top of the working tree: the folder is a path from there, and
 	# a pathspec read from a subdirectory would match nothing and look clean.
@@ -179,6 +213,20 @@ need_common() {
 	: >"$tmp/pin.err"
 }
 gap() { say "$*" >>"$tmp/gaps"; }
+
+# Every file under the folder of the working tree at <top>, into $tmp/files;
+# fails where find could not read it whole, its reason in $tmp/err.
+tree_files() { # top
+	local from
+	# Behind ./ no folder name (`!`, `(`) is an expression to find; the paths
+	# are printed without it. -H: a folder that is a symlink is read through.
+	case "$FOLDER" in
+	/*) from="$FOLDER" ;;
+	*) from="./$FOLDER" ;;
+	esac
+	(cd "$1" && find -H "$from" -type f) >"$tmp/found" 2>"$tmp/err" || return 1
+	sed 's|^\./||' "$tmp/found" >"$tmp/files"
+}
 
 # A branch of the repository, fetched once per run: prints `<remote> TAB
 # <oid>`. Why it failed is left in $tmp/pin.err.
@@ -240,7 +288,7 @@ print_gaps() {
 
 cmd_claims() {
 	need_common
-	local base_oid branch_oid branch_name pinned degraded="" n head pbase pbase_oid poid hname cross m mc mb moid claims collisions
+	local base_oid branch_oid branch_name pinned degraded="" n head pbase pbase_oid poid hname cross m mc mb moid mboid claims collisions
 	if [ -n "$BASE" ] && [ -n "$LOCAL_BASE" ]; then usage "give --base or --local-base, not both"; fi
 	[ -n "$BASE$LOCAL_BASE" ] || usage "claims needs --base <branch>, or --local-base <commit> where the repository cannot have the base"
 	branch_oid="$(git rev-parse --verify --quiet "$BRANCH^{commit}")" || fail "the branch '$BRANCH' names no commit here. Nothing was scanned."
@@ -318,7 +366,8 @@ cmd_claims() {
 			moid="$(git rev-parse --verify --quiet "$mc^{commit}")" || fail "the member '$mc' names no commit here. Nothing here says its numbers are free."
 			# The scanned branch named as a member holds nothing against itself.
 			[ "$moid" != "$branch_oid" ] || continue
-			if ! git diff --no-renames --diff-filter=A --name-only "$mb...$mc" -- "$FOLDER/" >"$tmp/member" 2>/dev/null; then
+			mboid="$(git rev-parse --verify --quiet "$mb^{commit}")" || fail "the base '$mb' of the member '$mc' names no commit here. Nothing here says its numbers are free."
+			if ! git diff --no-renames --diff-filter=A --name-only "$mboid...$moid" -- "$FOLDER/" >"$tmp/member" 2>/dev/null; then
 				fail "could not read what the member '$mc' adds against '$mb'. Nothing here says its numbers are free."
 			fi
 			awk "$NUMBERED" "$tmp/member" | awk -F "$TAB" -v t="$TAB" -v h="member:$mc" '{ print $1 t h t $2 }' >>"$tmp/holders"
@@ -409,7 +458,9 @@ cmd_taken() {
 	top="$(git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ] || fail "this checkout has no working tree to inventory."
 	: >"$tmp/taken"
 	if [ -d "$top/$FOLDER" ]; then
-		(cd "$top" && find "$FOLDER" -type f) | awk "$LISTED" | awk -F "$TAB" -v t="$TAB" '{ print "taken=" $1 t "tree" t $2 }' >>"$tmp/taken"
+		tree_files "$top" ||
+			fail "could not read the folder '$FOLDER' whole ($(tr '\n' ' ' <"$tmp/err")). A partial inventory says nothing of which numbers are free."
+		awk "$LISTED" "$tmp/files" | awk -F "$TAB" -v t="$TAB" '{ print "taken=" $1 t "tree" t $2 }' >>"$tmp/taken"
 	fi
 	enumerate
 	while IFS="$TAB" read -r n head pbase poid hname cross; do
@@ -434,12 +485,36 @@ cmd_taken() {
 	}
 }
 
+cmd_duplicates() {
+	[ -z "$REPO$BASE$LOCAL_BASE$RESERVED$MEMBERS" ] && [ "$BRANCH" = HEAD ] || usage "duplicates takes --folder only: it reads the working tree and nothing remote"
+	need_tree
+	local top duplicates
+	top="$(git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ] || fail "this checkout has no working tree to inventory."
+	[ -d "$top/$FOLDER" ] ||
+		fail "'$FOLDER' is no folder in this working tree. That is not a clean sweep: name the task folder with --folder where it is another."
+	tree_files "$top" ||
+		fail "could not read the folder '$FOLDER' whole ($(tr '\n' ' ' <"$tmp/err")). That is not a clean sweep: name the task folder with --folder where it is another."
+	awk "$LISTED" "$tmp/files" | sort >"$tmp/tree"
+	awk -F "$TAB" '$1 != "-" { count[$1]++; paths[$1] = paths[$1] "duplicate=" $1 "\t" substr($0, length($1) + 2) "\n" }
+		END { for (n in count) if (count[n] > 1) printf "%s", paths[n] }' "$tmp/tree" | sort >"$tmp/duplicates"
+	duplicates="$(cut -f1 "$tmp/duplicates" | sort -u | awk 'END { print NR }')"
+	if [ "$duplicates" -gt 0 ]; then say "outcome=duplicate"; else say "outcome=clean"; fi
+	say "numbered=$(awk -F "$TAB" '$1 != "-"' "$tmp/tree" | awk 'END { print NR }')"
+	cat "$tmp/duplicates"
+	awk -F "$TAB" '$1 == "-" { print "unnumbered=" substr($0, 3) }' "$tmp/tree"
+	[ "$duplicates" -eq 0 ] || {
+		note "$duplicates task number(s) stand on more than one file in this working tree. Report every path for explicit remediation; a done or deferred task is never renumbered to repair one."
+		exit 3
+	}
+}
+
 case "$CMD" in
 claims) cmd_claims ;;
 taken) cmd_taken ;;
+duplicates) cmd_duplicates ;;
 -h | --help | help)
 	awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$SELF"
 	;;
-'') usage "name a command: claims or taken" ;;
+'') usage "name a command: claims, taken or duplicates" ;;
 *) usage "unknown command: $CMD" ;;
 esac
