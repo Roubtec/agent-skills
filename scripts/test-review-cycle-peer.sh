@@ -1,0 +1,733 @@
+#!/usr/bin/env bash
+# Hermetic test for the review-cycle peer helper
+# (plugins/dev-skills/skills/review-cycle/peer.sh).
+#
+# No provider is contacted: `peer-review-run`, `codex`, `claude` and `muse` are
+# stubs on a private PATH that log how they were called and answer as files
+# under $STEER tell them to. The direct launch runs those stubs as real
+# detached processes, so the identity handoff, the deadline and the teardown
+# are exercised for real; the one thing a real process cannot do — survive
+# KILL — is driven by sourcing the helper beside a fake `kill` and a fake
+# /proc. Needs Bash, git, jq, coreutils and Linux /proc.
+# shellcheck disable=SC2319 # `ok <label> $?` after a `[ … ]` test is the point
+# shellcheck disable=SC2016 # single-quoted text is literal prompt bytes, or a program for another shell
+set -uo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+SHIPPED="$SCRIPT_DIR/../plugins/dev-skills/skills/review-cycle/peer.sh"
+HELPER="${REVIEW_CYCLE_PEER_HELPER:-$SHIPPED}"
+MIRROR="$SCRIPT_DIR/../codex/dev-skills/skills/review-cycle/peer.sh"
+BRIEF="$SCRIPT_DIR/../plugins/dev-skills/skills/review-cycle/peer-brief.md"
+SHIM="$SCRIPT_DIR/../plugins/dev-skills/bin/review-cycle-peer"
+WORKDIR="$(cd -P "$(mktemp -d)" && pwd)"
+cleanup() {
+	local f pid
+	for f in "$WORKDIR"/art/*/manual-attempt-*/peer-review.pid; do
+		[ -f "$f" ] || continue
+		read -r pid _ <"$f" || continue
+		case "$pid" in '' | *[!0-9]*) continue ;; esac
+		[ "$(cat "/proc/$pid/comm" 2>/dev/null)" != sleep ] || kill -KILL "$pid" 2>/dev/null
+	done
+	rm -rf "$WORKDIR"
+}
+trap cleanup EXIT
+export REVIEW_CYCLE_PEER_POLL_SECONDS=0.1
+
+checks=0
+fails=0
+ok() { # <label> <condition status>
+	checks=$((checks + 1))
+	if [ "$2" != 0 ]; then
+		fails=$((fails + 1))
+		printf 'FAIL [%s]\n' "$1" >&2
+	fi
+}
+has() { # <label> <haystack> <needle>
+	case "$2" in *"$3"*) ok "$1" 0 ;; *)
+		ok "$1" 1
+		printf '      wanted: %s\n      got:    %s\n' "$3" "$2" >&2
+		;;
+	esac
+}
+lacks() { # <label> <haystack> <needle>
+	case "$2" in *"$3"*)
+		ok "$1" 1
+		printf '      unwanted: %s\n' "$3" >&2
+		;;
+	*) ok "$1" 0 ;; esac
+}
+is() { # <label> <actual> <expected>
+	if [ "$2" = "$3" ]; then ok "$1" 0; else
+		ok "$1" 1
+		printf '      wanted: %s\n      got:    %s\n' "$3" "$2" >&2
+	fi
+}
+val() { printf '%s\n' "$OUT" | sed -n "s/^$1=//p" | head -n 1; }
+first() { printf '%s\n' "$OUT" | head -n 1; }
+
+for tool in peer-review-run codex claude muse; do
+	if PATH=/usr/bin:/bin command -v "$tool" >/dev/null 2>&1; then
+		printf 'review-cycle peer helper test: a real %s sits in /usr/bin or /bin, so the private PATH cannot hide it.\n' "$tool" >&2
+		exit 1
+	fi
+done
+
+# --- stubs ---------------------------------------------------------------
+ALL="$WORKDIR/bin-all"         # every provider and the helper
+NOHELPER="$WORKDIR/bin-direct" # the providers, no peer-review-run
+BARE="$WORKDIR/bin-bare"       # nothing
+STEER="$WORKDIR/steer"
+mkdir -p "$ALL" "$NOHELPER" "$BARE" "$STEER" "$WORKDIR/art"
+export STEER
+
+cat >"$ALL/peer-review-run" <<'STUB'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$STEER/helper.calls"
+root="" prompt=""
+while [ $# -gt 0 ]; do
+	case "$1" in
+	--artifact-root) root="$2" ;;
+	--prompt-file) prompt="$2" ;;
+	esac
+	shift
+done
+cp "$prompt" "$STEER/helper.prompt"
+mode="$(cat "$STEER/helper.mode" 2>/dev/null || echo passed)"
+echo '{"event":"progress","line":"working"}' >&2
+case "$mode" in
+usage-provider)
+	echo "peer-review-run: --provider must be claude or codex" >&2
+	exit 64
+	;;
+usage-other)
+	echo "peer-review-run: --worktree must be an absolute path" >&2
+	exit 64
+	;;
+crash)
+	echo "peer-review-run: cannot create the review file" >&2
+	exit 70
+	;;
+raw)
+	cat "$STEER/helper.raw"
+	exit 0
+	;;
+esac
+review=null
+case "$mode" in
+passed | issues)
+	mkdir -p "$root/session/attempt-1"
+	cat "$STEER/helper.review" >"$root/session/attempt-1/review.txt"
+	review="\"$root/session/attempt-1/review.txt\""
+	;;
+passed-nofile) mode=passed ;;
+issues-ghost)
+	mode=issues
+	review="\"$root/session/attempt-1/review.txt\""
+	;;
+esac
+echo "a line of provider noise before the result"
+jq -cn --arg outcome "$mode" --arg reason "$(cat "$STEER/helper.reason" 2>/dev/null)" \
+	--argjson model "$(cat "$STEER/helper.model" 2>/dev/null || echo null)" \
+	--argjson effort "$(cat "$STEER/helper.effort" 2>/dev/null || echo '"medium"')" \
+	--argjson review "$review" \
+	'{schema: "powbox.peer-review-run/v1", outcome: $outcome, reason: $reason, model: $model, effort: $effort, artifactDir: "/nowhere", reviewFile: $review}'
+STUB
+
+cat >"$NOHELPER/codex" <<'STUB'
+#!/usr/bin/env bash
+if [ "$1 ${2:-}" = "login status" ]; then
+	state="$(cat "$STEER/codex.login" 2>/dev/null || echo ok)"
+	[ "$state" = ok ] && { echo "Logged in using ChatGPT"; exit 0; }
+	echo "$state" >&2
+	exit 1
+fi
+n=$(($(cat "$STEER/codex.count" 2>/dev/null || echo 0) + 1))
+echo "$n" >"$STEER/codex.count"
+for a in "$@"; do printf '%s\n--ARG--\n' "$a"; done >"$STEER/codex.args.$n"
+{ pwd; readlink /proc/$$/fd/0; } >"$STEER/codex.env.$n"
+out=""
+while [ $# -gt 0 ]; do
+	[ "$1" != -o ] || out="$2"
+	shift
+done
+mode="$(cat "$STEER/codex.mode.$n" 2>/dev/null || cat "$STEER/codex.mode" 2>/dev/null || echo pass)"
+echo "codex stub progress on stderr" >&2
+case "$mode" in
+pass) cat "$STEER/codex.review" >"$out" ;;
+empty) : ;;
+blank) printf '\n  \n' >"$out" ;;
+garbled) echo "It looks broadly fine to me." >"$out" ;;
+auth)
+	echo "ERROR: You are not logged in. Run codex login." >&2
+	exit 1
+	;;
+crash)
+	echo "error: stream disconnected before completion" >&2
+	exit 1
+	;;
+hang) exec sleep 300 ;;
+late)
+	cat "$STEER/codex.review" >"$out"
+	exec sleep 300
+	;;
+esac
+STUB
+
+cat >"$NOHELPER/claude" <<'STUB'
+#!/usr/bin/env bash
+if [ "$1 ${2:-}" = "auth status" ]; then
+	state="$(cat "$STEER/claude.auth" 2>/dev/null || echo ok)"
+	[ "$state" = ok ] && { echo '{"loggedIn": true}'; exit 0; }
+	echo "$state" >&2
+	exit 1
+fi
+n=$(($(cat "$STEER/claude.count" 2>/dev/null || echo 0) + 1))
+echo "$n" >"$STEER/claude.count"
+for a in "$@"; do printf '%s\n--ARG--\n' "$a"; done >"$STEER/claude.args.$n"
+pwd >"$STEER/claude.env.$n"
+cat >"$STEER/claude.stdin.$n"
+mode="$(cat "$STEER/claude.mode" 2>/dev/null || echo pass)"
+case "$mode" in
+pass) jq -n --arg r "$(cat "$STEER/claude.review")" '{type: "result", is_error: false, result: $r}' ;;
+error) jq -n --arg r "$(cat "$STEER/claude.review")" '{type: "result", is_error: true, result: $r}' ;;
+notjson) echo "Segmentation fault (core dumped)" ;;
+esac
+STUB
+
+cat >"$NOHELPER/muse" <<'STUB'
+#!/usr/bin/env bash
+if [ "$1" = usage ]; then
+	state="$(cat "$STEER/muse.usage" 2>/dev/null || echo ok)"
+	[ "$state" = ok ] && { echo "plan: wonder"; exit 0; }
+	echo "$state" >&2
+	exit 1
+fi
+echo "the muse stub is only ever asked for usage" >&2
+exit 99
+STUB
+chmod +x "$ALL/peer-review-run" "$NOHELPER/codex" "$NOHELPER/claude" "$NOHELPER/muse"
+for tool in codex claude muse; do ln -s "$NOHELPER/$tool" "$ALL/$tool"; done
+
+BIN="$ALL"
+peer() { PATH="$BIN:/usr/bin:/bin" bash "$HELPER" "$@"; }
+fresh() { # a clean steering directory and a new artifact directory in $A
+	rm -rf "$STEER"
+	mkdir -p "$STEER"
+	N=$((${N:-0} + 1))
+	A="$WORKDIR/art/$N"
+	printf 'VERDICT: PASS\nVERIFICATION: STATIC (executed no tests)\n' >"$STEER/helper.review"
+	cp "$STEER/helper.review" "$STEER/codex.review"
+}
+args_of() { # <stub> <call number>: the logged arguments, one per line, the prompt replaced
+	awk -v RS='\n--ARG--\n' '{ if ($0 ~ /\n/) print "<PROMPT>"; else print }' "$STEER/$1.args.$2" | tr '\n' ' '
+}
+
+# --- a small committed diff to review --------------------------------------
+REPO="$WORKDIR/repo"
+git init -q "$REPO"
+git -C "$REPO" config user.email t@example.invalid
+git -C "$REPO" config user.name T
+printf 'contextword stays\nold line\nlast\n' >"$REPO/a.txt"
+git -C "$REPO" add a.txt
+git -C "$REPO" commit -q -m base
+BASE_OID="$(git -C "$REPO" rev-parse HEAD)"
+printf 'contextword stays\nnew zebracrossing line\ntwice_token\ntwice_token again\nlast\n' >"$REPO/a.txt"
+git -C "$REPO" commit -q -am change
+TIP_OID="$(git -C "$REPO" rev-parse HEAD)"
+FACTS="$WORKDIR/facts.txt"
+printf 'Work item: tidy a.txt.\nBranch: main. Base: %s.\n$(echo not expanded) `nor this`\n' "$BASE_OID" >"$FACTS"
+proof() { # <token>
+	printf 'VERDICT: PASS\nVERIFICATION: STATIC (executed no tests)\nEVIDENCE_BASE_OID: %s\nEVIDENCE_TIP_OID: %s\nEVIDENCE_TOKEN: %s\n' "$BASE_OID" "$TIP_OID" "$1"
+}
+
+# --- 1: what ships -----------------------------------------------------------
+cmp -s "$SHIPPED" "$MIRROR"
+ok "1: the Codex mirror ships the same helper, byte for byte" $?
+for f in plugins/dev-skills/skills/review-cycle/peer.sh codex/dev-skills/skills/review-cycle/peer.sh plugins/dev-skills/bin/review-cycle-peer; do
+	mode="$(git -c safe.directory='*' -C "$SCRIPT_DIR/.." ls-files -s -- "$f" | cut -d' ' -f1)"
+	is "1: $f is committed executable" "$mode" 100755
+done
+OUT="$(bash "$SHIPPED" --help 2>&1)"
+has "1: the helper prints its contract" "$OUT" "peer.sh preflight --provider"
+has "1: ...which names the one stop" "$OUT" "Exit status: 0 for every outcome above; 3 when a provider this script"
+lacks "1: ...and none of its code" "$OUT" "set -u"
+is "1: the bin/ shim runs the same helper" "$(bash "$SHIM" --help 2>&1)" "$OUT"
+ln -s "$SHIM" "$WORKDIR/linked"
+is "1: ...through a symlink too" "$(bash "$WORKDIR/linked" run --help 2>&1)" "$OUT"
+
+# --- 2: usage errors launch nothing ------------------------------------------
+fresh
+usage_case() { # <label> <args...>
+	local label="$1"
+	shift
+	OUT="$(peer "$@" 2>&1)"
+	is "2: $label is a usage error" "$?" 64
+	lacks "2: ...with no outcome line" "$OUT" "outcome="
+}
+usage_case "no command"
+usage_case "an unknown command" review
+usage_case "an unknown provider" run --provider gemini --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS"
+usage_case "a missing provider" preflight
+usage_case "a relative worktree" run --provider codex --worktree repo --artifact-dir "$A" --facts "$FACTS"
+usage_case "a relative artifact directory" run --provider codex --worktree "$REPO" --artifact-dir art --facts "$FACTS"
+usage_case "an artifact directory inside the worktree" run --provider codex --worktree "$REPO" --artifact-dir "$REPO/.peer" --facts "$FACTS"
+usage_case "the worktree itself as artifact directory" run --provider codex --worktree "$REPO" --artifact-dir "$REPO" --facts "$FACTS"
+usage_case "neither facts nor prompt" run --provider codex --worktree "$REPO" --artifact-dir "$A"
+usage_case "both facts and prompt" run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --prompt-file "$FACTS"
+usage_case "an empty facts file" run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts /dev/null
+usage_case "claude without an evidence base" run --provider claude --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS"
+usage_case "an evidence base beside a complete prompt" run --provider codex --worktree "$REPO" --artifact-dir "$A" --prompt-file "$FACTS" --evidence-base "$BASE_OID"
+usage_case "a deadline that is not a number" run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --deadline soon
+usage_case "a flag with no value" run --provider
+usage_case "collect where nothing was launched" collect --artifact-dir "$WORKDIR/art"
+usage_case "a wait that is not a number" collect --artifact-dir "$A" --wait 0
+[ ! -e "$STEER/helper.calls" ] && [ ! -e "$STEER/codex.count" ]
+ok "2: none of them reached the helper or a provider" $?
+
+# --- 3: preflight ------------------------------------------------------------
+fresh
+BIN="$BARE"
+OUT="$(peer preflight --provider codex)"
+is "3: codex missing is unavailable" "$(first)|$(val reason)" "outcome=unavailable|missing binary"
+OUT="$(peer preflight --provider claude)"
+is "3: claude missing is unavailable" "$(first)|$(val reason)" "outcome=unavailable|missing binary"
+OUT="$(peer preflight --provider muse)"
+is "3: muse missing is absent, which a run says nothing about" "$(first)|$(val reason)" "outcome=absent|missing binary"
+BIN="$ALL"
+OUT="$(peer preflight --provider codex)"
+is "3: a logged-in codex is available" "$?|$(first)|$(val provider)" "0|outcome=available|codex"
+echo "Not logged in" >"$STEER/codex.login"
+OUT="$(CODEX_API_KEY='' peer preflight --provider codex)"
+is "3: a logged-out codex with no key is unavailable, with the probe's own words" "$?|$(first)|$(val reason)" "0|outcome=unavailable|Not logged in"
+OUT="$(CODEX_API_KEY=k peer preflight --provider codex)"
+is "3: ...and deferred to the first launch where CODEX_API_KEY is set" "$(first)" "outcome=deferred"
+OUT="$(peer preflight --provider claude)"
+is "3: a logged-in claude is available" "$(first)" "outcome=available"
+echo "Invalid credentials" >"$STEER/claude.auth"
+OUT="$(ANTHROPIC_API_KEY='' peer preflight --provider claude)"
+is "3: any other claude auth failure is unavailable and keeps its reason" "$(first)|$(val reason)" "outcome=unavailable|Invalid credentials"
+OUT="$(ANTHROPIC_API_KEY=k peer preflight --provider claude)"
+is "3: ...deferred where ANTHROPIC_API_KEY is set" "$(first)" "outcome=deferred"
+echo "error: unknown command 'auth'" >"$STEER/claude.auth"
+OUT="$(ANTHROPIC_API_KEY='' peer preflight --provider claude)"
+is "3: ...and deferred where this claude has no auth status" "$(first)|$(val reason)" "outcome=deferred|this claude has no auth status subcommand"
+OUT="$(peer preflight --provider muse)"
+is "3: a muse that answers usage is available" "$(first)" "outcome=available"
+echo "not logged in to muse" >"$STEER/muse.usage"
+OUT="$(peer preflight --provider muse)"
+is "3: ...and unavailable where it does not" "$?|$(first)|$(val reason)" "0|outcome=unavailable|not logged in to muse"
+[ ! -e "$STEER/helper.calls" ] && [ ! -e "$STEER/codex.count" ] && [ ! -e "$STEER/claude.count" ]
+ok "3: no preflight launched a review" $?
+
+# --- 4: the helper path --------------------------------------------------------
+fresh
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" 2>"$WORKDIR/stderr")"
+is "4: a passing codex review through peer-review-run" "$?|$(first)|$(val path)" "0|outcome=passed|helper"
+is "4: codex is launched at medium effort with no model flag, in the default budget" "$(cat "$STEER/helper.calls")" \
+	"--provider codex --worktree $REPO --prompt-file $A/peer-review.prompt --artifact-root $A/peer-review-run --timeout 260 --effort medium"
+is "4: the prompt is the brief, a blank line, and the facts, byte for byte" "$(cat "$A/peer-review.prompt" | cksum)" "$({ cat "$BRIEF" && printf '\n' && cat "$FACTS"; } | cksum)"
+cmp -s "$A/peer-review.prompt" "$STEER/helper.prompt"
+ok "4: ...and that is the file the helper was handed" $?
+is "4: the review file is the one the result names" "$(val review_file)" "$A/peer-review-run/session/attempt-1/review.txt"
+is "4: a null model is reported as a strength note, with the pin held" "$(val model)|$(val effort)|$(val strength_pin)" "null|medium|held"
+is "4: the helper's progress stays out of the caller's output" "$(cat "$WORKDIR/stderr")" ""
+lacks "4: no evidence was asked for, so none is reported" "$OUT" "evidence="
+has "4: the prompt file is named" "$OUT" "prompt_file=$A/peer-review.prompt"
+
+fresh
+printf 'A complete prompt.\n' >"$WORKDIR/whole.txt"
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --prompt-file "$WORKDIR/whole.txt")"
+cmp -s "$A/peer-review.prompt" "$WORKDIR/whole.txt"
+ok "4: a complete prompt is handed over unchanged, with no brief added" $?
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" 2>&1)"
+is "4: an artifact directory is never used twice" "$?" 64
+is "4: ...and the helper ran once, not twice" "$(wc -l <"$STEER/helper.calls" | tr -d ' ')" 1
+
+for outcome in issues unavailable timeout forfeited failed; do
+	fresh
+	echo "$outcome" >"$STEER/helper.mode"
+	printf 'VERDICT: ISSUES\n1. blocking a.txt:2 wrong\n' >"$STEER/helper.review"
+	echo "the helper's own words for $outcome" >"$STEER/helper.reason"
+	OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS")"
+	is "4: helper outcome $outcome is carried with its reason and exits 0" "$?|$(first)|$(val reason)" "0|outcome=$outcome|the helper's own words for $outcome"
+	if [ "$outcome" = issues ]; then
+		[ -s "$(val review_file)" ]
+		ok "4: issues names a readable review file" $?
+	else
+		lacks "4: $outcome carries no review file" "$OUT" "review_file="
+	fi
+done
+
+fresh
+echo "provider exited 0 but emitted no recognizable VERDICT token" >"$STEER/helper.reason"
+echo forfeited >"$STEER/helper.mode"
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS")"
+is "4: a reason the batch throttle matches literally arrives unaltered" "$(val reason)" "provider exited 0 but emitted no recognizable VERDICT token"
+
+fresh
+echo '"gpt-next"' >"$STEER/helper.model"
+echo '"high"' >"$STEER/helper.effort"
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS")"
+is "4: an effort other than the one pinned is reported as a pin that differs" "$(val model)|$(val effort)|$(val strength_pin)" "gpt-next|high|differs"
+
+fresh
+echo raw >"$STEER/helper.mode"
+echo '{"schema":"powbox.peer-review-run/v1","outcome":"exploded","reason":""}' >"$STEER/helper.raw"
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS")"
+is "4: an outcome outside the vocabulary is forfeited, never a pass" "$?|$(first)" "0|outcome=forfeited"
+echo '{"schema":"something/else","outcome":"passed","reviewFile":"/etc/hostname"}' >"$STEER/helper.raw"
+fresh_a() { N=$((N + 1)) A="$WORKDIR/art/$N"; }
+fresh_a
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS")"
+is "4: a result under another schema is not read as one" "$?|$(first)" "0|outcome=failed"
+has "4: ...and says the helper gave no result" "$(val reason)" "peer-review-run exited 0 with no result line"
+fresh
+echo crash >"$STEER/helper.mode"
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS")"
+is "4: a helper that dies without a result is failed, with its last words" "$?|$(first)|$(val reason)" "0|outcome=failed|peer-review-run exited 70 with no result line: peer-review-run: cannot create the review file"
+[ ! -e "$STEER/codex.count" ]
+ok "4: ...and is no reason to launch the provider directly" $?
+
+# --- 5: claude and muse on the helper path --------------------------------------
+fresh
+echo '"opus"' >"$STEER/helper.model"
+proof zebracrossing >"$STEER/helper.review"
+OUT="$(peer run --provider claude --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --evidence-base "$BASE_OID")"
+is "5: claude is launched with the model named and medium effort" "$(cat "$STEER/helper.calls")" \
+	"--provider claude --worktree $REPO --prompt-file $A/peer-review.prompt --artifact-root $A/peer-review-run --timeout 260 --model opus --effort medium"
+is "5: a proved pass is a pass, with both pins held" "$(first)|$(val evidence)|$(val strength_pin)" "outcome=passed|proved|held"
+{
+	git -C "$REPO" log --oneline "$BASE_OID..$TIP_OID"
+	git -C "$REPO" diff "$BASE_OID...$TIP_OID"
+} >"$WORKDIR/evidence.txt"
+cmp -s "$WORKDIR/evidence.txt" "$A/diff-evidence.txt"
+ok "5: the audit copy of the evidence is the log and the diff of base..tip" $?
+is "5: ...read-only to its owner" "$(stat -c %a "$A/diff-evidence.txt")" 400
+sed -n '/^BEGIN EMBEDDED GIT EVIDENCE$/,/^END EMBEDDED GIT EVIDENCE$/p' "$A/peer-review.prompt" | sed '1d;$d' >"$WORKDIR/embedded.txt"
+cmp -s "$WORKDIR/evidence.txt" "$WORKDIR/embedded.txt"
+ok "5: nothing but those bytes sits between the evidence markers" $?
+PROMPT="$(cat "$A/peer-review.prompt")"
+has "5: the brief still leads the prompt" "$PROMPT" "$(head -n 1 "$BRIEF")"
+has "5: the facts are inside the generated data, unexpanded" "$PROMPT" "BEGIN GENERATED REVIEW DATA
+$(cat "$FACTS")
+Effective base OID: $BASE_OID
+Review tip OID: $TIP_OID
+BEGIN EMBEDDED GIT EVIDENCE"
+is "5: the prompt ends with the closing markers" "$(tail -n 2 "$A/peer-review.prompt" | tr '\n' '|')" "END EMBEDDED GIT EVIDENCE|END GENERATED REVIEW DATA|"
+has "5: the peer is asked for the three proof lines" "$PROMPT" 'EVIDENCE_BASE_OID: <full OID>` and `EVIDENCE_TIP_OID: <full OID>`'
+lacks "5: ...and is never shown a token to copy" "${PROMPT%%BEGIN GENERATED REVIEW DATA*}" "zebracrossing"
+
+proof_case() { # <label> <review text> <expected first line> <expected reason> <expected evidence>
+	fresh
+	echo '"opus"' >"$STEER/helper.model"
+	printf '%s\n' "$2" >"$STEER/helper.review"
+	case "$2" in *ISSUES*) echo issues >"$STEER/helper.mode" ;; esac
+	OUT="$(peer run --provider claude --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --evidence-base "$BASE_OID")"
+	is "5: $1" "$(first)|$(val reason)|$(val evidence)" "$3|$4|$5"
+}
+UNPROVED='diff evidence unreadable or proof absent'
+proof_case "a pass with no proof lines is forfeited" "VERDICT: PASS" "outcome=forfeited" "$UNPROVED" unproved
+lacks "5: ...and its review is not offered as one" "$OUT" "review_file="
+proof_case "a token in backticks is still the token" "$(proof '`zebracrossing`')" "outcome=passed" "" proved
+proof_case "a token that occurs twice proves nothing" "$(proof twice_token)" "outcome=forfeited" "$UNPROVED" unproved
+proof_case "a token from an unchanged line proves nothing" "$(proof contextword)" "outcome=forfeited" "$UNPROVED" unproved
+proof_case "a token that is not in the diff proves nothing" "$(proof giraffe)" "outcome=forfeited" "$UNPROVED" unproved
+proof_case "a token holding a space proves nothing" "$(proof 'new zebracrossing')" "outcome=forfeited" "$UNPROVED" unproved
+proof_case "a wrong base OID proves nothing" "$(proof zebracrossing | sed "s/^EVIDENCE_BASE_OID: .*/EVIDENCE_BASE_OID: $TIP_OID/")" "outcome=forfeited" "$UNPROVED" unproved
+proof_case "a wrong tip OID proves nothing" "$(proof zebracrossing | sed "s/^EVIDENCE_TIP_OID: .*/EVIDENCE_TIP_OID: $BASE_OID/")" "outcome=forfeited" "$UNPROVED" unproved
+proof_case "issues without proof stay issues, with the reason attached" "VERDICT: ISSUES
+1. blocking a.txt:2 wrong" "outcome=issues" "$UNPROVED" unproved
+[ -s "$(val review_file)" ]
+ok "5: ...and keep their review, so no finding is dropped" $?
+
+fresh
+OUT="$(peer run --provider claude --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --evidence-base no-such-ref)"
+is "5: evidence that cannot be rendered forfeits the launch" "$?|$(first)|$(val reason)" "0|outcome=forfeited|diff evidence could not be rendered: no-such-ref names no commit"
+[ ! -e "$STEER/helper.calls" ] && [ ! -e "$A/peer-review.prompt" ]
+ok "5: ...before any prompt is written or any peer asked" $?
+
+fresh
+OUT="$(peer run --provider muse --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS")"
+is "5: muse gets one long attempt and no model flag" "$(cat "$STEER/helper.calls")" \
+	"--provider muse --worktree $REPO --prompt-file $A/peer-review.prompt --artifact-root $A/peer-review-run --timeout 540 --attempts 1 --effort medium"
+is "5: ...and its pass is a pass" "$(first)|$(val provider)" "outcome=passed|muse"
+fresh
+echo usage-provider >"$STEER/helper.mode"
+OUT="$(peer run --provider muse --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS")"
+is "5: a helper that predates the muse provider makes muse unavailable" "$?|$(first)" "0|outcome=unavailable"
+has "5: ...naming the helper's refusal" "$(val reason)" "--provider must be claude or codex"
+fresh
+echo usage-other >"$STEER/helper.mode"
+OUT="$(peer run --provider muse --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS")"
+is "5: any other usage error is the call's own failure" "$(first)" "outcome=failed"
+fresh
+echo passed-nofile >"$STEER/helper.mode"
+OUT="$(peer run --provider muse --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS")"
+is "5: a muse verdict with no review file is forfeited: there is no direct launch" "$(first)|$(val reason)" "outcome=forfeited|helper result carried no usable reviewFile"
+fresh
+BIN="$NOHELPER"
+OUT="$(peer run --provider muse --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS")"
+is "5: muse without the helper is unavailable" "$?|$(first)|$(val reason)" "0|outcome=unavailable|peer-review-run absent from PATH"
+[ ! -e "$A/manual.state" ]
+ok "5: ...and nothing was launched for it" $?
+
+# --- 6: the direct launch -------------------------------------------------------
+launch() { peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" "$@"; }
+pid_of() { cut -d' ' -f1 "$A/manual-attempt-$1/peer-review.pid"; }
+gone() { # <pid>: wait briefly for it to leave
+	local _
+	for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+		kill -0 "$1" 2>/dev/null || return 0
+		sleep 0.1
+	done
+	return 1
+}
+
+fresh
+BIN="$NOHELPER"
+OUT="$(launch)"
+is "6: without the helper, codex is launched directly and run returns at once" "$?|$(first)|$(val path)|$(val attempt)" "0|outcome=launched|manual|1"
+is "6: ...saying why" "$(val fallback_reason)" "peer-review-run absent from PATH"
+OUT="$(peer collect --artifact-dir "$A")"
+is "6: collect reads its pass" "$?|$(first)|$(val reason)" "0|outcome=passed|"
+is "6: ...from the provider's own result file" "$(val review_file)" "$A/manual-attempt-1/peer-review.out"
+is "6: ...and still says why the direct launch ran" "$(val fallback_reason)|$(val effort)" "peer-review-run absent from PATH|medium"
+is "6: codex is launched read-only, in the worktree, at medium effort, with the prompt as its argument" "$(args_of codex 1)" \
+	"exec --sandbox read-only --cd $REPO -o $A/manual-attempt-1/peer-review.out -c mcp_servers={} -c model_reasoning_effort=medium <PROMPT> "
+is "6: ...standing in the worktree with stdin closed" "$(tr '\n' '|' <"$STEER/codex.env.1")" "$REPO|/dev/null|"
+has "6: ...and that prompt is the assembled one" "$(cat "$STEER/codex.args.1")" "$(cat "$A/peer-review.prompt")"
+has "6: its stderr is kept apart from the result" "$(cat "$A/manual-attempt-1/peer-review.stderr")" "codex stub progress on stderr"
+is "6: a second collect repeats the answer without a new launch" "$(peer collect --artifact-dir "$A" | head -n 1)|$(cat "$STEER/codex.count")" "outcome=passed|1"
+
+fresh
+echo passed-nofile >"$STEER/helper.mode"
+BIN="$ALL"
+OUT="$(launch)"
+is "6: a helper verdict with no review file hands the round to the direct launch" "$(first)|$(val fallback_reason)" "outcome=launched|helper result carried no usable reviewFile"
+lacks "6: ...without the helper's strength note" "$OUT" "strength_pin="
+OUT="$(peer collect --artifact-dir "$A")"
+is "6: ...which is collected as usual" "$(first)|$(val path)" "outcome=passed|manual"
+fresh
+echo issues-ghost >"$STEER/helper.mode"
+OUT="$(launch)"
+is "6: so does a review file that is not there" "$(first)|$(val fallback_reason)" "outcome=launched|helper result carried no usable reviewFile"
+peer collect --artifact-dir "$A" >/dev/null
+BIN="$NOHELPER"
+
+manual_case() { # <label> <codex mode> <review text> <expected first line> <expected reason> <expected launches>
+	fresh
+	echo "$2" >"$STEER/codex.mode"
+	[ -z "$3" ] || printf '%s\n' "$3" >"$STEER/codex.review"
+	launch >/dev/null
+	OUT="$(peer collect --artifact-dir "$A")"
+	is "6: $1" "$?|$(first)|$(val reason)|$(cat "$STEER/codex.count")" "0|$4|$5|$6"
+}
+manual_case "a verdict of issues is issues" pass "VERDICT: ISSUES
+1. minor a.txt:2 naming" "outcome=issues" "" 1
+manual_case "a verdict under Markdown emphasis still counts" pass "**VERDICT: PASS**" "outcome=passed" "" 1
+manual_case "no output at all is forfeited as empty output" empty "" "outcome=forfeited" "empty output" 1
+manual_case "whitespace alone is empty output too" blank "" "outcome=forfeited" "empty output" 1
+manual_case "prose with no verdict line is forfeited as garbled output" garbled "" "outcome=forfeited" "garbled output" 1
+lacks "6: ...and offers no review" "$OUT" "review_file="
+manual_case "a login failure is unavailable, with the provider's words, and is not retried" auth "" "outcome=unavailable" "ERROR: You are not logged in. Run codex login." 1
+manual_case "a crash is retried once and then failed, with the provider's words" crash "" "outcome=failed" "error: stream disconnected before completion" 2
+is "6: ...in a second attempt directory of its own" "$(val attempt)|$(find "$A" -maxdepth 1 -name 'manual-attempt-*' | wc -l | tr -d ' ')" "2|2"
+fresh
+echo crash >"$STEER/codex.mode.1"
+launch >/dev/null
+OUT="$(peer collect --artifact-dir "$A")"
+is "6: a retry that passes is a pass" "$(first)|$(val attempt)|$(val review_file)" "outcome=passed|2|$A/manual-attempt-2/peer-review.out"
+
+fresh
+echo hang >"$STEER/codex.mode"
+launch --deadline 600 >/dev/null
+OUT="$(peer collect --artifact-dir "$A" --wait 1)"
+is "6: a provider still inside its deadline is pending, not timed out" "$?|$(first)|$(val attempt)" "0|outcome=pending|1"
+PID="$(pid_of 1)"
+kill -0 "$PID" 2>/dev/null
+ok "6: ...and was left running" $?
+# The same PID under another start time is another process: never signalled.
+read -r _ START <"$A/manual-attempt-1/peer-review.pid"
+echo "$PID $((START + 1))" >"$A/manual-attempt-1/peer-review.pid"
+OUT="$(peer collect --artifact-dir "$A" --wait 1)"
+is "6: a PID whose start time no longer matches is the old peer's death" "$(first)|$(val reason)" "outcome=forfeited|empty output"
+kill -0 "$PID" 2>/dev/null
+ok "6: ...and the process now holding that number is not touched" $?
+kill -KILL "$PID" 2>/dev/null
+for bad in one-field surplus-field zero-pid not-numbers; do
+	fresh
+	echo hang >"$STEER/codex.mode"
+	launch --deadline 1 >/dev/null
+	PID="$(pid_of 1)"
+	read -r _ START <"$A/manual-attempt-1/peer-review.pid"
+	sleep 1
+	case "$bad" in
+	one-field) echo "$PID" ;;
+	surplus-field) echo "$PID $START extra" ;;
+	zero-pid) echo "0 $START" ;;
+	not-numbers) echo "x y" ;;
+	esac >"$A/manual-attempt-1/peer-review.pid"
+	echo pass >"$STEER/codex.mode"
+	OUT="$(peer collect --artifact-dir "$A" --wait 5)"
+	kill -0 "$PID" 2>/dev/null
+	ok "6: a malformed handoff ($bad) signals nothing, even past the deadline" $?
+	kill -KILL "$PID" 2>/dev/null
+done
+
+fresh
+echo hang >"$STEER/codex.mode"
+launch --deadline 1 >/dev/null
+P1="$(pid_of 1)"
+OUT="$(peer collect --artifact-dir "$A" --wait 60)"
+is "6: a provider past its deadline is stopped, retried once, and then a timeout" "$?|$(first)|$(val attempt)|$(cat "$STEER/codex.count")" "0|outcome=timeout|2|2"
+is "6: ...whose reason names the deadline" "$(val reason)" "no verdict within 1 seconds"
+P2="$(pid_of 2)"
+gone "$P1" && gone "$P2" && [ "$P1" != "$P2" ]
+ok "6: ...with both providers dead and a new identity for the second" $?
+
+fresh
+echo late >"$STEER/codex.mode"
+launch --deadline 1 >/dev/null
+OUT="$(peer collect --artifact-dir "$A" --wait 60)"
+is "6: a verdict written before the deadline stop is authoritative once the provider is dead" "$(first)|$(cat "$STEER/codex.count")" "outcome=passed|1"
+gone "$(pid_of 1)"
+ok "6: ...and it is dead" $?
+
+fresh
+BIN="$BARE"
+OUT="$(launch)"
+is "6: with neither helper nor provider the peer is unavailable" "$?|$(first)|$(val reason)" "0|outcome=unavailable|missing binary"
+BIN="$NOHELPER"
+
+# --- 7: the direct claude launch ---------------------------------------------------
+claude_launch() { peer run --provider claude --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --evidence-base "$BASE_OID"; }
+fresh
+proof zebracrossing >"$STEER/claude.review"
+OUT="$(claude_launch)"
+is "7: claude is launched directly too" "$(first)|$(val fallback_reason)" "outcome=launched|peer-review-run absent from PATH"
+OUT="$(peer collect --artifact-dir "$A")"
+is "7: its proved pass is a pass, at the strength the launch pinned" "$(first)|$(val evidence)|$(val model)|$(val effort)" "outcome=passed|proved|opus|medium"
+is "7: with the model and effort named, read-only tools, and only the artifact directory added" "$(args_of claude 1)" \
+	"-p --model opus --effort medium --safe-mode --tools Read,Glob,Grep --disallowedTools mcp__* --add-dir $A --output-format json "
+is "7: it runs from the reviewed worktree, which is the only way claude -p learns where to read" "$(cat "$STEER/claude.env.1")" "$REPO"
+cmp -s "$STEER/claude.stdin.1" "$A/peer-review.prompt"
+ok "7: the prompt, evidence included, arrives on stdin" $?
+is "7: the review is the decoded message, not the JSON envelope" "$(head -n 1 "$(val review_file)")" "VERDICT: PASS"
+fresh
+echo "VERDICT: PASS" >"$STEER/claude.review"
+claude_launch >/dev/null
+OUT="$(peer collect --artifact-dir "$A")"
+is "7: an unproved pass is forfeited on this path as well" "$(first)|$(val reason)" "outcome=forfeited|diff evidence unreadable or proof absent"
+fresh
+echo error >"$STEER/claude.mode"
+echo "Invalid API key · Please run /login" >"$STEER/claude.review"
+claude_launch >/dev/null
+OUT="$(peer collect --artifact-dir "$A")"
+is "7: an auth error result is unavailable and not retried" "$(first)|$(val reason)|$(cat "$STEER/claude.count")" "outcome=unavailable|Invalid API key · Please run /login|1"
+fresh
+echo error >"$STEER/claude.mode"
+printf 'VERDICT: PASS\nthe model returned an error turn\n' >"$STEER/claude.review"
+claude_launch >/dev/null
+OUT="$(peer collect --artifact-dir "$A")"
+is "7: an error result is failed after one retry, never a pass, whatever its text says" "$(first)|$(val reason)|$(cat "$STEER/claude.count")" "outcome=failed|VERDICT: PASS|2"
+fresh
+echo notjson >"$STEER/claude.mode"
+claude_launch >/dev/null
+OUT="$(peer collect --artifact-dir "$A")"
+is "7: output that is not the JSON envelope is garbled output" "$(first)|$(val reason)" "outcome=forfeited|garbled output"
+
+# --- 8: identity checks and teardown, beside a fake kill and a fake /proc ----------
+PROC="$WORKDIR/proc"
+SIGLOG="$WORKDIR/signals.log"
+IDFILE="$WORKDIR/peer.pid"
+mkdir -p "$PROC/731"
+stat_line() { printf '731 (peer ) name with spaces) S 1 731 731 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 %s 0\n' "$1" >"$PROC/731/stat"; }
+# The fake kill logs every operand. `-0` answers from the fake /proc; KILL
+# removes the record unless this run models a survivor.
+lifecycle() { # <survivor: yes|no> <commands...>
+	: >"$SIGLOG"
+	(
+		export PROC SIGLOG IDFILE SURVIVOR="$1"
+		shift
+		PATH="$NOHELPER:/usr/bin:/bin" bash -c '
+			source "$1"
+			PEER_PROC_ROOT="$PROC"
+			kill() {
+				printf "%s\n" "$*" >>"$SIGLOG"
+				if [ "$1" = -0 ]; then [ -f "$PROC/$2/stat" ]; return; fi
+				if [ "$1" = -KILL ] && [ "$SURVIVOR" != yes ]; then rm -f "$PROC/$2/stat"; fi
+				return 0
+			}
+			sleep() { :; }
+			shift
+			eval "$1"' peer-test "$HELPER" "$@"
+	)
+}
+signals() { tr '\n' '|' <"$SIGLOG"; }
+
+stat_line 424242
+echo "731 424242" >"$IDFILE"
+lifecycle no 'peer_alive "$IDFILE"; peer_signal TERM "$IDFILE"'
+is "8: probe and TERM reach only the identity-checked PID, past a comm holding spaces and a parenthesis" "$?|$(signals)" "0|-0 731|-TERM 731|"
+stat_line 999999
+lifecycle no 'peer_alive "$IDFILE" || :; peer_signal TERM "$IDFILE" || :'
+is "8: a reused PID with another start time is never probed or signalled" "$(signals)" ""
+rm -f "$PROC/731/stat"
+lifecycle no 'peer_alive "$IDFILE" || :; peer_signal TERM "$IDFILE" || :'
+is "8: a missing /proc record is the original's death, without a signal" "$(signals)" ""
+stat_line 424242
+echo "731 424242 surplus" >"$IDFILE"
+lifecycle no 'peer_alive "$IDFILE" || :; peer_signal KILL "$IDFILE" || :'
+is "8: a handoff with a surplus field fails closed before every kill" "$(signals)" ""
+echo "731 424242" >"$IDFILE"
+printf '731 (peer) S 1 731 731 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n' >"$PROC/731/stat"
+lifecycle no 'peer_alive "$IDFILE" || :'
+is "8: a zero start time is no identity" "$(signals)" ""
+stat_line 424242
+lifecycle no 'peer_stop "$IDFILE"'
+is "8: a provider that ignores TERM is killed, on the same PID, and its death confirmed" "$?" 0
+has "8: ...TERM first" "$(signals)" "-TERM 731|-0 731|"
+has "8: ...then KILL" "$(signals)" "-KILL 731|"
+stat_line 424242
+lifecycle yes 'peer_stop "$IDFILE"'
+is "8: an identity that outlives TERM and KILL makes the stop fail" "$?|$(grep -c -- '-KILL 731' "$SIGLOG")" "1|1"
+stat_line 424242
+lifecycle no 'peer_abort_unhanded 731'
+is "8: a launch with no identity gets TERM and KILL back to back, then probes only" "$?|$(signals)" "0|-TERM 731|-KILL 731|-0 731|"
+stat_line 424242
+lifecycle yes 'peer_abort_unhanded 731'
+is "8: ...and reports a child it could not prove dead" "$?" 1
+
+# A direct launch, well past its deadline, whose provider survives KILL.
+survivor_state() { # <deadline>
+	fresh
+	mkdir -p "$A/manual-attempt-1"
+	printf 'provider=codex\ndeadline=%s\nfallback_reason=peer-review-run absent from PATH\nattempt=1\nlaunched_at=1\nworktree=%s\n' "$1" "$REPO" >"$A/manual.state"
+	echo "731 424242" >"$A/manual-attempt-1/peer-review.pid"
+	echo prompt >"$A/peer-review.prompt"
+	stat_line 424242
+}
+survivor_state 5
+OUT="$(A="$A" lifecycle yes 'main collect --artifact-dir "$A" --wait 5')"
+is "8: a teardown survivor is the one stop: exit 3" "$?" 3
+is "8: ...reported as failed, flagged, with the PID to hand the operator" "$(first)|$(val teardown)|$(val pid)" "outcome=failed|survivor|731"
+has "8: ...and a reason naming the probe that still answered" "$(val reason)" "PID 731 still answered kill -0 after TERM and KILL"
+[ ! -e "$A/manual-attempt-2" ] && [ ! -e "$STEER/codex.count" ] && [ ! -e "$A/manual.result" ]
+ok "8: ...with no retry launched and no result recorded" $?
+survivor_state 5
+OUT="$(A="$A" lifecycle no 'main collect --artifact-dir "$A" --wait 5' 2>/dev/null)"
+has "8: where KILL does land, the same deadline is an ordinary non-blocking outcome" "$?|$(first)" "0|outcome="
+lacks "8: ...with no survivor flag" "$OUT" "teardown="
+
+# A wrapper that cannot record its identity never becomes a provider.
+fresh
+OUT="$(A="$A" REPO="$REPO" FACTS_FILE="$FACTS" lifecycle no 'PEER_PROC_ROOT=/nonexistent; main run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS_FILE"')"
+is "8: a failed identity handoff is failed, non-blocking" "$?|$(first)|$(val reason)" "0|outcome=failed|peer launch handoff failed before the provider started"
+[ ! -e "$STEER/codex.count" ] && [ ! -e "$A/manual.state" ]
+ok "8: ...and no provider was started without one" $?
+
+if [ "$fails" -gt 0 ]; then
+	printf 'review-cycle peer helper test: %d/%d checks FAILED.\n' "$fails" "$checks" >&2
+	exit 1
+fi
+printf 'review-cycle peer helper test passed (%d checks).\n' "$checks"

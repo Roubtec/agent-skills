@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# review-cycle-peer — puts the review-cycle skill's bundled `peer.sh` on PATH.
+#
+# The script itself lives in the skill folder, where the skill calls it by
+# path; this is only a name for it. Claude's plugin runtime puts this `bin/` on
+# the Bash tool's PATH, which is how a workflow agent — handed a brief rather
+# than a skill folder — reaches the same script. Nothing is installed anywhere:
+# the shim runs the copy that shipped beside it, so the two cannot drift.
+# Usage: review-cycle-peer <command> [args...] — see `review-cycle-peer --help`.
+self="${BASH_SOURCE[0]}"
+while [ -L "$self" ]; do
+	link="$(readlink "$self")"
+	case "$link" in
+	/*) self="$link" ;;
+	*) self="$(dirname -- "$self")/$link" ;;
+	esac
+done
+here="$(cd -P -- "$(dirname -- "$self")" && pwd)" || exit 127
+target="$here/../skills/review-cycle/peer.sh"
+if [ ! -f "$target" ]; then
+	echo "review-cycle-peer: $target is missing — this shim only works from the dev-skills plugin's own bin/, beside its skills/ folder." >&2
+	exit 127
+fi
+exec bash "$target" "$@"
