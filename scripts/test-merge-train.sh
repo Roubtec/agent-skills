@@ -1040,7 +1040,9 @@ rollup 7 "$H1" "$RUNNING"
 printf '{"resources":{"graphql":{"remaining":0,"reset":%s}}}\n' "$(($(date +%s) + 1000))" >"$FAKE/ratelimit.json"
 touch "$FAKE/fail-rollup"
 call watch "${WARGS[@]}" --max 300
-is "7: a reset beyond the bound does not carry the watch past it" "$(sleeps)" "300 "
+# A first poll that took a second leaves 299 to wait and then 1: the sum is the bound.
+SLEPT="$(awk '{ n += $1 } END { print n + 0 }' "$FAKE/sleep.log")"
+is "7: a reset beyond the bound does not carry the watch past it" "$SLEPT" 300
 has "7: ...it expires" "$OUT" "reason=expired"
 
 # A commit's own lanes: the default branch's run on the final tip.
