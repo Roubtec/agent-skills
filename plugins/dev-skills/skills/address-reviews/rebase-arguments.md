@@ -2,7 +2,7 @@
 
 This file is part of the `address-reviews` skill, and the section and phase names it cites are that skill's `SKILL.md`, beside it.
 It is read in full before `targets.sh plan` runs, when the invocation carries `rebase on top of <target>` or `no-rebase`, or its prose keeps an entry out of rebasing.
-A batch with none of the three rebases every entry onto its own base ref and never reads it.
+A batch with none of the three rebases every entry onto its own base ref, or a stacked dependent onto its parent's new tip, and never reads it.
 
 ## Handing them to the plan
 

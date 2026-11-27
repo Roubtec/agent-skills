@@ -61,7 +61,7 @@ Parsing is **lenient** — accept commas, `&`, `#` prefixes, and free word order
 **A named target, `no-rebase`, or an entry kept out of rebasing: read `rebase-arguments.md` first.**
 Where the invocation carries `rebase on top of <target>` or `no-rebase`, or its prose keeps an entry out of rebasing ("rebase everything except `special/snowflake`"), read `rebase-arguments.md`, beside this file, in full before you run `targets.sh plan`.
 It holds how each of the three is handed to the plan, where a named target is resolved and why it is never resolved twice, and what an entry that does not rebase takes as its effective base.
-A batch with none of the three never needs it: every entry rebases onto its own base ref, re-pinned at each point as below.
+A batch with none of the three never needs it: every entry rebases onto its own base ref, re-pinned at each point as below, or onto its parent's new tip where it is a stacked dependent.
 
 **Classifying each entry** is the helper's, below: a bare or `#`-prefixed integer is a **PR number**, anything else a **branch name**, and a branch literally named like an integer is passed with an explicit `refs/heads/` prefix, or by its PR number instead.
 
