@@ -274,6 +274,7 @@ usage_case "an artifact directory inside the worktree" run --provider codex --wo
 usage_case "the worktree itself as artifact directory" run --provider codex --worktree "$REPO" --artifact-dir "$REPO" --facts "$FACTS"
 usage_case "neither facts nor prompt" run --provider codex --worktree "$REPO" --artifact-dir "$A"
 usage_case "both facts and prompt" run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --prompt-file "$FACTS"
+has "2: ...named as the choice it is" "$OUT" "give --facts or --prompt-file, not both"
 usage_case "an empty facts file" run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts /dev/null
 usage_case "claude without an evidence base" run --provider claude --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS"
 usage_case "an evidence base beside a complete prompt" run --provider codex --worktree "$REPO" --artifact-dir "$A" --prompt-file "$FACTS" --evidence-base "$BASE_OID"
@@ -683,6 +684,17 @@ echo "731 424242" >"$IDFILE"
 printf '731 (peer) S 1 731 731 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0\n' >"$PROC/731/stat"
 lifecycle no 'peer_alive "$IDFILE" || :'
 is "8: a zero start time is no identity" "$(signals)" ""
+lifecycle no 'peer_start_time 731'
+is "8: ...and is not read as a start time at all" "$?" 1
+# Operands `kill` would read as a process group or as every process.
+for bad in 0 -1; do
+	mkdir -p "$PROC/$bad"
+	sed 's/^731 /1 /' "$PROC/731/stat" | sed 's/ 0 0$/ 424242 0/' >"$PROC/$bad/stat"
+	echo "$bad 424242" >"$IDFILE"
+	lifecycle no 'peer_alive "$IDFILE" || :; peer_signal TERM "$IDFILE" || :; peer_stop "$IDFILE" || :'
+	is "8: a handoff naming PID $bad is never probed or signalled" "$(signals)" ""
+done
+echo "731 424242" >"$IDFILE"
 stat_line 424242
 lifecycle no 'peer_stop "$IDFILE"'
 is "8: a provider that ignores TERM is killed, on the same PID, and its death confirmed" "$?" 0
@@ -725,6 +737,16 @@ OUT="$(A="$A" REPO="$REPO" FACTS_FILE="$FACTS" lifecycle no 'PEER_PROC_ROOT=/non
 is "8: a failed identity handoff is failed, non-blocking" "$?|$(first)|$(val reason)" "0|outcome=failed|peer launch handoff failed before the provider started"
 [ ! -e "$STEER/codex.count" ] && [ ! -e "$A/manual.state" ]
 ok "8: ...and no provider was started without one" $?
+
+# A handoff file that does not name the launched child is no handoff, and a
+# launch left running without one is the same stop as any other survivor.
+fresh
+OUT="$(A="$A" REPO="$REPO" FACTS_FILE="$FACTS" lifecycle yes 'nohup() { echo "1 77" >"$5"; command sleep 3; }; sleep() { command sleep 0.05; }; kill() { printf "%s\n" "$*" >>"$SIGLOG"; return 0; }; main run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS_FILE"')"
+is "8: an identity file naming another PID is not accepted, and the child that outlives TERM and KILL is the stop" "$?|$(first)|$(val teardown)" "3|outcome=failed|survivor"
+has "8: ...named as a failed handoff" "$(val reason)" "survived TERM and KILL after a failed launch handoff"
+is "8: ...after TERM and KILL went to that child, back to back" "$(grep -A 1 -- '^-TERM ' "$SIGLOG" | sed 's/ [0-9]*$//' | tr '\n' '|')" "-TERM|-KILL|"
+[ ! -e "$A/manual.state" ]
+ok "8: ...and nothing is recorded as launched" $?
 
 if [ "$fails" -gt 0 ]; then
 	printf 'review-cycle peer helper test: %d/%d checks FAILED.\n' "$fails" "$checks" >&2
