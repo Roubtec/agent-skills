@@ -18,6 +18,7 @@ plugins/
     bin/address-review-reviews     # the same for skills/address-review/reviews.sh
     bin/address-review-publish     # the same for skills/address-review/publish.sh
     bin/review-cycle-peer          # the same for skills/review-cycle/peer.sh
+    bin/review-cycle-rebase-facts  # the same for skills/review-cycle/rebase-facts.sh
     bin/address-tasks-overlap      # the same for skills/address-tasks/overlap.sh
     bin/write-tasks-task-numbers   # the same for skills/write-tasks/task-numbers.sh
     bin/write-tasks-task-citations # the same for skills/write-tasks/task-citations.sh
@@ -40,6 +41,7 @@ scripts/
   test-address-reviews-targets.sh       # hermetic coverage for the address-reviews targets helper (entry pairing, the stack and its parent-first order, target pinning, the re-pin)
   test-write-tasks-task-numbers.sh      # hermetic coverage for the write-tasks task-number helper (a branch's claims against the base and every open PR head, relocation pairing, the allocator's inventory, the sweep's duplicates, the open PRs that change a named task file), and for the citation helper beside it (the backticked paths and identifiers a task cites that a commit's tree lacks)
   test-review-cycle-peer.sh             # hermetic coverage for the review-cycle peer helper (preflight, prompt and evidence, both launch paths, every outcome, teardown) and its `bin/` shim
+  test-review-cycle-rebase-facts.sh     # hermetic coverage for the review-cycle rebase-facts helper (the no-op proof, the stale parent tip, shared paths, the patch-identical replay that carries a verdict) and its `bin/` shim
   test-address-review-ping.sh           # hermetic coverage for the address-review ping helper (comment pings, the Copilot request and its timeline confirmation) and its `bin/` shim
   test-address-review-reviews.sh        # hermetic coverage for the address-review review-listing helper (the listing, the suppressed-comment block in each shape and unrecognised, the scope check, paging, the comparison with a head) and its `bin/` shim
   test-address-review-record.sh         # hermetic coverage for the address-review disposition-record helper (find, render, post, spend)
@@ -104,6 +106,7 @@ A workflow agent holds a brief rather than a skill folder, so where a workflow n
 - `write-tasks-task-numbers`
 - `write-tasks-task-citations`
 - `review-cycle-peer`
+- `review-cycle-rebase-facts`
 
 The scripts, likewise one per line:
 
@@ -124,6 +127,7 @@ The scripts, likewise one per line:
 - `write-tasks/task-citations.sh` lists the paths and identifiers a task file cites in backticks that resolve nowhere in the tree of a named commit, by the recognition rules its header states; `write-tasks` runs it on what it drafted and the batch skills on the tasks they are about to dispatch, and it reports without deciding, since a task names files it asks for.
 - `merge-train/train.sh` reads a PR's standing for the train (open, on the default branch, review items, the rollup, comments since the last look), surveys a list of PRs for stacks and shared files, rebases a PR onto the default branch's freshly fetched tip with the files that landed since it forked, and merges on an exact head after checking all of that again; it calls `address-review`'s `pr-branch.sh` and `ci.sh` from the folder beside its own rather than carry a second copy of the reconcile, the leased push or the rollup reading.
 - `review-cycle/peer.sh` is the peer review's mechanics for either harness, the provider being an argument: the once-per-run preflight, the prompt file built from `peer-brief.md` and the facts file it is handed, the launch through powbox's `peer-review-run` where that is on PATH and a detached direct launch of `codex` or `claude` where it is not, that launch's deadline and its teardown by a PID whose start time is checked before every signal, and one outcome vocabulary whichever path ran; a provider it cannot prove dead is its one stop.
+- `review-cycle/rebase-facts.sh` answers a rebase point from objects alone, for every skill that delegates one: `before` says whether the point is a no-op, how many commits would replay, whether a merge is in range, whether a stacked child's recorded parent tip is its ancestor, and which files changed on both sides; `after` says whether a replay was patch-identical over disjoint paths, which is what carries a review verdict across it.
 - `declare-shadows/probe.sh` gathers, in one read-only call, the facts that skill and `enable-worktrees` decide on, and `enable-worktrees` runs it from the folder beside its own: whether a `.powbox.local.yml` override replaces the committed shadow list, by powbox's own two-part test; a `shadow:` value that is not a list of paths, which stops the run; each ignored directory and each declared path as a literal candidate, with whether a committed rule ignores it, whether anything in it is tracked, the first ownership check it fails, and what is mounted on or under it; and for the three worktree roots, where each is declared, ignored and tracked and whether its mount is healthy. It writes no file, not even a temporary one, and never calls `shadow-refresh.sh` or `wt-bootstrap`; what to shadow, what to write and what to tell the user stay in the two briefs.
 
 The same folder can carry prose that only a subagent reads, so the orchestrator does not hold it in context: `subagent-boundary.md` in each skill that spawns one, `review-cycle/rebase-brief.md`, which is how the delegated rebase step is carried out and which the rebaser is told to read in full, and `review-cycle/fixer-brief.md`, `reviewer-brief.md` and `peer-brief.md`, which hold each review role's own rules: a Fixer or Reviewer is told to read its brief, and the peer's is copied into its prompt file by `peer.sh`.
@@ -253,6 +257,10 @@ Run `bash scripts/test-address-reviews-targets.sh` after any change to `targets.
 ### `test-review-cycle-peer.sh`
 
 Run `bash scripts/test-review-cycle-peer.sh` after any change to `peer.sh` in either mirror's `review-cycle` skill folder, to `peer-brief.md`, or to `bin/review-cycle-peer`; the hermetic suite puts stub `peer-review-run`, `codex`, `claude` and `muse` binaries on a private PATH and covers each preflight answer, the attempt directory the helper makes for itself under `--artifact-root` (never inside the reviewed worktree, never one two runs share), the prompt and the embedded evidence byte for byte, the exact helper call per provider, all six outcomes with their reasons on both launch paths, the one verdict rule read from the review text on both, the proof check, and the direct launch as real detached processes (the handoff, `pending`, the deadline stop, the one retry). It sources the helper beside a fake `kill` and a fake `/proc` for what a real process cannot show: a reused PID, a zombie, a malformed handoff, and the provider that survives KILL, which must exit 3. `REVIEW_CYCLE_PEER_HELPER` points it at another copy of the script, with `peer-brief.md` beside it. Needs `jq` and Linux `/proc`.
+
+### `test-review-cycle-rebase-facts.sh`
+
+Run `bash scripts/test-review-cycle-rebase-facts.sh` after any change to `rebase-facts.sh` in either mirror's `review-cycle` skill folder or to `bin/review-cycle-rebase-facts`; the hermetic suite builds a throwaway repository, checks each forecast against what `git rebase` then does there, and covers an unmoved base, a moved base that is disjoint and one that overlaps, a pure-join merge in range, a stacked child on an unmoved, a grown and a rewritten parent, replays that dropped, altered (if only in its whitespace) or reworded a commit, a rename on either side, a read that fails, that nothing is written, and every failure and usage exit. `REBASE_FACTS_HELPER` points it at another copy of the script.
 
 ### `test-write-tasks-task-numbers.sh`
 

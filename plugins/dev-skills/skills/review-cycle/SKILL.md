@@ -63,7 +63,7 @@ Each round is: a fixer pass (whenever there is work to implement or findings to 
   The **round tier** governs every intermediate round: the cheapest signal that catches what that round actually changed — typecheck/lint for ordinary code edits, targeted tests for touched behavior, and no build at all where the round's diff holds no executable change (comments, prose, docs).
   The **delivery tier** runs the full applicable sanity set — lint, typecheck, build, tests, whichever the repo has — on the final state before the cycle concludes, and always before any PR creation or publication; the intermediate durability pushes a consumer mandates for worktree safety are not delivery events and never require it, since the boundary is the final state being concluded or published, not the act of pushing.
   A cycle must not conclude or publish on anything less than a delivery-tier pass of that final state — where a completed run whose only failures carry the evidenced-unrelated disposition below counts as that pass, with the failures documented so the maintainer sees them at the PR and decides how to absorb the gap.
-  That pass survives exactly one post-run change: the diagnosis-only follow-up commit the flake policy requires (the new task file, and any PR-body or summary note recording what the delivery run itself surfaced).
+  A replay carried under `delegating-a-rebase.md` aside, that pass survives exactly one post-run change: the diagnosis-only follow-up commit the flake policy requires (the new task file, and any PR-body or summary note recording what the delivery run itself surfaced).
   Surviving it means what it says, so that commit buys no reviewer round either: confirm on the diff — never on the pass's own account of it — that the range holds nothing but that record, exactly as the close-out check below is judged, and let anything else in it forfeit the tolerance for the normal round.
   The pass's own record of what the run surfaced is the other half of that licence, since the tolerance is granted so the failure reaches the maintainer: a pass that committed the record but reported none of it has nothing to publish and buys the normal round too.
   Nothing broader — prose here carries behavior (a skill's prompt text, a config or contract expressed as text), and no further check follows this gate to catch what a wider tolerance would admit, so any other post-run change voids the pass and reruns the delivery tier.
@@ -192,8 +192,8 @@ The caller **never runs the rebase in its own turn**: it spawns a fresh subagent
 
 The step is two files beside this one.
 `rebase-brief.md` is how it is carried out, and the rebaser reads it rather than you restating it.
-`delegating-a-rebase.md` is the caller's half: what the rebaser's prompt has to carry, how ranges are named after a rebase, the parent-first order of a stack, and what to do with a no-op, a halt, and a replayed tree.
-Read `delegating-a-rebase.md` in full when a rebase is about to be delegated, and not before: a cycle whose caller rebases nothing never reads it.
+`delegating-a-rebase.md` is the caller's half: the facts `rebase-facts.sh` reads before a point and after a replay and what each answer decides, what the rebaser's prompt has to carry, how ranges are named after a rebase, the parent-first order of a stack, and what to do with a no-op, a halt, and a replayed tree.
+Read `delegating-a-rebase.md` in full when a rebase point is reached, and not before: a cycle whose caller rebases nothing never reads it.
 
 ## Escalation: open questions
 

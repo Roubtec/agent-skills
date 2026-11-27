@@ -148,7 +148,7 @@ Three top-level subagent roles plus one CLI peer:
   This is the `review-cycle` skill's Reviewer role.
 - **Peer (`claude`, best-effort)** — the `review-cycle` skill's cross-harness peer step: a read-only CLI review launched beside the Reviewer with the same disposition context but no implementation reasoning.
   Every rule that skill states under *The peer step* binds here whole, later additions included; a coherent, grounded finding is first-class.
-- **Rebaser** (default, once per rebase point) — a fresh subagent that performs one of step 2's rebase points under `review-cycle` → "The delegated rebase step", and hands back the pinned effective base, the before/after tips, and any halt.
+- **Rebaser** (default, once per rebase point that is not a proved no-op) — a fresh subagent that performs one of step 2's rebase points under `review-cycle` → "The delegated rebase step", and hands back the pinned effective base, the before/after tips, and any halt.
   It is the only role here that rewrites history, and it is never also the fixer.
   In `delegated-fix` the role belongs to the batch orchestrator rather than to this run, for the reasons "Delegated modes for the worktree orchestrator" gives.
 
@@ -249,19 +249,19 @@ The tip this run started from is the `tip=` it printed — the **working locatio
 ### Step 2 — Rebase onto the freshest base (the default; `no-rebase` opts out)
 
 The rebase happens at **two points**: here, before triage and fixing, and again at the end of step 5, before step 6's reviewer round — the second one repeating whenever step 6 sends the work back for further fixing.
-You may judge a point unnecessary — where the base demonstrably has not moved since this run's earlier rebase, say so in the report and skip it rather than delegating a replay of nothing.
+A point is skipped on proof and never on an impression that the base has not moved: `review-cycle`'s `rebase-facts.sh before` answering `outcome=noop` for the pinned target is that proof, and the report quotes it.
 `no-rebase` suppresses **both** points, and nothing else does.
 `rebase on top of <target>` replaces the default target with the one it names.
 Given both, honor `no-rebase` and note the token it overrode, exactly as `no-push` wins over `push` — overrode for the rebase, and no further: the target still stands, and step 6 pins IT as the effective review base rather than `baseRefName`, since the branch was deliberately based on it.
 
 **Do not run the rebase in your own turn.**
-Delegate each point to a fresh subagent under `review-cycle` → "The delegated rebase step", which defines that brief whole — the pre-rebase recovery ref, the base pinned to the OID actually rebased onto, the hunk-level conflict rules it takes from `rebase-stack`, the clean halt, the validation, and the packet it hands back.
+Delegate each point that is not skipped to a fresh subagent under `review-cycle` → "The delegated rebase step", which defines that brief whole — the facts read before the spawn and what each answer decides (`review-cycle`'s `delegating-a-rebase.md`), the pre-rebase recovery ref, the base pinned to the OID actually rebased onto, the hunk-level conflict rules it takes from `rebase-stack`, the clean halt, the validation, and the packet it hands back.
 What is specific to one PR:
 
 - **The target.**
-  By default the PR's own `baseRefName`, fetched fresh at the point the rebase runs rather than read from a remote-tracking ref some earlier step updated — and fetched from the repository that ref lives in, which is the repository this PR is in, so hand the delegated step that repository as the `<owner>/<repo>` of the PR's own `url`.
-  `rebase on top of <target>` names a branch or an exact commit instead (a batch orchestrator pins one commit so every entry rebases onto the same base), and that one is resolved where the maintainer named it — locally, in the working location — rather than fetched, since an explicit token routinely names a local branch that the remote has no such ref for.
-  Tell the delegated step which of the two it is holding.
+  By default the PR's own `baseRefName`, fetched fresh at the point the rebase runs rather than read from a remote-tracking ref some earlier step updated — and fetched from the repository that ref lives in, which is the repository this PR is in: pin it immediately before the point with `pr-branch.sh pin-base --repo <owner>/<repo> --base <baseRefName>`, the `<owner>/<repo>` being the one in the PR's own `url`.
+  `rebase on top of <target>` names a branch or an exact commit instead (a batch orchestrator pins one commit so every entry rebases onto the same base), and that one is resolved where the maintainer named it — locally, in the working location — rather than fetched, since an explicit token routinely names a local branch that the remote has no such ref for (`pr-branch.sh pin-base --target '<target>'`).
+  Either way the commit that pin prints is what `rebase-facts.sh before` is asked about and what the delegated step is handed.
   Either way this is a **single-branch** rebase: a whole chain of dependent branches is the separate `rebase-stack` skill — mention it if the user seems to want chain-wide restacking.
   Where this PR's base is another in-flight PR's head, the target is that parent's new tip, per the delegated step's parent-first rule — which for a single-PR run reduces to that branch's tip as freshly fetched, since nothing here rebases the parent; a batch orchestrator holding the parent map is what rebases it first and then pins the resulting tip as this entry's target.
 - **Where it runs.**
@@ -270,8 +270,8 @@ What is specific to one PR:
   In `delegated-fix` neither point is this run's ("Delegated modes for the worktree orchestrator"), and a `publish-reviewed` run rebases nothing.
 - **The pinned effective base is this run's effective review base** (step 6) and the boundary of every range you delegate afterwards.
   Take it from the returned packet — the OID that rebase actually landed on — and never re-derive it later from `baseRefName` or `origin/<base>`.
-- **The second point runs before each reviewer round**, so a passing verdict always describes the exact tree step 7 pushes.
-  Where it replayed anything, its delivery-tier validation runs and step 6 reviews the rebased tree; where it was a no-op, the tree the reviewer sees is already the one being pushed.
+- **The second point runs before each reviewer round**, so a passing verdict describes the tree step 7 pushes.
+  Where it replayed anything, step 6 reviews the rebased tree, and the replay's delivery-tier validation runs unless `rebase-facts.sh after` carries step 5's across it; where it was a proved no-op, the tree the reviewer sees is already the one being pushed.
 - **A halt is a stop, not a guess.**
   A conflict beyond the delegated step's competence — or a merge carrying its own content, met before any replay (the conflict is aborted; the merge starts no rebase, so there is nothing to abort) — comes back as an open question with the tree left clean and idle.
   **Interactive:** put that question to the user — what it turns on, your proposed resolution, and the reasoning — and hand their answer to a *fresh* rebase subagent rather than finishing the rebase in your own turn; loop them in as many times as needed.
@@ -363,7 +363,7 @@ For the actionable items:
 - Before review, apply `review-cycle`'s packet hard-check to the working location: `git status --porcelain` empty **and** no Git operation in progress.
   Inspect and commit every intended change; if a fixer leaves partial or unexplained changes, resolve that state or stop rather than letting the reviewer inspect only the committed subset.
 - Then run **step 2's second rebase point** — after that hard-check passes, before anything reaches review or publication.
-  Its pinned effective base supersedes the first point's for step 6's brief and every later range, and a rebase that replayed anything runs its delivery-tier validation there rather than leaving step 6 to discover the breakage.
+  Its pinned effective base supersedes the first point's for step 6's brief and every later range, and a replay that does not carry step 5's validation runs its delivery-tier validation there rather than leaving step 6 to discover the breakage.
   In `delegated-fix` that point is the orchestrator's: leave the worktree clean at the hard-check and return the packet.
 
 For the **follow-up-task** items, write the task file(s) following the `write-tasks` skill conventions (invoke that skill where available):
@@ -396,7 +396,7 @@ The peer preflight outcome from step 0 and `peer-opinions=off` carry into the cy
 This skill's deltas on the cycle:
 
 - The work items are every unresolved thread and standalone item verbatim, and every CI lane step 3 gathered — its identity as step 3 gathers it, its details URL, the log tail or the explicit logs-unavailable marker step 3 recorded, the cause found, and any fix made for it — each with its proposed disposition label (actionable-fixed / already-addressed / push-back / follow-up-task / ambiguous, or the CI disposition step 4 gave a lane), plus the effective review base, the branch, and the **working location** — its absolute path in worktree mode, so the Reviewer and the peer read the tree the fixes landed in rather than the main checkout.
-  The effective review base is the **pinned OID** step 2's latest rebase point landed on — the same commit every delegated range is taken against; where no rebase ran at all this turn (`no-rebase`, or both points judged unnecessary), pin the target the rebase would have used, once here instead, with `pr-branch.sh pin-base`.
+  The effective review base is the **pinned OID** step 2's latest rebase point landed on — the same commit every delegated range is taken against; a point skipped as a proved no-op was pinned all the same, and that pin is the commit it landed on; under `no-rebase`, where nothing was pinned, pin the target the rebase would have used, once here instead, with `pr-branch.sh pin-base`.
   A `rebase on top of <target>` target still standing — named by the request and not discarded by `no-rebase`, which suppresses the rebase and not the target — is pinned with `--target '<target>'` (quoted as ONE argument), which resolves it in this checkout and fetches nothing.
   Where that reports `unresolved`, stop and report it rather than substituting anything: `baseRefName` is the target only where the request named NONE, never the fallback for one that failed to resolve.
   Otherwise — the request having named none — pin `baseRefName` with `--repo <owner>/<repo> --base <baseRefName>`, which fetches it fresh from the PR's own repository and moves no branch.
@@ -468,8 +468,8 @@ Then, in worktree mode, reclaim the worktree, per "Working location" — never i
 
 Always produce a report (it doubles as the body of the Summary comment on push runs):
 
-- The PR, the branch, before/after tip SHAs, and what each of step 2's two rebase points did — replayed, no-op, skipped as unnecessary (with why), or suppressed by `no-rebase` — plus the pinned effective base the run ended on and how any conflicts went.
-  In `delegated-fix`, where those points are the orchestrator's, report the pinned effective base you were handed and carried rather than a rebase of your own.
+- The PR, the branch, before/after tip SHAs, and what each of step 2's two rebase points did — replayed, replayed with the validation carried (the tip it ran on, the tip it was carried to, and the `outcome=carry` answer), skipped as a proved no-op (with the proof), or suppressed by `no-rebase` — plus the pinned effective base the run ended on and how any conflicts went.
+  In `delegated-fix`, where those points are the orchestrator's, report the pinned effective base you were handed and carried rather than a rebase of your own; in `publish-reviewed`, report any carry the packet names, with its two tips and its answer.
 - **The working location and how it was selected** — inline on the target branch, forced `inline`, or a worktree (created or reused) — plus whether that worktree was reclaimed, or its absolute path where a halt left it standing.
   Say nothing about where the main checkout points now: a worktree run neither moved it nor watched it.
 - Each addressed comment with a **stable reference** — file:line, comment author, the thread's GraphQL node id, and the comment permalink — and its disposition (fixed / already-addressed / pushed-back / follow-up-task / skipped).

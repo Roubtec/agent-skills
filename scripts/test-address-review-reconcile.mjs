@@ -3345,11 +3345,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
         // range at the wrong commit.
         text.includes("that named target's pinned OID on a `no-rebase` batch") &&
         rules.includes("since `no-rebase` suppresses the rebase without discarding the token") &&
-        // A named target cannot drift, so the second point normally reports a
+        // A named target cannot drift, so the second point is normally a
         // no-op — but the canonical step still flattens a pure-join merge in
-        // range, so "guaranteed" would license skipping the point itself.
+        // range, so "guaranteed" would license skipping the point unasked:
+        // what skips it is `rebase-facts.sh`'s proof, which counts that merge.
         !/guaranteed no-op for a named target/.test(text + rules) &&
-        rules.includes("never a reason for you not to spawn it"),
+        rules.includes("so a point is skipped only on the proof `review-cycle`'s `rebase-facts.sh before` gives, `outcome=noop`, which counts that merge"),
       "the named target is re-resolved per point, a site still falls back to `baseRefName` under `no-rebase`, or the second point is claimed to be a guaranteed no-op",
     );
     // This file's frontmatter `description` is what the harness loads the skill
@@ -6784,7 +6785,7 @@ for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
     "a first round that did not end the cycle sends the run to later-rounds.md": /Once the first reviewer round has not ended the cycle — it did not pass, or the pass after it fixed or disputed something — read `later-rounds\.md`, beside this file, in full/,
     "the first open question sends the run to open-questions.md": /Read it in full the first time the cycle holds an open question — a pass returned an `escalated` disposition, a delegated rebase halted, or the invoker handed one in/,
     "a Fixer is handed that file's path as the shape of a new question": /the path of `open-questions\.md`, beside this file, for it to read in full before it escalates/,
-    "a rebase about to be delegated sends the caller to delegating-a-rebase.md": /Read `delegating-a-rebase\.md` in full when a rebase is about to be delegated, and not before/,
+    "a rebase point sends the caller to delegating-a-rebase.md": /Read `delegating-a-rebase\.md` in full when a rebase point is reached, and not before/,
     "the round cap stays where a caller lowering it at launch reads it": /allow at most \*\*12 reviewer rounds total\*\*[\s\S]*An invoker may lower the cap for a bounded context, never raise it\./,
     "each round's ending SHA is recorded from round one": /\*\*Record each round's ending SHA\.\*\*/,
   };

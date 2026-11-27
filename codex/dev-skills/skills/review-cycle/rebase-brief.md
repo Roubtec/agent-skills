@@ -1,7 +1,7 @@
 # The delegated rebase step
 
 You were sent here by the prompt that started you, to bring one branch onto its freshest base.
-That prompt names the working location (an absolute path, and whether it is a checkout someone may be standing on or a worktree), the branch, the target and which kind it is, where any build output goes, and the two `git update-ref` commands this step may run.
+That prompt names the working location (an absolute path, and whether it is a checkout someone may be standing on or a worktree), the branch, the target and which kind it is, the facts `rebase-facts.sh` read for this point, where any build output goes, and the two `git update-ref` commands this step may run.
 Everything below is how the step is carried out; where your prompt and this file disagree on a fact of the run — a path, a branch, a target — your prompt wins.
 
 **Save the recovery ref before the first replay.**
@@ -21,6 +21,10 @@ An OID is immutable, so recording it *is* the pin; where nothing the run keeps h
 Where your prompt hands you a parent's new tip and its old one, the form is `git rebase --no-update-refs --no-rebase-merges --onto <new parent tip> <old parent tip>`, which replays the child's own commits alone, and git's patch-id dropping removes whatever the base already carries.
 That is also the shape of the parent that merely gained fix commits mid-run while its child still sits on the old tip.
 Restacking a whole chain after merges is the `rebase-stack` skill's job: name it and stop rather than growing into it.
+
+**An old parent tip that is not an ancestor of `HEAD` halts the entry before any replay.**
+Check it whatever your prompt says of it — `git merge-base --is-ancestor <old parent tip> HEAD` — because a tip the child does not descend from bounds nothing, and `--onto` from it would replay the parent's superseded commits as the child's own.
+Where the check fails start no rebase, and report the halt as an open question in the shape given below, naming both tips.
 
 **The replay's shape is stated, never inherited: it moves one ref — the entry's own branch — and flattens what it replays.**
 So every rebase this step runs passes `--no-update-refs`, the ordinary onto-the-pinned-OID form and the stacked `--onto` form alike, whatever `rebase.updateRefs` the user or repository config sets; a sibling branch moves in its own parent-first turn, behind its own recovery ref.
@@ -49,6 +53,7 @@ The caller gives the question its `id` and round, and couples it to any sibling 
 
 **Validate after a rebase that actually replayed something**, with the full applicable sanity set — lint, typecheck, build, tests, whichever the repo has — writing any build output only where your prompt says.
 A no-op rebase earns no validation.
+Where your prompt says the validation may be carried, run the `rebase-facts.sh after` command it spells out before validating: on `outcome=carry` run no validation and return that answer's lines in place of a validation outcome, and on any other answer, a failed call included, validate.
 
 **Finish inside your own turn, and reap what you start.**
 Whether or not your harness would resume you, never end your turn waiting for a notification, a callback, or a child you launched: bound and wait on anything you start, reap it before returning, and leave no process of your own running.

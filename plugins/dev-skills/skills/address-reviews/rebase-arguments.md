@@ -20,7 +20,7 @@ Its `named=` commit is the batch's one base: that single OID serves every rebase
 
 "Re-pin a default target at each rebase point" does not reach it: a named target is the batch's single pinned base by construction, so it is not re-resolved per point.
 That the second point then normally finds nothing to do for a named target is intended.
-Normally rather than always, and the point runs either way — a pure-join merge still in range is flattened by the replay, moving the tip over an unmoved base — so a no-op is what that point may REPORT, never a reason for you not to spawn it.
+Normally rather than always — a pure-join merge still in range is flattened by the replay, moving the tip over an unmoved base — so a point is skipped only on the proof `review-cycle`'s `rebase-facts.sh before` gives, `outcome=noop`, which counts that merge, and never on your impression that the base has not moved.
 
 ## The effective base of an entry that did not rebase
 
