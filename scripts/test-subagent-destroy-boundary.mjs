@@ -426,7 +426,8 @@ function shippedWorkflows() {
 // in contiguous literal runs — 74.7% over the five, which is 73.8% of a
 // `CYCLE_DESTROY_BOUNDARY` and 75.3% of a `DESTROY_BOUNDARY`, so no single
 // fraction is true of EACH constant and the aggregate is the honest way to state
-// it. It was 69.7% before task 067 added its five entries, 58.5% before task 046b retired the no-helper fallback clause and
+// it. It was 69.7% before task 067 added its five entries, 58.5% before task
+// 046b retired the no-helper fallback clause and
 // folded its neighbour into one longer span, 60.0% before that task's review
 // round pinned the guarded `cd`, and 66.8% before its third round pinned the
 // install remedy at the invocation as well. So it is the unpinned remainder —
