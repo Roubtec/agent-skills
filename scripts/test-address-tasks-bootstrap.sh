@@ -307,6 +307,32 @@ git -C "$R" remote add origin "$WORKDIR/nowhere.git"
 call run
 is "git: an origin that does not answer is remote=no" "$(val remote)" no
 
+# No remote named origin, and a repository in a directory of that name: the
+# probe must not take the directory for the remote.
+fresh
+git init -q --bare "$R/origin"
+call run
+is "git: a directory named origin is not the remote" "$(val remote)" no
+
+fresh
+OUT="$(cd "$R" && CONTAINER_NAME=box PATH="$USE" bash "$HELPER" run 2>/dev/null)"
+is "git: CONTAINER_NAME scopes the base" "$(val wt-base)" "$R/.worktrees/box"
+present "git: ...and that is the directory created" "$R/.worktrees/box"
+
+fresh
+git -C "$R" worktree add -q -b gone "$WORKDIR/gone$n"
+rm -rf "$WORKDIR/gone$n"
+call run
+lacks "git: a registration whose directory is gone is pruned" "$(git -C "$R" worktree list)" "gone$n"
+
+N="$WORKDIR/new
+line"
+git init -q -b main "$N"
+DIR="$N"
+call ignore
+is "a repository path holding a newline is a failure" "$RC" 1
+is "...with nothing on stdout" "$OUT" ""
+
 # Leftovers under the base: empty goes, content stays and is named, anything
 # registered (or holding something registered) is not mentioned at all.
 fresh
@@ -315,6 +341,8 @@ mkdir "$R/.worktrees/empty" "$R/.worktrees/full"
 echo work >"$R/.worktrees/full/notes"
 git -C "$R" worktree add -q -b live "$R/.worktrees/live"
 git -C "$R" worktree add -q -b inner "$R/.worktrees/group/inner"
+mkdir "$WORKDIR/elsewhere"
+ln -s "$WORKDIR/elsewhere" "$R/.worktrees/link"
 call run
 is "orphans: ready" "$RC" 0
 has "orphans: an empty leftover is removed" "$OUT" "pruned=empty"
@@ -325,6 +353,8 @@ lacks "orphans: a registered worktree is not mentioned" "$OUT" "=live"
 lacks "orphans: a directory holding a registered worktree is not mentioned" "$OUT" "=group"
 present "orphans: a registered worktree survives" "$R/.worktrees/live/.git"
 present "orphans: ...and so does one further down" "$R/.worktrees/group/inner/.git"
+lacks "orphans: a symlink is neither removed nor reported" "$OUT" "=link"
+present "orphans: ...and still there" "$R/.worktrees/link"
 clean orphans
 
 fresh
@@ -416,6 +446,11 @@ helper 1 '{"ok":false}'
 call run
 is "helper blocker: a missing blocker is still a stop" "$RC" 3
 has "helper blocker: ...and says it was missing" "$(val blocker)" "named no blocker"
+
+helper 1 '{"ok":false,"blocker":"first line\nsecond line"}'
+call run
+is "helper blocker: a blocker of two lines is carried on one" "$(val blocker)" "first line second line"
+is "helper blocker: ...leaving two lines of answer" "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" 2
 
 helper 1 "{\"ok\":true,\"wtBase\":\"$R/.worktrees/box\"}"
 call run
