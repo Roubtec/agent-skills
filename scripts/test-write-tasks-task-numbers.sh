@@ -723,6 +723,20 @@ has "11: ...naming one file" "$OUT" "duplicate=1000${TAB}tasks/1000-big.md"
 has "11: ...and the other" "$OUT" "duplicate=1000${TAB}tasks/done/1000-again.md"
 is "11: ...and no number that only starts the same" "$(count duplicate)" 2
 
+# A four-digit number the base holds, and one the branch itself holds twice.
+new_repo
+git -C "$R" checkout -q main
+put "$R" tasks/done/2000-landed.md
+git -C "$R" push -q origin main
+git -C "$R" checkout -q feature
+put "$R" tasks/2000-mine.md
+put "$R" tasks/2001-one.md
+put "$R" tasks/sub/2001-two.md
+call claims "${ARGS[@]}"
+has "11: a four-digit number a file on the base holds is a collision" "$OUT" "collision=2000${TAB}tasks/2000-mine.md${TAB}base${TAB}tasks/done/2000-landed.md${TAB}other-path"
+has "11: ...and so is one the branch itself holds twice" "$OUT" "collision=2001${TAB}tasks/2001-one.md${TAB}branch${TAB}tasks/sub/2001-two.md${TAB}other-path"
+is "11: ...each named once per holder" "$(count collision)" 3
+
 # Compared as written: a padded number and a bare one are two numbers.
 new_repo
 put "$R" tasks/0999-padded.md
