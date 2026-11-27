@@ -572,6 +572,10 @@ is "glob: a match is a candidate" "$(cand apps/api/dist from)" "glob,ignored"
 is "glob: a match also declared literally" "$(cand apps/web/dist from)" "glob,committed,ignored"
 is "glob: the pattern itself is never a candidate" "$(row 'candidate=apps/*/dist')" ""
 is "glob: a negation is never a candidate" "$(row 'candidate=!apps/skip')" ""
+put .powbox.yml 'shadow:\n  - //apps/a*/dist\n'
+run shadows
+is "glob: leading slashes are anchored at the root, as a literal's are" "$(row glob=committed)" "glob=committed${TAB}1${TAB}//apps/a*/dist"
+is "glob: and its match is a candidate" "$(cand apps/api/dist from)" "glob,ignored"
 
 # ------------------------------------------------------------------- mounts --
 new_repo
