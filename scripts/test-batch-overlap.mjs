@@ -18,11 +18,11 @@
 //
 // Run: node scripts/test-batch-overlap.mjs
 
-import { readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
-import { dirname, join, delimiter } from "node:path";
+import { dirname, join, delimiter, resolve } from "node:path";
 
 const here = dirname(fileURLToPath(import.meta.url));
 const pluginRoot = join(here, "..", "plugins", "dev-skills");
@@ -309,12 +309,17 @@ try {
     return x.status === 127 ? { ran: false, exitStatus: -1, stdout: "", detail: "overlap helper not found" } : { ran: true, exitStatus: x.status, stdout: x.stdout, stderr: x.stderr };
   };
   const withBin = { ...process.env, PATH: `${join(pluginRoot, "bin")}${delimiter}${process.env.PATH}` };
+  // An installed plugin puts its own `bin/` on the caller's PATH, so the PATH
+  // that lacks the helper is built here rather than inherited. An entry is
+  // resolved against `repo`, the directory the deputy's shell runs in.
+  const holdsHelper = (dir) => existsSync(join(resolve(repo, dir), "address-tasks-overlap"));
+  const withoutBin = { ...process.env, PATH: (process.env.PATH || "").split(delimiter).filter((dir) => !holdsHelper(dir)).join(delimiter) };
   const planOf = (slugs) => ({ defaultBase: "main", waves: [slugs.map((s) => ({ slug: s, branch: `task/${s}`, base: s === "004-d" ? "task/003-c" : "main", dependsOn: [] }))] });
   const resultsOf = (slugs) => slugs.map((s) => ({ slug: s, branch: `task/${s}`, status: "done" }));
   const slugs = ["005-e", "004-d", "003-c", "002-b", "001-a"];
   const live = await load({ agent: deputy(withBin), phase: () => {}, log: () => {} }).runOverlapCheck({ plan: planOf(slugs), results: resultsOf(slugs) });
   check("brief run as written: the stage reports the conflict, in the recommended order, with exit 3 as its answer", live.ran === true && live.outcome === "conflict" && live.exitStatus === 3 && same(live.mergeOrder, ["task/001-a", "task/002-b", "task/003-c", "task/004-d", "task/005-e"]) && same(live.branches.map((b) => b.branch), live.mergeOrder) && live.pairs.some((p) => p.verdict === "conflict" && same(p.conflicts, ["a.txt"])), JSON.stringify(live));
-  const gone = await load({ agent: deputy(process.env), phase: () => {}, log: () => {} }).runOverlapCheck({ plan: planOf(slugs), results: resultsOf(slugs) });
+  const gone = await load({ agent: deputy(withoutBin), phase: () => {}, log: () => {} }).runOverlapCheck({ plan: planOf(slugs), results: resultsOf(slugs) });
   check("brief run as written without the plugin's bin on PATH: did not run, helper not found", gone.ran === false && gone.skipped === false && gone.reason === "overlap check did not run: overlap helper not found" && gone.outcome === undefined, JSON.stringify(gone));
   check("real script: every run left the repository's refs and working tree as they were", git("for-each-ref") === refsBefore && git("status", "--porcelain") === "" && git("worktree", "list", "--porcelain").split("\n").filter((l) => l.startsWith("worktree ")).length === 1);
 } finally {
