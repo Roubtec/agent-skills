@@ -34,8 +34,8 @@
 # repository's worktrees", and nothing weaker: a directory with no valid marker,
 # or one made from another repository, is never removed.
 # A slug is unique to its caller, not to the repository, which is why the search
-# stops at one: two worktrees may each hold a clone of the same slug, and a call
-# from a third place cannot know which was meant. More than one clone, or one
+# stops at one: two scopes may each hold a clone of the same slug, and a call
+# from a third cannot know which was meant. More than one clone, or one
 # whose source is not a registered worktree (another repository's, or a worktree
 # since removed), is named with its path and left alone, and the exit status is
 # then non-zero — a clone that exists and was not removed is not a success.
@@ -53,13 +53,14 @@
 #   dc-remove probe        # remove the clone dc-enter created for slug `probe`
 #
 # Removing a slug that has no clone anywhere under the clone root is a no-op and
-# succeeds, so a cleanup trap can call it unconditionally — for a slug no other
-# worktree of the repository is using. The search above makes that a condition:
-# a call with no clone in its own scope (a trap firing after a failed dc-enter,
-# or a second time) removes the single clone a sibling worktree holds under the
-# same slug, one still being created included, since dc-enter writes the marker
-# before it clones. Nothing is ever written to stdout; diagnostics go to stderr,
-# and the exit status is the whole result.
+# succeeds. A scope is the worktree plus the agent name, and a call with no clone
+# in its own scope (a cleanup trap firing after a failed dc-enter, or a second
+# time) runs the search above: it removes the single clone another scope holds
+# under the same slug, one still being created included, since dc-enter writes
+# the marker before it clones. So a call made without knowing its own scope holds
+# the clone acts on the slug under the root, not on the caller's clone. Nothing
+# is ever written to stdout; diagnostics go to stderr, and the exit status is the
+# whole result.
 #
 # This is also how a slug is freed: `dc-enter` refuses a slug that already has a
 # clone, because a concurrent sibling may be using it. Calling dc-remove when a
