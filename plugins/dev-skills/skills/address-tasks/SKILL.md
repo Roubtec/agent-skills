@@ -247,6 +247,7 @@ The reservation **converts to delivered** once the PR exists (or, in a local-onl
 **Early merges move the base.**
 A sibling's PR can merge while the batch is still running; the guard's scan is where the run notices (read each delivered sibling's PR state as you compare against it).
 A branch still on its way to delivery whose recorded base was that sibling's branch, or that shares the base the sibling merged into, is rebased onto the advanced base through `review-cycle`'s delegated rebase step before its final delivery-tier review — a dependent's PR base moves with it — so a clash with an already-merged sibling surfaces as an honest conflict at that rebase, never as an invisible add/add at merge time.
+That step starts from `review-cycle`'s `rebase-facts.sh`, as `delegating-a-rebase.md` beside it says: a point it proves a no-op spawns no rebaser, and a replay it proves patch-identical over a base that touched none of the branch's files carries the branch's validation and any review it had already passed, which the task's result reports as carried.
 A halted rebase holds only that branch, with its conflict as an open question.
 Per the no-latched-flags rule, the task's result describes its final state after any rebase, with the history in its artifact directory.
 

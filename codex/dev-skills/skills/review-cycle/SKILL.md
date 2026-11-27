@@ -201,8 +201,8 @@ The caller **never runs the rebase in its own turn**: it spawns a fresh subagent
 
 The step is two files beside this one.
 `rebase-brief.md` is how it is carried out, and the rebaser reads it rather than you restating it.
-`delegating-a-rebase.md` is the caller's half: what the rebaser's prompt has to carry, how ranges are named after a rebase, the parent-first order of a stack, and what to do with a no-op, a halt, and a replayed tree.
-Read `delegating-a-rebase.md` in full when a rebase is about to be delegated, and not before: a cycle whose caller rebases nothing never reads it.
+`delegating-a-rebase.md` is the caller's half: the facts `rebase-facts.sh` reads before a point and after a replay and what each answer decides, what the rebaser's prompt has to carry, how ranges are named after a rebase, the parent-first order of a stack, and what to do with a no-op, a halt, and a replayed tree.
+Read `delegating-a-rebase.md` in full when a rebase point is reached, and not before: a cycle whose caller rebases nothing never reads it.
 
 ## Escalation: open questions
 

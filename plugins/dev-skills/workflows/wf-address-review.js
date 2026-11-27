@@ -1670,8 +1670,8 @@ const zeroItemCarrier = { ...(zeroItemRun ? { zeroItem: zeroItemRun } : {}), ...
 // merged; and again once the fixes are committed, so the diff a reviewer reads
 // at push time is the change rather than the base's drift. Both are
 // unconditional on a run that reaches them — the difference from the prose
-// skill, where an agent may judge a point unnecessary: a no-op rebase is
-// cheaper and more deterministic than the judgment that it would be one.
+// skill, which spawns no rebaser for a point its `rebase-facts.sh` proves a
+// no-op: here the rebaser is still what finds that out.
 // "Reaches them" is load-bearing, and it is where this pipeline's ordering
 // differs from the skill's step 2 (which rebases before it has even gathered the
 // threads): here one agent resolves the PR and gathers them together, so a run
