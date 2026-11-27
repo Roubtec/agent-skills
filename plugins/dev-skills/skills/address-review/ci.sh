@@ -58,6 +58,8 @@
 #        Several failed jobs of one run share its id, so one request covers
 #        them. Stops with `outcome=no-run` for a URL that names none. A run
 #        whose branch is gone, or that names none, is not held to a tip.
+#        It asks the repository the URL names and has no dry run: try it out
+#        against a stub of `gh`, as its suite does, never against a live run.
 #
 # What GitHub does mid-run, as seen on 2026-11-27 with gh 2.105.0 on a run
 # with one job failed and others still going:

@@ -247,7 +247,8 @@ call check "${ARGS[@]}" --lane "Tests / ab"
 is "1: ...in either direction" "$(val outcome)" waiting
 call check "${ARGS[@]}" --lane ""
 is "1: an empty --lane is a usage error" "$RC" 64
-# A lane whose workflow did not run on this head, every run it has being done.
+# A lane of the repository's workflows that this head's runs, all of them
+# done, did not bring.
 # runs <workflow id>=<status>...
 runs() {
 	local kv sep=""
@@ -260,7 +261,7 @@ runs() {
 		printf ']}\n'
 	} >"$FAKE/runs.json"
 }
-printf '{"workflows":[{"id":1,"name":"Tests"},{"id":2,"name":"Review"},{"id":3,"name":"Review / deep"}]}\n' >"$FAKE/workflows.json"
+printf '{"workflows":[{"id":1,"name":"Tests"},{"id":2,"name":"Review"}]}\n' >"$FAKE/workflows.json"
 rollup 7 "$H1" "$GREEN"
 runs 1=completed
 call check "${ARGS[@]}" --lane "Tests / a" --lane "Review / bot"
@@ -272,8 +273,8 @@ has "1: ...the runs asked for by this head" "$(cat "$FAKE/gh.log")" "repos/acme/
 has "1: ...and said to be the caller's to judge" "$ERR" "yours to judge"
 runs 1=completed 2=completed
 call check "${ARGS[@]}" --lane "Review / bot"
-is "1: a lane whose workflow did run here is still to come" "$(val outcome)" waiting
-is "1: ...and missing" "$(val missing)" "Review / bot"
+is "1: a lane its workflow's finished run on this head did not bring will not come either (a job renamed)" "$(val outcome)" unscheduled
+is "1: ...and is named so" "$(val unscheduled)|$(val missing)" "Review / bot|"
 runs 1=in_progress
 call check "${ARGS[@]}" --lane "Review / bot"
 is "1: while a run of this head is still going, a lane with none yet is still to come" "$(val outcome)" waiting
@@ -283,9 +284,6 @@ is "1: a head with no workflow run at all says nothing about what is coming" "$(
 runs 1=completed
 call check "${ARGS[@]}" --lane "codecov / patch"
 is "1: a lane of no workflow of the repository is never told unscheduled" "$(val outcome)" waiting
-runs 1=completed 2=completed
-call check "${ARGS[@]}" --lane "Review / deep / scan"
-is "1: a lane belongs to the workflow with the longest name that starts it" "$(val outcome)" unscheduled
 runs 1=completed
 call check "${ARGS[@]}" --lane "Review / bot" --lane "codecov / patch"
 is "1: one lane still to come keeps the head waiting beside an unscheduled one" "$(val outcome)" waiting
@@ -1059,8 +1057,43 @@ lacks "7: ...and not on a rollup that is green but lacks a lane of the full run"
 "
 has "7: ...the green run on the new head replaces the kept one, with the lane it added" "$(cat "$S")" "green=7	head=$H2	lane=Tests / a	lane=Tests / b	lane=Tests / c"
 is "7: every line: two first readings, the push, the green run, the stop" "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" 5
+has "7: ...the push on its way recorded with the head the PR was still on" "$(cat "$S")" "pr=7	head=$H2	outcome=waiting	ci=unpushed	now=$H1	at="
 call state --state "$S"
 is "7: the state read down gives the head of the last full green run, for rebase --green" "$(printf '%s\n' "$OUT" | grep -c "^green=7	head=$H2")" 1
+
+# A push that takes more than one poll to show is a push on its way for as
+# long as the PR stays on the head it was last seen on, and no longer.
+H3=3333333333333333333333333333333333333333
+wfresh
+printf '7 %s\n' "$H2" >"$L"
+printf 'pr=7\thead=%s\toutcome=ready\tci=green\tat=2026-01-01T00:00:00Z\n' "$H1" >"$S"
+facts 7
+facts 7.h2 head="$H2"
+rollup 7 "$H1" "$GREEN"
+rollup 7.h2 "$H2" "$GREEN"
+hook 7 4 'cp "$FAKE/facts.7.h2.json" "$FAKE/facts.7.json"; cp "$FAKE/rollup.7.h2.json" "$FAKE/rollup.7.json"'
+call watch "${WARGS[@]}"
+is "7: a push GitHub does not show for three polls is said once, then the head it reached" "$(printf '%s\n' "$OUT" | tr '\n' '|')" "pr=7	head=$H2	outcome=waiting	ci=unpushed	now=$H1|pr=7	head=$H2	outcome=ready	ci=green|outcome=stopped	reason=idle	pending=	unread=|"
+is "7: ...the PR read on every poll until then" "$(polls 7)" 4
+wfresh
+printf '7 %s\n' "$H2" >"$L"
+printf 'pr=7\thead=%s\toutcome=ready\tci=green\tat=2026-01-01T00:00:00Z\n' "$H1" >"$S"
+facts 7
+facts 7.h3 head="$H3"
+rollup 7 "$H1" "$GREEN"
+rollup 7.h3 "$H3" "$GREEN"
+hook 7 3 'cp "$FAKE/facts.7.h3.json" "$FAKE/facts.7.json"; cp "$FAKE/rollup.7.h3.json" "$FAKE/rollup.7.json"'
+call watch "${WARGS[@]}"
+is "7: a PR that goes to some other head while a push is awaited has moved" "$(printf '%s\n' "$OUT" | sed -n 2p)" "pr=7	head=$H2	outcome=moved	now=$H3"
+is "7: ...which ends the entry" "$(polls 7)" 3
+# After `moved`, the head the PR was last seen on is the one it moved to.
+wfresh
+printf '7 %s\n' "$H2" >"$L"
+printf 'pr=7\thead=%s\toutcome=moved\tnow=%s\tat=2026-01-01T00:00:00Z\n' "$H1" "$H3" >"$S"
+facts 7 head="$H3"
+rollup 7 "$H3" "$GREEN"
+call watch "${WARGS[@]}" --max 0
+is "7: a new head listed for a moved PR that GitHub still shows where it moved to is a push on its way" "$(printf '%s\n' "$OUT" | sed -n 1p)" "pr=7	head=$H2	outcome=waiting	ci=unpushed	now=$H3"
 
 # A lane of the full green run whose workflow does not run on a re-pushed head
 # (one that runs when the PR opens only) must not hold that head for ever.
@@ -1122,6 +1155,24 @@ FIRST="$(head -n 1 "$FAKE/sleep.log")"
 [ "$FIRST" -ge 1000 ] && [ "$FIRST" -le 1010 ]
 ok "7: ...it sleeps until the limit resets (slept $FIRST)" $?
 is "7: ...then polls at its interval again" "$(sed -n 2p "$FAKE/sleep.log")" 120
+# Every read the watch makes is cut where `timeout` is there to cut it.
+CUT="$WORKDIR/cutbin"
+mkdir -p "$CUT"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"$FAKE/timeout.log"\nshift\nexec "$@"\n' >"$CUT/timeout"
+chmod +x "$CUT/timeout"
+wfresh
+rm -f "$FAKE/timeout.log"
+printf '7\n' >"$L"
+facts 7
+rollup 7 "$H1" "$RUNNING"
+rollup 7.3 "$H1" "$GREEN"
+printf '{"resources":{"graphql":{"remaining":5000,"reset":0}}}\n' >"$FAKE/ratelimit.json"
+hook 7 1 'touch "$FAKE/fail-rollup"'
+hook 7 2 'rm -f "$FAKE/fail-rollup"'
+PATH="$CUT:$PATH" call watch "${WARGS[@]}"
+is "7: (setup) the watch ran through the failed poll" "$RC" 0
+has "7: the rate-limit read is cut like an entry's, so a stalled one cannot hold the watch past its bound" "$(cat "$FAKE/timeout.log")" "300 gh api rate_limit"
+has "7: ...as an entry's read is" "$(cat "$FAKE/timeout.log")" "300 bash "
 wfresh
 printf '7\n' >"$L"
 facts 7
@@ -1162,8 +1213,25 @@ crollup "" ""
 call watch "${WARGS[@]}"
 is "7: a commit that gets no workflow run is answered no-run, and the watch ends" "$(printf '%s\n' "$OUT" | tr '\n' '|')" "commit=$MC	outcome=waiting	ci=none|commit=$MC	outcome=no-run	ci=none|outcome=stopped	reason=idle	pending=	unread=|"
 is "7: ...with exit 0" "$RC" 0
-is "7: ...ten minutes after it was first read, not sooner" "$(sleeps)" "120 120 120 120 120 "
-has "7: ...having asked whether the commit has any workflow run" "$(cat "$FAKE/gh.log")" "repos/acme/widgets/actions/runs?head_sha=$MC"
+# Five waits, or six where the first read fell a second into the watch.
+SLEPT="$(awk '{ n += $1 } END { print n + 0 }' "$FAKE/sleep.log")"
+[ "$SLEPT" -ge 600 ] && [ "$SLEPT" -le 720 ]
+ok "7: ...ten minutes after it was first read, not sooner (waited $SLEPT)" $?
+has "7: ...having asked for the commit's workflow runs" "$(cat "$FAKE/gh.log")" "repos/acme/widgets/actions/runs?head_sha=$MC"
+# A watch started again on that state file: the answer stands.
+: >"$FAKE/gh.log"
+rm -f "$FAKE/sleep.log"
+call watch "${WARGS[@]}"
+is "7: a watch started again on a commit already answered no-run says nothing new and waits for nothing" "$OUT|$(cat "$FAKE/sleep.log" 2>/dev/null)" "outcome=stopped	reason=idle	pending=	unread=|"
+lacks "7: ...and does not ask for its runs again" "$(cat "$FAKE/gh.log")" "actions/runs"
+# Runs that completed and left no lane: a default branch's tip collects the
+# skipped runs of events that build nothing.
+wfresh
+printf 'commit %s\n' "$MC" >"$L"
+crollup "" ""
+runs 4=completed 4=completed
+call watch "${WARGS[@]}"
+is "7: a commit whose only workflow runs completed without a lane is answered no-run" "$(printf '%s\n' "$OUT" | tr '\n' '|')" "commit=$MC	outcome=waiting	ci=none|commit=$MC	outcome=no-run	ci=none|outcome=stopped	reason=idle	pending=	unread=|"
 wfresh
 printf 'commit %s\n' "$MC" >"$L"
 crollup "" ""

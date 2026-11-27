@@ -39,11 +39,12 @@
 #                             every lane this head has is green, and each
 #                             `--lane` it lacks will not come: one
 #                             `unscheduled=<identity>` line each. Such a lane
-#                             belongs to a workflow that has no run on this
-#                             head, though the head has workflow runs and all
-#                             of them have completed (a workflow that runs
-#                             when a PR opens and not on a later push).
-#                             Whether the head merges without it is yours.
+#                             belongs to a workflow of the repository, and
+#                             the head has workflow runs, every one of them
+#                             completed, without it (a workflow that runs
+#                             when a PR opens and not on a later push, a job
+#                             renamed since). Whether the head merges
+#                             without it is yours.
 #                             A lane of no workflow of the repository (another
 #                             app's check, a commit status) is never told so:
 #                             it stays `missing=`
@@ -132,15 +133,18 @@
 #         printed once and not polled again until the list names another head
 #         for that PR. Every other entry is polled each time, so a red lane
 #         re-run or a thread resolved is seen. A listed head GitHub does not
-#         show yet, on a PR still at the head watched before, is a push on its
-#         way: `waiting`, with `ci=unpushed`.
+#         show yet, on a PR still at the head it was last seen on, is a push
+#         on its way for as long as that lasts: `waiting`, with `ci=unpushed`
+#         and that head as `now=`.
 #           pr=<N> TAB head=<oid> TAB outcome=<as check> TAB ...   and then
 #             ci=<rollup>, or state= and merge-commit= (not-open), or now=<the
 #             head it moved to>
 #           commit=<oid> TAB outcome=<green|red|waiting|no-run> TAB ci=<rollup>
 #             no-run: ten minutes after the watch first read it the commit has
-#             neither a lane nor a workflow run, so none is coming (workflows
-#             that run on pull requests only)
+#             no lane and no workflow run still going, so none is coming
+#             (workflows that run on pull requests only; a run that completed
+#             and left no lane, as a skipped one does). It stands, across
+#             watches too, until a lane shows.
 #           entry=<line> TAB outcome=bad-entry   a line it cannot read, or a
 #                                                PR listed twice; said once
 #         The first time an entry's lanes are all green it keeps their names,
@@ -161,8 +165,8 @@
 #         read an entry prints nothing and leaves its outcome standing; the
 #         wait doubles with each such poll running, and where GitHub reports
 #         the rate limit spent the watch sleeps until it resets. It runs no
-#         longer than `--max` and one poll; where `timeout` is installed, an
-#         entry's read is cut at five minutes.
+#         longer than `--max` and one poll; where `timeout` is installed,
+#         each read it makes is cut at five minutes.
 #         The state file is the train's memory, and it lives where you say:
 #         outside the repository. It is a journal, one TAB-separated record a
 #         line, only ever appended to, so the latest record of a kind is the
@@ -442,7 +446,7 @@ why() { # outcome
 	draft) printf 'PR #%s is a draft.' "$PR" ;;
 	review) printf 'PR #%s has open review items (%s unresolved threads, %s reviewers requesting changes, review decision %s). They are the maintainer'"'"'s to settle: skip it, with every PR stacked on it.' "$PR" "$F_THREADS" "$F_CHANGES" "$F_DECISION" ;;
 	red) printf 'PR #%s has a failing lane. Read its log before re-running anything.' "$PR" ;;
-	unscheduled) printf 'PR #%s is green on every lane this head has, and the lanes of its full run it lacks belong to workflows that did not run on this head and will not: every workflow run it has is complete. Whether it merges without them is yours to judge.' "$PR" ;;
+	unscheduled) printf 'PR #%s is green on every lane this head has, and the lanes of its full run it lacks will not come: every workflow run this head has is complete without them. Whether it merges without them is yours to judge.' "$PR" ;;
 	waiting) printf 'PR #%s is not green yet: a lane is running, or the rollup does not hold the lanes of a full run.' "$PR" ;;
 	esac
 }
@@ -453,26 +457,23 @@ sort_missing() {
 	local s h runs flows
 	s="$(slug)"
 	h="$(host)"
-	runs="$(gh api ${h:+--hostname} ${h:+"$h"} "repos/$s/actions/runs?head_sha=$F_HEAD&per_page=100" --jq '.workflow_runs[] | "\(.workflow_id)\t\(.status)"' </dev/null)" ||
+	runs="$(gh api ${h:+--hostname} ${h:+"$h"} "repos/$s/actions/runs?head_sha=$F_HEAD&per_page=100" --jq '.workflow_runs[].status' </dev/null)" ||
 		fail "could not list the workflow runs on $F_HEAD in $REPO (gh failed). Nothing here says which lanes are still to come."
-	flows="$(gh api ${h:+--hostname} ${h:+"$h"} "repos/$s/actions/workflows?per_page=100" --jq '.workflows[] | "\(.id)\t\(.name)"' </dev/null)" ||
+	flows="$(gh api ${h:+--hostname} ${h:+"$h"} "repos/$s/actions/workflows?per_page=100" --jq '.workflows[].name' </dev/null)" ||
 		fail "could not list the workflows of $REPO (gh failed). Nothing here says which lanes are still to come."
 	RUNS="$runs" FLOWS="$flows" awk '
 		BEGIN {
 			n = split(ENVIRON["RUNS"], r, "\n")
 			for (i = 1; i <= n; i++) if (r[i] != "") {
-				split(r[i], f, "\t"); ran[f[1]] = 1; runs++
-				if (f[2] != "completed") going = 1
+				runs++
+				if (r[i] != "completed") going = 1
 			}
 			m = split(ENVIRON["FLOWS"], w, "\n")
 		}
 		{
-			lane = substr($0, 9); id = ""; len = 0
-			for (i = 1; i <= m; i++) {
-				t = index(w[i], "\t"); name = substr(w[i], t + 1)
-				if (name != "" && index(lane, name " / ") == 1 && length(name) > len) { id = substr(w[i], 1, t - 1); len = length(name) }
-			}
-			if (id != "" && !(id in ran) && runs > 0 && !going) print "unscheduled=" lane
+			lane = substr($0, 9); ours = 0
+			for (i = 1; i <= m; i++) if (w[i] != "" && index(lane, w[i] " / ") == 1) ours = 1
+			if (ours && runs > 0 && !going) print "unscheduled=" lane
 			else print $0
 		}'
 }
@@ -805,17 +806,19 @@ cmd_merge() {
 	stop unconfirmed "the merge command returned, but PR #$PR still reads $F_STATE. Read it again before going on." "state=$F_STATE" "head=$F_HEAD"
 }
 
-# The latest record of one entry in the state file, as `<head> TAB <outcome>`;
-# empty where it has none, or where the list dropped it since.
+# The latest record of one entry in the state file, as `<head> TAB <outcome>
+# TAB <the head GitHub last showed for it>`; empty where it has none, or where
+# the list dropped it since.
 last_of() { # pr|commit, id
 	awk -F "$TAB" -v k="$1=$2" -v u="dropped=$2" '
 		$1 == k {
-			h = "-"; o = ""
+			h = "-"; o = ""; s = ""
 			for (i = 2; i <= NF; i++) {
 				if (index($i, "head=") == 1) h = substr($i, 6)
 				if (index($i, "outcome=") == 1) o = substr($i, 9)
+				if (index($i, "now=") == 1) s = substr($i, 5)
 			}
-			r = h "\t" o
+			r = h "\t" o "\t" (s == "" ? h : s)
 		}
 		$1 == u { r = "" }
 		END { print r }' "$STATE"
@@ -839,9 +842,9 @@ bad_entry() { # the line
 	grep -qF -- "$rec$TAB" "$STATE" || report "$rec"
 }
 watch_pr() { # PR, head the list names (may be empty)
-	local id="$1" head="$2" last lhead="" lout="" kept rc=0 out o h ci rec green lane
+	local id="$1" head="$2" last lhead="" lout="" lseen="" kept rc=0 out o h ci rec green lane
 	last="$(last_of pr "$id")"
-	IFS="$TAB" read -r lhead lout <<EOF
+	IFS="$TAB" read -r lhead lout lseen <<EOF
 $last
 EOF
 	[ -n "$head" ] || head="$lhead"
@@ -876,8 +879,8 @@ EOF
 	[ -n "$head" ] || head="$h"
 	ci="$(field ci "$out")"
 	# The list names a head GitHub does not show yet, and the PR is still on
-	# the one watched before: a push on its way, not somebody else's.
-	if [ "$o" = moved ] && [ "$head" != "$lhead" ] && [ "$h" = "$lhead" ]; then
+	# the one it was last seen on: a push on its way, not somebody else's.
+	if [ "$o" = moved ] && [ "$h" = "$lseen" ]; then
 		o=waiting
 		ci=unpushed
 	fi
@@ -885,7 +888,10 @@ EOF
 	case "$o" in
 	not-open) rec="$rec${TAB}state=$(field state "$out")${TAB}merge-commit=$(field merge-commit "$out")" ;;
 	moved) rec="$rec${TAB}now=$h" ;;
-	*) rec="$rec${TAB}ci=$ci" ;;
+	*)
+		rec="$rec${TAB}ci=$ci"
+		[ "$ci" != unpushed ] || rec="$rec${TAB}now=$h"
+		;;
 	esac
 	if [ "$head" != "$lhead" ] || [ "$o" != "$lout" ]; then report "$rec"; fi
 	case "$o" in
@@ -900,9 +906,9 @@ EOF
 	[ "$o" != waiting ] || W_PENDING="$W_PENDING $id"
 }
 watch_commit() { # oid
-	local id="$1" last lhead="" lout="" out ci o s h since runs
+	local id="$1" last lhead="" lout="" lseen="" out ci o s h since going
 	last="$(last_of commit "$id")"
-	IFS="$TAB" read -r lhead lout <<EOF
+	IFS="$TAB" read -r lhead lout lseen <<EOF
 $last
 EOF
 	if ! out="$($GUARD bash "$CI" lanes --repo "$REPO" --commit "$id" 2>/dev/null)"; then
@@ -922,14 +928,18 @@ EOF
 		esac
 		since="${W_NONE##*" $id="}"
 		since="${since%% *}"
-		if [ $((W_ELAPSED - since)) -ge "$NO_RUN_AFTER" ]; then
+		if [ "$lout" = no-run ]; then
+			o=no-run
+		elif [ $((W_ELAPSED - since)) -ge "$NO_RUN_AFTER" ]; then
 			s="$(slug)"
 			h="$(host)"
-			if ! runs="$($GUARD gh api ${h:+--hostname} ${h:+"$h"} "repos/$s/actions/runs?head_sha=$id&per_page=1" --jq .total_count 2>/dev/null)"; then
+			# A run that completed and left no lane is not going to: events
+			# that build nothing (a comment) attach skipped runs to this tip.
+			if ! going="$($GUARD gh api ${h:+--hostname} ${h:+"$h"} "repos/$s/actions/runs?head_sha=$id&per_page=100" --jq '[.workflow_runs[] | select(.status != "completed")] | length' 2>/dev/null)"; then
 				W_UNREAD="$W_UNREAD $id"
 				return 0
 			fi
-			[ "$runs" != 0 ] || o=no-run
+			[ "$going" != 0 ] || o=no-run
 		fi
 		;;
 	*)
@@ -1045,12 +1055,6 @@ cmd_watch() {
 				break
 			fi
 		fi
-		tick
-		elapsed="$W_ELAPSED"
-		if [ "$elapsed" -ge "$MAX" ]; then
-			reason=expired
-			break
-		fi
 		wait="$INTERVAL"
 		n="$fails"
 		while [ "$n" -gt 1 ]; do
@@ -1058,7 +1062,7 @@ cmd_watch() {
 			n=$((n - 1))
 		done
 		if [ "$fails" -gt 0 ]; then
-			limit="$(gh api ${h:+--hostname} ${h:+"$h"} rate_limit --jq '.resources.graphql | "\(.remaining) \(.reset)"' 2>/dev/null)" || limit=""
+			limit="$($GUARD gh api ${h:+--hostname} ${h:+"$h"} rate_limit --jq '.resources.graphql | "\(.remaining) \(.reset)"' 2>/dev/null)" || limit=""
 			case "$limit" in
 			"0 "*[!0-9]* | "0 ") ;;
 			"0 "*)
@@ -1066,6 +1070,14 @@ cmd_watch() {
 				[ "$n" -le "$wait" ] || wait="$n"
 				;;
 			esac
+		fi
+		# Read after the last thing that can take time, so no wait follows a
+		# bound already passed.
+		tick
+		elapsed="$W_ELAPSED"
+		if [ "$elapsed" -ge "$MAX" ]; then
+			reason=expired
+			break
 		fi
 		[ "$wait" -le $((MAX - elapsed)) ] || wait=$((MAX - elapsed))
 		sleep "$wait"
