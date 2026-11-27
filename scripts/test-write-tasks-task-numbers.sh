@@ -148,7 +148,7 @@ is "1: outcome is the first line" "$(printf '%s\n' "$OUT" | head -n 1)" "outcome
 
 put "$R" tasks/010-new.md
 put "$R" tasks/README.md
-put "$R" tasks/notes/1234-four-digits.md
+put "$R" tasks/notes/12-two-digits.md
 call claims "${ARGS[@]}"
 is "1: a new task file with a free number is clean" "$(val outcome)" clean
 is "1: ...as one claim" "$(val claims)" 1
@@ -672,6 +672,86 @@ OUT="$(cd "$R" && bash "$ROOT/plugins/dev-skills/bin/write-tasks-task-numbers" d
 is "10: the plugin's shim runs it" "$(count duplicate)" 5
 call --help
 has "10: --help prints its contract" "$OUT" "outcome=duplicate"
+
+# --- 11. numbers past 999 ------------------------------------------------------
+new_repo
+put "$R" tasks/1000-big.md
+put "$R" tasks/1001a-suffixed.md
+put "$R" tasks/12345-five.md
+put "$R" tasks/12-two.md
+call claims "${ARGS[@]}"
+is "11: four-digit task files with free numbers are clean" "$(val outcome)" clean
+is "11: ...each one a claim, and a two-digit name none" "$(val claims)" 3
+has "11: ...named with its whole number" "$OUT" "claim=1000${TAB}tasks/1000-big.md"
+has "11: ...suffix included" "$OUT" "claim=1001a${TAB}tasks/1001a-suffixed.md"
+has "11: ...and at any width past three" "$OUT" "claim=12345${TAB}tasks/12345-five.md"
+call claims "${ARGS[@]}" --reserved 1000
+is "11: --reserved accepts a four-digit number, which collides" "$(val outcome)" collision
+has "11: ...held as reserved" "$OUT" "collision=1000${TAB}tasks/1000-big.md${TAB}reserved${TAB}-${TAB}other-path"
+call claims "${ARGS[@]}" --reserved 1001 --reserved 1000a --reserved 100
+is "11: 1001 beside 1001a, 1000a and 100 beside 1000 are other numbers" "$(val outcome)" clean
+call claims "${ARGS[@]}" --reserved 1000A
+is "11: a reserved number with a capital suffix is still a usage error" "$RC" 64
+other_pr 7 theirs main tasks/sub/1000-theirs.md
+call claims "${ARGS[@]}"
+is "11: a four-digit number an open head adds is a collision" "$(val outcome)" collision
+has "11: ...naming the head" "$OUT" "collision=1000${TAB}tasks/1000-big.md${TAB}pr:7${TAB}tasks/sub/1000-theirs.md${TAB}other-path"
+is "11: ...once" "$(count collision)" 1
+git -C "$R" checkout -q -b wide-sibling main
+put "$R" tasks/1001a-sibling.md
+git -C "$R" checkout -q feature
+mv "$FAKE/prs.json" "$FAKE/prs.kept" && printf '[]\n' >"$FAKE/prs.json"
+call claims "${ARGS[@]}" --member wide-sibling:main
+has "11: a member's four-digit suffixed number is compared whole" "$OUT" "collision=1001a${TAB}tasks/1001a-suffixed.md${TAB}member:wide-sibling${TAB}tasks/1001a-sibling.md${TAB}other-path"
+is "11: ...and it alone" "$(count collision)" 1
+mv "$FAKE/prs.kept" "$FAKE/prs.json"
+call taken --repo acme/widgets
+is "11: taken lists a four-digit tree" "$(val outcome)" listed
+has "11: ...under its whole number" "$OUT" "taken=1000${TAB}tree${TAB}tasks/1000-big.md"
+has "11: ...suffix included" "$OUT" "taken=1001a${TAB}tree${TAB}tasks/1001a-suffixed.md"
+has "11: ...on an open head too" "$OUT" "taken=1000${TAB}pr:7${TAB}tasks/sub/1000-theirs.md"
+has "11: ...while two digits stay another numbering style" "$OUT" "taken=-${TAB}tree${TAB}tasks/12-two.md"
+call duplicates
+is "11: four-digit numbers standing once each are no duplicate" "$(val outcome)" clean
+is "11: ...and are counted as numbered" "$(val numbered)" 6
+has "11: ...a two-digit name is not" "$OUT" "unnumbered=tasks/12-two.md"
+printf 'x\n' >"$R/tasks/done/1000-again.md"
+printf 'x\n' >"$R/tasks/100-short.md"
+call duplicates
+is "11: a four-digit number standing twice is a duplicate" "$(val outcome)" duplicate
+has "11: ...naming one file" "$OUT" "duplicate=1000${TAB}tasks/1000-big.md"
+has "11: ...and the other" "$OUT" "duplicate=1000${TAB}tasks/done/1000-again.md"
+is "11: ...and no number that only starts the same" "$(count duplicate)" 2
+
+# A four-digit number the base holds, and one the branch itself holds twice.
+new_repo
+git -C "$R" checkout -q main
+put "$R" tasks/done/2000-landed.md
+git -C "$R" push -q origin main
+git -C "$R" checkout -q feature
+put "$R" tasks/2000-mine.md
+put "$R" tasks/2001-one.md
+put "$R" tasks/sub/2001-two.md
+call claims "${ARGS[@]}"
+has "11: a four-digit number a file on the base holds is a collision" "$OUT" "collision=2000${TAB}tasks/2000-mine.md${TAB}base${TAB}tasks/done/2000-landed.md${TAB}other-path"
+has "11: ...and so is one the branch itself holds twice" "$OUT" "collision=2001${TAB}tasks/2001-one.md${TAB}branch${TAB}tasks/sub/2001-two.md${TAB}other-path"
+is "11: ...each named once per holder" "$(count collision)" 3
+
+# Compared as written: a padded number and a bare one are two numbers.
+new_repo
+put "$R" tasks/0999-padded.md
+put "$R" tasks/999-plain.md
+call claims "${ARGS[@]}"
+is "11: 0999 beside 999 is no collision" "$(val outcome)" clean
+is "11: ...both claimed" "$(val claims)" 2
+call claims "${ARGS[@]}" --reserved 999
+is "11: a reserved 999 is held against the file written 999" "$(count collision)" 1
+has "11: ...and not the one written 0999" "$OUT" "collision=999${TAB}tasks/999-plain.md${TAB}reserved"
+call duplicates
+is "11: ...and the sweep reads them as two numbers" "$(val outcome)" clean
+call taken --repo acme/widgets
+has "11: ...each listed as it is written" "$OUT" "taken=0999${TAB}tree${TAB}tasks/0999-padded.md"
+has "11: ...the bare one too" "$OUT" "taken=999${TAB}tree${TAB}tasks/999-plain.md"
 
 if [ "$fails" -gt 0 ]; then
 	printf 'write-tasks task-numbers helper test FAILED (%s of %s checks).\n' "$fails" "$checks" >&2

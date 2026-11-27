@@ -14,9 +14,14 @@
 # `<owner>/<repo>` is the repository the pull requests are in; write it
 # `<host>/<owner>/<repo>` where that is not github.com. `--folder` is the
 # repository's task folder (`tasks`, no trailing slash; `./-x` for a name that starts with a dash). A task file is one whose basename starts
-# with a full task number and a dash: three digits and an optional lowercase
-# letter (`001-`, `001a-`, `042b-`), at any depth under the folder, so
-# `done/` and `deferred/` keep their numbers. `001` and `001a` are two numbers.
+# with a full task number and a dash: three or more digits and an optional
+# lowercase letter (`001-`, `001a-`, `042b-`, `1042-`), at any depth under the
+# folder, so `done/` and `deferred/` keep their numbers. `001` and `001a` are
+# two numbers. A number is compared as it is written, never by its value:
+# `0999` and `999` are two numbers as well, neither a collision nor a
+# duplicate of the other, so a repository that grows past 999 keeps writing
+# its old numbers at the width they have. Fewer than three digits is another
+# numbering style.
 #
 # claims  For the pre-PR guard. `--base` is the branch the scanned branch
 #         (`--branch`, else HEAD) is recorded as based on: it is fetched from
@@ -64,6 +69,7 @@
 #           taken=<number> TAB <tree|pr:<N>> TAB <path>
 #         <number> is `-` for a file that carries no full task number as
 #         above: a repository numbering its tasks another way reads the paths.
+#         The lines are sorted as text, so `1000` stands before `999`.
 #         under outcome=listed, or outcome=incomplete (exit 3) with the same
 #         skipped= and limit= lines. A folder that is not in the working tree
 #         lists nothing from it (the first task has no folder yet); one that
@@ -143,13 +149,13 @@ field() { # key, text
 # shellcheck disable=SC2016 # the $names are awk's
 LISTED='{
 	b = $0; sub(/.*\//, "", b)
-	print (match(b, /^[0-9][0-9][0-9][a-z]?-/) ? substr(b, 1, RLENGTH - 1) : "-") "\t" $0
+	print (match(b, /^[0-9][0-9][0-9]+[a-z]?-/) ? substr(b, 1, RLENGTH - 1) : "-") "\t" $0
 }'
 # Reads paths, prints `<number> TAB <path>` for each that is a task file.
 # shellcheck disable=SC2016 # the $names are awk's
 NUMBERED='{
 	b = $0; sub(/.*\//, "", b)
-	if (match(b, /^[0-9][0-9][0-9][a-z]?-/)) print substr(b, 1, RLENGTH - 1) "\t" $0
+	if (match(b, /^[0-9][0-9][0-9]+[a-z]?-/)) print substr(b, 1, RLENGTH - 1) "\t" $0
 }'
 
 CMD="${1:-}"
@@ -180,7 +186,7 @@ while [ $# -gt 0 ]; do
 		--branch) BRANCH="$2" ;;
 		--folder) FOLDER="$2" ;;
 		--reserved)
-			printf '%s\n' "$2" | grep -Eq '^[0-9]{3}[a-z]?$' || usage "--reserved takes a full task number such as 024 or 024a"
+			printf '%s\n' "$2" | grep -Eq '^[0-9]{3,}[a-z]?$' || usage "--reserved takes a full task number such as 024, 024a or 1024"
 			RESERVED="$RESERVED$2
 "
 			;;
@@ -371,7 +377,7 @@ cmd_claims() {
 			$1 == "B" { if (!($2 in gone)) print "base" t $2; next }
 			{ print "branch" t $2 }' | awk -F "$TAB" -v t="$TAB" '{
 				b = $2; sub(/.*\//, "", b)
-				if (match(b, /^[0-9][0-9][0-9][a-z]?-/)) print substr(b, 1, RLENGTH - 1) t $1 t $2
+				if (match(b, /^[0-9][0-9][0-9]+[a-z]?-/)) print substr(b, 1, RLENGTH - 1) t $1 t $2
 			}' >>"$tmp/holders"
 		printf '%s' "$RESERVED" | awk -v t="$TAB" 'NF { print $0 t "reserved" t "-" }' >>"$tmp/holders"
 		while IFS= read -r m; do

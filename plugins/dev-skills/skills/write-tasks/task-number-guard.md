@@ -6,8 +6,8 @@ The script's `--help` prints what every line of its output means; this file hold
 
 ## What is compared
 
-A task file's basename starts with a **full task number**: three digits plus an optional lowercase letter suffix, such as `001`, `001a`, or `042b`, followed by a dash and its slug.
-Two files collide whenever their full task numbers are identical, regardless of slug; `001`, `001a`, and `001b` are distinct and do not collide.
+A task file's basename starts with a **full task number**: three or more digits plus an optional lowercase letter suffix, such as `001`, `001a`, `042b`, or `1042`, followed by a dash and its slug.
+Two files collide whenever their full task numbers are identical as written, regardless of slug; `001`, `001a`, and `001b` are distinct and do not collide, and neither do `0999` and `999`.
 
 The scanned branch claims every task file it adds against its own recorded base, less its own relocations.
 Within one number, each file it removes pairs with one file it adds, the same basename first and then the one git reads as its rename, so an archive, a deferral, a promotion or an in-place slug rename is a net-zero claim, and a two-file number swap clears too.
