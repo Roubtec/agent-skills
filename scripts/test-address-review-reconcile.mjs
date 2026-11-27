@@ -819,35 +819,28 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // this case promises never to dirty — and a halt, which is precisely what
   // KEEPS the worktree, leaves it standing. Pinned ahead of the arms for the
   // same reason the registration read is: stated inside one arm it would exempt
-  // the other. Both halves are read,
-  // because the probe without the write is a check nothing acts on: the
-  // `check-ignore` probe, and the untracked repo-local exclude file it appends
-  // to rather than the tracked `.gitignore`, which is the maintainer's.
-  // Three shapes fail silently here and each is worth naming. The probe carries
-  // a TRAILING SLASH because `/.worktrees/` is a directory-only rule and `git
-  // check-ignore` answers NO for a bare `.worktrees` that is not on disk yet —
-  // which is every first run, so the slashless form only ever agrees by
-  // accident of ordering, and a re-probe after the append would fail outright.
-  // The exclude file is asked of GIT rather than spelled `.git/info/exclude`,
-  // because this checkout may itself be a linked worktree — as the run that
-  // wrote this one was — where `.git` is a gitfile, `.git/info` is not a
-  // directory, and the literal append fails before the base is ever protected.
-  // And that question is asked from inside `<repo>`, because the answer is
-  // CWD-relative where the neighbouring probe's `<repo>/…` placeholder is
-  // absolute: in a primary checkout `--git-path` prints the relative
-  // `.git/info/exclude` (a linked worktree gets an absolute path), so an agent
-  // that runs it as `git -C <repo> …` and appends from its own directory writes
-  // the rule to a file `check-ignore` never reads.
-  const probesTheIgnoreRule = /git check-ignore -q "<repo>\/\.worktrees\/"/.test(registrationRule);
-  const resolvesTheExcludeThroughGit =
-    /append `\/\.worktrees\/` to the file `git rev-parse --git-path info\/exclude` names/.test(registrationRule) &&
-    /rather than writing a literal `\.git\/info\/exclude`/.test(registrationRule) &&
-    /NOT the tracked/.test(registrationRule);
-  const resolvesItFromInsideTheRepo = /run (?:it )?from inside `<repo>`[\s\S]*?RELATIVE/.test(registrationRule);
+  // the other.
+  // The recipe itself is the `address-tasks` skill's `bootstrap.sh`, reached
+  // through the plugin's `address-tasks-bootstrap` shim, and its three silent
+  // failures are that script's to avoid and `test-address-tasks-bootstrap.sh`'s
+  // to run: a probe without the TRAILING SLASH answers no for a `.worktrees`
+  // that is not on disk yet, which is every first run; a literal
+  // `.git/info/exclude` is not a path where this checkout is a linked worktree
+  // — as the run that wrote this one was; and the exclude file Git names is
+  // CWD-relative in a primary checkout, so an append made from elsewhere lands
+  // where `check-ignore` never reads. What the brief owes is read here: it
+  // orders the script ahead of the arms, it stops on the script's stop rather
+  // than attaching under an unignored base, it states no recipe of its own —
+  // a copy beside the call is what drifted before — and it still points away
+  // from the tracked `.gitignore`, which is the maintainer's.
+  const ordersTheScript = /run `address-tasks-bootstrap ignore`/.test(registrationRule);
+  const stopsOnItsStop = /`outcome=stop`[^.]*`ok: false`[^.]*attach nothing/.test(registrationRule);
+  const statesNoRecipe = !/check-ignore|info\/exclude/.test(cases) && /Establish the rule no other way/.test(registrationRule);
+  const pointsAwayFromGitignore = /NOT the tracked/.test(registrationRule);
   check(
-    "the worktree base is made ignored before any arm adds under it, probed as a directory and appended to the exclude file Git itself names — resolved from inside `<repo>`, never a literal `.git/info/exclude` and never the tracked `.gitignore`",
-    probesTheIgnoreRule && resolvesTheExcludeThroughGit && resolvesItFromInsideTheRepo,
-    `ignore rule probed as a directory: ${probesTheIgnoreRule}; exclude resolved through git instead of a literal path or .gitignore: ${resolvesTheExcludeThroughGit}; resolved from inside the repo, the answer being CWD-relative: ${resolvesItFromInsideTheRepo}`,
+    "the worktree base is made ignored before any arm adds under it, by the bootstrap script rather than a recipe of the brief's own — a stop from it attaches nothing, and the tracked `.gitignore` is never the place",
+    ordersTheScript && stopsOnItsStop && statesNoRecipe && pointsAwayFromGitignore,
+    `script ordered ahead of the arms: ${ordersTheScript}; its stop is a blocker: ${stopsOnItsStop}; no hand recipe beside it: ${statesNoRecipe}; points away from .gitignore: ${pointsAwayFromGitignore}`,
   );
   // The location pair rides in `pr`, which is otherwise owed only on success —
   // so the packet that could silently omit the path is precisely the halt that
