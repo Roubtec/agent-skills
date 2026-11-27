@@ -24,7 +24,7 @@
 // evaluates the ACTUAL shipped source — no second copy of the gate — with those
 // globals stubbed, and drives scripted gather packets through it, reading the
 // result the script returns. The nested review cycle is the "the run proceeded"
-// signal: reaching `workflow("wf-review-cycle", ...)` at all means the gate let
+// signal: reaching `workflow("dev-skills:wf-review-cycle", ...)` at all means the gate let
 // this run through.
 //
 // The gate is only the CONSUMER of `packet.reconcile`. The producer is a
@@ -864,8 +864,8 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   const working = await run(gathered({ reconcile: { outcome: "work" }, items: [ITEM] }));
   check("same-branch `work` with threads proceeds to the nested cycle", working.status === "reached-cycle", working.status);
   check(
-    "and hands the cycle the checked-out branch",
-    working.seen.cycleOpts && working.seen.cycleOpts.name === "wf-review-cycle" && working.seen.cycleOpts.opts.branch === "feature/x",
+    "and hands the cycle the checked-out branch, calling it by the plugin-qualified name the runtime registers",
+    working.seen.cycleOpts && working.seen.cycleOpts.name === "dev-skills:wf-review-cycle" && working.seen.cycleOpts.opts.branch === "feature/x",
     JSON.stringify(working.seen.cycleOpts && working.seen.cycleOpts.opts && working.seen.cycleOpts.opts.branch),
   );
   const ffClean = await run(gathered({ reconcile: { outcome: "fast-forwarded" } }));
@@ -2637,11 +2637,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     rebases: { "pre-fix": REBASE_NOOP, "pre-push": REBASE_REPLAY },
   });
   check(
-    "a replaying pre-push point re-runs the cycle over the rebased tree, on the base THAT rebase landed on",
+    "a replaying pre-push point re-runs the cycle over the rebased tree, by the same qualified name, on the base THAT rebase landed on",
     replayed.status === "fixed-local" &&
       replayed.seen.cycleCalls.length === 2 &&
+      replayed.seen.cycleCalls[1].name === "dev-skills:wf-review-cycle" &&
       replayed.seen.cycleCalls[1].opts.base === REBASE_REPLAY.effectiveBase,
-    JSON.stringify({ status: replayed.status, cycles: replayed.seen.cycleCalls.length, base: replayed.seen.cycleCalls[1] && replayed.seen.cycleCalls[1].opts.base }),
+    JSON.stringify({ status: replayed.status, cycles: replayed.seen.cycleCalls.length, name: replayed.seen.cycleCalls[1] && replayed.seen.cycleCalls[1].name, base: replayed.seen.cycleCalls[1] && replayed.seen.cycleCalls[1].opts.base }),
   );
   const second = replayed.seen.cycleCalls[1] ? replayed.seen.cycleCalls[1].opts.scope : null;
   const passedDisposition = CYCLE_PASS.workReport[0];

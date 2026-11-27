@@ -48,7 +48,7 @@
  * Consumption modes
  * -----------------
  * 1. NESTING — where the runtime supports child workflows, invoke it directly:
- *      const cycle = await workflow("wf-review-cycle", { worktree, branch, ... });
+ *      const cycle = await workflow("dev-skills:wf-review-cycle", { worktree, branch, ... });
  *    Fine for a consumer that does not fan out (wf-address-review). Under
  *    nesting each cycle is a separate child with its own state, so any shared
  *    cross-cycle policy (e.g. a peer-launch throttle) placed inside the child

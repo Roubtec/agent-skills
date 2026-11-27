@@ -83,7 +83,7 @@
  * prose, and the verifier is a textbook fresh-`Agent` spawn.
  *
  * The fix -> review -> fix loop itself is NOT stated here: this workflow nests
- * the canonical cycle (`workflow("wf-review-cycle", ...)`) for its verification
+ * the canonical cycle (`workflow("dev-skills:wf-review-cycle", ...)`) for its verification
  * loop — roles, gates, disposition rule, the best-effort cross-harness peer
  * roster, and the round cap are all wf-review-cycle's, and this script only
  * supplies the PR-specific scope (triage kinds, per-thread report contract,
@@ -2018,7 +2018,9 @@ if (typeof workflow !== "function") {
 // it so every check and every result past this point reads the cycle that judged
 // the tree actually being published — carrying this cycle's open questions,
 // deviations and round count along, which are the run's rather than a loop's.
-let cycle = await workflow("wf-review-cycle", {
+// By its plugin-qualified name: the runtime registers a plugin's workflows
+// under the plugin's namespace only, and `workflow()` throws on the bare name.
+let cycle = await workflow("dev-skills:wf-review-cycle", {
   worktree: locationMode === "worktree" ? worktreePath : "",
   branch: packet.pr.workingBranch,
   base: packet.pr.base,
@@ -2516,7 +2518,7 @@ if (cycle.verdict === "pass" && !flags.noRebase) {
         note: withRecordNote(`Nothing was pushed. The branch is on the rebased base, and its pre-rebase tip is saved at \`${second.rebase.recoveryRef}\`. Re-run to review the rebased tree with a fresh round budget.`),
       };
     }
-    const reverified = await workflow("wf-review-cycle", {
+    const reverified = await workflow("dev-skills:wf-review-cycle", {
       worktree: locationMode === "worktree" ? worktreePath : "",
       branch: packet.pr.workingBranch,
       base: packet.pr.base,
