@@ -285,6 +285,17 @@ git -C "$R" commit -q --amend -m "reworded"
 call after --old-base "$INIT" --old-tip "$H" --new-base "$INIT"
 is "6: a reworded commit is not the same commit" "$(val identical):$(val reason)" "no:message"
 is "6: ...whatever the paths say" "$(val paths):$(val outcome):$RC" "disjoint:verify:3"
+# The same patch but for its whitespace: what a hand edit during the replay leaves.
+branch w "$INIT"
+printf 'if x:\n    y()\nz()\n' >"$R/p.py"
+git -C "$R" add p.py
+git -C "$R" commit -q -m "add p.py"
+W="$(tip w)"
+printf 'if x:\n    y()\n    z()\n' >"$R/p.py"
+git -C "$R" commit -q -a --amend --no-edit
+call after --old-base "$INIT" --old-tip "$W" --new-base "$INIT"
+is "6: a commit altered only in its whitespace is not patch-identical" "$(val identical):$(val reason)" "no:patch"
+is "6: ...so nothing is carried over disjoint paths" "$(val paths):$(val outcome):$RC" "disjoint:verify:3"
 # A rename counts under both of its names.
 branch ren "$INIT"
 git -C "$R" mv g g2
@@ -294,6 +305,15 @@ line g 5 M5
 on ren
 call before --onto main8
 is "6: a renamed file is touched under its old name" "$(val paths):$(all shared)" "shared:g "
+# ...on the base's side as well: the file the branch edits is gone from under it.
+branch edits "$INIT"
+line g 1 G1
+on main8
+git -C "$R" mv g g3
+git -C "$R" commit -q -m "rename g on the base"
+on edits
+call before --onto main8
+is "6: a file the base renamed is changed underneath under its old name" "$(val paths):$(all shared)" "shared:g "
 # A branch with nothing of its own left: the rebase would only fast-forward it.
 branch behind "$INIT"
 call before --onto "$MAIN2"
@@ -340,6 +360,21 @@ is "7: an old base that is no ancestor of the old tip is a failure" "$RC" 1
 is "7: ...with nothing on stdout" "$OUT" ""
 call after --old-base "$INIT" --old-tip "$A" --new-base "$MAIN3"
 is "7: a new base the branch was not replayed onto is a failure" "$RC" 1
+# A read that fails proves nothing: no answer, and never a carry on two empty reads.
+REAL_GIT="$(command -v git)"
+mkdir "$WORKDIR/shim"
+cat >"$WORKDIR/shim/git" <<SHIM
+#!/bin/sh
+case " \$* " in *" \$BREAK_GIT "*) exit 1 ;; esac
+exec "$REAL_GIT" "\$@"
+SHIM
+chmod +x "$WORKDIR/shim/git"
+for broken in "patch-id" "cat-file" "--merges" "diff-tree --stdin" "diff-tree -r"; do
+	OUT="$(cd "$R" && PATH="$WORKDIR/shim:$PATH" BREAK_GIT="$broken" bash "$HELPER" after --old-base "$INIT" --old-tip "$A" --new-base "$MAIN2" a 2>/dev/null)"
+	is "7: a failed '$broken' read fails the call and carries nothing" "$?:$OUT" "1:"
+done
+OUT="$(cd "$R" && PATH="$WORKDIR/shim:$PATH" BREAK_GIT="no-such-word" bash "$HELPER" after --old-base "$INIT" --old-tip "$A" --new-base "$MAIN2" a 2>/dev/null)"
+is "7: ...where the same call through the same shim, unbroken, carries" "$?:$(val outcome)" "0:carry"
 OUT="$(cd "$WORKDIR" && bash "$HELPER" before --onto main 2>"$WORKDIR/err")"
 is "7: outside a repository is a failure" "$?" 1
 OUT="$(bash "$HELPER" -C "$R" before --onto "$MAIN2" a 2>/dev/null)"

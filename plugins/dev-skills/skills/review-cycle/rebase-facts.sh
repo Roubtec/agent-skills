@@ -29,8 +29,9 @@
 #   fork-point=<oid>      where the branch's own commits start: `--parent-tip`
 #                         where one was given, else the merge base of the
 #                         branch and `--onto`
-#   replay=<n>            commits a rebase here would replay: the non-merge
-#                         commits in <fork-point>..<branch>, and 0 on a no-op
+#   replay=<n>            commits a rebase here would replay at most: the
+#                         non-merge commits in <fork-point>..<branch> (git
+#                         drops one whose patch `--onto` holds), 0 on a no-op
 #   merges=<n>            merge commits in that range, then one `merge=<oid>`
 #                         for each
 #   onto-ahead=<n>        commits `--onto` holds that the branch lacks; 0 is a
@@ -54,8 +55,9 @@
 #   old-base=<oid> old-tip=<oid> new-base=<oid> new-tip=<oid>
 #   identical=<yes|no>    yes where <new-base>..<new-tip> holds the commits of
 #                         <old-base>..<old-tip> one for one and in order, each
-#                         with the same patch, author and message, and neither
-#                         range holds a merge
+#                         with the same patch byte for byte (whitespace
+#                         included), author and message, and neither range
+#                         holds a merge
 #   reason=<merge|count|patch|message>
 #                         on `identical=no`, the first way they differ: a merge
 #                         in either range, a commit dropped or added, or a
@@ -76,9 +78,14 @@
 # Output: `key=value` lines on stdout, `outcome=` first. Exit status: 0 on
 # noop, replay, unchanged and carry; 3 on stale-parent and verify; 1 on a
 # failure (a commit that does not resolve, histories with no common ancestor,
-# a base that is not an ancestor of its tip), with nothing on stdout; 64 on a
-# usage error. Written for bash 3.2 and later.
+# a base that is not an ancestor of its tip, a read that failed), with nothing
+# on stdout; 64 on a usage error. Written for bash 3.2 and later, and for git
+# 2.39 and later: `after` needs `git patch-id --verbatim`, and fails where git
+# lacks it.
 set -u
+# A read that fails inside a pipeline must fail the call: an empty answer would
+# otherwise compare equal to another empty one and prove a carry.
+set -o pipefail
 
 TAB="$(printf '\t')"
 case "$0" in
@@ -114,7 +121,8 @@ touched() { # <base> <tip>
 	local revs
 	revs="$(git rev-list "$1..$2")" || fail "could not list $1..$2."
 	[ -n "$revs" ] || return 0
-	printf '%s\n' "$revs" | git diff-tree --stdin -m -r --no-renames --name-only --no-commit-id | awk 'NF' | sort -u
+	printf '%s\n' "$revs" | git diff-tree --stdin -m -r --no-renames --name-only --no-commit-id | awk 'NF' | sort -u ||
+		fail "could not list the files $1..$2 touches."
 }
 differing() { # <tree-ish> <tree-ish>
 	git diff-tree -r --no-renames --name-only "$1" "$2" | sort -u
@@ -173,15 +181,17 @@ before() {
 }
 
 # What a replay carries of one commit: its patch, and its author and message.
+# `--verbatim`, because the default patch id ignores whitespace and a commit
+# re-indented by hand would read as the one that was verified.
 patch_of() { # <commit>
-	git diff-tree -p --binary --no-renames --no-ext-diff --no-textconv --no-commit-id --root "$1" | git patch-id --stable | awk '{ print $1 }'
+	git diff-tree -p --binary --no-renames --no-ext-diff --no-textconv --no-commit-id --root "$1" | git patch-id --verbatim | awk '{ print $1 }'
 }
 words_of() { # <commit>
 	git cat-file commit "$1" | awk 'body { print; next } /^$/ { body = 1; print; next } /^author / { print }'
 }
 
 after() {
-	local ob ot nb nt old new old_n new_n identical=yes reason="" differs="" o n outcome
+	local ob ot nb nt old new old_n new_n identical=yes reason="" differs="" o n outcome old_m new_m po pn wo wn
 	ob="$(commit "--old-base" "$OLD_BASE")" || exit 1
 	ot="$(commit "--old-tip" "$OLD_TIP")" || exit 1
 	nb="$(commit "--new-base" "$NEW_BASE")" || exit 1
@@ -196,18 +206,24 @@ after() {
 	new="$(git rev-list --reverse "$nb..$nt")" || fail "could not list $nb..$nt."
 	old_n="$(printf '%s\n' "$old" | awk 'NF { n++ } END { print n + 0 }')"
 	new_n="$(printf '%s\n' "$new" | awk 'NF { n++ } END { print n + 0 }')"
-	if [ -n "$(git rev-list --merges "$ob..$ot")" ] || [ -n "$(git rev-list --merges "$nb..$nt")" ]; then
+	old_m="$(git rev-list --merges "$ob..$ot")" || fail "could not list the merges in $ob..$ot."
+	new_m="$(git rev-list --merges "$nb..$nt")" || fail "could not list the merges in $nb..$nt."
+	if [ -n "$old_m$new_m" ]; then
 		identical=no reason=merge
 	elif [ "$old_n" != "$new_n" ]; then
 		identical=no reason=count
 	else
 		while IFS= read -r o <&3 && IFS= read -r n <&4; do
 			[ -n "$o" ] || continue
-			if [ "$(patch_of "$o")" != "$(patch_of "$n")" ]; then
+			po="$(patch_of "$o")" || fail "could not read the patch of $o. Nothing was compared."
+			pn="$(patch_of "$n")" || fail "could not read the patch of $n. Nothing was compared."
+			wo="$(words_of "$o")" || fail "could not read the message of $o. Nothing was compared."
+			wn="$(words_of "$n")" || fail "could not read the message of $n. Nothing was compared."
+			if [ "$po" != "$pn" ]; then
 				identical=no reason=patch differs="$o$TAB$n"
 				break
 			fi
-			if [ "$(words_of "$o")" != "$(words_of "$n")" ]; then
+			if [ "$wo" != "$wn" ]; then
 				identical=no reason=message differs="$o$TAB$n"
 				break
 			fi
