@@ -1711,12 +1711,14 @@ for (const name of WORKFLOWS) {
     // exact `peer-review-run` line (medium effort explicit, no model for
     // codex) and the complete direct launch are pinned where they now live, in
     // scripts/test-review-cycle-peer.sh, against the script that runs them.
-    const launchLine = renderedPeer.match(/review-cycle-peer run --provider codex --worktree "\$worktree" --artifact-dir "\$artifact_dir" --prompt-file "\$prompt_file"/g) || [];
+    const launchLine = renderedPeer.match(/review-cycle-peer run --provider codex --worktree "\$worktree" --artifact-root "\$round_dir" --prompt-file "\$prompt_file"/g) || [];
     check(
       "the peer prompt launches through the script, once, in the foreground, under a wait that covers the helper's retry",
       launchLine.length === 1 &&
         /4\. Launch: run `review-cycle-peer run/.test(renderedPeer) &&
         /exactly once, in the foreground/.test(renderedPeer) &&
+        /The script makes this launch a directory of its own under that root and answers its path as `artifact_dir`\./.test(renderedPeer) &&
+        !/artifact_dir=|run-2/.test(renderedPeer) &&
         /caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap/.test(renderedPeer) &&
         /at medium effort and with no model named/.test(renderedPeer),
       "launch shape",
@@ -1729,7 +1731,7 @@ for (const name of WORKFLOWS) {
     check(
       "a direct launch is collected through the script, which also supplies the reason it was taken",
       /5\. If the answer is `outcome=launched`, the script started the provider directly, because the helper is absent, `jq` is not there to read its result, or its verdict named no usable review file: set `fallbackReason` to the `fallback_reason` value exactly/.test(renderedPeer) &&
-        /run `review-cycle-peer collect --artifact-dir "\$artifact_dir"` under the same wait, and again for as long as it answers `outcome=pending`/.test(renderedPeer) &&
+        /run `review-cycle-peer collect --artifact-dir "\$artifact_dir"`, with the `artifact_dir` value of that answer exactly, under the same wait, and again for as long as it answers `outcome=pending`/.test(renderedPeer) &&
         /never probe or signal the provider yourself/.test(renderedPeer) &&
         /On any other answer `fallbackReason` stays empty/.test(renderedPeer),
       "direct launch collection",
@@ -2111,8 +2113,8 @@ for (const name of WORKFLOWS) {
     check(
       "each stage launches its own provider, on the worktree it is told to name, from a directory of its own",
       [musePrompt, codexPrompt].every((p) => /2\. Set `worktree` to the absolute worktree path the contract above names/.test(p)) &&
-        /review-cycle-peer run --provider muse --worktree "\$worktree" --artifact-dir "\$artifact_dir" --prompt-file "\$prompt_file"/.test(musePrompt) &&
-        /review-cycle-peer run --provider codex --worktree "\$worktree" --artifact-dir "\$artifact_dir" --prompt-file "\$prompt_file"/.test(codexPrompt) &&
+        /review-cycle-peer run --provider muse --worktree "\$worktree" --artifact-root "\$round_dir" --prompt-file "\$prompt_file"/.test(musePrompt) &&
+        /review-cycle-peer run --provider codex --worktree "\$worktree" --artifact-root "\$round_dir" --prompt-file "\$prompt_file"/.test(codexPrompt) &&
         !/--provider codex/.test(musePrompt) && /round-1\/peer-muse'/.test(musePrompt) &&
         !/--provider muse/.test(codexPrompt) && /round-1\/peer-codex'/.test(codexPrompt),
       "launch line and round directory per provider",
@@ -2471,7 +2473,7 @@ const PEER_LAUNCH_CHECKS = 15;
   );
   check(
     "the Claude mirror launches codex through the script, once, in the foreground, with no model flag, under a caller wait that covers the helper's retry",
-    /`peer\.sh run --provider codex --worktree "\$worktree" --artifact-dir "\$artifact_dir" --facts "\$facts_file"`, exactly once, in the foreground\.\nSet the caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap/.test(pluginsStep) &&
+    /`peer\.sh run --provider codex --worktree "\$worktree" --artifact-root "\$artifact_root" --facts "\$facts_file"`, exactly once, in the foreground\.\nSet the caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap/.test(pluginsStep) &&
       !/--model/.test(pluginsStep) &&
       /`review_file` is the peer's full review as plain text: read that file in full before applying verdict logic and relay every finding from it verbatim/.test(pluginsStep) &&
       /`model=null` is that note and never a reason to launch again/.test(pluginsStep),
@@ -2479,7 +2481,7 @@ const PEER_LAUNCH_CHECKS = 15;
   );
   check(
     "the Codex mirror launches claude through the script with its evidence base, reads back both pinned strength dimensions, and relays the review file verbatim",
-    /`peer\.sh run --provider claude --worktree "\$worktree" --artifact-dir "\$artifact_dir" --facts "\$facts_file" --evidence-base "\$effective_base"`, exactly once, in the foreground\./.test(codexStep) &&
+    /`peer\.sh run --provider claude --worktree "\$worktree" --artifact-root "\$artifact_root" --facts "\$facts_file" --evidence-base "\$effective_base"`, exactly once, in the foreground\./.test(codexStep) &&
       /Set the caller-side tool wait to at least 570 seconds but strictly below its roughly 600-second cap/.test(codexStep) &&
       /The script pins both dimensions for `claude`, `opus` at an explicit medium effort/.test(codexStep) &&
       /say in it where `strength_pin=differs`/.test(codexStep) &&
@@ -2505,7 +2507,9 @@ const PEER_LAUNCH_CHECKS = 15;
     [codexStep, pluginsStep].every(
       (text) =>
         /`outcome=launched` means the script started the provider directly instead, because the helper is absent(?:, `jq` is not there to read its result,)? or its verdict named no review file this cycle could relay; `fallback_reason` says which, and a run states it once rather than every round/.test(text) &&
-        /run `peer\.sh collect --artifact-dir "\$artifact_dir"` under the same wait, again for as long as it answers `pending`/.test(text) &&
+        /run `peer\.sh collect --artifact-dir "\$artifact_dir"`, with the `artifact_dir` that answer carries, under the same wait, again for as long as it answers `pending`/.test(text) &&
+        /the script makes every launch a directory of its own under it and answers that path as `artifact_dir`/.test(text) &&
+        !/peer\.sh run[^\n]*--artifact-dir/.test(text) &&
         !/prerequisite/i.test(text) &&
         !/issues\/145/.test(text) &&
         !/reviewText/.test(text) &&
@@ -2582,7 +2586,7 @@ const PEER_LAUNCH_CHECKS = 15;
   check("the two executable review-cycle cores remain byte-identical", workflowCores[0] === workflowCores[1], `${workflowCores[0].length}/${workflowCores[1].length}`);
   check(
     "both workflow cores launch and preflight through the shim, under the caller wait budget, and assemble no provider command",
-    workflowCores.every((core) => /4\. Launch: run \\`review-cycle-peer run --provider \$\{provider\.id\} --worktree "\$worktree" --artifact-dir "\$artifact_dir" --prompt-file "\$prompt_file"\\` exactly once, in the foreground, inside this Peer stage\. Set the caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap\./.test(core) && /Run \\`review-cycle-peer preflight --provider \$\{provider\.id\}\\`/.test(core) && !/nohup|model_reasoning_effort|--timeout 260|codex login status|muse usage/.test(core) && !/prerequisite/i.test(core.slice(core.indexOf("function cyclePeerPrompt")))),
+    workflowCores.every((core) => /4\. Launch: run \\`review-cycle-peer run --provider \$\{provider\.id\} --worktree "\$worktree" --artifact-root "\$round_dir" --prompt-file "\$prompt_file"\\` exactly once, in the foreground, inside this Peer stage\. The script makes this launch a directory of its own under that root and answers its path as \\`artifact_dir\\`\. Set the caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap\./.test(core) && /Run \\`review-cycle-peer preflight --provider \$\{provider\.id\}\\`/.test(core) && !/nohup|model_reasoning_effort|--timeout 260|codex login status|muse usage|run-2|artifact_dir=/.test(core) && !/prerequisite/i.test(core.slice(core.indexOf("function cyclePeerPrompt")))),
     "shim launch in workflow cores",
   );
 

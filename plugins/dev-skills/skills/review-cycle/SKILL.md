@@ -146,12 +146,12 @@ A batch orchestrator preflights once for the whole batch and never repeats the p
 
 **What the peer is told is a facts file and nothing else.**
 Write the evidence the Peer role above lists to a file of its own, and never the implementer's reasoning: the script builds the prompt from `peer-brief.md` and that file alone.
-Give every launch a fresh `artifact_dir` of its own under this cycle's artifact directory, outside the reviewed worktree.
+Set `artifact_root` to this cycle's artifact directory, outside the reviewed worktree: the script makes every launch a directory of its own under it and answers that path as `artifact_dir`.
 
-**Launch** inside the concurrently started Peer role: `peer.sh run --provider codex --worktree "$worktree" --artifact-dir "$artifact_dir" --facts "$facts_file"`, exactly once, in the foreground.
+**Launch** inside the concurrently started Peer role: `peer.sh run --provider codex --worktree "$worktree" --artifact-root "$artifact_root" --facts "$facts_file"`, exactly once, in the foreground.
 Set the caller-side Bash/tool wait to at least 570 seconds but strictly below its roughly 600-second cap, and do not background, poll, retry, or externally signal the call: where `peer-review-run` is on PATH the script runs it, and that helper owns timeout, transient-only retry, and provider-tree reaping inside that wait.
 `outcome=launched` means the script started the provider directly instead, because the helper is absent, `jq` is not there to read its result, or its verdict named no review file this cycle could relay; `fallback_reason` says which, and a run states it once rather than every round.
-Then run `peer.sh collect --artifact-dir "$artifact_dir"` under the same wait, again for as long as it answers `pending`.
+Then run `peer.sh collect --artifact-dir "$artifact_dir"`, with the `artifact_dir` that answer carries, under the same wait, again for as long as it answers `pending`.
 A direct launch gets a loose 12 minutes per attempt; pass `--deadline <seconds>` to `run` where visible progress or review size justifies waiting longer.
 
 **Review strength is pinned per invocation.**
@@ -172,7 +172,7 @@ Muse Code is a third harness some containers carry and most do not, so it is str
 Preflight it once per run beside the Peer's own preflight, unless `peer-opinions=off`, which disables both: `peer.sh preflight --provider muse`.
 `absent` means this container has no Muse and the run says nothing about it; `unavailable` means no second peer this run, said once in the final summary.
 A batch orchestrator preflights it once for the whole batch, like the Peer.
-Launch it with `peer.sh run --provider muse` on the Peer's facts file and an `artifact_dir` of its own, exactly once, in the foreground, inside its own role started at the same moment as the Peer's, under the same caller-side wait.
+Launch it with `peer.sh run --provider muse` on the Peer's facts file and `--artifact-root`, exactly once, in the foreground, inside its own role started at the same moment as the Peer's, under the same caller-side wait.
 It runs through `peer-review-run` only, as one long attempt rather than two short ones, so it never answers `launched`; an `unavailable` from the launch itself (the helper is missing, or predates Muse) means no second peer for the rest of the run, stated once.
 Contributor mode is the user's saved Muse setting, which also decides how fast their Muse allowance is spent, so leave it alone: set no `MUSE_CONTRIBUTOR_MODE` for the call.
 Its result lands in the outcome vocabulary below and feeds the gate, the grounding spot-check, the verbatim relay, and the pass-note consumption on the Peer's terms, its `model` and `effort` are recorded beside the Peer's, and its launches count toward the same batch throttle.

@@ -4,7 +4,8 @@
 # Usage:
 #   peer.sh preflight --provider <codex|claude|muse>
 #   peer.sh run --provider <codex|claude|muse> --worktree <abs dir>
-#               --artifact-dir <abs dir> (--facts <file> | --prompt-file <file>)
+#               (--artifact-root <abs dir> | --artifact-dir <abs dir>)
+#               (--facts <file> | --prompt-file <file>)
 #               [--evidence-base <ref>] [--deadline <seconds>]
 #   peer.sh collect --artifact-dir <abs dir> [--wait <seconds>]
 #
@@ -17,12 +18,20 @@
 #            It launches no review.
 #
 # run        Review the committed state of --worktree, read-only, at medium
-#            effort. --artifact-dir is this attempt's own directory: absolute,
-#            outside the worktree, never one a previous `run` used. The prompt
-#            is `peer-brief.md` (beside this script) followed by the bytes of
-#            --facts, or the bytes of --prompt-file alone where the caller
-#            holds a complete prompt; it is written to
-#            <artifact-dir>/peer-review.prompt and nothing else is added to it.
+#            effort. Every attempt has an artifact directory of its own.
+#            Under --artifact-root, `run` makes it: a new `peer-run.XXXXXX`
+#            (mktemp) inside that directory, so calls sharing a root, at the
+#            same moment too, never share an attempt. Its path is answered as
+#            `artifact_dir=`, which is what `collect` takes. --artifact-dir
+#            names the directory instead, and never one a previous `run` used.
+#            Either flag's path is absolute, outside the worktree, and has no
+#            `..` component. The prompt is `peer-brief.md` (beside this
+#            script) followed by the bytes of --facts, or the bytes of
+#            --prompt-file alone where the caller holds a complete prompt; it
+#            is written to <artifact-dir>/peer-review.prompt and nothing else
+#            is added to it. What else an attempt leaves is in that directory
+#            too: the helper's tree under `peer-review-run/`, and a direct
+#            launch's `manual.state`, `manual-attempt-<n>/` and `manual.result`.
 #            --evidence-base <ref> (needs --facts; required for claude, whose
 #            read-only tools cannot run git) embeds the log and diff of
 #            <ref>..HEAD in the prompt between fixed markers, asks the peer for
@@ -59,7 +68,7 @@
 # `path=manual`, and where they apply `fallback_reason=`, `attempt=`,
 # `review_file=` (the peer's full review as plain text, for passed/issues),
 # `model=`, `effort=`, `strength_pin=held|differs`, `evidence=proved|unproved`,
-# `pid=` and `prompt_file=`.
+# `pid=`, `prompt_file=` and, on a `run` given --artifact-root, `artifact_dir=`.
 #
 # The review outcomes are passed, issues, unavailable, timeout, forfeited and
 # failed. Only passed and issues carry a review; none of the six blocks the
@@ -101,7 +110,7 @@ SELF="${BASH_SOURCE[0]}"
 note() { printf 'peer: %s\n' "$*" >&2; }
 usage() {
 	note "$*"
-	sed -n '4,10p' "$SELF" | sed 's/^# \{0,1\}//' >&2
+	sed -n '4,11p' "$SELF" | sed 's/^# \{0,1\}//' >&2
 	exit 64
 }
 die() {
@@ -114,7 +123,7 @@ is_count() {
 	[ "$1" -gt 0 ] 2>/dev/null
 }
 
-PROVIDER="" WORKTREE="" ADIR="" FACTS="" PROMPT_SRC="" EVIDENCE_BASE=""
+PROVIDER="" WORKTREE="" ADIR="" AROOT="" FACTS="" PROMPT_SRC="" EVIDENCE_BASE=""
 DEADLINE="$DEADLINE_DEFAULT" WAIT="$WAIT_DEFAULT"
 R_PATH="" R_FALLBACK="" R_ATTEMPT="" R_REVIEW="" R_MODEL="" R_EFFORT="" R_PIN="" R_EVIDENCE="" R_PID="" R_TEARDOWN=""
 
@@ -133,6 +142,7 @@ emit() { # <outcome> <reason>
 	[ -z "$R_TEARDOWN" ] || printf 'teardown=%s\n' "$R_TEARDOWN"
 	[ -z "$R_PID" ] || printf 'pid=%s\n' "$R_PID"
 	[ -z "$ADIR" ] || [ ! -f "$ADIR/peer-review.prompt" ] || printf 'prompt_file=%s\n' "$ADIR/peer-review.prompt"
+	[ -z "$AROOT" ] || [ -z "$ADIR" ] || printf 'artifact_dir=%s\n' "$ADIR"
 }
 
 # What differs per provider: the helper's attempt budget (muse gets one long
@@ -280,11 +290,13 @@ peer_abort_unhanded() { # <child pid>
 # --- prompt and evidence -----------------------------------------------------
 
 resolve_dirs() {
-	case "$ADIR" in /*) ;; *) usage "--artifact-dir must be an absolute path" ;; esac
+	local flag=--artifact-dir given="$ADIR"
+	[ -z "$AROOT" ] || flag=--artifact-root given="$AROOT"
+	case "$given" in /*) ;; *) usage "$flag must be an absolute path" ;; esac
 	case "$WORKTREE" in /*) ;; *) usage "--worktree must be an absolute path" ;; esac
 	[ -d "$WORKTREE" ] || usage "--worktree is not a directory: $WORKTREE"
-	case "$ADIR/" in */../*) usage "--artifact-dir must not contain a .. component" ;; esac
-	local wt ad there="$ADIR" rest=""
+	case "$given/" in */../*) usage "$flag must not contain a .. component" ;; esac
+	local wt ad there="$given" rest=""
 	wt="$(cd -P -- "$WORKTREE" && pwd)" || die "cannot enter $WORKTREE"
 	# Judged before anything is created, from the deepest directory that exists.
 	while [ ! -d "$there" ]; do
@@ -292,9 +304,12 @@ resolve_dirs() {
 		[ -n "$there" ] || there=/
 	done
 	ad="$(cd -P -- "$there" && pwd)" || die "cannot enter $there"
-	case "${ad%/}$rest/" in "$wt"/*) usage "--artifact-dir must be outside the reviewed worktree" ;; esac
-	mkdir -p "$ADIR" || die "cannot create $ADIR"
-	ad="$(cd -P -- "$ADIR" && pwd)" || die "cannot enter $ADIR"
+	case "${ad%/}$rest/" in "$wt"/*) usage "$flag must be outside the reviewed worktree" ;; esac
+	mkdir -p "$given" || die "cannot create $given"
+	ad="$(cd -P -- "$given" && pwd)" || die "cannot enter $given"
+	if [ -n "$AROOT" ]; then
+		ad="$(mktemp -d "${ad%/}/peer-run.XXXXXX")" || die "cannot create an attempt directory under $AROOT"
+	fi
 	WORKTREE="$wt" ADIR="$ad"
 	[ ! -e "$ADIR/peer-review.prompt" ] || usage "--artifact-dir already holds a peer run: give each attempt a directory of its own"
 }
@@ -654,7 +669,7 @@ classify_dead() { # <attempt dir> <timed out: 0|1>
 cmd_run() {
 	provider_setup
 	[ -n "$WORKTREE" ] || usage "--worktree <abs dir> is required"
-	[ -n "$ADIR" ] || usage "--artifact-dir <abs dir> is required"
+	if [ -n "$AROOT" ] && [ -n "$ADIR" ]; then usage "give --artifact-root or --artifact-dir, not both"; fi
 	if [ -n "$FACTS" ] && [ -n "$PROMPT_SRC" ]; then usage "give --facts or --prompt-file, not both"; fi
 	[ -n "$FACTS$PROMPT_SRC" ] || usage "give --facts <file> or --prompt-file <file>"
 	[ -s "$FACTS$PROMPT_SRC" ] || usage "not a readable, non-empty file: $FACTS$PROMPT_SRC"
@@ -684,6 +699,7 @@ cmd_run() {
 }
 
 cmd_collect() {
+	[ -z "$AROOT" ] || usage "collect takes --artifact-dir: the artifact_dir run answered"
 	[ -n "$ADIR" ] || usage "--artifact-dir <abs dir> is required"
 	is_count "$WAIT" || usage "--wait needs a positive number of seconds"
 	if [ -f "$ADIR/manual.result" ]; then
@@ -762,11 +778,12 @@ main() {
 			awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$SELF"
 			exit 0
 			;;
-		--provider | --worktree | --artifact-dir | --facts | --prompt-file | --evidence-base | --deadline | --wait)
+		--provider | --worktree | --artifact-root | --artifact-dir | --facts | --prompt-file | --evidence-base | --deadline | --wait)
 			[ $# -ge 2 ] || usage "$1 needs a value"
 			case "$1" in
 			--provider) PROVIDER="$2" ;;
 			--worktree) WORKTREE="$2" ;;
+			--artifact-root) AROOT="$2" ;;
 			--artifact-dir) ADIR="$2" ;;
 			--facts) FACTS="$2" ;;
 			--prompt-file) PROMPT_SRC="$2" ;;
