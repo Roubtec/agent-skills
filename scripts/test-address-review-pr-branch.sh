@@ -8,7 +8,9 @@
 # `insteadOf` rewrites to the bare origin, which is how the helper's
 # match-the-remote-by-URL step is exercised for real. `gh` is a fake that
 # answers `pr view` from a JSON file each case writes, run through the real
-# `jq` with the helper's own `--jq` expression.
+# `jq` with the helper's own `--jq` expression. With a `hint` file beside it,
+# the fake ends a PR read as gh 2.105 does for a coding agent: with its
+# `gh event listen` block on stderr.
 # shellcheck disable=SC2319 # `ok <label> $?` after a `[ … ]` test is the point
 set -uo pipefail
 
@@ -58,9 +60,11 @@ mkdir -p "$FAKE"
 	printf '#!/usr/bin/env bash\n'
 	printf 'echo "$*" >>"%s/gh.log"\n' "$FAKE"
 	printf '[ "$1 $2" = "pr view" ] || exit 1\n'
+	printf 'if [ -f "%s/gh-error" ]; then cat "%s/gh-error" >&2; exit 1; fi\n' "$FAKE" "$FAKE"
 	printf '[ -f "%s/pr.json" ] || exit 1\n' "$FAKE"
 	printf 'expr=.; while [ $# -gt 0 ]; do [ "$1" = --jq ] && expr="$2"; shift; done\n'
 	printf 'jq -r "$expr" "%s/pr.json"\n' "$FAKE"
+	printf '[ ! -f "%s/hint" ] || cat "%s/hint" >&2\n' "$FAKE" "$FAKE"
 } >"$FAKE/gh"
 chmod +x "$FAKE/gh"
 export PATH="$FAKE:$PATH"
@@ -765,6 +769,83 @@ OUT="$(cd "$R" && PATH="$SWITCH:$PATH" bash "$HELPER" reconcile "${ARGS[@]}" 2>/
 RC=$?
 is "5: a branch that moved during the fetch fails the reconcile" "$RC" 1
 is "5: ...with no relation reported for a tip it did not read" "$(val outcome)" ""
+
+# --- 5b. gh's agent hint ----------------------------------------------------
+# The block as gh 2.105.0 prints it (pkg/cmd/event/shared/hint.go).
+HINT="$WORKDIR/hint"
+cat >"$HINT" <<'HINT'
+hint: if you need to wait for this pull request to be reviewed, merged, or closed before continuing, use this instead of polling:
+    gh event listen --resource https://github.com/Acme/Widgets/pull/7 --event com.github.pull_request.review.submitted.v1,com.github.pull_request.state.changed.v1
+  - It prints the first event as a JSON line on stdout and exits; run it again to wait for the next one.
+  - Add `--timeout` to stop waiting after a while, for example `--timeout 30m`; it then exits with status 8.
+  - Events carry no details; read the pull request to see what changed.
+  - It misses changes made before it starts, so read the pull request once it is running.
+  - See `gh event listen --help` for other event types.
+  - Event subscriptions are in preview and may not be enabled for your account.
+HINT
+new_repo
+pr OPEN feature "$(tip HEAD)"
+cp "$HINT" "$FAKE/hint"
+run reconcile "${ARGS[@]}"
+is "5b: a PR read that ends in gh's agent hint is read all the same" "$(val outcome)" equal
+is "5b: ...and none of the hint reaches the helper's stderr" "$ERR" ""
+git -C "$R" checkout -q -b elsewhere
+run reconcile "${ARGS[@]}"
+is "5b: ...which then holds the helper's own explanation alone" "$(printf '%s\n' "$ERR" | grep -c .)" 1
+has "5b: ...whole" "$ERR" "pr-branch: "
+git -C "$R" checkout -q feature
+printf 'gh: the network broke\n' >"$FAKE/gh-error"
+cat "$HINT" >>"$FAKE/gh-error"
+run reconcile "${ARGS[@]}"
+is "5b: a gh that fails still fails the read" "$RC" 1
+has "5b: ...and its own error line still gets through" "$ERR" "gh: the network broke"
+case "$ERR" in *"gh event listen"*) ok "5b: ...without the hint beside it" 1 ;; *) ok "5b: ...without the hint beside it" 0 ;; esac
+rm -f "$FAKE/hint" "$FAKE/gh-error"
+
+# Every bundled helper that calls `gh pr` carries the same filter. Each copy is
+# run on its own against a gh that prints the block among lines that only
+# resemble it.
+NOISY="$WORKDIR/noisy"
+mkdir -p "$NOISY"
+{
+	printf '#!/usr/bin/env bash\n'
+	printf 'echo "stdout: $*"\n'
+	printf 'echo "warning: before" >&2\n'
+	printf 'cat "%s" >&2\n' "$HINT"
+	printf 'echo "gh: after" >&2\n'
+	printf 'echo "  - a list item of some other message" >&2\n'
+	printf 'echo "    gh event listen named elsewhere" >&2\n'
+	printf 'echo "hint: some other hint" >&2\n'
+	printf 'head -n 1 "%s" >&2\n' "$HINT"
+	printf 'echo "gh: right after the first line alone" >&2\n'
+	printf 'exit 7\n'
+} >"$NOISY/gh"
+chmod +x "$NOISY/gh"
+KEPT='warning: before
+gh: after
+  - a list item of some other message
+    gh event listen named elsewhere
+hint: some other hint
+gh: right after the first line alone'
+for f in address-review/ping.sh address-review/pr-branch.sh address-reviews/targets.sh merge-train/train.sh prune-branches/prune-branches.sh write-tasks/task-numbers.sh; do
+	for m in plugins codex; do
+		sed -n '/^gh() {$/,/^} 3>&1$/p' "$SCRIPT_DIR/../$m/dev-skills/skills/$f" >"$WORKDIR/filter.sh"
+		[ -s "$WORKDIR/filter.sh" ]
+		ok "5b: $m $f carries the hint filter" $?
+		OUT="$(PATH="$NOISY:$PATH" bash -c '. "$1"; gh pr view 7 --repo acme/widgets 2>"$2"' _ "$WORKDIR/filter.sh" "$WORKDIR/err")"
+		is "5b: $m $f: gh's exit status passes through" "$?" 7
+		is "5b: $m $f: its stdout too, with its arguments" "$OUT" "stdout: pr view 7 --repo acme/widgets"
+		is "5b: $m $f: and every line of stderr but the block" "$(cat "$WORKDIR/err")" "$KEPT"
+	done
+done
+# Checked on the working files, so that a filter dropped from a helper that
+# has a `gh pr` call is seen where no suite of its own prints the block.
+for f in "$SCRIPT_DIR"/../plugins/dev-skills/skills/*/*.sh; do
+	if grep -v '^[[:space:]]*#' "$f" | grep -Eq '(^|[^[:alnum:]_.-])gh pr '; then
+		grep -q '^gh() {$' "$f"
+		ok "5b: ${f##*/skills/} calls \`gh pr\` and so filters gh's stderr" $?
+	fi
+done
 
 # --- 6. the shipped files ---------------------------------------------------
 cmp -s "$SCRIPT_DIR/../plugins/dev-skills/skills/address-review/pr-branch.sh" "$MIRROR"
