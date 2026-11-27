@@ -14,6 +14,13 @@ jobs:
       # local setup, so a file that formats clean locally can never fail here
       # (and vice versa). Bump the pin here and there together.
       - run: npx --yes markdownlint-cli2@0.23.2 "**/*.md"
+  # Every bundled helper's contract is bash 3.2 and the runner's bash is newer,
+  # so the parse check runs in the official image of the real thing.
+  bash32:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - run: docker run --rm -v "$PWD":/w:ro -w /w docker.io/library/bash:3.2 bash scripts/check-bash32-syntax.sh --require 3.2
   scripts:
     runs-on: ubuntu-latest
     steps:
