@@ -2,11 +2,11 @@
 
 ## Why this task exists
 
-This is one of a series (053–060) that cuts what a skill costs in context by moving deterministic procedure into bundled scripts and rarely-needed rules into files read on demand; README's "Helpers bundled inside a skill" describes the approach and what PRs #141–#149 already moved.
+This is one of a series (053–060) that cuts what a skill costs in context by moving deterministic procedure into bundled scripts and rarely-needed rules into files read on demand; README's "Helpers bundled inside a skill" describes the approach and what PRs #129–#149 already moved.
 
 `review-cycle/SKILL.md` is about 8,400 words on `main` at `de3b2993`, and every skill that runs a cycle reads all of it before the first round.
 Most cycles converge in one or two rounds without a rebase or an open question, yet the reader has already paid for "The loop and its gates" (about 1,600 words, much of it round caps and stall rules), "Escalation: open questions" (about 900), "The delegated rebase step" (about 1,080) and "Roles" (about 1,100), part of which the role briefs beside the file now repeat.
-Splitting by when a rule is needed is what took `address-review` from 14,852 words to 10,956.
+Splitting by when a rule is needed is what took `address-review` from 14,173 words to 10,956.
 
 ## Scope
 
@@ -38,6 +38,8 @@ Out of scope:
 
 - Keep a moved section's heading in `SKILL.md` as the stub's heading where other files cite it by name; that keeps most citations valid without an edit.
 - A rule needed before round one must not sit behind a later trigger. The round cap itself is such a rule if a caller may lower it at launch; what happens on reaching it is not.
+- Task 058 moves `rebase-stack`'s "Step 5 — Conflict handling", which `rebase-brief.md` here cites; that is why 058 follows this task.
+- **Landing order for the series.** 053, 055, 057, 059 and 060 can be worked in parallel; 054 follows 053 and 057, 056 follows 055, and 058 follows 056. Tasks that add a script each append to `.github/workflows/tests.yml`, README's "Focused tests" and the one-line paragraph under README's "Helpers bundled inside a skill", so whichever lands second resolves a mechanical conflict there.
 - A stub says to read the file in full; a half-read rules file is worse than a long section.
 - The Codex mirror moves the same rules into the same-named files; only its harness wording differs.
 

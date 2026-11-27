@@ -2,7 +2,7 @@
 
 ## Why this task exists
 
-This is one of a series (053–060) that cuts what a skill costs in context by moving deterministic procedure into bundled scripts and rarely-needed rules into files read on demand; README's "Helpers bundled inside a skill" describes the approach and what PRs #141–#149 already moved.
+This is one of a series (053–060) that cuts what a skill costs in context by moving deterministic procedure into bundled scripts and rarely-needed rules into files read on demand; README's "Helpers bundled inside a skill" describes the approach and what PRs #129–#149 already moved.
 
 `rebase-stack` got `stack.sh` early in that work, and its `SKILL.md` is still about 5,170 words on `main` at `de3b2993`.
 "Step 4 — Linear-run fast path and per-branch rebase loop" is about 1,180 of them and was written around the script rather than rewritten for it, so it is likely to explain decisions that `stack.sh qualify`, `snapshot`, `verify` and `restore` now make.
@@ -25,7 +25,7 @@ Out of scope:
 
 - `plugins/dev-skills/skills/rebase-stack/SKILL.md` and `stack.sh`, whose header comment is its contract (`stack.sh --help`).
 - `scripts/test-rebase-stack.sh` covers the script; README's `test-rebase-stack.sh` entry says when to run it.
-- `review-cycle`'s "The delegated rebase step" and `rebase-brief.md` are the callers of the delegated form; a moved section must still be reachable from what they cite.
+- `address-tasks/review-stack.md` is the one caller of "Delegated unattended mode", and `review-cycle/rebase-brief.md` cites "Step 5 — Conflict handling" without invoking this skill; both exist in both trees, and each citation must still lead to the moved rules.
 - `address-review/misfired-findings.md` shows the stub-and-file pattern.
 
 ## Target files or areas
@@ -38,6 +38,7 @@ Out of scope:
 - The conflict file must be read in full the first time a rebase stops, including in a delegated run, where nobody can be asked; say so in the stub.
 - A new script command follows the existing contract and gets tests with a mutation check on each guard.
 - Keep the headings other files cite, as stubs.
+- **Landing order for the series.** 053, 055, 057, 059 and 060 can be worked in parallel; 054 follows 053 and 057, 056 follows 055, and 058 follows 056. Tasks that add a script each append to `.github/workflows/tests.yml`, README's "Focused tests" and the one-line paragraph under README's "Helpers bundled inside a skill", so whichever lands second resolves a mechanical conflict there.
 
 ## Acceptance criteria
 

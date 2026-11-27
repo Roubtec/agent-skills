@@ -2,7 +2,7 @@
 
 ## Why this task exists
 
-This is one of a series (053–060) that cuts what a skill costs in context by moving deterministic procedure into bundled scripts and rarely-needed rules into files read on demand; README's "Helpers bundled inside a skill" describes the approach and what PRs #141–#149 already moved.
+This is one of a series (053–060) that cuts what a skill costs in context by moving deterministic procedure into bundled scripts and rarely-needed rules into files read on demand; README's "Helpers bundled inside a skill" describes the approach and what PRs #129–#149 already moved.
 
 `address-reviews` is the second-largest skill (about 10,000 words on `main` at `de3b2993`).
 Its "Publication" section (about 1,320 words) restates much of what `address-review` step 7 says about a single PR's publish, and its "Arguments" section is still about 2,000 words after #149 moved the target arithmetic into `targets.sh`.
@@ -10,6 +10,7 @@ The orchestrator reads all of it on every batch, including the cases a given bat
 
 **Prerequisite: task 053.**
 Once `address-review/publish.sh` exists, a publisher's writes are one call, and this section can say so instead of describing them.
+Task 057 rewrites this file's "Session Bootstrap"; land after it too, or rebase over it.
 
 ## Scope
 
@@ -29,7 +30,7 @@ Out of scope:
 - `plugins/dev-skills/skills/address-reviews/SKILL.md`, `targets.sh` (its header is its contract), and `address-review/SKILL.md` step 7 as it stands after 053.
 - `address-review/disposition-record.md` and `misfired-findings.md` are the model for an on-demand file: the `SKILL.md` keeps a stub saying when to read the file, in full, and the file holds the rules.
 - `scripts/test-skill-bundled-files.mjs`: a file another skill owns must be introduced on a line naming that skill.
-- Several suites pin clauses in this skill by text (`test-unreviewed-close-carriage.mjs`, `test-subagent-destroy-boundary.mjs`, `test-skill-worktree-base-exclude.mjs`, `test-skill-mirror-parity.mjs`); a clause that moves into another file moves its assertion with it.
+- Several suites pin clauses in this skill by text (`test-address-review-reconcile.mjs`, `test-subagent-destroy-boundary.mjs`, `test-skill-worktree-base-exclude.mjs`, `test-skill-mirror-parity.mjs`); a clause that moves into another file moves its assertion with it.
 
 ## Target files or areas
 
@@ -39,6 +40,7 @@ Out of scope:
 
 - A stub's trigger must be something the reader can evaluate without opening the file: "the batch names a rebase target and an entry opts out", not "in complex cases".
 - Do not weaken a guard to make it shorter. If a rule exists because of an incident, it stays, in the main file or the on-demand one.
+- **Landing order for the series.** 053, 055, 057, 059 and 060 can be worked in parallel; 054 follows 053 and 057, 056 follows 055, and 058 follows 056. Tasks that add a script each append to `.github/workflows/tests.yml`, README's "Focused tests" and the one-line paragraph under README's "Helpers bundled inside a skill", so whichever lands second resolves a mechanical conflict there.
 - Edit both mirrors in lockstep; the Codex mirror's harness-specific wording stays its own.
 
 ## Acceptance criteria

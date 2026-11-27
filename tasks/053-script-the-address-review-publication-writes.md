@@ -3,7 +3,7 @@
 ## Why this task exists
 
 This is one of a series (053–060) that cuts what a skill costs in context by moving deterministic procedure out of `SKILL.md` and into a script bundled in the skill's folder, and by moving rules that apply only in a rare case into a file read on demand.
-PRs #141–#149 did this for the branch mechanics, the disposition record, CI lanes, pings, the thread fetch, the merge train, the overlap check, the task-number guard and the batch targets; README's "Helpers bundled inside a skill" describes what exists and the contract every helper follows.
+PRs #129–#149 did this for the branch mechanics, the disposition record, CI lanes, pings, the thread fetch, the merge train, the overlap check, the task-number guard and the batch targets; README's "Helpers bundled inside a skill" describes what exists, and each script's header comment is the contract it follows.
 
 `address-review`'s "Step 7 — Publish after the review gate" is still that skill's largest section (about 1,290 words on `main` at `de3b2993`), with "GitHub API recipes" (about 220) behind it.
 The push, the record and the pings are scripted (`pr-branch.sh push`, `record.sh`, `ping.sh`), but the thread replies, the resolves and the Summary comment are still hand-run `gh` calls and GraphQL mutations that each run re-derives from prose.
@@ -30,11 +30,12 @@ Out of scope:
 - README: "Helpers bundled inside a skill", "Safety posture", and the per-suite entries under "Focused tests".
 - `plugins/dev-skills/skills/address-review/`: `SKILL.md` (step 7, "The durable disposition record", "GitHub API recipes"), `disposition-record.md`, and the neighbouring helpers, whose header comments are their contracts.
 - `scripts/test-address-review-ping.sh` and `scripts/test-address-review-record.sh` show how a helper is tested against a stubbed `gh`.
+- `scripts/test-address-review-reconcile.mjs` pins the workflow's publisher brief by text, including the reply POST and the resolve rule; an assertion whose sentence moves into the script moves into the script's tests rather than being deleted.
 - `scripts/test-skill-bundled-files.mjs` and `scripts/test-skill-mirror-parity.mjs` constrain how files and mirrors are added.
 
 ## Target files or areas
 
-`plugins/dev-skills/skills/address-review/` and its byte-identical helper copy plus lockstep `SKILL.md` edit under `codex/dev-skills/skills/address-review/`, `plugins/dev-skills/bin/address-review-publish`, `plugins/dev-skills/workflows/wf-address-review.js`, `scripts/`, `.github/workflows/tests.yml`, `README.md`.
+`plugins/dev-skills/skills/address-review/` and its byte-identical helper copy plus lockstep `SKILL.md` edit under `codex/dev-skills/skills/address-review/`, `plugins/dev-skills/bin/address-review-publish`, `plugins/dev-skills/workflows/wf-address-review.js`, `scripts/` (the new suite and `test-address-review-reconcile.mjs`), `.github/workflows/tests.yml`, `README.md`.
 
 ## Implementation notes
 
@@ -42,12 +43,14 @@ Out of scope:
 - Choose a dispositions format that needs no quoting of free text: reply bodies and the Summary are best passed as file paths.
 - A publish that fails partway must be resumable: print which threads were replied to and resolved, and make a second run with the same file skip what is already done rather than post a duplicate reply.
 - Check that every thread id belongs to the named PR before writing to it. `gh-review-threads.sh` exists because a concurrent GraphQL call once returned another PR's threads; a write to the wrong PR is worse than a read.
+- `address-review/SKILL.md` is also edited by 057 ("Attaching the worktree") and 060 (step 5's follow-up-task numbering), in other sections.
+- **Landing order for the series.** 053, 055, 057, 059 and 060 can be worked in parallel; 054 follows 053 and 057, 056 follows 055, and 058 follows 056. Tasks that add a script each append to `.github/workflows/tests.yml`, README's "Focused tests" and the one-line paragraph under README's "Helpers bundled inside a skill", so whichever lands second resolves a mechanical conflict there.
 - Whether the script also sequences `push`, `record` and `ping` is your call. Prefer the smaller script unless one command removes real prose.
 
 ## Acceptance criteria
 
 - A run publishes its thread replies, resolves and Summary comment through `publish.sh`; no hand-run reply or resolve mutation remains in step 7 or in the workflow's publisher brief.
-- Step 7 and "GitHub API recipes" together are materially shorter, and nothing a run needs to decide was lost; report the before and after word counts in the PR.
+- The PR lists every rule removed from step 7 and "GitHub API recipes" as either enforced by the script or deliberately dropped with the reason, and states the before and after word counts.
 - A second run after a partial failure posts no duplicate.
 - A thread id from another PR is refused without a write.
 - Both mirrors hold the same script, and the full test set passes.
