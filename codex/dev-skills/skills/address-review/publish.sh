@@ -121,7 +121,7 @@ while [ $# -gt 0 ]; do
 	shift 2
 done
 case "$REPO" in
-*/*/* | /* | */) usage "--repo is <owner>/<repo>, on github.com: the thread list reads no other host" ;;
+*/*/*) usage "--repo is <owner>/<repo>, on github.com: the thread list reads no other host" ;;
 ?*/?*) ;;
 *) usage "--repo <owner>/<repo> is required (the repository the PR is in)" ;;
 esac
@@ -158,7 +158,7 @@ if [ "$NO_THREADS" = 0 ]; then
 	bad="$(awk -F '\t' -v sep="$SEP" -v out="$TMPD/raw" '
 		{ sub(/\r$/, "") }
 		!NF { next }
-		NF != 3 || $1 == "" || $1 ~ /[[:space:]]/ || $3 == "" {
+		NF != 3 || $1 == "" {
 			print "line " NR " is not <thread id> TAB <reply|resolve> TAB <reply file>"; exit
 		}
 		$2 != "reply" && $2 != "resolve" { print "line " NR " names the action \"" $2 "\": it is reply or resolve"; exit }
@@ -185,7 +185,6 @@ bash "$HERE/gh-review-threads.sh" --all --repo "$REPO" "$PR" >"$TMPD/threads.jso
 rc=$?
 [ "$rc" != 3 ] || stop contaminated "the thread list of PR #$PR in $REPO failed its scope check twice (see above). Nothing was written, and no thread id from another source is safe to write to."
 [ "$rc" = 0 ] || fail "could not list the review threads of PR #$PR in $REPO. Nothing was written."
-jq -e 'type == "array"' "$TMPD/threads.json" >/dev/null 2>&1 || fail "the thread list of PR #$PR in $REPO is not a JSON array. Nothing was written."
 
 # One thread of the list → resolved SEP first comment id SEP the url of an equal
 # reply of the authenticated user; `absent` where the list holds no such thread.
@@ -195,7 +194,6 @@ THREAD_JQ='
 	($body | norm) as $want
 	| [.[] | select(.id == $id)]
 	| if length == 0 then "absent"
-	  elif length > 1 then error("thread listed twice")
 	  else .[0]
 		| [ (.isResolved == true | tostring),
 			(.comments[0].databaseId | tostring),

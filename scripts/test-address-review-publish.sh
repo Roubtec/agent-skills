@@ -57,6 +57,7 @@ cat >"$FAKE/gh" <<'FAKEGH'
 # $FAKE/state.json holds the PR: {"threads": [...], "issue": [...]}.
 # Files under $FAKE steer it:
 #   fail-user, fail-threads, fail-list, fail-summary   that call exits 1
+#   empty-user     the authenticated user comes back with no login
 #   fail-reply     a first-comment id whose reply is refused
 #   lost-reply     a first-comment id whose reply lands and is then reported failed
 #   fail-resolve   a thread id whose resolve is refused
@@ -106,7 +107,7 @@ next() {
 case "$method $path" in
 "GET user")
 	[ ! -f "$FAKE/fail-user" ] || exit 1
-	echo '{"login":"me-bot"}' | jq -r "$expr"
+	if [ -f "$FAKE/empty-user" ]; then echo '{"login":""}' | jq -r "$expr"; else echo '{"login":"me-bot"}' | jq -r "$expr"; fi
 	;;
 "GET graphql")
 	case "$query" in
@@ -167,7 +168,7 @@ thread() {
 }
 # Four threads: T1 and T2 to publish, T3 arrived after triage, T4 long resolved.
 fresh() {
-	rm -f "$FAKE"/fail-* "$FAKE/lost-reply" "$FAKE/unresolved" "$FAKE/no-url" "$FAKE/serial" "$FAKE/gh.log"
+	rm -f "$FAKE"/fail-* "$FAKE/empty-user" "$FAKE/lost-reply" "$FAKE/unresolved" "$FAKE/no-url" "$FAKE/serial" "$FAKE/gh.log"
 	{
 		thread T1 101 codex-bot false
 		thread T2 102 alice false
@@ -221,6 +222,7 @@ ok "1: the reply goes before its resolve" $?
 has "1: an unresolved thread the file does not name is reported" "$OUT" "unlisted=T3	https://github.com/acme/widgets/pull/7#discussion_r103"
 is "1: ...and never written to" "$(state '.threads[2] | [.isResolved, (.comments | length)] | join(" ")')" "false 1"
 lacks "1: a resolved thread the file does not name is not" "$OUT" "T4"
+lacks "1: ...nor is a thread the file does name" "$OUT" "unlisted=T1"
 has "1: the Summary is posted" "$OUT" "summary=posted	https://github.com/acme/widgets/pull/7#issuecomment-903"
 has "1: ...as a top-level comment of the PR, in its repository" "$(log)" "api --method POST repos/acme/widgets/issues/7/comments -F body=@$D/summary.md --jq .html_url // empty"
 is "1: ...holding the file, verbatim" "$(state '.issue[-1].body')" "$(cat "$D/summary.md")"
@@ -353,6 +355,10 @@ fresh
 jq --rawfile b "$D/summary.md" '.issue += [{id: 2, user: {login: "alice"}, body: $b, html_url: "u"}]' "$FAKE/state.json" >"$FAKE/state.new" && mv "$FAKE/state.new" "$FAKE/state.json"
 publish
 has "2: another user's equal comment is not this run's Summary" "$OUT" "summary=posted"
+fresh
+jq '.issue += [{id: 2, user: {login: "me-bot"}, body: "\r\n## Summary of Review Fixes  \r\n\r\n- quoted the path\r\n\r\n", html_url: "https://github.com/acme/widgets/pull/7#issuecomment-2"}]' "$FAKE/state.json" >"$FAKE/state.new" && mv "$FAKE/state.new" "$FAKE/state.json"
+publish
+has "2: an equal Summary is recognised across line ends and outer whitespace" "$OUT" "summary=present	https://github.com/acme/widgets/pull/7#issuecomment-2"
 
 fresh
 printf 'T4\tresolve\tt1.md\nT1\treply\tt1.md\n' >"$D/dispositions.tsv"
@@ -394,6 +400,11 @@ fresh
 touch "$FAKE/fail-user"
 publish
 is "3: an unreadable authenticated user is a failure" "$RC" 1
+is "3: ...before any write" "$(writes)" 0
+fresh
+touch "$FAKE/empty-user"
+publish
+is "3: so is an authenticated user with no login" "$RC" 1
 is "3: ...before any write" "$(writes)" 0
 fresh
 jq '.threads[0].comments[0].databaseId = null' "$FAKE/state.json" >"$FAKE/state.new" && mv "$FAKE/state.new" "$FAKE/state.json"
