@@ -52,12 +52,18 @@ export FAKE
 cat >"$FAKE/gh" <<'FAKEGH'
 #!/usr/bin/env bash
 # The rollup comes from $FAKE/page1.json (and page2.json once a cursor is
-# passed); `gh run` calls are logged and answered from $FAKE/run.*.
+# passed). A run is $FAKE/run.json, its jobs jobs.json, a job job.<id>.json
+# and its log log.<id>, a branch's refs refs.json. Every call is logged.
 printf '%s\n' "$*" >>"$FAKE/gh.log"
+expr=. path="" flags=""
 case "$1 $2" in
+"api --help")
+	[ -f "$FAKE/old-gh" ] || echo "      --allow-escape-sequences   Allow printing terminal escape sequences"
+	exit 0
+	;;
 "api graphql")
 	[ ! -f "$FAKE/fail-api" ] || exit 1
-	page=page1.json expr=.
+	page=page1.json
 	shift 2
 	while [ $# -gt 0 ]; do
 		case "$1" in
@@ -74,11 +80,39 @@ case "$1 $2" in
 	done
 	jq -r "$expr" "$FAKE/$page"
 	;;
-"run view")
+"api "*)
+	shift
+	while [ $# -gt 0 ]; do
+		case "$1" in
+		--jq)
+			expr="$2"
+			shift
+			;;
+		--hostname) shift ;;
+		--*) flags="$flags $1" ;;
+		*) path="$1" ;;
+		esac
+		shift
+	done
 	[ ! -f "$FAKE/fail-run" ] || exit 1
-	seq 1 300 | sed 's/^/log line /'
+	case "$path" in
+	*/jobs/*/logs)
+		id="${path%/logs}"
+		# As gh does: an answer holding escape sequences is refused unless
+		# the caller allowed them.
+		if [ ! -f "$FAKE/old-gh" ] && grep -q "$(printf '\033')" "$FAKE/log.${id##*/}"; then
+			case "$flags" in *--allow-escape-sequences*) ;; *) exit 1 ;; esac
+		fi
+		cat "$FAKE/log.${id##*/}"
+		;;
+	*/actions/jobs/*) jq -r "$expr" "$FAKE/job.${path##*/}.json" ;;
+	*/actions/runs/*/jobs*) jq -r "$expr" "$FAKE/jobs.json" ;;
+	*/actions/runs/*) jq -r "$expr" "$FAKE/run.json" ;;
+	*/git/matching-refs/heads/*) jq -r "$expr" "$FAKE/refs.json" ;;
+	*) exit 1 ;;
+	esac
 	;;
-"run rerun") [ ! -f "$FAKE/fail-run" ] ;;
+"run rerun") [ ! -f "$FAKE/fail-rerun" ] ;;
 *) exit 1 ;;
 esac
 FAKEGH
@@ -111,9 +145,11 @@ call() { # <command> [args...] → OUT (stdout), ERR (stderr), RC
 val() { printf '%s\n' "$OUT" | sed -n "s/^$1=//p" | head -n 1; }
 vals() { printf '%s\n' "$OUT" | sed -n "s/^$1=//p"; }
 fresh() {
-	rm -f "$FAKE"/fail-* "$FAKE"/page*.json
+	rm -f "$FAKE"/fail-* "$FAKE"/*.json "$FAKE"/log.* "$FAKE/old-gh"
 	: >"$FAKE/gh.log"
 }
+# Whether gh was asked to re-run anything.
+asked() { grep -c '^run rerun' "$FAKE/gh.log"; }
 ARGS=(--repo acme/widgets --pr 7)
 RUN=https://github.com/acme/widgets/actions/runs/111/job/222
 RUN2=https://github.com/acme/widgets/actions/runs/333/job/444
@@ -194,27 +230,114 @@ touch "$FAKE/fail-api"
 call lanes "${ARGS[@]}"
 is "1: a gh failure is a failure, never 'green'" "$RC" 1
 is "1: ...with no outcome" "$(val outcome)" ""
+# A commit's own rollup: a default branch's run has no PR.
+OID=abc1230000000000000000000000000000000000
+commit_rollup() { # <oid in the answer> <nodes>
+	printf '{"data":{"repository":{"object":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[%s]}}}}}}\n' "$1" "$2" >"$FAKE/page1.json"
+}
+fresh
+commit_rollup "$OID" "$(run_node tests scripts COMPLETED '"SUCCESS"' "$RUN"),$(run_node tests markdown COMPLETED '"FAILURE"' "$RUN2")"
+call lanes --repo acme/widgets --commit "$OID"
+is "1: a commit's rollup is read like a PR head's" "$(val outcome)" failing
+is "1: ...naming that commit" "$(val head)" "$OID"
+has "1: ...its failing lane" "$OUT" "lane=tests / markdown	actions	FAILURE	$RUN2"
+has "1: ...and its passing one" "$OUT" "passing=tests / scripts"
+has "1: ...asked for by its id, not by a PR" "$(cat "$FAKE/gh.log")" "-f oid=$OID"
+lacks "1: ...no PR number in the question" "$(cat "$FAKE/gh.log")" "pr="
+fresh
+commit_rollup def4560000000000000000000000000000000000 ""
+call lanes --repo acme/widgets --commit "$OID"
+is "1: an answer for another commit is a failure" "$RC" 1
+fresh
+printf '{"data":{"repository":{"object":null}}}\n' >"$FAKE/page1.json"
+call lanes --repo acme/widgets --commit "$OID"
+is "1: a commit the repository does not hold is a failure, not 'none'" "$RC" 1
+is "1: ...with no outcome" "$(val outcome)" ""
+call lanes --repo acme/widgets --commit abc123
+is "1: a short commit id is a usage error" "$RC" 64
+call lanes --repo acme/widgets --pr 7 --commit "$OID"
+is "1: a PR and a commit together are a usage error" "$RC" 64
 call lanes --repo widgets --pr 7
 is "1: the repository has to be owner/repo" "$RC" 64
 call lanes --repo acme/widgets
 is "1: and the PR a number" "$RC" 64
 
 # --- 2. log --------------------------------------------------------------------
+ESC="$(printf '\033')"
+job() { printf '{"id":%s,"status":"%s"}\n' "$1" "$2" >"$FAKE/job.$1.json"; }
+# A job's log as GitHub serves it: a byte-order mark, CRLF line ends, colour
+# codes, the failing step, then the job's clean-up.
+joblog() { # <job id> <lines before the error>
+	{
+		printf '\357\273\277'
+		seq 1 "$2" | sed "s/^/log line /"
+		printf '%s[31mFAILED%s[0m tests/a.spec %s]0;title\007end\r\n' "$ESC" "$ESC" "$ESC"
+		printf '##[error]Process completed with exit code 1.\r\n'
+		printf 'Post job cleanup.\nCleaning up orphan processes\n'
+	} >"$FAKE/log.$1"
+}
 fresh
+job 222 completed
+joblog 222 300
 call log --url "$RUN"
 is "2: a job's failing log is tailed to 200 lines" "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" 200
-is "2: ...the last ones" "$(printf '%s\n' "$OUT" | tail -n 1)" "log line 300"
-has "2: ...read by the job the URL names, in the repository it names" "$(cat "$FAKE/gh.log")" "run view --repo github.com/acme/widgets --job 222 --log-failed"
+is "2: ...ending on its last error line, not on the job's clean-up" "$(printf '%s\n' "$OUT" | tail -n 1)" "##[error]Process completed with exit code 1."
+is "2: ...with colour codes, a title sequence and the carriage return gone from the line above it" "$(printf '%s\n' "$OUT" | tail -n 2 | head -n 1)" "FAILED tests/a.spec end"
+lacks "2: ...and no escape byte anywhere" "$OUT" "$ESC"
+has "2: ...read as that job's own log, in the repository and on the host the URL names" "$(cat "$FAKE/gh.log")" "api --hostname github.com --allow-escape-sequences repos/acme/widgets/actions/jobs/222/logs"
+lacks "2: ...never by the route that waits for the whole run" "$(cat "$FAKE/gh.log")" "run view"
 fresh
-call log --url https://github.com/acme/widgets/actions/runs/111 --lines 5
-is "2: a URL naming only the run reads the run, to the length asked" "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" 5
-has "2: ...as a whole" "$(cat "$FAKE/gh.log")" "run view 111 --repo github.com/acme/widgets --log-failed"
+job 222 completed
+joblog 222 3
+call log --url "$RUN"
+is "2: a log shorter than the tail starts at its first line, the byte-order mark gone" "$(printf '%s\n' "$OUT" | head -n 1)" "log line 1"
 fresh
+job 222 completed
+seq 1 10 | sed 's/^/plain line /' >"$FAKE/log.222"
+call log --url "$RUN" --lines 4
+is "2: a log with no error line is tailed whole, to the length asked" "$(printf '%s\n' "$OUT" | tr '\n' '|')" "plain line 7|plain line 8|plain line 9|plain line 10|"
+fresh
+job 222 completed
+joblog 222 3
+touch "$FAKE/old-gh"
+call log --url "$RUN"
+is "2: a gh that does not know the escape flag is not passed it" "$RC" 0
+lacks "2: ...at all" "$(cat "$FAKE/gh.log")" "--allow-escape-sequences"
+lacks "2: ...and its log is cleaned the same" "$OUT" "$ESC"
+fresh
+job 222 in_progress
+call log --url "$RUN"
+is "2: a job still going has no log yet, which is its own outcome" "$(val outcome)" not-finished
+is "2: ...a stop, not a failure" "$RC" 3
+is "2: ...naming the job" "$(val job)" 222
+is "2: ...and where it stands" "$(val status)" in_progress
+lacks "2: ...with no log asked for" "$(cat "$FAKE/gh.log")" "/logs"
+fresh
+job 222 completed
+joblog 222 3
 call log --url "https://github.com/acme/widgets/actions/runs/111/job/222?pr=7#step:4:1"
-has "2: a query string or fragment on the URL is not part of the job id" "$(cat "$FAKE/gh.log")" "--job 222 --log-failed"
-fresh
+has "2: a query string or fragment on the URL is not part of the job id" "$(cat "$FAKE/gh.log")" "actions/jobs/222/logs"
 call log --url https://ghe.example.test/acme/widgets/actions/runs/111/job/222
-has "2: an Enterprise run is read on the host its URL names" "$(cat "$FAKE/gh.log")" "run view --repo ghe.example.test/acme/widgets --job 222"
+has "2: an Enterprise run is read on the host its URL names" "$(cat "$FAKE/gh.log")" "api --hostname ghe.example.test --allow-escape-sequences repos/acme/widgets/actions/jobs/222/logs"
+
+# A URL naming only the run: every finished job that failed, a sibling still running.
+fresh
+printf '{"jobs":[{"id":222,"name":"scripts","status":"completed","conclusion":"failure"},{"id":223,"name":"lint","status":"completed","conclusion":"success"},{"id":224,"name":"slow","status":"in_progress","conclusion":null},{"id":225,"name":"e2e","status":"completed","conclusion":"timed_out"},{"id":226,"name":"docs","status":"completed","conclusion":"skipped"}]}\n' >"$FAKE/jobs.json"
+joblog 222 300
+joblog 225 2
+call log --url https://github.com/acme/widgets/actions/runs/111 --lines 5
+is "2: a URL naming only the run reads each failed job of it, to the length asked, under its name" "$(printf '%s\n' "$OUT" | grep -c '^==> ')" 2
+has "2: ...the failed one" "$OUT" "==> scripts (job 222)"
+has "2: ...and the timed-out one" "$OUT" "==> e2e (job 225)"
+is "2: ...five lines each beside the two headings" "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" 11
+lacks "2: ...and neither the passing, the skipped nor the running job's" "$(cat "$FAKE/gh.log")" "jobs/223/"
+lacks "2: ...the running one least of all" "$(cat "$FAKE/gh.log")" "jobs/224"
+has "2: ...of the run's latest attempt" "$(cat "$FAKE/gh.log")" "repos/acme/widgets/actions/runs/111/jobs?filter=latest"
+fresh
+printf '{"jobs":[{"id":224,"name":"slow","status":"in_progress","conclusion":null},{"id":223,"name":"lint","status":"completed","conclusion":"success"}]}\n' >"$FAKE/jobs.json"
+call log --url https://github.com/acme/widgets/actions/runs/111
+is "2: a run with no finished failed job says so" "$(val outcome)" no-failed-job
+is "2: ...as a stop" "$RC" 3
 call log --url https://codecov.example/x
 is "2: a URL with no workflow run has no logs through gh" "$(val outcome)" no-logs
 is "2: ...which is a stop" "$RC" 3
@@ -223,21 +346,99 @@ touch "$FAKE/fail-run"
 call log --url "$RUN"
 is "2: a gh that failed is a failed gather, not an empty tail" "$RC" 1
 has "2: ...and says so" "$ERR" "not an empty log"
+fresh
+job 222 completed
+: >"$FAKE/log.222"
+call log --url "$RUN"
+is "2: a log that came back empty is a failed gather too" "$RC" 1
 call log
 is "2: log needs the URL" "$RC" 64
 
 # --- 3. rerun ------------------------------------------------------------------
+SHA=abc1230000000000000000000000000000000000
+NEWER=def4560000000000000000000000000000000000
+# run <status> [<head branch> [<head repository>]]
+run() {
+	local branch="${2-feature}" home="${3-acme/widgets}"
+	[ "$branch" = null ] || branch="\"$branch\""
+	[ "$home" = null ] || home="{\"full_name\":\"$home\"}"
+	printf '{"status":"%s","head_sha":"%s","head_branch":%s,"head_repository":%s}\n' "$1" "$SHA" "$branch" "$home" >"$FAKE/run.json"
+}
+# refs <branch>=<oid>...
+refs() {
+	local kv sep=""
+	{
+		printf '['
+		for kv in "$@"; do
+			printf '%s{"ref":"refs/heads/%s","object":{"sha":"%s"}}' "$sep" "${kv%%=*}" "${kv#*=}"
+			sep=,
+		done
+		printf ']\n'
+	} >"$FAKE/refs.json"
+}
 fresh
+run completed
+refs feature="$SHA"
 call rerun --url "$RUN"
 is "3: an accepted re-run says so" "$(val outcome)" accepted
 is "3: ...by run id" "$(val run)" 111
 has "3: ...having asked for the failed jobs of that run, in its repository" "$(cat "$FAKE/gh.log")" "run rerun 111 --repo github.com/acme/widgets --failed"
+has "3: ...after reading the run on the host its URL names" "$(cat "$FAKE/gh.log")" "api --hostname github.com repos/acme/widgets/actions/runs/111 "
 fresh
-touch "$FAKE/fail-run"
+run completed
+refs feature="$SHA"
+touch "$FAKE/fail-rerun"
 call rerun --url "$RUN"
 is "3: a rejected re-run is a stop" "$(val outcome)" rejected
 is "3: ...still naming the run it is owed on" "$(val run)" 111
 is "3: ...with exit 3" "$RC" 3
+for status in in_progress queued waiting; do
+	fresh
+	run "$status"
+	refs feature="$SHA"
+	call rerun --url "$RUN"
+	is "3: a run that is $status is not a refusal: it is in-progress" "$(val outcome)" in-progress
+	is "3: ...a stop ($status)" "$RC" 3
+	is "3: ...naming the run to ask again of ($status)" "$(val run)" 111
+	is "3: ...and nothing was asked of GitHub ($status)" "$(asked)" 0
+done
+has "3: ...which the explanation says" "$ERR" "ask again when it completes"
+fresh
+run completed
+refs feature="$NEWER"
+call rerun --url "$RUN"
+is "3: a run whose branch has moved past its commit is superseded" "$(val outcome)" superseded
+is "3: ...a stop" "$RC" 3
+is "3: ...naming the commit it ran on" "$(val head)" "$SHA"
+is "3: ...and the tip that replaced it" "$(val tip)" "$NEWER"
+is "3: ...and nothing was re-run" "$(asked)" 0
+fresh
+run completed feature fork/widgets
+refs feature="$NEWER"
+call rerun --url "$RUN"
+has "3: a fork's branch is read in the fork" "$(cat "$FAKE/gh.log")" "repos/fork/widgets/git/matching-refs/heads/feature"
+is "3: ...and supersedes the same" "$(val outcome)" superseded
+fresh
+run completed feature
+refs feature-2="$NEWER" feature="$SHA"
+call rerun --url "$RUN"
+is "3: a branch whose name only starts the same is not the run's branch" "$(val outcome)" accepted
+fresh
+run completed feature
+refs
+call rerun --url "$RUN"
+is "3: a run whose branch is gone is not held to a tip" "$(val outcome)" accepted
+fresh
+run completed null null
+call rerun --url "$RUN"
+is "3: nor is one that names no branch" "$(val outcome)" accepted
+lacks "3: ...for which no ref is read" "$(cat "$FAKE/gh.log")" "matching-refs"
+fresh
+touch "$FAKE/fail-run"
+call rerun --url "$RUN"
+is "3: a run that could not be read is a failure" "$RC" 1
+is "3: ...with no outcome" "$(val outcome)" ""
+is "3: ...and nothing re-run" "$(asked)" 0
 call rerun --url https://legacy.example/1
 is "3: a lane with no workflow run cannot be re-run here" "$(val outcome)" no-run
 

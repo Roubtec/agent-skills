@@ -12,7 +12,7 @@ The run is hands-off after a short preflight, and the deliverable is the final r
 It leaves anything that needs a human call unmerged, including PRs with unresolved review threads.
 For addressing review threads use `address-review`/`address-reviews` instead, for restacking branches without merging use `rebase-stack`.
 
-The mechanical steps are in `train.sh`, beside this file: reading a PR's standing, the rebase, the leased push, and the merge with its checks.
+The mechanical steps are in `train.sh`, beside this file: reading a PR's standing, the rebase, the leased push, the merge with its checks, and the watch that fills the hours between them.
 Run it by its absolute path; `--help` prints its full contract.
 Where the PRs are on a host other than github.com, write `--repo` as `<host>/<owner>/<repo>`.
 It prints `key=value` lines with `outcome=` first, exits 0 to proceed and 3 on anything else it read cleanly, and explains itself on stderr.
@@ -53,7 +53,8 @@ Carry every such note through the run.
   See *Open review items* for how the preflight and the loop handle this.
 - **The train's own fix PRs** are the exception: review on a fix PR you opened goes through `address-review`, because you own that PR.
 - **The report goes in your final message;** there is no place for it on GitHub.
-  Log each merge and its basis, each cancelled run and each resolved conflict in a line of output as it happens: the run outlasts what you will remember of it, and the report is assembled from those lines.
+  The run outlasts what you will remember of it, so its memory is the state file (see *The loop*), written as things happen: pass `--state <state> --basis <what this head merged on>` to every `train.sh merge`, and record each cancelled run, each resolved conflict and anything else the report will need with `train.sh note --state <state> [--pr <N>] <words>`.
+  The report is assembled from `train.sh state --state <state>`.
 
 ## Preflight, before the user leaves
 
@@ -104,26 +105,38 @@ An unresolved thread or a review requesting changes always blocks; read each `ne
 
 ## The loop
 
-Watch with a background `Monitor` that polls `train.sh check --repo <owner>/<repo> --pr <N> --head <the head you expect> --lane <identity>…` for the active PRs and emits a line only when an outcome changes.
+The train keeps two files in one folder outside the repository, which you choose at the start and name to the user.
+The **list** is what is being watched: one line per PR still in the train, `<N> <head>`.
+The **state file** is the train's memory: each listed PR's head and last outcome, the head and lanes of its last full green run, every merge with its basis and every note.
+Watch by running `train.sh watch --repo <owner>/<repo> --list <list> --state <state>` under a background `Monitor`, and write no polling loop of your own.
+It prints a line only when a listed PR's outcome changes, `outcome=` being what `train.sh check` answers, and a last line, `outcome=stopped`, with the reason it ended: `idle` when nothing listed is waiting any more, `expired` at its `--max` (four hours unless you say otherwise), `unreadable`, or `no-list`.
+Start it again whenever something is waiting and no watch is running.
+A new watch goes on from the state file and repeats nothing it holds.
+The list is yours to edit while the watch runs, and it is read again on every poll: add a line, drop one, or write a new head into one, and never restart the watch for it.
+Write the head into a PR's line after every `train.sh push`, and drop the line once the PR has merged or left the train.
 `check` reads the rollup by what it positively says: `ready` means every lane has settled on `SUCCESS`, `NEUTRAL` or `SKIPPED`.
 Right after a push the new head's rollup is empty or partial, and a partial one can be all green.
-So keep the `passing=` lines `check` printed for the PR's last full green run, and pass each as its own `--lane` on every check of a later head: a lane among them that has not shown yet makes the answer `waiting` with a `missing=` line, never `ready`.
-Leave `--lane` out only for a head whose full run you are reading for the first time.
-`survey` prints the count alone, and a watch that reports only outcome changes drops the lines, so before rebasing a PR that reads `ready`, run `check` on that head once and keep its `passing=` lines.
-`moved` means someone pushed: put that PR back under watch on its new head instead of rebasing or merging it.
-Monitors expire, so re-arm on expiry and widen the filter if the silence was unexpected.
+The watch covers that from the state file: it holds every later head of a PR to the lanes of that PR's last full green run, and answers `waiting` until each of them has passed there.
+It cannot do so for a head it has never seen green, so list a PR that was pushed moments ago only once its lanes have shown.
+`moved` means someone else pushed: that entry is finished, and the PR is watched again only when you write its new head into the list, which you do instead of rebasing or merging it.
+Whenever you need what the train knows (after a wakeup, after your context was compacted, in a new session), run `train.sh state --state <state>` instead of trusting what you remember: its `green=` line for a PR carries the `--green` head for `rebase`.
+A scheduled wakeup's prompt names the two files, never a list of PRs.
 React to each event:
 
 1. **A PR goes green** (`outcome=ready`).
    Check for open review items, and skip or pause as *Open review items* says.
    Run `train.sh -C <worktree> rebase --repo <owner>/<repo> --pr <N> --head <the head check called ready>`.
-   `moved` means the PR head is no longer that one: put the PR back under watch on its new head, whose rollup is the one that counts.
+   `moved` means the PR head is no longer that one: write its new head into the list, whose rollup is the one that counts.
    On `conflict`, resolve it and `git -C <worktree> rebase --continue`, or `git -C <worktree> rebase --abort`, as the ground rules say; the head to push is then the worktree's `HEAD`.
    Decide whether it needs another CI run (*Merge now or wait*).
-   If it does, push and put it back under watch: it returns to this step when that run is green.
-   Otherwise push (nothing to push on `current`) and run `train.sh merge --head <head>`, which waits out the moment after a push when GitHub reports "not mergeable".
+   If it does, push and write the new head into the list: it returns to this step when that run is green.
+   Otherwise push (nothing to push on `current`) and run `train.sh merge --head <head> --state <state> --basis <what it merges on>`, which waits out the moment after a push when GitHub reports "not mergeable".
 2. **A PR goes red.**
-   Read the failed job's log before re-running anything: each `lane=` line of `check` carries the lane's URL, and `ci.sh log --url <url>` and `ci.sh rerun --url <url>` read the failing log's tail and re-run the failed jobs (that `ci.sh` is the `address-review` skill's, in the folder beside this skill's).
+   Read the failed job's log before re-running anything: run `train.sh check` on the PR, whose `lane=` lines each carry the lane's URL, and `ci.sh log --url <url>` (that `ci.sh` is the `address-review` skill's, in the folder beside this skill's).
+   It returns the failed job's log up to its last error line as soon as that job has finished, while the rest of the run is still going; what failed in it is yours to read.
+   `ci.sh rerun --url <url>` re-runs the run's failed jobs, and only `accepted` is a re-run under way.
+   `in-progress` means the run has not completed, which GitHub requires before it re-runs anything: nothing was asked, so ask again once the run's other lanes have settled.
+   `superseded` means the branch has moved past the commit that run was on: read the lanes of the new head instead.
    Classify the failure: flaky or infrastructure, the PR's own, or `main`'s.
    Then act as the ground rules say.
 3. **After every merge,** re-assess the remaining PRs.
@@ -190,10 +203,11 @@ Consider freeing what the train will not use:
 
 ## Finishing
 
-After the last merge, watch `main`'s own CI run on the final tip.
+After the last merge, watch `main`'s own CI run on the final tip: write `commit <that tip>` into the list and start the watch, which reports that commit's lanes as `green`, `red` or `waiting`.
+`ci.sh lanes --repo <owner>/<repo> --commit <that tip>` gives the URL of each lane that failed there.
 Where the repository's workflows run on pull requests only, no such run will appear: say so in the report instead of waiting for one.
 Where each push to `main` cancels the previous `main` run, that one run covers the whole train.
-A lane cancelled with no newer push behind it, or failed for an infrastructure reason, gets a re-run once the run completes.
+A lane cancelled with no newer push behind it, or failed for an infrastructure reason, gets a re-run once the run completes: `ci.sh rerun` answers `in-progress` until then.
 Use reasonable effort on further re-runs, taking into account infrastructure issues, runner contention, and the history and state of the train.
 Stop the retries on persistent failures and report the issues encountered for the user to take further action.
 A real failure gets a fix PR, per the ground rules.
@@ -202,5 +216,5 @@ If foreign pushes start interfering with `main`'s CI after the train is done, ab
 Remove each worktree you created once its PR is merged or given up (`wt-remove merge-train-<N>`, or plain `git worktree remove`).
 Leave the branches themselves alone: the remote ones belong to the repository's auto-delete setting, the local ones to `prune-branches`.
 
-The final report gives, for each PR: merged (merge commit, and whether on a fresh CI run, on local checks, or as a clean rebase of a green run), skipped for open review items (which items, and which stacked PRs went with it), or left unmerged (why, and what the user has to decide).
+The final report is assembled from `train.sh state --state <state>`, and gives, for each PR: merged (merge commit, and whether on a fresh CI run, on local checks, or as a clean rebase of a green run), skipped for open review items (which items, and which stacked PRs went with it), or left unmerged (why, and what the user has to decide).
 Add fix PRs opened, conflicts resolved and how, re-stamps, runs cancelled, the state of `main`'s CI, and any observations about the CI pipeline worth the user's time.
