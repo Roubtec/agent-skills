@@ -118,10 +118,10 @@ Wait for the answer before locking the decision.
 Honor clarifying push-back first — maintainers often refine the *mechanism*, not just the yes/no.
 
 **Escape hatch — let the maintainer wrap up early.**
-Codex cannot render an extra structured control beside a decision, so make the exit explicit in words: tell the maintainer up front — and again whenever a round serves a long queue — that they may say **"wrap up"** (or "stop after this") at any time, instead of having to smuggle the request into a free-text answer.
+Codex cannot render an extra structured control beside a decision, so make the exit explicit in words: tell the maintainer up front — and again in any round that leaves more than five items after its own — that they may say **"wrap up"** (or "stop after this") at any time, instead of having to smuggle the request into a free-text answer.
 When they do, do **not** abandon the work in flight: finish resolving and **persisting/applying the item(s) already on the table** (step 5), then stop and produce the ledger plus a closing progress count (`N of TOTAL resolved; M still pending, listed`) so a later session resumes cleanly.
 Treat a wrap-up as a clean pause, never a discard.
-If the session *does* expose a structured user-input tool, you may add a small "continue / wrap up after this" question to each round (while more than one item remains) as the richer equivalent — but the spoken request is the baseline and always honored.
+If the session *does* expose a structured user-input tool, you may add a small "continue / wrap up after this" question to a round that leaves more than five items after its own as the richer equivalent — but the spoken request is the baseline and always honored.
 
 **Sub-step — audit adjacent code/data when the decision relies on an invariant.**
 If a resolution introduces or leans on a non-obvious invariant (e.g. "a record may stay `ACTIVE` past its soft-expiry"), do not just implement it — first **sweep every other consumer of that invariant** and report whether any mishandles it.

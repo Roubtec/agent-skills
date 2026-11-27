@@ -109,10 +109,10 @@ Every brief has the same four parts:
 Then capture the decision with **AskUserQuestion** (options = the resolutions; recommended one first and labelled).
 Honor any clarifying push-back before locking it — maintainers often refine the *mechanism*, not just the yes/no.
 
-**Offer an exit each round — the escape hatch.**
-Whenever more than one item still remains, include in the *same* `AskUserQuestion` call a second, separate question — *"After this, continue or wrap up?"* with options **Continue (Recommended)** and **Wrap up after this** — so the maintainer can end a long session at any point (a meeting, a context switch) without having to smuggle the request into a free-text answer.
-It consumes one of `AskUserQuestion`'s four question slots, so when you batch trivial decisions cap them at three to leave room; skip the control entirely on the final remaining item, where there is nothing left to continue to.
-If the maintainer picks **Wrap up** — or says so in any wording at any time — do **not** abandon the work in flight: finish resolving and **persisting/applying the item(s) already on the table** (step 5), then stop and produce the ledger plus a closing progress count (`N of TOTAL resolved; M still pending, listed`) so a later session resumes cleanly.
+**Offer an exit on a long list — the escape hatch.**
+Whenever more than five items remain after the round's own, include in the *same* `AskUserQuestion` call a second, separate question — *"After this, continue or wrap up?"* with options **Continue (Recommended)** and **Wrap up after this** — so the maintainer can end a long session at any point (a meeting, a context switch) without having to smuggle the request into a free-text answer.
+It consumes one of `AskUserQuestion`'s four question slots, so in such a round cap batched trivial decisions at three to leave room; on a shorter list leave the control out, where a "Continue" picked round after round is noise and the slot is better spent on a decision.
+If the maintainer picks **Wrap up** — or says so in any wording at any time, whether or not the control was offered — do **not** abandon the work in flight: finish resolving and **persisting/applying the item(s) already on the table** (step 5), then stop and produce the ledger plus a closing progress count (`N of TOTAL resolved; M still pending, listed`) so a later session resumes cleanly.
 Treat a wrap-up as a clean pause, never a discard.
 
 **Sub-step — audit adjacent code/data when the decision relies on an invariant.**
