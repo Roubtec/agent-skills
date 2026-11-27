@@ -184,6 +184,25 @@ is "4: ...for that reason" "$(val reason)" merge
 is "4: ...so the tree is verified" "$(val outcome):$RC" "verify:3"
 call before --onto "$INIT"
 is "4: flattened once, the range is linear and the point a no-op" "$(val outcome)" noop
+# A merge a replay re-created keeps the commit count and every patch, and is
+# still not the range that was verified.
+branch kept "$INIT"
+add only-kept k
+git -C "$R" merge -q --no-ff -m join side
+KEPT="$(tip kept)"
+git -C "$R" rebase -q --no-update-refs --rebase-merges "$MAIN2" >/dev/null 2>&1
+call after --old-base "$INIT" --old-tip "$KEPT" --new-base "$MAIN2"
+is "4: a merge re-created by the replay leaves the counts equal" "$(val old-commits):$(val new-commits)" "3:3"
+is "4: ...and is not patch-identical all the same" "$(val identical):$(val reason)" "no:merge"
+is "4: ...so nothing is carried over disjoint paths" "$(val paths):$(val outcome):$RC" "disjoint:verify:3"
+# What a merge changed by hand is the branch's own, though no replayed commit holds it.
+branch evil "$INIT"
+add only-evil e
+git -C "$R" merge -q --no-ff --no-commit side
+awk 'NR == 1 { print "EVIL"; next } { print }' "$R/g" >"$WORKDIR/edit" && cp "$WORKDIR/edit" "$R/g"
+git -C "$R" commit -q -am "join, with an edit"
+call before --onto "$MAIN2"
+is "4: a file only a merge's own edit touches is the branch's" "$(val paths):$(all shared)" "shared:g "
 
 # --- 5: a stacked child, and a parent tip that is not its ancestor -------
 branch parent "$INIT"
