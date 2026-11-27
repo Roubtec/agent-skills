@@ -461,9 +461,8 @@ cmd_duplicates() {
 	need_tree
 	local top duplicates
 	top="$(git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ] || fail "this checkout has no working tree to inventory."
-	[ -d "$top/$FOLDER" ] || fail "there is no folder '$FOLDER' in this working tree. Nothing was inventoried, which is not a clean sweep: name the task folder with --folder."
 	(cd "$top" && find "$FOLDER" -type f) >"$tmp/files" 2>"$tmp/err" ||
-		fail "could not read every file under '$FOLDER' ($(tr '\n' ' ' <"$tmp/err")). A partial inventory is not a clean sweep."
+		fail "could not read the folder '$FOLDER' whole ($(tr '\n' ' ' <"$tmp/err")). That is not a clean sweep: name the task folder with --folder where it is another."
 	awk "$LISTED" "$tmp/files" | sort >"$tmp/tree"
 	awk -F "$TAB" '$1 != "-" { n = $1; sub(/^[^\t]*\t/, ""); count[n]++; paths[n] = paths[n] "duplicate=" n "\t" $0 "\n" }
 		END { for (n in count) if (count[n] > 1) printf "%s", paths[n] }' "$tmp/tree" | sort >"$tmp/duplicates"
