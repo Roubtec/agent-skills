@@ -8,8 +8,9 @@
 # Each `<branch>` and each base is a branch name or a commit this repository
 # already holds; nothing is fetched. A branch is read against its own base in
 # the three-dot form, from where it left that base, so a branch stacked on a
-# sibling never lists the files it inherited from it. A file a branch renamed
-# into place is a file it added, whatever `diff.renames` says here.
+# sibling never lists the files it inherited from it. A file git reads as
+# renamed into place is not one the branch adds, whatever `diff.renames` says
+# here: an archived or moved file on two branches is no new surface.
 #
 # For every branch, in the order named, it prints
 #   branch=<branch> TAB <its base> TAB <how many files it adds>
@@ -109,7 +110,7 @@ while IFS= read -r spec; do
 	oid="$(git rev-parse --verify --quiet "$b^{commit}")" || fail "the branch '$b' names no commit here. Nothing was compared."
 	base_oid="$(git rev-parse --verify --quiet "$base^{commit}")" || fail "the base '$base' of '$b' names no commit here. Nothing was compared."
 	git merge-base "$base_oid" "$oid" >/dev/null || fail "'$b' and its base '$base' share no history. Nothing was compared."
-	git diff --no-renames --diff-filter=A --name-only "$base_oid...$oid" >"$tmp/adds" ||
+	git diff -M --diff-filter=A --name-only "$base_oid...$oid" >"$tmp/adds" ||
 		fail "could not list what '$b' adds against '$base'. Nothing was compared."
 	while IFS= read -r path; do printf '%s\t%s\n' "$b" "$path"; done <"$tmp/adds" >>"$tmp/all"
 	BRANCHES="${BRANCHES}branch=$b$TAB$base$TAB$(awk 'END { print NR }' "$tmp/adds")

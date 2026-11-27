@@ -347,13 +347,20 @@ git -C "$A" checkout -q main
 acall twice:main third:main
 is "7: ...and with a second branch every one of its files is listed" "$(count basename)" 3
 
-# A rename into place is an added path, whatever diff.renames says.
+# A rename into place is no addition, as the skill's old scan read it under
+# git's defaults, and whatever diff.renames says.
 git -C "$A" checkout -q -b mover main
 git -C "$A" mv src/existing.ts src/alone.ts
 git -C "$A" commit -q -m move
 git -C "$A" checkout -q main
 acall mover:main alone:main
-has "7: a file renamed into place is a file the branch adds" "$OUT" "path=src/alone.ts${TAB}mover"
+is "7: a file renamed into place is not a file the branch adds" "$(val outcome)" clean
+has "7: ...which then adds nothing" "$OUT" "branch=mover${TAB}main${TAB}0"
+is "7: ...as the old scan read it" "$(old_paths mover:main alone:main)" ""
+git -C "$A" config diff.renames false
+acall mover:main alone:main
+is "7: ...whatever diff.renames says here" "$(val outcome)" clean
+git -C "$A" config --unset diff.renames
 
 acall one:main
 is "7: one branch alone is clean, not a usage error" "$(val outcome)" clean
