@@ -405,7 +405,7 @@ git -C "$U" push -q origin gone-base:refs/pull/13/head
 pr 13 "$(tip gone-base "$U")" gone "$GONE"
 call claims "${ARGS[@]}"
 has "5: a base commit that arrives with the head is used" "$OUT" "collision=070${TAB}tasks/070-mine.md${TAB}pr:13${TAB}tasks/070-theirs.md"
-lacks "5: ...and what sits under it is not the PR's addition" "$OUT" "071"
+lacks "5: ...and what sits under it is not the PR's addition" "$OUT" "tasks/071-on-gone-base.md"
 
 new_repo
 put "$R" tasks/070-mine.md
@@ -460,6 +460,16 @@ call claims "${ARGS[@]}" --member sibling:dropped
 lacks "6: what a member's base dropped since it forked is not the member's addition" "$OUT" "member:sibling${TAB}tasks/001-first.md"
 call claims "${ARGS[@]}" --member no-such:main
 is "6: a member that cannot be read is a failure" "$RC" 1
+call claims "${ARGS[@]}" --member sibling:no-such
+is "6: ...and so is one whose base names no commit" "$RC" 1
+has "6: ...which is named" "$ERR" "the base 'no-such' of the member 'sibling'"
+# A base half git would read as an option. The fixture is the working
+# directory, so a script that let it through would leave one empty file there.
+call claims "${ARGS[@]}" --member "sibling:--output=member-base-leak"
+is "6: a member's base that is an option to git is a failure, not an empty member" "$RC" 1
+is "6: ...with no outcome" "$OUT" ""
+[ -z "$(find "$R" -maxdepth 1 -name '*member-base-leak*')" ]
+ok "6: ...and it reached git as no option" $?
 call claims "${ARGS[@]}" --branch sibling
 has "6: --branch scans a branch other than HEAD" "$OUT" "claim=082${TAB}tasks/082-sibling.md"
 is "6: ...and it alone" "$(val claims)" 2
@@ -497,6 +507,28 @@ call taken --repo acme/widgets
 has "8: a head that cannot be fetched is named" "$OUT" "skipped=pr:11"
 is "8: ...and makes the listing incomplete" "$(val outcome)" incomplete
 rm "$R/tasks/091-untracked.md"
+jq '.[0:1]' "$FAKE/prs.json" >"$FAKE/prs.new" && mv "$FAKE/prs.new" "$FAKE/prs.json"
+call taken --repo acme/widgets --folder plans
+is "8: a folder the working tree does not have lists nothing from it" "$(count taken)" 0
+is "8: ...and fails nothing" "$RC" 0
+ln -s tasks "$R/tk"
+call taken --repo acme/widgets --folder tk
+has "8: a task folder that is a symlink is read through" "$OUT" "taken=001${TAB}tree${TAB}tk/001-first.md"
+rm "$R/tk"
+mkdir -p "$R/plans/closed" && printf 'x\n' >"$R/plans/007-a.md" && chmod 000 "$R/plans/closed"
+# Only where the mode binds (not as root): a folder find cannot enter.
+if ! ls "$R/plans/closed" >/dev/null 2>&1; then
+	call taken --repo acme/widgets --folder plans
+	is "8: a folder that cannot be read whole is a failure, not a shorter listing" "$RC" 1
+	is "8: ...with no outcome" "$OUT" ""
+fi
+chmod 755 "$R/plans/closed"
+# A folder named as one of find's operators. The fixture is the working
+# directory, so a script that read it as one would print paths and no more.
+mkdir "$R/!" && printf 'x\n' >"$R/!/009-a.md"
+call taken --repo acme/widgets --folder '!'
+has "8: a folder named as a find operator is read as a folder" "$OUT" "taken=009${TAB}tree${TAB}!/009-a.md"
+is "8: ...and it alone" "$(printf '%s\n' "$OUT" | grep -c "${TAB}tree${TAB}")" 1
 
 # --- 9. usage, and the mirrors ------------------------------------------------
 call claims --base main
@@ -520,6 +552,14 @@ call claims "${ARGS[@]}" --branch no-such-branch
 is "9: a scanned branch that names no commit is a failure" "$RC" 1
 OUT="$(cd "$WORKDIR" && bash "$HELPER" -C "$R" claims "${ARGS[@]}" 2>/dev/null)"
 is "9: -C names the checkout" "$(val outcome)" clean
+# `-` is the previous directory to cd, here the fixture: read so, the sweep
+# would answer for it.
+OUT="$(cd "$R" && cd "$WORKDIR" && bash "$HELPER" -C - duplicates 2>/dev/null)"
+RC=$?
+is "9: -C takes a directory, not cd's own - or an option" "$RC" 1
+is "9: ...with no outcome" "$OUT" ""
+call claims "${ARGS[@]}" --folder ""
+is "9: an empty --folder is a usage error" "$RC" 64
 call --help
 is "9: --help exits 0" "$RC" 0
 has "9: ...printing the contract" "$OUT" "outcome=incomplete"
@@ -589,6 +629,12 @@ call duplicates --branch main
 is "10: ...and no branch" "$RC" 64
 call duplicates --reserved 001
 is "10: ...and no reserved number" "$RC" 64
+call duplicates --base main
+is "10: ...and no base" "$RC" 64
+call duplicates --local-base main
+is "10: ...local or not" "$RC" 64
+call duplicates --member feature:main
+is "10: ...and no member" "$RC" 64
 # A folder value that find would read as an expression. The fixture is the
 # working directory and the expression a harmless one, so a script that let
 # it through would print paths and nothing more.
@@ -609,6 +655,16 @@ ln -s tasks "$R/tk"
 call duplicates --folder tk
 is "10: a task folder that is a symlink is read through" "$(val outcome)" duplicate
 has "10: ...under the name it was given" "$OUT" "duplicate=001${TAB}tk/done/001-again.md"
+# Folders named as find's operators: read as one, `!` would list every
+# directory of the fixture as unnumbered and count nothing.
+mkdir "$R/!" "$R/(" && printf 'x\n' >"$R/!/009-a.md" && printf 'x\n' >"$R/(/009-b.md"
+call duplicates --folder '!'
+is "10: a folder named as a find operator is read as a folder" "$(val numbered)" 1
+is "10: ...and nothing else is listed" "$(count unnumbered)" 0
+call duplicates --folder '('
+is "10: ...an opening parenthesis too" "$(val numbered)" 1
+call duplicates --folder ')'
+is "10: ...and one that is not there is a missing folder" "$RC" 1
 call duplicates --folder tasks/001-first.md
 is "10: a --folder that names a file is a failure, not a clean sweep" "$RC" 1
 is "10: ...with no outcome" "$OUT" ""

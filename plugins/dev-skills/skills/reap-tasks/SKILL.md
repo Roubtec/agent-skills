@@ -98,7 +98,7 @@ Instead, create one or more new follow-up task files in the same task folder usi
 
 - Continue the numbering sequence within the same phase.
   For example, if reaping six `01-*` tasks, a follow-up file might be `01-07-phase-01-follow-ups.md`.
-  Allocate the number by that skill's "File naming and ordering" and its `task-numbers.sh taken` call, never a hand inventory; a head it could not read leaves the allocation reported as not fully checked and fails nothing.
+  Allocate the number by that skill's "File naming and ordering" and its `task-numbers.sh taken --repo <owner>/<repo>` call, never a hand inventory; a head it could not read (`outcome=incomplete`) leaves the allocation reported as not fully checked and fails nothing.
 - If the remaining items are small and span multiple original tasks, prefer a single consolidated follow-up task (e.g. "Phase 01 minor fixes and gaps") over one file per original task.
   Group by theme or proximity, not by origin.
 - If a gap is substantial enough to warrant its own task, give it its own file with a descriptive name.

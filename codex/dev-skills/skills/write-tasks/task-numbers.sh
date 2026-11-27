@@ -65,7 +65,9 @@
 #         <number> is `-` for a file that carries no full task number as
 #         above: a repository numbering its tasks another way reads the paths.
 #         under outcome=listed, or outcome=incomplete (exit 3) with the same
-#         skipped= and limit= lines.
+#         skipped= and limit= lines. A folder that is not in the working tree
+#         lists nothing from it (the first task has no folder yet); one that
+#         could not be read whole is a failure, and a symlink is read through.
 # duplicates
 #         For a cleanup sweep. The working tree's folder alone, tracked or
 #         not, and nothing remote: no pull request is read, so none can fail
@@ -122,13 +124,13 @@ field() { # key, text
 	printf '%s\n' "$2" | awk -v k="$1=" 'index($0, k) == 1 { print substr($0, length(k) + 1); exit }'
 }
 
-# Reads paths, prints `<number> TAB <path>` for each that is a task file.
 # Reads paths, prints `<number or -> TAB <path>` for every one.
 # shellcheck disable=SC2016 # the $names are awk's
 LISTED='{
 	b = $0; sub(/.*\//, "", b)
 	print (match(b, /^[0-9][0-9][0-9][a-z]?-/) ? substr(b, 1, RLENGTH - 1) : "-") "\t" $0
 }'
+# Reads paths, prints `<number> TAB <path>` for each that is a task file.
 # shellcheck disable=SC2016 # the $names are awk's
 NUMBERED='{
 	b = $0; sub(/.*\//, "", b)
@@ -140,7 +142,12 @@ CMD="${1:-}"
 case "$CMD" in
 -C)
 	[ $# -ge 2 ] || usage "-C needs a directory and a command"
-	cd "$1" 2>/dev/null || fail "could not enter $1."
+	# Behind ./ a relative name is a directory and nothing else: not an
+	# option, not `-` for the previous directory, not a CDPATH lookup.
+	case "$1" in
+	/*) cd "$1" 2>/dev/null || fail "could not enter $1." ;;
+	*) cd "./$1" 2>/dev/null || fail "could not enter $1." ;;
+	esac
 	CMD="$2"
 	shift 2
 	;;
@@ -207,6 +214,20 @@ need_tree() {
 }
 gap() { say "$*" >>"$tmp/gaps"; }
 
+# Every file under the folder of the working tree at <top>, into $tmp/files;
+# fails where find could not read it whole, its reason in $tmp/err.
+tree_files() { # top
+	local from
+	# Behind ./ no folder name (`!`, `(`) is an expression to find; the paths
+	# are printed without it. -H: a folder that is a symlink is read through.
+	case "$FOLDER" in
+	/*) from="$FOLDER" ;;
+	*) from="./$FOLDER" ;;
+	esac
+	(cd "$1" && find -H "$from" -type f) >"$tmp/found" 2>"$tmp/err" || return 1
+	sed 's|^\./||' "$tmp/found" >"$tmp/files"
+}
+
 # A branch of the repository, fetched once per run: prints `<remote> TAB
 # <oid>`. Why it failed is left in $tmp/pin.err.
 pin() { # branch
@@ -267,7 +288,7 @@ print_gaps() {
 
 cmd_claims() {
 	need_common
-	local base_oid branch_oid branch_name pinned degraded="" n head pbase pbase_oid poid hname cross m mc mb moid claims collisions
+	local base_oid branch_oid branch_name pinned degraded="" n head pbase pbase_oid poid hname cross m mc mb moid mboid claims collisions
 	if [ -n "$BASE" ] && [ -n "$LOCAL_BASE" ]; then usage "give --base or --local-base, not both"; fi
 	[ -n "$BASE$LOCAL_BASE" ] || usage "claims needs --base <branch>, or --local-base <commit> where the repository cannot have the base"
 	branch_oid="$(git rev-parse --verify --quiet "$BRANCH^{commit}")" || fail "the branch '$BRANCH' names no commit here. Nothing was scanned."
@@ -345,7 +366,8 @@ cmd_claims() {
 			moid="$(git rev-parse --verify --quiet "$mc^{commit}")" || fail "the member '$mc' names no commit here. Nothing here says its numbers are free."
 			# The scanned branch named as a member holds nothing against itself.
 			[ "$moid" != "$branch_oid" ] || continue
-			if ! git diff --no-renames --diff-filter=A --name-only "$mb...$mc" -- "$FOLDER/" >"$tmp/member" 2>/dev/null; then
+			mboid="$(git rev-parse --verify --quiet "$mb^{commit}")" || fail "the base '$mb' of the member '$mc' names no commit here. Nothing here says its numbers are free."
+			if ! git diff --no-renames --diff-filter=A --name-only "$mboid...$moid" -- "$FOLDER/" >"$tmp/member" 2>/dev/null; then
 				fail "could not read what the member '$mc' adds against '$mb'. Nothing here says its numbers are free."
 			fi
 			awk "$NUMBERED" "$tmp/member" | awk -F "$TAB" -v t="$TAB" -v h="member:$mc" '{ print $1 t h t $2 }' >>"$tmp/holders"
@@ -436,7 +458,9 @@ cmd_taken() {
 	top="$(git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ] || fail "this checkout has no working tree to inventory."
 	: >"$tmp/taken"
 	if [ -d "$top/$FOLDER" ]; then
-		(cd "$top" && find "$FOLDER" -type f) | awk "$LISTED" | awk -F "$TAB" -v t="$TAB" '{ print "taken=" $1 t "tree" t $2 }' >>"$tmp/taken"
+		tree_files "$top" ||
+			fail "could not read the folder '$FOLDER' whole ($(tr '\n' ' ' <"$tmp/err")). A partial inventory says nothing of which numbers are free."
+		awk "$LISTED" "$tmp/files" | awk -F "$TAB" -v t="$TAB" '{ print "taken=" $1 t "tree" t $2 }' >>"$tmp/taken"
 	fi
 	enumerate
 	while IFS="$TAB" read -r n head pbase poid hname cross; do
@@ -468,8 +492,7 @@ cmd_duplicates() {
 	top="$(git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ] || fail "this checkout has no working tree to inventory."
 	[ -d "$top/$FOLDER" ] ||
 		fail "'$FOLDER' is no folder in this working tree. That is not a clean sweep: name the task folder with --folder where it is another."
-	# -H: a task folder that is a symlink is read, not passed over as one file.
-	(cd "$top" && find -H "$FOLDER" -type f) >"$tmp/files" 2>"$tmp/err" ||
+	tree_files "$top" ||
 		fail "could not read the folder '$FOLDER' whole ($(tr '\n' ' ' <"$tmp/err")). That is not a clean sweep: name the task folder with --folder where it is another."
 	awk "$LISTED" "$tmp/files" | sort >"$tmp/tree"
 	awk -F "$TAB" '$1 != "-" { count[$1]++; paths[$1] = paths[$1] "duplicate=" $1 "\t" substr($0, length($1) + 2) "\n" }
