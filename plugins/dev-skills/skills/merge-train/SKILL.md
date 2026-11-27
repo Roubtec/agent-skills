@@ -59,6 +59,7 @@ Carry every such note through the run.
 
 Run `train.sh survey --repo <owner>/<repo> <PR numbers…>`.
 It prints one line per PR (its `check` outcome, base, `parent=`, head, mergeability, review decision, open threads, CI, passing lanes, file count) and a `shared=` line for each file two or more of them touch.
+A line reading `outcome=unreadable` is a listed number it could not read (`reason=no-such-pr`: the repository has no such PR, most often a mistyped number; `reason=gh-failed`: it could not be asked about), and the survey then answers `outcome=incomplete` with exit 3: name each such number to the user before starting, and run the train without it unless they correct it.
 From that, and from the diffs where a `shared=` line or a migration calls for a look, work out and tell the user:
 
 - **Stacks.**

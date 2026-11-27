@@ -49,6 +49,14 @@
 #         one is based on, `-` for none) head= mergeable= review= threads= ci=
 #         lanes= files=. Then one line per file two or more of them touch:
 #           shared=<path> TAB <PR>,<PR>...
+#         A listed PR that could not be read gets its line all the same, and
+#         the others are surveyed without it:
+#           pr=<N> TAB outcome=unreadable TAB reason=<no-such-pr|gh-failed>
+#         `no-such-pr`: the repository has no pull request of that number.
+#         `gh-failed`: its standing or its files could not be asked for.
+#           outcome=surveyed    every listed PR was read
+#           outcome=incomplete  an `outcome=unreadable` line is among them
+#         A survey in which gh answered for none of them is a failure.
 # rebase  Brings the worktree's branch level with the PR head where that loses
 #         nothing, pins the default branch's tip, and rebases onto it with
 #         `--no-update-refs --no-rebase-merges`. `--head` is the head whose
@@ -378,7 +386,7 @@ cmd_survey() {
 	parse "$@"
 	[ -z "$PR" ] || usage "survey takes the PR numbers as plain arguments"
 	[ -n "$PRS" ] || usage "survey needs at least one PR number"
-	local n out rc tmp lines="" branches="" parent files o
+	local n out rc tmp branches="" parent files o good="" bad=0 answered="" default=""
 	for n in $PRS; do
 		case "$n" in
 		*[!0-9]*) usage "'$n' is not a PR number" ;;
@@ -387,37 +395,57 @@ cmd_survey() {
 	tmp="$(mktemp -d "${TMPDIR:-/tmp}/train.XXXXXX")" || fail "could not create a temporary directory."
 	# shellcheck disable=SC2064 # expand now: the directory this run made
 	trap "rm -rf '$tmp'" EXIT
+	: >"$tmp/errs"
 	for n in $PRS; do
 		rc=0
 		out="$(bash "$SELF" check --repo "$REPO" --pr "$n" 2>"$tmp/err")" || rc=$?
 		case "$rc" in
-		0 | 3) ;;
-		*)
-			cat "$tmp/err" >&2
-			fail "could not survey PR #$n."
+		0 | 3)
+			if gh pr diff "$n" --repo "$REPO" --name-only >"$tmp/files.$n" 2>"$tmp/err"; then
+				printf '%s\n' "$out" >"$tmp/check.$n"
+				good="$good $n"
+				answered=1
+				[ -n "$default" ] || default="$(field default "$out")"
+				branches="$branches$(field branch "$out")$TAB$n
+"
+				continue
+			fi
 			;;
 		esac
-		printf '%s\n' "$out" >"$tmp/check.$n"
-		gh pr diff "$n" --repo "$REPO" --name-only >"$tmp/files.$n" || fail "could not list the files PR #$n touches (gh failed)."
-		branches="$branches$(field branch "$out")$TAB$n
-"
+		bad=$((bad + 1))
+		# The one failure that is an answer: gh asked, and GitHub has no such PR.
+		if grep -F -q "Could not resolve to a PullRequest with the number of $n." "$tmp/err"; then
+			echo no-such-pr >"$tmp/why.$n"
+			answered=1
+		else
+			echo gh-failed >"$tmp/why.$n"
+		fi
+		cat "$tmp/err" >>"$tmp/errs"
 	done
-	say "outcome=surveyed"
+	cat "$tmp/errs" >&2
+	[ -n "$answered" ] || fail "could not read any of the listed PRs in $REPO (gh failed). Nothing was surveyed."
+	if [ "$bad" -gt 0 ]; then say "outcome=incomplete"; else say "outcome=surveyed"; fi
+	[ -z "$default" ] || say "default=$default"
 	for n in $PRS; do
+		if [ -f "$tmp/why.$n" ]; then
+			say "pr=$n${TAB}outcome=unreadable${TAB}reason=$(cat "$tmp/why.$n")"
+			continue
+		fi
 		out="$(cat "$tmp/check.$n")"
 		o="$(field outcome "$out")"
-		[ -z "$lines" ] && say "default=$(field default "$out")"
-		lines=1
 		parent="$(printf '%s' "$branches" | awk -F "$TAB" -v b="$(field base "$out")" -v me="$n" '$1 == b && $2 != me { print $2; exit }')"
 		files="$(awk 'NF' "$tmp/files.$n" | sort -u | awk 'END { print NR }')"
 		say "pr=$n${TAB}outcome=$o${TAB}base=$(field base "$out")${TAB}parent=${parent:--}${TAB}head=$(field head "$out")${TAB}mergeable=$(field mergeable "$out")${TAB}review=$(field review "$out")${TAB}threads=$(field threads "$out")${TAB}ci=$(field ci "$out")${TAB}lanes=$(field lanes "$out")${TAB}files=$files"
 	done
-	for n in $PRS; do
+	for n in $good; do
 		awk 'NF' "$tmp/files.$n" | sort -u | awk -v n="$n" -v t="$TAB" '{ print $0 t n }'
 	done | sort -t "$TAB" -k1,1 -s | awk -F "$TAB" '
 		$1 != path { if (count > 1) print "shared=" path "\t" list; path = $1; list = $2; count = 1; next }
 		{ list = list "," $2; count++ }
 		END { if (count > 1) print "shared=" path "\t" list }'
+	[ "$bad" -gt 0 ] || return 0
+	note "$bad of the listed PRs could not be read: see the \`outcome=unreadable\` lines. The others were surveyed without them."
+	exit 3
 }
 
 # Is $1 an ancestor of $2? A probe that could not run is neither answer.

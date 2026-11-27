@@ -63,6 +63,7 @@ cat >"$FAKE/gh" <<'FAKEGH'
 #   rollup.<pr>.json       its status rollup
 #   compare.json           the compare API's answer
 #   files.<pr>             `gh pr diff --name-only`
+#   missing.<pr>           the repository has no such PR: gh's own words, exit 1
 #   pr.json                `gh pr view`, as pr-branch.sh reads it
 #   merge-error            `gh pr merge` fails, printing this
 #   merge-lands            `gh pr merge` installs facts.<pr>.merged.json
@@ -91,6 +92,10 @@ case "$1 $2" in
 	[ ! -f "$FAKE/fail-api" ] || exit 1
 	case "$query" in
 	*reviewThreads*)
+		if [ -f "$FAKE/missing.$pr" ]; then
+			printf 'gh: Could not resolve to a PullRequest with the number of %s.\n' "$pr" >&2
+			exit 1
+		fi
 		n=$(($(cat "$FAKE/reads.$pr" 2>/dev/null || echo 0) + 1))
 		echo "$n" >"$FAKE/reads.$pr"
 		file="$FAKE/facts.$pr.json"
@@ -131,7 +136,7 @@ H1=1111111111111111111111111111111111111111
 H2=2222222222222222222222222222222222222222
 MC=cccccccccccccccccccccccccccccccccccccccc
 fresh() {
-	rm -f "$FAKE"/*.json "$FAKE"/reads.* "$FAKE"/files.* "$FAKE"/fail-* "$FAKE"/merge-* "$FAKE/gh.log"
+	rm -f "$FAKE"/*.json "$FAKE"/reads.* "$FAKE"/files.* "$FAKE"/missing.* "$FAKE"/fail-* "$FAKE"/merge-* "$FAKE/gh.log"
 	printf '{"behind_by":0}\n' >"$FAKE/compare.json"
 }
 # facts <file-suffix> key=value...  — an open, mergeable, clean PR by default.
@@ -338,10 +343,41 @@ has "2: a file two PRs touch is listed with both" "$OUT" "shared=README.md	7,9"
 has "2: ...each such file" "$OUT" "shared=src/b.js	8,9"
 lacks "2: a file one PR touches is not" "$OUT" "shared=src/a.js"
 has "2: the files are read per PR, by number and repository" "$(cat "$FAKE/gh.log")" "pr diff 8 --repo acme/widgets --name-only"
-rm "$FAKE/rollup.9.json"
+touch "$FAKE/missing.9"
+call survey --repo acme/widgets 7 9 8
+is "2: a listed number that is no PR leaves the survey incomplete" "$(val outcome)" incomplete
+is "2: ...which is a stop" "$RC" 3
+is "2: ...with a line of its own, in its place on the list" "$(printf '%s\n' "$OUT" | sed -n 4p)" "pr=9	outcome=unreadable	reason=no-such-pr"
+has "2: ...while the others are surveyed as before" "$OUT" "pr=7	outcome=ready	base=main	parent=-	head=$H1	mergeable=MERGEABLE	review=NONE	threads=0	ci=green	lanes=2	files=2"
+has "2: ...each of them, with its parent" "$OUT" "pr=8	outcome=stacked	base=feature	parent=7"
+is "2: ...and the default branch still named" "$(val default)" main
+lacks "2: ...and its files, never read, are shared with nobody" "$OUT" "shared="
+has "2: gh's own words for it reach stderr" "$ERR" "Could not resolve to a PullRequest with the number of 9."
+has "2: ...beside the helper's count" "$ERR" "1 of the listed PRs could not be read"
+rm "$FAKE/missing.9" "$FAKE/rollup.9.json"
 call survey --repo acme/widgets 7 8 9
-is "2: a PR that cannot be read fails the survey" "$RC" 1
-lacks "2: ...which then reports nothing as surveyed" "$OUT" "outcome=surveyed"
+is "2: a PR gh could not be asked about is unreadable too, for that reason" "$(printf '%s\n' "$OUT" | grep '^pr=9')" "pr=9	outcome=unreadable	reason=gh-failed"
+is "2: ...and the survey a stop" "$RC" 3
+rollup 9 "$H1" "$GREEN"
+rm "$FAKE/files.8"
+call survey --repo acme/widgets 7 8 9
+is "2: so is a PR whose files could not be listed" "$(printf '%s\n' "$OUT" | grep '^pr=8')" "pr=8	outcome=unreadable	reason=gh-failed"
+is "2: ...which leaves the survey incomplete" "$(val outcome)" incomplete
+has "2: ...and the files of the others still compared" "$OUT" "shared=README.md	7,9"
+lacks "2: ...without its own" "$OUT" "shared=src/b.js"
+printf 'src/b.js\n' >"$FAKE/files.8"
+touch "$FAKE/missing.7" "$FAKE/missing.8" "$FAKE/missing.9"
+call survey --repo acme/widgets 7 8 9
+is "2: a list of numbers that are all no PR is still an answer" "$(val outcome)" incomplete
+is "2: ...a stop, not a failure" "$RC" 3
+is "2: ...naming each" "$(printf '%s\n' "$OUT" | grep -c 'outcome=unreadable	reason=no-such-pr$')" 3
+rm "$FAKE"/missing.*
+touch "$FAKE/fail-api"
+call survey --repo acme/widgets 7 8 9
+is "2: a survey in which gh answered for no PR is a failure" "$RC" 1
+is "2: ...with nothing on stdout" "$OUT" ""
+has "2: ...saying so" "$ERR" "could not read any of the listed PRs"
+rm "$FAKE/fail-api"
 call survey --repo acme/widgets
 is "2: a survey of nothing is a usage error" "$RC" 64
 
