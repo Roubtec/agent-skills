@@ -273,6 +273,7 @@ is "fixture: guard passes build output" "$(cand apps/web/dist guard)" ok
 is "fixture: a nested checkout trips the guard" "$(cand .venv guard)" "nested-git:.venv/src/pkg/.git"
 is "fixture: a folder ignored only through its files is no candidate" "$(row candidate=logs)" ""
 is "fixture: and is counted" "$(row dropped=1)" "dropped=1"
+is "fixture: an ignored file is no candidate" "$(row candidate=logs/a.log)" ""
 has "fixture: an unprintable name is surfaced" "$OUT" "${TAB}a name with a tab or newline"
 is "fixture: the ignore file is listed" "$(row gitignore=.gitignore)" "gitignore=.gitignore"
 is "fixture: candidates are literal paths" "$(printf '%s\n' "$OUT" | grep -c '^candidate=[^	]*[][*?]')" 0
@@ -677,6 +678,40 @@ for cmd in shadows worktrees; do
 	is "a broken index fails $cmd" "$RC" 1
 	is "a broken index prints no answer for $cmd" "$OUT" ""
 done
+
+# A git that refuses one kind of question, to tell "nothing there" from "no answer".
+REAL_GIT="$(command -v git)"
+export REAL_GIT
+mkdir -p "$WORKDIR/gitbin"
+cat >"$WORKDIR/gitbin/git" <<'FAKEGIT'
+#!/usr/bin/env bash
+printf '%s\n' "$*" >>"$FAKE/git.log"
+case " $* " in *" $FAKE_GIT_REFUSES "*) exit 128 ;; esac
+exec "$REAL_GIT" "$@"
+FAKEGIT
+chmod +x "$WORKDIR/gitbin/git"
+new_repo
+commit .gitignore 'dist/\n.worktrees/\n'
+refused() { # <label> <argument git refuses> <probe arguments>
+	local label="$1" refuses="$2"
+	shift 2
+	OUT="$(cd "$R" && PATH="$WORKDIR/gitbin:$PATH" FAKE_GIT_REFUSES="$refuses" bash "$HELPER" "$@" 2>/dev/null)"
+	is "$label: exit 1" "$?" 1
+	is "$label: no answer printed" "$OUT" ""
+}
+refused "the ignored listing fails" --ignored shadows
+refused "the index listing fails" --stage shadows
+refused "the ignore question fails for a candidate" check-ignore shadows --candidate apps/web/dist
+refused "the tracked question fails for a candidate" --literal-pathspecs shadows --candidate apps/web/dist
+refused "the .gitignore listing fails" ":(glob)**/.gitignore" shadows
+refused "the ignore question fails for a root" check-ignore worktrees
+refused "the tracked question fails for a root" --literal-pathspecs worktrees
+put .powbox.local.yml 'ctx: 1\n'
+refused "the local file's ignore question fails" -q worktrees
+OUT="$(cd "$R" && PATH="$WORKDIR/gitbin:$PATH" FAKE_GIT_REFUSES=nothing-at-all bash "$HELPER" shadows 2>/dev/null)"
+is "the refusing git is otherwise the real one" "$?" 0
+# The probe's promise not to take a lock rests on which git commands it runs.
+is "git is asked only read-only questions" "$(awk '{ for (i = 1; i <= NF; i++) if ($i !~ /^-/ && $i != ENVIRON["R"] && !(i > 1 && $(i - 1) == "-C")) { print $i; break } }' "$FAKE/git.log" | LC_ALL=C sort -u | tr '\n' ' ')" "check-ignore ls-files rev-parse show "
 
 printf '%s checks, %s failed\n' "$checks" "$fails"
 [ "$fails" = 0 ]

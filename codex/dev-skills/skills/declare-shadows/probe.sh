@@ -363,7 +363,6 @@ ignore_state() { # path, exists (dir|absent|...)
 	case "$pattern" in '!'*) return 0 ;; esac
 	IGN=unshared
 	case "$line" in '' | *[!0-9]*) return 0 ;; esac
-	git -C "$ROOT" cat-file -e "HEAD:$src" 2>/dev/null || return 0
 	if git -C "$ROOT" show "HEAD:$src" 2>/dev/null | tr -d '\r' |
 		LINE="$pattern" awk '$0 == ENVIRON["LINE"] { found = 1 } END { exit !found }'; then
 		IGN=shared
@@ -437,10 +436,6 @@ guard() { # path, declared (0|1)
 	GUARD=ok
 	p="$ROOT/$rel"
 	[ -d "$p" ] || return 0
-	if [ "$SCAN_LEFT" -le 0 ]; then
-		GUARD=unscanned
-		return
-	fi
 	scan="$({
 		find "$p" -print 2>/dev/null
 		printf 'find-status %s\n' "$?"
