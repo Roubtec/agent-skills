@@ -57,6 +57,13 @@
 #           outcome=surveyed    every listed PR was read
 #           outcome=incomplete  an `outcome=unreadable` line is among them
 #         A survey in which gh answered for none of them is a failure.
+#         Last, one line per PR that is open against the default branch and
+#         not on the list, of the 100 most recently created:
+#           unlisted=<N> TAB <head branch> TAB <title>
+#         These are information: the outcome and the exit status are the
+#         listed PRs' alone. `unlisted=unknown` says those lines are not the
+#         whole set: the listing failed or came back full, or no listed PR
+#         was read to name the default branch.
 # rebase  Brings the worktree's branch level with the PR head where that loses
 #         nothing, pins the default branch's tip, and rebases onto it with
 #         `--no-update-refs --no-rebase-merges`. `--head` is the head whose
@@ -386,7 +393,7 @@ cmd_survey() {
 	parse "$@"
 	[ -z "$PR" ] || usage "survey takes the PR numbers as plain arguments"
 	[ -n "$PRS" ] || usage "survey needs at least one PR number"
-	local n out rc tmp branches="" parent files o good="" bad=0 answered="" default=""
+	local n out rc tmp branches="" parent files o good="" bad=0 answered="" default="" open
 	for n in $PRS; do
 		case "$n" in
 		*[!0-9]*) usage "'$n' is not a PR number" ;;
@@ -443,6 +450,22 @@ cmd_survey() {
 		$1 != path { if (count > 1) print "shared=" path "\t" list; path = $1; list = $2; count = 1; next }
 		{ list = list "," $2; count++ }
 		END { if (count > 1) print "shared=" path "\t" list }'
+	if [ -z "$default" ]; then
+		say "unlisted=unknown"
+		note "no listed PR was read, so the default branch is not known and the open PRs that are not on the list were not looked for."
+	elif open="$(gh pr list --repo "$REPO" --state open --base "$default" --limit 100 --json number,headRefName,title \
+		--jq '.[] | "\(.number)\t\(.headRefName)\t\(.title | gsub("[[:cntrl:]]+"; " "))"')"; then
+		printf '%s\n' "$open" | awk -F "$TAB" -v listed="$PRS" '
+			BEGIN { n = split(listed, a, " "); for (i = 1; i <= n; i++) on[a[i] + 0] = 1 }
+			$1 ~ /^[0-9]+$/ && !(($1 + 0) in on) { print "unlisted=" $0 }'
+		if [ "$(printf '%s\n' "$open" | awk 'NF { n++ } END { print n + 0 }')" -ge 100 ]; then
+			say "unlisted=unknown"
+			note "100 PRs are open against '$default', which is as many as were asked for: there may be more that are not on the list."
+		fi
+	else
+		say "unlisted=unknown"
+		note "could not list the PRs open against '$default' (gh failed), so whether one is missing from the list is not known. The survey of the listed PRs stands."
+	fi
 	[ "$bad" -gt 0 ] || return 0
 	note "$bad of the listed PRs could not be read: see the \`outcome=unreadable\` lines. The others were surveyed without them."
 	exit 3
