@@ -2393,7 +2393,7 @@ const GRANT_CHECKS = 13;
 // role, so the section's `measurer` default — exercised on both legs above — is
 // not what a batch's measuring turn actually reads. Checked here, once, outside
 // the embeddable section, because that is where `worktreeContract` lives.
-const BATCH_CONTRACT_CHECKS = 10;
+const BATCH_CONTRACT_CHECKS = 11;
 {
   console.log("# wf-address-tasks.js — the batch's per-role contracts");
   const before = legOk + legFail;
@@ -2442,6 +2442,8 @@ const BATCH_CONTRACT_CHECKS = 10;
   const withCited = taskCycleConfig({ ...task, unresolvedCitations: own }, true, "off").scope.instructions;
   check("and they ride that task's assignment as a list to read", own.every((line) => withCited.includes(`- ${line}`)) && /not a verdict/.test(withCited), withCited);
   check("which sends the implementer nowhere near a stop", !/\bSTOP\b|do not (start|proceed|implement)|\bblock/i.test(withCited.slice(withCited.indexOf("## Citations"))), withCited);
+  const stamped = src.indexOf("task.unresolvedCitations = unresolvedCitationsFor(task.path, plan.resolution.taskChecks)");
+  check("the batch body picks them out for every task before the pipeline starts one", stamped > 0 && stamped < src.indexOf("\n  await runPipelinedBatch({ plan"), String(stamped));
   const plain = taskCycleConfig({ ...task, unresolvedCitations: [] }, true, "off").scope.instructions;
   check("a task with none is told nothing about citations", !/Citations/.test(plain) && plain === taskCycleConfig(task, true, "off").scope.instructions, plain);
 
