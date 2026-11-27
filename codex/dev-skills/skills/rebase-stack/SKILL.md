@@ -57,23 +57,10 @@ If neither exists, ask the user for the target branch.
 ### Delegated unattended mode
 
 Another skill may invoke `rebase-stack` without an interactive user only when its prompt supplies an explicit chain, explicitly authorizes execution, and states that every chain branch is a disposable snapshot.
-In that mode:
-
-- Validate and print the proposed chain for the record, but treat the parent prompt as confirmation and do not wait for another `go`.
-- Never re-derive, reorder, or drop branches from the chain, and never push or fetch.
-  (This bars dropping a *chain branch*; the `git rebase --skip` used for the "patch already represented in HEAD" trivial subtype is still expected.)
-- Resolve trivial conflicts as usual.
-- On the first non-trivial conflict outside a combined replay, abort the current rebase and stop; during a combined replay, abort and restore the whole run, then use the per-branch fallback to establish and stop at the actual branch boundary.
-  Do not leave conflict markers or an in-progress rebase for the parent agent.
-- If conflict resolution completes but validation cannot be repaired confidently, restore the whole run after a combined replay or reset the current disposable branch after a per-branch replay, then stop as Steps 4 and 6 prescribe.
-- Before returning, run `git clean -fd` to remove untracked leftovers (`git rebase --abort` and `git reset --hard` restore tracked files but leave `.orig`/build outputs) and confirm `git status --porcelain` is empty, so the parent can `git worktree remove` without `--force`.
-- **What these commands may reach.**
-  Every `git reset --hard` and `git clean -fd` this mode runs — the restore after a stop, the pre-return clean, and the clean-stop that follows a restore — is scoped to the disposable chain branch currently being processed (the caller's guide branch) and to the worktree this invocation was pointed at: never a canonical task branch, never a remote ref, never a sibling worktree.
-  The combined replay and combined-run restore are the only multi-ref writers: Step 4 gates the replay to exactly the disposable run branches, and its guarded `git update-ref --stdin` restore transaction reaches exactly those branches and their saved snapshot OIDs — never a canonical branch, remote ref, skipped branch, or branch outside that run.
-  `git clean -fd` is bounded to the tree it runs in; ref-moving commands are not — a worktree isolates the working tree, not the repository, so a `reset --hard` on the wrong branch or an incorrectly scoped ref transaction reaches every sibling worktree through the shared `.git`.
+Where the prompt that invoked this run gives all three, read `delegated-unattended-mode.md`, beside this file, in full before Step 1: it replaces the confirmation wait and every interactive stop below, and bounds what the run's resets and cleans may reach.
 
 Do not infer this mode merely because the caller is a subagent.
-Without all three guarantees — explicit chain, explicit authorization, and disposable branches — use the normal interactive confirmation and stopping behavior.
+Without all three guarantees — explicit chain, explicit authorization, and disposable branches — use the normal interactive confirmation and stopping behavior, and leave that file unread.
 
 ## What the skill does NOT do
 
@@ -115,7 +102,7 @@ One with none — a branch of a linear stack, or a snapshot ref left by an earli
 This is **heuristic, not metadata**: it can also catch an unrelated branch that shares a merge-base on the spine (e.g., `login-tests` accidentally branched from `feature/03`), which the confirmation listing lets the user filter out.
 
 - A `near=` line names a spine branch with no commit of its own, no open PR and no upstream: a snapshot ref, or a chain branch never published.
-  To carry it along, use the explicit `chain` form (that list is authoritative) or a deliberate manual `git rebase --update-refs --no-rebase-merges` after explicitly enumerating and approving every ref the replay would move and applying Step 4's all-worktree checkout check.
+  To carry it along, use the explicit `chain` form (that list is authoritative) or a deliberate manual `git rebase --update-refs --no-rebase-merges` after explicitly enumerating and approving every ref the replay would move and checking that none of them is checked out in another worktree.
 - A `merged=` line names a spine branch whose every commit the target already carries: a merged predecessor left behind.
   It is never a chain branch, but while it exists Step 4 replays the run it points into one branch at a time.
   Offer in the listing to delete it first (`git branch -d`, or the `prune-branches` skill); delete nothing without the user's word, and never in delegated unattended mode.
@@ -188,121 +175,49 @@ Skipped branches are **left entirely untouched**.
 
 ### Step 4 — Linear-run fast path and per-branch rebase loop
 
-After the chain is confirmed and any skipped branches have been removed, run `stack.sh segments <b1> ... <bN>` on it, in order: it divides the chain at every consecutive pair `X → Y` where `X`'s tip is not an ancestor of `Y`'s.
-Each `segment=run` line is a candidate run of at least two branches; a `segment=single` branch uses the per-branch loop.
-Process candidate runs and single-branch segments strictly left to right under one base-selection invariant: before qualifying or executing any segment `<first> ...`, set its `<segment-base>` to `<target>` if and only if `<first>` is the first branch of the entire confirmed chain; otherwise set it to the freshly rebased tip of `<first>`'s immediately preceding confirmed branch.
-Never choose the base from whether this is the first fast-path run or the first run of a particular kind.
-If a candidate run falls back, its first branch keeps that same `<segment-base>` and each later branch advances onto its freshly rebased immediate predecessor; after any segment succeeds, apply the invariant anew to the next segment.
+Run `stack.sh segments <b1> ... <bN>` on the confirmed chain, skipped branches removed, in stacking order.
+Process its lines strictly left to right: each `segment=run` line is a candidate for one combined replay, and a `segment=single` branch uses the per-branch loop.
+
+**One rule selects every base.**
+The first branch of the entire confirmed chain goes onto `<target>`; every other branch goes onto the freshly rebased tip of the confirmed branch immediately before it.
+A segment's `<segment-base>` is its first branch's base under that rule — never chosen from whether this is the first fast-path run or the first run of a particular kind — and a candidate run that falls back to the per-branch loop keeps it.
+
 For a candidate run `<first> ... <last>`, run `stack.sh qualify --base <segment-base> <first> ... <last>`.
-It never guesses a boundary: the run is replayed together only where every one of its checks holds, and any one failing sends the whole run to the per-branch loop.
 
-- **`combined`** → the run has one fork from the base (`fork=`), carries no merge and no commit off that line, is pointed into by exactly its own branches — no omitted or skipped chain branch and no unrelated local branch — has every intermediate tip actually replayed rather than dropped as patch-equivalent to the base, and has no branch checked out in another worktree.
-  Where it prints `detach-first=`, this worktree stands on a run branch: run `git checkout --detach <segment-base>` and qualify again before replaying.
-- **`per-branch`** → `reason=` names the check that failed; process the run's branches with the per-branch loop below.
-  A run whose fork already is the segment base needs no combined replay, and that loop's iterations safely no-op as appropriate.
+- **`per-branch`** → `reason=` names the check that failed; take the run's branches through the per-branch loop below.
+- **`combined`** → replay the run together:
+  1. Where it printed `detach-first=`, this worktree stands on a run branch: run `git checkout --detach <segment-base>` and qualify again before going on.
+  2. Run `stack.sh snapshot --stamp <stamp> <first> ... <last>`, with the stamp `preflight` printed.
+     On `conflict`, a snapshot of this stamp already holds another commit for that branch: stop and report it rather than overwrite it.
+  3. Run the `replay=` command `qualify` printed, exactly as printed.
+     Do **not** respell it as `--onto <segment-base> <fork>`: that makes `<fork>` the upstream used for cherry-pick dropping, so commits already represented on `<segment-base>` can be replayed instead of dropped.
+     Where it stops on a conflict, Step 5 applies.
+  4. Run `stack.sh verify --stamp <stamp> --base <segment-base> <first> ... <last>`.
+     On `verified`, the run stands.
+     On `postcondition-failed`, restore the run and use the per-branch loop from the same `<segment-base>`.
+     On `outside-moved`, a branch outside the run changed: stop and report it rather than hiding out-of-scope movement with a fallback.
 
-Whenever the instructions below say to restore an entire run, run `stack.sh restore --stamp <stamp> <first> ... <last>`.
-It detaches this worktree if it stands on a run branch, and moves every run branch back to its snapshot ref in one transaction, each update guarded by the commit the branch holds now, so it restores all of them or none.
-On `ref-moved`, or on any stop, report the concurrent or unexpected ref movement; do not start the fallback from a state that was not restored exactly.
+**To restore a run**, wherever these instructions call for it, run `stack.sh restore --stamp <stamp> <first> ... <last>`.
+On `restored`, every run branch is back on its snapshot.
+On any stop (`ref-moved`, `checked-out`, `no-snapshot`, `rebase-in-progress`) nothing was restored: report it, and the concurrent or unexpected ref movement it names, and do not start a fallback from a state that was not restored exactly.
 
-For a qualifying run:
+**The per-branch loop** takes every branch `X` not replayed in a run, in confirmed-chain order, each onto its `<new-base>` under the base rule above:
 
-1. **Save every pre-rebase ref before replaying anything.**
-   `stack.sh snapshot --stamp <stamp> <first> ... <last>` saves `refs/pre-rebase/<X>/<stamp>` for each branch, with the stamp `preflight` printed, and records every local branch's tip for the verification below.
-   These snapshots receive the same inspection and run-scoped cleanup treatment as the per-branch snapshots below.
-2. **Replay once from the last branch.**
-   Run the `replay=` command `qualify` printed, exactly as printed: `git rebase --update-refs --no-rebase-merges --no-fork-point <segment-base> <last-branch>`.
-   Do **not** respell it as `--onto <segment-base> <fork>`: that makes `<fork>` the upstream used for cherry-pick dropping, so commits already represented on `<segment-base>` can be replayed instead of dropped.
-3. **Verify exact ref movement and topology before accepting the run.**
-   `stack.sh verify --stamp <stamp> --base <segment-base> <first> ... <last>` requires that exactly the run's branches moved, each off its snapshot, onto the base, and each an ancestor of the next.
-   On `postcondition-failed`, restore the entire run and use the per-branch loop from the same `<segment-base>`.
-   On `outside-moved`, a branch outside the run changed: stop and report it rather than hiding out-of-scope movement with a fallback.
-4. **Handle conflicts under Step 5.**
-   Attribute a conflicted commit to `<first>` when it lies in `<fork>..<first-original-tip>`, or to the later branch `Y` whose original interval is `<previous-original-tip>..<Y-original-tip>`.
-   Trivial conflicts and accepted resolutions continue within the combined replay.
-   A non-trivial conflict that the agent cannot resolve confidently, or whose proposed resolution the user rejects, is the explicit exception to Step 5's normal interactive stop-in-place rule: record it, abort the combined replay, restore the entire run, and start the per-branch loop for the whole run from the same `<segment-base>`.
-   If that loop reaches the same conflict, do not ask the user to reconsider the same rejected or indeterminate resolution: in normal interactive mode leave that branch's per-branch rebase in progress for inspection; in delegated unattended mode abort and restore that current disposable branch, clean it, and stop.
-5. **Keep validation branch-gated.**
-   After a successful single replay and its postcondition check, apply Step 6 separately to every run branch attributed at least one in-file conflict, checking out each such branch to validate it; clean and `--skip`-only branch intervals still skip validation.
-   Do not make a repair commit on an intermediate run ref while its descendants already point past it.
-   On the first failure, inspect enough to decide whether a focused repair is clear.
-   If it is, restore the entire run and process it with the per-branch loop from the same `<segment-base>` so Step 6 applies the repair at the correct branch boundary and later branches inherit it; from that point Step 6 governs, including stopping at that branch if the attempted repair fails.
-   If no confident repair is apparent, restore the entire run and stop immediately without starting the fallback or touching later branches; delegated unattended mode also performs its clean-stop.
-   This is the fast-path exception to Step 6 and Step 7's usual rebased-but-failing interactive state.
-   Finish a successful run with `<last-branch>` checked out.
-
-For every branch `X` not processed by the fast path, use this loop in confirmed-chain order.
-Apply the segment-base invariant above: set `<new-base>` for the first branch of a fallback or singleton segment to that segment's already selected `<segment-base>`, then set `<new-base>` for every later branch in the same fallback to the freshly rebased immediately preceding confirmed branch:
-
-1. **Save pre-rebase ref.**
-   `stack.sh snapshot --stamp <stamp> <X>` saves `refs/pre-rebase/<X>/<stamp>`, with the one `YYYYMMDD-HHMMSS` stamp `preflight` printed, so every ref this run creates shares it.
-   These refs are not deleted automatically; document the cleanup pattern in the final summary — scoped to **this run's** refs (the shared timestamp, or the exact list saved), never the whole `refs/pre-rebase/` namespace.
-2. **Checkout.**
-   `git checkout <X>`.
-3. **Rebase.**
-   `git rebase --no-update-refs --no-rebase-merges <new-base>`.
+1. Run `stack.sh snapshot --stamp <stamp> <X>`, with the same stop on `conflict`.
+2. `git checkout <X>`.
+3. `git rebase --no-update-refs --no-rebase-merges <new-base>`.
    The flags state both behavior axes instead of inheriting `rebase.updateRefs` or `rebase.rebaseMerges` configuration.
-
-   **Important caveat — patch-id cascades.**
-   If the previous branch's rebase had to *resolve* a conflict (Step 5), the resolved commit's patch-id no longer matches the original still present in the descendant's history, so git will not auto-skip it and replaying it conflicts.
-
-   The right move in that case is **`git rebase --skip`** for that single commit.
-   See Step 5's "patch already represented in HEAD" rule.
-4. **Conflict handling** — see Step 5.
-5. **Validation** — see Step 6.
-6. **Move on** to the next branch.
+   Where it stops on a conflict, Step 5 applies, and Step 6 says whether the branch is then validated.
+4. Move on to the next branch.
 
 After the last branch in the chain, the source branch is checked out at its rebased tip.
 
 ### Step 5 — Conflict handling
 
-When `git rebase` halts on a conflict:
-
-**Combined-replay exception:** while the linear-run fast path is active, use Step 4.4 wherever the rules below would normally abort and stop in delegated unattended mode or leave an interactive rebase in progress.
-
-1. **Inspect the conflict.**
-   Read the conflicting files, the offending commit (`git show REBASE_HEAD`), and the recent history of the affected hunks.
-   Resolve conflicts hunk by hunk in place, preserving cleanly auto-merged changes elsewhere in each file.
-   Whole-file `git checkout --ours` or `--theirs` is safe only after inspecting the merged result and verifying that the file contains no cleanly auto-merged content from the other side; otherwise it can silently delete a sibling's already-shipped behavior with no conflict marker left behind.
-2. **Classify.**
-   A conflict is **trivial** if any of:
-   - It's a pure import-ordering or formatting collision.
-   - One side is an addition only and the other side is empty.
-   - It's a whitespace-only difference.
-   - The resolution is clearly traceable to a fix already applied earlier in this same rebase run (i.e., the same hunk's resolution was just chosen on a predecessor branch).
-   - **Patch already represented in HEAD.**
-     The incoming commit's content is *already on HEAD* — either literally (a true duplicate that patch-id should have skipped but didn't, because a predecessor's rebase mutated the patch-id — see Step 4's cascade caveat) or as a strict superset (HEAD has the same content plus refinements introduced by review-feedback fixups or by predecessor conflict resolutions).
-     The resolution is `git rebase --skip`, **not** an in-file edit; the recognition recipe below decides it.
-
-     **Recognition recipe (concrete)**: (a) every new file `REBASE_HEAD` adds (`A` lines in `git show --name-status REBASE_HEAD`) already exists on HEAD; AND (b) for every modified file, every hunk's *post-image* (the `+` lines) is already present at the corresponding location on HEAD (literally or refined by a later commit).
-     If both hold, `--skip`.
-     If (b) holds only partially, this is **not** the patch-already-represented case — fall through to non-trivial.
-
-   Otherwise it is **non-trivial**.
-3. **Trivial — resolve.**
-   Two paths depending on the trivial subtype:
-   - **In-file resolution** (import collisions, whitespace, predecessor-traceable): apply the merge, `git add` the resolved files, `git rebase --continue`.
-     Mention briefly in the running narration ("resolved trivial conflict in `<file>`: kept both imports") so the user can scan after the fact, but don't pause.
-   - **Patch already represented in HEAD**: run `git rebase --skip` (do *not* edit files).
-     Narrate one line: "skipped redundant commit `<short-sha>` — content already on rebased base".
-     Do not `git add` or `git rebase --continue` for this subtype; `--skip` advances the rebase by itself.
-4. **Non-trivial → stop unattended, otherwise propose and confirm.**
-   In delegated unattended mode outside a combined replay, record the conflicting files, offending commit, and why it is non-trivial; then run `git rebase --abort`, report the branch as the stop point, and return without touching subsequent branches.
-   The current disposable branch is restored to its pre-rebase tip; then apply the delegated-mode clean-stop (`git clean -fd`, empty `git status --porcelain`) before returning.
-   In normal interactive mode, present the conflict, the proposed resolution (with reasoning, including any traceable precedent), and ask the user to confirm before applying.
-   On user "go": apply, `git add`, `git rebase --continue` (or `git rebase --skip` if the proposed resolution is "skip this commit").
-   On user "no": use the combined-replay exception when it applies; otherwise stop the skill (see Step 7 below).
-5. **Normal interactive mode only: if the agent cannot determine a confident resolution at all** — e.g., the conflict involves intent that isn't apparent from the code or history — **stop the skill without aborting the rebase**.
-   Leave the rebase in progress (working tree contains conflict markers and `git rev-parse --git-path rebase-merge` points to the active state).
-   Tell the user clearly:
-   - Which branch is mid-rebase (`<X>`).
-   - Where the pre-rebase ref is saved.
-   - That the user can finish the rebase manually with `git rebase --continue` after resolving, or `git rebase --abort` to roll back to the pre-rebase ref.
-   - That subsequent branches in the chain have not been touched.
-   - That re-invoking the skill from the source branch (or any later branch) will produce a fresh, smaller chain detection on top of whatever state the user leaves things in.
-
-   Do **not** run `git rebase --abort` automatically.
-   The user may want to inspect the in-progress state.
+When a `git rebase` of Step 4 stops on a conflict, read `conflict-handling.md`, beside this file, in full before touching the conflict.
+Read it the first time a rebase of this run stops, and in a delegated unattended run too, where nobody can be asked what it says.
+It holds the trivial/non-trivial classification and what each allows, the `git rebase --skip` for a patch HEAD already carries, what a conflict inside a combined replay changes, and where a conflicted run stops.
+A run whose every rebase is clean leaves it unread.
 
 ### Step 6 — Validation
 
@@ -314,7 +229,7 @@ Skip validation entirely for:
 
 When validation is required:
 
-During validation after a combined replay, use Step 4.5 in place of items 3–4 below: an intermediate repair must be applied through the per-branch fallback, and an ambiguous or failed repair restores the combined run and stops.
+During validation after a combined replay, use `conflict-handling.md` → "Inside a combined replay" in place of items 3–4 below: an intermediate repair must be applied through the per-branch fallback, and an ambiguous or failed repair restores the combined run and stops.
 
 1. **Discover commands.**
    In order of preference:
@@ -343,7 +258,7 @@ The skill can stop at three points:
 - On non-trivial conflict the user rejects, or one the agent cannot resolve.
 - On validation failure that cannot be auto-fixed.
 
-A combined fast-path replay is never left as the stopped state; Steps 4.4 and 4.5 restore it first.
+A combined fast-path replay is never left as the stopped state; `conflict-handling.md` → "Inside a combined replay" restores it first.
 
 In normal interactive mode:
 
@@ -352,7 +267,7 @@ In normal interactive mode:
 - Subsequent chain branches are completely untouched.
 - All pre-rebase refs created so far are preserved.
 
-In delegated unattended mode, a stop instead restores the run or the current disposable branch as Steps 4–6 prescribe and leaves the worktree clean; only the completed prefix before the restored run or branch remains rebased.
+In delegated unattended mode, a stop instead restores the run or the current disposable branch as Step 6 and `conflict-handling.md` prescribe and leaves the worktree clean; only the completed prefix before the restored run or branch remains rebased.
 
 **Note on detached HEAD during in-progress rebase**: while a `git rebase` is paused mid-flight, the working tree is on a detached HEAD — `git branch --show-current` returns empty, which can be disorienting.
 Use `git status` (which reports the in-progress rebase, the branch being rebased, and the conflicted files) for orientation when resuming.
