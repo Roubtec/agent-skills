@@ -11,12 +11,17 @@
 # answer for the same main checkout, the one whose `.git` directory the
 # worktrees share. Both commands are idempotent.
 #
-# `run` is the whole bootstrap. Where `wt-bootstrap` is on PATH it is called
-# and its answer translated; where it is not, plain git does the same job:
+# `run` is the whole bootstrap, and its two paths do not enforce the same
+# things. Where `wt-bootstrap` is on PATH it is called and its answer
+# translated, refusals included: that path enforces powbox's layout (the
+# worktree roots are mountpoints, the harness's own root is tmpfs, the worktree
+# metadata is as durable as the worktrees). Where it is not on PATH plain git
+# does the job and enforces none of that, because those requirements describe
+# powbox and a machine without the helper is not assumed to be one:
 #   - the worktree base is `<main checkout>/.worktrees/$CONTAINER_NAME`, or
 #     `<main checkout>/.worktrees` where CONTAINER_NAME is unset
-#   - a base on a host-shared filesystem (9p, drvfs, virtiofs) is refused, as
-#     `wt-bootstrap` refuses it
+#   - the filesystem under the base is reported (`fstype=`, `host-shared=`)
+#     and nothing is refused on it
 #   - `git worktree prune`, then every directory under the base that holds no
 #     registered worktree is removed where it is empty and named where it is
 #     not; nothing with content is ever deleted
@@ -51,8 +56,14 @@
 #                                   `unknown` where no positive figure could
 #                                   be read
 #     fstype=<type>|unknown         via=git only; `unknown` where `findmnt`
-#                                   is not installed, and then nothing was
-#                                   refused on it
+#                                   is not installed
+#     host-shared=yes|no|unknown    via=git only. `yes` where that type is
+#                                   9p, drvfs or virtiofs: worktrees will sit
+#                                   on a filesystem shared with a host, slower
+#                                   and visible there. `no` says only that the
+#                                   type is none of those (a Linux host's bind
+#                                   mount reads as an ordinary type); `unknown`
+#                                   goes with `fstype=unknown`. Never a stop
 #     pruned=<name>                 one per empty leftover directory removed
 #     quarantined=<name>            via=wt-bootstrap: one per leftover with
 #                                   content that it moved aside
@@ -61,11 +72,13 @@
 #   outcome=stop      (exit 3) no worktree may be added until someone decides
 #     blocker=<why, on one line>
 #     wt-base=<absolute path>       where one had been settled
-#   The stops: `wt-bootstrap` reported a blocker (passed on verbatim) or is
-#   missing under `--require-helper`; the main checkout cannot be found (a
-#   bare repository, a submodule); the base is on a host-shared filesystem;
-#   the base is still not ignored once the rule is listed, which means a later
-#   rule un-ignores it. Only the last of these is reached after a write.
+#   The stops: `wt-bootstrap` reported a blocker (passed on verbatim), is
+#   missing under `--require-helper`, or is there without the `jq` its answer
+#   needs; the main checkout cannot be found (a bare repository, a submodule,
+#   a `--separate-git-dir` repository); the base is still not ignored once the
+#   rule is listed, which means a later rule un-ignores it. Only the last of
+#   these is reached after a write of the script's own: `wt-bootstrap` creates
+#   its roots before it reports a blocker.
 #
 # Exit status: 0 ready, 3 stop, 1 on a failure (not a git repository, git or
 # the filesystem refusing, a `wt-bootstrap` answer that is not its JSON
@@ -206,18 +219,19 @@ by_helper() {
 }
 
 by_git() {
-	local where type dir name kb
+	local where type shared dir name kb
 	WT_BASE="$ROOT/.worktrees${CONTAINER_NAME:+/$CONTAINER_NAME}"
 	# A base that is not on disk yet is no mount of its own: it will sit on
 	# whatever holds the nearest directory above it that exists.
 	where="$ROOT/.worktrees"
 	[ -d "$where" ] || where="$ROOT"
-	type=unknown
+	type=unknown shared=unknown
 	if command -v findmnt >/dev/null 2>&1; then
 		type="$(findmnt -nro FSTYPE -T "$where" 2>"$tmp/err")" && [ -n "$type" ] ||
 			fail "findmnt could not name the filesystem under $where: $(cat "$tmp/err")"
 		case "$type" in
-		9p | drvfs | virtiofs) stop "$where is on a host-shared filesystem ($type): worktrees there are the host bind mount wt-bootstrap refuses. Use a container-local or native filesystem (in powbox, run enable-worktrees and relaunch)." ;;
+		9p | drvfs | virtiofs) shared=yes ;;
+		*) shared=no ;;
 		esac
 	fi
 	record "via=git"
@@ -248,6 +262,7 @@ by_git() {
 	*) record "avail-bytes=$((kb * 1024))" ;;
 	esac
 	record "fstype=$type"
+	record "host-shared=$shared"
 }
 
 case "$COMMAND" in

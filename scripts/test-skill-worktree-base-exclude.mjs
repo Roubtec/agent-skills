@@ -112,6 +112,8 @@ const FULL = [
   ["runs the whole bootstrap", /`bootstrap\.sh run`/],
   ["makes a stop a blocker that creates no worktree", /`outcome=stop` is a blocker[^\n]*create no worktree/],
   ["forbids working around a stop", /never work around it/],
+  ["makes a failure that printed no outcome a blocker too", /Any other non-zero exit[^\n]*is a blocker too[^\n]*create no worktree/],
+  ["keeps a host-shared base a notice, not a blocker", /`host-shared=yes`[^\n]*is \*\*not\*\* a blocker[^\n]*tell the user once[^\n]*proceed/],
   ["takes the reported base and no other", /`wt-base=` path[^\n]*\band no other/],
   ["admits the preferred helper's container-scoped base beneath `.worktrees/`", /`<repo>\/\.worktrees\/\$CONTAINER_NAME`/],
   ["says the preferred helper establishes no ignore rule", /establishes no ignore rule/],
@@ -209,6 +211,7 @@ for (const [file, text] of [["wf-address-review.js", reviewWorkflow], ["wf-addre
   check("wf-address-review.js orders `address-tasks-bootstrap ignore`, once", calls.length === 1 && calls[0] === "`address-tasks-bootstrap ignore`", JSON.stringify(calls));
   const line = workflowLine(reviewWorkflow, "wf-address-review.js", "`address-tasks-bootstrap ignore`");
   check("wf-address-review.js: the script's stop is a blocker that attaches nothing", /`outcome=stop`[^.]*`ok: false`[^.]*attach nothing/.test(line));
+  check("wf-address-review.js: a failure that printed no outcome is a blocker that attaches nothing", /Any other exit, or no `outcome=` line, is a blocker too[^.]*attach nothing/.test(line));
   check("wf-address-review.js: points away from the tracked `.gitignore`", /NOT the tracked `\.gitignore`/.test(line));
   check("wf-address-review.js: forbids establishing the rule any other way", /Establish the rule no other way/.test(line));
 }

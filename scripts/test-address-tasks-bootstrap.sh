@@ -77,6 +77,13 @@ ln -s "$(command -v jq)" "$WORKDIR/with-jq/jq" || {
 }
 cat >"$WORKDIR/fake-findmnt/findmnt" <<'FAKE'
 #!/usr/bin/env bash
+# Like the real one, it has no answer for a path that is not on disk.
+target=""
+while [ $# -gt 0 ]; do
+	case "$1" in -T) target="${2:-}" ;; esac
+	shift
+done
+[ -e "$target" ] || { echo "findmnt: $target: can't find in /etc/fstab or mountinfo" >&2; exit 1; }
 type="$(cat "$FAKE_STATE/fstype")"
 [ "$type" != FAIL ] || { echo "findmnt: no such mount" >&2; exit 1; }
 printf '%s\n' "$type"
@@ -274,7 +281,8 @@ is "git: says which path answered" "$(val via)" git
 is "git: the base" "$(val wt-base)" "$R/.worktrees"
 is "git: the rule was added" "$(val ignore)" added
 is "git: origin answered" "$(val remote)" yes
-is "git: the filesystem is named" "$(val fstype)" ext4
+is "git: the filesystem is named, on a first run with no base on disk yet" "$(val fstype)" ext4
+is "git: ...and is not a host share" "$(val host-shared)" no
 case "$(val avail-bytes)" in '' | *[!0-9]* | 0) ok "git: free space is a positive figure" 1 ;; *) ok "git: free space is a positive figure" 0 ;; esac
 present "git: the base exists afterwards" "$R/.worktrees"
 ignored_everywhere git
@@ -357,20 +365,32 @@ lacks "orphans: a symlink is neither removed nor reported" "$OUT" "=link"
 present "orphans: ...and still there" "$R/.worktrees/link"
 clean orphans
 
+# Entered through a symlink, git still lists worktrees by their real paths: a
+# base built from the symlinked spelling would call every live worktree an
+# orphan.
 fresh
-echo 9p >"$FAKE_STATE/fstype"
 call run
-is "host share: a stop" "$RC" 3
-has "host share: naming the filesystem" "$(val blocker)" "host-shared filesystem (9p)"
-is "host share: no rule was written on the way out" "$(rules "$R/.git/info/exclude")" 0
-absent "host share: no base was created" "$R/.worktrees"
-for type in drvfs virtiofs; do
+git -C "$R" worktree add -q -b live "$R/.worktrees/live"
+ln -s "$R" "$WORKDIR/sym$n"
+DIR="$WORKDIR/sym$n/sub"
+call run
+is "symlinked path: ready" "$RC" 0
+is "symlinked path: the base is the real one" "$(val wt-base)" "$R/.worktrees"
+lacks "symlinked path: a registered worktree is not taken for an orphan" "$OUT" "=live"
+
+# A host share is reported and never refused: off powbox it is where an
+# ordinary checkout lives (WSL under /mnt/c, a devcontainer's bind mount).
+for type in 9p drvfs virtiofs; do
+	fresh
 	echo "$type" >"$FAKE_STATE/fstype"
 	call run
-	is "host share: $type is refused too" "$RC" 3
+	is "host share: $type is ready, not a stop" "$RC:$(first)" "0:outcome=ready"
+	is "host share: $type is named" "$(val fstype)" "$type"
+	is "host share: $type is reported as one" "$(val host-shared)" yes
+	present "host share: $type still gets its base" "$R/.worktrees"
 done
 call ignore
-is "host share: ignore alone does not read the filesystem" "$RC" 0
+lacks "host share: ignore alone does not read the filesystem" "$OUT" "host-shared="
 echo FAIL >"$FAKE_STATE/fstype"
 fresh
 call run
@@ -384,6 +404,7 @@ USE="$P_BARE"
 call run
 is "no findmnt: ready" "$RC" 0
 is "no findmnt: the filesystem is unknown, and said to be" "$(val fstype)" unknown
+is "no findmnt: ...and so is whether it is a host share" "$(val host-shared)" unknown
 is "no findmnt, no jq: the plain-git path needs neither" "$(val via)" git
 
 fresh
@@ -417,6 +438,7 @@ has "helper: pruned orphans, one per line" "$OUT" "pruned=a
 pruned=b"
 has "helper: quarantined orphans" "$OUT" "quarantined=c"
 lacks "helper: no plain-git keys" "$OUT" "fstype="
+lacks "helper: ...neither of them" "$OUT" "host-shared="
 has "helper: its diagnostics reach stderr" "$ERR" "helper diagnostic"
 is "helper: called once" "$(wc -l <"$FAKE_STATE/helper-calls" | tr -d ' ')" 1
 ignored_everywhere helper

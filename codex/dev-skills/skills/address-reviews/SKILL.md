@@ -145,9 +145,11 @@ In brief, all idempotent:
 1. **Prepare the worktree base and prune stale state.**
    Run `bootstrap.sh run` — the script in the sibling `address-tasks` skill folder, run by absolute path — and do none of what it does by hand.
    It settles the worktree base, makes it ignored, prunes stale worktree state, probes remote access and measures free space, then answers in `key=value` lines with `outcome=` first.
-   Where a `wt-bootstrap` helper is on PATH the script runs it for all of that but the ignore rule — the helper establishes no ignore rule, and reports `ok` whether or not one exists — and where it is absent plain git does the same job; the ignore rule is the script's own on both paths.
+   Where a `wt-bootstrap` helper is on PATH the script runs it for all of that but the ignore rule — the helper establishes no ignore rule, and reports `ok` whether or not one exists — and where it is absent plain git does the job, refusing nothing on the powbox layout checks that are the helper's alone; the ignore rule is the script's own on both paths.
    That rule goes in the repo-local exclude file, untracked and so dirtying nothing itself, and NOT in the tracked `.gitignore` — editing that would dirty the main checkout, which would later block freeing a batch branch it occupies.
    `outcome=stop` is a blocker: report its `blocker=` line, which names its own remedy, and create no worktree — never work around it by choosing another base or by listing the rule yourself.
+   Any other non-zero exit arrives with no `outcome=` line and is a blocker too: report what the script printed on stderr, and create no worktree.
+   `host-shared=yes`, which only the plain-git path prints, is **not** a blocker: tell the user once that the worktrees will live on a filesystem shared with the host — slower, and visible there — and proceed.
    **Stricter than the task batch:** here `remote=no` is a stop too — PR-number resolution and lease-safe publication cannot be trusted from stale refs.
    On `outcome=ready` with `remote=yes`, the `wt-base=` path is the `$WT_BASE` used below, and no other: it is `<repo>/.worktrees/` or a path beneath it (`<repo>/.worktrees/$CONTAINER_NAME` in a container), the one name the script's rule covers.
    Its `avail-bytes=` reading is the storage input to "Adaptive throttling"; where it reads `unknown`, measure it yourself (`df -k "$WT_BASE"`).
