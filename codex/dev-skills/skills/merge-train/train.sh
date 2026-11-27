@@ -451,7 +451,7 @@ why() { # outcome
 	draft) printf 'PR #%s is a draft.' "$PR" ;;
 	review) printf 'PR #%s has open review items (%s unresolved threads, %s reviewers requesting changes, review decision %s). They are the maintainer'"'"'s to settle: skip it, with every PR stacked on it.' "$PR" "$F_THREADS" "$F_CHANGES" "$F_DECISION" ;;
 	red) printf 'PR #%s has a failing lane. Read its log before re-running anything.' "$PR" ;;
-	unscheduled) printf 'PR #%s is green on every lane this head has, and lacks lanes of its full run: every workflow run this head has is complete without them, so none comes unless a later event starts a run. Whether it merges without them is yours to judge.' "$PR" ;;
+	unscheduled) printf 'PR #%s is green on every lane this head has, and lacks lanes of its full run: every workflow run this head has is complete without them; a run GitHub has yet to create looks the same. Whether it merges without them is yours to judge.' "$PR" ;;
 	waiting) printf 'PR #%s is not green yet: a lane is running, or the rollup does not hold the lanes of a full run.' "$PR" ;;
 	esac
 }

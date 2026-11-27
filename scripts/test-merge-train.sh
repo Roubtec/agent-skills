@@ -273,7 +273,7 @@ has "1: ...the runs asked for by this head" "$(cat "$FAKE/gh.log")" "repos/acme/
 has "1: ...and said to be the caller's to judge" "$ERR" "yours to judge"
 runs 1=completed 2=completed
 call check "${ARGS[@]}" --lane "Review / bot"
-is "1: a lane its workflow's finished run on this head did not bring will not come either (a job renamed)" "$(val outcome)" unscheduled
+is "1: a lane its workflow's finished run on this head did not bring is unscheduled too (a job renamed)" "$(val outcome)" unscheduled
 is "1: ...and is named so" "$(val unscheduled)|$(val missing)" "Review / bot|"
 runs 1=in_progress
 call check "${ARGS[@]}" --lane "Review / bot"
