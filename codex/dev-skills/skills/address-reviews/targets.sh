@@ -103,6 +103,21 @@
 # usage error. Needs gh. Written for bash 3.2 and later.
 set -u
 
+# gh 2.105 and later, where it takes its caller for a coding agent, ends a PR
+# read with a block on stderr that advertises `gh event listen`, and has no
+# switch for it. That block alone is dropped here, by its own first line and
+# the lines that continue it: every other line gh prints passes through, and
+# so does its exit status.
+gh() {
+	command gh "$@" 2>&1 >&3 3>&- | awk '
+		hint == 1 && index($0, "    gh event listen ") == 1 { hint = 2; next }
+		hint == 2 && index($0, "  - ") == 1 { next }
+		{ hint = 0 }
+		$0 == "hint: if you need to wait for this pull request to be reviewed, merged, or closed before continuing, use this instead of polling:" { hint = 1; next }
+		{ print }' >&2 3>&-
+	return "${PIPESTATUS[0]}"
+} 3>&1
+
 SEP="$(printf '\037')"
 TAB="$(printf '\t')"
 case "$0" in

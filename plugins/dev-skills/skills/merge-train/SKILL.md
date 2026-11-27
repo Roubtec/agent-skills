@@ -59,6 +59,9 @@ Carry every such note through the run.
 
 Run `train.sh survey --repo <owner>/<repo> <PR numbers…>`.
 It prints one line per PR (its `check` outcome, base, `parent=`, head, mergeability, review decision, open threads, CI, passing lanes, file count) and a `shared=` line for each file two or more of them touch.
+An `outcome=unreadable` line is a listed number the survey could not read, and its `reason=` says why.
+A `no-such-pr` is a number the repository has no pull request for (a typo, an issue, another repository's PR): name each to the user before starting, and run the train without it unless they correct it.
+A `gh-failed` is a PR that may well exist and be ready: survey that number again once, and if it is still unreadable, ask the user before starting rather than leave it out.
 From that, and from the diffs where a `shared=` line or a migration calls for a look, work out and tell the user:
 
 - **Stacks.**
@@ -71,6 +74,8 @@ From that, and from the diffs where a `shared=` line or a migration calls for a 
   Migration timestamps (see *Ordering*), and among the `shared=` files the counters several PRs bump and the generated artifacts several PRs regenerate.
 - **The plan:** order, which PRs you expect to merge without a fresh CI run, and what you will leave unmerged.
   A PR that is passing on its own will likely pass after rebase, so expect to merge it right after the rebase unless *Merge now or wait* says a fresh run is advisable.
+
+An `unlisted=` line is a PR open against the default branch and not on the list (`unlisted=unknown`: there may be more): name them once, with whatever the preflight asks or in the plan when it asks nothing, and leave adding one to the user.
 
 If any listed PR shows `outcome=review`, name those PRs and their items, together with any PRs stacked on them.
 Ask the user to choose: skip those PRs and merge the rest, or not start the entire train at all.

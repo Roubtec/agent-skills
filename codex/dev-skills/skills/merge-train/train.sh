@@ -49,6 +49,21 @@
 #         one is based on, `-` for none) head= mergeable= review= threads= ci=
 #         lanes= files=. Then one line per file two or more of them touch:
 #           shared=<path> TAB <PR>,<PR>...
+#         A listed PR that could not be read gets its line all the same, and
+#         the others are surveyed without it:
+#           pr=<N> TAB outcome=unreadable TAB reason=<no-such-pr|gh-failed>
+#         `no-such-pr`: the repository has no pull request of that number.
+#         `gh-failed`: its standing or its files could not be asked for.
+#           outcome=surveyed    every listed PR was read
+#           outcome=incomplete  an `outcome=unreadable` line is among them
+#         A survey in which gh answered for none of them is a failure.
+#         Last, one line per PR that is open against the default branch and
+#         not on the list, of the 100 most recently created:
+#           unlisted=<N> TAB <head branch> TAB <title>
+#         These are information: the outcome and the exit status are the
+#         listed PRs' alone. `unlisted=unknown` says those lines are not the
+#         whole set: the listing failed or came back full, or no listed PR
+#         was read to name the default branch.
 # rebase  Brings the worktree's branch level with the PR head where that loses
 #         nothing, pins the default branch's tip, and rebases onto it with
 #         `--no-update-refs --no-rebase-merges`. `--head` is the head whose
@@ -98,6 +113,21 @@
 # read cleanly (`check` exits 3 on every outcome but ready), 1 on a failure
 # (network, gh), 64 on a usage error. Needs gh. Written for bash 3.2 and later.
 set -u
+
+# gh 2.105 and later, where it takes its caller for a coding agent, ends a PR
+# read with a block on stderr that advertises `gh event listen`, and has no
+# switch for it. That block alone is dropped here, by its own first line and
+# the lines that continue it: every other line gh prints passes through, and
+# so does its exit status.
+gh() {
+	command gh "$@" 2>&1 >&3 3>&- | awk '
+		hint == 1 && index($0, "    gh event listen ") == 1 { hint = 2; next }
+		hint == 2 && index($0, "  - ") == 1 { next }
+		{ hint = 0 }
+		$0 == "hint: if you need to wait for this pull request to be reviewed, merged, or closed before continuing, use this instead of polling:" { hint = 1; next }
+		{ print }' >&2 3>&-
+	return "${PIPESTATUS[0]}"
+} 3>&1
 
 TAB="$(printf '\t')"
 case "$0" in
@@ -378,7 +408,7 @@ cmd_survey() {
 	parse "$@"
 	[ -z "$PR" ] || usage "survey takes the PR numbers as plain arguments"
 	[ -n "$PRS" ] || usage "survey needs at least one PR number"
-	local n out rc tmp lines="" branches="" parent files o
+	local n out rc tmp branches="" parent files o good="" bad=0 answered="" default="" open
 	for n in $PRS; do
 		case "$n" in
 		*[!0-9]*) usage "'$n' is not a PR number" ;;
@@ -387,37 +417,75 @@ cmd_survey() {
 	tmp="$(mktemp -d "${TMPDIR:-/tmp}/train.XXXXXX")" || fail "could not create a temporary directory."
 	# shellcheck disable=SC2064 # expand now: the directory this run made
 	trap "rm -rf '$tmp'" EXIT
+	: >"$tmp/errs"
 	for n in $PRS; do
 		rc=0
 		out="$(bash "$SELF" check --repo "$REPO" --pr "$n" 2>"$tmp/err")" || rc=$?
 		case "$rc" in
-		0 | 3) ;;
-		*)
-			cat "$tmp/err" >&2
-			fail "could not survey PR #$n."
+		0 | 3)
+			if gh pr diff "$n" --repo "$REPO" --name-only >"$tmp/files.$n" 2>"$tmp/err"; then
+				printf '%s\n' "$out" >"$tmp/check.$n"
+				good="$good $n"
+				answered=1
+				[ -n "$default" ] || default="$(field default "$out")"
+				branches="$branches$(field branch "$out")$TAB$n
+"
+				continue
+			fi
 			;;
 		esac
-		printf '%s\n' "$out" >"$tmp/check.$n"
-		gh pr diff "$n" --repo "$REPO" --name-only >"$tmp/files.$n" || fail "could not list the files PR #$n touches (gh failed)."
-		branches="$branches$(field branch "$out")$TAB$n
-"
+		bad=$((bad + 1))
+		# The one failure that is an answer: gh asked, and GitHub has no such PR.
+		if grep -F -q "Could not resolve to a PullRequest with the number of $n." "$tmp/err"; then
+			echo no-such-pr >"$tmp/why.$n"
+			answered=1
+			# gh's own line and no more: the child's "gh failed" is not true of it.
+			grep -F "Could not resolve to a PullRequest" "$tmp/err" >>"$tmp/errs"
+		else
+			echo gh-failed >"$tmp/why.$n"
+			cat "$tmp/err" >>"$tmp/errs"
+		fi
 	done
-	say "outcome=surveyed"
+	cat "$tmp/errs" >&2
+	[ -n "$answered" ] || fail "could not read any of the listed PRs in $REPO (gh failed). Nothing was surveyed."
+	if [ "$bad" -gt 0 ]; then say "outcome=incomplete"; else say "outcome=surveyed"; fi
+	[ -z "$default" ] || say "default=$default"
 	for n in $PRS; do
+		if [ -f "$tmp/why.$n" ]; then
+			say "pr=$n${TAB}outcome=unreadable${TAB}reason=$(cat "$tmp/why.$n")"
+			continue
+		fi
 		out="$(cat "$tmp/check.$n")"
 		o="$(field outcome "$out")"
-		[ -z "$lines" ] && say "default=$(field default "$out")"
-		lines=1
 		parent="$(printf '%s' "$branches" | awk -F "$TAB" -v b="$(field base "$out")" -v me="$n" '$1 == b && $2 != me { print $2; exit }')"
 		files="$(awk 'NF' "$tmp/files.$n" | sort -u | awk 'END { print NR }')"
 		say "pr=$n${TAB}outcome=$o${TAB}base=$(field base "$out")${TAB}parent=${parent:--}${TAB}head=$(field head "$out")${TAB}mergeable=$(field mergeable "$out")${TAB}review=$(field review "$out")${TAB}threads=$(field threads "$out")${TAB}ci=$(field ci "$out")${TAB}lanes=$(field lanes "$out")${TAB}files=$files"
 	done
-	for n in $PRS; do
+	for n in $good; do
 		awk 'NF' "$tmp/files.$n" | sort -u | awk -v n="$n" -v t="$TAB" '{ print $0 t n }'
 	done | sort -t "$TAB" -k1,1 -s | awk -F "$TAB" '
 		$1 != path { if (count > 1) print "shared=" path "\t" list; path = $1; list = $2; count = 1; next }
 		{ list = list "," $2; count++ }
 		END { if (count > 1) print "shared=" path "\t" list }'
+	if [ -z "$default" ]; then
+		say "unlisted=unknown"
+		note "no listed PR was read, so the default branch is not known and the open PRs that are not on the list were not looked for."
+	elif open="$(gh pr list --repo "$REPO" --state open --base "$default" --limit 100 --json number,headRefName,title \
+		--jq '.[] | "\(.number)\t\(.headRefName)\t\(.title | gsub("[[:cntrl:]]+"; " "))"')"; then
+		printf '%s\n' "$open" | awk -F "$TAB" -v listed="$PRS" '
+			BEGIN { n = split(listed, a, " "); for (i = 1; i <= n; i++) on[a[i] + 0] = 1 }
+			$1 ~ /^[0-9]+$/ && !(($1 + 0) in on) { print "unlisted=" $0 }'
+		if [ "$(printf '%s\n' "$open" | awk 'NF { n++ } END { print n + 0 }')" -ge 100 ]; then
+			say "unlisted=unknown"
+			note "100 PRs are open against '$default', which is as many as were asked for: there may be more that are not on the list."
+		fi
+	else
+		say "unlisted=unknown"
+		note "could not list the PRs open against '$default' (gh failed), so whether one is missing from the list is not known. The survey of the listed PRs stands."
+	fi
+	[ "$bad" -gt 0 ] || return 0
+	note "$bad of the listed PRs could not be read: see the \`outcome=unreadable\` lines. The others were surveyed without them."
+	exit 3
 }
 
 # Is $1 an ancestor of $2? A probe that could not run is neither answer.

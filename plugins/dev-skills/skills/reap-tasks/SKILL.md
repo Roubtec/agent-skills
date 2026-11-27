@@ -15,6 +15,9 @@ An ordinary no-argument sweep retains its existing inventory flow: discover cand
 No arguments never means a glob over `done/` or permission to re-verify it.
 Reconcile the returned packet against the list you handed it: every deduplicated raw pointer must appear either in some path's `selectedBy` or as a `not-found` diagnostic, and a pointer the packet accounts for nowhere is a resolution failure to report, never a silently smaller batch; and no `selectedBy` or `not-found` raw value may name a pointer you never handed it — a packet that invents an input is the same resolution failure to report, never extra work to admit.
 
+The one exception is a list that needs no resolving: where every pointer is a task number, and one recursive listing of the task subtree shows each of those full numbers on exactly one file, directly in the task folder itself, the orchestrator may resolve the list itself, treating each such file as a number-selected unambiguous `active` path, and says in its report that it resolved the list inline.
+Any path, glob, miss, duplicate, letter-suffixed or unpadded number, or match outside the task folder itself sends the whole list to the resolver as above.
+
 Use the packet's `selectedBy` provenance to apply policy.
 A path selected by an explicit path or glob is reaped exactly as it was before this additive preflight, whether its report context is `active`, `done`, `deferred`, `ambiguous`, or `outside-subtree`; if both explicit and number provenance selected it, explicit selection wins.
 A number-selected unambiguous `active` path is eligible for verification immediately; a number-selected unambiguous `deferred` path becomes eligible only after the maintainer explicitly includes it in an interactive run and is excluded hands-off.

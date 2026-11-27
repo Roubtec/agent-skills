@@ -334,6 +334,8 @@ For the actionable items:
 - **Small/surgical** → fix directly in your own context, committing at logical milestones.
 - **Large/multi-file/exploratory** → spawn a **Fixer** subagent (see Architecture and the prompt sketch below).
   One at a time; await its commits before moving on.
+- **Reproduce what a finding names:** where a finding names the conditions it fails under and they can be built cheaply, build them and watch it fail before changing anything and pass after, then hand the recipe to the Reviewer in step 6.
+  Where they cannot be built, say so in the reply.
 - **Preclude repeat comments:** for each pattern you fix, grep the PR's changed files and closely related code for the **same offending pattern** and fix those too, so the next review round doesn't re-raise it.
   Mention these proactive fixes in the summary.
 - Keep commits buildable where practical, and validate at `review-cycle`'s tiers: the round tier while iterating, and the delivery tier — the full applicable sanity set — on the state you publish, before step 7 pushes.
