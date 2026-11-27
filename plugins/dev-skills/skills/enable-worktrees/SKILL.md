@@ -53,74 +53,54 @@ The `.worktrees` entry below is then a harmless **fallback** — skipped when th
 ## Procedure
 
 Operate on the current repository only.
-Every step is idempotent and surgical — preserve unrelated content, comments, and formatting, and never remove shadow entries or gitignore lines you did not add.
+The facts come from `probe.sh` in the sibling `declare-shadows` skill folder, run by its path: it only reads, it mounts and prunes nothing, and its header (`probe.sh --help`) defines every field named below.
+Every edit is idempotent and surgical — preserve unrelated content, comments, and formatting, and never remove shadow entries or gitignore lines you did not add.
 
-1. **Locate the repo root.**
-   `ROOT="$(git rev-parse --show-toplevel)"`.
-   If this is not a git repository, stop and tell the user — worktrees require git.
+1. **Probe.**
+   Run `probe.sh worktrees` from the repository's main checkout; `repo=` is the root, `$ROOT` below.
+   Only `outcome=probed` lets the run continue.
+   On `not-a-repository`, stop and tell the user — worktrees require git.
+   On `malformed`, a `shadow:` value in `.powbox.yml` or in an active override is not a list of non-empty string paths — null, a scalar, a mapping, or a list containing a null, a collection, or an empty string — and each `malformed=` line names the file: stop, report, and write **nothing at all** — not `.powbox.yml`, not `.gitignore` — rather than coercing a pathname or inventing a list inside a user-local file.
+   An empty list is well-formed, and deliberately so — it disables the committed declarations, exactly the case step 2 exists to catch.
+   On `no-yq`, a powbox file exists and nothing here can read it.
+   `checkout=linked` is a linked worktree, which powbox never mounts on: run the probe from the main checkout instead.
 
-2. **Reconcile `.powbox.yml` — checking for a local override first.**
-   The local override described above replaces the committed list wholesale: `detect-shadows.sh` reads `$ROOT/.powbox.local.yml` instead and logs `detect-shadows: shadow list overridden by .powbox.local.yml`. powbox bakes `detect-shadows.sh` onto `PATH` in its containers, so it is the authority for how the effective shadow list is derived and every claim here can be checked against the script itself.
-   Use powbox's own test, not a variant of it, and keep both of its halves: the override counts only when `[ -f "$ROOT/.powbox.local.yml" ]` holds **and** `yq -r 'has("shadow")' "$ROOT/.powbox.local.yml" 2>/dev/null` prints `true`.
-   Guard the `yq` call on that existence test rather than running it unconditionally — the `2>/dev/null` above already silences the error a missing file raises, and the answer is the same either way, so the guard is hygiene rather than a behaviour fix — and treat a parse failure on a file that is there as no override either, because powbox does: it falls back to `.powbox.yml`, which is then genuinely the effective list.
-   Presence alone is not enough: a local file with only `ctx:` overrides nothing, so the committed list stays the effective one and the reconciliation below proceeds normally.
-   Whenever that file exists at all — override or not — run `git -C "$ROOT" check-ignore -q -- .powbox.local.yml` and tell the user when it is not ignored: the file is user-local, powbox's launcher only *warns* about the gap, and this skill never stages or commits it (see step 6).
+2. **Reconcile `.powbox.yml` — reading the override first.**
+   `override=active` is the local override described above: `detect-shadows.sh` reads `$ROOT/.powbox.local.yml` instead of the committed list and logs `detect-shadows: shadow list overridden by .powbox.local.yml`.
+   The probe uses powbox's own test, not a variant of it, and keeps both of its halves — the file is there, and `yq -r 'has("shadow")'` on it prints `true` — so presence alone is not enough: a local file with only `ctx:` overrides nothing, and the committed list stays the effective one.
+   `powbox_local_yml=unparseable` is no override either, because powbox takes none from a file it cannot parse: it falls back to `.powbox.yml`, which is then genuinely the effective list.
+   Whenever `powbox_local_yml_ignored=no` — override or not — tell the user: the file is user-local, powbox's launcher only *warns* about the gap, and this skill never stages or commits it (see step 6).
 
-   An active `shadow:` has to be a list of non-empty string paths before you act on it.
-   Null, a scalar, a mapping, or a list containing a null, a collection, or an empty string is malformed: stop, report, and write **nothing at all** — not `.powbox.yml`, not `.gitignore` — rather than coercing a pathname or inventing a list inside a user-local file.
-   An empty list is well-formed, and deliberately so — it disables the committed declarations, exactly the case this step exists to catch.
-
-   Then read `$ROOT/.powbox.yml` if it exists.
-   - Absent → create it with a `shadow:` list containing the three literal entries above.
-   - Present → ensure the `shadow:` list contains each of the three entries and add any that are missing.
+   Then give `.powbox.yml` every root whose `worktree_root=` line reads `committed=no`.
+   - `powbox_yml=absent` → create it with a `shadow:` list containing the three literal entries above.
+   - Present → add the missing entries to its `shadow:` list.
      **Keep every existing entry** (other shadow paths, monorepo `node_modules` globs, etc.) untouched.
-     If the file has a `shadow:` key that is malformed by the same rule, stop and report rather than rewriting it.
 
-   `.powbox.yml` gets the three entries either way — it is the durable, shared record every teammate and future container inherits — but the override's list is the one that mounts.
-   If it already carries all three roots, the effective list is compliant and there is nothing to resolve (step 5 still verifies it) — but `.powbox.yml` is still replaced wholesale, so record that too and name any of its entries the override lacks: those are the declarations that stay unmounted.
+   `.powbox.yml` gets the three entries either way — it is the durable, shared record every teammate and future container inherits — but an active override's list is the one that mounts.
+   If all three roots read `effective=yes`, the effective list is compliant and there is nothing to resolve (step 5 still verifies it) — but `.powbox.yml` is still replaced wholesale, so record that too and name its entries the override lacks, the `override_drops=` lines: those are the declarations that stay unmounted.
    Otherwise say plainly that what you wrote is inert, and confirm one of two resolutions before editing a user-local file: add the three entries to the override's `shadow:` list, keeping its existing entries and its other keys untouched; or have the user retire the override by dropping its `shadow:` key so the committed list takes effect.
-   Retiring is not free: name the entries it would stop declaring — every path the override holds and `.powbox.yml` does not — and note that `shadow-refresh.sh` only adds mounts, so each keeps its tmpfs, and its host-invisible writes, until the next container start.
+   Retiring is not free: name the entries it would stop declaring — the `override_only=` lines, every path the override holds and `.powbox.yml` does not — and note that `shadow-refresh.sh` only adds mounts, so each keeps its tmpfs, and its host-invisible writes, until the next container start.
 
 3. **Reconcile `.gitignore`.**
-   Ensure `$ROOT/.gitignore` ignores `.worktrees/` and `.claude/worktrees/`.
-   - Accept an existing equivalent entry (`.worktrees` without a trailing slash also matches the directory).
-     Only add what is missing, under a short comment such as `# powbox git worktrees (container-local; never commit working trees)`.
+   `$ROOT/.gitignore` has to ignore `.worktrees/` and `.claude/worktrees/`, and `ignored=shared` on a root's line says a committed rule already does.
+   - The probe asks git rather than matching text, so an existing equivalent entry is accepted (`.worktrees` without a trailing slash also matches the directory).
+     Only add what reads `no`, or `unshared` — a rule teammates do not have, whose source `rule=` names — under a short comment such as `# powbox git worktrees (container-local; never commit working trees)`.
    - Do **not** add `.git/worktrees`.
 
 4. **Guard against leaked tracking.**
-   Run `git -C "$ROOT" ls-files -- .worktrees .claude/worktrees`.
-   If anything is tracked, `git -C "$ROOT" rm -r --cached` it (keeping the working copy) so worktree contents stop being committed.
+   A root whose line reads other than `tracked=0` has files in the index.
+   `git -C "$ROOT" rm -r --cached -- <root>` them (keeping the working copy) so worktree contents stop being committed.
    Report what you untracked.
 
 5. **Apply immediately in this session — optional, except after an override.**
    Committed declarations take effect automatically at the *next* container start.
-   To shadow the directories now, in the running container, without relaunching:
+   To shadow the directories now, in the running container, without relaunching, run `shadow-refresh.sh "$ROOT"` and then the probe again.
 
-   ```bash
-   shadow-refresh.sh "$ROOT"
-   for root in "$ROOT/.worktrees" "$ROOT/.claude/worktrees" "$ROOT/.git/worktrees"; do
-     mountpoint -q "$root" || { echo "Unsafe worktree root (not a mountpoint): $root" >&2; exit 1; }
-     findmnt -no TARGET,FSTYPE -T "$root"
-   done
-   # Harness working trees stay ephemeral tmpfs.
-   [ "$(findmnt -nro FSTYPE -T "$ROOT/.claude/worktrees")" = tmpfs ] ||
-     { echo "Unsafe harness worktree root (expected tmpfs): $ROOT/.claude/worktrees" >&2; exit 1; }
-   # Per-worktree git metadata must be durable (bound from the volume, non-tmpfs)
-   # whenever .worktrees is the persistent volume — a tmpfs .git/worktrees there
-   # would be lost on recycle. (Both tmpfs together is the volume-less fallback.)
-   wt_fs="$(findmnt -nro FSTYPE -T "$ROOT/.worktrees")"
-   gitwt_fs="$(findmnt -nro FSTYPE -T "$ROOT/.git/worktrees")"
-   if [ "$wt_fs" != tmpfs ] && [ "$gitwt_fs" = tmpfs ]; then
-     echo "Unsafe: .git/worktrees is tmpfs while .worktrees is persistent — worktrees would not survive recycle. Rebuild/relaunch on an image with durable worktree metadata." >&2; exit 1
-   fi
-   case "$(findmnt -nro FSTYPE -T "$ROOT/.worktrees")" in
-     9p|drvfs|virtiofs) echo "Unsafe .worktrees host filesystem" >&2; exit 1 ;;
-   esac
-   ```
-
+   `mounts=healthy` is the answer to require; each `unhealthy=` line names a root and what is wrong with it.
    `.worktrees` is healthy when it is its own mount on any container-local filesystem — normally the per-project volume, or tmpfs as a fallback.
    `.git/worktrees` must be a mountpoint and, when `.worktrees` is the persistent volume, durable (non-tmpfs, bound from it); `.claude/worktrees` must be tmpfs.
    If a check fails, tell the user to rebuild the powbox image on the host (`./build.sh all`) and relaunch; the repo config you wrote is still correct.
+   `mounts=unknown` is a machine with no mount table to ask, which is not a powbox container: say so, and that nothing was verified.
 
    Skip this step only when step 2 found no override.
    A repo whose declarations may be inert is the one case where skipping the verification hides the failure completely — so once step 2 is settled — resolution applied, or the override already carrying the three roots — run these checks rather than deferring them to the next container start, and treat a failure as the run's outcome.
