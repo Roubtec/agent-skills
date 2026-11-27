@@ -92,12 +92,14 @@ The same bootstrap serves this skill and `address-reviews`:
 
 Use the subagent interface Codex exposes in the current session.
 In interactive Codex sessions, ask Codex in natural language to spawn the appropriate built-in subagents and wait for their results.
-In tool-enabled sessions, this capability is typically exposed through tools such as `multi_agent_v1.spawn_agent`, `multi_agent_v1.wait_agent`, and `multi_agent_v1.close_agent`; use those names only when they are present in the current tool listing.
+In tool-enabled sessions, this is a spawn tool and a wait tool, seen as `collaboration.spawn_agent` and `collaboration.wait_agent`, and in earlier releases as `multi_agent_v1.spawn_agent`, `multi_agent_v1.wait_agent`, and `multi_agent_v1.close_agent`; read the current tool listing before the first spawn and use only the names and parameters present in it.
 
-Spawn implementers as `worker` agents and reviewers as `explorer` agents.
+Spawn implementers as `worker` agents and reviewers as `explorer` agents where the spawn takes a role; where it takes none, the two words name what the prompt must say: a `worker` may edit and commit in the location it is assigned, and an `explorer` edits nothing.
 Do not fork context; instead, pass each subagent a self-contained prompt with the full task content and the worktree contract.
+Where the spawn carries a fork parameter (`fork_turns`), set it to none: it defaults to the whole history.
 Omit model overrides unless the user explicitly asks for a different model.
 After each subagent finishes, close that agent thread when it is no longer needed.
+Where the session offers no close operation, a finished agent is closed once you hold its result and send it nothing further, by whatever tool the session has for that (`send_input`, `followup_task`, `send_message`); that is also all "never continue a prior thread" asks.
 No custom agent personas (`~/.codex/agents/*.toml`) are required.
 
 Parallelism is allowed only across subagents that are assigned distinct worktree paths.

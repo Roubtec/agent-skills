@@ -2040,7 +2040,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // rather than narrowing the scan: the scan's job is catching a builder
   // interpolation this template failed to resolve, not a bash parameter
   // expansion the boundary text states on purpose.
-  const KNOWN_LITERAL_SPANS = ["${DC:?dc-enter returned no path — see its error above; if it is not installed, install it from the dev-skills plugin bin/}"];
+  const KNOWN_LITERAL_SPANS = ["${DC:?dc-enter returned no path — see its error above; if it is not installed, install it from the dev-skills plugin bin/}", "${P:?}"];
   const unrendered = [];
   const rendered = {};
   for (const [what, { flags, args, packet }] of Object.entries(arms)) {

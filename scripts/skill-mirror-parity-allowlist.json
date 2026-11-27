@@ -3,7 +3,7 @@
     "skill": "address-review",
     "heading": "### Codex subagent execution",
     "side": "codex",
-    "reason": "Codex names its multi_agent_v1 spawn/wait/close tools and worker/explorer roles in a section of its own; the Claude mirror's Agent tool needs no such section."
+    "reason": "Codex names its spawn/wait tools and worker/explorer roles in a section of its own; the Claude mirror's Agent tool needs no such section."
   },
   {
     "skill": "address-reviews",
@@ -21,7 +21,7 @@
     "skill": "address-tasks-serialized",
     "heading": "### How to spawn a subagent in Codex",
     "side": "codex",
-    "reason": "The serialized executor's Codex spawn recipe (multi_agent_v1 tools, worker/explorer roles, no context fork); Claude's Agent tool is described inline."
+    "reason": "The serialized executor's Codex spawn recipe (spawn/wait tools, worker/explorer roles, no context fork); Claude's Agent tool is described inline."
   },
   {
     "skill": "resolve-open-questions",

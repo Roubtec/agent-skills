@@ -19,6 +19,11 @@ Any perturbation-style control — gutting a check, perturbing a predicate to co
 
 **A sweep is enumerated, never asserted.**
 Told to fix a pattern *everywhere*, return the explicit enumeration of the search space with a per-item verdict, and claim a completed sweep in a commit message only where you enumerated that space.
+Build that space from at least two independent patterns and from the branch's own diff as well as matches on the subject, and report it as a floor, not a total.
+
+**A flake unrelated to your work item is not investigated, stabilised, or escalated as an open question.**
+That takes evidence, not a hunch: the failure reproduces on the base, or the same head has gone green, within one rerun.
+Where nothing else is actionable and a re-run is the short way to a merge, report the lane to be re-run; where a review cycle is under way and the branch is changing anyway, or the flake has been seen before, commit the diagnosis-only follow-up task from what is already in hand.
 
 **Ship only comments that outlive the PR.**
 A code comment earns its place only where it still does once the PR closes: why an arbitrary constant or choice is what it is, an external constraint that shaped a decision, a non-obvious invariant or tradeoff the code relies on but cannot express (why an ordering prevents a deadlock, why apparently redundant synchronization is needed), or a still-standing deliberately-overruled review decision, which you *may* record so the point is not re-raised.
@@ -28,8 +33,11 @@ Rationale addressed to the people watching this diff goes in your packet, for th
 Carry current rationale only: where a change supersedes a commented decision, the standing overruled one included, replace that comment rather than appending to it, and delete a comment the code has outgrown instead of precision-editing it.
 
 **Finish inside your own turn, and reap what you start.**
-Nothing resumes you, so never end your turn waiting for a notification, a callback, or a child you launched: bound and wait on anything you start, reap it before returning, and leave no process of your own running.
-Launch no peer review of your own; the cycle runs its own beside the Reviewer.
+Whether or not your harness would resume you, never end your turn waiting for a notification, a callback, or a child you launched: bound and wait on anything you start, reap it before returning, and leave no process of your own running.
+A suite longer than your tool's default timeout runs in the foreground with an explicit timeout that covers it, never in the background with the turn ended.
+Launch no peer review of your own, and spawn no reviewer of your own under a round cap of your own, which is the same thing by another route; the cycle runs both itself.
+A helper you do spawn is briefed to report to you alone, and you collect it before you return.
+Open, edit, mark ready, or comment on no pull request unless your prompt spells that out; publication is the orchestrator's.
 And write to no shared task or plan tracker (the `TaskCreate`/`TaskUpdate`/`TaskList` tools, where your harness has them).
 
 **What you return:** what changed, the disposition of every finding you were handed, and the final SHA — with `git status --porcelain` empty, every intended change committed, and no Git operation left in progress.

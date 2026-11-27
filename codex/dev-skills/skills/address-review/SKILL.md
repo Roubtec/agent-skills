@@ -162,10 +162,12 @@ Three top-level subagent roles plus one CLI peer:
 ### Codex subagent execution
 
 Use the subagent interface exposed in the current session.
-In tool-enabled sessions this is typically available through tools such as `multi_agent_v1.spawn_agent`, `multi_agent_v1.wait_agent`, and `multi_agent_v1.close_agent`; use those names only when present in the current tool listing.
-Spawn fixers and rebasers as `worker` agents and reviewers as `explorer` agents.
+In tool-enabled sessions this is a spawn tool and a wait tool, seen as `collaboration.spawn_agent` and `collaboration.wait_agent`, and in earlier releases as `multi_agent_v1.spawn_agent`, `multi_agent_v1.wait_agent`, and `multi_agent_v1.close_agent`; read the current tool listing before the first spawn and use only the names and parameters present in it.
+Spawn fixers and rebasers as `worker` agents and reviewers as `explorer` agents where the spawn takes a role; where it takes none, the two words name what the prompt must say: a `worker` may edit and commit in the location it is assigned, and an `explorer` edits nothing.
 Pass self-contained prompts; do not fork the orchestrator's context, and omit model overrides unless the user asks for one.
+Where the spawn carries a fork parameter (`fork_turns`), set it to none: it defaults to the whole history.
 Wait for each subagent and close its thread when no longer needed.
+Where the session offers no close operation, a finished agent is closed once you hold its result and send it nothing further, by whatever tool the session has for that (`send_input`, `followup_task`, `send_message`); that is also all "never continue a prior thread" asks.
 No custom agent personas (`~/.codex/agents/*.toml`) are required.
 
 If the session exposes no subagent capability, do not publish unreviewed changes.
