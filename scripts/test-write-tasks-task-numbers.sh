@@ -528,6 +528,70 @@ is "9: the plugin's shim runs the same script" "$(val outcome)" clean
 cmp -s "$SHIPPED" "$MIRROR"
 ok "9: the two mirrors ship the same script" $?
 
+# --- 10. duplicates -----------------------------------------------------------
+new_repo
+# Nothing remote can be read: the sweep's answer must not depend on it.
+touch "$FAKE/fail-list"
+pr 11 1111111111111111111111111111111111111111 main
+call duplicates
+is "10: a tree with no number twice is clean" "$(val outcome)" clean
+is "10: ...with exit 0, whatever the open heads" "$RC" 0
+is "10: outcome is the first line" "$(printf '%s\n' "$OUT" | head -n 1)" "outcome=clean"
+is "10: ...counting the files that carry a full number, at any depth" "$(val numbered)" 3
+has "10: ...and naming a file that carries none" "$OUT" "unnumbered=tasks/AGENTS.md"
+lacks "10: ...but nothing outside the folder" "$OUT" "src/004-not-a-task.md"
+[ ! -f "$FAKE/gh.log" ]
+ok "10: ...and without asking GitHub" $?
+rm "$FAKE/fail-list"
+printf 'x\n' >"$R/tasks/001a-suffixed.md"
+mkdir -p "$R/tasks/done" && printf 'x\n' >"$R/tasks/done/AGENTS.md"
+call duplicates
+is "10: 001 beside 001a is no duplicate" "$(val outcome)" clean
+is "10: ...and names neither" "$(count duplicate)" 0
+is "10: ...nor two files that carry no number" "$(count unnumbered)" 2
+printf 'x\n' >"$R/tasks/done/001-again.md"
+call duplicates
+is "10: one full number on two files is a duplicate" "$(val outcome)" duplicate
+is "10: ...with exit 3" "$RC" 3
+has "10: ...naming the tracked file" "$OUT" "duplicate=001${TAB}tasks/001-first.md"
+has "10: ...and the untracked one in another folder" "$OUT" "duplicate=001${TAB}tasks/done/001-again.md"
+is "10: ...and those two alone, not the suffixed neighbour" "$(count duplicate)" 2
+is "10: ...among every numbered file" "$(val numbered)" 5
+has "10: ...saying what a duplicate is not repaired by" "$ERR" "never renumbered"
+printf 'x\n' >"$R/tasks/003a-other-slug.md"
+printf 'x\n' >"$R/tasks/deferred/001-third.md"
+call duplicates
+is "10: every file of every duplicated number is named" "$(count duplicate)" 5
+has "10: ...a suffixed number against itself" "$OUT" "duplicate=003a${TAB}tasks/deferred/003a-third.md"
+has "10: ...and the third holder of one" "$OUT" "duplicate=001${TAB}tasks/deferred/001-third.md"
+OUT="$(cd "$R/src" && bash "$HELPER" duplicates 2>/dev/null)"
+is "10: from a subdirectory the folder is still read from the top" "$(count duplicate)" 5
+call duplicates --folder plans
+is "10: a folder that is not there is a failure, not a clean sweep" "$RC" 1
+is "10: ...with no outcome" "$OUT" ""
+mkdir -p "$R/plans/old" && printf 'x\n' >"$R/plans/007-a.md" && printf 'x\n' >"$R/plans/old/007-b.md"
+call duplicates --folder plans
+has "10: --folder names another one" "$OUT" "duplicate=007${TAB}plans/old/007-b.md"
+is "10: ...where the conventional folder's duplicates are not read" "$(count duplicate)" 2
+rm "$R/plans/old/007-b.md"
+mkdir "$R/plans/closed" && chmod 000 "$R/plans/closed"
+# Only where the mode binds (not as root): a folder find cannot enter.
+if ! ls "$R/plans/closed" >/dev/null 2>&1; then
+	call duplicates --folder plans
+	is "10: a folder that cannot be read whole is a failure" "$RC" 1
+	is "10: ...with no outcome" "$OUT" ""
+fi
+chmod 755 "$R/plans/closed"
+call duplicates --repo acme/widgets
+is "10: duplicates takes no repository" "$RC" 64
+has "10: ...with the usage lines" "$ERR" "task-numbers.sh duplicates"
+call duplicates --branch main
+is "10: ...and no branch" "$RC" 64
+OUT="$(cd "$R" && bash "$ROOT/plugins/dev-skills/bin/write-tasks-task-numbers" duplicates 2>/dev/null)"
+is "10: the plugin's shim runs it" "$(count duplicate)" 5
+call --help
+has "10: --help prints its contract" "$OUT" "outcome=duplicate"
+
 if [ "$fails" -gt 0 ]; then
 	printf 'write-tasks task-numbers helper test FAILED (%s of %s checks).\n' "$fails" "$checks" >&2
 	exit 1

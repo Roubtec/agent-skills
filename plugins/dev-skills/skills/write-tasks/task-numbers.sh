@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
 # task-numbers.sh — which task numbers a branch newly claims, and who else
-# holds them: the base it is headed for, and every open pull request.
+# holds them: the base it is headed for, and every open pull request; and which
+# numbers stand twice in the working tree.
 #
 # Usage, from the checkout that holds the branch, or with `-C <dir>` ahead of
 # the command, as git takes it:
@@ -8,6 +9,7 @@
 #                          [--branch <commit>] [--folder <dir>]
 #                          [--reserved <number>]... [--member <commit>:<its base commit>]...
 #   task-numbers.sh taken  --repo <owner>/<repo> [--folder <dir>]
+#   task-numbers.sh duplicates [--folder <dir>]
 #
 # `<owner>/<repo>` is the repository the pull requests are in; write it
 # `<host>/<owner>/<repo>` where that is not github.com. `--folder` is the
@@ -64,6 +66,23 @@
 #         above: a repository numbering its tasks another way reads the paths.
 #         under outcome=listed, or outcome=incomplete (exit 3) with the same
 #         skipped= and limit= lines.
+# duplicates
+#         For a cleanup sweep. The working tree's folder alone, tracked or
+#         not, and nothing remote: no pull request is read, so none can fail
+#         it. Full numbers are compared, as the guard does and the allocator
+#         does not: two `024` files are a duplicate whatever their slugs or
+#         subfolders, `001` beside `001a` is none.
+#           duplicate=<number> TAB <path>
+#                       once for every file of a number that stands on more
+#                       than one
+#           unnumbered=<path>
+#                       a file that carries no full task number as above, and
+#                       so was compared with nothing: a repository numbering
+#                       its tasks another way reads these paths
+#         under outcome=clean (exit 0) or outcome=duplicate (exit 3), and
+#         always numbered= (how many files carried a full number). A folder
+#         that is missing or could not be read whole is a failure, not a
+#         clean answer.
 #
 # One enumeration, `gh pr list --state open --limit 200`, is the whole remote
 # reading, and each head is read at the commit it named: a head that moves
@@ -72,10 +91,10 @@
 # and from the remote it matched; no FETCH_HEAD is read.
 #
 # Output: `key=value` lines on stdout, `outcome=` first; an explanation goes to
-# stderr. Exit status: 0 on clean and listed, 3 on collision and incomplete, 1
-# on a failure (the scanned branch or its base could not be read), 64 on a
-# usage error. Needs git, and gh for the remote reading. Written for bash 3.2
-# and later.
+# stderr. Exit status: 0 on clean and listed; 3 on collision, incomplete and
+# duplicate; 1 on a failure (the scanned branch, its base or the folder could
+# not be read); 64 on a usage error. Needs git, and gh for the remote reading.
+# Written for bash 3.2 and later.
 set -u
 # Paths as they are, not C-quoted: they are compared and printed as names.
 export GIT_CONFIG_COUNT=1 GIT_CONFIG_KEY_0=core.quotePath GIT_CONFIG_VALUE_0=false
@@ -96,7 +115,7 @@ fail() {
 }
 usage() {
 	note "$*"
-	sed -n '5,10p' "$SELF" | sed 's/^# \{0,1\}//' >&2
+	sed -n '6,12p' "$SELF" | sed 's/^# \{0,1\}//' >&2
 	exit 64
 }
 field() { # key, text
@@ -163,6 +182,9 @@ need_common() {
 	?*/?*) ;;
 	*) usage "--repo <owner>/<repo> is required (the repository the pull requests are in)" ;;
 	esac
+	need_tree
+}
+need_tree() {
 	[ -n "$FOLDER" ] || usage "--folder cannot be empty"
 	git rev-parse --git-dir >/dev/null 2>&1 || fail "this is not a git repository."
 	# From the top of the working tree: the folder is a path from there, and
@@ -434,12 +456,35 @@ cmd_taken() {
 	}
 }
 
+cmd_duplicates() {
+	[ -z "$REPO$BASE$LOCAL_BASE$RESERVED$MEMBERS" ] && [ "$BRANCH" = HEAD ] || usage "duplicates takes --folder only: it reads the working tree and nothing remote"
+	need_tree
+	local top duplicates
+	top="$(git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ] || fail "this checkout has no working tree to inventory."
+	[ -d "$top/$FOLDER" ] || fail "there is no folder '$FOLDER' in this working tree. Nothing was inventoried, which is not a clean sweep: name the task folder with --folder."
+	(cd "$top" && find "$FOLDER" -type f) >"$tmp/files" 2>"$tmp/err" ||
+		fail "could not read every file under '$FOLDER' ($(tr '\n' ' ' <"$tmp/err")). A partial inventory is not a clean sweep."
+	awk "$LISTED" "$tmp/files" | sort >"$tmp/tree"
+	awk -F "$TAB" '$1 != "-" { n = $1; sub(/^[^\t]*\t/, ""); count[n]++; paths[n] = paths[n] "duplicate=" n "\t" $0 "\n" }
+		END { for (n in count) if (count[n] > 1) printf "%s", paths[n] }' "$tmp/tree" | sort >"$tmp/duplicates"
+	duplicates="$(cut -f1 "$tmp/duplicates" | sort -u | awk 'END { print NR }')"
+	if [ "$duplicates" -gt 0 ]; then say "outcome=duplicate"; else say "outcome=clean"; fi
+	say "numbered=$(awk -F "$TAB" '$1 != "-"' "$tmp/tree" | awk 'END { print NR }')"
+	cat "$tmp/duplicates"
+	awk -F "$TAB" '$1 == "-" { sub(/^-\t/, ""); print "unnumbered=" $0 }' "$tmp/tree"
+	[ "$duplicates" -eq 0 ] || {
+		note "$duplicates task number(s) stand on more than one file in this working tree. Report every path for explicit remediation; a done or deferred task is never renumbered to repair one."
+		exit 3
+	}
+}
+
 case "$CMD" in
 claims) cmd_claims ;;
 taken) cmd_taken ;;
+duplicates) cmd_duplicates ;;
 -h | --help | help)
 	awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$SELF"
 	;;
-'') usage "name a command: claims or taken" ;;
+'') usage "name a command: claims, taken or duplicates" ;;
 *) usage "unknown command: $CMD" ;;
 esac
