@@ -418,6 +418,7 @@ Publication runs in the working location: the re-check, the resolved push remote
    A thread it shows that this run did not triage gets no line below: it stays open, called out in the Summary for the next pass.
 4. **Per-thread hygiene** — one line per triaged thread in a dispositions file, `<thread id> TAB <action> TAB <reply file>`: `resolve` replies and then resolves, `reply` replies and leaves the thread open.
    Where your reply to this finding already stands on the thread (a replayed record says so, or the thread shows it), compose no second one: write `-` for the reply file.
+   A reply that answers a comment made after yours is a new reply and takes its file.
    - *Actionable-fixed* → `Fixed in <sha>: <one line>`; `resolve`.
    - *Already-addressed* → where it's handled; `resolve`.
    - *Follow-up-task* → the placement-specific template: queued work uses `Follow-up task committed: tasks/NNN[a-z]?-… — queued for an upcoming batch`; parked work uses `Deferred with full context to tasks/deferred/NNN[a-z]?-… — <the condition it waits on>`, where the lowercase letter suffix is optional.

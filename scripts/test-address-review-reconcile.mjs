@@ -5107,6 +5107,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       // posting may have left no record at all.
       /look at the thread before composing: in step 3's list, or, where that does not show it \(it was resolved since triage\), in what step 3's command prints with `--all` ahead of `--repo`\./.test(pubBrief) &&
       /Where it already holds a reply of the authenticated user \(`gh api user --jq \.login`\) giving this disposition — the same fix under another SHA is the same reply — or the disposition's `detail` carries an earlier turn's record saying the reply is ALREADY POSTED, compose no second one and write `-` in place of the reply file, on the same `resolve` or `reply` line/.test(pubBrief) &&
+      /A reply answering a comment made AFTER yours on that thread is a new reply, not a second one: compose it and give its file/.test(pubBrief) &&
       !/give the thread no line and report it/.test(pubBrief) &&
       // A failed second invocation prints no `thread=` line, and the replies
       // the first one landed are still on the PR.
