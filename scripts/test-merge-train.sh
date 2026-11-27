@@ -999,8 +999,8 @@ is "7: a PR added to the list is picked up without a restart" "$(lines "pr=9	hea
 is "7: ...from the poll after the edit, not before" "$(polls 9)" 2
 is "7: a PR dropped from the list is polled no more" "$(polls 7)" 3
 is "7: ...and no longer keeps the watch going" "$(printf '%s\n' "$OUT" | tail -n 1)" "outcome=stopped	reason=idle	pending=	unread="
-has "7: ...which the state file records" "$(cat "$S")" "unlisted=7	at="
-is "7: ...once" "$(grep -c '^unlisted=7' "$S")" 1
+has "7: ...which the state file records" "$(cat "$S")" "dropped=7	at="
+is "7: ...once" "$(grep -c '^dropped=7' "$S")" 1
 call state --state "$S"
 lacks "7: ...so the state read down no longer lists it" "$OUT" "pr=7"
 

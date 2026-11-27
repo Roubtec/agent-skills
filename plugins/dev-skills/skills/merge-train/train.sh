@@ -172,7 +172,7 @@
 #           green=<N> TAB head=<oid> TAB lane=<identity>...
 #                                       the head of that PR's last full green
 #                                       run (`rebase --green`) and its lanes
-#           unlisted=<N or oid>         the list dropped that entry
+#           dropped=<N or oid>          the list no longer holds that entry
 #           merged=<N> TAB head= TAB merge-commit= TAB at= TAB basis=<words>
 #           note=<N or -> TAB at= TAB text=<words>
 #         A watch started on a state file that has records goes on from them:
@@ -808,7 +808,7 @@ cmd_merge() {
 # The latest record of one entry in the state file, as `<head> TAB <outcome>`;
 # empty where it has none, or where the list dropped it since.
 last_of() { # pr|commit, id
-	awk -F "$TAB" -v k="$1=$2" -v u="unlisted=$2" '
+	awk -F "$TAB" -v k="$1=$2" -v u="dropped=$2" '
 		$1 == k {
 			h = "-"; o = ""
 			for (i = 2; i <= NF; i++) {
@@ -991,12 +991,12 @@ poll() {
 	awk -F "$TAB" '
 		{ k = $1; sub(/=.*/, "", k); v = substr($1, length(k) + 2) }
 		k == "pr" || k == "commit" { if (!(v in seen)) { seen[v] = 1; order[++n] = v }; live[v] = 1 }
-		k == "unlisted" { live[v] = 0 }
+		k == "dropped" { live[v] = 0 }
 		END { for (i = 1; i <= n; i++) if (live[order[i]]) print order[i] }' "$STATE" |
 		while IFS= read -r id; do
 			case " $W_LISTED " in
 			*" $id "*) ;;
-			*) journal "unlisted=$id${TAB}at=$(now)" ;;
+			*) journal "dropped=$id${TAB}at=$(now)" ;;
 			esac
 		done
 }
@@ -1109,7 +1109,7 @@ cmd_state() {
 		{ k = $1; sub(/=.*/, "", k); v = substr($1, length(k) + 2) }
 		k == "watch" { watch = $0 }
 		k == "pr" || k == "commit" { if (!(v in seen)) { seen[v] = 1; order[++n] = v }; cur[v] = $0 }
-		k == "unlisted" { cur[v] = "" }
+		k == "dropped" { cur[v] = "" }
 		k == "green" { if (!(v in gseen)) { gseen[v] = 1; gorder[++g] = v }; green[v] = $0 }
 		k == "merged" || k == "note" { rest[++r] = $0 }
 		END {
