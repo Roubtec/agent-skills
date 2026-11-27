@@ -341,7 +341,6 @@ usage_case "an artifact root reaching the worktree through a symlink" run --prov
 usage_case "an artifact root that climbs back into the worktree past a directory not yet there" run --provider codex --worktree "$REPO" --artifact-root "$WORKDIR/art/nope/../../repo" --facts "$FACTS"
 [ ! -e "$REPO/.peer" ] && [ ! -e "$WORKDIR/art/nope" ] && [ -z "$(git -C "$REPO" status --porcelain --ignored)" ]
 ok "2: ...and no root left anything in the worktree" $?
-usage_case "collect handed an artifact root" collect --artifact-root "$WORKDIR/art"
 usage_case "neither facts nor prompt" run --provider codex --worktree "$REPO" --artifact-dir "$A"
 usage_case "both facts and prompt" run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --prompt-file "$FACTS"
 has "2: ...named as the choice it is" "$OUT" "give --facts or --prompt-file, not both"
@@ -685,6 +684,8 @@ D1="$(val artifact_dir)"
 is "6: a direct launch under an artifact root answers the directory it made" "$?|$(first)|$(dirname "$D1")" "0|outcome=launched|$A"
 OUT="$(peer collect --artifact-dir "$D1")"
 is "6: ...and collect works with it" "$?|$(first)|$(val review_file)" "0|outcome=passed|$D1/manual-attempt-1/peer-review.out"
+OUT="$(peer collect --artifact-root "$D1" 2>&1)"
+is "6: ...by that name only: an artifact root is not something to collect" "$?|$(first)" "64|peer: collect takes --artifact-dir: the artifact_dir run answered"
 
 fresh
 echo passed-nofile >"$STEER/helper.mode"
