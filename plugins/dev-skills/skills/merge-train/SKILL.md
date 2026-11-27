@@ -59,7 +59,9 @@ Carry every such note through the run.
 
 Run `train.sh survey --repo <owner>/<repo> <PR numbers…>`.
 It prints one line per PR (its `check` outcome, base, `parent=`, head, mergeability, review decision, open threads, CI, passing lanes, file count) and a `shared=` line for each file two or more of them touch.
-An `outcome=unreadable` line is a listed number the survey could not read (its `reason=` says why): name each to the user before starting, and run the train without it unless they correct it.
+An `outcome=unreadable` line is a listed number the survey could not read, and its `reason=` says why.
+A `no-such-pr` is a number the repository has no pull request for (a typo, an issue, another repository's PR): name each to the user before starting, and run the train without it unless they correct it.
+A `gh-failed` is a PR that may well exist and be ready: survey that number again once, and if it is still unreadable, ask the user before starting rather than leave it out.
 From that, and from the diffs where a `shared=` line or a migration calls for a look, work out and tell the user:
 
 - **Stacks.**

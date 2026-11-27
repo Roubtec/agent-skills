@@ -840,6 +840,10 @@ for f in address-review/ping.sh address-review/pr-branch.sh address-reviews/targ
 done
 # Checked on the working files, so that a filter dropped from a helper that
 # has a `gh pr` call is seen where no suite of its own prints the block.
+# gh prints the block after a plain REST read of a pull request too
+# (`gh api repos/<owner>/<repo>/pulls/<N>`), which this check does not look
+# for: no helper makes one today, so a helper that starts to needs the
+# filter added by hand and this pattern widened.
 for f in "$SCRIPT_DIR"/../plugins/dev-skills/skills/*/*.sh; do
 	if grep -v '^[[:space:]]*#' "$f" | grep -Eq '(^|[^[:alnum:]_.-])gh pr '; then
 		grep -q '^gh() {$' "$f"
