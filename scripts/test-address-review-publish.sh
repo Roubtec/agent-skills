@@ -356,6 +356,10 @@ jq --rawfile b "$D/summary.md" '.issue += [{id: 2, user: {login: "alice"}, body:
 publish
 has "2: another user's equal comment is not this run's Summary" "$OUT" "summary=posted"
 fresh
+jq '.issue += [{id: 2, user: {login: "me-bot"}, body: "@codex review", html_url: "u"}]' "$FAKE/state.json" >"$FAKE/state.new" && mv "$FAKE/state.new" "$FAKE/state.json"
+publish
+has "2: nor is a different comment of the authenticated user" "$OUT" "summary=posted"
+fresh
 jq '.issue += [{id: 2, user: {login: "me-bot"}, body: "\r\n## Summary of Review Fixes  \r\n\r\n- quoted the path\r\n\r\n", html_url: "https://github.com/acme/widgets/pull/7#issuecomment-2"}]' "$FAKE/state.json" >"$FAKE/state.new" && mv "$FAKE/state.new" "$FAKE/state.json"
 publish
 has "2: an equal Summary is recognised across line ends and outer whitespace" "$OUT" "summary=present	https://github.com/acme/widgets/pull/7#issuecomment-2"
@@ -396,6 +400,10 @@ publish
 is "3: a thread list that cannot be read is a failure" "$RC" 1
 is "3: ...with no outcome" "$OUT" ""
 is "3: ...and no write" "$(writes)" 0
+fresh
+touch "$FAKE/fail-threads"
+call --repo acme/widgets --pr 7 --no-threads --summary "$D/summary.md"
+is "3: ...and no Summary posted over threads it could not list" "$RC $(writes)" "1 0"
 fresh
 touch "$FAKE/fail-user"
 publish

@@ -146,7 +146,7 @@ trap cleanup EXIT
 TMPD="$(mktemp -d "${TMPDIR:-/tmp}/publish.XXXXXX")" || fail "could not create a temporary directory. Nothing was written."
 
 # A body with nothing but whitespace in it is not one GitHub would accept.
-has_text() { [ -f "$1" ] && [ -r "$1" ] && grep -q '[^[:space:]]' "$1"; }
+has_text() { grep -q '[^[:space:]]' "$1" 2>/dev/null; }
 
 has_text "$SUMMARY" || stop malformed "the Summary file $SUMMARY is missing, unreadable or empty. Nothing was written."
 
@@ -178,8 +178,9 @@ if [ "$NO_THREADS" = 0 ]; then
 fi
 
 # --- what the PR holds ------------------------------------------------------------
-ME="$(gh api user --jq .login)" || fail "could not read the authenticated user (gh failed). Nothing was written."
-[ -n "$ME" ] || fail "gh named no authenticated user. Nothing was written."
+if ! ME="$(gh api user --jq .login)" || [ -z "$ME" ]; then
+	fail "could not read the authenticated user from gh. Nothing was written."
+fi
 
 bash "$HERE/gh-review-threads.sh" --all --repo "$REPO" "$PR" >"$TMPD/threads.json"
 rc=$?
