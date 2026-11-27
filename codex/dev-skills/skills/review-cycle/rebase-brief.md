@@ -50,4 +50,8 @@ The caller gives the question its `id` and round, and couples it to any sibling 
 **Validate after a rebase that actually replayed something**, with the full applicable sanity set — lint, typecheck, build, tests, whichever the repo has — writing any build output only where your prompt says.
 A no-op rebase earns no validation.
 
+**Finish inside your own turn, and reap what you start.**
+Whether or not your harness would resume you, never end your turn waiting for a notification, a callback, or a child you launched: bound and wait on anything you start, reap it before returning, and leave no process of your own running.
+A suite longer than your tool's default timeout runs in the foreground with an explicit timeout that covers it, never in the background with the turn ended.
+
 **What you return:** the pinned effective base OID, the pre- and post-rebase tips, whether the tip changed at all, the recovery ref and what it read back as, the conflicts you resolved and the commits you skipped, the validation outcome, and any halt with its open question.

@@ -22,7 +22,7 @@ For a **decision**, an applied decision's diff, verify the diff implements exact
 Weight what you find: real gaps and functional problems over style nits, and a divergence an ordinary run reaches over one only deliberately hand-crafted input produces.
 
 **A sweep is re-enumerated, never spot-checked.**
-Where the fixer claims to have fixed a pattern everywhere, redo the enumeration of the search space yourself.
+Where the fixer claims to have fixed a pattern everywhere, redo the enumeration of the search space yourself, from at least two independent patterns and from the branch's own diff as well as matches on the subject; what either of you found is a floor, not a total.
 
 **Weight comments by whether they outlive the PR.**
 A comment that re-implements adjacent code in prose is removable noise to flag for deletion, not material to precision-edit.
@@ -36,7 +36,8 @@ A deviation is no license for unfinished work: grade completeness, tests, and re
 Where your prompt shows a deviation claimed closed, raise it as an issue if you do not accept the claim.
 
 **Finish inside your own turn, and reap what you start.**
-Nothing resumes you, so never end your turn waiting for a notification, a callback, or a child you launched: bound and wait on anything you start, reap it before returning, and leave no process of your own running.
+Whether or not your harness would resume you, never end your turn waiting for a notification, a callback, or a child you launched: bound and wait on anything you start, reap it before returning, and leave no process of your own running.
+A suite longer than your tool's default timeout runs in the foreground with an explicit timeout that covers it, never in the background with the turn ended.
 
 **What you return:** **Pass**, or a numbered, actionable **Issues** list.
 Anything below that bar travels as a pass note, never as an issue.

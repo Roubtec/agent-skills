@@ -570,9 +570,13 @@ const CYCLE_DESTROY_BOUNDARY = `## DESTROY BOUNDARY
 
 Permitted: reading, searching, and read-only \`git\`/\`gh\` queries — plus, where the contract above authorizes it, edits, commits, and pushes confined to the worktree and branch it names.
 Forbidden: \`rm -rf\`, \`git reset --hard\`, \`git clean\`, \`git branch -f\`, \`git update-ref\`, \`git gc\`, and force-pushing — each of them beyond what this assignment itself spells out, whether as an exact command or as a skill it names to invoke — NOT in a clone, NOT in a temp directory, NOT "safely". You may not self-authorize one by putting yourself somewhere you believe is safe; what this assignment spells out, and the disposable clone below, are the only exemptions — and only because this assignment names them, not because a clone is safe.
+Your own probe directory is the one removal spelled out here for every assignment: a directory you yourself created this turn with \`mktemp -d\` under a destination this assignment names, removed by the exact path \`mktemp\` printed, held in a variable guarded against being empty — \`rm -rf -- "\${P:?}"\`. Nothing found by a glob or by name, nothing outside that destination, and no other forbidden command.
+NEVER discard uncommitted work, yours or anyone else's: \`git checkout -- <path>\`, \`git restore\`, and a bare \`git stash\` have each thrown it away. The one use that stands is putting a committed file back after a control you ran on it, once your own work is committed and the file holds nothing uncommitted but that control's edit.
 A worktree is not a blast radius: it isolates the working tree, not the repository, so \`branch -f\`, \`reset\`, \`update-ref\`, and \`gc\` reach every sibling worktree through the shared \`.git\`.
 Address any repository other than your own checkout BY PATH: \`git -C <absolute path>\`. NEVER derive a working directory from a glob, and NEVER chain a state-changing git command after a \`cd\` whose success you have not checked.
-Empirical verification that could change state belongs ONLY in a disposable clone: work in \`DC="$(dc-enter <slug>)"\` — it prints one absolute path on stdout, \`dc-remove <slug>\` drops it, and a reused slug is REFUSED rather than re-derived, so pass \`--replace\` or remove the slug first if this may run twice. Where that command is not found at all, install the helpers from the dev-skills plugin \`bin/\` rather than improvising a destination. Never \`cd\` into a path held in a variable unguarded: \`cd ""\` returns 0 and moves nowhere, so checking the status catches nothing and a lookup that produced no path leaves you in the shared checkout. Write \`cd -- "\${DC:?dc-enter returned no path — see its error above; if it is not installed, install it from the dev-skills plugin bin/}"\`, and confirm \`pwd\` before the first command that writes.`;
+Empirical verification that could change state belongs ONLY in a disposable clone: work in \`DC="$(dc-enter <slug>)"\` — it prints one absolute path on stdout, \`dc-remove <slug>\` drops it, and a reused slug is REFUSED rather than re-derived, so pass \`--replace\` or remove the slug first if this may run twice. Where that command is not found at all, install the helpers from the dev-skills plugin \`bin/\` rather than improvising a destination. Never \`cd\` into a path held in a variable unguarded: \`cd ""\` returns 0 and moves nowhere, so checking the status catches nothing and a lookup that produced no path leaves you in the shared checkout. Write \`cd -- "\${DC:?dc-enter returned no path — see its error above; if it is not installed, install it from the dev-skills plugin bin/}"\`, and confirm \`pwd\` before the first command that writes.
+Install nothing system-wide or global: every agent in the session shares this machine, so a system or global package you install or upgrade changes it for all of them — report the need instead (the helper install above is the one named exception).
+Stop only a process whose PID you recorded when you started it, NEVER one found by name or pattern (\`pkill\`, \`killall\`, \`kill $(pgrep …)\`).`;
 
 // Where a role's redirected output goes. Every cycle brief that orders a build
 // orders one whose output the role may want in a file, and a role left to pick
@@ -634,12 +638,12 @@ function cycleValidationTier(cycle, state) {
 // is never resumed, so one that ended its turn "waiting for the monitor
 // notification" from a background child it had launched left a dirty worktree
 // and no packet until the orchestrator hunted the child down by hand.
-const CYCLE_FINISH_IN_TURN = "Finish inside your own turn: nothing resumes you afterwards, so never end it waiting for a notification, a callback, or a child you started. Bound and wait on anything you launch, and reap it before you return — no process of yours may outlive your turn.";
+const CYCLE_FINISH_IN_TURN = "Finish inside your own turn: nothing resumes you afterwards, so never end it waiting for a notification, a callback, or a child you started. Bound and wait on anything you launch, and reap it before you return — no process of yours may outlive your turn. A suite longer than your tool's default timeout runs in the foreground with an explicit timeout that covers it, never in the background with the turn ended.";
 
 // On top of that, for every role except the peer stage itself: an implementer
 // that launched its own detached second opinion outlived it, orphaned, and
 // wandered into an unrelated sibling worktree for want of a tight working dir.
-const CYCLE_NO_SELF_PEER = "The cycle runs the sanctioned second opinion itself, beside the reviewer — do not launch a peer review of your own.";
+const CYCLE_NO_SELF_PEER = "The cycle runs its reviewer and the sanctioned second opinion itself — do not launch a peer review of your own, and spawn no reviewer of your own, capped or not, which is the same thing by another route. A helper you do spawn is briefed to report to you alone, and you collect it before you return.";
 
 // Default worktree/branch contract when the consumer supplies none. A consumer
 // with its own worktree lifecycle (wt-enter etc.) passes richer per-role
@@ -773,7 +777,8 @@ ${cycleItemsBlock(cycle)}${cycleFindingsBlock(state.findings)}${cycleOpenQuestio
 - ${artifactLine}
 - Commit at logical milestones, and validate at THIS PASS'S TIER (code artifacts). ${tierLine}${closeOutLine}
 - ${CYCLE_FLAKE_POLICY}
-- A sweep ("fix this pattern everywhere") is ENUMERATED, never asserted: return the explicit search space with a per-item verdict, and claim a completed sweep in a commit message only where you enumerated that space. This round's reviewer redoes the enumeration rather than spot-checking yours.
+- A sweep ("fix this pattern everywhere") is ENUMERATED, never asserted: return the explicit search space with a per-item verdict, and claim a completed sweep in a commit message only where you enumerated that space. Build that space from at least two independent patterns and from the branch's own diff as well as matches on the subject, and report it as a FLOOR, not a total. This round's reviewer redoes the enumeration rather than spot-checking yours.
+- Open, edit, mark ready, or comment on no pull request unless this assignment spells that out; publication is the orchestrator's.
 - ${CYCLE_COMMENT_DISCIPLINE}
 - ${CYCLE_CARRIED_CLAIMS}
 - ${CYCLE_FINISH_IN_TURN} ${CYCLE_NO_SELF_PEER}
@@ -860,7 +865,7 @@ Read the repository's agent-context files (\`AGENTS.md\` / \`CLAUDE.md\`) first 
 
 ${cycleReviewChecks(cycle.artifactType, state.tier)}
 
-Where the work claims a same-pattern sweep ("fixed everywhere"), REDO the enumeration of its search space yourself rather than spot-checking the enumeration supplied; a sweep asserted with no enumeration behind it is a finding in its own right.
+Where the work claims a same-pattern sweep ("fixed everywhere"), REDO the enumeration of its search space yourself rather than spot-checking the enumeration supplied — from at least two independent patterns and from the branch's own diff as well as matches on the subject, and what either of you found is a FLOOR, not a total; a sweep asserted with no enumeration behind it is a finding in its own right.
 
 ${CYCLE_CARRIED_CLAIMS}
 
@@ -2397,9 +2402,13 @@ const DESTROY_BOUNDARY = `## DESTROY BOUNDARY
 
 Permitted: reading, searching, read-only \`git\`/\`gh\` queries, and the specific mutations this assignment spells out.
 Forbidden: \`rm -rf\`, \`git reset --hard\`, \`git clean\`, \`git branch -f\`, \`git update-ref\`, \`git gc\`, and force-pushing — each of them beyond what this assignment itself spells out, whether as an exact command or as a skill it names to invoke — NOT in a clone, NOT in a temp directory, NOT "safely". You may not self-authorize one by putting yourself somewhere you believe is safe; what this assignment spells out, and the disposable clone below, are the only exemptions — and only because this assignment names them, not because a clone is safe.
+Your own probe directory is the one removal spelled out here for every assignment: a directory you yourself created this turn with \`mktemp -d\` under a destination this assignment names, removed by the exact path \`mktemp\` printed, held in a variable guarded against being empty — \`rm -rf -- "\${P:?}"\`. Nothing found by a glob or by name, nothing outside that destination, and no other forbidden command.
+NEVER discard uncommitted work, yours or anyone else's: \`git checkout -- <path>\`, \`git restore\`, and a bare \`git stash\` have each thrown it away. The one use that stands is putting a committed file back after a control you ran on it, once your own work is committed and the file holds nothing uncommitted but that control's edit.
 A worktree is not a blast radius: it isolates the working tree, not the repository, so \`branch -f\`, \`reset\`, \`update-ref\`, and \`gc\` reach every sibling worktree through the shared \`.git\`.
 Address any repository other than your own checkout BY PATH: \`git -C <absolute path>\`. NEVER derive a working directory from a glob, and NEVER chain a state-changing git command after a \`cd\` whose success you have not checked.
-Empirical verification that could change state belongs ONLY in a disposable clone: work in \`DC="$(dc-enter <slug>)"\` — it prints one absolute path on stdout, \`dc-remove <slug>\` drops it, and a reused slug is REFUSED rather than re-derived, so pass \`--replace\` or remove the slug first if this may run twice. Where that command is not found at all, install the helpers from the dev-skills plugin \`bin/\` rather than improvising a destination. Never \`cd\` into a path held in a variable unguarded: \`cd ""\` returns 0 and moves nowhere, so checking the status catches nothing and a lookup that produced no path leaves you in the shared checkout. Write \`cd -- "\${DC:?dc-enter returned no path — see its error above; if it is not installed, install it from the dev-skills plugin bin/}"\`, and confirm \`pwd\` before the first command that writes.`;
+Empirical verification that could change state belongs ONLY in a disposable clone: work in \`DC="$(dc-enter <slug>)"\` — it prints one absolute path on stdout, \`dc-remove <slug>\` drops it, and a reused slug is REFUSED rather than re-derived, so pass \`--replace\` or remove the slug first if this may run twice. Where that command is not found at all, install the helpers from the dev-skills plugin \`bin/\` rather than improvising a destination. Never \`cd\` into a path held in a variable unguarded: \`cd ""\` returns 0 and moves nowhere, so checking the status catches nothing and a lookup that produced no path leaves you in the shared checkout. Write \`cd -- "\${DC:?dc-enter returned no path — see its error above; if it is not installed, install it from the dev-skills plugin bin/}"\`, and confirm \`pwd\` before the first command that writes.
+Install nothing system-wide or global: every agent in the session shares this machine, so a system or global package you install or upgrade changes it for all of them — report the need instead (the helper install above is the one named exception).
+Stop only a process whose PID you recorded when you started it, NEVER one found by name or pattern (\`pkill\`, \`killall\`, \`kill $(pgrep …)\`).`;
 
 function scopePrompt(input) {
   return `You are scoping one review cycle. Read the repository's agent-context files (\`AGENTS.md\` / \`CLAUDE.md\`) first. This is scoping only — edit nothing, commit nothing.

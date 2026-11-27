@@ -15,7 +15,7 @@ It is the **canonical definition** of the review protocol the other dev-skills s
 ## Roles
 
 Three roles, freshly spawned every round.
-Fix-ups and re-reviews always use a fresh subagent spawn — fixers as `worker` agents, reviewers as `explorer` agents — never `send_input` to continue a prior worker or reviewer; a reviewer with no attachment to the fix is the whole point.
+Fix-ups and re-reviews always use a fresh subagent spawn — fixers as `worker` agents, reviewers as `explorer` agents, where the spawn takes a role — never `send_input`, or whichever follow-up tool the session offers, to continue a prior worker or reviewer; a reviewer with no attachment to the fix is the whole point.
 
 **How each role works is its own brief file beside this one — `fixer-brief.md`, `reviewer-brief.md`, `peer-brief.md` — which the role reads rather than you restating it.**
 A Fixer's or Reviewer's prompt opens with the boundary line below, then tells it to read `<path>/fixer-brief.md` or `<path>/reviewer-brief.md` in full and carry it out, then gives the facts of this run, which are all you compose:
@@ -45,7 +45,7 @@ The rule is about committed state, not turn structure: never spawn the Reviewer 
 A harness may run spawns asynchronously, returning an id immediately and delivering the result as a later notification, so the obligation is to wait for that completion notification; "one checkout-dependent agent at a time" is the proxy for the invariant, sufficient where spawns are synchronous and neither sufficient nor necessary where they are not.
 The examination-only peer launched beside the Reviewer after the tree is clean and committed is the sole concurrency exception: two readers are safe, and so is the third the optional second peer adds.
 
-The briefs carry four rules every role is held to, which you rely on when reading what comes back: a role finishes inside its own turn and reaps what it starts, a fixer launching no peer review of its own; a sweep is enumerated by the fixer and re-enumerated by the Reviewer, never asserted; a fixer ships only comments that outlive the PR, and the Reviewer weights comments the same way; and no role writes to a shared task or plan tracker, whose entries leak into your view.
+The briefs carry four rules every role is held to, which you rely on when reading what comes back: a role finishes inside its own turn and reaps what it starts, a fixer launching no review of its own, peer or otherwise; a sweep is enumerated by the fixer and re-enumerated by the Reviewer, never asserted; a fixer ships only comments that outlive the PR, and the Reviewer weights comments the same way; and no role writes to a shared task or plan tracker, whose entries leak into your view.
 
 **Mark each factual claim in a brief with its provenance** — *verified this turn* against the committed tree, or *carried*: not verified this turn, whatever its source — re-derive it before relying on it.
 

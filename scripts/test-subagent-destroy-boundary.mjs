@@ -26,8 +26,8 @@
 //
 //   CONTENT, checked per boundary constant, against the clause list below.
 //   Task 017's criterion is about what the constants SAY, and they say it once
-//   each; asserting eleven clauses against all sixty-six renders re-derived the
-//   same five answers sixty-six times over. The constants are evaluated out of the
+//   each; asserting every clause against every render re-derived the same five
+//   answers once per render. The constants are evaluated out of the
 //   same declaration prefix the builders come from, so this is the value the
 //   briefs actually interpolate rather than the source text of the literal.
 //
@@ -282,6 +282,9 @@
 //   `BESPOKE_DESTINATIONS` — empty, or an entry holding an empty span: the
 //     cross-check searches for that clause in nothing, silently. Guarded by the
 //     declared-tables check below, both shapes.
+//   `BOUNDARY_FILE_CLAUSES` — empty, or holding an empty span: the boundary
+//     file's content check asserts nothing. The empty table is guarded by the
+//     declared-tables check below, and an empty span FAILs as a lost clause.
 //   `PROSE_MIRRORS` — empty: reported "0 prose clauses deletion-guarded" as a
 //     pass — that summary read "0 prose destination clauses deletion-guarded"
 //     when it was measured, before task 046e's category widened it past
@@ -419,11 +422,12 @@ function shippedWorkflows() {
 // phrase that carries it rather than by a byte comparison of the whole
 // constant. This must fail when a clause is LOST. What that buys is narrow, and
 // measured rather than hoped for: summing each phrase's match length over each
-// evaluated constant, the phrases pin seven tenths of the constants IN AGGREGATE
-// in contiguous literal runs — 69.7% over the five, which is 68.4% of a
-// `CYCLE_DESTROY_BOUNDARY` and 70.6% of a `DESTROY_BOUNDARY`, so no single
+// evaluated constant, the phrases pin three quarters of the constants IN AGGREGATE
+// in contiguous literal runs — 74.7% over the five, which is 73.8% of a
+// `CYCLE_DESTROY_BOUNDARY` and 75.3% of a `DESTROY_BOUNDARY`, so no single
 // fraction is true of EACH constant and the aggregate is the honest way to state
-// it. It was 58.5% before task 046b retired the no-helper fallback clause and
+// it. It was 69.7% before task 067 added its five entries, 58.5% before task
+// 046b retired the no-helper fallback clause and
 // folded its neighbour into one longer span, 60.0% before that task's review
 // round pinned the guarded `cd`, and 66.8% before its third round pinned the
 // install remedy at the invocation as well. So it is the unpinned remainder —
@@ -562,6 +566,33 @@ const REQUIRED = [
   // helper refusing a reused slug exits non-zero with empty stdout too, and
   // there it is installed and its own stderr already names the fix.
   ["guarded `cd`, naming the install step", /Write `cd -- "\$\{DC:\?dc-enter returned no path — see its error above; if it is not installed, install it from the dev-skills plugin bin\/\}"`, and confirm `pwd` before the first command that writes/],
+  // Task 067's four. The probe-directory exemption is pinned from the directory's
+  // provenance through its closing exclusions, because every word of it narrows:
+  // a span stopping at the `rm` is green against an exemption that covers any
+  // path a role likes.
+  ["probe-directory exemption, whole", /a directory you yourself created this turn with `mktemp -d` under a destination this assignment names, removed by the exact path `mktemp` printed, held in a variable guarded against being empty — `rm -rf -- "\$\{P:\?\}"`\. Nothing found by a glob or by name, nothing outside that destination, and no other forbidden command/],
+  // Two entries for one rule: the prohibition, and the bound on the one use it
+  // leaves standing. A copy keeping only the first forbids the restore a control
+  // legitimately ends with; a copy keeping only the second forbids nothing.
+  ["uncommitted work is never discarded", /NEVER discard uncommitted work, yours or anyone else's: `git checkout -- <path>`, `git restore`, and a bare `git stash` have each thrown it away/],
+  ["the one restore that stands, bounded", /The one use that stands is putting a committed file back after a control you ran on it, once your own work is committed and the file holds nothing uncommitted but that control's edit/],
+  ["no system-wide or global install", /Install nothing system-wide or global: every agent in the session shares this machine, so a system or global package you install or upgrade changes it for all of them — report the need instead/],
+  ["stop only a recorded PID", /Stop only a process whose PID you recorded when you started it, NEVER one found by name or pattern/],
+];
+
+// The same four rules where they ship as prose: `subagent-boundary.md`, the file
+// every skill-spawned role reads first. The copies are held byte-identical
+// below, which says nothing about what the one text says, so each span here must
+// sit in it exactly once. The disposable-clone bullet is not repeated: the prose
+// census anchors it per skill. The first entry is not one of the four: it is the
+// sentence that squares the probe-directory exemption with the "not in a temp
+// directory" beside it, and without it the file contradicts itself.
+const BOUNDARY_FILE_CLAUSES = [
+  "What your prompt spelled out, the disposable location below, and the probe directory in the next bullet are the only exemptions.",
+  "**A probe directory you made is yours to remove, and nothing else is.** That is a directory you yourself created this turn with `mktemp -d` under a destination your prompt named, removed by the exact path `mktemp` printed, held in a variable guarded against being empty: `rm -rf -- \"${P:?}\"`. Nothing found by a glob or by name, nothing outside that destination, and no other command on the list.",
+  "**Uncommitted work is never discarded, yours or anyone else's.** `git checkout -- <path>`, `git restore`, and a bare `git stash` have each thrown it away. The one use that stands is putting a committed file back after a control you ran on it, once your own work is committed and the file holds nothing uncommitted but that control's edit.",
+  "**Install nothing system-wide or global.** Every agent in the session shares this machine, so a system package (`apt-get`) or a global one (`npm -g`, `pip` outside a virtual environment) you install or upgrade changes it for all of them: report the need instead.",
+  "**Stop only a process you started.** Record its PID when you start it and stop that PID; never one found by name or pattern",
 ];
 
 // What a destination CONSTANT must say, for REQUIRED's reason — a brief carrying
@@ -569,7 +600,7 @@ const REQUIRED = [
 // instructs anything, so the gutting this closes is the one that keeps the
 // vocabulary and destroys the instruction — but NOT on REQUIRED's terms, and the
 // difference was demonstrated rather than reasoned. REQUIRED matches each clause
-// by the phrase that carries it because it spans eleven clauses over five
+// by the phrase that carries it because it spans sixteen clauses over five
 // constants, where a byte comparison would turn every wording tweak into a
 // failure. That tolerance does not survive one sentence: three phrase regexes
 // over this constant ("output you redirect to a file", "goes under that same
@@ -1599,6 +1630,7 @@ const emptyTables = [
   ["REQUIRED", REQUIRED],
   ["PROSE_MIRRORS", PROSE_MIRRORS],
   ["BESPOKE_DESTINATIONS", BESPOKE_DESTINATIONS],
+  ["BOUNDARY_FILE_CLAUSES", BOUNDARY_FILE_CLAUSES],
 ].filter(([, table]) => !table.length);
 // An emptied span in that last table is the same vacuum one step down: the
 // cross-check drops it (an empty span is contained in every string, so keeping it
@@ -1616,12 +1648,13 @@ if (emptyTables.length || blankSpans.length) {
     .join("; ");
   rows.push(["(all)", "declared tables", "FAIL", why]);
 } else {
-  rows.push(["(all)", "declared tables", "ok", `REQUIRED ${REQUIRED.length} clauses, PROSE_MIRRORS ${PROSE_MIRRORS.length} mirrors, BESPOKE_DESTINATIONS ${BESPOKE_DESTINATIONS.length} clauses`]);
+  rows.push(["(all)", "declared tables", "ok", `REQUIRED ${REQUIRED.length} clauses, PROSE_MIRRORS ${PROSE_MIRRORS.length} mirrors, BESPOKE_DESTINATIONS ${BESPOKE_DESTINATIONS.length} clauses, BOUNDARY_FILE_CLAUSES ${BOUNDARY_FILE_CLAUSES.length} clauses`]);
 }
 
 // The boundary file is one text shipped beside every skill that sends subagents
-// to it. Held here to two things the prose guard above cannot see: every copy is
-// the same bytes, and a brief that names the file ships it.
+// to it. Held here to three things the prose guard above cannot see: every copy
+// is the same bytes, a brief that names the file ships it, and the one text
+// carries each `BOUNDARY_FILE_CLAUSES` span exactly once.
 {
   const copies = new Map();
   const orphans = [];
@@ -1644,11 +1677,16 @@ if (emptyTables.length || blankSpans.length) {
     }
   }
   const distinct = new Set(copies.values()).size;
+  const text = flat([...copies.values()][0] || "");
+  const lost = BOUNDARY_FILE_CLAUSES.filter((clause) => !clause || text.split(flat(clause)).length - 1 !== 1);
   if (copies.size === 0 || distinct !== 1 || orphans.length) {
     failures++;
     rows.push(["(all)", "boundary file", "FAIL", `${copies.size} copies in ${distinct} distinct texts; named-without-file or file-without-name: ${orphans.join(", ") || "none"}`]);
+  } else if (lost.length) {
+    failures++;
+    rows.push(["(all)", "boundary file", "FAIL", `${lost.length} of ${BOUNDARY_FILE_CLAUSES.length} clause(s) not present exactly once; first: ${JSON.stringify(lost[0].slice(0, 70))}…`]);
   } else {
-    rows.push(["(all)", "boundary file", "ok", `${copies.size} byte-identical copies, each named by its brief`]);
+    rows.push(["(all)", "boundary file", "ok", `${copies.size} byte-identical copies, each named by its brief, carrying all ${BOUNDARY_FILE_CLAUSES.length} pinned clauses`]);
   }
 }
 
