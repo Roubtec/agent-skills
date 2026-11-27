@@ -36,15 +36,19 @@
 #                             a `--lane` is not among its passing lanes: one
 #                             `missing=<identity>` line each
 #           outcome=unscheduled
-#                             every lane this head has is green, and each
-#                             `--lane` it lacks will not come: one
+#                             every lane this head has is green, and no run
+#                             on it is left to bring a `--lane` it lacks: one
 #                             `unscheduled=<identity>` line each. Such a lane
 #                             belongs to a workflow of the repository, and
 #                             the head has workflow runs, every one of them
 #                             completed, without it (a workflow that runs
 #                             when a PR opens and not on a later push, a job
-#                             renamed since). Whether the head merges
-#                             without it is yours.
+#                             renamed since). That is all it establishes: a
+#                             run GitHub has yet to create looks the same, so
+#                             a lane of a workflow started by another's
+#                             completion (`workflow_run`) or by a later event
+#                             on this head reads so until its run appears.
+#                             Whether the head merges without it is yours.
 #                             A lane of no workflow of the repository (another
 #                             app's check, a commit status) is never told so:
 #                             it stays `missing=`
@@ -150,9 +154,10 @@
 #         The first time an entry's lanes are all green it keeps their names,
 #         and holds every later head of that PR to them as `check --lane`
 #         does, so a rollup still filling after a push is `waiting`, and a
-#         lane that will not come is `unscheduled`, said once. It cannot
-#         tell a first rollup that is still filling: list a head that has
-#         never had a full green run only once its lanes have shown.
+#         lane no run on the head is left to bring is `unscheduled`, said
+#         once. It cannot tell a first rollup that is still filling: list a
+#         head that has never had a full green run only once its lanes have
+#         shown.
 #         It stops by itself, and its last line says why:
 #           outcome=stopped TAB reason=<why> TAB pending=<ids> TAB unread=<ids>
 #             idle        nothing listed is `waiting` any more (exit 0)
@@ -446,13 +451,13 @@ why() { # outcome
 	draft) printf 'PR #%s is a draft.' "$PR" ;;
 	review) printf 'PR #%s has open review items (%s unresolved threads, %s reviewers requesting changes, review decision %s). They are the maintainer'"'"'s to settle: skip it, with every PR stacked on it.' "$PR" "$F_THREADS" "$F_CHANGES" "$F_DECISION" ;;
 	red) printf 'PR #%s has a failing lane. Read its log before re-running anything.' "$PR" ;;
-	unscheduled) printf 'PR #%s is green on every lane this head has, and the lanes of its full run it lacks will not come: every workflow run this head has is complete without them. Whether it merges without them is yours to judge.' "$PR" ;;
+	unscheduled) printf 'PR #%s is green on every lane this head has, and lacks lanes of its full run: every workflow run this head has is complete without them, so none comes unless a later event starts a run. Whether it merges without them is yours to judge.' "$PR" ;;
 	waiting) printf 'PR #%s is not green yet: a lane is running, or the rollup does not hold the lanes of a full run.' "$PR" ;;
 	esac
 }
 
-# Of the missing lanes on stdin, the ones that will not come: `unscheduled=`
-# for those, `missing=` for the rest.
+# Of the missing lanes on stdin, the ones no run on the head is left to bring:
+# `unscheduled=` for those, `missing=` for the rest.
 sort_missing() {
 	local s h runs flows
 	s="$(slug)"

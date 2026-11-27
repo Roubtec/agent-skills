@@ -118,7 +118,8 @@ Write the head into a PR's line after every `train.sh push`, and drop the line o
 Right after a push the new head's rollup is empty or partial, and a partial one can be all green.
 The watch covers that from the state file: it holds every later head of a PR to the lanes of that PR's last full green run, and answers `waiting` until each of them has passed there.
 It cannot do so for a head it has never seen green, so list a PR that was pushed moments ago only once its lanes have shown.
-`unscheduled` means the head is green on every lane it has and lacks a lane of that full run that will not come, every workflow run on this head having completed without it (a workflow that runs when a PR opens and not on a later push): each `unscheduled=` line of `train.sh check` names one, and whether the head merges without it is yours to judge.
+`unscheduled` means the head is green on every lane it has and lacks a lane of that full run, every workflow run on this head having completed without it (a workflow that runs when a PR opens and not on a later push): each `unscheduled=` line of `train.sh check` names one, and whether the head merges without it is yours to judge.
+That is all it establishes: a run GitHub has yet to create looks the same, so a lane of a workflow started by another's completion (`workflow_run`), or by a later event on the same head, reads `unscheduled` until its run appears.
 `moved` means someone else pushed: that entry is finished, and the PR is watched again only when you write its new head into the list, which you do instead of rebasing or merging it.
 Whenever you need what the train knows (after a wakeup, after your context was compacted, in a new session), run `train.sh state --state <state>` instead of trusting what you remember: its `green=` line for a PR carries the `--green` head for `rebase`.
 A scheduled wakeup's prompt names the two files, never a list of PRs.
