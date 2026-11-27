@@ -2637,11 +2637,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     rebases: { "pre-fix": REBASE_NOOP, "pre-push": REBASE_REPLAY },
   });
   check(
-    "a replaying pre-push point re-runs the cycle over the rebased tree, on the base THAT rebase landed on",
+    "a replaying pre-push point re-runs the cycle over the rebased tree, by the same qualified name, on the base THAT rebase landed on",
     replayed.status === "fixed-local" &&
       replayed.seen.cycleCalls.length === 2 &&
+      replayed.seen.cycleCalls[1].name === "dev-skills:wf-review-cycle" &&
       replayed.seen.cycleCalls[1].opts.base === REBASE_REPLAY.effectiveBase,
-    JSON.stringify({ status: replayed.status, cycles: replayed.seen.cycleCalls.length, base: replayed.seen.cycleCalls[1] && replayed.seen.cycleCalls[1].opts.base }),
+    JSON.stringify({ status: replayed.status, cycles: replayed.seen.cycleCalls.length, name: replayed.seen.cycleCalls[1] && replayed.seen.cycleCalls[1].name, base: replayed.seen.cycleCalls[1] && replayed.seen.cycleCalls[1].opts.base }),
   );
   const second = replayed.seen.cycleCalls[1] ? replayed.seen.cycleCalls[1].opts.scope : null;
   const passedDisposition = CYCLE_PASS.workReport[0];
