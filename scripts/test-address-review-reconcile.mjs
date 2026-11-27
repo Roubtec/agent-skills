@@ -5103,11 +5103,19 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /`landed` is what the PR CARRIES rather than what this run put there/.test(PUBLISH_SCHEMA.properties.threadOutcomes.description) &&
       /NOT evidence that anything this run did reached origin/.test(PUBLISH_SCHEMA.properties.pushed.description) &&
       /set that entry's `replied` and `resolved` to the state of the thread ON THE PR when your turn ends rather than to what you attempted/.test(pubBrief) &&
-      /a reply the command skipped as `reply=present`, an equal one of yours already being there, is `replied: true`/.test(pubBrief) &&
+      /a reply the command skipped as `reply=present`, one of yours already being there, is `replied: true`/.test(pubBrief) &&
       /`reply=posted` and `reply=present` are `replied: true`, `reply=failed` is false; `resolve=done` and `resolve=already` are `resolved: true`/.test(pubBrief) &&
       // The duplicate rule itself is the script's now: an equal reply of the
-      // authenticated user's is `present`, and nothing is posted over it.
-      publishHelper.includes('select(.author.login == $me and ((.body // "") | norm) == $want)') &&
+      // authenticated user's is `present`, and nothing is posted over it. Where
+      // an earlier turn's reply stands under other words — its SHA re-derived —
+      // the line carries `-` and the script resolves on any reply of theirs.
+      publishHelper.includes('select(.author.login == $me and ($only == "1" or ((.body // "") | norm) == $want))') &&
+      /where the disposition's `detail` carries an earlier turn's record saying the reply is ALREADY POSTED, compose no second one: where the resolve is still owed, write `-` in place of the reply file on its `resolve` line/.test(pubBrief) &&
+      /and where it is not, give the thread no line and report it `replied: true`\. A `reply` line never takes `-`\./.test(pubBrief) &&
+      // A failed second invocation prints no `thread=` line, and the replies
+      // the first one landed are still on the PR.
+      /Take `threadOutcomes` from the LAST answer that printed `thread=` lines/.test(pubBrief) &&
+      /or still no outcome at all \(after exit 1, which you retry once, or exit 64, a miswritten command, which you correct once\) → that invocation wrote nothing/.test(pubBrief) &&
       /if \[ -n "\$prior" \]; then\n\t\treply=present url="\$prior"\n\telif url="\$\(gh api --method POST/.test(publishHelper) &&
       /Report them even where publication stops part-way, and report EXACTLY ONE entry per item you were given/.test(pubBrief) &&
       /an account keyed on it cannot say which of them was replied to/.test(pubBrief),
@@ -5228,7 +5236,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // The brief orders no `gh pr` call of its own any more: every PR write is a
     // script's. The negative stays, for the day one comes back.
     "and no ordered `gh pr` call left bare": orderedPrCalls.every((call) => call.includes("--repo <owner>/<repo>")),
-    "nor any script it orders": orderedScriptCalls.length >= 3 && orderedScriptCalls.every((call) => call.includes("--repo <owner>/<repo>")),
+    "nor any script it orders": orderedScriptCalls.length === 4 && orderedScriptCalls.every((call) => call.includes("--repo <owner>/<repo>")),
   };
   const publishAbsent = Object.entries(publishClauses).filter(([, present]) => !present).map(([name]) => name);
   check(
@@ -6292,7 +6300,10 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /SKIP an id the disposition's `detail` names as ALREADY ORDERED/.test(flakeBrief) &&
       /ordering only the run ids `rerunAccepted` does not carry, which is why an accepted id is reported even beside a rejected one/.test(flakeBrief) &&
       /rerunAccepted: \{ type: "array", items: \{ type: "string" \}/.test(src) &&
-      /carry that line's accepted run ids into the entry's \\`detail\\`, since publication orders only the rest/.test(src),
+      /carry that line's accepted run ids into the entry's \\`detail\\`, since publication orders only the rest/.test(src) &&
+      // The same carriage for a thread: the publisher composes no second reply
+      // only where the entry's `detail` tells it one is already there.
+      /Where a replayed thread entry's standing line says its reply is ALREADY POSTED, carry that line into the entry's \\`detail\\` word for word/.test(src),
     flakeBrief.slice(flakeBrief.indexOf("SKIP an id") - 40, flakeBrief.indexOf("SKIP an id") + 200),
   );
   // The caller's per-id half: one of the repeated lane's two runs accepted and

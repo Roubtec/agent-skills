@@ -16,8 +16,11 @@
 #                 `reply` posts the reply and leaves the thread open; `resolve`
 #                 posts the reply and then resolves the thread. The reply file
 #                 holds the reply's body, verbatim; a relative path is read
-#                 from the folder the dispositions file is in. A thread left
-#                 open without a reply has no line. Blank lines are skipped.
+#                 from the folder the dispositions file is in. A `resolve`
+#                 line may carry `-` in its place, meaning resolve only: an
+#                 earlier run's reply stands and this one composes no second.
+#                 A thread left open without a reply has no line. Blank lines
+#                 are skipped.
 # --no-threads    this publication owes no thread anything (a zero-item run,
 #                 or one whose items are all standalone or CI lanes). One of
 #                 the two is required, so an empty file never passes for that.
@@ -43,7 +46,8 @@
 #   outcome=partial     a write failed, or could not be confirmed (exit 3)
 # with, under either:
 #   thread=<id> TAB reply=<r> TAB resolve=<s> TAB <reply url, or ->
-#       r: posted | present (an equal reply was there) | failed
+#       r: posted | present (an equal reply was there, or the reply a `-`
+#          line stands on) | failed
 #       s: done | already (found resolved) | open (not asked for) | failed |
 #          skipped (the reply failed)
 #   unlisted=<id> TAB <url>
@@ -53,11 +57,14 @@
 #       withheld: a thread write failed, so the Summary waits for the re-run
 # and stops before any write (exit 3) on:
 #   outcome=malformed       a line is not three tab-separated fields, names an
-#                           unknown action or a thread twice, a reply or the
-#                           Summary is unreadable or empty, or the file names
-#                           no thread
+#                           unknown action or a thread twice, gives a `reply`
+#                           line `-` for its file, a reply or the Summary is
+#                           unreadable or empty, or the file names no thread
 #   outcome=foreign-thread  a `foreign=<id>` line per thread id that is not a
 #                           review thread of this PR
+#   outcome=no-reply        an `unreplied=<id>` line per `-` line whose thread
+#                           holds no reply of the authenticated user; the
+#                           thread's first comment is the finding, never one
 #   outcome=contaminated    the thread list failed its scope check twice
 #
 # A `failed` write may still have landed (a timeout, a 502); the re-run reads
@@ -163,16 +170,17 @@ if [ "$NO_THREADS" = 0 ]; then
 		}
 		$2 != "reply" && $2 != "resolve" { print "line " NR " names the action \"" $2 "\": it is reply or resolve"; exit }
 		$1 in seen { print "line " NR " names thread " $1 " a second time"; exit }
+		$2 == "reply" && $3 == "-" { print "line " NR " is a reply with - for its file: only a resolve line can stand on a reply already there"; exit }
 		{ seen[$1] = 1; print $1 sep $2 sep $3 >out }
 	' "$DISPOSITIONS")" || fail "could not read $DISPOSITIONS. Nothing was written."
 	[ -z "$bad" ] || stop malformed "$DISPOSITIONS: $bad. Nothing was written."
 	[ -s "$TMPD/raw" ] || stop malformed "$DISPOSITIONS names no thread. Where the publication owes none, say --no-threads. Nothing was written."
 	while IFS="$SEP" read -r id action file; do
 		case "$file" in
-		/*) ;;
+		- | /*) ;;
 		*) file="$base/$file" ;;
 		esac
-		has_text "$file" || stop malformed "the reply for thread $id, $file, is missing, unreadable or empty. Nothing was written."
+		[ "$file" = - ] || has_text "$file" || stop malformed "the reply for thread $id, $file, is missing, unreadable or empty. Nothing was written."
 		say "$id$SEP$action$SEP$file" >>"$TMPD/lines"
 	done <"$TMPD/raw"
 fi
@@ -188,8 +196,9 @@ rc=$?
 [ "$rc" = 0 ] || fail "could not list the review threads of PR #$PR in $REPO. Nothing was written."
 
 # One thread of the list → resolved SEP first comment id SEP the url of an equal
-# reply of the authenticated user; `absent` where the list holds no such thread.
-# shellcheck disable=SC2016 # $id, $me and $body are jq's
+# reply of the authenticated user, or of any reply of theirs for a `-` line;
+# `absent` where the list holds no such thread.
+# shellcheck disable=SC2016 # $id, $me, $only and $body are jq's
 THREAD_JQ='
 	def norm: gsub("\r"; "") | gsub("[ \t]+\n"; "\n") | sub("^[ \t\n]+"; "") | sub("[ \t\n]+$"; "");
 	($body | norm) as $want
@@ -198,14 +207,16 @@ THREAD_JQ='
 	  else .[0]
 		| [ (.isResolved == true | tostring),
 			(.comments[0].databaseId | tostring),
-			([.comments[1:][] | select(.author.login == $me and ((.body // "") | norm) == $want) | .url][0] // "") ]
+			([.comments[1:][] | select(.author.login == $me and ($only == "1" or ((.body // "") | norm) == $want)) | .url][0] // "") ]
 		| join("\u001f")
 	  end'
 
 : >"$TMPD/plan"
-FOREIGN=""
+FOREIGN="" UNREPLIED=""
 while IFS="$SEP" read -r id action file; do
-	row="$(jq -r --arg id "$id" --arg me "$ME" --rawfile body "$file" "$THREAD_JQ" "$TMPD/threads.json")" ||
+	only=0 body="$file"
+	[ "$file" != - ] || only=1 body=/dev/null
+	row="$(jq -r --arg id "$id" --arg me "$ME" --arg only "$only" --rawfile body "$body" "$THREAD_JQ" "$TMPD/threads.json")" ||
 		fail "could not read thread $id out of the thread list. Nothing was written."
 	if [ "$row" = absent ]; then
 		FOREIGN="$FOREIGN
@@ -216,9 +227,14 @@ foreign=$id"
 	case "$cid" in
 	'' | *[!0-9]*) fail "thread $id lists no first comment to reply under. Nothing was written." ;;
 	esac
+	if [ "$only" = 1 ] && [ -z "$(printf '%s' "$row" | cut -d "$SEP" -f 3)" ]; then
+		UNREPLIED="$UNREPLIED
+unreplied=$id"
+	fi
 	say "$id$SEP$action$SEP$file$SEP$row" >>"$TMPD/plan"
 done <"$TMPD/lines"
 [ -z "$FOREIGN" ] || stop foreign-thread "the dispositions name a thread that is not a review thread of PR #$PR in $REPO. Nothing was written: take every thread id from this PR's own thread list." "$(printf '%s\n' "$FOREIGN" | awk 'NF')"
+[ -z "$UNREPLIED" ] || stop no-reply "a line asks for a resolve alone on a thread of PR #$PR in $REPO that holds no reply of $ME. Nothing was written: give that line the reply's file." "$(printf '%s\n' "$UNREPLIED" | awk 'NF')"
 
 # shellcheck disable=SC2016 # $named is jq's
 UNLISTED="$(jq -r --rawfile named "$TMPD/lines" '

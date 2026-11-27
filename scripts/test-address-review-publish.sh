@@ -375,6 +375,43 @@ printf 'T2\treply\tt2.md\n' >"$D/dispositions.tsv"
 publish
 has "2: a reply line's thread found resolved is reported as it stands" "$OUT" "thread=T2	reply=posted	resolve=already"
 
+# A `-` line: an earlier run replied, a later one owes the resolve alone.
+fresh
+add_reply T1 me-bot "Fixed in 0ld5ha1: quoted the path"
+printf 'T1\tresolve\t-\nT2\treply\tt2.md\n' >"$D/dispositions.tsv"
+publish
+has "2: a resolve line with - resolves on the reply already there" "$OUT" "thread=T1	reply=present	resolve=done	https://github.com/acme/widgets/pull/7#discussion_r555"
+is "2: ...posting no second reply on that thread" "$(state '.threads[0] | [.isResolved, (.comments | length)] | join(" ")')" "true 2"
+is "2: ...only the other line's" "$(replies)" 1
+is "2: ...and the run publishes" "$(val outcome)" published
+: >"$FAKE/gh.log"
+publish
+has "2: run again, it finds the thread resolved" "$OUT" "thread=T1	reply=present	resolve=already	https://github.com/acme/widgets/pull/7#discussion_r555"
+is "2: ...and writes nothing" "$(writes)" 0
+
+unreplied() { # <label> — after the PR is arranged
+	printf 'T2\treply\tt2.md\nT1\tresolve\t-\n' >"$D/dispositions.tsv"
+	publish
+	is "2: a resolve line with - on $1 is refused" "$(val outcome)" no-reply
+	is "2: ...with exit 3" "$RC" 3
+	has "2: ...by name" "$OUT" "unreplied=T1"
+	is "2: ...before any write, the line ahead of it included" "$(writes)" 0
+	lacks "2: ...and no thread line claims one" "$OUT" "thread="
+}
+fresh
+unreplied "a thread holding no reply"
+has "2: ...stderr saying what the line needs" "$ERR" "give that line the reply's file"
+fresh
+jq '.threads[0].comments[0].author.login = "me-bot"' "$FAKE/state.json" >"$FAKE/state.new" && mv "$FAKE/state.new" "$FAKE/state.json"
+unreplied "a thread whose first comment is the authenticated user's only one"
+fresh
+add_reply T1 alice "Fixed, I think"
+unreplied "a thread only another user replied on"
+fresh
+printf 'PRRT_other\tresolve\t-\nT1\tresolve\t-\n' >"$D/dispositions.tsv"
+publish
+is "2: a thread that is not this PR's is said first" "$(val outcome)" foreign-thread
+
 # --- 3. a thread that is not this PR's -----------------------------------------
 fresh
 printf 'T1\tresolve\tt1.md\nPRRT_other\tresolve\tt1.md\nT2\treply\tt2.md\n' >"$D/dispositions.tsv"
@@ -446,6 +483,11 @@ has "4: ...named on stderr" "$ERR" 'names the action "dismiss"'
 fresh
 printf 'T1\tresolve\tt1.md\nT1\treply\tt2.md\n' >"$D/dispositions.tsv"
 malformed "a thread named twice"
+fresh
+add_reply T1 me-bot "an earlier reply"
+printf 'T1\treply\t-\n' >"$D/dispositions.tsv"
+malformed "a reply line with - for its file"
+has "4: ...named on stderr" "$ERR" "only a resolve line can stand on a reply already there"
 fresh
 printf 'T1\tresolve\tabsent.md\n' >"$D/dispositions.tsv"
 malformed "a missing reply file"
