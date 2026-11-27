@@ -472,6 +472,7 @@ for file in .powbox.local.yml .powbox.yml; do
 	malformed "mapping entry" "$file" 'shadow:\n  - a: b\n'
 	malformed "number entry" "$file" 'shadow:\n  - 3\n'
 	malformed "empty entry" "$file" 'shadow:\n  - dist\n  - ""\n'
+	malformed "empty entry between others" "$file" 'shadow:\n  - a\n  - ""\n  - b\n'
 	malformed "only an empty entry" "$file" 'shadow:\n  - ""\n'
 	malformed "multi-line entry" "$file" 'shadow:\n  - "a\\nb"\n'
 done
@@ -708,6 +709,9 @@ refused "the ignore question fails for a root" check-ignore worktrees
 refused "the tracked question fails for a root" --literal-pathspecs worktrees
 put .powbox.local.yml 'ctx: 1\n'
 refused "the local file's ignore question fails" -q worktrees
+rm "$R/.powbox.local.yml"
+put dist/x
+refused "the ignore question fails for a listed folder" check-ignore shadows
 OUT="$(cd "$R" && PATH="$WORKDIR/gitbin:$PATH" FAKE_GIT_REFUSES=nothing-at-all bash "$HELPER" shadows 2>/dev/null)"
 is "the refusing git is otherwise the real one" "$?" 0
 # The probe's promise not to take a lock rests on which git commands it runs.
