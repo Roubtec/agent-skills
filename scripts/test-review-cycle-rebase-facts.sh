@@ -198,7 +198,7 @@ is "4: ...so nothing is carried over disjoint paths" "$(val paths):$(val outcome
 # What a merge changed by hand is the branch's own, though no replayed commit holds it.
 branch evil "$INIT"
 add only-evil e
-git -C "$R" merge -q --no-ff --no-commit side
+git -C "$R" merge -q --no-ff --no-commit side >/dev/null 2>&1
 awk 'NR == 1 { print "EVIL"; next } { print }' "$R/g" >"$WORKDIR/edit" && cp "$WORKDIR/edit" "$R/g"
 git -C "$R" commit -q -am "join, with an edit"
 call before --onto "$MAIN2"
@@ -243,13 +243,13 @@ call after --old-base "$P1" --old-tip "$CHILD" --new-base "$P2"
 is "5: the child's replay onto the grown parent carries" "$(val outcome):$RC" "carry:0"
 
 # --- 6: a replay that dropped, altered or reworded a commit --------------
+# The base already holds the branch's LAST commit, so every pair that remains matches.
 branch d "$INIT"
 add only-d d
-D1="$(tip d)"
 line f 4 D4
 D="$(tip d)"
 branch main6 "$INIT"
-git -C "$R" cherry-pick "$D1" >/dev/null 2>&1
+git -C "$R" cherry-pick "$D" >/dev/null 2>&1
 add only-main6 m
 MAIN6="$(tip main6)"
 on d
