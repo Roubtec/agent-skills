@@ -288,6 +288,13 @@
 # `$CONTAINER_NAME`, else the login name, reduced to 40 safe characters — two
 # identities differing only past that prefix land in one scope, so set `DC_AGENT`
 # explicitly when they might.
+# `dc-remove` derives the same scope, so it reaches a clone directly only from
+# the worktree and agent name that made it. Called from anywhere else in the
+# repository it searches the other scopes under the same root, and what lets it
+# act there is the marker written below: it removes a clone only when that is
+# the single clone of its slug under the root, the marker's `clone=` is the
+# directory it sits in, and its `source=` is one of the repository's registered
+# worktrees. Anything else it finds it names and leaves, exiting non-zero.
 #
 # REUSE: a slug's clone is never handed back as it was found. A disposable clone
 # exists to be wrecked, so returning whatever survived the last experiment —
