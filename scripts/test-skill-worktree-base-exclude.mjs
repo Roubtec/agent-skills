@@ -1,26 +1,27 @@
 #!/usr/bin/env node
-// Focused pin for how the SKILLS establish the worktree base's ignore rule.
+// Focused pin for how the SKILLS and the WORKFLOWS get the worktree base's
+// ignore rule established: through the `address-tasks` skill's `bootstrap.sh`,
+// and through nothing else.
 //
-// `scripts/test-address-review-reconcile.mjs` pins this recipe on the WORKFLOW
-// side ("the worktree base is made ignored before any arm adds under it…").
-// The same recipe is also stated in prose by three skill steps, each shipped in
-// two hand-edited mirrors with no generator between them, so six files can drift
-// from the workflow and from each other one review-driven edit at a time. That
-// is what task 018a had to repair, in two different shapes. The two BOOTSTRAP
-// steps told a run to append to a literal `.git/info/exclude`, which is not a
-// path at all when the checkout is itself a linked worktree (`.git` is a
-// gitfile, `.git/info` is not a directory, the append fails outright). The
-// `address-review` restatement already resolved the path through Git and named
-// the literal only to warn against it; its defect was solely the missing CWD
-// clause — a primary checkout answers RELATIVE, so an answer appended to from
-// another directory writes the rule where nothing reads it. Either way the
-// protection was never established and the nested `git worktree add` left
-// `?? .worktrees/` in the very checkout the step promises not to dirty.
+// The rule used to be a recipe stated in prose on five surfaces — three skill
+// steps, each shipped in two hand-edited mirrors, and two workflow briefs — and
+// every incident this file records was one of those copies drifting. Task 018a:
+// two bootstrap steps appended to a literal `.git/info/exclude`, which is not a
+// path at all when the checkout is a linked worktree, and `address-review`
+// resolved the path through Git but not from inside the repository, so the
+// rule landed in a file nothing reads. Task 047: both bootstrap steps told a
+// run to prefer `wt-bootstrap`, which establishes no ignore rule and reports
+// `ok` without one. Task 047a: the batch workflow said the same of it.
 //
-// What is pinned here is the resolved form's load-bearing clauses, not whole
-// sentences: reword freely around them. The clauses are asserted to appear in
-// the WORKFLOWS' own text too — both of the two that state the recipe — so no
-// surface can be "reconciled" into a second spelling of one recipe.
+// Task 057 moved the recipe into the script, so what each incident protects now
+// lives in two places. The recipe's own clauses — the exclude file asked of Git
+// from inside the main checkout, the trailing-slash probe, the second probe and
+// its stop, the rule established whether or not `wt-bootstrap` answered — are
+// BEHAVIOUR, and `scripts/test-address-tasks-bootstrap.sh` runs them from a
+// primary checkout, a subdirectory and a linked worktree. What is left to pin
+// by text is here: that every surface calls the script, that none of them
+// states the recipe beside it (a second spelling is how the drift starts
+// again), and the judgement each surface keeps — what a stop means there.
 //
 // Run: node scripts/test-skill-worktree-base-exclude.mjs
 
@@ -81,79 +82,91 @@ function workflowLine(text, file, anchor) {
   return hits[0];
 }
 
-// Clauses every one of the three steps must carry. Each is the ANSWER to a way
-// the recipe silently fails: ask Git for the exclude file rather than spelling
-// it (a linked worktree has no `.git/info` directory); ask from inside the
-// repository (a primary checkout answers CWD-relative, so an answer appended to
-// from elsewhere writes the rule where `check-ignore` never reads it); and probe
-// with the trailing slash a directory-only rule needs before the directory it
-// names exists — which is every first run.
+// What every one of the three steps must say. The script is another skill's
+// for two of them, so the line that names it names its owner too, and the rule
+// still goes where it dirties nothing: the repo-local exclude file, never the
+// tracked `.gitignore`.
 const SHARED = [
-  ["names the exclude file through `git rev-parse --git-path info/exclude`", /git rev-parse --git-path info\/exclude/],
-  ["says the question is asked from inside the repository", /from inside `<repo>`/],
-  ["probes with the trailing slash", /trailing slash/i],
+  ["names the script", /`bootstrap\.sh (?:run|ignore)`/],
+  ["forbids doing the script's work by hand", /by hand/],
+  ["says the rule goes in the repo-local exclude file", /repo-local exclude file/],
+  ["points away from the tracked `.gitignore`", /the tracked `\.gitignore`/],
 ];
 
-// The literal, matched bare or backticked: the scans below promise "every
-// occurrence", and a mention that drops the code span must not slip past them.
-const EXCLUDE_LITERAL = /`?\.git\/info\/exclude`?/g;
+// The hand recipe, in any of the spellings it has had. No surface may carry
+// one: the script is the recipe, and a copy beside the call is free to drift.
+const HAND_RECIPE = [
+  ["a `check-ignore` probe", /check-ignore/],
+  ["an exclude file named as a path", /info\/exclude/],
+  ["an append instruction", /append `?\/\.worktrees\/`?/],
+];
 
-// The two BOOTSTRAP steps state the full recipe, command and all. The recipe
-// probes and appends the one root-anchored name `/.worktrees/`, so the step may
-// not offer an in-repo base OUTSIDE that name, which the re-probe would wave
-// through unignored. Beneath it is a different matter and is pinned as its own
-// clause: the append is a directory rule that carries the whole subtree, and
-// `wt-bootstrap` — the helper both steps tell a run to prefer — reports
-// `<repo>/.worktrees/$CONTAINER_NAME` as its base (`wf-address-tasks.js`'s
-// BOOTSTRAP_SCHEMA), so a step that admitted only `.worktrees/` itself would
-// reject the very result it just asked for. Asserting the subtree admission
-// keeps a later round from re-tightening it back into that conflict.
+// The two BOOTSTRAP steps run the whole bootstrap. Each keeps the judgement:
+// a stop is a blocker, and the base is the one the script reported — the rule
+// it lists is the one root-anchored name `/.worktrees/`, so an in-repo base
+// chosen anywhere else would be ready and unignored. Task 047's clause stays on
+// the same line as the call: the helper the script prefers establishes no
+// ignore rule, so the rule has to be said to be the script's on BOTH paths, or
+// a later round can restore "the helper covers it".
 const FULL = [
-  ["constrains the in-repo base to `.worktrees/` and its subtree, and nothing else", /in-repo base is `\.worktrees\/` or a path beneath it\b[^\n]*\band nothing else/],
-  ["admits the preferred helper's container-scoped base beneath it", /`<repo>\/\.worktrees\/\$CONTAINER_NAME`/],
-  ["gives the probe command with the trailing slash", /git check-ignore -q "<repo>\/\.worktrees\/"/],
-  ["re-probes and makes a still-no answer a blocker", /re-probe and make a still-no answer a blocker/],
-  ["warns that a linked worktree has no `.git/info` directory", /`\.git\/info` is not a directory at all/],
-  ["points away from the tracked `.gitignore`", /NOT the tracked `\.gitignore`/],
+  ["runs the whole bootstrap", /`bootstrap\.sh run`/],
+  ["makes a stop a blocker that creates no worktree", /`outcome=stop` is a blocker[^\n]*create no worktree/],
+  ["forbids working around a stop", /never work around it/],
+  ["makes a failure that printed no outcome a blocker too", /Any other non-zero exit[^\n]*is a blocker too[^\n]*create no worktree/],
+  ["keeps a host-shared base a notice, not a blocker", /`host-shared=yes`[^\n]*is \*\*not\*\* a blocker[^\n]*tell the user once[^\n]*proceed/],
+  ["takes the reported base and no other", /`wt-base=` path[^\n]*\band no other/],
+  ["admits the preferred helper's container-scoped base beneath `.worktrees/`", /`<repo>\/\.worktrees\/\$CONTAINER_NAME`/],
+  ["says the preferred helper establishes no ignore rule", /establishes no ignore rule/],
+  ["says the rule is the script's on both paths", /the ignore rule is the script's own on both paths/],
+  ["points away from the tracked `.gitignore`", /NOT in the tracked `\.gitignore`/],
+  ["leaves a leftover with content alone", /never remove one yourself/],
 ];
 
-// The `address-review` restatement deliberately carries neither the re-probe nor
-// its blocker — task 018a scoped that deviation out rather than reconciling it —
-// so the exclusion is pinned as ABSENCE rather than as omission from the list
-// above. Omission pins one direction only: it stops the clause being dropped
-// where it belongs, while the reconciliation this decision refuses — adding it
-// here — would sail through. Asserted both ways, moving that clause in either
-// direction costs a deliberate edit to this file, which is what "pinned as a
-// decision" has to mean. The pattern is loose on purpose: a reconciliation
-// copies the workflow's own spelling, and either half of it selects.
+// The `address-review` step deliberately makes neither the second probe nor a
+// still-unignored base a blocker — task 018a scoped that deviation out rather
+// than reconciling it — so the exclusion is pinned as ABSENCE rather than as
+// omission from the list above. Omission pins one direction only: it stops the
+// clause being dropped where it belongs, while the reconciliation this decision
+// refuses — adding it here — would sail through. The script probes twice
+// whoever calls it, so what the decision comes to now is what this skill does
+// with its stop: it attaches all the same and reports, and that is pinned as
+// stated too, since a silent line would leave a run to guess. Moving the
+// clause in either direction costs a deliberate edit to this file.
 const ABSENT_REPROBE = [
   ["deliberately carries no re-probe and no still-no blocker", /re-?probe|still-no/i],
+  ["deliberately makes the script's stop no blocker", /is a blocker/],
 ];
 
 const STEPS = [
   {
     skill: "address-reviews",
     anchor: "**Prepare the worktree base and prune stale state.**",
-    clauses: [...SHARED, ...FULL],
+    owner: true,
+    clauses: [...SHARED, ...FULL, ["makes an unreachable remote a stop here", /`remote=no` is a stop too/]],
   },
   {
     skill: "address-tasks",
-    anchor: "**Choose the worktree base directory** (`$WT_BASE`)",
-    clauses: [...SHARED, ...FULL],
+    anchor: "**Run the worktree bootstrap:**",
+    clauses: [...SHARED, ...FULL, ["keeps an unreachable remote a fallback, not a blocker", /`remote=no` is \*\*not\*\* a blocker/]],
   },
   {
     skill: "address-review",
     anchor: "Branch resolution and attach follow `address-reviews`",
+    owner: true,
     clauses: [
       ...SHARED,
-      ["warns that a literal `.git/info/exclude` is not a path at all", /a literal `\.git\/info\/exclude` is not a path at all/],
-      ["points away from the tracked `.gitignore`", /the tracked `\.gitignore`/],
+      ["runs the ignore rule alone", /`bootstrap\.sh ignore`/],
+      ["runs it before the first attach", /before the first attach run `bootstrap\.sh ignore`/],
+      ["says what this skill does with a stop", /`outcome=stop` does not halt this run/],
+      ["carries the stop into the final report", /`blocker=` line into the final report/],
+      ["makes a stop that names no base attach nothing", /A stop with no `wt-base=` line[^\n]*attach nothing/],
+      ["makes a failure that printed no outcome attach nothing", /Any other non-zero exit[^\n]*no `outcome=` line[^\n]*attach nothing/],
     ],
     absent: ABSENT_REPROBE,
   },
 ];
 
-for (const { skill, anchor, clauses, absent = [] } of STEPS) {
+for (const { skill, anchor, clauses, absent = [], owner = false } of STEPS) {
   const plugins = stepLine("plugins", skill, anchor);
   const codex = stepLine("codex", skill, anchor);
 
@@ -169,103 +182,68 @@ for (const { skill, anchor, clauses, absent = [] } of STEPS) {
     check(`${skill}: ${name}`, !re.test(plugins) && !re.test(codex));
   }
 
-  // Nothing may name `.git/info/exclude` as a path to WRITE. Every occurrence
-  // has to be under a disclaimer — the RELATIVE answer a primary checkout gives,
-  // or the literal you must not spell — which is what distinguishes the fixed
-  // text from the instruction it replaced.
-  for (const [tree, line] of [["plugins", plugins], ["codex", codex]]) {
-    const bad = [...line.matchAll(EXCLUDE_LITERAL)].filter(
-      (m) => !/literal|RELATIVE/.test(line.slice(Math.max(0, m.index - 60), m.index)),
-    );
-    check(
-      `${tree}/${skill}: no undisclaimed \`.git/info/exclude\` stated as a path to write`,
-      bad.length === 0,
-      `${bad.length} undisclaimed mention(s)`,
-    );
-  }
-}
-
-// Both BOOTSTRAP steps tell a run to PREFER the baked `wt-bootstrap` helper
-// over doing the checks by hand. The helper establishes no ignore rule — it
-// names neither `check-ignore` nor an exclude file anywhere — and in
-// self-hosted mode, where the worktree roots are ordinary subdirectories rather
-// than mounts, it reports `ok` for a repository that ignores nothing. So a run
-// that reads "prefer it", takes the reported `wtBase`, and skips the by-hand
-// branch never establishes the rule and never reaches the blocker inside the
-// branch it skipped. The obligation therefore has to be stated on the
-// PREFERENCE statement itself, which in `address-tasks` is a paragraph away
-// from the step it defers to — out of reach of the step pins above, hence its
-// own anchor here. Pinned so a later round cannot restore an unqualified "it
-// covers those and nothing else" over the ignore half.
-const PREFERENCE_ANCHOR = "If a `wt-bootstrap` helper is on PATH";
-const PREFERENCE = [
-  ["says the preferred helper establishes no ignore rule", /establishes no ignore rule/],
-  ["leaves making an in-repo base ignored with the run", /still yours to make ignored/],
-];
-
-for (const skill of ["address-tasks", "address-reviews"]) {
-  const plugins = stepLine("plugins", skill, PREFERENCE_ANCHOR);
-  const codex = stepLine("codex", skill, PREFERENCE_ANCHOR);
-
-  check(`${skill}: the \`wt-bootstrap\` preference is byte-identical across the two mirrors`, plugins === codex);
-
-  for (const [name, re] of PREFERENCE) {
-    check(`${skill}: ${name}`, re.test(plugins) && re.test(codex));
+  // A consumer says whose script it is, where a reader meets the name.
+  if (owner) {
+    check(`${skill}: names the script's owner beside it`, /sibling `address-tasks` skill folder/.test(plugins) && /sibling `address-tasks` skill folder/.test(codex));
   }
 
-  // The preference statement must POINT AT the recipe, not restate it: a second
-  // spelling beside the first is the drift this whole file exists to stop, and
-  // the pins above would not notice one added outside the step line. Counted
-  // file-wide, so it does not matter which line the copy would land on.
+  // The recipe is the script's. Counted over the whole file rather than the
+  // step line, so it does not matter where a copy would land.
   for (const tree of ["plugins", "codex"]) {
-    const path = join(repo, tree, "dev-skills", "skills", skill, "SKILL.md");
-    const probes = readFileSync(path, "utf8").match(/git check-ignore/g) ?? [];
-    check(
-      `${tree}/${skill}: states the ignore recipe's probe exactly once`,
-      probes.length === 1,
-      `${probes.length} occurrence(s)`,
-    );
+    const text = readFileSync(join(repo, tree, "dev-skills", "skills", skill, "SKILL.md"), "utf8");
+    for (const [name, re] of HAND_RECIPE) {
+      check(`${tree}/${skill}: states no hand recipe — ${name}`, !re.test(text));
+    }
+    const calls = text.match(/`bootstrap\.sh (?:run|ignore)`/g) ?? [];
+    check(`${tree}/${skill}: orders the script exactly once`, calls.length === 1, `${calls.length} occurrence(s)`);
   }
 }
 
-// One recipe, one spelling: the shared clauses are the workflows' own words, so
-// a later round cannot "reconcile" the skills into a second phrasing of it.
-for (const [name, re] of SHARED) {
-  check(`wf-address-review.js states the same clause — ${name}`, re.test(reviewWorkflow));
+// The workflows reach the same script through the plugin's `bin/` shim, and
+// state no recipe either. `wf-address-review.js` attaches one worktree and so
+// runs the ignore rule alone; unlike the skill of the same name it stops on
+// the script's stop, as it always has.
+for (const [file, text] of [["wf-address-review.js", reviewWorkflow], ["wf-address-tasks.js", tasksWorkflow]]) {
+  for (const [name, re] of HAND_RECIPE) {
+    check(`${file}: states no hand recipe — ${name}`, !re.test(text));
+  }
+}
+{
+  const calls = reviewWorkflow.match(/`address-tasks-bootstrap [a-z -]+`/g) ?? [];
+  check("wf-address-review.js orders `address-tasks-bootstrap ignore`, once", calls.length === 1 && calls[0] === "`address-tasks-bootstrap ignore`", JSON.stringify(calls));
+  const line = workflowLine(reviewWorkflow, "wf-address-review.js", "`address-tasks-bootstrap ignore`");
+  check("wf-address-review.js: the script's stop is a blocker that attaches nothing", /`outcome=stop`[^.]*`ok: false`[^.]*attach nothing/.test(line));
+  check("wf-address-review.js: a failure that printed no outcome is a blocker that attaches nothing", /Any other exit, or no `outcome=` line, is a blocker too[^.]*attach nothing/.test(line));
+  check("wf-address-review.js: points away from the tracked `.gitignore`", /NOT the tracked `\.gitignore`/.test(line));
+  check("wf-address-review.js: forbids establishing the rule any other way", /Establish the rule no other way/.test(line));
 }
 
-// Task 047a carried the same obligation onto the OTHER workflow surface.
-// `wf-address-tasks.js`'s bootstrap prompt used to tell its subagent that
-// `wt-bootstrap` "performs the whole Session Bootstrap deterministically" and
-// then enumerate what it does — a list with no ignore rule in it, because the
-// helper establishes none — while its helper-ABSENT branch returned a blocker
-// and said not to re-derive the checks by hand. So the rule was established in
-// no configuration: helper present, the step reported complete; helper absent,
-// the run stopped. Only the first of those was a defect, and only it was fixed:
-// the absent branch still stops, because a bootstrap that returns `ok: false`
-// adds no worktree and so has no base to protect (task 046b keeps that fallback
-// reachable rather than retiring it).
+// Task 047a's obligation on the batch workflow. Its bootstrap prompt used to
+// tell its subagent that `wt-bootstrap` "performs the whole Session Bootstrap
+// deterministically" — a list with no ignore rule in it, because the helper
+// establishes none. The prompt now runs the script, which runs the helper and
+// then establishes the rule; `--require-helper` keeps the helper-ABSENT branch
+// the stop it was, because the batch's later steps need the other `wt-*`
+// helpers (task 046b keeps that fallback reachable rather than retiring it),
+// and the script writes nothing on that stop.
 //
-// Pinned beside the skills' PREFERENCE block rather than in a workflow-only
-// suite, so the two surfaces cannot drift apart again: the workflow now states
-// the SHARED clauses in the same spelling, carries the preference clauses the
-// skills carry, and states the probe exactly once — this file being the one
-// that counts occurrences, since a second spelling here is the drift it exists
-// to stop. The retired claim is asserted ABSENT: 047a's review plan treats a
-// restored "performs the whole Session Bootstrap" as a regression, and omission
-// from a clause list would not notice one coming back.
-const tasksHelperStep = workflowLine(tasksWorkflow, "wf-address-tasks.js", "1. From the repo root, run `wt-bootstrap`");
-const tasksIgnoreStep = workflowLine(tasksWorkflow, "wf-address-tasks.js", "2. Where it reported `ok`");
-const tasksMappingStep = workflowLine(tasksWorkflow, "wf-address-tasks.js", "Map that JSON onto the structured result verbatim");
+// The retired claim is asserted ABSENT: 047a's review plan treats a restored
+// "performs the whole Session Bootstrap" as a regression, and omission from a
+// clause list would not notice one coming back.
+const tasksHelperStep = workflowLine(tasksWorkflow, "wf-address-tasks.js", "1. From the repo root, run `address-tasks-bootstrap run --require-helper`");
+const tasksReadyStep = workflowLine(tasksWorkflow, "wf-address-tasks.js", "2. `outcome=ready` (exit 0)");
+const tasksStopStep = workflowLine(tasksWorkflow, "wf-address-tasks.js", "3. `outcome=stop` (exit 3)");
 const tasksWtBaseField = workflowLine(tasksWorkflow, "wf-address-tasks.js", "Absolute path to this container's worktree base");
 
-for (const [name, re] of SHARED) {
-  check(`wf-address-tasks.js states the same clause — ${name}`, re.test(tasksIgnoreStep));
-}
-// Anchored to the step that PREFERS the helper, not to the file: the schema's
+// Anchored to the step that runs the script, not to the file: the schema's
 // copy of the same statement must not be able to stand in for it.
-for (const [name, re] of PREFERENCE) {
-  check(`wf-address-tasks.js: ${name}`, re.test(tasksHelperStep));
+check("wf-address-tasks.js: says the helper establishes no ignore rule", /establishes no ignore rule/.test(tasksHelperStep));
+check("wf-address-tasks.js: says the script does that half, before any worktree is added", /the script then does that half[^.]*BEFORE any worktree is added/.test(tasksHelperStep));
+check("wf-address-tasks.js: forbids a hand-made rule, check, or helper run beside the script's", /Establish nothing by hand/.test(tasksHelperStep));
+check("wf-address-tasks.js: points away from the tracked `.gitignore`", /never in the tracked `\.gitignore`/.test(tasksHelperStep));
+{
+  const calls = tasksWorkflow.match(/`address-tasks-bootstrap [a-z -]+`/g) ?? [];
+  check("wf-address-tasks.js orders `address-tasks-bootstrap run --require-helper`, once", calls.length === 1 && calls[0] === "`address-tasks-bootstrap run --require-helper`", JSON.stringify(calls));
 }
 // The schema field carries the statement too — the acceptance criterion covers
 // "prompt literals or schema field descriptions" — so it is pinned in its own
@@ -274,48 +252,34 @@ check(
   "wf-address-tasks.js: `BOOTSTRAP_SCHEMA`'s `wtBase` says the helper establishes no ignore rule",
   /establishes no ignore rule/.test(tasksWtBaseField),
 );
-// The mapping step orders the helper's JSON copied "with no reinterpretation",
-// and it is the LATER instruction, so an unqualified form silently outranks the
-// still-unignored blocker the ignore step exists to emit — and the batch would
-// proceed on the helper's `ok` over an unprotected base. The qualifier is what
-// makes the two steps one decision, so it is pinned rather than trusted.
+// The ready step maps the script's lines "with no reinterpretation", and the
+// stop step is what keeps that from outranking a refusal: a still-unignored
+// base arrives as a stop, and an `ok` returned over it is exactly the answer
+// the batch would add worktrees under. So the stop is pinned as final, and as
+// the place the unignored base and the missing helper both arrive.
+check("wf-address-tasks.js: a ready answer is mapped with no reinterpretation", /no reinterpretation/.test(tasksReadyStep) && /`wt-base=`/.test(tasksReadyStep));
 check(
-  "wf-address-tasks.js: the verbatim mapping is qualified by the ignore step's override",
-  /no reinterpretation[^.]*step 2/i.test(tasksMappingStep),
+  "wf-address-tasks.js: a stop is returned as `ok: false` with the script's blocker, and is final",
+  /`ok: false` with its `blocker=` line verbatim[^.]*that decision is final/.test(tasksStopStep),
 );
+check("wf-address-tasks.js: the stop covers a base still not ignored", /still not ignored/.test(tasksStopStep));
+check("wf-address-tasks.js: the stop covers a missing `wt-bootstrap`, with no plain-git fallback", /not on PATH[^.]*rather than fall back to plain git/.test(tasksStopStep));
 check(
   "wf-address-tasks.js no longer claims the helper performs the whole Session Bootstrap",
   !/performs the whole Session Bootstrap/.test(tasksWorkflow),
 );
-{
-  const probes = tasksWorkflow.match(/git check-ignore/g) ?? [];
-  check(
-    "wf-address-tasks.js states the ignore recipe's probe exactly once",
-    probes.length === 1,
-    `${probes.length} occurrence(s)`,
-  );
-  // Same undisclaimed-literal scan the skill steps get: every mention of the
-  // literal must sit under a disclaimer (the RELATIVE answer a primary checkout
-  // gives, or the literal you must not spell), never stand as a path to write.
-  const bad = [...tasksWorkflow.matchAll(EXCLUDE_LITERAL)].filter(
-    (m) => !/literal|RELATIVE/.test(tasksWorkflow.slice(Math.max(0, m.index - 60), m.index)),
-  );
-  check(
-    "wf-address-tasks.js: no undisclaimed `.git/info/exclude` stated as a path to write",
-    bad.length === 0,
-    `${bad.length} undisclaimed mention(s)`,
-  );
-}
 
 // `declare-shadows` names `.git/info/exclude` too, as a rule source that does
 // not reach teammates rather than a file to append to. It is out of the step
 // pins' scope on purpose; this check keeps that decision visible instead of
-// leaving a later audit to rediscover the mention and "fix" it. The undisclaimed
-// scan above runs over the three step LINES, so this file is the one place the
-// literal appears with no scan over it — which is why the mention is counted
-// rather than merely looked for. "Only" has to mean only: a SECOND mention, such
-// as an added instruction to append there directly, is the defect this file's
-// single disclaimed mention would otherwise camouflage.
+// leaving a later audit to rediscover the mention and "fix" it. The hand-recipe
+// scan above runs over the three skills that call the script, so this file is
+// the one place the literal appears with no scan over it — which is why the
+// mention is counted rather than merely looked for. "Only" has to mean only: a
+// SECOND mention, such as an added instruction to append there directly, is the
+// defect this file's single disclaimed mention would otherwise camouflage.
+// Matched bare or backticked, so a mention that drops the code span counts.
+const EXCLUDE_LITERAL = /`?\.git\/info\/exclude`?/g;
 for (const tree of ["plugins", "codex"]) {
   const path = join(repo, tree, "dev-skills", "skills", "declare-shadows", "SKILL.md");
   const mentions = logicalLines(readFileSync(path, "utf8")).flatMap((line) =>

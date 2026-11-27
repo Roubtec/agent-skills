@@ -125,17 +125,17 @@ Follows `address-tasks` → "Session Bootstrap" — see that skill's Bootstrap f
 In brief, all idempotent:
 
 1. **Prepare the worktree base and prune stale state.**
-   Pick or create a base directory for worktrees — `<repo>/.worktrees/` inside the repo, or a directory outside the repo.
-   An in-repo base is `.worktrees/` or a path beneath it — the `wt-bootstrap` helper this bootstrap prefers reports `<repo>/.worktrees/$CONTAINER_NAME`, which is one — and nothing else: the ignore recipe that follows probes and appends exactly `/.worktrees/`, a root-anchored directory rule Git applies to everything beneath it, so a base under that name is carried by the very same append while one ANYWHERE ELSE in the repo would pass the re-probe while staying unignored.
-   A base inside the repo has to BE ignored, and only this run makes it so: `git worktree add` excludes nothing on its own, so probe it with `git check-ignore -q "<repo>/.worktrees/"` — with the TRAILING SLASH, since `/.worktrees/` is a directory-only rule and `check-ignore` answers NO for a bare `.worktrees` that does not exist on disk yet, which is every first run — and, where it answers no, append `/.worktrees/` to the file `git rev-parse --git-path info/exclude` names — run it from inside `<repo>`, because in a primary checkout it answers with the RELATIVE `.git/info/exclude` (only a linked worktree gets an absolute path), so a `git -C <repo>` form whose answer you then append to from your own directory writes the rule to a file `check-ignore` never reads — then re-probe and make a still-no answer a blocker.
-   Ask Git for that path rather than writing a literal `.git/info/exclude`: THIS checkout may itself be a linked worktree, where `.git` is a gitfile and `.git/info` is not a directory at all, so the literal append fails outright and the protection is never established — while `--git-path` resolves to the shared exclude file that `check-ignore` actually reads, in a linked worktree and a primary checkout alike.
-   It is the repo-local ignore file, untracked and so dirtying nothing itself, and NOT the tracked `.gitignore` — editing that would dirty the main checkout, which would later block freeing a batch branch it occupies.
-   Run `git worktree prune` to clear stale registrations, and remove any orphaned directories under the base that `git worktree list` no longer knows about.
-   Then probe remote access with `git ls-remote origin`.
-   **Stricter than the task batch:** here a failed remote probe is a stop — PR-number resolution and lease-safe publication cannot be trusted from stale refs.
-   The chosen base is the `$WT_BASE` used below.
-   If a `wt-bootstrap` helper is on PATH, prefer it — it performs these checks and prints the base dir as JSON.
-   It establishes no ignore rule, though: an in-repo base is still yours to make ignored by the recipe above, and the helper reports `ok` whether or not that rule exists.
+   Run `bootstrap.sh run` — the script in the sibling `address-tasks` skill folder, run by absolute path — and do none of what it does by hand.
+   It settles the worktree base, makes it ignored, prunes stale worktree state, probes remote access and measures free space, then answers in `key=value` lines with `outcome=` first.
+   Where a `wt-bootstrap` helper is on PATH the script runs it for all of that but the ignore rule — the helper establishes no ignore rule, and reports `ok` whether or not one exists — and where it is absent plain git does the job; the ignore rule is the script's own on both paths.
+   That rule goes in the repo-local exclude file, untracked and so dirtying nothing itself, and NOT in the tracked `.gitignore` — editing that would dirty the main checkout, which would later block freeing a batch branch it occupies.
+   `outcome=stop` is a blocker: report its `blocker=` line, which names its own remedy, and create no worktree — never work around it by choosing another base or by listing the rule yourself.
+   Any other non-zero exit arrives with no `outcome=` line and is a blocker too: report what the script printed on stderr, and create no worktree.
+   `host-shared=yes` is **not** a blocker: tell the user once that the worktrees will live on a filesystem shared with the host, and proceed.
+   **Stricter than the task batch:** here `remote=no` is a stop too — PR-number resolution and lease-safe publication cannot be trusted from stale refs.
+   On `outcome=ready` with `remote=yes`, the `wt-base=` path is the `$WT_BASE` used below, and no other: it is `<repo>/.worktrees/` or a path beneath it (`<repo>/.worktrees/$CONTAINER_NAME` in a container), the one name the script's rule covers.
+   Its `avail-bytes=` reading is the storage input to "Adaptive throttling"; where it reads `unknown`, measure it yourself (`df -k "$WT_BASE"`).
+   An `orphan=` line names a leftover directory under the base that holds content and no registered worktree, and a `quarantined=` line one that `wt-bootstrap` moved aside: the script deleted neither, so name each in the final summary and never remove one yourself.
 2. **Confirm GitHub API access.**
    `gh auth status` must succeed for every run because each subagent must read review threads (the `git ls-remote` probe checks git remote access, not the API).
 3. **Preflight the peer once for the batch, unless `peer-opinions=off`,** in this main working tree, per the `review-cycle` skill's peer preflight.

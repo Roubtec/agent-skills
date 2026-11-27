@@ -57,7 +57,7 @@ So:
 Worktrees are disposable working directories: the shared `.git` object store keeps every commit and branch ref even after a worktree directory is deleted.
 The operating discipline that follows:
 
-- Keep worktrees under a **gitignored base directory** (e.g. `.worktrees/` at the repo root) or outside the repository entirely, so worktree contents never show up in the main tree's status or get committed.
+- Keep worktrees under a **gitignored base directory** (e.g. `.worktrees/` at the repo root), so worktree contents never show up in the main tree's status or get committed.
 - **Commit early and often**, and **push after every commit** while the remote is available — a worktree's working tree is more volatile than committed-and-pushed history, and pushing provides remote durability and keeps the PR current.
   In the local-only fallback (Session Bootstrap's remote probe failed), commits are the durability boundary — push when access returns.
 - Package managers with a content-addressed store (e.g. pnpm) make per-worktree installs cheap: when the store and the worktree share a filesystem, installs hardlink package files from the store instead of copying them, so many worktrees can install concurrently without multiplying disk usage.
@@ -67,30 +67,23 @@ The operating discipline that follows:
 Do this in the **main working tree** before creating worktrees.
 The same bootstrap serves this skill and `address-reviews`:
 
-1. **Choose the worktree base directory** (`$WT_BASE`): `.worktrees/` at the repo root, or a directory outside the repository.
-   An in-repo base is `.worktrees/` or a path beneath it — the `wt-bootstrap` helper this bootstrap prefers reports `<repo>/.worktrees/$CONTAINER_NAME`, which is one — and nothing else: the ignore recipe that follows probes and appends exactly `/.worktrees/`, a root-anchored directory rule Git applies to everything beneath it, so a base under that name is carried by the very same append while one ANYWHERE ELSE in the repo would pass the re-probe while staying unignored.
-   A base inside the repo has to BE ignored, and only this run makes it so: `git worktree add` excludes nothing on its own, so probe it with `git check-ignore -q "<repo>/.worktrees/"` — with the TRAILING SLASH, since `/.worktrees/` is a directory-only rule and `check-ignore` answers NO for a bare `.worktrees` that does not exist on disk yet, which is every first run — and, where it answers no, append `/.worktrees/` to the file `git rev-parse --git-path info/exclude` names — run it from inside `<repo>`, because in a primary checkout it answers with the RELATIVE `.git/info/exclude` (only a linked worktree gets an absolute path), so a `git -C <repo>` form whose answer you then append to from your own directory writes the rule to a file `check-ignore` never reads — then re-probe and make a still-no answer a blocker.
-   Ask Git for that path rather than writing a literal `.git/info/exclude`: THIS checkout may itself be a linked worktree, where `.git` is a gitfile and `.git/info` is not a directory at all, so the literal append fails outright and the protection is never established — while `--git-path` resolves to the shared exclude file that `check-ignore` actually reads, in a linked worktree and a primary checkout alike.
-   It is the repo-local ignore file, untracked and so dirtying nothing itself, and NOT the tracked `.gitignore` — an ignore edit dirties the main checkout mid-run.
+1. **Run the worktree bootstrap:** `bootstrap.sh run`, beside this file, and do none of what it does by hand.
+   It settles the worktree base directory (`$WT_BASE`), makes that base ignored, prunes stale worktree state, probes push access and measures free space, then answers in `key=value` lines with `outcome=` first.
+   Where a `wt-bootstrap` helper is on PATH the script runs it for all of that but the ignore rule — the helper establishes no ignore rule, and reports `ok` whether or not one exists — and where it is absent plain git does the job; the ignore rule is the script's own on both paths.
+   That rule goes in the repo-local exclude file, untracked and so dirtying nothing itself, and NOT in the tracked `.gitignore` — an ignore edit dirties the main checkout mid-run.
+   `outcome=stop` is a blocker: report its `blocker=` line, which names its own remedy, and create no worktree — never work around it by choosing another base or by listing the rule yourself.
+   Any other non-zero exit arrives with no `outcome=` line and is a blocker too: report what the script printed on stderr, and create no worktree.
+   `host-shared=yes` is **not** a blocker: tell the user once that the worktrees will live on a filesystem shared with the host, and proceed.
+   On `outcome=ready`, `$WT_BASE` is the `wt-base=` path and no other: it is `<repo>/.worktrees/` or a path beneath it (`<repo>/.worktrees/$CONTAINER_NAME` in a container), the one name the script's rule covers.
+   `remote=no` is **not** a blocker: decide the fallback now, not mid-wave — **local reviewed branches only**, with a note in the final summary that PRs/pushes were skipped.
+   `avail-bytes=` is the starting input for Adaptive throttling below; where it reads `unknown`, measure it yourself (`df -k "$WT_BASE"`) before fanning out.
+   An `orphan=` line names a leftover directory under the base that holds content and no registered worktree, and a `quarantined=` line one that `wt-bootstrap` moved aside: the script deleted neither, so name each in the final summary and never remove one yourself.
 
-2. **Prune stale state:** run `git worktree prune`, then remove any orphaned directories under the base — directories whose git worktree registration is gone (`git worktree list` no longer shows them).
-   Never remove a directory that is still a registered worktree.
-
-3. **Probe remote access:** `git ls-remote --heads origin`.
-   Verify this up front — if pushes can't work, decide the fallback now, not mid-wave.
-   A failure is **not** a blocker: fall back to **local reviewed branches only** and note in the final summary that PRs/pushes were skipped.
-
-4. **Measure free disk space** on the base directory's filesystem (`df -k "$WT_BASE"`) — the starting input for Adaptive throttling below.
-
-5. **Preflight the peer once** unless `peer-opinions=off`, per the `review-cycle` skill's peer preflight.
+2. **Preflight the peer once** unless `peer-opinions=off`, per the `review-cycle` skill's peer preflight.
    Peer unavailability is never an error; proceed with own reviewers and note the reason once in the final summary.
 
-6. **Baseline the shared main checkout** — read its working-tree state now, before any worktree exists, as the reading the closing cleanliness report compares against (see "Main-checkout cleanliness report").
+3. **Baseline the shared main checkout** — read its working-tree state now, before any worktree exists, as the reading the closing cleanliness report compares against (see "Main-checkout cleanliness report").
    Observe only; never "fix" a checkout that is already dirty.
-
-If a `wt-bootstrap` helper is on PATH, prefer it for steps 1–4 — it performs those worktree checks, prunes orphans, and prints the base dir (`wtBase`) and free space (`availBytes`) as JSON.
-It covers those and nothing else — and not the whole of step 1: it establishes no ignore rule, so an in-repo `wtBase` is still yours to make ignored by step 1's recipe; the helper reports `ok` whether or not that rule exists.
-Run every remaining step above yourself.
 
 ## Codex subagent execution
 
@@ -158,7 +151,7 @@ If breadth causes failures, preserve completed and viable in-flight work, then r
 Concretely, before a task starts and while tasks run:
 
 - **Storage headroom.**
-  Measure free space on the worktree base's filesystem at Bootstrap (`df -k "$WT_BASE"`; if you used the `wt-bootstrap` helper, it already reported this as `availBytes`).
+  Free space on the worktree base's filesystem is Bootstrap's `avail-bytes=` reading (`df -k "$WT_BASE"` where that read `unknown`).
   Estimate `per_worktree_need`, then cap the number of **live worktrees** at `max_concurrent = max(1, floor(free_bytes / per_worktree_need))`: a ready task waits for a slot while that many are live, and each delivery's reclaimed worktree frees one.
   A worktree left in place for inspection (a cap-out, a hold, a crash, or a delivery whose reclaim `wt-remove` refused — read the reclaim's outcome rather than assuming it) is still live and keeps its slot.
   Once every slot is held by a retained worktree, no delivery can free one, so a ready task that would wait on it ends **storage-throttled** instead — a terminal state its dependents skip on, named in the summary beside the cap — rather than waiting forever or being admitted over that headroom.
@@ -385,7 +378,7 @@ Default behavior: each task that passes review and clears the guard gets **pushe
      Before retrying creation, look it up by the recorded head branch in the repository that owns the PR — the base repository the creation targeted, never the head repository, where a fork's PR does not live: `gh pr list --repo <base-repo> --head <branch-name> --state open --json url,headRepositoryOwner`.
      `--head` cannot carry an `<owner>:<branch>` form, so require the returned PR's head repository owner to match the recorded head before trusting the match, then assert its base as above.
      Only a lookup that finds nothing licenses the retry, and a delivery ending with neither a captured URL nor a lookup match is reported as that distinct failure, never as an opened PR.
-3. If pushing/PR creation is unavailable (no remote auth — see Bootstrap step 3), fall back to **local reviewed branches**: the work persists in the shared `.git`.
+3. If pushing/PR creation is unavailable (no remote auth — see Bootstrap step 1), fall back to **local reviewed branches**: the work persists in the shared `.git`.
    Note in the final summary which branches still need to be pushed once a remote is reachable.
 
 Do not delete the branch — the PR and any dependents need it (removing a worktree never touches branches).
