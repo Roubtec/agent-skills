@@ -288,6 +288,13 @@
 # `$CONTAINER_NAME`, else the login name, reduced to 40 safe characters — two
 # identities differing only past that prefix land in one scope, so set `DC_AGENT`
 # explicitly when they might.
+# `dc-remove` derives the same scope, so it reaches a clone directly only from
+# the worktree and agent name that made it. Called from any other scope it
+# searches the rest of the scopes under the same root, and what lets it
+# act there is the marker written below: it removes a clone only when that is
+# the single clone of its slug under the root, the marker's `clone=` is the
+# directory it sits in, and its `source=` is one of the repository's registered
+# worktrees. Anything else it finds it names and leaves, exiting non-zero.
 #
 # REUSE: a slug's clone is never handed back as it was found. A disposable clone
 # exists to be wrecked, so returning whatever survived the last experiment —
@@ -547,10 +554,11 @@ read_marker() {
 	[ -n "$magic_seen" ]
 }
 
-# The proof this helper demands before it discards anything, and deliberately
-# the SAME predicate dc-remove applies. dc-enter is the helper holding the
-# `rm -rf`, so it must never be the more permissive of the two: the magic alone
-# would let it delete a directory whose marker records some other clone.
+# The proof this helper demands before it discards anything: the two fields
+# dc-remove matches for a clone in its own scope, and nothing wider (dc-remove's
+# search of other scopes is that helper's alone). dc-enter is the helper holding
+# the `rm -rf`, so it must never be the more permissive of the two: the magic
+# alone would let it delete a directory whose marker records some other clone.
 marker_is_ours() {
 	read_marker "$1" || return 1
 	[ "$MARKER_CLONE" = "$CLONE_DIR" ] || return 1
@@ -1211,7 +1219,7 @@ if [ -L "$SESSION_DIR" ]; then
 fi
 if [ -e "$SESSION_DIR" ]; then
 	if marker_is_ours "$MARKER"; then
-		# Ours by the same proof dc-remove demands — but possibly a CONCURRENT
+		# Ours by marker_is_ours — but possibly a CONCURRENT
 		# sibling's, since siblings of one container share an identity and a
 		# worktree and so derive this very path. Discarding it is therefore an
 		# explicit decision, never a default. See REUSE in the header.

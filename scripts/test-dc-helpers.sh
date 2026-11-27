@@ -101,6 +101,13 @@ set -euo pipefail
 #       plumbing has to escape for the shell git runs `--upload-pack` through.
 #       These are the checks that must be made on the value the caller supplied
 #       rather than on the canonicalized one, since canonicalizing changes it.
+#   (l) dc-remove on a miss: a clone made from another worktree of the same
+#       repository is found and removed rather than reported as nothing to
+#       remove, a true miss still exits 0 and names the root, the derived scope
+#       and the worktree it was derived from, two clones of one slug are never
+#       both removed and a call from a third worktree removes neither, and a
+#       directory with no valid marker, a marker recording another place, a
+#       symlink, or a clone made from another repository is never removed.
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 ROOT_DIR="$(cd "${SCRIPT_DIR}/.." && pwd)"
@@ -2281,6 +2288,120 @@ assert_eq "k: ... at that source's HEAD" \
 in_repo "$Q_SRC" env "DC_ROOT=$WORK/k/root" "$DC_REMOVE" quotesource
 assert_eq "k: ... and dc-remove removes it" "$RC" 0
 assert_true "k: ... leaving nothing" "$([ ! -e "$CLONE_Q" ] && echo true || echo false)"
+
+echo "== (l) dc-remove on a miss searches the other scopes under the root =="
+SRC8="$WORK/l/src"
+WT8="$WORK/l/src-wt"
+THIRD8="$WORK/l/src-third"
+ROOT8="$WORK/l/root"
+mkdir -p "$WORK/l"
+make_source "$SRC8"
+g -C "$SRC8" worktree add -q "$THIRD8" -b thirdbranch HEAD
+export DC_ROOT="$ROOT8"
+exists() { [ -e "$1" ] && echo true || echo false; }
+# The defect: made from a linked worktree, dropped from the main checkout. The
+# two derive different scopes, and the old helper answered "nothing to remove"
+# with status 0 over a clone that was still there.
+in_repo "$WT8" "$DC_ENTER" moved
+require_clone CLONE_MOVED "l: moved"
+in_repo "$SRC8" "$DC_REMOVE" moved
+assert_eq "l: a clone made from another worktree is removed" "$RC" 0
+assert_eq "l: ... with nothing on stdout" "$OUT" ""
+assert_eq "l: ... and it is gone" "$(exists "$(dirname "$CLONE_MOVED")")" false
+assert_contains "l: ... and the removal names its path" "$ERR" "removed $(dirname "$CLONE_MOVED")"
+assert_contains "l: ... and the worktree it was made from" "$ERR" "$WT8"
+case "$ERR" in
+*"nothing to remove"*) MOVED_SAID_NOTHING=true ;;
+*) MOVED_SAID_NOTHING=false ;;
+esac
+assert_eq "l: ... never as nothing to remove" "$MOVED_SAID_NOTHING" false
+# A true miss keeps the unconditional-trap property, and says where it looked.
+in_repo "$SRC8" "$DC_REMOVE" moved
+assert_eq "l: a true miss exits 0" "$RC" 0
+assert_eq "l: a true miss writes nothing to stdout" "$OUT" ""
+assert_contains "l: a true miss says so" "$ERR" "nothing to remove for slug moved"
+assert_contains "l: ... names the root and what chose it" "$ERR" "'$ROOT8' (from DC_ROOT)"
+assert_contains "l: ... names the scope it derived" "$ERR" "scope '$ROOT8/dc-testagent-"
+assert_contains "l: ... and the worktree it derived it from" "$ERR" "derived from the worktree '$SRC8'"
+# A slug is unique to its caller, not to the repository: with two clones of it
+# a call from a third worktree cannot know which was meant, and removes neither.
+in_repo "$SRC8" "$DC_ENTER" twice
+require_clone CLONE_TWICE_MAIN "l: twice/main"
+in_repo "$WT8" "$DC_ENTER" twice
+require_clone CLONE_TWICE_WT "l: twice/wt"
+in_repo "$THIRD8" "$DC_REMOVE" twice
+assert_ne "l: two clones of one slug are refused from a third worktree" "$RC" 0
+assert_eq "l: ... silently on stdout" "$OUT" ""
+assert_eq "l: ... and both survive" "$(exists "$CLONE_TWICE_MAIN")$(exists "$CLONE_TWICE_WT")" truetrue
+assert_contains "l: ... the refusal names the first" "$ERR" "$(dirname "$CLONE_TWICE_MAIN")"
+assert_contains "l: ... and the second" "$ERR" "$(dirname "$CLONE_TWICE_WT")"
+# From a worktree that holds one of them, the call removes its own and only that.
+in_repo "$WT8" "$DC_REMOVE" twice
+assert_eq "l: a worktree holding one of the two removes its own" "$RC" 0
+assert_eq "l: ... and only its own" "$(exists "$CLONE_TWICE_MAIN")$(exists "$CLONE_TWICE_WT")" truefalse
+in_repo "$SRC8" "$DC_REMOVE" twice
+assert_eq "l: ... and the other goes from its own worktree" "$(exists "$CLONE_TWICE_MAIN")" false
+# The scope is per agent as well as per worktree, so a changed agent name is the
+# same miss and is found the same way.
+in_repo "$SRC8" env "DC_AGENT=renamed" "$DC_ENTER" agentmoved
+require_clone CLONE_AGENTMOVED "l: agentmoved"
+in_repo "$SRC8" "$DC_REMOVE" agentmoved
+assert_eq "l: a clone made under another agent name is removed" "$RC" 0
+assert_eq "l: ... and is gone" "$(exists "$CLONE_AGENTMOVED")" false
+# A clone made from ANOTHER repository under the same root is a clone that
+# exists and was not removed: named, left alone, and not a success.
+OTHER8="$WORK/l/other"
+make_source "$OTHER8"
+in_repo "$OTHER8" "$DC_ENTER" theirs
+require_clone CLONE_THEIRS "l: theirs"
+in_repo "$SRC8" "$DC_REMOVE" theirs
+assert_ne "l: another repository's clone is not removed, and not a success" "$RC" 0
+assert_eq "l: ... it survives" "$(exists "$CLONE_THEIRS")" true
+assert_contains "l: ... and is named" "$ERR" "$(dirname "$CLONE_THEIRS")"
+assert_contains "l: ... with the reason" "$ERR" "not a worktree registered against this repository"
+# One clone of this repository's beside it is no longer the only clone of the
+# slug, so it is left alone as well.
+in_repo "$WT8" "$DC_ENTER" theirs
+require_clone CLONE_THEIRS_OURS "l: theirs/ours"
+in_repo "$SRC8" "$DC_REMOVE" theirs
+assert_ne "l: one of ours beside one of theirs is still ambiguous" "$RC" 0
+assert_eq "l: ... and neither is removed" "$(exists "$CLONE_THEIRS")$(exists "$CLONE_THEIRS_OURS")" truetrue
+# Directories at the slug's place in another scope that dc-enter did not make:
+# no marker, a marker that is not one, a marker recording a different directory,
+# and a symlink. None is a clone, so the miss stays a miss — and none is touched.
+STRAY_SCOPE="$ROOT8/dc-stranger-1"
+mkdir -p "$STRAY_SCOPE/unmarked/repo" "$ROOT8/dc-stranger-2/unmarked" "$ROOT8/dc-stranger-3/unmarked/repo" "$WORK/l/elsewhere"
+printf 'precious\n' >"$STRAY_SCOPE/unmarked/repo/keep.txt"
+printf 'not-a-marker\0clone=%s\0source=%s\0' "$ROOT8/dc-stranger-2/unmarked/repo" "$SRC8" \
+	>"$ROOT8/dc-stranger-2/unmarked/dc-clone-meta"
+printf 'dc-clone-v2\0clone=/somewhere/else/repo\0source=%s\0' "$SRC8" \
+	>"$ROOT8/dc-stranger-3/unmarked/dc-clone-meta"
+printf 'precious\n' >"$WORK/l/elsewhere/keep.txt"
+printf 'dc-clone-v2\0clone=%s\0source=%s\0' "$ROOT8/dc-stranger-4/unmarked/repo" "$SRC8" \
+	>"$WORK/l/elsewhere/dc-clone-meta"
+mkdir -p "$ROOT8/dc-stranger-4"
+ln -s "$WORK/l/elsewhere" "$ROOT8/dc-stranger-4/unmarked"
+in_repo "$SRC8" "$DC_REMOVE" unmarked
+assert_eq "l: directories dc-enter did not make leave the miss a miss" "$RC" 0
+assert_contains "l: ... reported as nothing to remove" "$ERR" "nothing to remove for slug unmarked"
+assert_eq "l: the unmarked directory survives" "$(cat "$STRAY_SCOPE/unmarked/repo/keep.txt")" "precious"
+assert_contains "l: ... and is named" "$ERR" "$STRAY_SCOPE/unmarked — carries no"
+assert_eq "l: the directory with a non-marker survives" "$(exists "$ROOT8/dc-stranger-2/unmarked")" true
+assert_eq "l: the directory whose marker records another place survives" \
+	"$(exists "$ROOT8/dc-stranger-3/unmarked/repo")" true
+assert_contains "l: ... and that mismatch is named" "$ERR" "records clone path '/somewhere/else/repo'"
+assert_eq "l: the symlink's target survives" "$(cat "$WORK/l/elsewhere/keep.txt")" "precious"
+assert_eq "l: ... and the symlink is left in place" \
+	"$([ -L "$ROOT8/dc-stranger-4/unmarked" ] && echo true || echo false)" true
+# A scope that is itself a symlink is not looked through at all, however valid
+# the marker behind it reads from the linked path.
+mkdir -p "$WORK/l/linked-scope/viascope/repo"
+printf 'dc-clone-v2\0clone=%s\0source=%s\0' "$ROOT8/dc-stranger-5/viascope/repo" "$SRC8" \
+	>"$WORK/l/linked-scope/viascope/dc-clone-meta"
+ln -s "$WORK/l/linked-scope" "$ROOT8/dc-stranger-5"
+in_repo "$SRC8" "$DC_REMOVE" viascope
+assert_eq "l: a symlinked scope is not searched" "$RC" 0
+assert_eq "l: ... so what is behind it survives" "$(exists "$WORK/l/linked-scope/viascope/repo")" true
 
 if [ "$fails" -eq 0 ]; then
 	printf 'test-dc-helpers: %d checks passed\n' "$checks"

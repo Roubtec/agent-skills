@@ -17,8 +17,30 @@
 # must carry dc-enter's marker file, whose recorded clone path AND source
 # repository must both match what this invocation derived, or it refuses rather
 # than deleting a stranger's directory that happens to sit at the same place.
-# dc-enter applies the identical proof before it discards anything, so the
-# destructive helper is never the more permissive of the two.
+# `dc-enter --replace` discards on that exact match and on nothing wider; the
+# search described next is this helper's alone.
+#
+# A MISS IS SEARCHED FOR, because the derived directory depends on the worktree
+# and agent name of the call: run from the main checkout after the work moved to
+# a worktree, this helper derives a scope the clone was never in, and "nothing to
+# remove" with a zero status would then be reported over a clone still on disk.
+# So when its own scope holds nothing for the slug it looks at `<scope>/<slug>`
+# in every other scope directory directly under the same clone root — no deeper,
+# through no symlink, reading nothing but markers — and removes what it finds
+# only when all of this holds: it is the ONLY clone of that slug under the root,
+# its marker records the directory it was found in, and the source that marker
+# records is a worktree registered against the invoking repository. That is the
+# same two-field proof with "this invocation's worktree" widened to "one of this
+# repository's worktrees", and nothing weaker: a directory with no valid marker,
+# or one made from another repository, is never removed.
+# A slug is unique to its caller, not to the repository, which is why the search
+# stops at one: two scopes may each hold a clone of the same slug, and a call
+# from a third cannot know which was meant. More than one clone, or one
+# whose source is not a registered worktree (another repository's, or a worktree
+# since removed), is named with its path and left alone, and the exit status is
+# then non-zero — a clone that exists and was not removed is not a success.
+# What the search cannot cover is a different clone ROOT between the two calls,
+# so every miss names the root it looked under and which variable chose it.
 #
 # The marker is an accident guard, not an authentication token: a process running
 # as this user could forge one, but such a process can already call `rm -rf`
@@ -30,9 +52,15 @@
 #
 #   dc-remove probe        # remove the clone dc-enter created for slug `probe`
 #
-# Removing a slug that has no clone is a no-op and succeeds, so a cleanup trap
-# can call it unconditionally. Nothing is ever written to stdout; diagnostics go
-# to stderr, and the exit status is the whole result.
+# Removing a slug that has no clone anywhere under the clone root is a no-op and
+# succeeds. A scope is the worktree plus the agent name, and a call with no clone
+# in its own scope (a cleanup trap firing after a failed dc-enter, or a second
+# time) runs the search above: it removes the single clone another scope holds
+# under the same slug, one still being created included, since dc-enter writes
+# the marker before it clones. So a call made without knowing its own scope holds
+# the clone acts on the slug under the root, not on the caller's clone. Nothing
+# is ever written to stdout; diagnostics go to stderr, and the exit status is the
+# whole result.
 #
 # This is also how a slug is freed: `dc-enter` refuses a slug that already has a
 # clone, because a concurrent sibling may be using it. Calling dc-remove when a
@@ -42,7 +70,8 @@
 # The clone root and per-agent/per-worktree path layout are derived exactly as
 # `dc-enter` derives them (`$DC_ROOT`, else `$TMPDIR`, else `/tmp`; then
 # `dc-<agent>-<repo-hash>/<slug>`), so both helpers must be invoked from the same
-# repository with the same `DC_ROOT`/`DC_AGENT` to resolve the same clone. That
+# worktree with the same `DC_ROOT`/`DC_AGENT` to resolve the same clone — the
+# search above is what catches a call that was not. That
 # derivation is duplicated here rather than sourced, because each helper has to
 # stand alone on a container PATH; scripts/test-dc-helpers.sh pins the two
 # derivations together by removing exactly the path dc-enter printed.
@@ -97,7 +126,8 @@ usage() {
 		echo
 		echo "  Removes the disposable clone 'dc-enter <slug>' created, however"
 		echo "  wrecked it is. Takes a slug, never a path: it can only reach a"
-		echo "  directory dc-enter created and marked. An unknown slug is a no-op."
+		echo "  directory dc-enter created and marked. An unknown slug is a no-op;"
+		echo "  a clone of it left under the clone root is named and exits non-zero."
 	} >&$((code == 0 ? 1 : 2))
 	exit "$code"
 }
@@ -304,6 +334,9 @@ while IFS= read -r env_var; do
 done <<<"$LOCAL_ENV_VARS"
 
 REPO_PATHS=("$SRC_TOP")
+# The registered worktrees alone, which is what a marker's `source=` can name.
+# REPO_PATHS also holds the git directories and is the wider refuse-list.
+WT_PATHS=("$SRC_TOP")
 
 # Every step of this enumeration fails closed. A path this helper does not learn
 # about is one the clone root could then be placed inside, which is the single
@@ -353,6 +386,7 @@ collect_worktree_paths() {
 		case "$line" in
 		"worktree "*)
 			add_repo_path "${line#worktree }"
+			WT_PATHS+=("$CANON_RESULT")
 			records=$((records + 1))
 			;;
 		esac
@@ -440,12 +474,110 @@ SESSION_DIR="$SCOPE_DIR/$SLUG"
 CLONE_DIR="$SESSION_DIR/repo"
 MARKER="$SESSION_DIR/$MARKER_NAME"
 
+# Everything between "the marker proves this is dc-enter's" and the rm, for
+# whichever directory the proof was made about. Each caller has already matched
+# the marker's clone= and source= fields; this is the part that does not depend
+# on which scope the directory sits in.
+remove_session() {
+	local session="$1" scope="$2" resolved repo_path
+	canon "$session" || die "could not canonicalize '$session'"
+	resolved="$CANON_RESULT"
+	[ "$resolved" = "$session" ] ||
+		die "refusing: '$session' resolves to '$resolved' (symlinked out of the clone root)"
+	path_within "$resolved" "$scope" ||
+		die "refusing: '$resolved' is outside the clone scope '$scope'"
+	if [ "$resolved" = "$scope" ] || [ "$resolved" = "$ROOT" ]; then
+		die "refusing: '$resolved' is the clone scope or root directory, not a slug's clone"
+	fi
+	for repo_path in "${REPO_PATHS[@]}"; do
+		if path_within "$resolved" "$repo_path"; then
+			die "refusing: '$resolved' is inside the invoking repository ($repo_path)"
+		fi
+		if [ "$resolved" -ef "$repo_path" ] 2>/dev/null; then
+			die "refusing: '$resolved' is the invoking repository ($repo_path)"
+		fi
+	done
+	rm -rf -- "$resolved"
+	REMOVED="$resolved"
+}
+REMOVED=""
+
+is_registered_worktree() {
+	local wt
+	for wt in "${WT_PATHS[@]}"; do
+		[ "$1" != "$wt" ] || return 0
+	done
+	return 1
+}
+
+# --- A miss: look for the slug in the other scopes under this root ------------
+# See "A MISS IS SEARCHED FOR" in the header for what this may remove and why it
+# stops at one. Findings are accumulated as text, one per line, because every
+# one of them is reported whichever way the search ends.
+CLONES_FOUND=0
+CLONES_REPORT=""
+STRAYS_REPORT=""
+OWNED_SESSION=""
+OWNED_SCOPE=""
+OWNED_SOURCE=""
+search_other_scopes() {
+	local scope cand cand_marker
+	for scope in "$ROOT"/dc-*; do
+		[ "$scope" != "$SCOPE_DIR" ] || continue
+		# Covers the unmatched glob as well, which is left as the literal pattern.
+		if [ -L "$scope" ] || [ ! -d "$scope" ]; then continue; fi
+		cand="$scope/$SLUG"
+		cand_marker="$cand/$MARKER_NAME"
+		if [ -L "$cand" ]; then
+			STRAYS_REPORT+="  $cand — a symlink, which is not followed"$'\n'
+			continue
+		fi
+		[ -e "$cand" ] || continue
+		if [ ! -d "$cand" ] || [ -L "$cand_marker" ] || ! read_marker "$cand_marker"; then
+			STRAYS_REPORT+="  $cand — carries no $MARKER_MAGIC marker, so dc-enter did not create it"$'\n'
+			continue
+		fi
+		if [ "$MARKER_CLONE" != "$cand/repo" ]; then
+			STRAYS_REPORT+="  $cand — its marker records clone path '$MARKER_CLONE', not this directory"$'\n'
+			continue
+		fi
+		CLONES_FOUND=$((CLONES_FOUND + 1))
+		if is_registered_worktree "$MARKER_SOURCE"; then
+			CLONES_REPORT+="  $cand — made from this repository's worktree '$MARKER_SOURCE'"$'\n'
+			OWNED_SESSION="$cand"
+			OWNED_SCOPE="$scope"
+			OWNED_SOURCE="$MARKER_SOURCE"
+		else
+			CLONES_REPORT+="  $cand — made from '$MARKER_SOURCE', which is not a worktree registered against this repository"$'\n'
+		fi
+	done
+}
+
 if [ -L "$SESSION_DIR" ]; then
 	die "refusing: '$SESSION_DIR' is a symlink, so it points somewhere dc-enter did not create"
 fi
 if [ ! -e "$SESSION_DIR" ]; then
-	printf '%s: nothing to remove for slug %s (%s does not exist)\n' "$PROG" "$SLUG" "$SESSION_DIR" >&2
-	exit 0
+	LOOKED="Looked under the clone root '$ROOT' (from $ROOT_SRC): first in this invocation's own scope '$SCOPE_DIR', derived from the worktree '$SRC_TOP' and the agent name '$AGENT', then at '$SLUG' in every other scope directory directly under that root."
+	search_other_scopes
+	if [ "$CLONES_FOUND" -eq 1 ] && [ -n "$OWNED_SESSION" ]; then
+		remove_session "$OWNED_SESSION" "$OWNED_SCOPE"
+		printf "%s: removed %s (outside this invocation's scope %s; it is the only clone of slug %s under the clone root and was made from this repository's worktree %s)\n" \
+			"$PROG" "$REMOVED" "$SCOPE_DIR" "$SLUG" "$OWNED_SOURCE" >&2
+		[ -z "$STRAYS_REPORT" ] ||
+			printf '%s: also at that slug, and left alone because they are not dc-enter clones:\n%s' "$PROG" "$STRAYS_REPORT" >&2
+		exit 0
+	fi
+	if [ "$CLONES_FOUND" -eq 0 ]; then
+		printf '%s: nothing to remove for slug %s. %s No clone of it is there. A clone made under a different root cannot be found from here; rerun with the DC_ROOT or TMPDIR its dc-enter ran under.\n' \
+			"$PROG" "$SLUG" "$LOOKED" >&2
+		[ -z "$STRAYS_REPORT" ] ||
+			printf '%s: at that slug, and left alone because they are not dc-enter clones:\n%s' "$PROG" "$STRAYS_REPORT" >&2
+		exit 0
+	fi
+	[ -z "$STRAYS_REPORT" ] ||
+		printf '%s: at slug %s, and left alone because they are not dc-enter clones:\n%s' "$PROG" "$SLUG" "$STRAYS_REPORT" >&2
+	die "slug '$SLUG' has no clone in this invocation's scope, but $CLONES_FOUND of its clones remain under the clone root and nothing was removed. $LOOKED A clone found that way is removed only when it is the only one of its slug and was made from a worktree registered against this repository; otherwise this call cannot tell whose it is. Found:
+${CLONES_REPORT}To remove one, run 'dc-remove $SLUG' from the worktree it was made from, with the DC_AGENT its dc-enter had."
 fi
 
 # --- Ownership proof ---------------------------------------------------------
@@ -464,23 +596,5 @@ read_marker "$MARKER" ||
 [ "$MARKER_SOURCE" = "$SRC_TOP" ] ||
 	die "refusing: '$MARKER' records source repository '$MARKER_SOURCE', not the '$SRC_TOP' this invocation was run from"
 
-canon "$SESSION_DIR" || die "could not canonicalize '$SESSION_DIR'"
-RESOLVED="$CANON_RESULT"
-[ "$RESOLVED" = "$SESSION_DIR" ] ||
-	die "refusing: '$SESSION_DIR' resolves to '$RESOLVED' (symlinked out of the clone root)"
-path_within "$RESOLVED" "$SCOPE_DIR" ||
-	die "refusing: '$RESOLVED' is outside the clone scope '$SCOPE_DIR'"
-if [ "$RESOLVED" = "$SCOPE_DIR" ] || [ "$RESOLVED" = "$ROOT" ]; then
-	die "refusing: '$RESOLVED' is the clone scope or root directory, not a slug's clone"
-fi
-for repo_path in "${REPO_PATHS[@]}"; do
-	if path_within "$RESOLVED" "$repo_path"; then
-		die "refusing: '$RESOLVED' is inside the invoking repository ($repo_path)"
-	fi
-	if [ "$RESOLVED" -ef "$repo_path" ] 2>/dev/null; then
-		die "refusing: '$RESOLVED' is the invoking repository ($repo_path)"
-	fi
-done
-
-rm -rf -- "$RESOLVED"
-printf '%s: removed %s\n' "$PROG" "$RESOLVED" >&2
+remove_session "$SESSION_DIR" "$SCOPE_DIR"
+printf '%s: removed %s\n' "$PROG" "$REMOVED" >&2
