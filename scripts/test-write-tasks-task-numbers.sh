@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Hermetic test for the write-tasks skill's bundled `task-numbers.sh`.
+# Hermetic test for the write-tasks skill's bundled `task-numbers.sh`, and for
+# `task-citations.sh` beside it.
 #
 # Each case builds a throwaway bare "origin" and a clone whose remote carries a
 # GitHub-shaped URL that a repository-local `insteadOf` rewrites to the bare
@@ -8,14 +9,18 @@
 # pushed to `refs/pull/<N>/head` there. `gh` is a fake that answers `pr list`
 # from a JSON file through the real `jq` and the helper's own `--jq`.
 # `TASK_NUMBERS_HELPER` points the suite at another copy (a mutant, say); it
-# must sit where `../address-review/pr-branch.sh` resolves.
-# shellcheck disable=SC2319 # `ok <label> $?` after a `[ … ]` test is the point
+# must sit where `../address-review/pr-branch.sh` resolves;
+# `TASK_CITATIONS_HELPER` does the same for the other script, which needs no
+# neighbour.
+# shellcheck disable=SC2319,SC2016 # `ok <label> $?` after a `[ … ]` test is the point; a task line's backticks are its text
 set -u
 
 ROOT="$(cd -P -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 SHIPPED="$ROOT/plugins/dev-skills/skills/write-tasks/task-numbers.sh"
 MIRROR="$ROOT/codex/dev-skills/skills/write-tasks/task-numbers.sh"
 HELPER="${TASK_NUMBERS_HELPER:-$SHIPPED}"
+CITES_SHIPPED="$ROOT/plugins/dev-skills/skills/write-tasks/task-citations.sh"
+CITES="${TASK_CITATIONS_HELPER:-$CITES_SHIPPED}"
 WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/task-numbers-test.XXXXXX")" || exit 1
 trap 'rm -rf "$WORKDIR"' EXIT
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.invalid GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid
@@ -127,6 +132,11 @@ other_pr() {
 }
 call() { # <command> [args...] → OUT (stdout), ERR (stderr), RC
 	OUT="$(cd "$R" && bash "$HELPER" "$@" 2>"$WORKDIR/err")"
+	RC=$?
+	ERR="$(cat "$WORKDIR/err")"
+}
+cite() { # [args...] → OUT, ERR, RC, from the top of $R
+	OUT="$(cd "$R" && bash "$CITES" "$@" 2>"$WORKDIR/err")"
 	RC=$?
 	ERR="$(cat "$WORKDIR/err")"
 }
@@ -752,6 +762,237 @@ is "11: ...and the sweep reads them as two numbers" "$(val outcome)" clean
 call taken --repo acme/widgets
 has "11: ...each listed as it is written" "$OUT" "taken=0999${TAB}tree${TAB}tasks/0999-padded.md"
 has "11: ...the bare one too" "$OUT" "taken=999${TAB}tree${TAB}tasks/999-plain.md"
+
+# --- 12. touching ---------------------------------------------------------------
+# edit_pr <N> <branch> <base> <path> [text]: a PR from the other clone that
+# rewrites (or adds) that one file on a branch off <base>.
+edit_pr() {
+	git -C "$U" fetch -q origin
+	git -C "$U" checkout -q -B "$2" "origin/$3"
+	put "$U" "$4" "${5:-edited by $2}"
+	git -C "$U" push -q origin "$2:refs/pull/$1/head"
+	pr "$1" "$(tip "$2" "$U")" "$3"
+}
+ASK=(touching --repo acme/widgets --task tasks/001-first.md --task tasks/done/002-second.md)
+
+new_repo
+edit_pr 5 edits main tasks/001-first.md
+git -C "$U" push -q origin edits
+other_pr 6 child edits tasks/095-child.md
+call "${ASK[@]}"
+is "12: an open PR that edits a named task file is reported" "$(val outcome)" touched
+is "12: ...with exit 3" "$RC" 3
+has "12: ...by number, what it does, and the path" "$OUT" "touching=pr:5${TAB}M${TAB}tasks/001-first.md"
+lacks "12: a PR stacked on it inherits the edit and is not reported" "$OUT" "pr:6"
+is "12: ...so one line stands" "$(count touching)" 1
+is "12: ...beside how many paths were asked about" "$(val tasks)" 2
+is "12: outcome is the first line" "$(printf '%s\n' "$OUT" | head -n 1)" "outcome=touched"
+has "12: ...with what to do on stderr" "$ERR" "Read what it changes"
+call touching --repo acme/widgets --task ./tasks/001-first.md
+has "12: a path written behind ./ is the same path" "$OUT" "touching=pr:5${TAB}M${TAB}tasks/001-first.md"
+OUT="$(cd "$R/src" && bash "$HELPER" "${ASK[@]}" 2>/dev/null)"
+has "12: a run from a subdirectory reads the paths from the top" "$OUT" "touching=pr:5${TAB}M${TAB}tasks/001-first.md"
+OUT="$(cd "$R" && bash "$ROOT/plugins/dev-skills/bin/write-tasks-task-numbers" "${ASK[@]}" 2>/dev/null)"
+has "12: the plugin's shim runs it" "$OUT" "touching=pr:5${TAB}M${TAB}tasks/001-first.md"
+
+new_repo
+other_pr 5 theirs main tasks/096-theirs.md
+call "${ASK[@]}"
+is "12: a PR that changes other files leaves the answer clean" "$(val outcome)" clean
+is "12: ...with exit 0" "$RC" 0
+is "12: ...and no line" "$(count touching)" 0
+call touching --repo acme/widgets --task 'tasks/*.md'
+is "12: a path is a name, never a pattern" "$(val outcome)" clean
+
+# The base rewrites the task after PR 5 forked: that is not PR 5's change.
+new_repo
+other_pr 5 theirs main tasks/097-theirs.md
+git -C "$U" checkout -q main
+put "$U" tasks/001-first.md "rewritten on the base"
+git -C "$U" push -q origin main
+call "${ASK[@]}"
+is "12: what the base changed since a PR forked is not that PR's change" "$(val outcome)" clean
+
+new_repo
+git -C "$U" fetch -q origin
+git -C "$U" checkout -q -B archive origin/main
+git -C "$U" mv tasks/001-first.md tasks/done/001-first.md
+git -C "$U" commit -q -m archive
+git -C "$U" push -q origin archive:refs/pull/7/head
+pr 7 "$(tip archive "$U")" main
+edit_pr 8 adds main tasks/098-not-here-yet.md
+call "${ASK[@]}" --task tasks/098-not-here-yet.md
+has "12: a PR that moves a named task away deletes that path" "$OUT" "touching=pr:7${TAB}D${TAB}tasks/001-first.md"
+has "12: ...and one that adds a named path adds it" "$OUT" "touching=pr:8${TAB}A${TAB}tasks/098-not-here-yet.md"
+is "12: ...the lower PR first" "$(printf '%s\n' "$OUT" | grep '^touching=' | head -n 1)" "touching=pr:7${TAB}D${TAB}tasks/001-first.md"
+
+new_repo
+touch "$FAKE/fail-list"
+call "${ASK[@]}"
+is "12: an enumeration that fails is incomplete, never clean" "$(val outcome)" incomplete
+is "12: ...with exit 3" "$RC" 3
+has "12: ...saying what was skipped" "$OUT" "skipped=prs${TAB}"
+has "12: ...and what to do on stderr" "$ERR" "do not call the scan complete"
+rm "$FAKE/fail-list"
+pr 11 1111111111111111111111111111111111111111 main
+call "${ASK[@]}"
+is "12: a head that cannot be fetched is incomplete" "$(val outcome)" incomplete
+has "12: ...naming the PR" "$OUT" "skipped=pr:11${TAB}its head 1111111111111111111111111111111111111111 could not be fetched"
+edit_pr 5 edits main tasks/001-first.md
+call "${ASK[@]}"
+is "12: a touching PR outranks a skipped head" "$(val outcome)" touched
+has "12: ...which is still reported" "$OUT" "skipped=pr:11"
+
+new_repo
+edit_pr 12 edits main tasks/001-first.md
+other_pr 13 theirs main tasks/099-theirs.md
+jq '.[0].baseRefName = "gone"' "$FAKE/prs.json" >"$FAKE/prs.new" && mv "$FAKE/prs.new" "$FAKE/prs.json"
+call "${ASK[@]}"
+has "12: a PR whose base branch is gone is read against the base commit it names" "$OUT" "touching=pr:12${TAB}M${TAB}tasks/001-first.md"
+jq '.[0].baseRefOid = "2222222222222222222222222222222222222222"' "$FAKE/prs.json" >"$FAKE/prs.new" && mv "$FAKE/prs.new" "$FAKE/prs.json"
+call "${ASK[@]}"
+is "12: ...and is skipped where that commit is not here either" "$(val outcome)" incomplete
+has "12: ...by number" "$OUT" "skipped=pr:12${TAB}its base 'gone'"
+is "12: ...with no touch invented" "$(count touching)" 0
+
+new_repo
+jq -n --arg h "$(tip main)" --arg b main '[range(1; 201) | {number: ., headRefOid: $h, baseRefName: $b, baseRefOid: $h, headRefName: "pr-\(.)", isCrossRepository: false}]' >"$FAKE/prs.json"
+call "${ASK[@]}"
+is "12: an enumeration at its bound is incomplete" "$(val outcome)" incomplete
+has "12: ...saying the bound" "$OUT" "limit=200"
+
+new_repo
+call touching --repo acme/widgets
+is "12: no task named is a usage error" "$RC" 64
+has "12: ...with the usage lines" "$ERR" "task-numbers.sh touching --repo"
+call touching --task tasks/001-first.md
+is "12: no repository is a usage error" "$RC" 64
+call "${ASK[@]}" --base main
+is "12: touching takes no base" "$RC" 64
+call touching --repo acme/widgets --task "$R/tasks/001-first.md"
+is "12: an absolute path is a usage error" "$RC" 64
+call taken --repo acme/widgets --task tasks/001-first.md
+is "12: taken takes no task" "$RC" 64
+call duplicates --task tasks/001-first.md
+is "12: ...nor does duplicates" "$RC" 64
+
+# --- 13. task-citations.sh ------------------------------------------------------
+# A repository with a little code, and a task that cites it.
+cite_repo() {
+	new_repo
+	git -C "$R" checkout -q main
+	put "$R" src/lib/widget.sh 'render_widget() { :; }'
+	put "$R" src/core.js 'function renderWidget() { return MAX_RETRIES; } // retryCount'
+	put "$R" tasks/done/008-old.md 'mentions onlyInTasks and nothing else'
+}
+# task <path> <line>...: write a task file (uncommitted) from those lines.
+task() {
+	local f="$R/$1"
+	shift
+	mkdir -p "$(dirname "$f")"
+	printf '%s\n' "$@" >"$f"
+}
+T=tasks/100-new.md
+
+cite_repo
+task "$T" 'Edit `src/lib/widget.sh`, not `src/lib/gone.sh`.' 'Call `renderWidget()`, not `missingHelper()`.'
+cite "$T"
+is "13: a path and an identifier that are not in the tree are unresolved" "$(val outcome)" unresolved
+is "13: ...with exit 3" "$RC" 3
+has "13: ...the path named with its task file" "$OUT" "unresolved=path${TAB}$T${TAB}src/lib/gone.sh"
+has "13: ...and the identifier as it was written" "$OUT" "unresolved=identifier${TAB}$T${TAB}missingHelper()"
+is "13: ...those two alone, not the two that exist" "$(count unresolved)" 2
+is "13: ...of four looked up" "$(val checked)" 4
+is "13: ...against the commit named" "$(val ref)" "$(tip HEAD)"
+is "13: outcome is the first line" "$(printf '%s\n' "$OUT" | head -n 1)" "outcome=unresolved"
+has "13: ...and stderr says it is a list, not a verdict" "$ERR" "not a verdict"
+
+cite_repo
+task "$T" 'See `widget.sh`, `lib/widget.sh`, `./src/core.js`, `src/lib/`, `src/` and `done/`.' \
+	'Uses `MAX_RETRIES`, `render_widget`, `Core.prototype.renderWidget`, `core::retryCount` and `renderWidget`.'
+cite "$T"
+is "13: a basename, a path's tail, a directory and a qualified name all resolve" "$(val outcome)" clean
+is "13: ...with exit 0" "$RC" 0
+is "13: ...each one looked up" "$(val checked)" 11
+
+cite_repo
+task "$T" 'Run `git diff --stat`, pass `--force`, `--out.json` or `-n`, set `key=value`, name `<owner>/<repo>`.' \
+	'Globs `*.md` and `src/*.sh`; words `main`, `HEAD`, `claims`, `write-tasks`; numbers `3.2`, `024`, `0/3/1/64`.' \
+	'An extension `.md`; `/abs/gone.sh`; `../up/gone.sh`; `origin/main`; `refs/pull/5/head`; `$HOME/gone.sh`; `"gone.sh"`.' \
+	'```sh' 'cat `src/fenced-gone.sh`' '```' '    ~~~' '`src/also-fenced-gone.sh`' '    ~~~' \
+	'An unclosed `src/unclosed-gone.sh span.'
+cite "$T"
+is "13: command lines, flags, placeholders, globs, words, numbers and refs are no citations" "$(val outcome)" clean
+is "13: ...and none was looked up" "$(val checked)" 0
+
+cite_repo
+task "$T" 'Create `src/lib/new-helper.sh` and `brand_new_function()`.' 'Not a directory of the tree: `nolib/thing`; but `src/nothing` starts in one.' \
+	'Only tasks say `onlyInTasks`.' 'Twice: `src/lib/gone.sh` and `src/lib/gone.sh`.' 'A method on a file: `core.js`, `process.env`.' 'Part of a name: `render_widge`.'
+cite "$T"
+has "13: a file the task asks for is listed" "$OUT" "unresolved=path${TAB}$T${TAB}src/lib/new-helper.sh"
+has "13: ...and a function it asks for" "$OUT" "unresolved=identifier${TAB}$T${TAB}brand_new_function()"
+has "13: a path with no extension is checked where its first step is a directory" "$OUT" "unresolved=path${TAB}$T${TAB}src/nothing"
+lacks "13: ...and not where it is none" "$OUT" "nolib/thing"
+has "13: an identifier that stands only in the task folder is unresolved" "$OUT" "unresolved=identifier${TAB}$T${TAB}onlyInTasks"
+is "13: a span cited twice is listed once" "$(printf '%s\n' "$OUT" | grep -c "src/lib/gone.sh")" 1
+has "13: a dotted name with a short lowercase tail reads as a file" "$OUT" "unresolved=path${TAB}$T${TAB}process.env"
+has "13: a name that is only part of a word in the tree is unresolved" "$OUT" "unresolved=identifier${TAB}$T${TAB}render_widge"
+is "13: ...and that is the whole list" "$(count unresolved)" 7
+
+# The ref's tree is what is read, not the working tree.
+cite_repo
+task "$T" 'Edit `src/lib/later.sh` with `laterName`.'
+printf 'laterName\n' >"$R/src/lib/later.sh"
+cite "$T"
+is "13: a file that is only in the working tree is not in HEAD" "$(count unresolved)" 2
+git -C "$R" checkout -q -b later
+git -C "$R" add src/lib/later.sh && git -C "$R" commit -q -m later
+git -C "$R" checkout -q main
+cite --ref later "$T"
+is "13: --ref names the commit whose tree is read" "$(val outcome)" clean
+is "13: ...and it is printed" "$(val ref)" "$(tip later)"
+cite --ref main "$T"
+is "13: ...while main still lacks both" "$(count unresolved)" 2
+
+cite_repo
+task "$T" 'Edit `src/lib/gone.sh`.'
+task tasks/101-other.md 'Edit `src/lib/gone.sh` and `src/core.js`.'
+cite "$T" tasks/101-other.md
+is "13: each task file is listed for what it cites" "$(count unresolved)" 2
+has "13: ...the second under its own name" "$OUT" "unresolved=path${TAB}tasks/101-other.md${TAB}src/lib/gone.sh"
+is "13: ...and counted once per file" "$(val checked)" 3
+OUT="$(cd "$R/tasks" && bash "$CITES" 100-new.md 2>/dev/null)"
+has "13: a task file is read at the path given, from a subdirectory too" "$OUT" "unresolved=path${TAB}100-new.md${TAB}src/lib/gone.sh"
+OUT="$(cd "$WORKDIR" && bash "$CITES" -C "$R" "$T" 2>/dev/null)"
+is "13: -C names the checkout" "$(val outcome)" unresolved
+OUT="$(cd "$R" && bash "$ROOT/plugins/dev-skills/bin/write-tasks-task-citations" "$T" 2>/dev/null)"
+is "13: the plugin's shim runs the same script" "$(val outcome)" unresolved
+# Another task folder: what stands only there is not an occurrence.
+put "$R" plans/009-plan.md 'mentions planOnly_name'
+task "$T" 'Uses `planOnly_name`.'
+cite "$T"
+is "13: outside the task folder an occurrence counts" "$(val outcome)" clean
+cite --folder plans "$T"
+is "13: --folder names the folder that does not count" "$(val outcome)" unresolved
+
+cite --ref no-such-ref "$T"
+is "13: a ref that names no commit is a failure" "$RC" 1
+is "13: ...with no outcome" "$OUT" ""
+cite tasks/no-such-task.md
+is "13: a task file that is not there is a failure" "$RC" 1
+is "13: ...with no outcome" "$OUT" ""
+cite
+is "13: no task file is a usage error" "$RC" 64
+has "13: ...with the usage lines" "$ERR" "task-citations.sh [--ref <commit>]"
+cite --frobnicate "$T"
+is "13: an unknown option is a usage error" "$RC" 64
+cite --ref
+is "13: an option with no value is a usage error" "$RC" 64
+cite --help
+is "13: --help exits 0" "$RC" 0
+has "13: ...printing the contract" "$OUT" "outcome=unresolved"
+cmp -s "$CITES_SHIPPED" "$ROOT/codex/dev-skills/skills/write-tasks/task-citations.sh"
+ok "13: the two mirrors ship the same script" $?
 
 if [ "$fails" -gt 0 ]; then
 	printf 'write-tasks task-numbers helper test FAILED (%s of %s checks).\n' "$fails" "$checks" >&2

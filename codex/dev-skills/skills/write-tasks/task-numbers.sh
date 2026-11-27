@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # task-numbers.sh — which task numbers a branch newly claims, and who else
-# holds them: the base it is headed for, and every open pull request; and which
-# numbers stand twice in the working tree.
+# holds them: the base it is headed for, and every open pull request; which
+# numbers stand twice in the working tree; and which open pull requests change
+# a named task file.
 #
 # Usage, from the checkout that holds the branch, or with `-C <dir>` ahead of
 # the command, as git takes it:
@@ -10,6 +11,7 @@
 #                          [--reserved <number>]... [--member <commit>:<its base commit>]...
 #   task-numbers.sh taken  --repo <owner>/<repo> [--folder <dir>]
 #   task-numbers.sh duplicates [--folder <dir>]
+#   task-numbers.sh touching --repo <owner>/<repo> --task <path> [--task <path>]...
 #
 # `<owner>/<repo>` is the repository the pull requests are in; write it
 # `<host>/<owner>/<repo>` where that is not github.com. `--folder` is the
@@ -91,6 +93,23 @@
 #         always numbered= (how many files carried a full number). A folder
 #         that is missing, is no folder, or could not be read whole is a
 #         failure, not a clean answer; one that is a symlink is read through.
+# touching
+#         For a batch about to start. Each `--task` is a task file's path from
+#         the top of the working tree, taken as a name and never as a pattern.
+#         Every open pull request whose own changes reach one of them:
+#           touching=pr:<N> TAB <A|M|D|T> TAB <path>
+#         with git's letter for what the head does to the file against where
+#         it left its own base (added, modified, deleted, type changed; a
+#         move reads as the deletion of the old path). A head that only
+#         inherits the file from its base changes nothing and is not listed.
+#         No pull request is left out as the caller's own: a task file still
+#         being added by an open pull request is listed with `A`.
+#         under outcome=clean (exit 0), outcome=touched (exit 3), or
+#         outcome=incomplete (exit 3) where nothing read touches one and a
+#         head or its base could not be read, with the same skipped= and
+#         limit= lines; and always tasks= (how many paths were asked about).
+#         This lists and decides nothing: whether a task waits is the
+#         caller's reading of the pull request.
 #
 # One enumeration, `gh pr list --state open --limit 200`, is the whole remote
 # reading, and each head is read at the commit it named: a head that moves
@@ -99,8 +118,8 @@
 # and from the remote it matched; no FETCH_HEAD is read.
 #
 # Output: `key=value` lines on stdout, `outcome=` first; an explanation goes to
-# stderr. Exit status: 0 on clean and listed; 3 on collision, incomplete and
-# duplicate; 1 on a failure (the scanned branch, its base or the folder could
+# stderr. Exit status: 0 on clean and listed; 3 on collision, incomplete,
+# duplicate and touched; 1 on a failure (the scanned branch, its base or the folder could
 # not be read); 64 on a usage error. Needs git, and gh for the remote reading.
 # Written for bash 3.2 and later.
 set -u
@@ -138,7 +157,7 @@ fail() {
 }
 usage() {
 	note "$*"
-	sed -n '6,12p' "$SELF" | sed 's/^# \{0,1\}//' >&2
+	sed -n '7,14p' "$SELF" | sed 's/^# \{0,1\}//' >&2
 	exit 64
 }
 field() { # key, text
@@ -175,9 +194,10 @@ case "$CMD" in
 esac
 
 REPO="" BASE="" LOCAL_BASE="" BRANCH="HEAD" FOLDER="tasks" RESERVED="" MEMBERS=""
+TASKS=()
 while [ $# -gt 0 ]; do
 	case "$1" in
-	--repo | --base | --local-base | --branch | --folder | --reserved | --member)
+	--repo | --base | --local-base | --branch | --folder | --reserved | --member | --task)
 		[ $# -ge 2 ] || usage "$1 needs a value"
 		case "$1" in
 		--repo) REPO="$2" ;;
@@ -197,6 +217,12 @@ while [ $# -gt 0 ]; do
 			esac
 			MEMBERS="$MEMBERS$2
 "
+			;;
+		--task)
+			case "$2" in
+			'' | /* | *"$TAB"*) usage "--task takes a task file's path from the top of the working tree" ;;
+			esac
+			TASKS[${#TASKS[@]}]="${2#./}"
 			;;
 		esac
 		shift 2
@@ -303,13 +329,37 @@ have_head() { # number, oid
 	git cat-file -e "$2^{commit}" 2>/dev/null
 }
 
+# Makes an open pull request's head readable, and settles the commit its own
+# changes are read against, in PBASE_OID; where either cannot be had, records
+# the gap and fails.
+PBASE_OID=""
+head_and_base() { # number, head oid, base name, base oid
+	local pinned
+	# Each distinct base is refreshed once, whether or not a ref of that name
+	# is already here: presence says nothing of freshness.
+	if pinned="$(pin "$3")"; then PBASE_OID="${pinned##*"$TAB"}"; else PBASE_OID=none; fi
+	if ! have_head "$1" "$2"; then
+		gap "skipped=pr:$1${TAB}its head $2 could not be fetched"
+		return 1
+	fi
+	# After the head: fetching it can bring the base commit along.
+	if [ "$PBASE_OID" = none ]; then
+		if git cat-file -e "$4^{commit}" 2>/dev/null; then
+			PBASE_OID="$4"
+		else
+			gap "skipped=pr:$1${TAB}its base '$3' could not be fetched, and the base commit it names is not here"
+			return 1
+		fi
+	fi
+}
+
 print_gaps() {
 	sort -u "$tmp/gaps"
 }
 
 cmd_claims() {
 	need_common
-	local base_oid branch_oid branch_name pinned degraded="" n head pbase pbase_oid poid hname cross m mc mb moid mboid claims collisions
+	local base_oid branch_oid branch_name pinned degraded="" n head pbase poid hname cross m mc mb moid mboid claims collisions
 	if [ -n "$BASE" ] && [ -n "$LOCAL_BASE" ]; then usage "give --base or --local-base, not both"; fi
 	[ -n "$BASE$LOCAL_BASE" ] || usage "claims needs --base <branch>, or --local-base <commit> where the repository cannot have the base"
 	branch_oid="$(git rev-parse --verify --quiet "$BRANCH^{commit}")" || fail "the branch '$BRANCH' names no commit here. Nothing was scanned."
@@ -406,23 +456,8 @@ EOF
 				gap "self=pr:$n"
 				continue
 			fi
-			# Each distinct base is refreshed once, whether or not a ref of
-			# that name is already here: presence says nothing of freshness.
-			if pinned="$(pin "$pbase")"; then pbase_oid="${pinned##*"$TAB"}"; else pbase_oid=none; fi
-			if ! have_head "$n" "$head"; then
-				gap "skipped=pr:$n${TAB}its head $head could not be fetched"
-				continue
-			fi
-			# After the head: fetching it can bring the base commit along.
-			if [ "$pbase_oid" = none ]; then
-				if git cat-file -e "$poid^{commit}" 2>/dev/null; then
-					pbase_oid="$poid"
-				else
-					gap "skipped=pr:$n${TAB}its base '$pbase' could not be fetched, and the base commit it names is not here"
-					continue
-				fi
-			fi
-			if ! git diff --no-renames --diff-filter=A --name-only "$pbase_oid...$head" -- "$FOLDER/" >"$tmp/pr" 2>/dev/null; then
+			head_and_base "$n" "$head" "$pbase" "$poid" || continue
+			if ! git diff --no-renames --diff-filter=A --name-only "$PBASE_OID...$head" -- "$FOLDER/" >"$tmp/pr" 2>/dev/null; then
 				gap "skipped=pr:$n${TAB}its head and its base share no history here"
 				continue
 			fi
@@ -474,7 +509,7 @@ EOF
 
 cmd_taken() {
 	need_common
-	[ -z "$BASE$LOCAL_BASE$RESERVED$MEMBERS" ] && [ "$BRANCH" = HEAD ] || usage "taken takes --repo and --folder only"
+	[ -z "$BASE$LOCAL_BASE$RESERVED$MEMBERS" ] && [ "$BRANCH" = HEAD ] && [ ${#TASKS[@]} -eq 0 ] || usage "taken takes --repo and --folder only"
 	local top n head pbase poid hname cross
 	top="$(git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ] || fail "this checkout has no working tree to inventory."
 	: >"$tmp/taken"
@@ -507,7 +542,7 @@ cmd_taken() {
 }
 
 cmd_duplicates() {
-	[ -z "$REPO$BASE$LOCAL_BASE$RESERVED$MEMBERS" ] && [ "$BRANCH" = HEAD ] || usage "duplicates takes --folder only: it reads the working tree and nothing remote"
+	[ -z "$REPO$BASE$LOCAL_BASE$RESERVED$MEMBERS" ] && [ "$BRANCH" = HEAD ] && [ ${#TASKS[@]} -eq 0 ] || usage "duplicates takes --folder only: it reads the working tree and nothing remote"
 	need_tree
 	local top duplicates
 	top="$(git rev-parse --show-toplevel 2>/dev/null)" && [ -n "$top" ] || fail "this checkout has no working tree to inventory."
@@ -529,13 +564,53 @@ cmd_duplicates() {
 	}
 }
 
+cmd_touching() {
+	[ -z "$BASE$LOCAL_BASE$RESERVED$MEMBERS" ] && [ "$BRANCH" = HEAD ] && [ "$FOLDER" = tasks ] || usage "touching takes --repo and --task only"
+	[ ${#TASKS[@]} -gt 0 ] || usage "touching needs --task <path> for each task file asked about"
+	need_common
+	local n head pbase poid hname cross touched
+	: >"$tmp/touching"
+	enumerate
+	while IFS="$TAB" read -r n head pbase poid hname cross; do
+		[ -n "$n" ] || continue
+		head_and_base "$n" "$head" "$pbase" "$poid" || continue
+		# Three dots, as the guard reads a head's additions: what the base
+		# gained since the head forked is not the head's change.
+		if ! git --literal-pathspecs diff --no-renames --name-status "$PBASE_OID...$head" -- "${TASKS[@]}" >"$tmp/pr" 2>/dev/null; then
+			gap "skipped=pr:$n${TAB}its head and its base share no history here"
+			continue
+		fi
+		awk -F "$TAB" -v t="$TAB" -v h="pr:$n" -v n="$n" 'NF == 2 { print n t "touching=" h t $1 t $2 }' "$tmp/pr" >>"$tmp/touching"
+	done <"$tmp/prs"
+	touched="$(awk 'END { print NR }' "$tmp/touching")"
+	if [ "$touched" -gt 0 ]; then
+		say "outcome=touched"
+	elif [ -s "$tmp/gaps" ]; then
+		say "outcome=incomplete"
+	else
+		say "outcome=clean"
+	fi
+	say "tasks=${#TASKS[@]}"
+	sort -t "$TAB" -k1,1n -k4 "$tmp/touching" | cut -f2-
+	print_gaps
+	if [ "$touched" -gt 0 ]; then
+		note "an open pull request changes a task file asked about. Read what it changes before the task is implemented from this copy."
+		exit 3
+	fi
+	[ ! -s "$tmp/gaps" ] || {
+		note "no open pull request among those read touches these task files, and not every one could be read. Report what was skipped; do not call the scan complete."
+		exit 3
+	}
+}
+
 case "$CMD" in
 claims) cmd_claims ;;
+touching) cmd_touching ;;
 taken) cmd_taken ;;
 duplicates) cmd_duplicates ;;
 -h | --help | help)
 	awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$SELF"
 	;;
-'') usage "name a command: claims, taken or duplicates" ;;
+'') usage "name a command: claims, taken, duplicates or touching" ;;
 *) usage "unknown command: $CMD" ;;
 esac

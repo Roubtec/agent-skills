@@ -2393,7 +2393,7 @@ const GRANT_CHECKS = 13;
 // role, so the section's `measurer` default — exercised on both legs above — is
 // not what a batch's measuring turn actually reads. Checked here, once, outside
 // the embeddable section, because that is where `worktreeContract` lives.
-const BATCH_CONTRACT_CHECKS = 5;
+const BATCH_CONTRACT_CHECKS = 11;
 {
   console.log("# wf-address-tasks.js — the batch's per-role contracts");
   const before = legOk + legFail;
@@ -2402,7 +2402,7 @@ const BATCH_CONTRACT_CHECKS = 5;
   if (cut < 0) throw new Error("wf-address-tasks.js: the cut marker this evaluates up to is gone");
   const prefix = src.slice(0, cut).replace(/^export const meta/m, "const meta");
   // eslint-disable-next-line no-new-func
-  const { taskCycleConfig } = new Function("args", `"use strict";\n${prefix}\nreturn { taskCycleConfig };`)("");
+  const { taskCycleConfig, unresolvedCitationsFor } = new Function("args", `"use strict";\n${prefix}\nreturn { taskCycleConfig, unresolvedCitationsFor };`)("");
   const cfg = taskCycleConfig({ slug: "t025a", branch: "task/025a-measure", base: "main", path: "tasks/025a-measure.md", content: "c" }, true, "off");
   const measurer = (cfg.contracts || {}).measurer || "";
 
@@ -2421,6 +2421,31 @@ const BATCH_CONTRACT_CHECKS = 5;
   check("and FINDS the already-registered worktree rather than resolving one, so no reading comes from a checkout built just now", /git worktree list --porcelain/.test(measurer) && !measurer.includes("$(wt-enter") && /git -C/.test(measurer), "measurer contract");
   check("with a worktree that is gone reported as unknown rather than rebuilt", /report it as unknown/.test(measurer) && /Never build it, attach it, or prune it/.test(measurer), "measurer contract");
   check("while the roles that must stay on the branch are still told to", /branch --show-current/.test(cfg.contracts.fixer) && /branch --show-current/.test(cfg.contracts.reviewer) && /branch --show-current/.test(cfg.contracts.peer), "role contracts");
+
+  // What the pre-dispatch citation check found about a task reaches that
+  // task's implementer, and no other's: the resolver's packet is one flat list.
+  const task = { slug: "t068", branch: "task/068-x", base: "main", path: "tasks/068-x.md", content: "c" };
+  const recorded = [
+    "unresolved=path\ttasks/068-x.md\tsrc/gone.sh",
+    "unresolved=identifier tasks/068-x.md missingHelper()",
+    "unresolved=path\\t./tasks/068-x.md\\tsrc/escaped.sh",
+    "unresolved=path\ttasks/069-y.md\ttasks/068-x.md",
+    "unresolved=path\tsubtasks/068-x.md\tsrc/other.sh",
+    "unresolved=path\ttasks/068-x.md.bak\tsrc/longer.sh",
+    "touching=12\ttasks/068-x.md",
+    "the citation check could not run for tasks/068-x.md",
+    7,
+  ];
+  const own = unresolvedCitationsFor(task.path, recorded);
+  check("a task's own unresolved citations are picked out of the resolver's flat list, whatever became of the tab", JSON.stringify(own) === JSON.stringify(recorded.slice(0, 3)), JSON.stringify(own));
+  check("with no list recorded, a task has none", unresolvedCitationsFor(task.path, undefined).length === 0 && unresolvedCitationsFor("", recorded).length === 0);
+  const withCited = taskCycleConfig({ ...task, unresolvedCitations: own }, true, "off").scope.instructions;
+  check("and they ride that task's assignment as a list to read", own.every((line) => withCited.includes(`- ${line}`)) && /not a verdict/.test(withCited), withCited);
+  check("which sends the implementer nowhere near a stop", !/\bSTOP\b|do not (start|proceed|implement)|\bblock/i.test(withCited.slice(withCited.indexOf("## Citations"))), withCited);
+  const stamped = src.indexOf("task.unresolvedCitations = unresolvedCitationsFor(task.path, plan.resolution.taskChecks)");
+  check("the batch body picks them out for every task before the pipeline starts one", stamped > 0 && stamped < src.indexOf("\n  await runPipelinedBatch({ plan"), String(stamped));
+  const plain = taskCycleConfig({ ...task, unresolvedCitations: [] }, true, "off").scope.instructions;
+  check("a task with none is told nothing about citations", !/Citations/.test(plain) && plain === taskCycleConfig(task, true, "off").scope.instructions, plain);
 
   const n = legOk + legFail - before;
   check(`batch contract checks ran all ${BATCH_CONTRACT_CHECKS}`, n === BATCH_CONTRACT_CHECKS, `ran ${n}`);

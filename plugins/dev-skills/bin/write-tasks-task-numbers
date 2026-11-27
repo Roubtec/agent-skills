@@ -6,7 +6,7 @@
 # the Bash tool's PATH, which is how a workflow agent — handed a brief rather
 # than a skill folder — reaches the same script. Nothing is installed anywhere:
 # the shim runs the copy that shipped beside it, so the two cannot drift.
-# Usage: write-tasks-task-numbers [-C <dir>] <claims|taken|duplicates> [--repo <owner>/<repo>] ... — see `write-tasks-task-numbers --help`.
+# Usage: write-tasks-task-numbers [-C <dir>] <claims|taken|duplicates|touching> [--repo <owner>/<repo>] ... — see `write-tasks-task-numbers --help`.
 self="${BASH_SOURCE[0]}"
 while [ -L "$self" ]; do
 	link="$(readlink "$self")"

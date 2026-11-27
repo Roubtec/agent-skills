@@ -1,0 +1,24 @@
+#!/usr/bin/env bash
+# write-tasks-task-citations — puts the write-tasks skill's bundled `task-citations.sh` on PATH.
+#
+# The script itself lives in the skill folder, where the skill calls it by
+# path; this is only a name for it. Claude's plugin runtime puts this `bin/` on
+# the Bash tool's PATH, which is how a workflow agent — handed a brief rather
+# than a skill folder — reaches the same script. Nothing is installed anywhere:
+# the shim runs the copy that shipped beside it, so the two cannot drift.
+# Usage: write-tasks-task-citations [-C <dir>] [--ref <commit>] [--folder <dir>] <task file>... — see `write-tasks-task-citations --help`.
+self="${BASH_SOURCE[0]}"
+while [ -L "$self" ]; do
+	link="$(readlink "$self")"
+	case "$link" in
+	/*) self="$link" ;;
+	*) self="$(dirname -- "$self")/$link" ;;
+	esac
+done
+here="$(cd -P -- "$(dirname -- "$self")" && pwd)" || exit 127
+target="$here/../skills/write-tasks/task-citations.sh"
+if [ ! -f "$target" ]; then
+	echo "write-tasks-task-citations: $target is missing — this shim only works from the dev-skills plugin's own bin/, beside its skills/ folder." >&2
+	exit 127
+fi
+exec bash "$target" "$@"
