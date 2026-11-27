@@ -54,7 +54,8 @@
 #
 # Output: `key=value` lines on stdout, `outcome=` first, then `reason=` (the
 # helper's reason verbatim; on the direct launch the provider's own diagnostic,
-# or exactly `empty output` / `garbled output`), `provider=`, `path=helper` or
+# or exactly `empty output` / `garbled output`; whole whatever its length, a
+# line break or tab in it written as a space), `provider=`, `path=helper` or
 # `path=manual`, and where they apply `fallback_reason=`, `attempt=`,
 # `review_file=` (the peer's full review as plain text, for passed/issues),
 # `model=`, `effort=`, `strength_pin=held|differs`, `evidence=proved|unproved`,
@@ -107,7 +108,7 @@ die() {
 	note "$*"
 	exit 1
 }
-oneline() { printf '%s' "$1" | tr '\n\r\t' '   ' | cut -c1-400; }
+oneline() { printf '%s' "$1" | tr '\n\r\t' '   '; }
 is_count() {
 	case "$1" in '' | *[!0-9]*) return 1 ;; esac
 	[ "$1" -gt 0 ] 2>/dev/null

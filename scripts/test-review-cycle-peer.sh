@@ -95,9 +95,11 @@ cp "$prompt" "$STEER/helper.prompt"
 mode="$(cat "$STEER/helper.mode" 2>/dev/null || echo passed)"
 echo '{"event":"progress","line":"working"}' >&2
 case "$mode" in
-usage-provider | usage-other)
+usage-provider | usage-attempts | usage-other)
 	if [ "$mode" = usage-provider ]; then
 		echo "peer-review-run: unsupported --provider 'muse' (claude|codex)" >&2
+	elif [ "$mode" = usage-attempts ]; then
+		echo "peer-review-run: unknown flag '--attempts'" >&2
 	else
 		echo "peer-review-run: --timeout must be a positive number of seconds (got '0')" >&2
 	fi
@@ -420,6 +422,14 @@ OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts 
 is "4: a reason the batch throttle matches literally arrives unaltered" "$(val reason)" "provider exited 0 but emitted no recognizable VERDICT token"
 
 fresh
+LONG="$(printf 'word %.0s' $(seq 1 200))"
+printf '%s\nsecond line\tend\n' "$LONG" >"$STEER/helper.reason"
+echo failed >"$STEER/helper.mode"
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS")"
+is "4: a long reason arrives whole, its line break and tab flattened to spaces" "$(val reason)" "$LONG second line end"
+is "4: ...on the one reason line" "$(printf '%s\n' "$OUT" | grep -c 'second line')|$(printf '%s\n' "$OUT" | grep -c '^reason=')" "1|1"
+
+fresh
 echo '"gpt-next"' >"$STEER/helper.model"
 echo '"high"' >"$STEER/helper.effort"
 OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS")"
@@ -553,6 +563,11 @@ echo usage-provider >"$STEER/helper.mode"
 OUT="$(peer run --provider muse --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS")"
 is "5: a helper that predates the muse provider makes muse unavailable, naming the helper's refusal and not its synopsis" "$?|$(first)|$(val reason)" \
 	"0|outcome=unavailable|peer-review-run predates this launch: peer-review-run: unsupported --provider 'muse' (claude|codex)"
+fresh
+echo usage-attempts >"$STEER/helper.mode"
+OUT="$(peer run --provider muse --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS")"
+is "5: so does a helper that knows muse but not a flag of this launch" "$?|$(first)|$(val reason)" \
+	"0|outcome=unavailable|peer-review-run predates this launch: peer-review-run: unknown flag '--attempts'"
 fresh
 echo usage-other >"$STEER/helper.mode"
 OUT="$(peer run --provider muse --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS")"
