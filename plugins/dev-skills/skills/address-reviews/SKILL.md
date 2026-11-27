@@ -47,14 +47,19 @@ Parsing is **lenient** — accept commas, `&`, `#` prefixes, and free word order
 | --- | --- |
 | `<PRs and/or branches>` | The batch: one or more entries, each a **PR number** (`#38`, `38`) or a **local branch name** (`task/088`). May be mixed (`#38 task/084 6`). Each becomes one worktree + one phased review-addressing workflow. This is the only required argument. |
 | `no-push` | Passed through to every entry as a **local-only run**: fix and commit in each worktree, but perform no PR-side communication (no push, replies, resolves, Summary, or ping). The one PR write that remains is the disposition record comment, which **you** leave per entry — see "An entry that will not publish still leaves its record." below. |
-| `push` | Passed through to every passing entry's publisher: push the fixed branch (normal fast-forward, or an exact expected-OID lease for every other state that pushes at all) and do the PR-side communication (replies, resolves, Summary comment) — but **ping no reviewer**. Use it to publish the batch quietly, without summoning fresh review rounds. |
-| `rebase on top of <target>` | Rebase every entry onto **this** target — a branch name or an exact commit — instead of onto each entry's own base ref. It is resolved to a commit ONCE at setup, by `targets.sh plan` below, and reused at both points; a stacked dependent still goes onto its **parent's new tip**. `no-rebase` wins over it for the REBASE but does not discard the target itself: it remains the pinned effective base every entry's ranges are taken against. |
-| `no-rebase` | **Do not rebase** — you run neither of the two rebase points for any entry, so each branch is addressed and published on the base it already sits on. It is per-invocation, not per entry; a single entry sits out only because the invocation prose said so ("rebase everything except `special/snowflake`"), which you honor as an ordinary instruction and record in the summary — no flag syntax for it. |
+| `push` | Passed through to every passing entry's publisher with `address-review`'s meaning: publish in full, but **ping no reviewer**. Use it to publish the batch quietly, without summoning fresh review rounds. |
+| `rebase on top of <target>` | Rebase every entry onto **this** target — a branch name or an exact commit — instead of onto each entry's own base ref; a stacked dependent still goes onto its **parent's new tip**. Read `rebase-arguments.md` first, per the stub below. |
+| `no-rebase` | **Do not rebase** — you run neither of the two rebase points for any entry, so each branch is addressed and published on the base it already sits on. It is per-invocation; a single entry sits out only because the invocation prose said so. Read `rebase-arguments.md` first, per the stub below. |
 | `peer-opinions=off` | Disable the best-effort `codex` disposition review for the whole batch. It is on by default, including in hands-off mode. |
 | `ping-codex` | Passed through to each publisher with `address-review`'s meaning: a dedicated `@codex review` comment after a real push. Implies `push`. |
 | `ping-claude` | Passed through likewise: a dedicated `@claude review` comment after a real push. Implies `push`. |
 | `ping-copilot` | Passed through likewise: a Copilot review request after a real push. Implies `push`. |
 | `ping-contributing` | **The default** — a bare batch with no push/ping argument publishes every entry and re-pings its contributing bots exactly as if this were passed. Passed through with `address-review`'s meaning and evaluated **per PR**: each publisher re-pings a bot only if it brought a genuinely new finding on that PR this round; combined with explicit `ping-*` it filters that named set, and alone it falls back to the known bots (codex/claude/copilot) that reviewed each PR. Implies `push`. |
+
+**A named target, `no-rebase`, or an entry kept out of rebasing: read `rebase-arguments.md` first.**
+Where the invocation carries `rebase on top of <target>` or `no-rebase`, or its prose keeps an entry out of rebasing ("rebase everything except `special/snowflake`"), read `rebase-arguments.md`, beside this file, in full before you run `targets.sh plan`.
+It holds how each of the three is handed to the plan, where a named target is resolved and why it is never resolved twice, and what an entry that does not rebase takes as its effective base.
+A batch with none of the three never needs it: every entry rebases onto its own base ref, re-pinned at each point as below.
 
 **Classifying each entry** is the helper's, below: a bare or `#`-prefixed integer is a **PR number**, anything else a **branch name**, and a branch literally named like an integer is passed with an explicit `refs/heads/` prefix, or by its PR number instead.
 
@@ -70,37 +75,28 @@ The top-level orchestrator (you) may still consult the user for **batch-level** 
 **Not user-facing (orchestrator may supply at its own discretion):** the per-PR `#N` (you always pass each subagent its assigned PR).
 **Rebasing is on by default**, per entry — and it is **yours to run**, at both of `address-review`'s two points (see "Phase A — initial fix" for where each runs), so the pinned targets and the topological order below govern every batch rather than only a requested one.
 `no-rebase` in an entry's own argument string says the ENTRY rebases nothing rather than that the batch does not rebase.
-`no-rebase` turns the default off for the whole batch, and an entry the invocation prose excluded is treated the same way.
 The step itself is `review-cycle` → "The delegated rebase step": the brief, the base pinning, the parent-first `--onto` form, the hunk-level conflict rules, the clean halt, and the packet it returns are defined there, and nothing about them is restated here or in the entry's prompt.
 
 **One call plans the batch:** `targets.sh plan --repo <owner>/<repo> [--target <target>] [--no-rebase | --except <entry>…] <entries…>` — the helper beside this file, run by absolute path in the main tree, whose `--help` is the contract for every field named here.
 `--repo` is the repository the batch's PRs are in (`<host>/<owner>/<repo>` where that is not github.com): take it from a PR URL the invocation gave, else from `gh repo view --json nameWithOwner` in the main tree, which is only a first guess, since the plan fails and names the right repository where a PR's own URL disagrees.
 The `repo=` it prints back, read from the PRs' own URLs and always host-qualified, is what every later command for an entry names.
 Exit 1 prints no plan at all (a PR, a head or a base that could not be read, a head that kept moving under the fetch): run it once more, then report it as a batch-level blocker, never work from part of a plan; `outcome=cycle` and `outcome=unresolved` (exit 3) are batch-level stops too.
-`--target` carries a `rebase on top of <target>` token, quoted as ONE argument; `--no-rebase` carries the batch-wide token; `--except` names each entry the invocation prose excluded.
 It prints one line per entry, parents first: the paired PR, its fetched head, its `parent=` in the batch, whether it rebases, and the exact commit it is pinned to (`pin=`), whose `target=` is `default` (the entry's own base ref), `named` (the invocation's) or `parent`.
 A line with a `skip=` reason is an entry to skip-and-record while the rest proceed; `no-remote` there is that entry's blocker, never a reason to pin `origin/<baseRefName>`.
-
-A target the invocation named is resolved WHERE IT WAS NAMED — in your own checkout, ONCE, by that call, with nothing fetched for it — so the call runs after Bootstrap's `git fetch origin`: a remote-tracking ref resolved before that fetch names a staler commit than the request meant.
-Where it stops on `unresolved`, stop the batch and report what you tried rather than substituting anything.
-Its `named=` commit is the batch's one base: that single OID serves every rebase-enabled entry at both of its points — overridden only for a stacked dependent, whose parent tip wins — and it, never the ref name again, is what any later `plan` is given as `--target`.
 
 For a rebase-enabled stack, rebase the base entry first onto its pinned target, then pin the dependent's target to the exact rebased base tip (a `target=parent` line has no `pin=` until then) — never rebase the dependent directly onto the original pinned target.
 If a parent PR merges during the batch, resolve the refreshed branch containing that merge once to an exact commit at that refresh and reuse the pinned SHA for every affected dependent.
 Restacking each **rebase-enabled** dependent onto that commit is mandatory because the merge may rewrite the parent's commit SHAs; rely on patch-id dropping, then verify the dependent's diff no longer contains parent content and rerun its review gate before publication.
-A dependent for which rebase remained disabled has no restack obligation.
 
 **Re-pin a default target at each rebase point.**
 It is the DEFAULT target this governs, and only it: immediately before each point, `targets.sh repin --repo <repo> --pr <N>` fetches the entry's own base ref afresh, and the `pin=` it prints is what you pin.
-A named target is the batch's single pinned base and a parent tip is that parent's post-rebase tip, both by construction, so neither is re-resolved per point.
-That the second point then normally finds nothing to do for a named target is intended.
-Normally rather than always, and the point runs either way — a pure-join merge still in range is flattened by the replay, moving the tip over an unmoved base — so a no-op is what that point may REPORT, never a reason for you not to spawn it.
+A parent tip is that parent's post-rebase tip by construction, and a named target is pinned once for the whole batch (`rebase-arguments.md`), so neither is re-resolved per point.
 
 **"Rebase-enabled" is now every entry** — the phrase survives in the rules below because `no-rebase`, or an entry the invocation prose excluded, still turns rebasing off (`rebase=no`), and those entries keep their exemption from every restack obligation.
 The **parent map** those orderings are computed from is that plan's `parent=` column, extended with each parent's **pre- and post-rebase tips** as its rebase completes, because that pair is exactly what restacks its children (`git rebase --no-update-refs --no-rebase-merges --onto <new parent tip> <old parent tip>`).
 That is the whole of the stack bookkeeping this skill does; a chain that genuinely needs a whole-chain restack is `rebase-stack`'s after the batch, and reimplementing it here is the thing to resist.
 Each entry's **pinned effective base** — the OID its rebase actually landed on, read from the delegated step's packet — is what that entry's later delegations name as `<effective base>..HEAD`: Phase B's review base, and any range a fix-up round is handed.
-Where no rebase ran for an entry at all — a `no-rebase` batch, or an entry the invocation prose excluded — its effective base is its line's `pin=`, fixed ONCE at setup: the invocation-named target's own pinned OID on a `no-rebase` batch that named one, since `no-rebase` suppresses the rebase without discarding the token, and the entry's own base ref otherwise.
+Where no rebase ran for an entry at all, its effective base is its plan line's `pin=`, fixed ONCE at setup; `rebase-arguments.md` says which commit that is.
 Never re-derive it afterwards from `origin/<base>` or the entry's `baseRefName`: a sibling entry's push or the next fetch moves those.
 **A rebase that halts is one entry's blocker, not the batch's.**
 The delegated step stops clean — a conflict beyond its competence aborted, or a content-bearing merge left unreplayed with no rebase started — leaves that worktree clean and idle, and hands back what it turns on as an open question: skip-and-record the entry with it, surface it among the hands-off blockers, and give its rebase-enabled descendants the parent's reason exactly as any other Phase-A failure does.
@@ -108,8 +104,7 @@ Siblings deliver.
 
 **The default is to publish.**
 A bare batch (no push/ping argument) publishes every entry and re-pings its contributing bots, exactly as `ping-contributing` (resolution order and precedence are as in `address-review` → "Flag interactions"); `no-push` is the only way to run the whole batch local-only.
-Flag pass-through is otherwise **batch-uniform**: the same resolved `push`/`ping-*` set applies to every PR in the run, with one carve-out — a stacked dependent published ahead of its parent **whose diff is not honest** has its ping tokens replaced by `push`, unless the maintainer named a bot outright (see "Publication" → ping only on an honest diff).
-With `ping-contributing` (including the bare default), the *flag* is uniform but its *effect* is evaluated independently inside each PR's `address-review`, so each PR re-pings only the bots still contributing to it.
+Flag pass-through is otherwise **batch-uniform**: the same resolved `push`/`ping-*` set applies to every PR in the run, with one carve-out, which is "Publication" → ping only on an honest diff.
 
 ## Worktree isolation (inherited)
 
@@ -328,8 +323,9 @@ The `review-cycle` round cap bounds each entry, counting every fix-up regardless
 ### Publication
 
 Unless the run is `no-push` (local-only), spawn a fresh publisher only for an entry that cleared the `review-cycle` gate; pass its final packet, Reviewer Pass, and explicit peer outcome.
+How one PR is published — push, thread replies and resolves, Summary comment, pings — is the `address-review` skill's step 7 and the helpers it runs: the publisher carries that out, and this section holds only what a batch adds.
 **Publish as ready.**
-Launch that publisher the moment the entry's own gate passes — push, thread hygiene, Summary comment, pings — and hold nothing for a batch-level publish barrier: no entry waits on a sibling except through the stack ordering below.
+Launch that publisher the moment the entry's own gate passes, and hold nothing for a batch-level publish barrier: no entry waits on a sibling except through the stack ordering below.
 For each detected rebase-enabled stack, publish parent-before-dependent as a **best-effort ordering, not a hard gate**: prefer to launch a dependent's publisher only after every parent has published successfully, refreshed as merged (content-verified below), or completed Phase A through the terminal zero-feedback shortcut, and take the blocked-parent carve-out below when a parent cannot get there at all.
 Publishers for unrelated entries may still run concurrently.
 
@@ -339,13 +335,13 @@ A parent blocked *before* its dependent launches still skip-and-records that dep
 Descendant invalidation's revocation is **provisional** until the parent's rerun concludes: when the rerun ends in a block, the parent's new tip will never publish, so restore the dependent's last packet and review gate — the ones valid against the last parent tip that satisfied its Phase-A gate — and treat that restored gate as satisfying publisher eligibility.
 The un-restacked hold is what makes the restore work — the dependent's worktree still matches that packet's final SHA, which `publish-reviewed` verifies — so do not instead re-gate the dependent by restacking it onto the blocked parent's newer un-gated tip, which would carry un-gated parent work into its PR.
 Judge each held descendant on what it actually holds: one that never passed a review gate of its own has nothing to restore, and is skip-and-recorded with the parent's reason.
-Publish a dependent that cleared its own gate onto the parent's existing remote tip and reply and resolve its threads normally (whether its diff renders honestly is settled separately by the honest-diff rule below).
+Publish a dependent that cleared its own gate onto the parent's existing remote tip exactly as any other entry is published (whether its diff renders honestly is settled separately by the honest-diff rule below).
 Never publish the parent's un-gated work on the dependent's behalf, and do not merge a dependent before its parent — an ordering this skill can only state, never enforce.
 None of this discourages a dependent PR that deliberately targets a feature branch rather than the default.
 
 **An entry that will not publish still leaves its record.**
 `delegated-fix` reaches neither of `address-review`'s publication steps and writes nothing to any PR, so for an entry that ends without a publisher the disposition record is **yours** to leave, from the packet you already hold: every entry of a `no-push` batch, an entry blocked at the `review-cycle` round cap or holding a blocker, and a held descendant whose parent's block leaves it unpublished.
-Post it per the `address-review` skill's `disposition-record.md`, in that skill's folder beside this one, read in full first — one per PR, superseding your own prior record rather than appending a second unless the map is one you already know is incomplete, which that file posts beside the earlier record rather than over it, drafted replies and the ready-to-post Summary body verbatim, the cited tips stated as local-only.
+Post it per the `address-review` skill's `disposition-record.md`, in that skill's folder beside this one, read in full first — one per PR, the cited tips stated as local-only; what it carries and which earlier record it supersedes are that file's.
 An entry whose publisher *did* run needs nothing from you even when publication aborted: that subagent reaches step 8 and leaves the record itself, and a second one here would be the stack that rule exists to prevent.
 An entry with no packet — skip-and-recorded at setup, or failed before triage — has no map to record; it belongs in the hands-off blockers instead.
 
@@ -355,7 +351,7 @@ Test it against the range GitHub will actually show: list `<base-ref current rem
 Take the set from that pinned tip rather than by matching commits across the restack.
 Anything else in that range (a parent commit, or a commit the restack pulled in from the rebase target) means the diff is not honest.
 Test the range, never tip ancestry and never patch-id presence of the parent's commits.
-When the range holds anything that is not the dependent's own work, complete the push, replies, resolves, and Summary comment, but **ping no reviewer**, and say so prominently in that PR's Summary comment and in the batch report, including that the diff narrows once the parent publishes or at the pre-merge rebase onto the default branch, and that re-requesting review is then the maintainer's to trigger.
+When the range holds anything that is not the dependent's own work, publish it in full but **ping no reviewer**, and say so prominently in that PR's Summary comment and in the batch report, including that the diff narrows once the parent publishes or at the pre-merge rebase onto the default branch, and that re-requesting review is then the maintainer's to trigger.
 Deliver the suppression through the publisher's arguments: invoke that entry's `publish-reviewed` with `push` substituted for the run's ping tokens, since `address-review` owns pings and has no honest-diff concept of its own.
 Only an explicitly named `ping-codex`/`ping-claude`/`ping-copilot` overrides the suppression — not `ping-contributing`, and not the bare default, which *resolves to* `ping-contributing`.
 
@@ -370,7 +366,7 @@ A changed head OID goes through the **Remote-tip refresh guard** above — at th
 Invalidate the stale packet only when an entry-affecting fact changed: its head OID, open/merged state, head or base name, or dependency target because any parent tip changed; unrelated `baseRefOid` movement alone does not invalidate it.
 When a packet is invalidated, do not launch its publisher: rerun `delegated-fix` (including the required restack when a rebase-enabled dependent's parent changed its dependency target) and the fresh review gate first, and apply **Descendant invalidation** to any parent tip that rerun changes — restoring the last valid gate instead where the rerun ends with the parent blocked.
 When no parent changed the dependency target, preserve the original exact non-parent target — subject to the same carve-out: the rebase point that follows re-resolves a default one for itself.
-Tell it to invoke the `address-review` skill with arguments `#N hands-off publish-reviewed <resolved push/ping tokens>` — pass the run's resolved push/ping set (a bare default batch resolves to `ping-contributing`; a `no-push` batch skips publication entirely) — except for an entry whose diff is not honest and for which no bot was named outright, where the ping tokens are replaced by `push` (see "Publication" → ping only on an honest diff).
+Tell it to invoke the `address-review` skill with arguments `#N hands-off publish-reviewed <resolved push/ping tokens>`: the run's resolved push/ping set, or `push` in its place where the honest-diff rule above suppressed the pings.
 It edits no code and returns the full final report, including per-thread dispositions, push/ping outcome, and blockers.
 
 Do **not** give any subagent another PR's context — strict per-PR isolation.
