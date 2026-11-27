@@ -150,7 +150,7 @@ Give every launch a fresh `artifact_dir` of its own under this cycle's artifact 
 
 **Launch** inside the concurrently started Peer role: `peer.sh run --provider codex --worktree "$worktree" --artifact-dir "$artifact_dir" --facts "$facts_file"`, exactly once, in the foreground.
 Set the caller-side Bash/tool wait to at least 570 seconds but strictly below its roughly 600-second cap, and do not background, poll, retry, or externally signal the call: where `peer-review-run` is on PATH the script runs it, and that helper owns timeout, transient-only retry, and provider-tree reaping inside that wait.
-`outcome=launched` means the script started the provider directly instead, because the helper is absent or its verdict named no review file this cycle could relay; `fallback_reason` says which, and a run states it once rather than every round.
+`outcome=launched` means the script started the provider directly instead, because the helper is absent, `jq` is not there to read its result, or its verdict named no review file this cycle could relay; `fallback_reason` says which, and a run states it once rather than every round.
 Then run `peer.sh collect --artifact-dir "$artifact_dir"` under the same wait, again for as long as it answers `pending`.
 A direct launch gets a loose 12 minutes per attempt; pass `--deadline <seconds>` to `run` where visible progress or review size justifies waiting longer.
 

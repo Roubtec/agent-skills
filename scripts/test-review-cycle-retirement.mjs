@@ -1728,7 +1728,7 @@ for (const name of WORKFLOWS) {
     );
     check(
       "a direct launch is collected through the script, which also supplies the reason it was taken",
-      /5\. If the answer is `outcome=launched`, the script started the provider directly, because the helper is absent or its verdict named no usable review file: set `fallbackReason` to the `fallback_reason` value exactly/.test(renderedPeer) &&
+      /5\. If the answer is `outcome=launched`, the script started the provider directly, because the helper is absent, `jq` is not there to read its result, or its verdict named no usable review file: set `fallbackReason` to the `fallback_reason` value exactly/.test(renderedPeer) &&
         /run `review-cycle-peer collect --artifact-dir "\$artifact_dir"` under the same wait, and again for as long as it answers `outcome=pending`/.test(renderedPeer) &&
         /never probe or signal the provider yourself/.test(renderedPeer) &&
         /On any other answer `fallbackReason` stays empty/.test(renderedPeer),
@@ -1737,7 +1737,8 @@ for (const name of WORKFLOWS) {
     check(
       "a reported model=null is a strength note, never a reason to launch again, and no deferral prose survives",
       /a `model=null` is a strength note and never a reason to launch again/.test(renderedPeer) &&
-        /Set `strength` to `model=<model> effort=<effort>` exactly as its `model` and `effort` lines report them/.test(renderedPeer) &&
+        /Set `strength` to `model=<model> effort=<effort>` exactly as its `model` and `effort` lines report them, to `effort=<effort>` alone where it has no `model` line \(a direct launch that named no model\), or to the empty string where it has neither/.test(renderedPeer) &&
+        /On the helper path that is what the helper result reports; on the direct launch it is what the launch pinned, `effort=<effort>` alone where it named no model\./.test(src) && !/empty on the direct launch/.test(src) &&
         !/prerequisite/i.test(renderedPeer) &&
         !/issues\/145/.test(renderedPeer) &&
         !/retain(?:s|ed)? the (?:pinned )?raw launch/.test(renderedPeer),
@@ -1866,7 +1867,7 @@ for (const name of WORKFLOWS) {
       if (label.startsWith("packet#")) return { measured: true, dirty: [], operation: "", detail: "" };
       if (label.startsWith("review#")) return { ...OK };
       if (label === "peer-preflight:codex") return { outcome: "available", detail: "" };
-      if (label === "peer:codex#1") return { outcome: "issues", findings: [{ claim: "fix the defect" }], notes: "", detail: "", reason: "", teardownFailure: false, strength: "", fallbackReason: "helper result carried no usable reviewFile" };
+      if (label === "peer:codex#1") return { outcome: "issues", findings: [{ claim: "fix the defect" }], notes: "", detail: "", reason: "", teardownFailure: false, strength: "effort=medium", fallbackReason: "helper result carried no usable reviewFile" };
       if (label === "peer:codex#2") return { outcome: "passed", findings: [], notes: "", detail: "", reason: "", teardownFailure: false, strength: "", fallbackReason: "helper result carried no usable reviewFile" };
       if (label === "ground#1") return { verdicts: [] };
       return null;
@@ -1878,7 +1879,10 @@ for (const name of WORKFLOWS) {
       "a round that took the direct launch still gates on its findings, and the run states the reason once",
       fallbackResult.verdict === "pass" && fallbackResult.rounds === 2 &&
         fallbackResult.peerRounds.length === 2 &&
-        fallbackResult.peerRounds.every((r) => r.fallbackReason === "helper result carried no usable reviewFile" && !("strength" in r)) &&
+        fallbackResult.peerRounds.every((r) => r.fallbackReason === "helper result carried no usable reviewFile") &&
+        // The direct codex launch pins an effort and names no model: the record
+        // carries exactly that, and an empty strength leaves no field at all.
+        fallbackResult.peerRounds[0].strength === "effort=medium" && !("strength" in fallbackResult.peerRounds[1]) &&
         fallbackLines.length === 1 && /helper result carried no usable reviewFile/.test(fallbackLines[0]),
       `${JSON.stringify(fallbackResult.peerRounds)} / ${JSON.stringify(fallbackLines)}`,
     );
@@ -2500,13 +2504,14 @@ const PEER_LAUNCH_CHECKS = 15;
     "both mirrors take the direct launch on the result, not the binary or the schema string, say why once, and no deferral prose survives",
     [codexStep, pluginsStep].every(
       (text) =>
-        /`outcome=launched` means the script started the provider directly instead, because the helper is absent or its verdict named no review file this cycle could relay; `fallback_reason` says which, and a run states it once rather than every round/.test(text) &&
+        /`outcome=launched` means the script started the provider directly instead, because the helper is absent(?:, `jq` is not there to read its result,)? or its verdict named no review file this cycle could relay; `fallback_reason` says which, and a run states it once rather than every round/.test(text) &&
         /run `peer\.sh collect --artifact-dir "\$artifact_dir"` under the same wait, again for as long as it answers `pending`/.test(text) &&
         !/prerequisite/i.test(text) &&
         !/issues\/145/.test(text) &&
         !/reviewText/.test(text) &&
         !/deferred conversion/.test(text),
     ) &&
+      /absent, `jq` is not there to read its result, or its verdict/.test(pluginsStep) && !/`jq`/.test(codexStep.slice(codexStep.indexOf("`outcome=launched` means"), codexStep.indexOf("`fallback_reason` says which"))) &&
       /\nHELPER_ABSENT='peer-review-run absent from PATH'\nUNUSABLE_REVIEW='helper result carried no usable reviewFile'\nJQ_ABSENT='jq absent from PATH, so no peer-review-run result could be read'\n/.test(script),
     "capability probe and deferral census",
   );
