@@ -691,7 +691,7 @@ passed|a pass after three backticks that open an inline code span|``` `x`\nVERDI
 passed|a pass between two two-backtick lines|``\nVERDICT: PASS\n``
 issues|no issues followed by changes required|VERDICT: NO ISSUES, CHANGES REQUIRED
 issues|no issues run straight into an issue word|VERDICT: NO ISSUES CHANGES REQUIRED
-passed|a pass followed by a word that only holds an issue word|VERDICT: PASS, unchanged
+passed|a pass followed by a word that only ends in an issue word|VERDICT: PASS, unblocking the release
 passed|a pass followed by a word that only begins with one|VERDICT: PASS, failing nothing
 none|a pass in a fence opened behind a form feed|\f```\nVERDICT: PASS\n```
 none|a pass in a fence opened behind a vertical tab|\v```\nVERDICT: PASS\n```
