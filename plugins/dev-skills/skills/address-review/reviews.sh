@@ -63,7 +63,8 @@
 # the entries are not in that shape, so a reviewer that changes its markup
 # reads as `parsed: false` with the review's `url` to open, never as no block.
 #
-# Scope. Every review and comment this reads must carry an `html_url` inside the requested repository and pull request; a paginated read run beside
+# Scope. Every review and comment this reads must carry an `html_url` inside
+# the requested repository and pull request; a paginated read run beside
 # other `gh` calls has returned another pull request's objects. It pages by
 # hand, one fresh `gh api` call per page, never `--paginate`. A response that
 # fails the check is discarded and the whole read is made once more; failing
