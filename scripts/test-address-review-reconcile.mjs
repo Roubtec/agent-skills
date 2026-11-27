@@ -282,7 +282,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 288;
+const EXPECTED_CHECKS = 290;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -3167,13 +3167,14 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     "codex review-cycle": join(here, "..", "codex", "dev-skills", "skills", "review-cycle", "SKILL.md"),
   };
   // One brief, shipped twice: the rebaser of either mirror reads the same rules,
-  // and the section that hands the step over names the file it reads.
+  // and the caller's half, `delegating-a-rebase.md` beside it, is what hands the
+  // step over and names the file the rebaser reads.
   const briefs = Object.values(rcMirrors).map((path) => readFileSync(join(dirname(path), "rebase-brief.md"), "utf8"));
   const handsOver = Object.values(rcMirrors).every((path) =>
-    readFileSync(path, "utf8").includes("tell it to read `<path>/rebase-brief.md` in full and carry it out"),
+    readFileSync(join(dirname(path), "delegating-a-rebase.md"), "utf8").includes("tell it to read `<path>/rebase-brief.md` in full and carry it out"),
   );
   check(
-    "the delegated rebase brief is one file, byte-identical in both mirrors, and both skills hand the rebaser to it",
+    "the delegated rebase brief is one file, byte-identical in both mirrors, and both skills' caller half hands the rebaser to it",
     briefs[0] === briefs[1] && briefs[0].length > 0 && handsOver,
     `identical: ${briefs[0] === briefs[1]}; handed over: ${handsOver}`,
   );
@@ -6641,6 +6642,40 @@ for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
   };
   const absent = Object.entries(triggers).filter(([, pattern]) => !pattern.test(skillOnly)).map(([what]) => what);
   check(`${mirror}/address-review/SKILL.md itself sends a run to its on-demand files`, absent.length === 0, absent.length ? `missing: ${absent.join("; ")}` : `${Object.keys(triggers).length} triggers`);
+}
+
+// `review-cycle` keeps three rule sets out of SKILL.md, each read only by the
+// run that reaches its case: later rounds, open questions, and the caller's
+// half of a delegated rebase. A rule there is reachable only through the
+// sentence in SKILL.md that sends a run to its file, and it is on demand only
+// while it lives in that file alone. Both halves are pinned per mirror: the
+// trigger in SKILL.md by itself, and one clause of each moved rule set present
+// in its file and absent from SKILL.md.
+for (const mirror of ["plugins/dev-skills/skills", "codex/dev-skills/skills"]) {
+  const dir = join(here, "..", mirror, "review-cycle");
+  const skillOnly = readFileSync(join(dir, "SKILL.md"), "utf8");
+  const triggers = {
+    "a first round that did not end the cycle sends the run to later-rounds.md": /Once the first reviewer round has not ended the cycle — it did not pass, or the pass after it fixed or disputed something — read `later-rounds\.md`, beside this file, in full/,
+    "the first open question sends the run to open-questions.md": /Read it in full the first time the cycle holds an open question — a pass returned an `escalated` disposition, a delegated rebase halted, or the invoker handed one in/,
+    "a Fixer is handed that file's path as the shape of a new question": /the path of `open-questions\.md`, beside this file, for it to read in full before it escalates/,
+    "a rebase about to be delegated sends the caller to delegating-a-rebase.md": /Read `delegating-a-rebase\.md` in full when a rebase is about to be delegated, and not before/,
+    "the round cap stays where a caller lowering it at launch reads it": /allow at most \*\*12 reviewer rounds total\*\*[\s\S]*An invoker may lower the cap for a bounded context, never raise it\./,
+    "each round's ending SHA is recorded from round one": /\*\*Record each round's ending SHA\.\*\*/,
+  };
+  const moved = {
+    "later-rounds.md": ["**Verbatim relay:** do not summarize, merge, or rewrite feedback.", "**Bound the claim instead of tightening it again.**", "**Two same-class findings make the structure the defect.**", "stop iterating, do not deliver or publish, and surface every outstanding finding set verbatim", "gets the **recorded prior-round SHA** as its base"],
+    "open-questions.md": ["Record each question with: a stable `id` within the run", "That `id` must be one no earlier pass used.", "So the mark lands **pending**", "a retired one rides along marked"],
+    "delegating-a-rebase.md": ["The prompt also spells out, as commands, the two ref writes the step makes", "**Stacked entries rebase parent-first, in topological order.**", "a no-op naming a moved tip, or naming none, is unevidenced and stops that caller's run", "never a SHA captured before the rebase, which is no longer reachable", "One entry's halt is one entry's"],
+  };
+  const misses = Object.entries(triggers).filter(([, pattern]) => !pattern.test(skillOnly)).map(([what]) => `SKILL.md lacks: ${what}`);
+  for (const [file, clauses] of Object.entries(moved)) {
+    const text = readFileSync(join(dir, file), "utf8");
+    for (const clause of clauses) {
+      if (!text.includes(clause)) misses.push(`${file} lacks "${clause}"`);
+      if (skillOnly.includes(clause)) misses.push(`SKILL.md still carries "${clause}", which ${file} holds`);
+    }
+  }
+  check(`${mirror}/review-cycle/SKILL.md itself sends a run to its on-demand files, and each moved rule lives in its file alone`, misses.length === 0, misses.join("; "));
 }
 
 check(`suite ran all ${EXPECTED_CHECKS} checks`, ran === EXPECTED_CHECKS, `ran ${ran}`);

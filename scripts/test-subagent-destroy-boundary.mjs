@@ -1352,11 +1352,12 @@ if (!canonicalRule) {
 //      one arriving or leaving fails until the table is brought up to date.
 //   2. BY-REFERENCE requirements (`byReference`) — a clause that IMPOSES a
 //      destination requirement while delegating both the destination and the
-//      warning to a rule anchored elsewhere in the same file. `review-cycle`'s
-//      delegated rebase step is the one member: its brief carries "the pinned base
-//      below, and a destination for any build output under this cycle's
-//      artifact-directory rules", which names the `## Artifacts and hygiene` rule
-//      anchored below rather than restating it. It carries no warning spelling at
+//      warning to a rule anchored elsewhere in the same skill. `review-cycle`'s
+//      delegated rebase step is the one member: the caller's half of it,
+//      `delegating-a-rebase.md`, has the brief carry "the pinned base below, and a
+//      destination for any build output under this cycle's artifact-directory
+//      rules", which names the `## Artifacts and hygiene` rule anchored in
+//      `SKILL.md` rather than restating it. It carries no warning spelling at
 //      all, so NO widening of `PROSE_WARNING` can reach it and the census cannot
 //      count it — but deleting it deletes the obligation on the caller to hand the
 //      rebase subagent a destination, which nothing else in either mirror states.
@@ -1603,9 +1604,10 @@ const PROSE_CLAUSES = {
         "A slug is routinely a branch name, and the `/` in one splits the suffix into a parent directory: `mktemp` refuses that outright, and a `mkdir -p` path takes it silently, nesting the round history where nobody will look for it.\n" +
         "The full round history (reviewer reports, peer output, fixer packets) lives there, as does any build or validation output a role redirects to a file",
     ],
-    // Category 2, the by-reference requirement: `## The delegated rebase step`
-    // obliges the brief to carry a destination and delegates WHICH destination to
-    // the artifact-directory rule anchored just above. The anchor starts at
+    // Category 2, the by-reference requirement: the caller's half of the
+    // delegated rebase step (`delegating-a-rebase.md`, beside `SKILL.md`) obliges
+    // the brief to carry a destination and delegates WHICH destination to the
+    // artifact-directory rule anchored just above. The anchor starts at
     // "carries that absolute path" so it spans the obligation rather than the
     // trailing reference alone, which a sentence could keep while dropping what it
     // is a list of. It arrived with task 016 rather than 017 and shipped
