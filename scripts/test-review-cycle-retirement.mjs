@@ -1873,9 +1873,9 @@ for (const name of WORKFLOWS) {
     };
     const fallbackLoaded = loadCycle(src, museAbsent(fallbackAgent), (line) => fallbackLogs.push(String(line)));
     const fallbackResult = await fallbackLoaded.runReviewCycle({ ...CYCLE, peer: "on" });
-    const fallbackLines = fallbackLogs.filter((line) => /manual fallback taken/.test(line));
+    const fallbackLines = fallbackLogs.filter((line) => /direct launch taken/.test(line));
     check(
-      "a round that took the manual fallback still gates on its findings, and the run states the reason once",
+      "a round that took the direct launch still gates on its findings, and the run states the reason once",
       fallbackResult.verdict === "pass" && fallbackResult.rounds === 2 &&
         fallbackResult.peerRounds.length === 2 &&
         fallbackResult.peerRounds.every((r) => r.fallbackReason === "helper result carried no usable reviewFile" && !("strength" in r)) &&
@@ -1899,7 +1899,7 @@ for (const name of WORKFLOWS) {
       nullModelResult.verdict === "pass" && nullModelResult.rounds === 1 &&
         nullModelResult.peerRounds.length === 1 && nullModelResult.peerRounds[0].outcome === "passed" &&
         nullModelResult.peerRounds[0].strength === "model=null effort=medium" && !("fallbackReason" in nullModelResult.peerRounds[0]) &&
-        !nullModelLogs.some((line) => /manual fallback taken/.test(line)),
+        !nullModelLogs.some((line) => /direct launch taken/.test(line)),
       JSON.stringify(nullModelResult.peerRounds),
     );
     const { normalizeCyclePeerResult: normalizePeer } = fallbackLoaded;
@@ -2507,7 +2507,7 @@ const PEER_LAUNCH_CHECKS = 15;
         !/reviewText/.test(text) &&
         !/deferred conversion/.test(text),
     ) &&
-      /\nHELPER_ABSENT='peer-review-run absent from PATH'\nUNUSABLE_REVIEW='helper result carried no usable reviewFile'\n/.test(script),
+      /\nHELPER_ABSENT='peer-review-run absent from PATH'\nUNUSABLE_REVIEW='helper result carried no usable reviewFile'\nJQ_ABSENT='jq absent from PATH, so no peer-review-run result could be read'\n/.test(script),
     "capability probe and deferral census",
   );
   check(

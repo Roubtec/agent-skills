@@ -1261,7 +1261,7 @@ const CYCLE_PEER_PROVIDERS = [
 //
 // `strength` and `fallbackReason` are notes, not control flow: the first is
 // what the helper says it actually reviewed with, the second the one-line
-// reason a round took the manual fallback (helper absent, or a passed/issues
+// reason a round took the direct launch (helper absent, or a passed/issues
 // result with no usable `reviewFile`). Neither is required, and neither
 // decides anything — in particular a reported `model: null` is a strength note
 // and never a fallback trigger.
@@ -1292,8 +1292,8 @@ const CYCLE_PEER_SCHEMA = {
     },
     notes: { type: "string", description: "Only valid bullets from the optional bounded NOTES section, preserved verbatim; empty when no valid advisory bullets survive (including a clean pass) and for every outcome that is not passed/issues, which reaches no verdict and so has no NOTES section to copy." },
     detail: { type: "string", description: "For a non-passed/issues outcome: why (logged out, timed out after retry, empty output, provider crash...)." },
-    strength: { type: "string", description: "Helper path only: `model=<model> effort=<effort>` exactly as the result reports them (a null written as `null`); empty on the fallback path." },
-    fallbackReason: { type: "string", description: "Empty on the helper path. When this round took the manual fallback, the one-line reason: the helper was absent from PATH, or its passed/issues result carried no usable `reviewFile`." },
+    strength: { type: "string", description: "Helper path only: `model=<model> effort=<effort>` exactly as the result reports them (a null written as `null`); empty on the direct launch." },
+    fallbackReason: { type: "string", description: "Empty on the helper path. When this round took the direct launch, the script's one-line reason: the helper was absent from PATH, its result could not be read, or its passed/issues result carried no usable `reviewFile`." },
     reason: { type: "string", description: "The provider/helper reason verbatim; distinguishes empty/garbled forfeitures for the adaptive throttle. Always emit it: an empty string where the outcome carries no reason, never an omitted field." },
     teardownFailure: { type: "boolean", description: "The ONE result that is not non-blocking: true ONLY when a provider process this stage launched could not be proven dead after the bounded TERM/KILL sequence. The cycle stops on it for operator intervention. False on every ordinary path, including this stage's own failures." },
   },
@@ -1908,7 +1908,7 @@ function cyclePeerTrouble(result) {
   // deliberately a separate exact mapping: helper diagnostics are a documented
   // wire contract, while broad matches on words such as "empty" or "garbled"
   // can throttle on unrelated forfeitures. The two short forms are emitted only
-  // by the fallback launch after it observes the corresponding condition.
+  // by the script after it observes the corresponding condition.
   const reasonClass = new Map([
     ["empty output", "empty"],
     ["garbled output", "garbled"],
@@ -2345,7 +2345,7 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     provider-less `disabled` entry per round with the peers off — where `detail`
 //     appends only the peer prompt's bounded advisory bullets when present,
 //     plus `strength` (the model/effort the helper result reports) and
-//     `fallbackReason` (why the round took the manual launch) where set,
+//     `fallbackReason` (why the round took the direct launch) where set,
 //     plus teardownFailure on the one round that carried it — a provider the
 //     peer stage could not prove dead, which ends the cycle as an `error`
 //     rather than degrading to a non-blocking outcome), peerThrottle,
@@ -3004,12 +3004,12 @@ async function runReviewCycle(cycle) {
       peerRounds.push({ round: rounds, ...(provider ? { provider: provider.id } : {}), outcome: peer.outcome, detail: peerRoundDetail, reason: peer.reason || "", ...(peer.strength ? { strength: peer.strength } : {}), ...(peer.fallbackReason ? { fallbackReason: peer.fallbackReason } : {}), ...(peer.teardownFailure ? { teardownFailure: true } : {}) });
       if (!provider) continue;
       const providerState = cyclePeerProviderState(peerState, provider);
-      // A round that took the manual fallback says why ONCE per run (per batch,
+      // A round that took the direct launch says why ONCE per run (per batch,
       // under a shared peerState), not once per round: the reason is a property
       // of the installed helper, not of the round.
       if (peer.fallbackReason && !providerState.fallbackReason) {
         providerState.fallbackReason = peer.fallbackReason;
-        log(`peer (${provider.id}) round ${rounds}: manual fallback taken — ${peer.fallbackReason}`);
+        log(`peer (${provider.id}) round ${rounds}: direct launch taken — ${peer.fallbackReason}`);
       }
     }
     // The one peer condition that is not non-blocking, checked before anything

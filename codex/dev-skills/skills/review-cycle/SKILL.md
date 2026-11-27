@@ -201,7 +201,7 @@ Anything that is not `passed` or `issues` is non-blocking — normalize an unrec
 **Batch concurrency is an optimistic session-local adaptive throttle.**
 Start with no cap.
 A `timeout` or `failed` outcome is trouble.
-A `forfeited` outcome is trouble only when its exact retained reason maps to empty/garbled output: the fallback-path literals `empty output` and `garbled output`, or the helper literals `provider exited 0 with an empty final message` and `provider exited 0 but produced a malformed/unparseable response`.
+A `forfeited` outcome is trouble only when its exact retained reason maps to empty/garbled output: the script's own literals `empty output` and `garbled output`, or the helper literals `provider exited 0 with an empty final message` and `provider exited 0 but produced a malformed/unparseable response`.
 Do not substring-match or paraphrase reasons; in particular, `provider exited 0 but emitted no recognizable VERDICT token`, other forfeitures, and auth/usage `unavailable` outcomes are not throttle events.
 On the first trouble, cap new launches at `max(2, min(8, current in-flight))`; never kill calls already in flight, and queue launches beyond the cap.
 Each later trouble cluster halves the cap as `max(2, floor(cap / 2))`: a cluster is one cap generation, so only trouble from a call launched under the current cap can step it down and results from calls already in flight at the prior step cannot collapse it again.
