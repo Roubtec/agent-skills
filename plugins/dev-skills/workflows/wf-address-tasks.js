@@ -220,6 +220,11 @@ const PLAN_SCHEMA = {
             required: ["raw", "kind", "paths", "reason"],
           },
         },
+        taskChecks: {
+          type: "array",
+          description: "What the two read-only pre-dispatch checks printed about the executable task files, one string per line: `unresolved=` (a backticked path or identifier that resolves nowhere on the default base), `touching=` (an open PR whose own changes reach a task file), `skipped=` / `limit=` (what that scan could not read), or a sentence saying a check could not run. Report context only; nothing is excluded by it. Empty when both ran and printed none of these.",
+          items: { type: "string" },
+        },
       },
       required: ["paths", "numbers", "notFound", "exclusions"],
     },
@@ -598,6 +603,7 @@ Do this:
    - \`dependsOn\`: the slugs of in-batch tasks it depends on (the task(s) whose branch is its base), or empty,
    - \`upstream\`: a one-line note on what an in-batch dependency introduced, if any.
 6. Set \`defaultBase\` to the user's explicit base override, else the current checked-out branch, else \`main\`.
+7. Run two read-only checks on the executable task files from the repo ROOT, and record what they print in \`resolution.taskChecks\`, one string per line. They report and exclude nothing: no task leaves a wave because of them. \`write-tasks-task-citations --ref <defaultBase> <task file>…\` prints an \`unresolved=\` line for each backticked path or identifier a task cites that resolves nowhere in that commit, a file the task asks to be created included; record each. \`write-tasks-task-numbers touching --repo <owner>/<repo> --task <path>…\`, with each path as written from the repo root, prints a \`touching=\` line for each open PR whose own changes reach one of those files, and \`skipped=\` / \`limit=\` lines where it could not read every head; record each. A check that could not run is one line saying so, never an empty answer.
 
 Return the structured plan. Paste each task file's FULL content verbatim into \`content\` — downstream agents have no other access to it.`;
 }

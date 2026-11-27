@@ -22,7 +22,7 @@
 # remains:
 #   path        a span with a slash in it, or one that ends in an extension
 #               (a dot and at most eight lowercase letters and digits, a letter among
-#               them, behind a stem: `stack.sh`, `tests.yml`, not `3.2` and
+#               them, behind a stem: `task-numbers.sh`, `tests.yml`, not `3.2` and
 #               not `.md`). An absolute path, one with a `..` step, and one
 #               with no letter in it are dropped. A span with a slash and no
 #               extension is checked only where its first step is a directory

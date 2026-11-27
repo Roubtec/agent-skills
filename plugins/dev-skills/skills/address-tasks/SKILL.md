@@ -37,6 +37,9 @@ In a hands-off run, execute only the number-selected unambiguous `active` paths 
 Exclude and document every number-selected `done`, `deferred`, or `ambiguous` classification and every `not-found` input; never guess an ambiguous number.
 Carry the complete mapping and exclusions into the run summary.
 
+Before dispatch, run two read-only checks on the task files that will execute, both in the `write-tasks` skill's folder, a sibling of this skill's: `task-citations.sh --ref <the base the implementers start from> <task file>…` lists the backticked paths and identifiers that resolve nowhere in that commit, and `task-numbers.sh touching --repo <owner>/<repo> --task <path>…` lists every open PR whose own changes reach one of those files.
+Neither answer stops the batch: for an unresolved citation that is not simply a file the task asks for, fix the task or note the gap in that implementer's prompt; for a touching PR, or a scan that answers `incomplete`, say so in the batch report and decide whether that task waits.
+
 This skill is the parallel sibling of `address-tasks-serialized`.
 The roles (orchestrator / implementer / reviewer), the implementer and reviewer prompt contracts, and the code-quality review checklist are inherited from that skill, and the peer second-opinion protocol is the `review-cycle` skill's — read those for the contracts and their rationale.
 **What changes here is the execution model:** instead of one branch on one shared working tree processed strictly sequentially, each task gets its **own git worktree** so independent tasks can run **concurrently**, while each individual task still runs its implement→review→fix loop **sequentially**, bounded by the `review-cycle` round cap.
