@@ -1613,6 +1613,7 @@ ${cycleItemsBlock(cycle)}${cycleFindingsBlock(state.findings)}${cycleOpenQuestio
 - Commit at logical milestones, and validate at THIS PASS'S TIER (code artifacts). ${tierLine}${closeOutLine}
 - ${CYCLE_FLAKE_POLICY}
 - A sweep ("fix this pattern everywhere") is ENUMERATED, never asserted: return the explicit search space with a per-item verdict, and claim a completed sweep in a commit message only where you enumerated that space. Build that space from at least two independent patterns and from the branch's own diff as well as matches on the subject, and report it as a FLOOR, not a total. This round's reviewer redoes the enumeration rather than spot-checking yours.
+- A perturbation-style control (changing code to confirm that a named check fails) runs only after your work is committed. For one that is a single changed string, \`review-cycle-perturb -C <your worktree> --file <path> --old <string> --new <string> -- <command>\` runs it (\`--help\` is its contract): it answers \`outcome=caught\` only where the change applied and the command then failed, having put the file back itself. It is a safer way to run a control you had already decided on, NEVER a reason to run one; name in \`summary\` the failure you expected to see.
 - Open, edit, mark ready, or comment on no pull request unless this assignment spells that out; publication is the orchestrator's.
 - ${CYCLE_COMMENT_DISCIPLINE}
 - ${CYCLE_CARRIED_CLAIMS}
@@ -1701,6 +1702,8 @@ Read the repository's agent-context files (\`AGENTS.md\` / \`CLAUDE.md\`) first 
 ${cycleReviewChecks(cycle.artifactType, state.tier)}
 
 Where the work claims a same-pattern sweep ("fixed everywhere"), REDO the enumeration of its search space yourself rather than spot-checking the enumeration supplied — from at least two independent patterns and from the branch's own diff as well as matches on the subject, and what either of you found is a FLOOR, not a total; a sweep asserted with no enumeration behind it is a finding in its own right.
+
+Where the change adds or extends a test FOR A FIX, satisfy yourself that the test fails without the fix, and say in your report how you did and which failure you expected. The direct way is to take the fix out and run that one test — in the disposable clone the boundary above describes, NEVER in the reviewed worktree, which a peer is reading as you work; \`review-cycle-perturb -C "$DC" --file <path> --old <string> --new <string> -- <command>\` does that for a fix that is one changed string and puts the file back itself (\`--help\` is its contract). Reading the test against the pre-fix code is acceptable where running is impractical. This asks for nothing where the change claims no test for a fix, and it is never a reason to ask a repository for checks it does not have.
 
 ${CYCLE_CARRIED_CLAIMS}
 

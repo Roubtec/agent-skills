@@ -43,6 +43,7 @@ jobs:
       - run: bash scripts/test-declare-shadows-probe.sh
       - run: bash scripts/test-review-cycle-peer.sh
       - run: bash scripts/test-review-cycle-rebase-facts.sh
+      - run: bash scripts/test-review-cycle-perturb.sh
       - run: node scripts/test-checkout-cleanliness-report.mjs
       - run: node scripts/test-storage-probe-target.mjs
       - run: node scripts/test-collision-discovery.mjs
