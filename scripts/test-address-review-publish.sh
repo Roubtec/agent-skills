@@ -389,6 +389,23 @@ publish
 has "2: run again, it finds the thread resolved" "$OUT" "thread=T1	reply=present	resolve=already	https://github.com/acme/widgets/pull/7#discussion_r555"
 is "2: ...and writes nothing" "$(writes)" 0
 
+# The same on a `reply` line: the reply stands and no resolve is owed, so the
+# thread's outcome still comes from a line of the helper's.
+fresh
+add_reply T2 me-bot "Not changing this, as said in the last round."
+printf 'T1\tresolve\tt1.md\nT2\treply\t-\n' >"$D/dispositions.tsv"
+publish
+has "2: a reply line with - stands on the reply already there" "$OUT" "thread=T2	reply=present	resolve=open	https://github.com/acme/widgets/pull/7#discussion_r555"
+is "2: ...posting no second reply on that thread and leaving it open" "$(state '.threads[1] | [.isResolved, (.comments | length)] | join(" ")')" "false 2"
+is "2: ...only the other line's" "$(replies)" 1
+is "2: ...and the run publishes" "$(val outcome)" published
+fresh
+printf 'T1\tresolve\tt1.md\nT2\treply\t-\n' >"$D/dispositions.tsv"
+publish
+is "2: a reply line with - on a thread holding no reply is refused" "$(val outcome)" no-reply
+has "2: ...by name" "$OUT" "unreplied=T2"
+is "2: ...before any write, the line ahead of it included" "$(writes)" 0
+
 unreplied() { # <label> — after the PR is arranged
 	printf 'T2\treply\tt2.md\nT1\tresolve\t-\n' >"$D/dispositions.tsv"
 	publish
@@ -483,11 +500,6 @@ has "4: ...named on stderr" "$ERR" 'names the action "dismiss"'
 fresh
 printf 'T1\tresolve\tt1.md\nT1\treply\tt2.md\n' >"$D/dispositions.tsv"
 malformed "a thread named twice"
-fresh
-add_reply T1 me-bot "an earlier reply"
-printf 'T1\treply\t-\n' >"$D/dispositions.tsv"
-malformed "a reply line with - for its file"
-has "4: ...named on stderr" "$ERR" "only a resolve line can stand on a reply already there"
 fresh
 printf 'T1\tresolve\tabsent.md\n' >"$D/dispositions.tsv"
 malformed "a missing reply file"

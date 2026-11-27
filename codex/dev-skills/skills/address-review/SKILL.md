@@ -415,8 +415,6 @@ Publication runs in the working location: the re-check, the resolved push remote
 **Which repository every command below addresses: the one the PR is in**, written out literally as `--repo <owner>/<repo>` from the PR's own URL rather than left to default.
 
 1. **Re-check and push:** run `pr-branch.sh push --repo <owner>/<repo> --pr <N> --expect <headRefOid>`, naming the head step 1 reconciled against.
-   It re-checks everything publication depends on — the tree clean, idle and still on the head branch; the PR open, with its head and the head ref itself both still the expected commit — then pushes `HEAD` to the head ref under an exact `--force-with-lease` on the expected head, whether that push is a fast-forward, a rewrite, or the no-op of a tip already there.
-   It then reads the ref back with `git ls-remote` through every push URL, after a refused push as well, since `gh pr view --json headRefOid` can report the pre-push head for a while.
 
 2. **Read its outcome:**
    - **`pushed`** → the branch advanced (`advanced=yes`), and `head=` is what origin now carries.
@@ -432,24 +430,22 @@ Publication runs in the working location: the re-check, the resolved push remote
    Each re-run request is part of the publication's success contract: report which run ids' `gh run rerun` was accepted, per id rather than per lane — a repeated lane names several runs and each request accepts one, and the lane counts as re-run only where the accepted ids cover every run it names — and where one was rejected or failed the publication has not completed — stop before the replies, report the failure with the lane and what `gh` returned, and leave the disposition record as any part-way publication does, since the one action that disposition promised never happened while the lane stays red; the record names the accepted ids beside the owed ones, so the next turn orders only the rest rather than meeting an accepted run already re-running.
    A thread it shows that this run did not triage gets no line below: it stays open, called out in the Summary for the next pass.
 4. **Per-thread hygiene** — one line per triaged thread in a dispositions file, `<thread id> TAB <action> TAB <reply file>`: `resolve` replies and then resolves, `reply` replies and leaves the thread open.
-   A triaged thread someone has since resolved keeps its line: it gets the reply and no resolve.
-   Where an earlier run's reply already stands on a thread (a replayed `part` record's entry says the reply is posted), compose no second one: where the resolve is still owed, write `-` for the reply file on its `resolve` line, which `publish.sh` refuses before any write unless the thread holds a reply of yours, and where it is not, give the thread no line.
+   Where your reply to this finding already stands on the thread (a replayed record says so, or the thread shows it), compose no second one: write `-` for the reply file.
    - *Actionable-fixed* → `Fixed in <sha>: <one line>`; `resolve`.
    - *Already-addressed* → where it's handled; `resolve`.
    - *Follow-up-task* → the placement-specific template: queued work uses `Follow-up task committed: tasks/NNN[a-z]?-… — queued for an upcoming batch`; parked work uses `Deferred with full context to tasks/deferred/NNN[a-z]?-… — <the condition it waits on>`, where the lowercase letter suffix is optional.
-     `resolve` when the follow-up was maintainer-directed or the thread is bot-authored, else `reply`.
+     `resolve` when the follow-up was maintainer-directed or the thread is bot-authored; else `reply`, leaving a human-authored thread unresolved unless the maintainer authorized closing it.
      Never re-implement a task-backed thread.
    - *Push-back* → the rationale, flagged prominently in the summary.
      `resolve` on a bot-authored thread once independent review validated the push-back; `reply` on a human-authored one unless the maintainer explicitly authorized resolving it, so unattended runs do not silently close a person's objection.
    - *Ambiguous/skipped* → **no line**: it stays open, listed in the summary as needing a decision.
-5. **Summary comment** — post a top-level **"Summary of Review Fixes"**: write it to a file and run `publish.sh --repo <owner>/<repo> --pr <N> --dispositions <file> --summary <file>`, beside this file and by absolute path (`--no-threads` where no thread is owed a reply).
-   It posts step 4's replies and resolves, then the Summary (`summary=` is its URL), refusing a thread id that is not this PR's and skipping what is already there, so `partial` (exit 3) is finished by running it again with the same files.
-   Still `partial`, or any other stop: report its lines, and write nothing by hand in its place.
+5. **Summary comment** — post a top-level **"Summary of Review Fixes"**: write it to a file and run `publish.sh --repo <owner>/<repo> --pr <N> --dispositions <file> --summary <file>`, beside this file and by absolute path (`--no-threads` where step 4 produced no lines).
+   It posts step 4's replies and resolves, then the Summary (`summary=` is its URL); `partial` (exit 3) is finished by running it again with the same files.
+   `malformed` or `no-reply`: correct the line and run it again; still `partial`, or any other stop: report its lines, and write nothing by hand in its place.
    Structure: what was fixed (with proactive same-pattern fixes called out), a **prominent "Pushed back — please re-examine" section** for every push-back with its rationale, a **"Follow-up tasks" section** listing each item with its committed task file (explicitly flag deferred placement and flag agent-proposed follow-ups for confirmation), a **"Top-level findings"** section for every standalone item taken from a bot's misfired top-level comment (step 3), each with its disposition and the permalink of the comment it came from, since no thread carries the reply — a **"CI"** section where step 3 gathered a failing lane or a replayed record carried one — each lane with the cause found and its disposition (fixed, re-run as an evidenced flake, or left for the maintainer's choice) — any ambiguous/skipped or newly-arrived items still needing a decision, and (in hands-off runs) every automatic low-stakes decision and every item skipped for lack of feedback.
    In this comment, avoid bare `@codex`/`@claude`/`@copilot` mentions (write "codex"/"claude"/"copilot" plain) so only the dedicated ping comments below trigger a review.
 6. **Pings** — only after the push and summary succeeded, **and only when the push actually advanced the branch** (skip all pings on an "Everything up-to-date" no-op push, even when `ping-*` was supplied).
    Run `ping.sh --repo <owner>/<repo> --pr <N> <the reviewers to ping>` — beside this file, run by absolute path — naming `codex`, `claude` and `copilot` as the ping set holds them.
-   It makes each ping as its own dedicated action (an `@codex review` or `@claude review` comment; a reviewer request for Copilot, never an `@copilot review` comment) and prints one line per reviewer: `pinged=`, `unconfirmed=`, `skipped=` or `failed=`.
    Anything but `pinged=` (exit 3, `outcome=partial`) never fails the run — the push and summary already succeeded — so report it as the line gives it and carry on: `unconfirmed=` as requested but unconfirmed, `skipped=` and `failed=` as not summoned, with the reason.
    Never issue an `unconfirmed` Copilot request again: the helper confirms it from the PR's timeline, which is eventually consistent, and a second request is a second review.
    When `ping-contributing` is in effect — including on a bare default run — determine which bots brought a new finding this round (its table row defines what counts) and ping only those; note each skipped bot in the summary.

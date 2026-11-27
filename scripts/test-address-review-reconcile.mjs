@@ -1658,16 +1658,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   {
     const wanted = [
       [
-        // The push is the helper's: the brief orders it with the head this run
-        // reconciled against, and states what the helper re-checks and how it
-        // chooses between the plain push and the lease.
+        // The push is the helper's: the skill orders it with the head this run
+        // reconciled against, and what the helper re-checks and how it pushes
+        // is read from its source below (`pushChain`) rather than restated.
         "the publication push",
         "1. **Re-check and push:** run `pr-branch.sh push --repo <owner>/<repo> --pr <N> --expect <headRefOid>`",
-        [
-          /the tree clean, idle and still on the head branch/,
-          /its head and the head ref itself both still the expected commit/,
-          /under an exact `--force-with-lease` on the expected head, whether that push is a fast-forward, a rewrite, or the no-op/,
-        ],
+        [/naming the head step 1 reconciled against/],
       ],
       [
         // The CONSEQUENCE of a stop, not only its name: a line that names the
@@ -1803,6 +1799,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
     // branch spelling with it: `git rev-parse --abbrev-ref HEAD` prints
     // `heads/<name>` wherever a tag shares the branch's name.
     const pushChain = [
+      ["the tree clean and idle, the PR open and unforked, and the tree on its head branch, ahead of everything else", "\trequire_idle\n\tread_pr\n\trequire_head_branch\n\tlocal remote tip fetched mode"],
       ["the PR's reported head against the expected one", '[ "$P_OID" = "$EXPECT" ] || stop head-moved'],
       ["the fetched ref against the expected one", '[ "$fetched" = "$EXPECT" ] || stop head-moved'],
       ["the proper-ancestor stop", 'if [ "$tip" != "$EXPECT" ] && is_ancestor "$tip" "$EXPECT"; then'],
@@ -2093,11 +2090,6 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // fails rather than passing on the file's other mentions of `ls-remote` or
   // `--add-reviewer`.
   const wanted = [
-    [
-      "the push read-back",
-      "It then reads the ref back with `git ls-remote` through every push URL",
-      [/after a refused push as well/, /since `gh pr view --json headRefOid` can report the pre-push head for a while/],
-    ],
     [
       "the read-back's stop",
       "- **`unconfirmed`** → some push URL does not show the tip at the head ref or did not answer, whether the push command returned or was refused",
@@ -5091,7 +5083,7 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       // one of the publisher's own already being there. Reported false, the
       // caller reads a complete publication as still owing that reply — which
       // the completion gate now refuses over — and a later turn posts it twice.
-      /a reply the publish command skipped as `reply=present`, an equal one of yours already being there, is on the PR/.test(outcomeItem.properties.replied.description) &&
+      /a reply the publish command skipped as `reply=present`, one of yours already being there, is on the PR/.test(outcomeItem.properties.replied.description) &&
       /true likewise for a thread you found already resolved rather than resolving yourself/.test(outcomeItem.properties.resolved.description) &&
       /MANDATORY on a `review-thread` item's entry/.test(outcomeItem.properties.threadId.description) &&
       /two threads a re-review left on the same line by the same author share it, so it can key nothing/.test(outcomeItem.properties.ref.description) &&
@@ -5108,10 +5100,14 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       // The duplicate rule itself is the script's now: an equal reply of the
       // authenticated user's is `present`, and nothing is posted over it. Where
       // an earlier turn's reply stands under other words — its SHA re-derived —
-      // the line carries `-` and the script resolves on any reply of theirs.
+      // the line carries `-` and the script stands on any reply of theirs.
       publishHelper.includes('select(.author.login == $me and ($only == "1" or ((.body // "") | norm) == $want))') &&
-      /where the disposition's `detail` carries an earlier turn's record saying the reply is ALREADY POSTED, compose no second one: where the resolve is still owed, write `-` in place of the reply file on its `resolve` line/.test(pubBrief) &&
-      /and where it is not, give the thread no line and report it `replied: true`\. A `reply` line never takes `-`\./.test(pubBrief) &&
+      // The rule is conditioned on the THREAD, not on the record: an `unknown`
+      // record carries no ALREADY POSTED line, and a turn that died after
+      // posting may have left no record at all.
+      /look at the thread before composing: in step 3's list, or, where that does not show it \(it was resolved since triage\), in what step 3's command prints with `--all` ahead of `--repo`\./.test(pubBrief) &&
+      /Where it already holds a reply of the authenticated user \(`gh api user --jq \.login`\) giving this disposition — the same fix under another SHA is the same reply — or the disposition's `detail` carries an earlier turn's record saying the reply is ALREADY POSTED, compose no second one and write `-` in place of the reply file, on the same `resolve` or `reply` line/.test(pubBrief) &&
+      !/give the thread no line and report it/.test(pubBrief) &&
       // A failed second invocation prints no `thread=` line, and the replies
       // the first one landed are still on the PR.
       /Take `threadOutcomes` from the LAST answer that printed `thread=` lines/.test(pubBrief) &&
