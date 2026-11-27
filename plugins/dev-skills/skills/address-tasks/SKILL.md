@@ -37,7 +37,7 @@ In a hands-off run, execute only the number-selected unambiguous `active` paths 
 Exclude and document every number-selected `done`, `deferred`, or `ambiguous` classification and every `not-found` input; never guess an ambiguous number.
 Carry the complete mapping and exclusions into the run summary.
 
-Before dispatch, run two read-only checks on the task files that will execute, both in the `write-tasks` skill's folder, a sibling of this skill's: `task-citations.sh --ref <the base the implementers start from> <task file>…` lists the backticked paths and identifiers that resolve nowhere in that commit, and `task-numbers.sh touching --repo <owner>/<repo> --task <path>…` lists every open PR whose own changes reach one of those files.
+Before dispatch, run two read-only checks on the task files that will execute, both in the `write-tasks` skill's folder, a sibling of this skill's: `task-citations.sh --ref <the base the implementers start from> <task file>…` (`--folder <dir>` where the task folder is not `tasks/`) lists the backticked paths and identifiers that resolve nowhere in that commit, and `task-numbers.sh touching --repo <owner>/<repo> --task <path>…` lists every open PR whose own changes reach one of those files.
 Neither answer stops the batch: for an unresolved citation that is not simply a file the task asks for, fix the task or note the gap in that implementer's prompt; for a touching PR, or a scan that answers `incomplete`, say so in the batch report and decide whether that task waits.
 
 This skill is the parallel sibling of `address-tasks-serialized`.

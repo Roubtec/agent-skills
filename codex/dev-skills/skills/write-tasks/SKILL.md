@@ -157,7 +157,7 @@ Encourage:
 
 ## Review the drafted tasks (the verbiage cycle)
 
-Once the task files are drafted, and before any review, run `task-citations.sh <task file>…`, beside this file: it lists the backticked paths and identifiers that resolve nowhere in `HEAD`, and decides nothing.
+Once the task files are drafted, and before any review, run `task-citations.sh <task file>…`, beside this file (`--folder <dir>` where the folder is not `tasks/`): it lists the backticked paths and identifiers that resolve nowhere in `HEAD`, and decides nothing.
 Fix a citation that is a slip; one that names a file the task asks for stays as it is.
 
 By default, after the task files are drafted and committed, run the `review-cycle` skill on them with artifact type `prose` — a fresh-eyes self-review plus that skill's best-effort cross-harness peer — checking verbiage, scoping, self-containedness, code references anchored to named symbols rather than line numbers, and the repo's documented numbering house style against the sections this skill requires.

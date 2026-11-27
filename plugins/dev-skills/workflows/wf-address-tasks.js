@@ -222,7 +222,7 @@ const PLAN_SCHEMA = {
         },
         taskChecks: {
           type: "array",
-          description: "What the two read-only pre-dispatch checks printed about the executable task files, one string per line: `unresolved=` (a backticked path or identifier that resolves nowhere on the default base), `touching=` (an open PR whose own changes reach a task file), `skipped=` / `limit=` (what that scan could not read), or a sentence saying a check could not run. Report context only; nothing is excluded by it. Empty when both ran and printed none of these.",
+          description: "What the two read-only pre-dispatch checks printed about the executable task files, one string per line: `unresolved=` (a backticked path or identifier that resolves nowhere on the default base), `touching=` (an open PR whose own changes reach a task file), `skipped=` / `limit=` (what that scan could not read), or a sentence saying a check could not run. Report context only, a task's own `unresolved=` lines for its implementer too; nothing is excluded by it. Empty when both ran and printed none of these.",
           items: { type: "string" },
         },
       },
@@ -603,7 +603,7 @@ Do this:
    - \`dependsOn\`: the slugs of in-batch tasks it depends on (the task(s) whose branch is its base), or empty,
    - \`upstream\`: a one-line note on what an in-batch dependency introduced, if any.
 6. Set \`defaultBase\` to the user's explicit base override, else the current checked-out branch, else \`main\`.
-7. Run two read-only checks on the executable task files from the repo ROOT, and record what they print in \`resolution.taskChecks\`, one string per line. They report and exclude nothing: no task leaves a wave because of them. \`write-tasks-task-citations --ref <defaultBase> <task file>…\` prints an \`unresolved=\` line for each backticked path or identifier a task cites that resolves nowhere in that commit, a file the task asks to be created included; record each. \`write-tasks-task-numbers touching --repo <owner>/<repo> --task <path>…\`, with each path as written from the repo root, prints a \`touching=\` line for each open PR whose own changes reach one of those files, and \`skipped=\` / \`limit=\` lines where it could not read every head; record each. A check that could not run is one line saying so, never an empty answer.
+7. Run two read-only checks on the executable task files from the repo ROOT, and record what they print in \`resolution.taskChecks\`, one string per line. They report and exclude nothing: no task leaves a wave because of them. \`write-tasks-task-citations --ref <defaultBase> <task file>…\`, with \`--folder <dir>\` where the resolved task folder is not \`tasks\` (an identifier that stands only in that folder is no occurrence), prints an \`unresolved=\` line for each backticked path or identifier a task cites that resolves nowhere in that commit, a file the task asks to be created included; record each as printed, task file path and all: a task's own lines also reach its implementer as context. \`write-tasks-task-numbers touching --repo <owner>/<repo> --task <path>…\`, with each path as written from the repo root, prints a \`touching=\` line for each open PR whose own changes reach one of those files, and \`skipped=\` / \`limit=\` lines where it could not read every head; record each. A check that could not run is one line saying so, never an empty answer.
 
 Return the structured plan. Paste each task file's FULL content verbatim into \`content\` — downstream agents have no other access to it.`;
 }
@@ -3221,12 +3221,29 @@ async function runReviewCycle(cycle) {
 const batchPeerState = createCyclePeerState();
 const batchPeerThrottle = createCyclePeerThrottle();
 
+// A task's own `unresolved=` lines among what the resolver recorded. The lines
+// passed through an agent, so the tab behind the kind is not relied on; a line
+// in any other shape is no task's, and stays in the report alone.
+function unresolvedCitationsFor(taskPath, taskChecks) {
+  if (typeof taskPath !== "string" || !taskPath || !Array.isArray(taskChecks)) return [];
+  const own = taskPath.replace(/^\.\//, "");
+  return taskChecks.filter((line) => {
+    const head = typeof line === "string" ? /^unresolved=(?:path|identifier)(?:\s|\\t)+(?:\.\/)?/.exec(line) : null;
+    if (!head) return false;
+    const rest = line.slice(head[0].length);
+    return rest.startsWith(own) && !/[A-Za-z0-9_.\/-]/.test(rest.charAt(own.length) || " ");
+  });
+}
+
 // Build one task's cycle config for the embedded runReviewCycle. The worktree
 // lifecycle stays with the wt-* helpers via worktreeContract (per-role
 // contracts below); the task-specific assignment — task content, upstream
 // context, the push-for-durability policy — rides the cycle's scope.
 function taskCycleConfig(task, remote, peerMode) {
   const upstream = task.upstream ? `\n\n## Upstream context\n\n${task.upstream}` : "";
+  const cited = Array.isArray(task.unresolvedCitations) && task.unresolvedCitations.length
+    ? `\n\n## Citations to read with care\n\nA read-only check before dispatch found that these backticked names in the task file resolve nowhere on the batch's default base. This is a list, not a verdict: one may be a file the task asks you to create, or something an in-batch dependency brings. Any other is a gap in the task (a renamed or missing name): settle what it meant before building on it, and say what you settled in your report.\n\n${task.unresolvedCitations.map((line) => `- ${line}`).join("\n")}`
+    : "";
   const pushLine = remote
     ? `After every commit, push for durability: \`git push -u origin ${shq(task.branch)}\` first, \`git push\` thereafter. The reviewer reads your worktree directly, so a transient push failure is not fatal — keep committing and note it — but pushed commits are the backup if the worktree is lost.`
     : `Remote push is unavailable this run; commit locally (the shared \`.git\` persists). Do not fail on missing push.`;
@@ -3252,7 +3269,7 @@ function taskCycleConfig(task, remote, peerMode) {
     },
     scope: {
       title: task.slug,
-      instructions: `Implement the task below to its description and acceptance criteria. The base branch already contains any dependency's work — build on it.${upstream}\n\n${pushLine}\nDo not revert unrelated edits.`,
+      instructions: `Implement the task below to its description and acceptance criteria. The base branch already contains any dependency's work — build on it.${upstream}${cited}\n\n${pushLine}\nDo not revert unrelated edits.`,
       items: [{ taskFile: task.path, taskContent: task.content }],
     },
   };
@@ -5446,6 +5463,7 @@ try {
     }
     return { batch: args, defaultBase: plan.defaultBase, remote, peer: peerMode, peerThrottle: cyclePeerThrottleSummary(batchPeerThrottle), waves: 0, tasks: 0, guardOrder: [], mergedDuringRun: [], orphanedBranches: [], terminalStates: {}, throttled: [], collisions: [], resolution: plan.resolution, mainCheckout: await finalMainCheckoutReport(), overlap: { ran: false, skipped: true, reason: "the batch resolved no task, so there is no branch to compare", mergeOrder: [], excluded: [] }, openQuestions: [], deviations: [], deviationAssessments: [], results: [] };
   }
+  for (const wave of plan.waves) for (const task of wave) task.unresolvedCitations = unresolvedCitationsFor(task.path, plan.resolution.taskChecks);
 
   // Concurrency: every dependency-ready task runs unless measured storage
   // headroom requires fewer live worktrees. The workflow runtime/provider owns
