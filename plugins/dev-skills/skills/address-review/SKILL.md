@@ -277,7 +277,7 @@ Fetch the **unresolved** review threads and enough context to judge them (see "G
   It names every passing lane too (`passing=`), which is not an item but is how a lane a prior record named is told as green now from absent from this head altogether.
   A lane still in progress on the current head (a `running=` line) is not an item: note it and let the push, or the re-run below, settle it.
   A rollup describing a head other than the one you reconciled against (its `head=` line) says nothing about this branch; re-read it after the push instead.
-- **Top-level review summaries** (`gh pr view --json reviews`) and **issue comments** (`gh api --paginate repos/{owner}/{repo}/issues/{number}/comments`) — read for context, especially **maintainer replies/push-backs** that override or qualify a bot's original comment.
+- **Top-level review summaries** (`gh pr view --json reviews`) and **issue comments** (`gh api --paginate repos/<owner>/<repo>/issues/<N>/comments`) — read for context, especially **maintainer replies/push-backs** that override or qualify a bot's original comment.
   They are not automatically actionable because they have no resolved/unresolved state; include a standalone item only when the maintainer explicitly identifies it as outstanding in the request or discussion — or when a prior disposition record already holds a standalone disposition for it, which is an earlier run having gathered it — by the request that identified it or as a misfired finding that qualified on its own — and is what makes that entry replayable at all (`disposition-record.md` → "Replaying a record").
   A bot reviewer sometimes misfires, posting its findings into a top-level review summary or issue comment instead of threads.
   Where a bot's top-level review or comment on this PR states a finding of its own about the code — as against an overview of the threads it opened, or a bare status — read `misfired-findings.md`, beside this file, in full before triage: it says which of those findings are taken as standalone items without the maintainer naming them, and the identity each is carried under.
@@ -399,7 +399,7 @@ If any differ or the peer outcome is missing, stop; do not re-triage or publish 
 
 Publication runs in the working location: the re-check, the resolved push remote/ref, and the push itself all read and write that tree and its `HEAD`, never the main checkout.
 
-**Which repository every `gh` call below addresses: the one the PR is in**, written out literally (`--repo <owner>/<repo>`, `repos/<owner>/<repo>/…`) per "GitHub API recipes" rather than left to default.
+**Which repository every command below addresses: the one the PR is in**, written out literally as `--repo <owner>/<repo>` from the PR's own URL rather than left to default.
 
 1. **Re-check and push:** run `pr-branch.sh push --repo <owner>/<repo> --pr <N> --expect <headRefOid>`, naming the head step 1 reconciled against.
    It re-checks everything publication depends on — the tree clean, idle and still on the head branch; the PR open, with its head and the head ref itself both still the expected commit — then pushes `HEAD` to the head ref under an exact `--force-with-lease` on the expected head, whether that push is a fast-forward, a rewrite, or the no-op of a tip already there.
@@ -417,21 +417,19 @@ Publication runs in the working location: the re-check, the resolved push remote
 3. **Re-read unresolved threads after the push.**
    Re-run any lane step 4 judged a flake only where the push was a no-op — a push that advanced the branch already re-ran every lane, and this run does not wait on the fresh rollup: CI gates the merge, and the next round reads it.
    Each re-run request is part of the publication's success contract: report which run ids' `gh run rerun` was accepted, per id rather than per lane — a repeated lane names several runs and each request accepts one, and the lane counts as re-run only where the accepted ids cover every run it names — and where one was rejected or failed the publication has not completed — stop before the replies, report the failure with the lane and what `gh` returned, and leave the disposition record as any part-way publication does, since the one action that disposition promised never happened while the lane stays red; the record names the accepted ids beside the owed ones, so the next turn orders only the rest rather than meeting an accepted run already re-running.
-   This catches comments resolved or added while fixes were in progress.
-   Do not mutate newly-added feedback that was not triaged and reviewed in this run; leave it open and call it out for the next pass.
-4. **Per-thread hygiene** — for each triaged thread still unresolved (recipes below):
-   - *Actionable-fixed* → reply (`Fixed in <sha>: <one line>`) **and resolve**.
-   - *Already-addressed* → reply pointing to where it's handled **and resolve**.
-   - *Follow-up-task* → reply with the placement-specific template: queued work uses `Follow-up task committed: tasks/NNN[a-z]?-… — queued for an upcoming batch`; parked work uses `Deferred with full context to tasks/deferred/NNN[a-z]?-… — <the condition it waits on>`, where the lowercase letter suffix is optional.
-     **Resolve** when the follow-up was maintainer-directed or the thread is bot-authored; leave a human-authored thread unresolved unless the maintainer authorized closing it.
+   A thread it shows that this run did not triage gets no line below: it stays open, called out in the Summary for the next pass.
+4. **Per-thread hygiene** — one line per triaged thread in a dispositions file, `<thread id> TAB <action> TAB <reply file>`: `resolve` replies and then resolves, `reply` replies and leaves the thread open.
+   - *Actionable-fixed* → `Fixed in <sha>: <one line>`; `resolve`.
+   - *Already-addressed* → where it's handled; `resolve`.
+   - *Follow-up-task* → the placement-specific template: queued work uses `Follow-up task committed: tasks/NNN[a-z]?-… — queued for an upcoming batch`; parked work uses `Deferred with full context to tasks/deferred/NNN[a-z]?-… — <the condition it waits on>`, where the lowercase letter suffix is optional.
+     `resolve` when the follow-up was maintainer-directed or the thread is bot-authored, else `reply`.
      Never re-implement a task-backed thread.
-   - *Push-back* → reply with the rationale and flag it prominently in the summary.
-     Resolve a bot-authored thread after independent review validates the push-back.
-     Leave a human-authored thread unresolved unless the maintainer explicitly authorized resolving it, so unattended runs do not silently close a person's objection.
-   - *Ambiguous/skipped* → **leave open**, list it in the summary as needing a decision.
-     Before replying, inspect the thread for an equivalent prior reply from the authenticated user (for example, a previous run replied but failed to resolve) and avoid posting duplicates.
-     Resolve only after the reply succeeds; record any communication failure and leave that thread open.
-5. **Summary comment** — post a top-level **"Summary of Review Fixes"** (`gh pr comment <PR#> --repo <owner>/<repo>`).
+   - *Push-back* → the rationale, flagged prominently in the summary.
+     `resolve` on a bot-authored thread once independent review validated the push-back; `reply` on a human-authored one unless the maintainer explicitly authorized resolving it, so unattended runs do not silently close a person's objection.
+   - *Ambiguous/skipped* → **no line**: it stays open, listed in the summary as needing a decision.
+5. **Summary comment** — post a top-level **"Summary of Review Fixes"**: write it to a file and run `publish.sh --repo <owner>/<repo> --pr <N> --dispositions <file> --summary <file>`, beside this file and by absolute path (`--no-threads` where no thread is owed a reply).
+   It posts step 4's replies and resolves, then the Summary (`summary=` is its URL), refusing a thread id that is not this PR's and skipping what is already there, so `partial` (exit 3) is finished by running it again with the same files.
+   Still `partial`, or any other stop: report its lines, and write nothing by hand in its place.
    Structure: what was fixed (with proactive same-pattern fixes called out), a **prominent "Pushed back — please re-examine" section** for every push-back with its rationale, a **"Follow-up tasks" section** listing each item with its committed task file (explicitly flag deferred placement and flag agent-proposed follow-ups for confirmation), a **"Top-level findings"** section for every standalone item taken from a bot's misfired top-level comment (step 3), each with its disposition and the permalink of the comment it came from, since no thread carries the reply — a **"CI"** section where step 3 gathered a failing lane or a replayed record carried one — each lane with the cause found and its disposition (fixed, re-run as an evidenced flake, or left for the maintainer's choice) — any ambiguous/skipped or newly-arrived items still needing a decision, and (in hands-off runs) every automatic low-stakes decision and every item skipped for lack of feedback.
    In this comment, avoid bare `@codex`/`@claude`/`@copilot` mentions (write "codex"/"claude"/"copilot" plain) so only the dedicated ping comments below trigger a review.
 6. **Pings** — only after the push and summary succeeded, **and only when the push actually advanced the branch** (skip all pings on an "Everything up-to-date" no-op push, even when `ping-*` was supplied).
@@ -497,28 +495,7 @@ Reach the orchestrator if you can, but otherwise drive to a best-effort completi
 
 ## GitHub API recipes
 
-`gh api` expands `{owner}`/`{repo}` to the current repo.
-For GraphQL, pass real values — the `<owner>`/`<repo>` of the PR's own URL.
-Qualify every PR-scoped call with the `<owner>/<repo>` of the PR's own URL (`repos/<owner>/<repo>/…`, `--repo <owner>/<repo>`) rather than letting it default to whatever repository the directory resolves to.
-
-**Reply to a review comment** (REST, threads the reply under the original):
-
-```sh
-gh api --method POST repos/<owner>/<repo>/pulls/NUMBER/comments/COMMENT_DATABASE_ID/replies -f body='Fixed in <sha>: ...'
-```
-
-**Resolve a thread** (GraphQL, using the thread `id` that `gh-review-threads.sh` printed).
-This mutation takes a global node id and has no repository argument to qualify, so what qualifies it is that id's **provenance**: it comes from that thread list, whose scope check already required every comment `url` to name this PR in this repository.
-So pass an id that list gave you and never one re-derived in some other way — a thread id fetched without that check is a thread resolved in whatever repository the working location answers for:
-
-```sh
-gh api graphql -f query='mutation($id:ID!){ resolveReviewThread(input:{threadId:$id}){ thread{ isResolved } } }' -F id=THREAD_NODE_ID
-```
-
-**Top-level comment** (the summary; the pings are `ping.sh`'s):
-
-```sh
-gh pr comment NUMBER --repo <owner>/<repo> --body '...'        # Summary of Review Fixes
-```
+Every PR write goes through a helper beside this file, which names the repository and the PR itself; what a run still calls by hand are reads.
+Qualify each with the `<owner>/<repo>` of the PR's own URL (`repos/<owner>/<repo>/…`, `--repo <owner>/<repo>`) rather than letting it default to whatever repository the directory resolves to, which is also what `gh api`'s `{owner}`/`{repo}` expand to.
 
 **Read context:** `gh pr view NUMBER --repo <owner>/<repo> --json reviews,comments,headRefName,headRefOid,isCrossRepository,baseRefName,url,state` and `gh api --paginate repos/<owner>/<repo>/issues/NUMBER/comments`.

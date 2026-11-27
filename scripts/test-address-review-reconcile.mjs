@@ -160,6 +160,10 @@ const pingHelper = readFileSync(
   join(here, "..", "plugins", "dev-skills", "skills", "address-review", "ping.sh"),
   "utf8",
 );
+const publishHelper = readFileSync(
+  join(here, "..", "plugins", "dev-skills", "skills", "address-review", "publish.sh"),
+  "utf8",
+);
 const prBranchHelperTest = readFileSync(join(here, "test-address-review-pr-branch.sh"), "utf8");
 // The batch skill's own helper, which makes that `head` call and the target
 // pins for every entry, and the suite that drives it.
@@ -278,7 +282,7 @@ function check(name, cond, detail) {
 // one too many and is not a way to audit it. Bump it deliberately when adding
 // or removing a check — a scenario that silently stops running is invisible to
 // a suite that only gates on failures.
-const EXPECTED_CHECKS = 287;
+const EXPECTED_CHECKS = 288;
 
 const src = readFileSync(join(workflows, SOURCE), "utf8");
 // The runtime requires `export const meta` as the first statement, which is
@@ -5083,11 +5087,11 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /True ONLY if the reply is ON THE PR when your turn ends/.test(outcomeItem.properties.replied.description) &&
       /Never what you intended or attempted/.test(outcomeItem.properties.resolved.description) &&
       // And the one shape in which "what SUCCEEDED" and "what is on the PR"
-      // differ: a reply step 4's duplicate rule told the publisher to SKIP,
-      // an equivalent one of its own already being there. Reported false, the
+      // differ: a reply the publish script SKIPPED as a duplicate, an equal
+      // one of the publisher's own already being there. Reported false, the
       // caller reads a complete publication as still owing that reply — which
       // the completion gate now refuses over — and a later turn posts it twice.
-      /a reply you skipped under step 4's duplicate rule, an equivalent one of yours already being there, is on the PR/.test(outcomeItem.properties.replied.description) &&
+      /a reply the publish command skipped as `reply=present`, an equal one of yours already being there, is on the PR/.test(outcomeItem.properties.replied.description) &&
       /true likewise for a thread you found already resolved rather than resolving yourself/.test(outcomeItem.properties.resolved.description) &&
       /MANDATORY on a `review-thread` item's entry/.test(outcomeItem.properties.threadId.description) &&
       /two threads a re-review left on the same line by the same author share it, so it can key nothing/.test(outcomeItem.properties.ref.description) &&
@@ -5099,7 +5103,12 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
       /`landed` is what the PR CARRIES rather than what this run put there/.test(PUBLISH_SCHEMA.properties.threadOutcomes.description) &&
       /NOT evidence that anything this run did reached origin/.test(PUBLISH_SCHEMA.properties.pushed.description) &&
       /set that entry's `replied` and `resolved` to the state of the thread ON THE PR when your turn ends rather than to what you attempted/.test(pubBrief) &&
-      /a reply you skipped under the duplicate rule above, an equivalent one of yours already being there, is `replied: true`/.test(pubBrief) &&
+      /a reply the command skipped as `reply=present`, an equal one of yours already being there, is `replied: true`/.test(pubBrief) &&
+      /`reply=posted` and `reply=present` are `replied: true`, `reply=failed` is false; `resolve=done` and `resolve=already` are `resolved: true`/.test(pubBrief) &&
+      // The duplicate rule itself is the script's now: an equal reply of the
+      // authenticated user's is `present`, and nothing is posted over it.
+      publishHelper.includes('select(.author.login == $me and ((.body // "") | norm) == $want)') &&
+      /if \[ -n "\$prior" \]; then\n\t\treply=present url="\$prior"\n\telif url="\$\(gh api --method POST/.test(publishHelper) &&
       /Report them even where publication stops part-way, and report EXACTLY ONE entry per item you were given/.test(pubBrief) &&
       /an account keyed on it cannot say which of them was replied to/.test(pubBrief),
     JSON.stringify({ required: outcomeItem.required, brief: /threadOutcomes/.test(pubBrief) }),
@@ -5187,28 +5196,63 @@ function gathered({ workingBranch = "feature/x", items = [], reconcile, location
   // quotes them as the defaults it is warning against, and steps 2 and 6 name
   // `gh pr view --json …` as an evidence channel they forbid outright.
   const orderedPrCalls = qualifiedPub.match(/gh pr (?:view|comment|edit) (?:\d+|<PR#>)[^`]*/g) || [];
+  const orderedScriptCalls = qualifiedPub.match(/`(?:address-review-(?:pr-branch|publish|ping)|gh-review-threads) [^`]*`/g) || [];
   const publishClauses = {
     "the WHICH REPOSITORY paragraph, naming the repository from the PR's own URL":
       qualifiedPub.includes("the PR's own URL `https://example.invalid/pr/42`") &&
       /never the repository your working location resolves to/.test(qualifiedPub) &&
       /Do not re-derive it from a bare `gh repo view --json nameWithOwner`/.test(qualifiedPub),
-    "step 4's reply POST": /gh api --method POST repos\/<owner>\/<repo>\/pulls\/42\/comments\/<commentId>\/replies/.test(qualifiedPub),
-    // The resolve mutation has no repository argument to carry, so the brief
-    // says what stands in for one rather than leaving it implied.
-    "step 4's resolve, qualified by the thread id's provenance rather than by an argument it has none of":
-      /has no repository argument to qualify, so what qualifies it is the id's PROVENANCE/.test(qualifiedPub) &&
-      /never re-fetch or re-derive a thread id in your own turn/.test(qualifiedPub),
-    "step 5's Summary comment": /gh pr comment 42 --repo <owner>\/<repo>/.test(qualifiedPub),
+    // Steps 4 and 5 hand their writes to the publish script, so the brief is
+    // held to the command and the script to each call the brief used to spell.
+    "step 5's one command for the replies, the resolves and the Summary, through the script, naming the repository and the PR":
+      /`address-review-publish --repo <owner>\/<repo> --pr 42 --dispositions <file> --summary <file>`/.test(qualifiedPub) &&
+      /never hand-run a reply, a resolve or the Summary comment in its place/.test(qualifiedPub),
+    "no reply or resolve left for the publisher to make by hand":
+      !/comments\/<commentId>\/replies/.test(qualifiedPub) && !/resolveReviewThread/.test(qualifiedPub) && !/gh pr comment 42/.test(qualifiedPub) &&
+      /you post no reply and resolve no thread yourself/.test(qualifiedPub),
+    "the script's reply POST, in the PR's repository, under the listed thread's own first comment":
+      publishHelper.includes('gh api --method POST "repos/$REPO/pulls/$PR/comments/$cid/replies" -F "body=@$file"'),
+    // The resolve mutation has no repository argument to carry, so what stands
+    // in for one is the id's provenance: the brief hands the id over as the
+    // gather fetched it, and the script refuses one this PR's own scope-checked
+    // list does not hold, before its first write.
+    "the resolve, qualified by the thread id's provenance rather than by an argument it has none of":
+      /never re-fetched or re-derived in your own turn; the command refuses, before any write, an id this PR's own thread list does not hold/.test(qualifiedPub) &&
+      publishHelper.includes('bash "$HERE/gh-review-threads.sh" --all --repo "$REPO" "$PR"') &&
+      publishHelper.includes('[ -z "$FOREIGN" ] || stop foreign-thread') &&
+      publishHelper.indexOf('[ -z "$FOREIGN" ] || stop foreign-thread') < publishHelper.indexOf("gh api --method POST") &&
+      publishHelper.includes("resolveReviewThread(input:{threadId:$id})"),
+    "the script's Summary comment, in the PR's repository": publishHelper.includes('gh api --method POST "repos/$REPO/issues/$PR/comments" -F "body=@$SUMMARY"'),
     "step 6's pings, through the script, naming the repository and the PR": /`address-review-ping --repo <owner>\/<repo> --pr 42 codex claude copilot`/.test(qualifiedPub),
     "no `{owner}`/`{repo}` placeholder left anywhere in it": !/\{owner\}\/\{repo\}/.test(qualifiedPub),
-    "and no ordered `gh pr` call left bare":
-      orderedPrCalls.length >= 1 && orderedPrCalls.every((call) => call.includes("--repo <owner>/<repo>")),
+    // The brief orders no `gh pr` call of its own any more: every PR write is a
+    // script's. The negative stays, for the day one comes back.
+    "and no ordered `gh pr` call left bare": orderedPrCalls.every((call) => call.includes("--repo <owner>/<repo>")),
+    "nor any script it orders": orderedScriptCalls.length >= 3 && orderedScriptCalls.every((call) => call.includes("--repo <owner>/<repo>")),
   };
   const publishAbsent = Object.entries(publishClauses).filter(([, present]) => !present).map(([name]) => name);
   check(
     "and the publish brief qualifies every PR-scoped call it orders at the repository the PR is in, named from its own URL",
     publishAbsent.length === 0,
-    publishAbsent.length ? `missing: ${publishAbsent.join("; ")}` : `all ${orderedPrCalls.length} ordered \`gh pr\` calls carry --repo, and no placeholder survives`,
+    publishAbsent.length ? `missing: ${publishAbsent.join("; ")}` : `all ${orderedScriptCalls.length} ordered script calls carry --repo, and no placeholder survives`,
+  );
+
+  // The command the brief orders is carried to the real script rather than
+  // read: a flag the script does not take is a usage error (64) there, however
+  // well the sentence reads. With files that do not exist it must get as far as
+  // refusing them, `malformed`, which is past the argument parse and ahead of
+  // any `gh` call. A brief naming no command at all fails here too.
+  const publishCommand = (qualifiedPub.match(/`address-review-publish ([^`]*)`/) || [])[1] || "";
+  const carryPublish = (args) =>
+    spawnSync("bash", [join(here, "..", "plugins", "dev-skills", "skills", "address-review", "publish.sh"), ...args.replace("<owner>/<repo>", "acme/widgets").replace(/<file>/g, "/nonexistent/t053").split(" ")], { encoding: "utf8" });
+  const carried = publishCommand ? carryPublish(publishCommand) : { status: null, stdout: "" };
+  const carriedBare = publishCommand && /`--no-threads` in place of `--dispositions <file>`/.test(qualifiedPub)
+    ? carryPublish(publishCommand.replace("--dispositions <file>", "--no-threads"))
+    : { status: null, stdout: "" };
+  check(
+    "and the publish command it orders, in both its forms, is one the real script accepts",
+    carried.status === 3 && carried.stdout.trim() === "outcome=malformed" && carriedBare.status === 3 && carriedBare.stdout.trim() === "outcome=malformed",
+    `\`${publishCommand || "no command in the brief"}\` → ${carried.status}: ${carried.stdout.trim()}; with --no-threads → ${carriedBare.status}: ${carriedBare.stdout.trim()}`,
   );
 
   // `starting HEAD` is part of the record's single canonical content, so it
