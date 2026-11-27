@@ -167,7 +167,7 @@ crash)
 	exit 1
 	;;
 crash-then-noise)
-	printf '%s\n' "ERROR: stream error" "tokens used" "1,234" >&2
+	printf '%s\n' "ERROR: stream error" "error: giving up" "tokens used" "1,234" >&2
 	exit 1
 	;;
 transcript)
@@ -293,7 +293,9 @@ ln -s "$REPO" "$WORKDIR/repo-link"
 usage_case "an artifact directory reaching the worktree through a symlink" run --provider codex --worktree "$REPO" --artifact-dir "$WORKDIR/repo-link/.peer" --facts "$FACTS"
 [ ! -e "$REPO/.peer" ]
 ok "2: ...which is not created either" $?
-usage_case "an artifact directory with a .. component" run --provider codex --worktree "$REPO" --artifact-dir "$WORKDIR/art/../repo/.peer" --facts "$FACTS"
+usage_case "an artifact directory that climbs back into the worktree past a directory not yet there" run --provider codex --worktree "$REPO" --artifact-dir "$WORKDIR/art/nope/../../repo/.peer" --facts "$FACTS"
+[ ! -e "$REPO/.peer" ] && [ ! -e "$WORKDIR/art/nope" ]
+ok "2: ...and nothing on that path is created" $?
 usage_case "the worktree itself as artifact directory" run --provider codex --worktree "$REPO" --artifact-dir "$REPO" --facts "$FACTS"
 usage_case "neither facts nor prompt" run --provider codex --worktree "$REPO" --artifact-dir "$A"
 usage_case "both facts and prompt" run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --prompt-file "$FACTS"
