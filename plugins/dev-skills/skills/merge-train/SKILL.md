@@ -59,7 +59,7 @@ Carry every such note through the run.
 
 Run `train.sh survey --repo <owner>/<repo> <PR numbers…>`.
 It prints one line per PR (its `check` outcome, base, `parent=`, head, mergeability, review decision, open threads, CI, passing lanes, file count) and a `shared=` line for each file two or more of them touch.
-A line reading `outcome=unreadable` is a listed number it could not read (`reason=no-such-pr`: the repository has no such PR, most often a mistyped number; `reason=gh-failed`: it could not be asked about), and the survey then answers `outcome=incomplete` with exit 3: name each such number to the user before starting, and run the train without it unless they correct it.
+An `outcome=unreadable` line is a listed number the survey could not read (its `reason=` says why): name each to the user before starting, and run the train without it unless they correct it.
 From that, and from the diffs where a `shared=` line or a migration calls for a look, work out and tell the user:
 
 - **Stacks.**
@@ -73,7 +73,7 @@ From that, and from the diffs where a `shared=` line or a migration calls for a 
 - **The plan:** order, which PRs you expect to merge without a fresh CI run, and what you will leave unmerged.
   A PR that is passing on its own will likely pass after rebase, so expect to merge it right after the rebase unless *Merge now or wait* says a fresh run is advisable.
 
-An `unlisted=` line is a PR open against `main` that is not on the list, and `unlisted=unknown` says the survey could not list them all: name them once, with whatever the preflight asks or in the plan when it asks nothing, and leave adding one to the user.
+An `unlisted=` line is a PR open against the default branch and not on the list (`unlisted=unknown`: there may be more): name them once, with whatever the preflight asks or in the plan when it asks nothing, and leave adding one to the user.
 
 If any listed PR shows `outcome=review`, name those PRs and their items, together with any PRs stacked on them.
 Ask the user to choose: skip those PRs and merge the rest, or not start the entire train at all.

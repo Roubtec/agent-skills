@@ -114,10 +114,10 @@ for (const skill of ["address-tasks", "address-tasks-serialized", "reap-tasks"])
   inlineExceptions.push(inline);
   check(`${skill} states the inline exception after the delegation and the reconciliation`, inline.length > 0 && pluginPreflight.indexOf(inline) > pluginPreflight.indexOf("never extra work to admit."));
   check(`${skill} limits inline resolution to a list of numbers alone`, /where every pointer is a task number/.test(inline));
-  check(`${skill} limits it to numbers on exactly one active file`, /each of those numbers on exactly one file, directly in the active folder — none in `done\/` or `deferred\/`, none matching twice/.test(inline));
+  check(`${skill} limits it to numbers on exactly one active file`, /each of those full numbers on exactly one file, directly in the task folder itself, the orchestrator/.test(inline));
   check(`${skill} has an inline resolution reported`, /says in its report that it resolved the list inline/.test(inline));
   check(`${skill} keeps inline results under the number-selected policy`, /treating each such file as a number-selected unambiguous `active` path/.test(inline));
-  check(`${skill} sends everything else to the resolver, whole`, /Any path, glob, miss, duplicate, or match outside the active folder sends the whole list to the resolver as above\.$/.test(inline));
+  check(`${skill} sends everything else to the resolver, whole`, /Any path, glob, miss, duplicate, letter-suffixed or unpadded number, or match outside the task folder itself sends the whole list to the resolver as above\.$/.test(inline));
 }
 check("the inline exception is byte-identical across the three consumers", inlineExceptions.length === 3 && inlineExceptions[0].length > 0 && inlineExceptions.every((text) => text === inlineExceptions[0]));
 

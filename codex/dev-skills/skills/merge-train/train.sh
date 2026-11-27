@@ -439,10 +439,12 @@ cmd_survey() {
 		if grep -F -q "Could not resolve to a PullRequest with the number of $n." "$tmp/err"; then
 			echo no-such-pr >"$tmp/why.$n"
 			answered=1
+			# gh's own line and no more: the child's "gh failed" is not true of it.
+			grep -F "Could not resolve to a PullRequest" "$tmp/err" >>"$tmp/errs"
 		else
 			echo gh-failed >"$tmp/why.$n"
+			cat "$tmp/err" >>"$tmp/errs"
 		fi
-		cat "$tmp/err" >>"$tmp/errs"
 	done
 	cat "$tmp/errs" >&2
 	[ -n "$answered" ] || fail "could not read any of the listed PRs in $REPO (gh failed). Nothing was surveyed."
