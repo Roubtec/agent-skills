@@ -40,7 +40,8 @@
 #                        bash reads as it goes: run a copy of it instead),
 #                        untracked, locked (a control's lock stood in this
 #                        repository as this one began), uncommitted (the
-#                        file differs from its commit, staged or not),
+#                        file differs from its commit, staged or not, or
+#                        the index tells git not to compare it),
 #                        unreadable (it holds a NUL byte, or could not be
 #                        copied), unwritable (the change could not be
 #                        written), failed (a step of the script's own could
@@ -393,6 +394,13 @@ fi
 NAME="${TMP##*/}"
 { ln -sn "$NAME" "$LOCK" && [ "$(readlink "$LOCK")" = "$NAME" ]; } 2>/dev/null || locked
 HELD=1
+# An assume-unchanged or skip-worktree entry is one git does not compare, so
+# its status is empty whatever the file holds. `ls-files -v` tags any other
+# entry `H`.
+case "$(git -C "$TARGET_DIR" ls-files -v -- "$TARGET_BASE" 2>/dev/null)" in
+"H "*) ;;
+*) refuse uncommitted "the index tells git not to compare $FILE with its commit (assume-unchanged or skip-worktree), so nothing says it holds committed work. \`git update-index --no-assume-unchanged --no-skip-worktree -- <file>\` clears that, and \`git diff\` then shows any difference: a control runs on committed work only." ;;
+esac
 [ -z "$(file_status)" ] || refuse uncommitted "$FILE differs from its commit. \`git diff\` shows the difference, and a control runs on committed work only: where it is work you mean to keep, commit it first; where it is what a control that was stopped left behind, undo it and do not commit it."
 BACKUP="$TMP/original"
 if ! cp -p "$TARGET" "$BACKUP.new" 2>/dev/null || ! cmp -s "$TARGET" "$BACKUP.new" || ! mv "$BACKUP.new" "$BACKUP" 2>/dev/null; then

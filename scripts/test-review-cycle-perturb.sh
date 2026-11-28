@@ -224,6 +224,18 @@ printf 'staged\n' >>"$R/sub/deep file"
 git -C "$R" add "sub/deep file"
 refused "a file with a staged edit" uncommitted --file "sub/deep file" --old x=1 --new x=2
 git -C "$R" commit -q -m "deep file" -- "sub/deep file"
+# An index flag that keeps git from comparing the file hides an edit from
+# `git status`, so the flag itself is refused.
+for flag in assume-unchanged skip-worktree; do
+	git -C "$R" update-index "--$flag" conf
+	printf 'hidden\n' >>"$R/conf"
+	is "3: an edit under $flag is one git status does not show" "$(git -C "$R" status --porcelain -- conf)" ""
+	refused "a file with an edit hidden by $flag" uncommitted --file conf --old limit=3 --new limit=4
+	has "3: ...named for the flag, not for a difference git cannot show" "$ERR" "tells git not to compare"
+	has "3: ...its hidden edit still there" "$(cat "$R/conf")" "hidden"
+	printf 'limit=3\nmode=strict\nmode_note=strict is the default\n' >"$R/conf"
+	git -C "$R" update-index "--no-$flag" conf
+done
 printf 'limit=3\n' >"$WORKDIR/outside"
 refused "a file outside the directory, by an absolute path" outside --file "$WORKDIR/outside" --old limit=3 --new limit=4
 is "3: ...which was not written to" "$(cat "$WORKDIR/outside")" "limit=3"
