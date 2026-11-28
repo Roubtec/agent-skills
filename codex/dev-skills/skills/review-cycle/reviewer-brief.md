@@ -24,6 +24,12 @@ Weight what you find: real gaps and functional problems over style nits, and a d
 **A sweep is re-enumerated, never spot-checked.**
 Where the fixer claims to have fixed a pattern everywhere, redo the enumeration of the search space yourself, from at least two independent patterns and from the branch's own diff as well as matches on the subject; what either of you found is a floor, not a total.
 
+**A test that arrives with a fix is one that fails without it.**
+Where the change adds or extends a test for a fix, satisfy yourself that the test fails without the fix, and say how you did; one that passes without it is a finding.
+The direct way is to take the fix out and run that one test, in the disposable clone your prompt names and never in the reviewed tree, which the peer is reading as you work: `perturb.sh`, the script beside this file whose `--help` is its contract, does that for a fix that is one changed string, pointed at the clone with `-C`.
+Reading the test against the pre-fix code is acceptable where running is impractical; your report says which you did and names the failure you expected.
+This asks for nothing where the change claims no test for a fix, and it is never a reason to ask a repository for checks it does not have; with no clone slug in your prompt, report that the check needs one.
+
 **Weight comments by whether they outlive the PR.**
 A comment that re-implements adjacent code in prose is removable noise to flag for deletion, not material to precision-edit.
 Absent behavior-narration is never a gap to report, unless a documented convention of the repository requires it (docstrings or API documentation on a public surface).
