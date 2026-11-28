@@ -16,8 +16,10 @@ WORKDIR="$(cd -P -- "$(mktemp -d "${TMPDIR:-/tmp}/perturb-test.XXXXXX")" && pwd)
 trap 'rm -rf "$WORKDIR"' EXIT
 export GIT_AUTHOR_NAME=t GIT_AUTHOR_EMAIL=t@example.invalid GIT_COMMITTER_NAME=t GIT_COMMITTER_EMAIL=t@example.invalid
 export GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_SYSTEM=/dev/null
-# The helper's own temporary directory lands here, so the suite can see that
-# none is left behind.
+# A TMPDIR inside some repository must not make "outside a repository" false.
+export GIT_CEILING_DIRECTORIES="$WORKDIR"
+# Anything the helper put in a temporary directory would land here, where the
+# suite can see that nothing is left behind.
 mkdir "$WORKDIR/tmp"
 export TMPDIR="$WORKDIR/tmp"
 
@@ -71,7 +73,14 @@ before() {
 }
 same() { is "$1" "$(snap)" "$BEFORE"; } # <label>
 unrun() { ok "$1" "$([ ! -e "$SAW" ] && echo 0 || echo 1)"; } # <label>: the command left no trace
-left() { find "$TMPDIR" -mindepth 1 | wc -l | tr -d ' '; }
+LOCK="$R/.git/perturb.lock"
+# What a finished control left: a temporary file, or its mark.
+left() {
+	{
+		find "$TMPDIR" -mindepth 1
+		[ ! -e "$LOCK" ] || echo "$LOCK"
+	} | wc -l | tr -d ' '
+}
 # A zombie has exited and only awaits its parent, and answers `kill -0` for as
 # long as PID 1 does not reap it.
 alive() { # <pid>
@@ -145,6 +154,8 @@ call --file conf --old 'strict' --new 'loose' -- ./check.sh
 is "1: a string that stands there twice is ambiguous, exit 3" "$RC:$(val outcome):$(val matches)" "3:ambiguous:2"
 unrun "1: ...and the command never ran"
 same "1: ...and the repository is as it was"
+call --file conf --old 'i' --new 'I' -- ./check.sh
+is "1: ...and the count goes no further than 2" "$RC:$(val outcome):$(val matches)" "3:ambiguous:2"
 
 # --- 2: the string is bytes, not a pattern --------------------------------------
 before
@@ -181,7 +192,7 @@ refused() { # <label> <reason> [args...]
 	same "3: ...and the repository is as it was"
 }
 refused "a file with an unstaged edit" uncommitted --file other --old kept --new lost
-has "3: ...told to commit first" "$ERR" "Commit first"
+has "3: ...pointed at the difference before any commit" "$ERR" "\`git diff\` shows the difference"
 has "3: ...its uncommitted edit still there" "$(cat "$R/other")" "an uncommitted edit"
 refused "an untracked file" untracked --file scratch --old untracked --new x
 printf 'staged\n' >>"$R/sub/deep file"
@@ -220,12 +231,13 @@ is "3: no refusal left a temporary file" "$(left)" 0
 # --- 4: a command that does not end by itself -----------------------------------
 # The command starts a process of its own and records it, so the suite can see
 # that stopping the command stopped that too.
-HANG='cat conf >"$SAW"; sleep 300 & echo $! >"$1"; wait'
+# The sleep is short enough that a helper which stops nothing still ends.
+HANG='cat conf >"$SAW"; sleep 15 & echo $! >"$1"; wait'
 before
 start=$(date +%s)
 call --timeout 1 --file conf --old 'limit=3' --new 'limit=4' -- sh -c "$HANG" sh "$WORKDIR/pid"
 is "4: a command still running at the timeout is timed-out, exit 3" "$RC:$(val outcome):$(val timeout):$(val restored)" "3:timed-out:1:yes"
-ok "4: ...without waiting for the command" "$([ $(($(date +%s) - start)) -lt 30 ] && echo 0 || echo 1)"
+ok "4: ...without waiting for the command" "$([ $(($(date +%s) - start)) -lt 10 ] && echo 0 || echo 1)"
 has "4: ...which had run against the changed file" "$(cat "$SAW" 2>/dev/null)" "limit=4"
 gone "$(cat "$WORKDIR/pid")"
 ok "4: ...and the process the command started is stopped with it" $?
@@ -263,6 +275,18 @@ for sig in TERM HUP; do
 	is "4: ...with no temporary file left" "$(left)" 0
 done
 
+# A command that ends by itself and leaves a process behind, which writes the
+# file a second later: after the answer, unless it was stopped first.
+for last in 1 0; do
+	before
+	call --file conf --old 'limit=3' --new 'limit=4' -- sh -c '(sleep 1; echo late >conf) & echo $! >"$1"; exit "$2"' sh "$WORKDIR/pid" "$last"
+	is "4: a command that left a process behind and exited $last is answered by its status" "$RC:$(val outcome):$(val restored)" "$([ "$last" = 0 ] && echo 3:missed || echo 0:caught):yes"
+	gone "$(cat "$WORKDIR/pid")"
+	ok "4: ...the process it left is stopped" $?
+	sleep 1.5
+	same "4: ...and never wrote the file after it was put back"
+done
+
 # --- 5: a file the command took away ---------------------------------------------
 before
 call --file check.sh --old 'limit=3' --new 'limit=4' -- sh -c 'rm check.sh; false'
@@ -276,6 +300,9 @@ is "5: ...and nothing claims it was" "$(val restored)" ""
 BACKUP="$(val backup)"
 is "5: ...the prior bytes are kept where backup= says" "$(cat "$BACKUP" 2>/dev/null)" "$(git -C "$R" show HEAD:conf)"
 has "5: ...and stderr says so" "$ERR" "COULD NOT RESTORE conf"
+is "5: ...the mark is kept with them" "$(val lock)/original" "$BACKUP"
+call --file odd --old 'star' --new 'X' -- false
+is "5: ...so the next control is refused, and pointed at the same bytes" "$RC:$(val outcome):$(val reason):$(val backup)" "1:refused:stale:$BACKUP"
 rmdir "$R/conf"
 cp "$BACKUP" "$R/conf"
 same "5: ...which is all it takes to put the repository back"
@@ -339,9 +366,13 @@ usage "a timeout of zero" --timeout 0 --file conf --old 'limit=3' --new 'limit=4
 usage "a command that does not exist" --file conf --old 'limit=3' --new 'limit=4' -- ./no-such-check.sh
 unrun "6: ...and none of them ran the command"
 same "6: ...or touched the repository"
-call --file conf --old 'limit=3' --new 'limit=4' -- sh -c 'exit 127'
-is "6: a command that could not run its own is still caught" "$RC:$(val outcome):$(val status)" "0:caught:127"
-has "6: ...with a word about what that status usually means" "$ERR" "could not run"
+for st in 126 127; do
+	call --file conf --old 'limit=3' --new 'limit=4' -- sh -c "exit $st"
+	is "6: status $st says nothing ran: not-run, exit 3, never caught" "$RC:$(val outcome):$(val status):$(val restored)" "3:not-run:$st:yes"
+done
+has "6: ...with a word about what that status means" "$ERR" "could not run"
+call --file conf --old 'limit=3' --new 'limit=4' -- bash no-such-test.sh
+is "6: a test script that is not there is not-run" "$RC:$(val outcome)" "3:not-run"
 OUT="$(bash "$HELPER" -C "$R" --file conf --old 'limit=3' --new 'limit=4' -- ./check.sh 2>/dev/null)"
 is "6: -C names where the control runs" "$?:$(val outcome)" "0:caught"
 OUT="$(bash "$HELPER" -C "$WORKDIR/nowhere" --file conf --old 'limit=3' --new 'limit=4' -- true 2>/dev/null)"
@@ -353,6 +384,78 @@ OUT="$(cd "$R" && bash "$SHIM" --file conf --old 'limit=3' --new 'limit=4' -- ./
 is "6: the bin/ shim runs the same script" "$?:$(val outcome)" "0:caught"
 same "6: ...and the repository is as it was"
 is "6: ...with no temporary file left" "$(left)" 0
+
+# --- 7: one control at a time, and one that was killed -----------------------------
+hang() { # start a control on conf that does not end; $helper is its process
+	rm -f "$WORKDIR/pid" "$WORKDIR/second"
+	(cd "$R" && exec bash "$HELPER" --file conf --old 'limit=3' --new 'limit=4' -- sh -c "$HANG" sh "$WORKDIR/pid") >"$WORKDIR/out1" 2>"$WORKDIR/err1" &
+	helper=$!
+	n=0
+	while [ ! -s "$WORKDIR/pid" ] && [ "$n" -lt 100 ]; do
+		sleep 0.1
+		n=$((n + 1))
+	done
+}
+SECOND=': >"$1"; false'
+before
+hang
+odd="$(cksum <"$R/odd")"
+for f in odd conf; do
+	call --file "$f" --old 'star' --new 'X' -- sh -c "$SECOND" sh "$WORKDIR/second"
+	is "7: a second control while one runs is refused as busy, naming it ($f)" "$RC:$(val outcome):$(val reason):$(val holder):$(val lock)" "1:refused:busy:$helper:$LOCK"
+done
+has "7: ...and told why" "$ERR" "another control is running"
+ok "7: ...its command never ran" "$([ ! -e "$WORKDIR/second" ] && echo 0 || echo 1)"
+is "7: ...its file is untouched" "$(cksum <"$R/odd")" "$odd"
+has "7: ...and the first still has its change in place" "$(cat "$R/conf")" "limit=4"
+kill -TERM "$helper"
+wait "$helper"
+is "7: ...and ends as it would have" "$?:$(sed -n 1p "$WORKDIR/out1")" "1:outcome=interrupted"
+gone "$(cat "$WORKDIR/pid")"
+same "7: ...and the repository is as it was"
+is "7: ...with no mark left" "$(left)" 0
+
+before
+hang
+{ kill -KILL "$helper" && wait "$helper"; } 2>/dev/null
+kill "$(cat "$WORKDIR/pid")" 2>/dev/null
+gone "$(cat "$WORKDIR/pid")"
+has "7: a helper killed outright leaves the file changed" "$(cat "$R/conf")" "limit=4"
+for f in conf odd; do
+	call --file "$f" --old 'limit=4' --new 'limit=5' -- sh -c "$SECOND" sh "$WORKDIR/second"
+	is "7: ...and the next control is refused as stale, not as uncommitted ($f)" "$RC:$(val outcome):$(val reason):$(val lock):$(val backup)" "1:refused:stale:$LOCK:$LOCK/original"
+done
+has "7: ...told that an earlier control never finished" "$ERR" "an earlier control here never finished (its process $helper is gone)"
+has "7: ...which file it was changing" "$ERR" "It was changing $R/conf"
+has "7: ...and not to commit what it left" "$ERR" "do not commit it"
+case "$ERR" in *"ommit it first"*) ok "7: ...nor anything about committing first" 1 ;; *) ok "7: ...nor anything about committing first" 0 ;; esac
+ok "7: ...its command never ran" "$([ ! -e "$WORKDIR/second" ] && echo 0 || echo 1)"
+has "7: ...and the helper removed and restored nothing itself" "$(cat "$R/conf" "$LOCK/pid")" "limit=4"
+is "7: ...the bytes the file had are where backup= says" "$(cat "$(val backup)")" "$(git -C "$R" show HEAD:conf)"
+cp "$(val backup)" "$R/conf"
+rm -r "$LOCK"
+same "7: ...and doing what it said puts the repository back"
+call --file conf --old 'limit=3' --new 'limit=4' -- ./check.sh
+is "7: ...after which a control runs again" "$RC:$(val outcome)" "0:caught"
+
+mkdir "$LOCK"
+call --file conf --old 'limit=3' --new 'limit=4' -- sh -c "$SECOND" sh "$WORKDIR/second"
+is "7: a mark with nothing in it is stale, with no backup to name" "$RC:$(val reason):$(val backup)" "1:stale:"
+has "7: ...and said to have changed nothing" "$ERR" "had changed nothing"
+ok "7: ...and is left for the caller to remove" "$([ -d "$LOCK" ] && echo 0 || echo 1)"
+rmdir "$LOCK"
+
+# A linked worktree's git directory is not `.git`: the mark goes to its own.
+git -C "$R" worktree add -q "$WORKDIR/wt" HEAD 2>/dev/null
+OUT="$(bash "$HELPER" -C "$WORKDIR/wt" --file conf --old 'limit=3' --new 'limit=4' -- sh -c '{ ls -d "$1"; git status --porcelain; } >"$SAW" 2>&1; false' sh "$R/.git/worktrees/wt/perturb.lock" 2>/dev/null)"
+is "7: in a linked worktree a control runs" "$?:$(val outcome)" "0:caught"
+is "7: ...its mark in that worktree's git directory, and only the change in git's sight" "$(cat "$SAW")" "$R/.git/worktrees/wt/perturb.lock
+ M conf"
+is "7: ...and gone afterwards, the worktree clean" "$([ -e "$R/.git/worktrees/wt/perturb.lock" ] && echo 1 || echo 0):$(git -C "$WORKDIR/wt" status --porcelain)" "0:"
+git -C "$R" worktree remove "$WORKDIR/wt"
+same "7: ...and the repository is as it was"
+is "7: ...with nothing left" "$(left)" 0
+
 ok "6: the Codex mirror is byte-identical" "$(cmp -s "$SHIPPED" "$MIRROR" && echo 0 || echo 1)"
 
 if [ "$fails" -gt 0 ]; then
