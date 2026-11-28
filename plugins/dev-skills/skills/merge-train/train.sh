@@ -6,7 +6,10 @@
 #   train.sh check  --repo <owner>/<repo> --pr <N> [--head <oid>] [--lane <identity>]... [--since <time>]
 #   train.sh rebase --repo <owner>/<repo> --pr <N> --head <oid> [--green <oid>] [--from <parent's old tip>]
 #   train.sh push   --repo <owner>/<repo> --pr <N> --expect <head-oid>
-#   train.sh merge  --repo <owner>/<repo> --pr <N> --head <oid> [--wait <seconds>]
+#   train.sh merge  --repo <owner>/<repo> --pr <N> --head <oid> [--wait <seconds>] [--state <file> --basis <words>]
+#   train.sh watch  --repo <owner>/<repo> --list <file> --state <file> [--interval <seconds>] [--max <seconds>]
+#   train.sh note   --state <file> [--pr <N>] <words>...
+#   train.sh state  --state <file>
 #
 # `rebase` and `push` run in the PR's worktree: stand in it, or put
 # `-C <worktree>` ahead of the command, as git takes it.
@@ -32,6 +35,23 @@
 #           outcome=waiting   a lane is still running, the rollup is empty, or
 #                             a `--lane` is not among its passing lanes: one
 #                             `missing=<identity>` line each
+#           outcome=unscheduled
+#                             every lane this head has is green, and no run
+#                             on it is left to bring a `--lane` it lacks: one
+#                             `unscheduled=<identity>` line each. Such a lane
+#                             belongs to a workflow of the repository, and
+#                             the head has workflow runs, every one of them
+#                             completed, without it (a workflow that runs
+#                             when a PR opens and not on a later push, a job
+#                             renamed since). That is all it establishes: a
+#                             run GitHub has yet to create looks the same, so
+#                             a lane of a workflow started by another's
+#                             completion (`workflow_run`) or by a later event
+#                             on this head reads so until its run appears.
+#                             Whether the head merges without it is yours.
+#                             A lane of no workflow of the repository (another
+#                             app's check, a commit status) is never told so:
+#                             it stays `missing=`
 #         and always: pr= state= head= branch= base= default= draft=
 #         mergeable= review= changes-requested= threads= ci= lanes= (how many
 #         lanes pass), one `passing=<identity>` line per passing lane, and
@@ -103,6 +123,74 @@
 #         It does not read CI: whether this head needs a fresh run is decided
 #         before calling it. It never squashes, deletes a branch or bypasses
 #         what the repository enforces.
+#         With `--state`, a merge is also written to that state file, with
+#         `--basis`: your words for what this head merged on.
+# watch   The hours of a train, as one command for a background monitor: polls
+#         `check` for every entry of the list file and prints a line when an
+#         entry's outcome changes, and one when it stops. Nothing else.
+#         The list file is yours to edit while the watch runs; it is read
+#         again on every poll. One entry per line, `#` starting a comment:
+#           <PR> [<head-oid>]   a PR on that head; with none, on the head it
+#                               has when first read
+#           commit <oid>        a commit's own lanes (a default branch's run)
+#         An entry is a PR on a head. `moved` and `not-open` end it: it is
+#         printed once and not polled again until the list names another head
+#         for that PR. Every other entry is polled each time, so a red lane
+#         re-run or a thread resolved is seen. A listed head GitHub does not
+#         show yet, on a PR still at the head it was last seen on, is a push
+#         on its way for as long as that lasts: `waiting`, with `ci=unpushed`
+#         and that head as `now=`.
+#           pr=<N> TAB head=<oid> TAB outcome=<as check> TAB ...   and then
+#             ci=<rollup>, or state= and merge-commit= (not-open), or now=<the
+#             head it moved to>
+#           commit=<oid> TAB outcome=<green|red|waiting|no-run> TAB ci=<rollup>
+#             no-run: ten minutes after the watch first read it the commit has
+#             no lane and no workflow run still going, so none is coming
+#             (workflows that run on pull requests only; a run that completed
+#             and left no lane, as a skipped one does). It stands, across
+#             watches too, until a lane shows.
+#           entry=<line> TAB outcome=bad-entry   a line it cannot read, or a
+#                                                PR listed twice; said once
+#         The first time an entry's lanes are all green it keeps their names,
+#         and holds every later head of that PR to them as `check --lane`
+#         does, so a rollup still filling after a push is `waiting`, and a
+#         lane no run on the head is left to bring is `unscheduled`, said
+#         once. It cannot tell a first rollup that is still filling: list a
+#         head that has never had a full green run only once its lanes have
+#         shown.
+#         It stops by itself, and its last line says why:
+#           outcome=stopped TAB reason=<why> TAB pending=<ids> TAB unread=<ids>
+#             idle        nothing listed is `waiting` any more (exit 0)
+#             expired     `--max` seconds have passed (14400: four hours)
+#             unreadable  five polls running could not read some entry
+#             no-list     the list file is gone
+#         A poll is one `check` per entry, every `--interval` seconds (120: a
+#         CI run takes minutes, so two minutes late loses nothing, and ten PRs
+#         then cost some 600 small queries an hour). A poll that could not
+#         read an entry prints nothing and leaves its outcome standing; the
+#         wait doubles with each such poll running, and where GitHub reports
+#         the rate limit spent the watch sleeps until it resets. It runs no
+#         longer than `--max` and one poll; where `timeout` is installed,
+#         each read it makes is cut at five minutes.
+#         The state file is the train's memory, and it lives where you say:
+#         outside the repository. It is a journal, one TAB-separated record a
+#         line, only ever appended to, so the latest record of a kind is the
+#         current one: every line the watch printed with `at=<time>` added,
+#         and
+#           watch=started|stopped ...   with the list's path, the repository
+#           green=<N> TAB head=<oid> TAB lane=<identity>...
+#                                       the head of that PR's last full green
+#                                       run (`rebase --green`) and its lanes
+#           dropped=<N or oid>          the list no longer holds that entry
+#           merged=<N> TAB head= TAB merge-commit= TAB at= TAB basis=<words>
+#           note=<N or -> TAB at= TAB text=<words>
+#         A watch started on a state file that has records goes on from them:
+#         it prints nothing for an outcome the file already holds.
+# note    Appends a `note=` record: a run cancelled, a conflict resolved, a
+#         merge made some other way.
+# state   The state file read down to what stands: the last `watch=` record,
+#         the latest record of every entry still listed, each PR's `green=`,
+#         then every `merged=` and `note=`, after `outcome=state`.
 #
 # The branch mechanics and the rollup reading are not reimplemented here:
 # they are `pr-branch.sh` and `ci.sh` of the `address-review` skill, called
@@ -138,6 +226,13 @@ SIBLING="$(dirname -- "$SELF")/../address-review"
 PRB="$SIBLING/pr-branch.sh"
 CI="$SIBLING/ci.sh"
 POLL="${TRAIN_POLL_SECONDS:-5}"
+# How many polls running may fail to read an entry before the watch gives up.
+UNREADABLE_AFTER=5
+# The longest one entry's read may take, where `timeout` is there to cut it.
+READ_SECONDS=300
+# How long a commit may show neither a lane nor a workflow run before the
+# watch says none is coming. GitHub registers a push's runs within seconds.
+NO_RUN_AFTER="${TRAIN_NO_RUN_SECONDS:-600}"
 
 say() { printf '%s\n' "$*"; }
 note() { printf 'train: %s\n' "$*" >&2; }
@@ -147,7 +242,7 @@ fail() {
 }
 usage() {
 	note "$*"
-	sed -n '4,9p' "$SELF" | sed 's/^# \{0,1\}//' >&2
+	sed -n '4,12p' "$SELF" | sed 's/^# \{0,1\}//' >&2
 	exit 64
 }
 stop() { # <outcome> <explanation> [key=value...]
@@ -167,11 +262,12 @@ field() { # key, text
 }
 
 REPO="" PR="" HEAD="" LANES="" SINCE="" FROM="" EXPECT="" GREEN="" WAIT=90 PRS=""
+LIST="" STATE="" INTERVAL=120 MAX=14400 BASIS="" NEEDS_REPO=1
 
 parse() {
 	while [ $# -gt 0 ]; do
 		case "$1" in
-		--repo | --pr | --head | --lane | --since | --from | --expect | --green | --wait)
+		--repo | --pr | --head | --lane | --since | --from | --expect | --green | --wait | --list | --state | --interval | --max | --basis)
 			[ $# -ge 2 ] || usage "$1 needs a value"
 			case "$1" in
 			--repo) REPO="$2" ;;
@@ -187,6 +283,11 @@ parse() {
 			--expect) EXPECT="$2" ;;
 			--green) GREEN="$2" ;;
 			--wait) WAIT="$2" ;;
+			--list) LIST="$2" ;;
+			--state) STATE="$2" ;;
+			--interval) INTERVAL="$2" ;;
+			--max) MAX="$2" ;;
+			--basis) BASIS="$2" ;;
 			esac
 			shift 2
 			;;
@@ -197,6 +298,7 @@ parse() {
 			;;
 		esac
 	done
+	[ -n "$NEEDS_REPO" ] || return 0
 	case "$REPO" in
 	?*/?*) ;;
 	*) usage "--repo <owner>/<repo> is required (the repository the PRs are in)" ;;
@@ -213,6 +315,19 @@ need_oid() { # flag, value
 	'' | *[!0-9a-f]*) usage "$1 takes a full commit id" ;;
 	esac
 	[ "${#2}" -ge 40 ] || usage "$1 takes a full commit id"
+}
+
+now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+# One record onto the end of the state file. TABs separate its fields, so a
+# caller's words lose theirs.
+journal() { printf '%s\n' "$1" >>"$STATE"; }
+words() { printf '%s' "$*" | tr '\t\n\r' '   '; }
+need_state() {
+	[ -n "$STATE" ] || usage "--state <file> is required"
+	case "$STATE" in
+	/*) ;;
+	*) STATE="$PWD/$STATE" ;;
+	esac
 }
 
 slug() { printf '%s' "$REPO" | awk -F/ '{ print $(NF-1) "/" $NF }'; }
@@ -336,8 +451,36 @@ why() { # outcome
 	draft) printf 'PR #%s is a draft.' "$PR" ;;
 	review) printf 'PR #%s has open review items (%s unresolved threads, %s reviewers requesting changes, review decision %s). They are the maintainer'"'"'s to settle: skip it, with every PR stacked on it.' "$PR" "$F_THREADS" "$F_CHANGES" "$F_DECISION" ;;
 	red) printf 'PR #%s has a failing lane. Read its log before re-running anything.' "$PR" ;;
+	unscheduled) printf 'PR #%s is green on every lane this head has, and lacks lanes of its full run: every workflow run this head has is complete without them; a run GitHub has yet to create looks the same. Whether it merges without them is yours to judge.' "$PR" ;;
 	waiting) printf 'PR #%s is not green yet: a lane is running, or the rollup does not hold the lanes of a full run.' "$PR" ;;
 	esac
+}
+
+# Of the missing lanes on stdin, the ones no run on the head is left to bring:
+# `unscheduled=` for those, `missing=` for the rest.
+sort_missing() {
+	local s h runs flows
+	s="$(slug)"
+	h="$(host)"
+	runs="$(gh api ${h:+--hostname} ${h:+"$h"} "repos/$s/actions/runs?head_sha=$F_HEAD&per_page=100" --jq '.workflow_runs[].status' </dev/null)" ||
+		fail "could not list the workflow runs on $F_HEAD in $REPO (gh failed). Nothing here says which lanes are still to come."
+	flows="$(gh api ${h:+--hostname} ${h:+"$h"} "repos/$s/actions/workflows?per_page=100" --jq '.workflows[].name' </dev/null)" ||
+		fail "could not list the workflows of $REPO (gh failed). Nothing here says which lanes are still to come."
+	RUNS="$runs" FLOWS="$flows" awk '
+		BEGIN {
+			n = split(ENVIRON["RUNS"], r, "\n")
+			for (i = 1; i <= n; i++) if (r[i] != "") {
+				runs++
+				if (r[i] != "completed") going = 1
+			}
+			m = split(ENVIRON["FLOWS"], w, "\n")
+		}
+		{
+			lane = substr($0, 9); ours = 0
+			for (i = 1; i <= m; i++) if (w[i] != "" && index(lane, w[i] " / ") == 1) ours = 1
+			if (ours && runs > 0 && !going) print "unscheduled=" lane
+			else print $0
+		}'
 }
 
 cmd_check() {
@@ -348,7 +491,7 @@ cmd_check() {
 	*[!0-9TZ:.+-]*) usage "--since takes a time as \`checked=\` printed it" ;;
 	esac
 	need_sibling "$CI"
-	local checked ci ciout cihead passing failing outcome missing=""
+	local checked ci ciout cihead passing failing outcome missing="" unscheduled=""
 	# Two minutes back: a comment shown twice costs a glance, one skipped
 	# because two clocks disagree costs the review it carried.
 	checked="$(date -u -d '2 minutes ago' +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)" ||
@@ -366,12 +509,18 @@ cmd_check() {
 		BEGIN { n = split(ENVIRON["HAVE"], a, "\n"); for (i = 1; i <= n; i++) have[substr(a[i], 9)] = 1 }
 		NF && !($0 in have) { print "missing=" $0 }')"
 	failing="$(printf '%s\n' "$ciout" | awk 'index($0, "lane=") == 1')"
+	if [ "$ci" = green ] && [ -n "$missing" ]; then
+		missing="$(printf '%s\n' "$missing" | sort_missing)" || exit 1
+		unscheduled="$(printf '%s\n' "$missing" | awk 'index($0, "unscheduled=") == 1')"
+		missing="$(printf '%s\n' "$missing" | awk 'index($0, "missing=") == 1')"
+	fi
 	outcome="$(blocker)"
 	if [ -z "$outcome" ]; then
 		case "$ci" in
 		failing) outcome=red ;;
 		green)
 			outcome=ready
+			[ -z "$unscheduled" ] || outcome=unscheduled
 			[ -z "$missing" ] || outcome=waiting
 			;;
 		running | none) outcome=waiting ;;
@@ -395,6 +544,7 @@ cmd_check() {
 	say "lanes=$(printf '%s\n' "$passing" | awk 'NF { n++ } END { print n + 0 }')"
 	[ -z "$passing" ] || say "$passing"
 	[ -z "$missing" ] || say "$missing"
+	[ -z "$unscheduled" ] || say "$unscheduled"
 	[ -z "$failing" ] || say "$failing"
 	printf '%s\n' "$ciout" | awk 'index($0, "running=") == 1'
 	[ -z "$SINCE" ] || printf '%s\n' "$F_NEW" | awk -F "$TAB" -v s="$SINCE" 'NF && ($3 "") > (s "") { print "new=" $0 }'
@@ -598,6 +748,11 @@ cmd_merge() {
 	case "$WAIT" in
 	'' | *[!0-9]*) usage "--wait takes a number of seconds" ;;
 	esac
+	if [ -n "$STATE$BASIS" ]; then
+		need_state
+		[ -n "$BASIS" ] || usage "--state takes --basis <words>: what this head merges on"
+		: >>"$STATE" || fail "cannot write the state file $STATE. Nothing was merged."
+	fi
 	local outcome s h behind waited=0 err rc=0 tries=0
 	facts
 	# Right after a push GitHub can still report the head from before it.
@@ -642,6 +797,8 @@ cmd_merge() {
 		say "outcome=merged"
 		say "merge-commit=$F_MERGED"
 		say "head=$F_HEAD"
+		[ -z "$STATE" ] || journal "merged=$PR${TAB}head=$F_HEAD${TAB}merge-commit=$F_MERGED${TAB}at=$(now)${TAB}basis=$(words "$BASIS")" ||
+			note "PR #$PR merged, but the merge could not be written to $STATE. Record it with \`note\`."
 		return 0
 	fi
 	if [ "$rc" != 0 ]; then
@@ -652,6 +809,332 @@ cmd_merge() {
 		stop refused "GitHub refused to merge PR #$PR, and it is still $F_STATE. A merge the repository's rules refuse is a human call: never bypass them." "state=$F_STATE" "head=$F_HEAD"
 	fi
 	stop unconfirmed "the merge command returned, but PR #$PR still reads $F_STATE. Read it again before going on." "state=$F_STATE" "head=$F_HEAD"
+}
+
+# The latest record of one entry in the state file, as `<head> TAB <outcome>
+# TAB <the head GitHub last showed for it>`; empty where it has none, or where
+# the list dropped it since.
+last_of() { # pr|commit, id
+	awk -F "$TAB" -v k="$1=$2" -v u="dropped=$2" '
+		$1 == k {
+			h = "-"; o = ""; s = ""
+			for (i = 2; i <= NF; i++) {
+				if (index($i, "head=") == 1) h = substr($i, 6)
+				if (index($i, "outcome=") == 1) o = substr($i, 9)
+				if (index($i, "now=") == 1) s = substr($i, 5)
+			}
+			r = h "\t" o "\t" (s == "" ? h : s)
+		}
+		$1 == u { r = "" }
+		END { print r }' "$STATE"
+}
+
+W_PENDING="" W_UNREAD="" W_LISTED="" GUARD="" W_START=0 W_WAITED=0 W_ELAPSED=0 W_NONE=""
+# The longer of the clock and the waits asked for, so a bound holds whatever
+# a sleep really took.
+tick() {
+	W_ELAPSED=$((SECONDS - W_START))
+	[ "$W_WAITED" -le "$W_ELAPSED" ] || W_ELAPSED="$W_WAITED"
+}
+# Says a record, and writes it to the state file with its time.
+report() {
+	say "$1"
+	journal "$1${TAB}at=$(now)" || fail "cannot write the state file $STATE."
+}
+bad_entry() { # the line
+	local rec
+	rec="entry=$(words "$1")${TAB}outcome=bad-entry"
+	grep -qF -- "$rec$TAB" "$STATE" || report "$rec"
+}
+watch_pr() { # PR, head the list names (may be empty)
+	local id="$1" head="$2" last lhead="" lout="" lseen="" kept rc=0 out o h ci rec green lane
+	last="$(last_of pr "$id")"
+	IFS="$TAB" read -r lhead lout lseen <<EOF
+$last
+EOF
+	[ -n "$head" ] || head="$lhead"
+	if [ -n "$head" ] && [ "$head" = "$lhead" ]; then
+		case "$lout" in
+		moved | not-open) return 0 ;;
+		esac
+	fi
+	kept="$(awk -F "$TAB" -v k="green=$id" '$1 == k { r = $0 } END { print r }' "$STATE")"
+	set -- check --repo "$REPO" --pr "$id"
+	[ -z "$head" ] || set -- "$@" --head "$head"
+	while IFS= read -r lane; do
+		case "$lane" in
+		lane=*) set -- "$@" --lane "${lane#lane=}" ;;
+		esac
+	done <<EOF
+$(printf '%s\n' "$kept" | tr "$TAB" '\n')
+EOF
+	out="$($GUARD bash "$SELF" "$@" 2>/dev/null)" || rc=$?
+	o="$(field outcome "$out")"
+	h="$(field head "$out")"
+	case "$rc" in
+	0 | 3) [ -n "$o" ] && [ -n "$h" ] || rc=1 ;;
+	esac
+	case "$rc" in
+	0 | 3) ;;
+	*)
+		W_UNREAD="$W_UNREAD $id"
+		return 0
+		;;
+	esac
+	[ -n "$head" ] || head="$h"
+	ci="$(field ci "$out")"
+	# The list names a head GitHub does not show yet, and the PR is still on
+	# the one it was last seen on: a push on its way, not somebody else's.
+	if [ "$o" = moved ] && [ "$h" = "$lseen" ]; then
+		o=waiting
+		ci=unpushed
+	fi
+	rec="pr=$id${TAB}head=$head${TAB}outcome=$o"
+	case "$o" in
+	not-open) rec="$rec${TAB}state=$(field state "$out")${TAB}merge-commit=$(field merge-commit "$out")" ;;
+	moved) rec="$rec${TAB}now=$h" ;;
+	*)
+		rec="$rec${TAB}ci=$ci"
+		[ "$ci" != unpushed ] || rec="$rec${TAB}now=$h"
+		;;
+	esac
+	if [ "$head" != "$lhead" ] || [ "$o" != "$lout" ]; then report "$rec"; fi
+	case "$o" in
+	not-open | moved) ;;
+	*)
+		if [ "$ci" = green ] && ! printf '%s\n' "$out" | grep -q -e '^missing=' -e '^unscheduled='; then
+			green="green=$id${TAB}head=$head$(printf '%s\n' "$out" | awk -v t="$TAB" 'index($0, "passing=") == 1 { printf "%slane=%s", t, substr($0, 9) }')"
+			[ "$green" = "$kept" ] || journal "$green" || fail "cannot write the state file $STATE."
+		fi
+		;;
+	esac
+	[ "$o" != waiting ] || W_PENDING="$W_PENDING $id"
+}
+watch_commit() { # oid
+	local id="$1" last lhead="" lout="" lseen="" out ci o s h since going
+	last="$(last_of commit "$id")"
+	IFS="$TAB" read -r lhead lout lseen <<EOF
+$last
+EOF
+	if ! out="$($GUARD bash "$CI" lanes --repo "$REPO" --commit "$id" 2>/dev/null)"; then
+		W_UNREAD="$W_UNREAD $id"
+		return 0
+	fi
+	ci="$(field outcome "$out")"
+	case "$ci" in
+	green) o=green ;;
+	failing) o=red ;;
+	running) o=waiting ;;
+	none)
+		o=waiting
+		case "$W_NONE " in
+		*" $id="*) ;;
+		*) W_NONE="$W_NONE $id=$W_ELAPSED" ;;
+		esac
+		since="${W_NONE##*" $id="}"
+		since="${since%% *}"
+		if [ "$lout" = no-run ]; then
+			o=no-run
+		elif [ $((W_ELAPSED - since)) -ge "$NO_RUN_AFTER" ]; then
+			s="$(slug)"
+			h="$(host)"
+			# A run that completed and left no lane is not going to: events
+			# that build nothing (a comment) attach skipped runs to this tip.
+			if ! going="$($GUARD gh api ${h:+--hostname} ${h:+"$h"} "repos/$s/actions/runs?head_sha=$id&per_page=100" --jq '[.workflow_runs[] | select(.status != "completed")] | length' 2>/dev/null)"; then
+				W_UNREAD="$W_UNREAD $id"
+				return 0
+			fi
+			[ "$going" != 0 ] || o=no-run
+		fi
+		;;
+	*)
+		W_UNREAD="$W_UNREAD $id"
+		return 0
+		;;
+	esac
+	[ "$o" = "$lout" ] || report "commit=$id${TAB}outcome=$o${TAB}ci=$ci"
+	[ "$o" != waiting ] || W_PENDING="$W_PENDING $id"
+}
+# One poll: every entry of the list, then the entries the list has dropped.
+poll() {
+	local line id
+	W_PENDING="" W_UNREAD="" W_LISTED=""
+	# The list is read on its own descriptor: gh would drink the loop's stdin.
+	while IFS= read -r line <&3 || [ -n "$line" ]; do
+		line="${line%%#*}"
+		set -f
+		# shellcheck disable=SC2086 # split into words, with globbing off
+		set -- $line
+		set +f
+		[ $# -gt 0 ] || continue
+		id="$1"
+		[ "$1" != commit ] || id="${2:-}"
+		case " $W_LISTED " in
+		*" $id "*)
+			bad_entry "$line"
+			continue
+			;;
+		esac
+		case "$1" in
+		commit)
+			case "$id" in
+			'' | *[!0-9a-f]*) id="" ;;
+			esac
+			if [ $# -ne 2 ] || [ "${#id}" -lt 40 ]; then
+				bad_entry "$line"
+				continue
+			fi
+			W_LISTED="$W_LISTED $id"
+			watch_commit "$id"
+			;;
+		*[!0-9]*)
+			bad_entry "$line"
+			;;
+		*)
+			case "${2:-}" in
+			*[!0-9a-f]*) set -- "$1" x x ;;
+			esac
+			if [ $# -gt 2 ] || { [ $# -eq 2 ] && [ "${#2}" -lt 40 ]; }; then
+				bad_entry "$line"
+				continue
+			fi
+			W_LISTED="$W_LISTED $id"
+			watch_pr "$id" "${2:-}"
+			;;
+		esac
+	done 3<"$LIST"
+	awk -F "$TAB" '
+		{ k = $1; sub(/=.*/, "", k); v = substr($1, length(k) + 2) }
+		k == "pr" || k == "commit" { if (!(v in seen)) { seen[v] = 1; order[++n] = v }; live[v] = 1 }
+		k == "dropped" { live[v] = 0 }
+		END { for (i = 1; i <= n; i++) if (live[order[i]]) print order[i] }' "$STATE" |
+		while IFS= read -r id; do
+			case " $W_LISTED " in
+			*" $id "*) ;;
+			*) journal "dropped=$id${TAB}at=$(now)" ;;
+			esac
+		done
+}
+
+cmd_watch() {
+	parse "$@"
+	[ -z "$PR$PRS" ] || usage "watch takes its PRs from the list file"
+	[ -n "$LIST" ] || usage "--list <file> is required"
+	need_state
+	case "$LIST" in
+	/*) ;;
+	*) LIST="$PWD/$LIST" ;;
+	esac
+	case "$INTERVAL" in
+	'' | *[!0-9]*) usage "--interval takes a number of seconds" ;;
+	esac
+	case "$MAX" in
+	'' | *[!0-9]*) usage "--max takes a number of seconds" ;;
+	esac
+	need_sibling "$CI"
+	[ -r "$LIST" ] || fail "cannot read the list file $LIST."
+	journal "watch=started${TAB}at=$(now)${TAB}repo=$REPO${TAB}list=$LIST${TAB}interval=$INTERVAL${TAB}max=$MAX" || fail "cannot write the state file $STATE."
+	# A read that hangs would hold the watch past its bound.
+	GUARD=""
+	if command -v timeout >/dev/null 2>&1; then GUARD="timeout $READ_SECONDS"; fi
+	local elapsed fails=0 reason wait n h limit rec
+	W_START="$SECONDS" W_WAITED=0 W_NONE=""
+	h="$(host)"
+	while :; do
+		if [ ! -r "$LIST" ]; then
+			reason=no-list
+			break
+		fi
+		tick
+		poll
+		if [ -n "$W_UNREAD" ]; then
+			fails=$((fails + 1))
+			if [ "$fails" -ge "$UNREADABLE_AFTER" ]; then
+				reason=unreadable
+				break
+			fi
+		else
+			fails=0
+			if [ -z "$W_PENDING" ]; then
+				reason=idle
+				break
+			fi
+		fi
+		wait="$INTERVAL"
+		n="$fails"
+		while [ "$n" -gt 1 ]; do
+			wait=$((wait * 2))
+			n=$((n - 1))
+		done
+		if [ "$fails" -gt 0 ]; then
+			limit="$($GUARD gh api ${h:+--hostname} ${h:+"$h"} rate_limit --jq '.resources.graphql | "\(.remaining) \(.reset)"' 2>/dev/null)" || limit=""
+			case "$limit" in
+			"0 "*[!0-9]* | "0 ") ;;
+			"0 "*)
+				n=$((${limit#0 } - $(date +%s) + 5))
+				[ "$n" -le "$wait" ] || wait="$n"
+				;;
+			esac
+		fi
+		# Read after the last thing that can take time, so no wait follows a
+		# bound already passed.
+		tick
+		elapsed="$W_ELAPSED"
+		if [ "$elapsed" -ge "$MAX" ]; then
+			reason=expired
+			break
+		fi
+		[ "$wait" -le $((MAX - elapsed)) ] || wait=$((MAX - elapsed))
+		sleep "$wait"
+		W_WAITED=$((W_WAITED + wait))
+	done
+	rec="reason=$reason${TAB}pending=$(printf '%s' "${W_PENDING# }" | tr ' ' ',')${TAB}unread=$(printf '%s' "${W_UNREAD# }" | tr ' ' ',')"
+	say "outcome=stopped${TAB}$rec"
+	journal "watch=stopped${TAB}at=$(now)${TAB}$rec" || note "could not write the stop to $STATE."
+	case "$reason" in
+	idle)
+		note "nothing listed is waiting any more. Act on what the lines above say; start the watch again once something is waiting."
+		return 0
+		;;
+	expired) note "the watch ran its $MAX seconds with entries still waiting. Start it again on the same list and state file: it goes on from what the state file holds." ;;
+	unreadable) note "$UNREADABLE_AFTER polls running could not read:$W_UNREAD. Run \`check\` on one by hand to see why, then start the watch again." ;;
+	no-list) note "the list file $LIST is gone, so there is nothing to watch." ;;
+	esac
+	exit 3
+}
+
+cmd_note() {
+	NEEDS_REPO=""
+	parse "$@"
+	need_state
+	case "$PR" in
+	*[!0-9]*) usage "--pr takes a PR number" ;;
+	esac
+	[ -n "$PRS" ] || usage "note takes the words to record"
+	journal "note=${PR:--}${TAB}at=$(now)${TAB}text=$(words "${PRS# }")" || fail "cannot write the state file $STATE."
+	say "outcome=noted"
+}
+
+cmd_state() {
+	NEEDS_REPO=""
+	parse "$@"
+	need_state
+	[ -z "$PR$PRS" ] || usage "state takes --state alone"
+	[ -r "$STATE" ] || fail "cannot read the state file $STATE."
+	say "outcome=state"
+	awk -F "$TAB" '
+		{ k = $1; sub(/=.*/, "", k); v = substr($1, length(k) + 2) }
+		k == "watch" { watch = $0 }
+		k == "pr" || k == "commit" { if (!(v in seen)) { seen[v] = 1; order[++n] = v }; cur[v] = $0 }
+		k == "dropped" { cur[v] = "" }
+		k == "green" { if (!(v in gseen)) { gseen[v] = 1; gorder[++g] = v }; green[v] = $0 }
+		k == "merged" || k == "note" { rest[++r] = $0 }
+		END {
+			if (watch != "") print watch
+			for (i = 1; i <= n; i++) if (cur[order[i]] != "") print cur[order[i]]
+			for (i = 1; i <= g; i++) print green[gorder[i]]
+			for (i = 1; i <= r; i++) print rest[i]
+		}' "$STATE"
 }
 
 if [ "${1:-}" = -C ]; then
@@ -668,6 +1151,9 @@ check) cmd_check "$@" ;;
 rebase) cmd_rebase "$@" ;;
 push) cmd_push "$@" ;;
 merge) cmd_merge "$@" ;;
+watch) cmd_watch "$@" ;;
+note) cmd_note "$@" ;;
+state) cmd_state "$@" ;;
 -h | --help | help)
 	awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$SELF"
 	;;

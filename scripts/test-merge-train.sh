@@ -9,6 +9,7 @@
 # address-review scripts the helper calls are the shipped ones.
 # Needs Bash, git, jq and coreutils.
 # shellcheck disable=SC2319 # `ok <label> $?` after a `[ … ]` test is the point
+# shellcheck disable=SC2016 # a hook's text is expanded by the fake that sources it
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -71,8 +72,15 @@ cat >"$FAKE/gh" <<'FAKEGH'
 #   merge-moves-main       `gh pr merge` is never reached: the compare answers
 #                          from compare.late.json once facts were read twice
 #   merge-breaks-api       every read after `gh pr merge` fails
+#   rollup.<pr>.<n>.json   its rollup on the PR's n-th read, where that exists
+#   crollup.json           a commit's rollup (crollup.<n>.json on the n-th)
+#   hook.<pr>.<n>          sourced on the PR's n-th read, before it is answered
+#   ratelimit.json         the rate_limit API's answer; none is a failed call
+#   runs.json              the workflow runs on a head (none: no runs at all;
+#                          fail-runs: the call fails)
+#   workflows.json         the repository's workflows (none: it has none)
 printf '%s\n' "$*" >>"$FAKE/gh.log"
-expr=. pr="" after="" query="" args=("$@")
+expr=. pr="" oid="" after="" query="" args=("$@")
 i=0
 while [ $i -lt ${#args[@]} ]; do
 	a="${args[$i]}" b="${args[$((i + 1))]:-}"
@@ -81,6 +89,7 @@ while [ $i -lt ${#args[@]} ]; do
 	-f | -F)
 		case "$b" in
 		pr=*) pr="${b#pr=}" ;;
+		oid=*) oid="${b#oid=}" ;;
 		after=*) after=1 ;;
 		query=*) query="$b" ;;
 		esac
@@ -99,17 +108,39 @@ case "$1 $2" in
 		fi
 		n=$(($(cat "$FAKE/reads.$pr" 2>/dev/null || echo 0) + 1))
 		echo "$n" >"$FAKE/reads.$pr"
+		# shellcheck disable=SC1090 # a test's own hook
+		[ ! -f "$FAKE/hook.$pr.$n" ] || . "$FAKE/hook.$pr.$n"
 		file="$FAKE/facts.$pr.json"
 		[ ! -f "$FAKE/facts.$pr.$n.json" ] || file="$FAKE/facts.$pr.$n.json"
 		[ -z "$after" ] || file="$FAKE/facts.$pr.p2.json"
 		;;
 	*statusCheckRollup*)
 		[ ! -f "$FAKE/fail-rollup" ] || exit 1
-		file="$FAKE/rollup.$pr.json"
+		if [ -n "$oid" ]; then
+			n=$(($(cat "$FAKE/reads.commit" 2>/dev/null || echo 0) + 1))
+			echo "$n" >"$FAKE/reads.commit"
+			file="$FAKE/crollup.json"
+			[ ! -f "$FAKE/crollup.$n.json" ] || file="$FAKE/crollup.$n.json"
+		else
+			n="$(cat "$FAKE/reads.$pr" 2>/dev/null || echo 0)"
+			file="$FAKE/rollup.$pr.json"
+			[ ! -f "$FAKE/rollup.$pr.$n.json" ] || file="$FAKE/rollup.$pr.$n.json"
+		fi
 		;;
 	*) exit 1 ;;
 	esac
 	jq -r "$expr" "$file"
+	;;
+"api rate_limit" | "api --hostname")
+	[ -f "$FAKE/ratelimit.json" ] || exit 1
+	jq -r "$expr" "$FAKE/ratelimit.json"
+	;;
+"api "*"/actions/runs?head_sha="*)
+	[ ! -f "$FAKE/fail-runs" ] || exit 1
+	if [ -f "$FAKE/runs.json" ]; then jq -r "$expr" "$FAKE/runs.json"; else printf '{"total_count":0,"workflow_runs":[]}' | jq -r "$expr"; fi
+	;;
+"api "*"/actions/workflows?"*)
+	if [ -f "$FAKE/workflows.json" ]; then jq -r "$expr" "$FAKE/workflows.json"; else printf '{"workflows":[]}' | jq -r "$expr"; fi
 	;;
 "api "*)
 	file="$FAKE/compare.json"
@@ -144,7 +175,7 @@ H1=1111111111111111111111111111111111111111
 H2=2222222222222222222222222222222222222222
 MC=cccccccccccccccccccccccccccccccccccccccc
 fresh() {
-	rm -f "$FAKE"/*.json "$FAKE"/reads.* "$FAKE"/files.* "$FAKE"/missing.* "$FAKE"/fail-* "$FAKE"/merge-* "$FAKE/gh.log"
+	rm -f "$FAKE"/*.json "$FAKE"/reads.* "$FAKE"/files.* "$FAKE"/missing.* "$FAKE"/fail-* "$FAKE"/merge-* "$FAKE"/hook.* "$FAKE/gh.log" "$FAKE/sleep.log"
 	printf '{"behind_by":0}\n' >"$FAKE/compare.json"
 	printf '[]\n' >"$FAKE/open.json"
 }
@@ -164,10 +195,10 @@ facts() {
 	printf '{"data":{"repository":{"defaultBranchRef":{"name":"main"},"pullRequest":{"number":%s,"state":"%s","isDraft":%s,"baseRefName":"%s","headRefName":"%s","headRefOid":"%s","mergeable":"%s","reviewDecision":%s,"latestOpinionatedReviews":{"nodes":[%s]},"mergeCommit":%s,"reviewThreads":{"pageInfo":{"hasNextPage":%s,"endCursor":"%s"},"nodes":[%s]},"comments":{"nodes":[%s]},"reviews":{"nodes":[%s]}}}}}\n' \
 		"$pr" "$state" "$draft" "$base" "$branch" "$head" "$mergeable" "$decision" "$latest" "$merged" "$more" "$cursor" "$threads" "$comments" "$reviews" >"$FAKE/facts.$suffix.json"
 }
-# rollup <pr> <head> <nodes>
+# rollup <pr>[.<n>] <head> <nodes>
 rollup() {
 	printf '{"data":{"repository":{"pullRequest":{"number":%s,"commits":{"nodes":[{"commit":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[%s]}}}}]}}}}}\n' \
-		"$1" "$2" "$3" >"$FAKE/rollup.$1.json"
+		"${1%%.*}" "$2" "$3" >"$FAKE/rollup.$1.json"
 }
 # lane <job> <status> <conclusion (JSON)>
 lane() {
@@ -216,6 +247,58 @@ call check "${ARGS[@]}" --lane "Tests / ab"
 is "1: ...in either direction" "$(val outcome)" waiting
 call check "${ARGS[@]}" --lane ""
 is "1: an empty --lane is a usage error" "$RC" 64
+# A lane of the repository's workflows that this head's runs, all of them
+# done, did not bring.
+# runs <workflow id>=<status>...
+runs() {
+	local kv sep=""
+	{
+		printf '{"total_count":%s,"workflow_runs":[' "$#"
+		for kv in "$@"; do
+			printf '%s{"workflow_id":%s,"status":"%s"}' "$sep" "${kv%%=*}" "${kv#*=}"
+			sep=,
+		done
+		printf ']}\n'
+	} >"$FAKE/runs.json"
+}
+printf '{"workflows":[{"id":1,"name":"Tests"},{"id":2,"name":"Review"}]}\n' >"$FAKE/workflows.json"
+rollup 7 "$H1" "$GREEN"
+runs 1=completed
+call check "${ARGS[@]}" --lane "Tests / a" --lane "Review / bot"
+is "1: a lane whose workflow has no run on this head, all its runs being done, is unscheduled, not waiting" "$(val outcome)" unscheduled
+is "1: ...a stop for the caller to judge" "$RC" 3
+is "1: ...naming the lane" "$(val unscheduled)" "Review / bot"
+lacks "1: ...which is not also missing" "$OUT" "missing="
+has "1: ...the runs asked for by this head" "$(cat "$FAKE/gh.log")" "repos/acme/widgets/actions/runs?head_sha=$H1"
+has "1: ...and said to be the caller's to judge" "$ERR" "yours to judge"
+runs 1=completed 2=completed
+call check "${ARGS[@]}" --lane "Review / bot"
+is "1: a lane its workflow's finished run on this head did not bring is unscheduled too (a job renamed)" "$(val outcome)" unscheduled
+is "1: ...and is named so" "$(val unscheduled)|$(val missing)" "Review / bot|"
+runs 1=in_progress
+call check "${ARGS[@]}" --lane "Review / bot"
+is "1: while a run of this head is still going, a lane with none yet is still to come" "$(val outcome)" waiting
+rm "$FAKE/runs.json"
+call check "${ARGS[@]}" --lane "Review / bot"
+is "1: a head with no workflow run at all says nothing about what is coming" "$(val outcome)" waiting
+runs 1=completed
+call check "${ARGS[@]}" --lane "codecov / patch"
+is "1: a lane of no workflow of the repository is never told unscheduled" "$(val outcome)" waiting
+runs 1=completed
+call check "${ARGS[@]}" --lane "Review / bot" --lane "codecov / patch"
+is "1: one lane still to come keeps the head waiting beside an unscheduled one" "$(val outcome)" waiting
+is "1: ...each said as what it is" "$(val missing)|$(val unscheduled)" "codecov / patch|Review / bot"
+rollup 7 "$H1" "$(lane a COMPLETED '"SUCCESS"'),$(lane b IN_PROGRESS null)"
+: >"$FAKE/gh.log"
+call check "${ARGS[@]}" --lane "Review / bot"
+is "1: a head with a lane still running is waiting" "$(val outcome)" waiting
+lacks "1: ...without the runs being asked for" "$(cat "$FAKE/gh.log")" "actions/runs"
+rollup 7 "$H1" "$GREEN"
+touch "$FAKE/fail-runs"
+call check "${ARGS[@]}" --lane "Review / bot"
+is "1: runs that could not be listed are a failure, not a verdict" "$RC" 1
+is "1: ...with nothing on stdout" "$OUT" ""
+rm "$FAKE/fail-runs" "$FAKE/runs.json"
 rollup 7 "$H1" "$(lane a COMPLETED '"SUCCESS"'),$(lane b IN_PROGRESS null)"
 call check "${ARGS[@]}"
 is "1: a lane in progress is waiting" "$(val outcome)" waiting
@@ -817,6 +900,7 @@ for f in plugins/dev-skills/skills/merge-train/train.sh codex/dev-skills/skills/
 done
 OUT="$(bash "$SHIPPED" --help 2>&1)"
 has "6: the helper prints its contract" "$OUT" "train.sh merge"
+has "6: ...the watch's part of it too" "$OUT" "outcome=stopped"
 lacks "6: ...and none of its code" "$OUT" "set -u"
 for sibling in pr-branch.sh ci.sh; do
 	[ -f "$(dirname "$MIRROR")/../address-review/$sibling" ]
@@ -830,6 +914,409 @@ facts 7
 OUT="$(bash "$EMPTY/train.sh" check "${ARGS[@]}" 2>&1)"
 is "6: a copy with no address-review folder beside it fails" "$?" 1
 has "6: ...saying what is missing" "$OUT" "address-review skill's scripts"
+
+# --- 7. watch, note, state ----------------------------------------------------
+# The watch's waits are a `sleep` that returns at once and logs what it was
+# asked for, so hours of polling run in a moment and each wait can be read.
+SLEEP="$WORKDIR/sleepbin"
+mkdir -p "$SLEEP"
+printf '#!/bin/sh\nprintf "%%s\\n" "$1" >>"$FAKE/sleep.log"\n' >"$SLEEP/sleep"
+chmod +x "$SLEEP/sleep"
+REALPATH="$PATH"
+PATH="$SLEEP:$PATH"
+L="$WORKDIR/train.list"
+S="$WORKDIR/train.state"
+export L
+WARGS=(--repo acme/widgets --list "$L" --state "$S")
+RUNNING="$(lane a IN_PROGRESS null)"
+lines() { printf '%s\n' "$OUT" | grep -c "$1"; }
+sleeps() { tr '\n' ' ' <"$FAKE/sleep.log" 2>/dev/null; }
+polls() { cat "$FAKE/reads.$1" 2>/dev/null || echo 0; }
+# hook <pr> <n> <shell> — run on that PR's n-th read; a list is replaced
+# whole, by a rename, as an editor does it.
+hook() { printf '%s\n' "$3" >"$FAKE/hook.$1.$2"; }
+wfresh() {
+	fresh
+	rm -f "$S" "$L"
+	: >"$FAKE/gh.log"
+}
+
+# A sequence of outcomes on two PRs: 7 waits, goes red, then green; 8 waits
+# throughout and goes green last.
+wfresh
+printf '# the train\n7\n8 %s   # pinned\n\n' "$H2" >"$L"
+facts 7
+facts 8 pr=8 head="$H2" branch=other
+rollup 7 "$H1" "$RUNNING"
+rollup 7.2 "$H1" "$RUNNING,$(lane b QUEUED null)"
+rollup 7.3 "$H1" "$(lane a COMPLETED '"SUCCESS"'),$(lane b COMPLETED '"FAILURE"'),$(lane c IN_PROGRESS null)"
+rollup 7.4 "$H1" "$(lane a COMPLETED '"SUCCESS"'),$(lane b COMPLETED '"FAILURE"'),$(lane c COMPLETED '"SUCCESS"')"
+rollup 7.5 "$H1" "$GREEN"
+rollup 7.6 "$H1" "$GREEN"
+rollup 8 "$H2" "$RUNNING"
+rollup 8.6 "$H2" "$GREEN"
+call watch "${WARGS[@]}"
+is "7: a watch whose entries have all left waiting ends by itself, with exit 0" "$RC" 0
+is "7: it printed one line per change of outcome and one for stopping, and nothing else" "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" 6
+is "7: ...a PR's first reading, on the head it had" "$(printf '%s\n' "$OUT" | sed -n 1p)" "pr=7	head=$H1	outcome=waiting	ci=running"
+is "7: ...and one pinned to a head by the list" "$(printf '%s\n' "$OUT" | sed -n 2p)" "pr=8	head=$H2	outcome=waiting	ci=running"
+is "7: ...red once, though its running lanes changed while it was red" "$(lines 'pr=7.*outcome=red')" 1
+is "7: ...waiting once, though its running lanes changed while it waited" "$(lines 'pr=7.*outcome=waiting')" 1
+is "7: ...then ready" "$(printf '%s\n' "$OUT" | sed -n 4p)" "pr=7	head=$H1	outcome=ready	ci=green"
+is "7: the last line says why it stopped" "$(printf '%s\n' "$OUT" | tail -n 1)" "outcome=stopped	reason=idle	pending=	unread="
+is "7: each poll read each PR once" "$(polls 7) $(polls 8)" "6 6"
+is "7: ...two minutes apart unless told otherwise" "$(sleeps)" "120 120 120 120 120 "
+has "7: the state file holds every line it printed, with its time" "$(cat "$S")" "pr=7	head=$H1	outcome=red	ci=failing	at=20"
+has "7: ...the lanes of the PR's full green run, with the head it was on" "$(cat "$S")" "green=7	head=$H1	lane=Tests / a	lane=Tests / b"
+has "7: ...and how the watch ended" "$(cat "$S")" "reason=idle"
+has "7: ...and what it was started on" "$(cat "$S")" "watch=started"
+# A second watch on the same state file knows what the first one said.
+rollup 7 "$H1" "$GREEN"
+rollup 8 "$H2" "$GREEN"
+call watch "${WARGS[@]}"
+is "7: a watch resumed on its state file repeats no outcome the file holds" "$OUT" "outcome=stopped	reason=idle	pending=	unread="
+call state --state "$S"
+is "7: the state file read down starts with outcome=state" "$(val outcome)" state
+has "7: ...gives each PR's head and standing" "$OUT" "pr=7	head=$H1	outcome=ready	ci=green"
+is "7: ...once each, the latest" "$(lines '^pr=')" 2
+has "7: ...and the latest word on the watch itself" "$OUT" "watch=stopped"
+is "7: state needs no repository" "$RC" 0
+
+# The list is edited while the watch runs: 9 added on the second poll, 7
+# dropped on the third.
+wfresh
+printf '7\n' >"$L"
+facts 7
+facts 9 pr=9 head="$H2"
+rollup 7 "$H1" "$RUNNING"
+rollup 9 "$H2" "$GREEN"
+hook 7 2 'printf "7\n9\n" >"$L.new" && mv "$L.new" "$L"'
+hook 7 3 'printf "9\n" >"$L.new" && mv "$L.new" "$L"'
+call watch "${WARGS[@]}"
+is "7: a PR added to the list is picked up without a restart" "$(lines "pr=9	head=$H2	outcome=ready")" 1
+is "7: ...from the poll after the edit, not before" "$(polls 9)" 2
+is "7: a PR dropped from the list is polled no more" "$(polls 7)" 3
+is "7: ...and no longer keeps the watch going" "$(printf '%s\n' "$OUT" | tail -n 1)" "outcome=stopped	reason=idle	pending=	unread="
+has "7: ...which the state file records" "$(cat "$S")" "dropped=7	at="
+is "7: ...once" "$(grep -c '^dropped=7' "$S")" 1
+call state --state "$S"
+lacks "7: ...so the state read down no longer lists it" "$OUT" "pr=7"
+
+# The bound: entries still waiting when --max runs out.
+wfresh
+printf '7\n' >"$L"
+facts 7
+rollup 7 "$H1" "$RUNNING"
+call watch "${WARGS[@]}" --interval 60 --max 150
+is "7: a watch stops at its maximum duration with something still waiting" "$(printf '%s\n' "$OUT" | tail -n 1)" "outcome=stopped	reason=expired	pending=7	unread="
+is "7: ...as a stop, so the caller knows to re-arm" "$RC" 3
+is "7: ...having waited no longer than the bound, the last wait cut to fit" "$(sleeps)" "60 60 30 "
+is "7: ...and said nothing in between" "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" 2
+has "7: ...with how to go on, on stderr" "$ERR" "Start it again on the same list and state file"
+call watch "${WARGS[@]}" --max 0
+is "7: a maximum of nothing is one poll" "$(polls 7)" 5
+
+# moved and not-open end an entry: said once, then not polled until the list
+# names another head.
+wfresh
+printf '7 %s\n9\n8\n' "$H1" >"$L"
+facts 7 head="$H2"
+facts 9 pr=9 state=MERGED merged="$MC"
+facts 8 pr=8
+rollup 7 "$H2" "$GREEN"
+rollup 9 "$H1" "$GREEN"
+rollup 8 "$H1" "$RUNNING"
+hook 8 3 'printf "7 '"$H2"'\n9\n8\n" >"$L.new" && mv "$L.new" "$L"'
+call watch "${WARGS[@]}" --max 600
+is "7: a head someone else pushed over is reported as moved, with the head it moved to" "$(lines "pr=7	head=$H1	outcome=moved	now=$H2")" 1
+is "7: a merged PR is reported with its merge commit" "$(lines "pr=9	head=$H1	outcome=not-open	state=MERGED	merge-commit=$MC")" 1
+is "7: ...and is not polled again" "$(polls 9)" 1
+is "7: the moved PR is polled again only once the list names its new head" "$(polls 7)" 4
+is "7: ...and is then reported on that head" "$(lines "pr=7	head=$H2	outcome=ready")" 1
+is "7: (setup) the watch ran its six polls" "$(polls 8)" 6
+
+# After a full green run the watch holds a later head to that run's lanes, and
+# a listed head GitHub does not show yet is a push on its way.
+wfresh
+printf '8\n7 %s\n' "$H1" >"$L"
+facts 8 pr=8 head="$H2"
+rollup 8 "$H2" "$RUNNING"
+facts 7
+facts 7.h2 head="$H2"
+rollup 7 "$H1" "$GREEN"
+rollup 7.h2a "$H2" "$(lane a COMPLETED '"SUCCESS"')"
+rollup 7.h2ab "$H2" "$GREEN,$(lane c COMPLETED '"SUCCESS"')"
+hook 7 1 'printf "8\n7 '"$H2"'\n" >"$L.new" && mv "$L.new" "$L"'
+hook 7 3 'cp "$FAKE/facts.7.h2.json" "$FAKE/facts.7.json"; cp "$FAKE/rollup.7.h2a.json" "$FAKE/rollup.7.json"'
+hook 7 5 'cp "$FAKE/rollup.7.h2ab.json" "$FAKE/rollup.7.json"'
+call watch "${WARGS[@]}" --interval 10 --max 60
+is "7: a listed head the PR has not reached yet is a push on its way, not a move" "$(lines "pr=7	head=$H2	outcome=waiting	ci=unpushed")" 1
+is "7: ...and is not called moved" "$(lines 'outcome=moved')" 0
+is "7: the new head is ready once" "$(lines "pr=7	head=$H2	outcome=ready")" 1
+lacks "7: ...and not on a rollup that is green but lacks a lane of the full run" "$(cat "$S")" "green=7	head=$H2	lane=Tests / a
+"
+has "7: ...the green run on the new head replaces the kept one, with the lane it added" "$(cat "$S")" "green=7	head=$H2	lane=Tests / a	lane=Tests / b	lane=Tests / c"
+is "7: every line: two first readings, the push, the green run, the stop" "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" 5
+has "7: ...the push on its way recorded with the head the PR was still on" "$(cat "$S")" "pr=7	head=$H2	outcome=waiting	ci=unpushed	now=$H1	at="
+call state --state "$S"
+is "7: the state read down gives the head of the last full green run, for rebase --green" "$(printf '%s\n' "$OUT" | grep -c "^green=7	head=$H2")" 1
+
+# A push that takes more than one poll to show is a push on its way for as
+# long as the PR stays on the head it was last seen on, and no longer.
+H3=3333333333333333333333333333333333333333
+wfresh
+printf '7 %s\n' "$H2" >"$L"
+printf 'pr=7\thead=%s\toutcome=ready\tci=green\tat=2026-01-01T00:00:00Z\n' "$H1" >"$S"
+facts 7
+facts 7.h2 head="$H2"
+rollup 7 "$H1" "$GREEN"
+rollup 7.h2 "$H2" "$GREEN"
+hook 7 4 'cp "$FAKE/facts.7.h2.json" "$FAKE/facts.7.json"; cp "$FAKE/rollup.7.h2.json" "$FAKE/rollup.7.json"'
+call watch "${WARGS[@]}"
+is "7: a push GitHub does not show for three polls is said once, then the head it reached" "$(printf '%s\n' "$OUT" | tr '\n' '|')" "pr=7	head=$H2	outcome=waiting	ci=unpushed	now=$H1|pr=7	head=$H2	outcome=ready	ci=green|outcome=stopped	reason=idle	pending=	unread=|"
+is "7: ...the PR read on every poll until then" "$(polls 7)" 4
+wfresh
+printf '7 %s\n' "$H2" >"$L"
+printf 'pr=7\thead=%s\toutcome=ready\tci=green\tat=2026-01-01T00:00:00Z\n' "$H1" >"$S"
+facts 7
+facts 7.h3 head="$H3"
+rollup 7 "$H1" "$GREEN"
+rollup 7.h3 "$H3" "$GREEN"
+hook 7 3 'cp "$FAKE/facts.7.h3.json" "$FAKE/facts.7.json"; cp "$FAKE/rollup.7.h3.json" "$FAKE/rollup.7.json"'
+call watch "${WARGS[@]}"
+is "7: a PR that goes to some other head while a push is awaited has moved" "$(printf '%s\n' "$OUT" | sed -n 2p)" "pr=7	head=$H2	outcome=moved	now=$H3"
+is "7: ...which ends the entry" "$(polls 7)" 3
+# After `moved`, the head the PR was last seen on is the one it moved to.
+wfresh
+printf '7 %s\n' "$H2" >"$L"
+printf 'pr=7\thead=%s\toutcome=moved\tnow=%s\tat=2026-01-01T00:00:00Z\n' "$H1" "$H3" >"$S"
+facts 7 head="$H3"
+rollup 7 "$H3" "$GREEN"
+call watch "${WARGS[@]}" --max 0
+is "7: a new head listed for a moved PR that GitHub still shows where it moved to is a push on its way" "$(printf '%s\n' "$OUT" | sed -n 1p)" "pr=7	head=$H2	outcome=waiting	ci=unpushed	now=$H3"
+
+# A lane of the full green run whose workflow does not run on a re-pushed head
+# (one that runs when the PR opens only) must not hold that head for ever.
+wfresh
+printf '7 %s\n8\n' "$H1" >"$L"
+facts 7
+facts 7.h2 head="$H2"
+facts 8 pr=8
+rollup 8 "$H1" "$RUNNING"
+rollup 8.4 "$H1" "$GREEN"
+printf '{"workflows":[{"id":1,"name":"Tests"},{"id":2,"name":"Review"}]}\n' >"$FAKE/workflows.json"
+REVIEW="$(lane bot COMPLETED '"SUCCESS"' | sed 's/"name":"Tests"/"name":"Review"/')"
+rollup 7 "$H1" "$GREEN,$REVIEW"
+rollup 7.h2run "$H2" "$(lane a COMPLETED '"SUCCESS"'),$(lane b IN_PROGRESS null)"
+rollup 7.h2done "$H2" "$GREEN"
+runs 1=in_progress
+hook 8 1 'printf "7 '"$H2"'\n8\n" >"$L.new" && mv "$L.new" "$L"; cp "$FAKE/facts.7.h2.json" "$FAKE/facts.7.json"; cp "$FAKE/rollup.7.h2run.json" "$FAKE/rollup.7.json"'
+hook 7 4 'cp "$FAKE/rollup.7.h2done.json" "$FAKE/rollup.7.json"; printf "{\"total_count\":1,\"workflow_runs\":[{\"workflow_id\":1,\"status\":\"completed\"}]}" >"$FAKE/runs.json"'
+call watch "${WARGS[@]}"
+is "7: (setup) the full green run kept the lane of the workflow that runs once" "$(grep -c "^green=7	head=$H1	lane=Review / bot	lane=Tests / a	lane=Tests / b\$" "$S")" 1
+is "7: a re-pushed head is waiting while its lanes run" "$(lines "pr=7	head=$H2	outcome=waiting	ci=running")" 1
+is "7: ...and once they are green is not left waiting for a workflow that never ran on it" "$(lines "pr=7	head=$H2	outcome=unscheduled	ci=green")" 1
+is "7: ...and the watch ends, nothing being waited for" "$(printf '%s\n' "$OUT" | tail -n 1)" "outcome=stopped	reason=idle	pending=	unread="
+is "7: ...the head that lacks a lane is not kept as a full green run" "$(grep -c "^green=7	head=$H2" "$S")" 0
+is "7: every line: two first readings, the new head waiting, unscheduled, the other PR green, the stop" "$(printf '%s\n' "$OUT" | wc -l | tr -d ' ')" 6
+
+# A poll that cannot be read says nothing, waits longer each time, and gives up.
+wfresh
+printf '7\n' >"$L"
+facts 7
+rollup 7 "$H1" "$RUNNING"
+touch "$FAKE/fail-rollup"
+call watch "${WARGS[@]}"
+is "7: five unreadable polls running stop the watch" "$OUT" "outcome=stopped	reason=unreadable	pending=	unread=7"
+is "7: ...as a stop" "$RC" 3
+is "7: ...the wait doubling between them" "$(sleeps)" "120 240 480 960 "
+wfresh
+printf '7\n' >"$L"
+facts 7
+rollup 7 "$H1" "$RUNNING"
+rollup 7.4 "$H1" "$GREEN"
+hook 7 2 'touch "$FAKE/fail-rollup"'
+hook 7 4 'rm -f "$FAKE/fail-rollup"'
+call watch "${WARGS[@]}"
+is "7: an unreadable poll leaves the outcome standing and the watch running" "$(printf '%s\n' "$OUT" | tr '\n' '|')" "pr=7	head=$H1	outcome=waiting	ci=running|pr=7	head=$H1	outcome=ready	ci=green|outcome=stopped	reason=idle	pending=	unread=|"
+is "7: ...backing off while it lasts" "$(sleeps)" "120 120 240 "
+# The rate limit spent: wait for its reset, not for the next interval.
+wfresh
+printf '7\n' >"$L"
+facts 7
+rollup 7 "$H1" "$RUNNING"
+rollup 7.3 "$H1" "$GREEN"
+printf '{"resources":{"graphql":{"remaining":0,"reset":%s}}}\n' "$(($(date +%s) + 1000))" >"$FAKE/ratelimit.json"
+hook 7 1 'touch "$FAKE/fail-rollup"'
+hook 7 2 'rm -f "$FAKE/fail-rollup"'
+call watch "${WARGS[@]}"
+is "7: a rate-limit answer does not fail the watch" "$RC" 0
+FIRST="$(head -n 1 "$FAKE/sleep.log")"
+[ "$FIRST" -ge 1000 ] && [ "$FIRST" -le 1010 ]
+ok "7: ...it sleeps until the limit resets (slept $FIRST)" $?
+is "7: ...then polls at its interval again" "$(sed -n 2p "$FAKE/sleep.log")" 120
+# Every read the watch makes is cut where `timeout` is there to cut it.
+CUT="$WORKDIR/cutbin"
+mkdir -p "$CUT"
+printf '#!/bin/sh\nprintf "%%s\\n" "$*" >>"$FAKE/timeout.log"\nshift\nexec "$@"\n' >"$CUT/timeout"
+chmod +x "$CUT/timeout"
+wfresh
+rm -f "$FAKE/timeout.log"
+printf '7\n' >"$L"
+facts 7
+rollup 7 "$H1" "$RUNNING"
+rollup 7.3 "$H1" "$GREEN"
+printf '{"resources":{"graphql":{"remaining":5000,"reset":0}}}\n' >"$FAKE/ratelimit.json"
+hook 7 1 'touch "$FAKE/fail-rollup"'
+hook 7 2 'rm -f "$FAKE/fail-rollup"'
+PATH="$CUT:$PATH" call watch "${WARGS[@]}"
+is "7: (setup) the watch ran through the failed poll" "$RC" 0
+has "7: the rate-limit read is cut like an entry's, so a stalled one cannot hold the watch past its bound" "$(cat "$FAKE/timeout.log")" "300 gh api rate_limit"
+has "7: ...as an entry's read is" "$(cat "$FAKE/timeout.log")" "300 bash "
+wfresh
+printf '7\n' >"$L"
+facts 7
+rollup 7 "$H1" "$RUNNING"
+printf '{"resources":{"graphql":{"remaining":0,"reset":%s}}}\n' "$(($(date +%s) + 1000))" >"$FAKE/ratelimit.json"
+touch "$FAKE/fail-rollup"
+call watch "${WARGS[@]}" --max 300
+# A first poll that took a second leaves 299 to wait and then 1: the sum is the bound.
+SLEPT="$(awk '{ n += $1 } END { print n + 0 }' "$FAKE/sleep.log")"
+is "7: a reset beyond the bound does not carry the watch past it" "$SLEPT" 300
+has "7: ...it expires" "$OUT" "reason=expired"
+
+# A commit's own lanes: the default branch's run on the final tip.
+wfresh
+printf 'commit %s\n' "$MC" >"$L"
+crollup() { # <file suffix> <nodes>
+	printf '{"data":{"repository":{"object":{"oid":"%s","statusCheckRollup":{"contexts":{"pageInfo":{"hasNextPage":false,"endCursor":""},"nodes":[%s]}}}}}}\n' "$MC" "$2" >"$FAKE/crollup$1.json"
+}
+crollup "" "$RUNNING"
+crollup .3 "$GREEN"
+call watch "${WARGS[@]}"
+is "7: a commit is watched to the end of its run" "$(printf '%s\n' "$OUT" | tr '\n' '|')" "commit=$MC	outcome=waiting	ci=running|commit=$MC	outcome=green	ci=green|outcome=stopped	reason=idle	pending=	unread=|"
+has "7: ...read by its id" "$(cat "$FAKE/gh.log")" "oid=$MC"
+wfresh
+printf 'commit %s\n' "$MC" >"$L"
+crollup "" "$(lane a COMPLETED '"CANCELLED"'),$RUNNING"
+call watch "${WARGS[@]}"
+is "7: a commit with a lane that did not pass is red, and the watch has nothing left to wait for" "$(printf '%s\n' "$OUT" | tr '\n' '|')" "commit=$MC	outcome=red	ci=failing|outcome=stopped	reason=idle	pending=	unread=|"
+wfresh
+printf 'commit %s\n' "$MC" >"$L"
+crollup "" ""
+call watch "${WARGS[@]}" --max 240
+is "7: a commit with no run yet is waiting, never green" "$(printf '%s\n' "$OUT" | sed -n 1p)" "commit=$MC	outcome=waiting	ci=none"
+# No run is coming: workflows that run on pull requests only.
+wfresh
+printf 'commit %s\n' "$MC" >"$L"
+crollup "" ""
+call watch "${WARGS[@]}"
+is "7: a commit that gets no workflow run is answered no-run, and the watch ends" "$(printf '%s\n' "$OUT" | tr '\n' '|')" "commit=$MC	outcome=waiting	ci=none|commit=$MC	outcome=no-run	ci=none|outcome=stopped	reason=idle	pending=	unread=|"
+is "7: ...with exit 0" "$RC" 0
+# Five waits, or six where the first read fell a second into the watch.
+SLEPT="$(awk '{ n += $1 } END { print n + 0 }' "$FAKE/sleep.log")"
+[ "$SLEPT" -ge 600 ] && [ "$SLEPT" -le 720 ]
+ok "7: ...ten minutes after it was first read, not sooner (waited $SLEPT)" $?
+has "7: ...having asked for the commit's workflow runs" "$(cat "$FAKE/gh.log")" "repos/acme/widgets/actions/runs?head_sha=$MC"
+# A watch started again on that state file: the answer stands.
+: >"$FAKE/gh.log"
+rm -f "$FAKE/sleep.log"
+call watch "${WARGS[@]}"
+is "7: a watch started again on a commit already answered no-run says nothing new and waits for nothing" "$OUT|$(cat "$FAKE/sleep.log" 2>/dev/null)" "outcome=stopped	reason=idle	pending=	unread=|"
+lacks "7: ...and does not ask for its runs again" "$(cat "$FAKE/gh.log")" "actions/runs"
+# Runs that completed and left no lane: a default branch's tip collects the
+# skipped runs of events that build nothing.
+wfresh
+printf 'commit %s\n' "$MC" >"$L"
+crollup "" ""
+runs 4=completed 4=completed
+call watch "${WARGS[@]}"
+is "7: a commit whose only workflow runs completed without a lane is answered no-run" "$(printf '%s\n' "$OUT" | tr '\n' '|')" "commit=$MC	outcome=waiting	ci=none|commit=$MC	outcome=no-run	ci=none|outcome=stopped	reason=idle	pending=	unread=|"
+wfresh
+printf 'commit %s\n' "$MC" >"$L"
+crollup "" ""
+runs 1=queued
+call watch "${WARGS[@]}" --max 1200
+is "7: a commit with a workflow run queued and no lane yet stays waiting" "$(printf '%s\n' "$OUT" | tr '\n' '|')" "commit=$MC	outcome=waiting	ci=none|outcome=stopped	reason=expired	pending=$MC	unread=|"
+wfresh
+printf 'commit %s\n' "$MC" >"$L"
+crollup "" ""
+call watch "${WARGS[@]}"
+crollup "" "$GREEN"
+call watch "${WARGS[@]}"
+is "7: a run that shows up after no-run was said is reported by the next watch" "$(printf '%s\n' "$OUT" | sed -n 1p)" "commit=$MC	outcome=green	ci=green"
+
+# Lines the watch cannot read, and a list that goes away.
+wfresh
+printf 'seven\n7 abc\n7\n7\ncommit abc\n' >"$L"
+facts 7
+rollup 7 "$H1" "$RUNNING"
+call watch "${WARGS[@]}" --max 240
+is "7: an entry it cannot read is said once, however many polls meet it" "$(lines 'entry=seven	outcome=bad-entry')" 1
+is "7: ...a head that is no commit id" "$(lines 'entry=7 abc	outcome=bad-entry')" 1
+is "7: ...a PR listed twice" "$(lines 'entry=7	outcome=bad-entry')" 1
+is "7: ...a commit that is no commit id" "$(lines 'entry=commit abc	outcome=bad-entry')" 1
+is "7: ...and the PR is polled once a poll all the same" "$(polls 7)" 3
+wfresh
+printf '7\n' >"$L"
+facts 7
+rollup 7 "$H1" "$RUNNING"
+hook 7 2 'rm -f "$L"'
+call watch "${WARGS[@]}"
+is "7: a list that is gone stops the watch" "$(printf '%s\n' "$OUT" | tail -n 1)" "outcome=stopped	reason=no-list	pending=7	unread="
+is "7: ...as a stop" "$RC" 3
+rm -f "$L" "$S"
+call watch "${WARGS[@]}"
+is "7: a list that was never there is a failure" "$RC" 1
+call watch --repo acme/widgets --state "$S"
+is "7: watch needs a list" "$RC" 64
+call watch --repo acme/widgets --list "$L"
+is "7: ...and a state file" "$RC" 64
+call watch "${WARGS[@]}" --interval soon
+is "7: ...and an interval in seconds" "$RC" 64
+call watch "${WARGS[@]}" --pr 7
+is "7: ...and takes no PR of its own" "$RC" 64
+PATH="$REALPATH"
+
+# merge --state, note, and the state read down.
+wfresh
+facts 7
+facts 7.merged state=MERGED merged="$MC"
+touch "$FAKE/merge-lands"
+call merge "${MARGS[@]}" --state "$S" --basis "clean rebase of a green run	nothing overlapping"
+is "7: a merge with a state file still merges" "$(val outcome)" merged
+is "7: ...and is written there with its head, merge commit and basis" "$(grep -c "^merged=7	head=$H1	merge-commit=$MC	at=20.*	basis=clean rebase of a green run nothing overlapping\$" "$S")" 1
+wfresh
+facts 7 threads=false
+call merge "${MARGS[@]}" --state "$S" --basis "fresh run"
+is "7: a merge that stopped writes no merge" "$(grep -c '^merged=' "$S")" 0
+call merge "${MARGS[@]}" --state "$S"
+is "7: a state file without a basis is a usage error" "$RC" 64
+nomerge "7: ...before anything is merged"
+call merge "${MARGS[@]}" --basis "fresh run"
+is "7: and so is a basis without a state file" "$RC" 64
+wfresh
+facts 7
+facts 7.merged state=MERGED merged="$MC"
+touch "$FAKE/merge-lands"
+call merge "${MARGS[@]}" --state "$WORKDIR/no-such-dir/state" --basis "fresh run"
+is "7: a state file that cannot be written is found before the merge" "$RC" 1
+nomerge "7: ...which is then not asked for"
+wfresh
+call note --state "$S" --pr 8 cancelled run 123 after the re-push
+is "7: a note is recorded" "$(val outcome)" noted
+has "7: ...against its PR" "$(cat "$S")" "note=8	at="
+has "7: ...in the caller's words" "$(cat "$S")" "text=cancelled run 123 after the re-push"
+call note --state "$S" "main's run covers the whole train"
+has "7: a note about no PR is kept too" "$(cat "$S")" "note=-	at="
+call note --state "$S"
+is "7: a note with no words is a usage error" "$RC" 64
+printf 'merged=7\thead=%s\tmerge-commit=%s\tat=2026-01-01T00:00:00Z\tbasis=fresh run\n' "$H1" "$MC" >>"$S"
+call state --state "$S"
+has "7: the state read down keeps every merge with its basis" "$OUT" "merged=7	head=$H1	merge-commit=$MC	at=2026-01-01T00:00:00Z	basis=fresh run"
+is "7: ...and every note" "$(lines '^note=')" 2
+call state --state "$WORKDIR/none"
+is "7: a state file that is not there is a failure" "$RC" 1
 
 if [ "$fails" -gt 0 ]; then
 	printf 'merge-train helper test: %d/%d checks FAILED.\n' "$fails" "$checks" >&2
