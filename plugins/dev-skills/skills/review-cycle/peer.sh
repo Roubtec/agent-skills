@@ -52,8 +52,9 @@
 #            attempt of 540 (`budget=long`), which is what muse gets at any
 #            size. --budget short|long forces either. Under --evidence-base
 #            the diff is in the prompt and counted there. With neither flag
-#            only the prompt is measured, and a --base that names no commit
-#            adds nothing and prints no `diff_bytes=`. Where 150000 comes
+#            only the prompt is measured, and a --base that names no commit,
+#            or one sharing no history with HEAD, adds nothing and prints no
+#            `diff_bytes=`. Where 150000 comes
 #            from: of the last 60 pull requests merged here by November 2026,
 #            the largest quarter had diffs above about 160000 bytes. No
 #            timeout was there to calibrate on: the 29 codex reviews
@@ -367,7 +368,8 @@ peer_abort_unhanded() { # <child pid>
 choose_budget() { # sets BUDGET, R_BUDGET, R_BYTES and, under --base, R_DIFF
 	local base_oid
 	R_BYTES="$({ wc -c <"$ADIR/peer-review.prompt" | tr -d ' '; } 2>/dev/null)"
-	if [ -n "$BASE" ] && base_oid="$(git -C "$WORKTREE" rev-parse --verify --quiet "$BASE^{commit}" 2>/dev/null)"; then
+	if [ -n "$BASE" ] && base_oid="$(git -C "$WORKTREE" rev-parse --verify --quiet "$BASE^{commit}" 2>/dev/null)" &&
+		git -C "$WORKTREE" merge-base "$base_oid" HEAD >/dev/null 2>&1; then
 		R_DIFF="$({ git -C "$WORKTREE" diff "$base_oid...HEAD" | wc -c | tr -d ' '; } 2>/dev/null)"
 	fi
 	case "$BUDGET_ARG" in

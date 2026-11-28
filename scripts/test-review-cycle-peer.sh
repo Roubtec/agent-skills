@@ -1157,6 +1157,10 @@ fresh
 OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --base no-such-ref)"
 is "9: a base that names no commit costs the launch nothing and claims no diff size" "$(first)|$(val budget)|$(val diff_bytes)" "outcome=passed|short|"
 fresh
+ORPHAN="$(git -C "$BIGREPO" commit-tree -m unrelated "$(git -C "$BIGREPO" rev-parse 'start^{tree}')")"
+OUT="$(peer run --provider codex --worktree "$BIGREPO" --artifact-dir "$A" --facts "$FACTS" --base "$ORPHAN")"
+is "9: nor does a base that shares no history with HEAD, which is not a measured zero" "$(first)|$(val budget)|$(val diff_bytes)" "outcome=passed|short|"
+fresh
 usage_case "a base beside an evidence base" run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --evidence-base "$BASE_OID" --base "$BASE_OID"
 BIN="$NOHELPER"
 fresh

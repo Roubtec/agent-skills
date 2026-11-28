@@ -95,7 +95,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 250;
+const CHECKS_PER_LEG = 252;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -1951,18 +1951,24 @@ for (const name of WORKFLOWS) {
     // A finished review comes back as that review, with the notes the script
     // reported; a launch never made is recorded as that, and neither is
     // written up as unknown.
+    let recordPrompt = "";
+    let recordSchema = null;
     const recordRun = async (answer) => {
       let reads = 0;
+      let handed = false;
       const recordAgent = async (prompt, opts) => {
         const label = (opts && opts.label) || "";
+        if (label === "fix#2") handed = prompt.includes("recovered finding");
         if (label === "peer-record:codex#1") {
+          recordPrompt = prompt;
+          recordSchema = opts.schema;
           reads += /Run `review-cycle-peer record --artifact-root '\/tmp\/art\/round-1\/peer-codex'` once\./.test(prompt) ? 1 : 100;
           return answer;
         }
         return deadStageAgent(prompt, opts);
       };
       const result = await loadCycle(src, museAbsent(recordAgent), () => {}).runReviewCycle({ ...CYCLE, peer: "on" });
-      return { entry: result.peerRounds[0], verdict: result.verdict, reads };
+      return { entry: result.peerRounds[0], verdict: result.verdict, reads, handed };
     };
     const recovered = await recordRun({ outcome: "passed", findings: [], notes: "", detail: "", reason: "provider exited 0 with an explicit pass verdict", teardownFailure: false, basis: "stated", budget: "budget=long prompt_bytes=4521 diff_bytes=160946" });
     const neverLaunched = await recordRun({ outcome: "not-launched", findings: [], notes: "", detail: "", reason: "", teardownFailure: false });
@@ -1976,6 +1982,43 @@ for (const name of WORKFLOWS) {
         !("budget" in neverLaunched.entry) && normalizePeer({ outcome: "timeout", findings: [], reason: "", budget: 5 }).budget === "" &&
         normalizePeer({ outcome: "passed", findings: [], reason: "", recordOutcome: "not-launched" }).recordOutcome === "",
       JSON.stringify({ recovered, neverLaunched }),
+    );
+    // The one recovery that changes a round decision, and the three answers
+    // that are not a review: a recovered `issues` gates like any other, an
+    // unreadable record leaves the outcome unknown rather than naming an
+    // answer, and a launch nobody collected says how to settle it.
+    const recoveredIssues = await recordRun({ outcome: "issues", findings: [{ severity: "minor", location: "a.txt:2", claim: "recovered finding" }], notes: "", detail: "", reason: "", teardownFailure: false, fallbackReason: "peer-review-run absent from PATH" });
+    const unreadable = await recordRun({ outcome: "unreadable", findings: [], notes: "", detail: "review-cycle-peer: not found", reason: "", teardownFailure: false });
+    const uncollected = await recordRun({ outcome: "pending", findings: [], notes: "", detail: "/tmp/art/round-1/peer-codex/peer-run.abc123", reason: "", teardownFailure: false });
+    check(
+      "a recovered issues review gates the round, an unreadable record leaves the outcome unknown, and an uncollected launch names the collect that settles it",
+      recoveredIssues.reads === 1 && recoveredIssues.verdict !== "pass" && recoveredIssues.entry.outcome === "issues" && recoveredIssues.entry.fallbackReason === "peer-review-run absent from PATH" &&
+        recoveredIssues.handed === true && recovered.handed === false &&
+        unreadable.reads === 1 && unreadable.verdict === "pass" && unreadable.entry.outcome === "forfeited" && !("recordOutcome" in unreadable.entry) &&
+        /outcome unknown until the round's record is read: `review-cycle-peer record/.test(unreadable.entry.detail) &&
+        uncollected.entry.outcome === "forfeited" && uncollected.entry.recordOutcome === "pending" &&
+        uncollected.entry.detail.includes("a detached provider may still be running, and `review-cycle-peer collect --artifact-dir '/tmp/art/round-1/peer-codex/peer-run.abc123'` settles it") &&
+        !/may still be running/.test(neverLaunched.entry.detail),
+      JSON.stringify({ recoveredIssues, unreadable, uncollected }),
+    );
+    // Both prompts render one mapping text, so the fields a recovered review
+    // carries cannot drift from the ones a reported review carries; and the
+    // record read answers in a schema whose outcome names the record answers.
+    const mapNotes = (src.match(/\nconst CYCLE_PEER_MAP_NOTES = `([^\n]*)`;\n/) || [])[1] || "";
+    const mapReview = (src.match(/\nconst CYCLE_PEER_MAP_REVIEW = `([^\n]*)`;\n/) || [])[1] || "";
+    const rendered = (text) => text.replace(/\\`/g, "`");
+    const recordOutcomes = (recordSchema && recordSchema.properties.outcome.enum) || [];
+    check(
+      "the record read maps a block by the peer stage's own text, names no order among blocks, and answers in a schema that names the record answers",
+      mapNotes.length > 400 && mapReview.length > 400 &&
+        (src.match(/\$\{CYCLE_PEER_MAP_NOTES\}/g) || []).length === 2 && (src.match(/\$\{CYCLE_PEER_MAP_REVIEW\}/g) || []).length === 2 &&
+        recordPrompt.includes(rendered(mapNotes)) && recordPrompt.includes(rendered(mapReview)) &&
+        /to `effort=<effort>` alone where it has no `model` line/.test(recordPrompt) && /at most three `- path:line — note` lines whose note is at most 15 words/.test(recordPrompt) &&
+        /Set `fallbackReason` to its `fallback_reason` value exactly/.test(recordPrompt) &&
+        /with several, read one whose `outcome` is `passed` or `issues` where there is one, and otherwise any of them/.test(recordPrompt) && !/use the last/.test(recordPrompt) &&
+        ["passed", "issues", "unavailable", "timeout", "forfeited", "failed", "not-launched", "started", "launched", "pending", "unreadable"].every((o) => recordOutcomes.includes(o)) && recordOutcomes.length === 11 &&
+        /not-launched/.test(recordSchema.properties.outcome.description) && recordSchema.required.includes("teardownFailure"),
+      JSON.stringify({ notes: mapNotes.length, review: mapReview.length, recordOutcomes }),
     );
 
     let preflightAttempts = 0;
