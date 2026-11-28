@@ -109,21 +109,12 @@
 # show here. Where the lock went or changed hands while it was read, only
 # `lock=` is printed and the control is to be run again.
 #
-# Signals, as measured and no further. An INT, TERM or HUP sent to this
-# script once the command was running was answered `interrupted` every time.
-# One sent earlier, during the checks and before the file is changed, mostly
-# was too. Of those sent in a run's first 20 ms under bash 5.2.37, about one
-# in a hundred was passed over, the control going on as if none had come; a
-# few in a thousand ended the run with status 1, bash's own complaint on
-# stderr and no `outcome=` line; and about one INT in three thousand left
-# the script spinning, deaf to INT and TERM, until it was killed. Under bash
-# 3.2.57 only an INT was passed over. In none of those runs had the file been
-# changed, and none left a lock; a spinning run that is killed may leave a
-# `perturb.XXXXXX` directory that nothing reads. A signal sent before the
-# script has been read is ignored.
-#
-# A run that prints no `outcome=` line, a usage error apart, is no result:
-# see that `git status` shows the file unchanged, and run the control again.
+# An INT, TERM or HUP sent to this script while it makes its checks, before
+# the change is written, is ignored: the control goes on, and the signal can
+# be sent again. The checks take tens of milliseconds for a small file and
+# seconds per megabyte of a large one. From the write on, a signal stops the
+# command and is answered `interrupted`, as it was in every trial measured
+# under bash 3.2.57 and 5.2.37.
 #
 # This script cannot catch SIGKILL or a lost machine: the file then stays
 # changed and the lock stands, or, killed as it began or ended, a
@@ -324,184 +315,175 @@ on_signal() {
 	note "stopped by SIG$1."
 	answer interrupted 1 "signal=$1"
 }
-# The run is one function for what that was measured to buy under bash
-# 5.2.37, over 21,600 runs each way signalled in their first 20 ms: as a
-# function, 48 ended with no `outcome=` line and none answered wrongly; as
-# top-level commands, 5 ended so and 17 refused a good file as outside,
-# not-a-file or locked.
-main() {
-	DIR="" OLD="" NEW="" TIMEOUT="" HAVE_OLD=0 HAVE_NEW=0
-	while [ $# -gt 0 ]; do
+trap cleanup EXIT
+
+DIR="" OLD="" NEW="" TIMEOUT="" HAVE_OLD=0 HAVE_NEW=0
+while [ $# -gt 0 ]; do
+	case "$1" in
+	-h | --help | help)
+		awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$SELF"
+		exit 0
+		;;
+	-C | --file | --old | --new | --timeout)
+		[ $# -ge 2 ] || usage "$1 needs a value"
 		case "$1" in
-		-h | --help | help)
-			awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$SELF"
-			exit 0
-			;;
-		-C | --file | --old | --new | --timeout)
-			[ $# -ge 2 ] || usage "$1 needs a value"
-			case "$1" in
-			-C) DIR="$2" ;;
-			--file) FILE="$2" ;;
-			--old) OLD="$2" HAVE_OLD=1 ;;
-			--new) NEW="$2" HAVE_NEW=1 ;;
-			--timeout) TIMEOUT="$2" ;;
-			esac
-			shift 2
-			;;
-		--)
-			shift
-			break
-			;;
-		*) usage "unknown argument: $1 (the command follows --)" ;;
+		-C) DIR="$2" ;;
+		--file) FILE="$2" ;;
+		--old) OLD="$2" HAVE_OLD=1 ;;
+		--new) NEW="$2" HAVE_NEW=1 ;;
+		--timeout) TIMEOUT="$2" ;;
 		esac
+		shift 2
+		;;
+	--)
+		shift
+		break
+		;;
+	*) usage "unknown argument: $1 (the command follows --)" ;;
+	esac
+done
+[ -n "$FILE" ] || usage "name the file to change: --file <path>"
+[ "$HAVE_OLD" = 1 ] && [ -n "$OLD" ] || usage "name the string to replace: --old <string>"
+[ "$HAVE_NEW" = 1 ] || usage "name its replacement: --new <string> (which may be empty)"
+[ "$OLD" != "$NEW" ] || usage "--old and --new are the same string, which changes nothing"
+[ $# -gt 0 ] || usage "name the command expected to fail, after --"
+case "$TIMEOUT" in
+"") ;;
+*[!0-9]* | 0*) usage "--timeout takes a whole number of seconds, 1 or more" ;;
+esac
+if [ -n "$DIR" ]; then
+	cd -- "$DIR" 2>/dev/null || refuse failed "could not enter $DIR."
+fi
+command -v -- "$1" >/dev/null 2>&1 || usage "'$1' is not a command this shell can run from here, so its failure would say nothing about the change"
+
+ROOT="$(pwd -P)" || refuse failed "could not tell where this control runs."
+git rev-parse --git-dir >/dev/null 2>&1 || refuse not-a-repository "$ROOT is not inside a git repository, so nothing says the file is committed."
+case "$FILE" in
+/*) TARGET="$FILE" ;;
+*) TARGET="$ROOT/$FILE" ;;
+esac
+TARGET_BASE="$(basename -- "$TARGET")"
+TARGET_DIR="$(cd -P -- "$(dirname -- "$TARGET")" 2>/dev/null && pwd -P)" || refuse missing "$FILE is not there."
+TARGET="$TARGET_DIR/$TARGET_BASE"
+[ "$ROOT" != / ] || ROOT=""
+case "$TARGET_DIR/" in
+"$ROOT"/*) ;;
+*) refuse outside "$FILE is not inside ${ROOT:-/}, the directory this control was pointed at." ;;
+esac
+[ -e "$TARGET" ] || [ -L "$TARGET" ] || refuse missing "$FILE is not there."
+[ -f "$TARGET" ] && [ ! -L "$TARGET" ] || refuse not-a-file "$FILE is not a regular file."
+git -C "$TARGET_DIR" ls-files --error-unmatch -- "$TARGET_BASE" >/dev/null 2>&1 || refuse untracked "$FILE is not a file git tracks, so all of it is uncommitted."
+
+# Taken before the file is compared with its commit, so that a second control
+# never reads a file the first is about to change, and under the git directory,
+# where neither `git status` nor a commit sees it.
+GITDIR="$(cd -- "$TARGET_DIR" && cd -P -- "$(git rev-parse --git-dir)" 2>/dev/null && pwd -P)" || refuse failed "could not find the git directory of $FILE."
+LOCK="$GITDIR/perturb.lock"
+if ! TMP="$(mktemp -d "$GITDIR/perturb.XXXXXX" 2>/dev/null)" || ! { printf '%s\n' "$TARGET" >"$TMP/target" && printf '%s\n' "$$" >"$TMP/pid"; } 2>/dev/null; then
+	refuse failed "could not make a directory for this control in $GITDIR."
+fi
+NAME="${TMP##*/}"
+{ ln -sn "$NAME" "$LOCK" && [ "$(readlink "$LOCK")" = "$NAME" ]; } 2>/dev/null || locked
+HELD=1
+[ -z "$(file_status)" ] || refuse uncommitted "$FILE differs from its commit. \`git diff\` shows the difference, and a control runs on committed work only: where it is work you mean to keep, commit it first; where it is what a control that was stopped left behind, undo it and do not commit it."
+BACKUP="$TMP/original"
+if ! cp -p "$TARGET" "$BACKUP.new" 2>/dev/null || ! cmp -s "$TARGET" "$BACKUP.new" || ! mv "$BACKUP.new" "$BACKUP" 2>/dev/null; then
+	refuse unreadable "$FILE could not be copied."
+fi
+
+# Byte semantics, in a subshell so the command inherits the caller's locale:
+# a multibyte locale would count in characters and stumble on a byte sequence
+# that is not one. Prints the match count; writes $TMP/changed on exactly one.
+COUNT="$(
+	LC_ALL=C
+	content="$(
+		cat "$BACKUP"
+		printf x
+	)"
+	content=${content%x}
+	printf '%s' "$content" | cmp -s - "$BACKUP" || {
+		echo unreadable
+		exit 0
+	}
+	rest=$content
+	n=0
+	while :; do
+		head=${rest%%"$OLD"*}
+		[ "${#head}" -ne "${#rest}" ] || break
+		n=$((n + 1))
+		[ "$n" -lt 2 ] || break
+		first=$head
+		rest=${rest:$((${#head} + ${#OLD}))}
 	done
-	[ -n "$FILE" ] || usage "name the file to change: --file <path>"
-	[ "$HAVE_OLD" = 1 ] && [ -n "$OLD" ] || usage "name the string to replace: --old <string>"
-	[ "$HAVE_NEW" = 1 ] || usage "name its replacement: --new <string> (which may be empty)"
-	[ "$OLD" != "$NEW" ] || usage "--old and --new are the same string, which changes nothing"
-	[ $# -gt 0 ] || usage "name the command expected to fail, after --"
-	case "$TIMEOUT" in
-	"") ;;
-	*[!0-9]* | 0*) usage "--timeout takes a whole number of seconds, 1 or more" ;;
-	esac
-	if [ -n "$DIR" ]; then
-		cd -- "$DIR" 2>/dev/null || refuse failed "could not enter $DIR."
-	fi
-	command -v -- "$1" >/dev/null 2>&1 || usage "'$1' is not a command this shell can run from here, so its failure would say nothing about the change"
-
-	ROOT="$(pwd -P)" || refuse failed "could not tell where this control runs."
-	git rev-parse --git-dir >/dev/null 2>&1 || refuse not-a-repository "$ROOT is not inside a git repository, so nothing says the file is committed."
-	case "$FILE" in
-	/*) TARGET="$FILE" ;;
-	*) TARGET="$ROOT/$FILE" ;;
-	esac
-	TARGET_BASE="$(basename -- "$TARGET")"
-	TARGET_DIR="$(cd -P -- "$(dirname -- "$TARGET")" 2>/dev/null && pwd -P)" || refuse missing "$FILE is not there."
-	TARGET="$TARGET_DIR/$TARGET_BASE"
-	[ "$ROOT" != / ] || ROOT=""
-	case "$TARGET_DIR/" in
-	"$ROOT"/*) ;;
-	*) refuse outside "$FILE is not inside ${ROOT:-/}, the directory this control was pointed at." ;;
-	esac
-	[ -e "$TARGET" ] || [ -L "$TARGET" ] || refuse missing "$FILE is not there."
-	[ -f "$TARGET" ] && [ ! -L "$TARGET" ] || refuse not-a-file "$FILE is not a regular file."
-	git -C "$TARGET_DIR" ls-files --error-unmatch -- "$TARGET_BASE" >/dev/null 2>&1 || refuse untracked "$FILE is not a file git tracks, so all of it is uncommitted."
-
-	# Taken before the file is compared with its commit, so that a second control
-	# never reads a file the first is about to change, and under the git directory,
-	# where neither `git status` nor a commit sees it.
-	GITDIR="$(cd -- "$TARGET_DIR" && cd -P -- "$(git rev-parse --git-dir)" 2>/dev/null && pwd -P)" || refuse failed "could not find the git directory of $FILE."
-	LOCK="$GITDIR/perturb.lock"
-	if ! TMP="$(mktemp -d "$GITDIR/perturb.XXXXXX" 2>/dev/null)" || ! { printf '%s\n' "$TARGET" >"$TMP/target" && printf '%s\n' "$$" >"$TMP/pid"; } 2>/dev/null; then
-		refuse failed "could not make a directory for this control in $GITDIR."
-	fi
-	NAME="${TMP##*/}"
-	{ ln -sn "$NAME" "$LOCK" && [ "$(readlink "$LOCK")" = "$NAME" ]; } 2>/dev/null || locked
-	HELD=1
-	[ -z "$(file_status)" ] || refuse uncommitted "$FILE differs from its commit. \`git diff\` shows the difference, and a control runs on committed work only: where it is work you mean to keep, commit it first; where it is what a control that was stopped left behind, undo it and do not commit it."
-	BACKUP="$TMP/original"
-	if ! cp -p "$TARGET" "$BACKUP.new" 2>/dev/null || ! cmp -s "$TARGET" "$BACKUP.new" || ! mv "$BACKUP.new" "$BACKUP" 2>/dev/null; then
-		refuse unreadable "$FILE could not be copied."
-	fi
-
-	# Byte semantics, in a subshell so the command inherits the caller's locale:
-	# a multibyte locale would count in characters and stumble on a byte sequence
-	# that is not one. Prints the match count; writes $TMP/changed on exactly one.
-	COUNT="$(
-		LC_ALL=C
-		content="$(
-			cat "$BACKUP"
-			printf x
-		)"
-		content=${content%x}
-		printf '%s' "$content" | cmp -s - "$BACKUP" || {
-			echo unreadable
+	if [ "$n" = 1 ]; then
+		printf '%s%s%s' "$first" "$NEW" "$rest" >"$TMP/changed" || {
+			echo failed
 			exit 0
 		}
-		rest=$content
-		n=0
-		while :; do
-			head=${rest%%"$OLD"*}
-			[ "${#head}" -ne "${#rest}" ] || break
-			n=$((n + 1))
-			[ "$n" -lt 2 ] || break
-			first=$head
-			rest=${rest:$((${#head} + ${#OLD}))}
-		done
-		if [ "$n" = 1 ]; then
-			printf '%s%s%s' "$first" "$NEW" "$rest" >"$TMP/changed" || {
-				echo failed
-				exit 0
-			}
-		fi
-		echo "$n"
-	)"
-	case "$COUNT" in
-	unreadable) refuse unreadable "$FILE holds a NUL byte, which this script cannot carry." ;;
-	0)
-		printf 'outcome=no-match\nfile=%s\nmatches=0\n' "$FILE"
-		note "--old is not in $FILE. Nothing was changed and the command was not run."
-		exit 3
-		;;
-	1) ;;
-	"" | *[!0-9]*) refuse failed "could not prepare the change." ;;
-	*)
-		printf 'outcome=ambiguous\nfile=%s\nmatches=%s\n' "$FILE" "$COUNT"
-		note "--old stands in $FILE more than once. Name a longer string that stands there once. Nothing was changed and the command was not run."
-		exit 3
-		;;
-	esac
-	! cmp -s "$TMP/changed" "$BACKUP" || refuse failed "the change left $FILE as it was."
-
-	# From here to the answer no `$(...)` runs while a signal can be caught:
-	# each run the header counts as ended with no `outcome=` line was at one.
-	MATCHES=1 APPLIED=1 WRITTEN=1
-	# The changed bytes are opened before the file is, as the copy is in restore.
-	if ! cat <"$TMP/changed" >"$TARGET" 2>/dev/null || ! cmp -s "$TMP/changed" "$TARGET"; then
-		note "could not write the change to $FILE. The command was not run."
-		answer refused 1 "reason=unwritable"
 	fi
+	echo "$n"
+)"
+case "$COUNT" in
+unreadable) refuse unreadable "$FILE holds a NUL byte, which this script cannot carry." ;;
+0)
+	printf 'outcome=no-match\nfile=%s\nmatches=0\n' "$FILE"
+	note "--old is not in $FILE. Nothing was changed and the command was not run."
+	exit 3
+	;;
+1) ;;
+"" | *[!0-9]*) refuse failed "could not prepare the change." ;;
+*)
+	printf 'outcome=ambiguous\nfile=%s\nmatches=%s\n' "$FILE" "$COUNT"
+	note "--old stands in $FILE more than once. Name a longer string that stands there once. Nothing was changed and the command was not run."
+	exit 3
+	;;
+esac
+! cmp -s "$TMP/changed" "$BACKUP" || refuse failed "the change left $FILE as it was."
 
-	# Job control gives the command a process group of its own, so what is stopped
-	# is everything it started and not just its first process.
-	set -m
-	"$@" </dev/null >&2 &
-	CMD_PID=$!
-	if [ -n "$TIMEOUT" ]; then
-		(
-			sleep "$TIMEOUT"
-			: >"$TMP/timed-out"
-			kill -TERM -"$CMD_PID"
-			sleep 2
-			kill -KILL -"$CMD_PID"
-		) </dev/null >/dev/null 2>&1 &
-		WATCH_PID=$!
-	fi
-	set +m
-	STATUS=0
-	wait "$CMD_PID" 2>/dev/null || STATUS=$?
-	if [ -e "$TMP/timed-out" ]; then
-		note "the command was still running after $TIMEOUT seconds and was stopped."
-		answer timed-out 3 "timeout=$TIMEOUT"
-	fi
-	# CMD_PID stays set: its group may hold processes the command left behind.
-	case "$STATUS" in
-	0)
-		note "the command PASSED with $FILE changed: it does not notice this change."
-		answer missed 3 "status=0"
-		;;
-	126 | 127)
-		note "the command ended with status $STATUS, which is what a shell gives for a command it could not run or find: nothing says the check ran at all."
-		answer not-run 3 "status=$STATUS"
-		;;
-	esac
-	answer caught 0 "status=$STATUS"
-}
-
-# Set before anything runs, git included, and ignored until then: a signal
-# with no trap set is one bash dies of without a word.
-trap cleanup EXIT
+# Signals are caught only from here, and from here to the answer no `$(...)`
+# runs while one can be: under bash 5.2.37 a trap that came due during the
+# checks was at times lost, ended the run with no answer, or left it spinning.
 trap 'on_signal INT' INT
 trap 'on_signal TERM' TERM
 trap 'on_signal HUP' HUP
-main "$@"
+MATCHES=1 APPLIED=1 WRITTEN=1
+# The changed bytes are opened before the file is, as the copy is in restore.
+if ! cat <"$TMP/changed" >"$TARGET" 2>/dev/null || ! cmp -s "$TMP/changed" "$TARGET"; then
+	note "could not write the change to $FILE. The command was not run."
+	answer refused 1 "reason=unwritable"
+fi
+
+# Job control gives the command a process group of its own, so what is stopped
+# is everything it started and not just its first process.
+set -m
+"$@" </dev/null >&2 &
+CMD_PID=$!
+if [ -n "$TIMEOUT" ]; then
+	(
+		sleep "$TIMEOUT"
+		: >"$TMP/timed-out"
+		kill -TERM -"$CMD_PID"
+		sleep 2
+		kill -KILL -"$CMD_PID"
+	) </dev/null >/dev/null 2>&1 &
+	WATCH_PID=$!
+fi
+set +m
+STATUS=0
+wait "$CMD_PID" 2>/dev/null || STATUS=$?
+if [ -e "$TMP/timed-out" ]; then
+	note "the command was still running after $TIMEOUT seconds and was stopped."
+	answer timed-out 3 "timeout=$TIMEOUT"
+fi
+# CMD_PID stays set: its group may hold processes the command left behind.
+case "$STATUS" in
+0)
+	note "the command PASSED with $FILE changed: it does not notice this change."
+	answer missed 3 "status=0"
+	;;
+126 | 127)
+	note "the command ended with status $STATUS, which is what a shell gives for a command it could not run or find: nothing says the check ran at all."
+	answer not-run 3 "status=$STATUS"
+	;;
+esac
+answer caught 0 "status=$STATUS"
