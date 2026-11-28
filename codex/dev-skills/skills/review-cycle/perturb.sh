@@ -30,30 +30,38 @@
 #                        (exit 3)
 #   outcome=not-run      the command ended with status 126 or 127, a shell's
 #                        answer for a command it could not run or find, so
-#                        nothing says the check ran at all (exit 3)
+#                        nothing says the check ran at all; a check that ran
+#                        and ended with either of its own reads the same
+#                        (exit 3)
 #   outcome=refused      the control did not start, by `reason=` (exit 1):
 #                        not-a-repository, missing, outside (the file is not
 #                        inside `-C`), not-a-file (a symlink included),
-#                        untracked, busy (another control is running in this
-#                        repository: `holder=` is its process), stale (an
-#                        earlier control here never finished: `backup=` names
-#                        the bytes its file had, and stderr says how to clear
-#                        it), uncommitted (the file differs from its commit,
-#                        staged or not), unreadable (it holds a NUL byte, or
-#                        could not be copied), unwritable (the change could
-#                        not be written)
+#                        untracked, busy (a control is running in this
+#                        repository), stale (an earlier control here never
+#                        finished), uncommitted (the file differs from its
+#                        commit, staged or not), unreadable (it holds a NUL
+#                        byte, or could not be copied), unwritable (the
+#                        change could not be written)
 #   outcome=interrupted  a signal (`signal=`) ended the run; the command was
 #                        stopped (exit 1)
 #   outcome=unrestored   the file could NOT be put back (exit 1). `backup=`
-#                        names a copy of its prior bytes, which is kept
+#                        names a copy of its prior bytes, which is kept; with
+#                        no `backup=`, that copy was removed while the control
+#                        ran, the file was left as it stood, and stderr says
+#                        what git reports of it
 #
 #   file=<path>          as it was named
 #   matches=<n>          how many times `--old` stands in the file, counted no
 #                        further than 2
 #   status=<n>           the command's exit status, on caught, missed and
 #                        not-run
-#   lock=<dir>           on busy, stale and unrestored: the directory that
-#                        marks a control in progress
+#   lock=<dir>           on busy and stale, and on unrestored beside
+#                        `backup=`: the directory that marks a control in
+#                        progress
+#   holder=<pid>         on busy and stale: the process the mark records, where
+#                        it records one
+#   backup=<path>        on busy and stale too, where the mark holds a copy of
+#                        the bytes its control's file had
 #   restored=yes         wherever the file was written to, on every outcome
 #                        but unrestored: its bytes were compared with the copy
 #                        taken before the change, and git reports it unchanged
@@ -67,6 +75,8 @@
 # The file is put back from a copy this script made, never through git, so
 # nothing else in the tree is touched and nothing uncommitted can be lost: a
 # file that differs from its commit is refused before anything is written.
+# The file is read whole and searched in the shell, which takes seconds per
+# megabyte.
 # It is put back on every exit this script can catch, a signal and a timeout
 # included, and on each of them whatever is left of the command's process
 # group is stopped first, so a process the command started and left behind
@@ -79,8 +89,14 @@
 # file's git directory (a linked worktree has its own), which also holds the
 # copy of the file and is removed on exit, except on unrestored. This script
 # cannot catch SIGKILL or a lost machine: the file then stays changed and the
-# mark stays, and the next control is refused as stale and told where the
-# prior bytes are. Nothing removes a mark but the run that made it, or you.
+# mark stays. Nothing removes a mark but the run that made it, or you, so the
+# next control is refused: as busy while the process the mark records is
+# running here, as stale otherwise. Neither is certain (a process number
+# passes to another process, and a control in another container or under
+# another user does not show here), so both print the same facts and stderr
+# says what to make sure of before the mark is removed. A control whose mark
+# or copy was removed under it leaves its file as it stands, never empty, and
+# answers unrestored.
 #
 # Output: `key=value` lines on stdout, `outcome=` first. Exit status: 0 on
 # caught; 3 on missed, no-match, ambiguous, timed-out and not-run; 1 on
@@ -101,7 +117,7 @@ usage() {
 	exit 64
 }
 
-TMP="" LOCK="" BACKUP="" TARGET="" TARGET_DIR="" TARGET_BASE="" MATCHES="" APPLIED=0 WRITTEN=0 KEEP=0 CMD_PID="" WATCH_PID=""
+TMP="" LOCK="" BACKUP="" TARGET="" TARGET_DIR="" TARGET_BASE="" MATCHES="" APPLIED=0 WRITTEN=0 KEEP=0 CMD_PID="" WATCH_PID="" TAKING=0 PENDING=""
 
 # Empty where git reports the file as its commit has it.
 file_status() {
@@ -111,7 +127,7 @@ file_status() {
 stop_children() {
 	local n=0
 	if [ -n "$WATCH_PID" ]; then
-		kill -TERM -"$WATCH_PID" 2>/dev/null
+		kill -KILL -"$WATCH_PID" 2>/dev/null
 		wait "$WATCH_PID" 2>/dev/null
 		WATCH_PID=""
 	fi
@@ -130,7 +146,9 @@ stop_children() {
 			set +m
 			wait "$CMD_PID" 2>/dev/null
 			kill -KILL -"$CMD_PID" 2>/dev/null
-			kill -TERM -"$reaper" 2>/dev/null
+			# KILL, because this runs with TERM ignored and the reaper
+			# inherited that.
+			kill -KILL -"$reaper" 2>/dev/null
 			wait "$reaper" 2>/dev/null
 			# A killed process may still finish the write it was in, so the
 			# group is seen empty before the file is put back. The bound is for
@@ -146,25 +164,46 @@ stop_children() {
 	fi
 }
 
+# The mark is this run's while it records this process: one removed by hand
+# may since have been made again by another control.
+mine() { [ -n "$TMP" ] && [ "$(cat "$TMP/pid" 2>/dev/null)" = "$$" ]; }
+release() {
+	[ -n "$TMP" ] && [ "$KEEP" = 0 ] || return 0
+	case "$(cat "$TMP/pid" 2>/dev/null)" in "$$" | "") rm -rf -- "$TMP" ;; esac
+}
+
 # 0 where the file holds its prior bytes again and git agrees.
 restore() {
 	[ "$APPLIED" = 1 ] || return 0
 	# A symlink left in the file's place is not written through. A file
 	# still there is written in place, so it keeps its mode and takes a new
 	# modification time: a build that compares times would otherwise keep
-	# what it made from the changed file.
-	if [ ! -L "$TARGET" ]; then
+	# what it made from the changed file. The copy is opened before the
+	# file is, so a copy that has gone leaves the file as it stands and not
+	# empty.
+	if mine && [ ! -L "$TARGET" ]; then
 		if [ -f "$TARGET" ]; then
-			cat "$BACKUP" >"$TARGET"
+			cat <"$BACKUP" >"$TARGET"
 		elif [ ! -e "$TARGET" ]; then
 			cp -p "$BACKUP" "$TARGET" && touch "$TARGET"
 		fi
 	fi 2>/dev/null
-	if cmp -s "$BACKUP" "$TARGET" 2>/dev/null && [ -f "$TARGET" ] && [ ! -L "$TARGET" ] && [ -z "$(file_status)" ]; then
+	if mine && cmp -s "$BACKUP" "$TARGET" 2>/dev/null && [ -f "$TARGET" ] && [ ! -L "$TARGET" ] && [ -z "$(file_status)" ]; then
 		APPLIED=0
 		return 0
 	fi
-	KEEP=1
+	return 1
+}
+# After a failed restore: 0, the mark kept, where the copy is there to name.
+kept() {
+	if mine && [ -f "$BACKUP" ]; then
+		KEEP=1
+		note "COULD NOT RESTORE $FILE: it does not hold its prior bytes, or git still reports it changed. A copy of them is kept at $BACKUP. Put them back, then remove $TMP: until then the next control here is refused."
+		return 0
+	fi
+	local now="still as its commit has it"
+	[ -z "$(file_status)" ] || now="changed"
+	note "COULD NOT RESTORE $FILE: the copy of its prior bytes, $BACKUP, was removed while this control ran, so the file was left as it stood and nothing was checked. It was as its commit has it when the control began, and git now reports it $now: \`git diff\` shows whatever is left to undo, and none of that is to be committed."
 	return 1
 }
 
@@ -172,10 +211,8 @@ restore() {
 cleanup() {
 	trap '' INT TERM HUP
 	stop_children
-	if ! restore; then
-		note "COULD NOT RESTORE $FILE. Its prior bytes are in $BACKUP; no control runs here until $TMP is removed."
-	fi
-	if [ "$KEEP" = 0 ] && [ -n "$TMP" ]; then rm -rf -- "$TMP"; fi
+	restore || kept || :
+	release
 }
 
 # Every answer that follows a change goes through here, so none is given
@@ -191,13 +228,14 @@ answer() { # <outcome> <exit status> [<line>...]
 		[ $# -eq 0 ] || printf '%s\n' "$@"
 		[ "$WRITTEN" = 0 ] || printf 'restored=yes\n'
 	else
-		printf 'outcome=unrestored\nfile=%s\nmatches=1\nbackup=%s\nlock=%s\nwas=%s\n' "$FILE" "$BACKUP" "$TMP" "$outcome"
+		printf 'outcome=unrestored\nfile=%s\nmatches=1\n' "$FILE"
+		if kept; then printf 'backup=%s\nlock=%s\n' "$BACKUP" "$TMP"; fi
+		printf 'was=%s\n' "$outcome"
 		[ $# -eq 0 ] || printf '%s\n' "$@"
-		note "COULD NOT RESTORE $FILE: it does not hold its prior bytes, or git still reports it changed. A copy of them is kept at $BACKUP. Put them back, then remove $TMP: until then the next control here is refused."
 		rc=1
 	fi
 	trap - EXIT
-	if [ "$KEEP" = 0 ] && [ -n "$TMP" ]; then rm -rf -- "$TMP"; fi
+	release
 	exit "$rc"
 }
 refuse() { # <reason> <message>
@@ -205,29 +243,54 @@ refuse() { # <reason> <message>
 	note "$2 Nothing was changed and the command was not run."
 	exit 1
 }
-# The mark is already there: say whose it is, and remove nothing.
+# The mark is already there: say what it records, and remove nothing. Returns
+# only where the mark went away while it was being read.
 held() {
-	local pid was
-	[ -s "$LOCK/pid" ] || sleep 1
-	pid="$(cat "$LOCK/pid" 2>/dev/null)"
-	was="$(cat "$LOCK/target" 2>/dev/null)"
+	local raw pid was reason lead clear n=0
+	# A mark is recorded within moments of being made, so one with no record
+	# yet is given two seconds before it is read as abandoned.
+	while [ -d "$LOCK" ] && [ ! -e "$LOCK/pid" ] && [ "$n" -lt 20 ]; do
+		sleep 0.1
+		n=$((n + 1))
+	done
+	raw="$(cat "$LOCK/pid" 2>/dev/null)"
+	pid="$raw"
 	case "$pid" in "" | *[!0-9]*) pid="" ;; esac
 	if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-		printf 'outcome=refused\nfile=%s\nreason=busy\nlock=%s\nholder=%s\n' "$FILE" "$LOCK" "$pid"
-		note "another control is running in this repository (process $pid, on ${was:-a file it has not named yet}), and two at once would each run with the other's change in place. Wait for it; if process $pid is no control, $LOCK was left by one that was killed. Nothing was changed and the command was not run."
-		exit 1
+		reason=busy
+	elif [ -d "$LOCK" ] && [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$raw" ]; then
+		# Still standing with the same record: no finished run's leftovers.
+		reason=stale
+	else
+		return 0
 	fi
-	printf 'outcome=refused\nfile=%s\nreason=stale\nlock=%s\n' "$FILE" "$LOCK"
+	was="$(cat "$LOCK/target" 2>/dev/null)"
+	printf 'outcome=refused\nfile=%s\nreason=%s\nlock=%s\n' "$FILE" "$reason" "$LOCK"
+	[ -z "$pid" ] || printf 'holder=%s\n' "$pid"
 	if [ -f "$LOCK/original" ]; then
 		printf 'backup=%s\n' "$LOCK/original"
-		note "an earlier control here never finished${pid:+ (its process $pid is gone)}. It was changing ${was:-a file}, and the bytes that file had are kept in $LOCK/original: where \`git diff\` still shows that control's change, copy them back over the file, and do not commit it. Then remove $LOCK and run this again. Nothing was changed and the command was not run."
+		clear="Its file is ${was:-not named}, and the bytes that file had are kept in $LOCK/original: where \`git diff\` still shows that control's change, copy them back over the file, and do not commit it. Then remove $LOCK and run this again."
 	else
-		note "an earlier control here never finished${pid:+ (its process $pid is gone)}, and had changed nothing. Remove $LOCK and run this again. Nothing was changed and the command was not run."
+		clear="It kept no copy of ${was:-a file}, so it had changed nothing, unless the copy was removed since: \`git diff\` shows such a change, which is not to be committed. Remove $LOCK and run this again."
 	fi
+	if [ "$reason" = busy ]; then
+		lead="another control is running in this repository (process $pid), and two at once would each run with the other's change in place: wait for it. Only if process $pid is no run of this script was the mark left by a control that was killed, and then: "
+	elif [ -n "$pid" ]; then
+		lead="an earlier control here never finished (its process $pid is gone). Make sure it is not running in another container or as another user, where it would not show here, and then: "
+	else
+		lead="an earlier control here was stopped as it began, before it recorded its process. "
+	fi
+	note "$lead$clear Nothing was changed and the command was not run."
 	exit 1
 }
 # shellcheck disable=SC2329 # the signal traps run it
 on_signal() {
+	# Between making the mark and knowing it was made, a signal waits: it
+	# would otherwise leave a mark no run owns.
+	if [ "$TAKING" = 1 ]; then
+		PENDING="$1"
+		return 0
+	fi
 	note "stopped by SIG$1."
 	answer interrupted 1 "signal=$1"
 }
@@ -304,19 +367,28 @@ trap cleanup EXIT
 trap 'on_signal INT' INT
 trap 'on_signal TERM' TERM
 trap 'on_signal HUP' HUP
-if ! mkdir "$LOCK" 2>/dev/null; then
-	[ -d "$LOCK" ] || {
+TRIES=0
+while :; do
+	TAKING=1
+	if mkdir "$LOCK" 2>/dev/null; then TMP="$LOCK"; fi
+	TAKING=0
+	[ -z "$PENDING" ] || on_signal "$PENDING"
+	[ -z "$TMP" ] || break
+	held
+	TRIES=$((TRIES + 1))
+	[ "$TRIES" -lt 3 ] || {
 		note "could not make $LOCK."
 		exit 1
 	}
-	held
+done
+# Each record is moved into place whole, so a reader never sees half of one.
+if ! { printf '%s\n' "$TARGET" >"$TMP/target" && printf '%s\n' "$$" >"$TMP/pid.new" && mv "$TMP/pid.new" "$TMP/pid"; } 2>/dev/null; then
+	note "could not record this control in $TMP."
+	exit 1
 fi
-TMP="$LOCK"
-printf '%s\n' "$$" >"$TMP/pid"
-printf '%s\n' "$TARGET" >"$TMP/target"
-[ -z "$(file_status)" ] || refuse uncommitted "$FILE differs from its commit, and no unfinished control accounts for that. \`git diff\` shows the difference; a control runs on committed work only, so commit it first where it is work you mean to keep."
+[ -z "$(file_status)" ] || refuse uncommitted "$FILE differs from its commit. \`git diff\` shows the difference, and a control runs on committed work only: where it is work you mean to keep, commit it first; where it is what a control that was stopped left behind, undo it and do not commit it."
 BACKUP="$TMP/original"
-if ! cp -p "$TARGET" "$BACKUP" 2>/dev/null || ! cmp -s "$TARGET" "$BACKUP"; then
+if ! cp -p "$TARGET" "$BACKUP.new" 2>/dev/null || ! cmp -s "$TARGET" "$BACKUP.new" || ! mv "$BACKUP.new" "$BACKUP" 2>/dev/null; then
 	refuse unreadable "$FILE could not be copied."
 fi
 
@@ -376,7 +448,7 @@ if cmp -s "$TMP/changed" "$BACKUP"; then
 fi
 
 MATCHES=1 APPLIED=1 WRITTEN=1
-if ! cat "$TMP/changed" 2>/dev/null >"$TARGET" || ! cmp -s "$TMP/changed" "$TARGET"; then
+if ! { mine && cat <"$TMP/changed" >"$TARGET"; } 2>/dev/null || ! cmp -s "$TMP/changed" "$TARGET"; then
 	note "could not write the change to $FILE. The command was not run."
 	answer refused 1 "reason=unwritable"
 fi

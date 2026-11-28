@@ -254,21 +254,27 @@ call --file conf --old 'limit=3' --new 'limit=4' -- sh -c 'kill -KILL $$'
 is "4: a command killed mid-run failed: caught, with the signal in its status" "$RC:$(val outcome):$(val status):$(val restored)" "0:caught:137:yes"
 same "4: ...and the repository is as it was"
 
-for sig in TERM HUP; do
+# Job control around the launch: without it a background job starts with INT
+# ignored, which no script can then catch.
+for sig in TERM HUP INT; do
 	before
+	set -m
 	(cd "$R" && exec bash "$HELPER" --file conf --old 'limit=3' --new 'limit=4' -- sh -c "$HANG" sh "$WORKDIR/pid") >"$WORKDIR/out" 2>"$WORKDIR/err" &
 	helper=$!
+	set +m
 	n=0
 	while [ ! -s "$WORKDIR/pid" ] && [ "$n" -lt 100 ]; do
 		sleep 0.1
 		n=$((n + 1))
 	done
 	has "4: SIG$sig arrives while the file is changed" "$(cat "$R/conf")" "limit=4"
+	start=$(date +%s)
 	kill "-$sig" "$helper"
 	wait "$helper"
 	RC=$?
 	OUT="$(cat "$WORKDIR/out")"
 	is "4: a helper stopped by SIG$sig answers interrupted, exit 1" "$RC:$(val outcome):$(val signal):$(val restored)" "1:interrupted:$sig:yes"
+	ok "4: ...as soon as the command is stopped, not two seconds on" "$([ $(($(date +%s) - start)) -lt 2 ] && echo 0 || echo 1)"
 	gone "$(cat "$WORKDIR/pid")"
 	ok "4: ...having stopped the command and what it started" $?
 	same "4: ...and the repository is as it was"
@@ -426,7 +432,7 @@ for f in conf odd; do
 	is "7: ...and the next control is refused as stale, not as uncommitted ($f)" "$RC:$(val outcome):$(val reason):$(val lock):$(val backup)" "1:refused:stale:$LOCK:$LOCK/original"
 done
 has "7: ...told that an earlier control never finished" "$ERR" "an earlier control here never finished (its process $helper is gone)"
-has "7: ...which file it was changing" "$ERR" "It was changing $R/conf"
+has "7: ...which file it was changing" "$ERR" "Its file is $R/conf"
 has "7: ...and not to commit what it left" "$ERR" "do not commit it"
 case "$ERR" in *"ommit it first"*) ok "7: ...nor anything about committing first" 1 ;; *) ok "7: ...nor anything about committing first" 0 ;; esac
 ok "7: ...its command never ran" "$([ ! -e "$WORKDIR/second" ] && echo 0 || echo 1)"
@@ -455,6 +461,131 @@ is "7: ...and gone afterwards, the worktree clean" "$([ -e "$R/.git/worktrees/wt
 git -C "$R" worktree remove "$WORKDIR/wt"
 same "7: ...and the repository is as it was"
 is "7: ...with nothing left" "$(left)" 0
+
+# --- 8: every state a second control can find the mark in -------------------------
+# Absent, held by a running control, and left by a killed one with its copy are
+# section 7's. Here: made but not yet recorded, gone while it is read, recorded
+# by a process that is gone and kept no copy, and recorded under a process
+# number that now belongs to something else.
+sleep 60 &
+live=$!
+true &
+dead=$!
+wait "$dead"
+
+before
+mkdir "$LOCK"
+(
+	sleep 0.5
+	rmdir "$LOCK"
+) &
+call --file conf --old 'limit=3' --new 'limit=4' -- ./check.sh
+wait $!
+is "8: a mark that goes away while it is read is not stale: the control runs" "$RC:$(val outcome):$(val restored)" "0:caught:yes"
+same "8: ...and the repository is as it was"
+is "8: ...with no mark left" "$(left)" 0
+
+mkdir "$LOCK"
+(
+	sleep 0.5
+	printf '%s\n' "$R/odd" >"$LOCK/target"
+	printf '%s\n' "$live" >"$LOCK/pid"
+) &
+call --file conf --old 'limit=3' --new 'limit=4' -- sh -c "$SECOND" sh "$WORKDIR/second"
+wait $!
+is "8: a mark not yet recorded is waited for, and read once it is: busy" "$RC:$(val reason):$(val holder):$(val backup)" "1:busy:$live:"
+rm -r "$LOCK"
+
+mkdir "$LOCK"
+printf '%s\n' "$R/odd" >"$LOCK/target"
+printf '%s\n' "$dead" >"$LOCK/pid"
+call --file conf --old 'limit=3' --new 'limit=4' -- sh -c "$SECOND" sh "$WORKDIR/second"
+is "8: a mark whose process is gone and which holds no copy is stale, with no backup to name" "$RC:$(val reason):$(val holder):$(val backup)" "1:stale:$dead:"
+has "8: ...said to have kept none, with where a change would show all the same" "$ERR" "It kept no copy of $R/odd, so it had changed nothing, unless the copy was removed since: \`git diff\` shows such a change"
+ok "8: ...and is left for the caller to remove" "$([ -d "$LOCK" ] && echo 0 || echo 1)"
+rm -r "$LOCK"
+ok "8: ...and none of these ran the second command" "$([ ! -e "$WORKDIR/second" ] && echo 0 || echo 1)"
+same "8: ...and the repository is as it was"
+
+# A killed control's process number, taken by another process: the mark reads
+# busy, and must still say everything the stale one does.
+before
+hang
+{ kill -KILL "$helper" && wait "$helper"; } 2>/dev/null
+kill "$(cat "$WORKDIR/pid")" 2>/dev/null
+gone "$(cat "$WORKDIR/pid")"
+printf '%s\n' "$live" >"$LOCK/pid"
+call --file odd --old 'star' --new 'X' -- sh -c "$SECOND" sh "$WORKDIR/second"
+is "8: a killed control's mark under a process number now another's reads busy, and still names the copy" "$RC:$(val reason):$(val holder):$(val lock):$(val backup)" "1:busy:$live:$LOCK:$LOCK/original"
+has "8: ...told when the mark is a leftover" "$ERR" "Only if process $live is no run of this script"
+has "8: ...which file it was changing" "$ERR" "Its file is $R/conf"
+has "8: ...and not to commit what it left" "$ERR" "do not commit it"
+case "$ERR" in *"ommit it first"*) ok "8: ...nor anything about committing first" 1 ;; *) ok "8: ...nor anything about committing first" 0 ;; esac
+BACKUP="$(val backup)"
+cp "$BACKUP" "$WORKDIR/kept"
+rm -r "$LOCK"
+call --file conf --old 'limit=4' --new 'limit=5' -- sh -c "$SECOND" sh "$WORKDIR/second"
+is "8: ...with the mark removed and the change still there, the file is refused as uncommitted" "$RC:$(val reason)" "1:uncommitted"
+has "8: ...and what a stopped control left is to be undone, not committed" "$ERR" "where it is what a control that was stopped left behind, undo it and do not commit it"
+ok "8: ...its command never ran" "$([ ! -e "$WORKDIR/second" ] && echo 0 || echo 1)"
+cp "$WORKDIR/kept" "$R/conf"
+same "8: ...and the kept bytes put the repository back"
+
+# A signal that arrives as the mark is made: a `mkdir` that sends one to the
+# helper once the directory stands.
+mkdir "$WORKDIR/shim"
+cat >"$WORKDIR/shim/mkdir" <<SHIM
+#!/bin/sh
+"$(command -v mkdir)" "\$@" || exit
+case "\$*" in *perturb.lock) kill -TERM "\$PPID" ;; esac
+SHIM
+chmod +x "$WORKDIR/shim/mkdir"
+before
+OUT="$(cd "$R" && PATH="$WORKDIR/shim:$PATH" bash "$HELPER" --file conf --old 'limit=3' --new 'limit=4' -- ./check.sh 2>/dev/null)"
+is "8: a signal that arrives as the mark is made is answered interrupted" "$?:$(val outcome):$(val signal):$(val restored)" "1:interrupted:TERM:"
+unrun "8: ...the command never ran"
+is "8: ...and the mark it had just made is not left behind" "$(left)" 0
+same "8: ...and the repository is as it was"
+
+# --- 9: the mark or the copy removed under a running control ------------------------
+# Whatever removed it, the file is never opened for writing with nothing to
+# write: it stays as the control changed it, which git shows, and is not emptied.
+undo() { git -C "$R" show HEAD:conf >"$R/conf"; }
+before
+call --file conf --old 'limit=3' --new 'limit=4' -- sh -c 'rm -r "$1"; false' sh "$LOCK"
+is "9: a control whose mark was removed as it ran is unrestored, naming no copy and no mark" "$RC:$(val outcome):$(val was):$(val backup):$(val lock):$(val restored)" "1:unrestored:caught:::"
+is "9: ...its file left as it stood, not emptied" "$(cat "$R/conf")" "$(git -C "$R" show HEAD:conf | sed 's/^limit=3$/limit=4/')"
+has "9: ...told that the copy was removed" "$ERR" "was removed while this control ran"
+has "9: ...and what git reports of the file" "$ERR" "git now reports it changed"
+case "$ERR" in *"then remove"* | *"Remove "*) ok "9: ...and not told to remove anything" 1 ;; *) ok "9: ...and not told to remove anything" 0 ;; esac
+undo
+same "9: ...and undoing what git shows puts the repository back"
+is "9: ...with nothing left" "$(left)" 0
+
+before
+call --file conf --old 'limit=3' --new 'limit=4' -- sh -c 'rm "$1/original"; false' sh "$LOCK"
+is "9: a control whose copy alone was removed is unrestored too" "$RC:$(val outcome):$(val backup):$(val lock)" "1:unrestored::"
+has "9: ...its file left as it stood" "$(cat "$R/conf")" "limit=4"
+is "9: ...and its mark, which holds nothing now, is not kept" "$(left)" 0
+call --file conf --old 'limit=4' --new 'limit=5' -- sh -c "$SECOND" sh "$WORKDIR/second"
+is "9: ...so the next control is refused for the change itself" "$RC:$(val reason)" "1:uncommitted"
+undo
+same "9: ...and undoing what git shows puts the repository back"
+
+# The mark removed and made again by another control, with a copy of its own.
+before
+call --file conf --old 'limit=3' --new 'limit=4' -- sh -c 'rm -r "$1" && mkdir "$1" && echo 1 >"$1/pid" && echo other >"$1/original"; false' sh "$LOCK"
+is "9: a mark that is another control's by now is not restored from" "$RC:$(val outcome):$(val backup):$(val lock)" "1:unrestored::"
+has "9: ...the file left as it stood, without the other control's bytes" "$(cat "$R/conf")" "limit=4"
+is "9: ...and the other control's mark and copy left alone" "$(cat "$LOCK/pid" "$LOCK/original" 2>&1)" "1
+other"
+rm -r "$LOCK"
+undo
+same "9: ...and undoing what git shows puts the repository back"
+ok "9: ...and none of these ran a second command" "$([ ! -e "$WORKDIR/second" ] && echo 0 || echo 1)"
+is "9: ...with nothing left" "$(left)" 0
+kill "$live" 2>/dev/null
+wait "$live" 2>/dev/null
 
 ok "6: the Codex mirror is byte-identical" "$(cmp -s "$SHIPPED" "$MIRROR" && echo 0 || echo 1)"
 
