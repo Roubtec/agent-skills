@@ -94,7 +94,9 @@
 # record     What became of the launches of one round. Every attempt directory
 #            holds `peer.record`: `outcome=started` from before anything is
 #            launched, replaced by each answer `run` and `collect` give for
-#            that attempt, with `round=` where `run` was given --round.
+#            that attempt, or by `outcome=failed` with the message where the
+#            script itself fails after that, with `round=` where `run` was
+#            given --round.
 #            `record` prints one block of those lines per attempt under
 #            --artifact-root (or for the one --artifact-dir), each ending in
 #            its `artifact_dir=`, an empty line between blocks, narrowed to
