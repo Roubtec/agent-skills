@@ -260,7 +260,7 @@ Run `bash scripts/test-review-cycle-peer.sh` after any change to `peer.sh` in ei
 
 ### `test-review-cycle-rebase-facts.sh`
 
-Run `bash scripts/test-review-cycle-rebase-facts.sh` after any change to `rebase-facts.sh` in either mirror's `review-cycle` skill folder or to `bin/review-cycle-rebase-facts`; the hermetic suite builds a throwaway repository, checks each forecast against what `git rebase` then does there, and covers an unmoved base, a moved base that is disjoint and one that overlaps, a pure-join merge in range, a stacked child on an unmoved, a grown and a rewritten parent, replays that dropped, altered (if only in its whitespace) or reworded a commit, a rename on either side, a read that fails, that nothing is written, and every failure and usage exit. `REBASE_FACTS_HELPER` points it at another copy of the script.
+Run `bash scripts/test-review-cycle-rebase-facts.sh` after any change to `rebase-facts.sh` in either mirror's `review-cycle` skill folder or to `bin/review-cycle-rebase-facts`; the hermetic suite builds a throwaway repository, checks each forecast against what `git rebase` then does there, and covers an unmoved base, a moved base that is disjoint and one that overlaps, a pure-join merge in range, a stacked child on an unmoved, a grown and a rewritten parent, replays that dropped, altered (if only in its whitespace), reworded or re-authored a commit, a rename on either side, a read that fails, that nothing is written, and every failure and usage exit. `REBASE_FACTS_HELPER` points it at another copy of the script.
 
 ### `test-write-tasks-task-numbers.sh`
 
