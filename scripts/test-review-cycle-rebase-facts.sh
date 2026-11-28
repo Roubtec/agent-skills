@@ -285,6 +285,14 @@ git -C "$R" commit -q --amend -m "reworded"
 call after --old-base "$INIT" --old-tip "$H" --new-base "$INIT"
 is "6: a reworded commit is not the same commit" "$(val identical):$(val reason)" "no:message"
 is "6: ...whatever the paths say" "$(val paths):$(val outcome):$RC" "disjoint:verify:3"
+# The same patch and message under another author: the name alone, the author date kept.
+branch au "$INIT"
+add only-au u
+AU="$(tip au)"
+git -C "$R" commit -q --amend --no-edit --author="u <t@example.invalid>"
+call after --old-base "$INIT" --old-tip "$AU" --new-base "$INIT"
+is "6: a commit under another author is not the same commit" "$(val identical):$(val reason)" "no:message"
+is "6: ...whatever the paths say of it" "$(val paths):$(val outcome):$RC" "disjoint:verify:3"
 # The same patch but for its whitespace: what a hand edit during the replay leaves.
 branch w "$INIT"
 printf 'if x:\n    y()\nz()\n' >"$R/p.py"
