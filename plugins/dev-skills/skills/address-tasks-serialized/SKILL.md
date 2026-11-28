@@ -183,7 +183,7 @@ For each task file in the input set:
    Apply `review-cycle`'s packet hard-check before adopting it: `git status --porcelain` empty **and** no Git operation in progress — check `git rev-parse --git-path rebase-merge` and `rebase-apply` for an existing path, plus `MERGE_HEAD`, `CHERRY_PICK_HEAD`, `REVERT_HEAD`, `BISECT_LOG`, since a tree left mid-rebase or mid-cherry-pick prints empty porcelain.
    Either condition failing means redrive or resume that implementer, never silent adoption.
    If the implementer hit a blocker it could not resolve, stop and surface it to the user before spawning a reviewer.
-6. **Only after step 5, spawn the reviewer agent** with a fresh prompt (see Reviewer Agent section) and launch the peer second opinion in the background at the same moment (unless unavailable or `peer-opinions=off`).
+6. **Only after step 5, spawn the reviewer agent** with a fresh prompt (see Reviewer Agent section) and launch the peer second opinion at the same moment (unless unavailable or `peer-opinions=off`).
    Always wait for the reviewer before triage, and also wait for the peer when one was launched.
    The gate is the implementer's commits being on disk — you share one working tree, so a reviewer started before the commit reviews an unfinished branch; keeping it out of the implementer's turn or parallel tool block is only the **proxy** for that gate.
 7. **Evaluate the reviewer's report:**
@@ -231,7 +231,7 @@ Exit 1 is a read that failed, such as a base that could not be fetched: never a 
 ## Peer second opinion (best-effort)
 
 Unless `peer-opinions=off`, run the `review-cycle` skill's peer step beside every review round.
-Every rule that skill states under *The peer step* binds here whole, later additions included.
+Read *The peer step* there before the first peer launch: every rule it states binds here whole, later additions included.
 
 Deltas for this serialized skill:
 

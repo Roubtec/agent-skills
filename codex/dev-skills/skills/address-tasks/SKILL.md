@@ -225,8 +225,8 @@ For each task `T`, the moment it is ready:
      Either failing means redrive or resume that task's Phase A rather than handing Phase B a worktree nobody can build on.
      The rest of that skill's *The loop and its gates* binds this loop whole too, later additions included.
    - **Phase B — review:** spawn the task's fresh `explorer` reviewer only once its implementer's commits are on disk — its packet returned and adopted under the hard-check above — in its worktree; nothing about a sibling's phase enters into it.
-     At the same moment, unless `peer-opinions=off`, launch the task's background peer while the peer remains available.
-     Every rule the `review-cycle` skill states under *The peer step* binds this batch whole, later additions included.
+     At the same moment, unless `peer-opinions=off`, launch the task's peer while the peer remains available.
+     Read the `review-cycle` skill's *The peer step* before the batch's first peer launch: every rule it states binds this batch whole, later additions included.
      Share that section's one session-local adaptive throttle across every task and round, queue launches it holds, and surface every step-down in the batch summary.
      Before triage, wait for this task's own reviewer and for its peer if one was launched; then close the finished own-reviewer thread.
    - A task exits the loop only when its round passes the `review-cycle` gate; tasks with issues carry both reports verbatim as separately labeled blocks into the next round's Phase A, under that skill's grounding, blocking-and-minor gating, dispute, timeout/retry, and forfeit rules — never re-summarized.

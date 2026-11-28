@@ -130,7 +130,7 @@ No custom agent personas (`~/.codex/agents/*.toml`) are required.
 Parallelism is allowed only across subagents assigned distinct worktree paths.
 Within one PR's worktree the rule is committed state: the reviewer may not start until that fixer's commits are on disk, and no fix-up or publisher may start until the reviewer has returned its verdict.
 A spawn call returns an agent id immediately and reports completion later, so wait for and close the fixer before spawning its fresh reviewer, and wait for and close the reviewer before any fix-up or publisher — that wait is what puts the commits there, and the wait-then-spawn ordering is the proxy, not the rule.
-The examination-only `claude` peer is a plain shell process, not a Codex subagent, and is the sole same-worktree concurrency exception: launch it beside the Reviewer only after the tree is committed and clean, then collect both before advancing.
+The examination-only `claude` peer is the sole same-worktree concurrency exception, beside the Reviewer and only after the tree is committed and clean; collect both before advancing.
 Never continue a fixer thread for review.
 If the session exposes no subagent capability, stop and tell the user this workflow requires Codex multi-agent support.
 
@@ -319,14 +319,14 @@ Either condition failing means redrive or resume that entry, never silent adopti
 
 ### Phase B — fresh review
 
-Spawn one fresh `explorer` Reviewer per packet-bearing PR only once that entry's fixer commits are on disk — its packet returned and adopted under the hard-check above — and, at the same moment for each entry, launch a background `claude` peer unless disabled or unavailable.
+Spawn one fresh `explorer` Reviewer per packet-bearing PR only once that entry's fixer commits are on disk — its packet returned and adopted under the hard-check above — and, at the same moment for each entry, launch a `claude` peer unless disabled or unavailable.
 Complete every required fix-up and re-review in that wave before releasing dependents into Phase A, so an ordinary parent fix-up changes the tip that dependents are later pinned to rather than leaving already-reviewed dependents on the old tip; a parent tip changed again by a later rerun goes through **Descendant invalidation** above.
 Give it the verbatim review items and proposed dispositions from that PR's packet, its **pinned** effective review base (the OID that entry's latest rebase landed on, from the packet — or, where no rebase ran for it, the effective base you pinned for it at setup by the rule above — the invocation-named target's own pinned OID on a `no-rebase` batch where the invocation named one, else the commit its `baseRefName` resolved to; never `origin/<base>` or a bare `baseRefName`), branch, and worktree path — never the fixer's reasoning.
 Use `address-review` step 6's reviewer contract.
 It edits nothing and reports Pass or numbered Issues.
 
 Give the peer those same inputs verbatim, not the fixer's reasoning or the Reviewer's execution steps.
-Every rule the `review-cycle` skill states under *The peer step* binds this batch whole, later additions included.
+Read the `review-cycle` skill's *The peer step* before the batch's first peer launch: every rule it states binds this batch whole, later additions included.
 Launch from each entry's worktree; an auth/usage failure on a classify-at-first-invocation attempt makes the peer unavailable for all later entries and rounds.
 Share that section's one session-local adaptive throttle across every entry and round in this batch, queue launches it holds, and surface every step-down in the batch summary.
 Always wait for the Reviewer; when a peer was launched, wait for it too before deciding this entry's outcome, otherwise carry the disabled or unavailable outcome forward explicitly.

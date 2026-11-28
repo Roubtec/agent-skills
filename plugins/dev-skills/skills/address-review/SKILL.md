@@ -145,7 +145,7 @@ Three top-level subagent roles — all spawned via the `Agent` tool with `subage
 - **Reviewer** (default before any push) — a fresh-eyes agent that receives every unresolved thread, standalone item, and gathered CI lane verbatim, plus the proposed disposition labels, but **not** your implementation reasoning; it independently confirms that each disposition is sound in the committed code and performs a quality pass on the changed files.
   This is the `review-cycle` skill's Reviewer role.
 - **Peer (`codex`, best-effort)** — the `review-cycle` skill's cross-harness peer step: a read-only CLI review launched beside the Reviewer with the same disposition context but no implementation reasoning.
-  Every rule that skill states under *The peer step* binds here whole, later additions included; a coherent, grounded finding is first-class.
+  Read *The peer step* there before the first peer launch: every rule it states binds here whole, later additions included; a coherent, grounded finding is first-class.
 - **Rebaser** (default, once per rebase point that is not a proved no-op) — a fresh subagent that performs one of step 2's rebase points under `review-cycle` → "The delegated rebase step", and hands back the pinned effective base, the before/after tips, and any halt.
   It is the only role here that rewrites history, and it is never also the fixer.
   In `delegated-fix` the role belongs to the batch orchestrator rather than to this run, for the reasons "Delegated modes for the worktree orchestrator" gives.

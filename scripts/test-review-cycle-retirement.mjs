@@ -63,7 +63,7 @@
 //
 // Run: node scripts/test-review-cycle-retirement.mjs
 
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, join } from "node:path";
 import { tmpdir } from "node:os";
@@ -95,7 +95,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 247;
+const CHECKS_PER_LEG = 249;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -1893,7 +1893,7 @@ for (const name of WORKFLOWS) {
       if (label.startsWith("packet#")) return { measured: true, dirty: [], operation: "", detail: "" };
       if (label === "review#1") return { ...OK };
       if (label === "peer-preflight:codex") return { outcome: "available", detail: "" };
-      if (label === "peer:codex#1") return { outcome: "passed", findings: [], notes: "", detail: "", reason: "", teardownFailure: false, strength: "model=null effort=medium", fallbackReason: "" };
+      if (label === "peer:codex#1") return { outcome: "passed", findings: [], notes: "", detail: "", reason: "", teardownFailure: false, strength: "model=null effort=medium", basis: "unstated", fallbackReason: "" };
       return null;
     };
     const nullModelLogs = [];
@@ -1913,6 +1913,39 @@ for (const name of WORKFLOWS) {
         normalizePeer({ outcome: "passed", findings: [], reason: "", strength: 7, fallbackReason: null }).strength === "" &&
         normalizePeer({ outcome: "issues", findings: [{ claim: "x" }], reason: "", fallbackReason: "peer-review-run absent from PATH" }).outcome === "issues",
       "note-field normalization",
+    );
+    // Task 066: what a passing peer says it checked is a note too. A pass
+    // without one stays a pass, and the field rides only on a pass.
+    check(
+      "a passed review's basis is asked for, carried as a note on the round, and never changes the outcome",
+      /For a pass, add one line \\`CHECKED: <the files you read and what you judged them against>\\`\./.test(src) &&
+        /Set \\`basis\\` to the answer's \\`basis\\` value exactly/.test(src) &&
+        nullModelResult.verdict === "pass" && nullModelResult.peerRounds[0].basis === "unstated" &&
+        normalizePeer({ outcome: "passed", findings: [], reason: "", basis: "stated" }).basis === "stated" &&
+        normalizePeer({ outcome: "passed", findings: [], reason: "", basis: "yes" }).basis === "" &&
+        normalizePeer({ outcome: "issues", findings: [{ claim: "x" }], reason: "", basis: "stated" }).basis === "" &&
+        !("basis" in fallbackResult.peerRounds[1]),
+      JSON.stringify(nullModelResult.peerRounds),
+    );
+    // A stage that died cannot say whether it launched anything; its round
+    // entry names the script's record, which can. A stage that did report
+    // back needs no such pointer.
+    const deadStageAgent = async (_prompt, opts) => {
+      const label = (opts && opts.label) || "";
+      if (label === "fix#1") return { ...PASS_PACKET, changed: true, dispositions: [] };
+      if (label === "fix#2") return { ...idle };
+      if (label.startsWith("packet#")) return { measured: true, dirty: [], operation: "", detail: "" };
+      if (label === "review#1") return { ...OK };
+      if (label === "peer-preflight:codex") return { outcome: "available", detail: "" };
+      return null;
+    };
+    const deadStageResult = await loadCycle(src, museAbsent(deadStageAgent), () => {}).runReviewCycle({ ...CYCLE, peer: "on" });
+    check(
+      "a peer stage that never reported back is recorded with the read that tells a cut-off launch from one never made",
+      deadStageResult.verdict === "pass" && deadStageResult.peerRounds.length === 1 && deadStageResult.peerRounds[0].outcome === "forfeited" &&
+        deadStageResult.peerRounds[0].detail.includes("`review-cycle-peer record --artifact-root '/tmp/art/round-1/peer-codex'` tells a launch that was cut off (`started`) from one never made (`not-launched`)") &&
+        !/review-cycle-peer record/.test(nullModelResult.peerRounds[0].detail),
+      JSON.stringify(deadStageResult.peerRounds),
     );
 
     let preflightAttempts = 0;
@@ -2511,7 +2544,7 @@ const BATCH_CONTRACT_CHECKS = 11;
 // here are the pins that tie the prose and the workflow cores to it, so that a
 // launch rule cannot drift back into text a run has to assemble by hand, and
 // the few literals the prose and the script must agree on stay agreed.
-const PEER_LAUNCH_CHECKS = 15;
+const PEER_LAUNCH_CHECKS = 18;
 {
   console.log("# review-cycle prose and peer.sh — peer launch pins");
   const before = legOk + legFail;
@@ -2553,7 +2586,7 @@ const PEER_LAUNCH_CHECKS = 15;
   );
   check(
     "the Claude mirror launches codex through the script, once, in the foreground, with no model flag, under a caller wait that covers the helper's retry",
-    /`peer\.sh run --provider codex --worktree "\$worktree" --artifact-root "\$artifact_root" --facts "\$facts_file"`, exactly once, in the foreground\.\nSet the caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap/.test(pluginsStep) &&
+    /`peer\.sh run --provider codex --worktree "\$worktree" --artifact-root "\$artifact_root" --facts "\$facts_file" --round "\$round"`, exactly once, in the foreground\.\nSet the caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap/.test(pluginsStep) &&
       !/--model/.test(pluginsStep) &&
       /`review_file` is the peer's full review as plain text: read that file in full before applying verdict logic and relay every finding from it verbatim/.test(pluginsStep) &&
       /`model=null` is that note and never a reason to launch again/.test(pluginsStep),
@@ -2561,7 +2594,7 @@ const PEER_LAUNCH_CHECKS = 15;
   );
   check(
     "the Codex mirror launches claude through the script with its evidence base, reads back both pinned strength dimensions, and relays the review file verbatim",
-    /`peer\.sh run --provider claude --worktree "\$worktree" --artifact-root "\$artifact_root" --facts "\$facts_file" --evidence-base "\$effective_base"`, exactly once, in the foreground\./.test(codexStep) &&
+    /`peer\.sh run --provider claude --worktree "\$worktree" --artifact-root "\$artifact_root" --facts "\$facts_file" --evidence-base "\$effective_base" --round "\$round"`, exactly once, in the foreground\./.test(codexStep) &&
       /Set the caller-side tool wait to at least 570 seconds but strictly below its roughly 600-second cap/.test(codexStep) &&
       /The script pins both dimensions for `claude`, `opus` at an explicit medium effort/.test(codexStep) &&
       /say in it where `strength_pin=differs`/.test(codexStep) &&
@@ -2668,6 +2701,44 @@ const PEER_LAUNCH_CHECKS = 15;
     "both workflow cores launch and preflight through the shim, under the caller wait budget, and assemble no provider command",
     workflowCores.every((core) => /4\. Launch: run \\`review-cycle-peer run --provider \$\{provider\.id\} --worktree "\$worktree" --artifact-root "\$round_dir" --prompt-file "\$prompt_file"\\` exactly once, in the foreground, inside this Peer stage\. The script makes this launch a directory of its own under that root and answers its path as \\`artifact_dir\\`\. Set the caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap\./.test(core) && /Run \\`review-cycle-peer preflight --provider \$\{provider\.id\}\\`/.test(core) && !/nohup|model_reasoning_effort|--timeout 260|codex login status|muse usage|run-2|artifact_dir=/.test(core) && !/prerequisite/i.test(core.slice(core.indexOf("function cyclePeerPrompt")))),
     "shim launch in workflow cores",
+  );
+
+  // Task 066: one statement of the launch form, in the peer step, and every
+  // consumer sends its reader there instead of describing a launch.
+  check(
+    "each mirror's peer step states the one launch form, with the harness form that makes the peer concurrent",
+    [codexStep, pluginsStep].every((text) => (text.match(/\*\*The launch has one form; read this paragraph before a run's first peer launch\.\*\*\nThe Peer is a role of its own: /g) || []).length === 1) &&
+      /an `Agent` spawn \(`subagent_type: "general-purpose"`\) sent in the same message as the Reviewer's, which is what makes the two concurrent\./.test(pluginsStep) &&
+      /a tool invocation issued in the same batch as the Reviewer's spawn, which is what makes the two concurrent/.test(codexStep),
+    "launch form statement",
+  );
+  const CONSUMERS = ["address-review", "address-reviews", "address-tasks", "address-tasks-serialized"];
+  const skillFiles = ["codex", "plugins"].flatMap((tree) => {
+    const root = join(here, "..", tree, "dev-skills", "skills");
+    return readdirSync(root, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name).flatMap((skill) => readdirSync(join(root, skill)).filter((f) => f.endsWith(".md")).map((f) => ({ tree, skill, text: readFileSync(join(root, skill, f), "utf8") })));
+  });
+  const backgrounded = skillFiles.flatMap(({ tree, skill, text }) => text.split("\n").filter((line) => /background/i.test(line) && /\bpeer\b/i.test(line) && !/do not background, poll, retry, or externally signal the call/.test(line)).map((line) => `${tree}/${skill}: ${line.slice(0, 80)}`));
+  const unsent = ["codex", "plugins"].flatMap((tree) => CONSUMERS.filter((skill) => !/Read (?:the `review-cycle` skill's )?\*The peer step\*(?: there)? before the (?:batch's )?first peer launch: every rule it states binds/.test(readFileSync(join(here, "..", tree, "dev-skills", "skills", skill, "SKILL.md"), "utf8"))).map((skill) => `${tree}/${skill}`));
+  check(
+    "no skill in either mirror backgrounds a peer, and each consumer sends its reader to the peer step before the first launch",
+    skillFiles.length > 20 && backgrounded.length === 0 && unsent.length === 0,
+    JSON.stringify({ backgrounded, unsent }),
+  );
+  const briefs = ["codex", "plugins"].map((tree) => readFileSync(join(skillDir(tree), "peer-brief.md"), "utf8"));
+  check(
+    "the peer step says how the facts file is written, who raises the effort, what a pass without a basis is, and how a round's launches are read, on the script's own literals",
+    [codexStep, pluginsStep].every(
+      (text) =>
+        /Write that file with a quoted heredoc \(`<<'FACTS'`\) or a file-writing tool, never through shell interpolation/.test(text) &&
+        /`--effort <level>` raises it for that one call, on the invoker's request or where you can name the risk in the change that warrants it\./.test(text) &&
+        /On `passed`, `basis=unstated` means the review does not say what it checked: still a pass/.test(text) &&
+        /`peer\.sh record --artifact-root "\$artifact_root" --round "\$round"`\.\nIt prints each launch's last answer, or `outcome=not-launched`\./.test(text) &&
+        /a prompt above 150000 bytes/.test(text),
+    ) &&
+      /\nLONG_BYTES=150000\n/.test(script) && /\nBUDGET_SHORT="--timeout 260"\nBUDGET_LONG="--timeout 540 --attempts 1"\n/.test(script) &&
+      /emit_lines not-launched ''/.test(script) && /record_put "\$\(emit_lines started ''\)"/.test(script) &&
+      briefs[0] === briefs[1] && /\n- For `PASS`, one line `CHECKED: <the files you read and what you judged them against>`\.\n/.test(briefs[0]),
+    "066 peer step literals",
   );
 
   const n = legOk + legFail - before;
