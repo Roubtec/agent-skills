@@ -114,6 +114,10 @@ crash-provider)
 	echo "peer-review-run: the --provider launch could not be prepared" >&2
 	exit 70
 	;;
+cutoff)
+	kill -KILL "$PPID"
+	exit 0
+	;;
 raw)
 	cat "$STEER/helper.raw"
 	exit 0
@@ -329,6 +333,7 @@ usage_case "an artifact directory that climbs back into the worktree past a dire
 ok "2: ...and nothing on that path is created" $?
 usage_case "the worktree itself as artifact directory" run --provider codex --worktree "$REPO" --artifact-dir "$REPO" --facts "$FACTS"
 usage_case "neither an artifact root nor an artifact directory" run --provider codex --worktree "$REPO" --facts "$FACTS"
+has "2: ...told of both flags" "$OUT" "give --artifact-root <abs dir> or --artifact-dir <abs dir>"
 usage_case "an artifact root beside an artifact directory" run --provider codex --worktree "$REPO" --artifact-root "$WORKDIR/art/both-root" --artifact-dir "$A" --facts "$FACTS"
 has "2: ...named as the choice it is" "$OUT" "give --artifact-root or --artifact-dir, not both"
 [ ! -e "$WORKDIR/art/both-root" ] && [ ! -e "$A" ]
@@ -1086,6 +1091,169 @@ is "8: ...naming the recorded provider and what it survived" "$(val pid)|$(val r
 has "8: ...after TERM went to that identity" "$(signals)" "-TERM $PID|-0 $PID|"
 has "8: ...and KILL" "$(signals)" "-KILL $PID|"
 kill -KILL "$PID" 2>/dev/null
+
+# --- 9: the budget, the effort, the basis and the round's record ---------------------
+BIN="$ALL"
+sized() { head -c "$1" /dev/zero | tr '\0' x >"$WORKDIR/sized.txt"; }
+budget_case() { # <label> <provider> <prompt bytes> <expected budget> <expected helper flags> [run args...]
+	local label="$1" provider="$2" bytes="$3" want="$4" flags="$5"
+	shift 5
+	fresh
+	sized "$bytes"
+	OUT="$(peer run --provider "$provider" --worktree "$REPO" --artifact-dir "$A" --prompt-file "$WORKDIR/sized.txt" "$@")"
+	is "9: $label" "$(first)|$(val budget)|$(val prompt_bytes)|$(sed 's/.*peer-review-run //' "$STEER/helper.calls")" "outcome=passed|$want|$bytes|$flags --effort medium"
+}
+budget_case "a prompt of 150000 bytes keeps two short attempts, and the answer says so" codex 150000 short "--timeout 260"
+budget_case "one byte more gets one long attempt" codex 150001 long "--timeout 540 --attempts 1"
+budget_case "the caller can force the short budget on a large review" codex 150001 short "--timeout 260" --budget short
+budget_case "...and the long one on a small review" codex 20 long "--timeout 540 --attempts 1" --budget long
+budget_case "muse keeps its one long attempt at any size" muse 20 long "--timeout 540 --attempts 1"
+budget_case "...unless the caller forces the short budget" muse 20 short "--timeout 260" --budget short
+fresh
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --evidence-base "$BASE_OID" --budget auto)"
+is "9: the measured size is that of the whole prompt, embedded evidence included" "$(val prompt_bytes)" "$(wc -c <"$A/peer-review.prompt" | tr -d ' ')"
+fresh
+OUT="$(nojq run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" 2>&1)"
+is "9: a size that cannot be measured costs the launch nothing: the default budget, and no size claimed" "$(first)|$(val budget)|$(val prompt_bytes)" "outcome=launched|short|"
+nojq collect --artifact-dir "$A" >/dev/null
+
+BIN="$NOHELPER"
+fresh
+echo crash >"$STEER/codex.mode"
+launch --budget long >/dev/null
+is "9: on the direct launch a long budget is one attempt of twice the deadline" "$(sed -n 's/^deadline=//p' "$A/manual.state")" 1440
+OUT="$(peer collect --artifact-dir "$A")"
+is "9: ...with no retry after a crash, and the answer says which budget ran" "$(first)|$(val budget)|$(val attempt)|$(cat "$STEER/codex.count")" "outcome=failed|long|1|1"
+fresh
+launch --deadline 7 >/dev/null
+is "9: ...and a short one keeps the deadline it was given" "$(sed -n 's/^deadline=//p' "$A/manual.state")" 7
+peer collect --artifact-dir "$A" >/dev/null
+
+BIN="$ALL"
+fresh
+echo '"high"' >"$STEER/helper.effort"
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --effort high)"
+is "9: an effort given to run is what the helper is handed" "$(sed 's/.*--timeout 260 //' "$STEER/helper.calls")" "--effort high"
+is "9: ...and what the answer reports, as a pin that held" "$(first)|$(val effort)|$(val strength_pin)" "outcome=passed|high|held"
+fresh
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --effort high)"
+is "9: a helper that reviewed at another effort than the one asked for is a pin that differs" "$(val effort)|$(val strength_pin)" "medium|differs"
+fresh
+proof zebracrossing >"$STEER/helper.review"
+echo '"opus"' >"$STEER/helper.model"
+echo '"max"' >"$STEER/helper.effort"
+OUT="$(peer run --provider claude --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --evidence-base "$BASE_OID" --effort max)"
+is "9: claude takes max" "$(first)|$(val effort)|$(val strength_pin)|$(sed 's/.*--model //' "$STEER/helper.calls")" "outcome=passed|max|held|opus --effort max"
+fresh
+usage_case "an effort that is no level" run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --effort extreme
+usage_case "max for codex, which offers none" run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --effort max
+usage_case "a budget that is no budget" run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --budget huge
+usage_case "a round that is not a number" run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --round two
+[ ! -e "$STEER/helper.calls" ] && [ ! -e "$A" ]
+ok "9: ...and none of them launched or created anything" $?
+BIN="$NOHELPER"
+fresh
+echo crash >"$STEER/codex.mode.1"
+launch --effort high >/dev/null
+OUT="$(peer collect --artifact-dir "$A")"
+is "9: the direct launch reviews at the effort given, its retry too, and reports it" "$(first)|$(val effort)|$(args_of codex 1 | grep -c 'model_reasoning_effort=high')|$(args_of codex 2 | grep -c 'model_reasoning_effort=high')" "outcome=passed|high|1|1"
+
+BIN="$ALL"
+basis_case() { # <label> <review text> <expected first line> <expected basis>
+	fresh
+	printf '%s\n' "$2" >"$STEER/helper.review"
+	OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS")"
+	is "9: $1" "$(first)|$(val basis)" "$3|$4"
+}
+basis_case "a pass that says what it checked is a pass with its basis stated" "VERDICT: PASS
+VERIFICATION: STATIC (executed no tests)
+CHECKED: a.txt against the work item" "outcome=passed" stated
+basis_case "a pass that does not is a pass all the same, with its basis unstated" "VERDICT: PASS
+VERIFICATION: STATIC (executed no tests)" "outcome=passed" unstated
+basis_case "a CHECKED line that names nothing states nothing" "VERDICT: PASS
+CHECKED:   " "outcome=passed" unstated
+basis_case "a CHECKED line under Markdown emphasis counts" "VERDICT: PASS
+**CHECKED:** a.txt" "outcome=passed" stated
+basis_case "the word inside a sentence is not that line" "VERDICT: PASS
+I checked: everything" "outcome=passed" unstated
+fresh
+echo issues >"$STEER/helper.mode"
+printf 'VERDICT: ISSUES\nCHECKED: a.txt\n1. blocking a.txt:2 wrong\n' >"$STEER/helper.review"
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS")"
+is "9: issues carry findings, not a basis" "$(first)|$(val basis)" "outcome=issues|"
+fresh
+printf 'VERDICT: PASS\nCHECKED: a.txt\n' >"$STEER/helper.review"
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --evidence-base "$BASE_OID")"
+is "9: nor does a pass forfeited for its missing proof" "$(first)|$(val basis)" "outcome=forfeited|"
+BIN="$NOHELPER"
+fresh
+printf 'VERDICT: PASS\nCHECKED: a.txt against the work item\n' >"$STEER/codex.review"
+launch >/dev/null
+OUT="$(peer collect --artifact-dir "$A")"
+is "9: the direct launch reports the basis too" "$(first)|$(val basis)" "outcome=passed|stated"
+
+# The round's record: what a round decision reads instead of trusting a role's report.
+BIN="$ALL"
+fresh
+OUT="$(peer record --artifact-root "$A")"
+is "9: a root no run ever used answers not-launched, and exits 0" "$?|$OUT" "0|outcome=not-launched
+reason="
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-root "$A" --facts "$FACTS" --round 2)"
+D1="$(val artifact_dir)"
+is "9: a run given a round answers it" "$(first)|$(val round)" "outcome=passed|2"
+RUN_OUT="$OUT"
+OUT="$(peer record --artifact-root "$A" --round 2)"
+is "9: the record of that round is the answer the run gave" "$OUT" "$RUN_OUT"
+OUT="$(peer record --artifact-root "$A" --round 3 --provider codex)"
+is "9: another round was not launched, and the answer names what was asked" "$(first)|$(val provider)|$(val round)" "outcome=not-launched|codex|3"
+OUT="$(peer record --artifact-root "$A" --round 2 --provider muse)"
+is "9: nor was another provider in this one" "$(first)" "outcome=not-launched"
+peer run --provider muse --worktree "$REPO" --artifact-root "$A" --facts "$FACTS" --round 2 >/dev/null
+peer run --provider codex --worktree "$REPO" --artifact-root "$A" --facts "$FACTS" --round 3 >/dev/null
+OUT="$(peer record --artifact-root "$A" --round 2)"
+is "9: two providers launched in one round are two blocks, an empty line between them" "$(printf '%s\n' "$OUT" | grep -c '^outcome=passed$')|$(printf '%s\n' "$OUT" | grep -c '^$')|$(printf '%s\n' "$OUT" | grep -c '^round=2$')|$(printf '%s\n' "$OUT" | sed -n 's/^provider=//p' | sort | tr '\n' ' ')" "2|1|2|codex muse "
+OUT="$(peer record --artifact-root "$A" --round 2 --provider codex)"
+is "9: ...narrowed to one by its provider" "$(printf '%s\n' "$OUT" | grep -c '^outcome=')|$(val artifact_dir)" "1|$D1"
+OUT="$(peer record --artifact-dir "$D1")"
+is "9: one attempt directory answers its own record" "$(first)|$(val round)|$(val artifact_dir)" "outcome=passed|2|$D1"
+usage_case "a record with no directory" record
+usage_case "a record with both directories" record --artifact-root "$A" --artifact-dir "$D1"
+usage_case "a record of a round that is not a number" record --artifact-root "$A" --round last
+
+fresh
+echo cutoff >"$STEER/helper.mode"
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-root "$A" --facts "$FACTS" --round 1 2>/dev/null)"
+is "9: a run killed while its review ran answers nothing" "$?|$OUT" "137|"
+OUT="$(peer record --artifact-root "$A" --round 1)"
+is "9: ...and its record says a launch was started and never answered" "$(first)|$(val provider)|$(val round)" "outcome=started|codex|1"
+case "$(val artifact_dir)" in "$A"/peer-run.??????) ok "9: ...naming the attempt directory to look in" 0 ;; *) ok "9: ...naming the attempt directory to look in" 1 ;; esac
+
+BIN="$NOHELPER"
+fresh
+echo late >"$STEER/codex.mode"
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-root "$A" --facts "$FACTS" --round 4)"
+D1="$(val artifact_dir)"
+OUT="$(peer record --artifact-root "$A" --round 4)"
+is "9: a direct launch is recorded as launched" "$(first)|$(val attempt)" "outcome=launched|1"
+peer collect --artifact-dir "$D1" --wait 1 >/dev/null
+OUT="$(peer record --artifact-root "$A" --round 4)"
+is "9: ...as pending while collect still waits, the round kept" "$(first)|$(val round)" "outcome=pending|4"
+kill -KILL "$(cut -d' ' -f1 "$D1/manual-attempt-1/peer-review.pid")" 2>/dev/null
+RUN_OUT="$(peer collect --artifact-dir "$D1")"
+OUT="$(peer record --artifact-root "$A" --round 4)"
+is "9: ...and as what collect last answered once it is in" "$(first)|$(printf '%s\n' "$OUT" | grep -v '^artifact_dir=')" "outcome=passed|$RUN_OUT"
+
+BIN="$ALL"
+fresh
+mkdir -p "$A/peer.record.new"
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" 2>"$WORKDIR/stderr")"
+is "9: a record that cannot be written changes no answer" "$?|$(first)|$(val review_file)" "0|outcome=passed|$A/peer-review-run/session/attempt-1/review.txt"
+has "9: ...and is said on stderr" "$(cat "$WORKDIR/stderr")" "peer: cannot write $A/peer.record"
+OUT="$(peer record --artifact-dir "$A")"
+is "9: ...leaving nothing to read back" "$(first)" "outcome=not-launched"
+OUT="$(bash "$SHIPPED" --help 2>&1)"
+has "9: the contract states the size threshold" "$OUT" "Up to 150000"
+has "9: ...and the record's two answers that are not review outcomes" "$OUT" "So \`started\` is a launch that was"
 
 if [ "$fails" -gt 0 ]; then
 	printf 'review-cycle peer helper test: %d/%d checks FAILED.\n' "$fails" "$checks" >&2
