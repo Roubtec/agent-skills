@@ -95,7 +95,7 @@ function check(name, cond, detail) {
 // BEFORE the assertion itself, so it does not count). Bump it deliberately
 // when adding or removing one — that is the point: the number is the
 // assertion.
-const CHECKS_PER_LEG = 249;
+const CHECKS_PER_LEG = 250;
 
 // Every scenario runs inside its own guard. A scenario that THROWS — an
 // unexpected shape, a cycle that blew up — is recorded as a failed check and
@@ -1943,9 +1943,39 @@ for (const name of WORKFLOWS) {
     check(
       "a peer stage that never reported back is recorded with the read that tells a cut-off launch from one never made",
       deadStageResult.verdict === "pass" && deadStageResult.peerRounds.length === 1 && deadStageResult.peerRounds[0].outcome === "forfeited" &&
-        deadStageResult.peerRounds[0].detail.includes("`review-cycle-peer record --artifact-root '/tmp/art/round-1/peer-codex'` tells a launch that was cut off (`started`) from one never made (`not-launched`)") &&
+        deadStageResult.peerRounds[0].detail.includes("outcome unknown until the round's record is read: `review-cycle-peer record --artifact-root '/tmp/art/round-1/peer-codex'` tells a launch that was cut off (`started`) from one never made (`not-launched`)") &&
         !/review-cycle-peer record/.test(nullModelResult.peerRounds[0].detail),
       JSON.stringify(deadStageResult.peerRounds),
+    );
+    // The read itself: one thin stage after a stage that never reported back.
+    // A finished review comes back as that review, with the notes the script
+    // reported; a launch never made is recorded as that, and neither is
+    // written up as unknown.
+    const recordRun = async (answer) => {
+      let reads = 0;
+      const recordAgent = async (prompt, opts) => {
+        const label = (opts && opts.label) || "";
+        if (label === "peer-record:codex#1") {
+          reads += /Run `review-cycle-peer record --artifact-root '\/tmp\/art\/round-1\/peer-codex'` once\./.test(prompt) ? 1 : 100;
+          return answer;
+        }
+        return deadStageAgent(prompt, opts);
+      };
+      const result = await loadCycle(src, museAbsent(recordAgent), () => {}).runReviewCycle({ ...CYCLE, peer: "on" });
+      return { entry: result.peerRounds[0], verdict: result.verdict, reads };
+    };
+    const recovered = await recordRun({ outcome: "passed", findings: [], notes: "", detail: "", reason: "provider exited 0 with an explicit pass verdict", teardownFailure: false, basis: "stated", budget: "budget=long prompt_bytes=4521 diff_bytes=160946" });
+    const neverLaunched = await recordRun({ outcome: "not-launched", findings: [], notes: "", detail: "", reason: "", teardownFailure: false });
+    check(
+      "a peer stage that never reported back is followed by one read of the round's record: a finished review is recovered with its budget, and a launch never made is recorded as that",
+      recovered.reads === 1 && recovered.verdict === "pass" && recovered.entry.outcome === "passed" && recovered.entry.reason === "provider exited 0 with an explicit pass verdict" &&
+        recovered.entry.basis === "stated" && recovered.entry.budget === "budget=long prompt_bytes=4521 diff_bytes=160946" &&
+        /read from the round's record after its stage ended without reporting back/.test(recovered.entry.detail) && !/outcome unknown/.test(recovered.entry.detail) && !("recordOutcome" in recovered.entry) &&
+        neverLaunched.reads === 1 && neverLaunched.verdict === "pass" && neverLaunched.entry.outcome === "forfeited" && neverLaunched.entry.recordOutcome === "not-launched" &&
+        /the round's record answers "not-launched"/.test(neverLaunched.entry.detail) && !/outcome unknown/.test(neverLaunched.entry.detail) &&
+        !("budget" in neverLaunched.entry) && normalizePeer({ outcome: "timeout", findings: [], reason: "", budget: 5 }).budget === "" &&
+        normalizePeer({ outcome: "passed", findings: [], reason: "", recordOutcome: "not-launched" }).recordOutcome === "",
+      JSON.stringify({ recovered, neverLaunched }),
     );
 
     let preflightAttempts = 0;
@@ -2586,7 +2616,7 @@ const PEER_LAUNCH_CHECKS = 18;
   );
   check(
     "the Claude mirror launches codex through the script, once, in the foreground, with no model flag, under a caller wait that covers the helper's retry",
-    /`peer\.sh run --provider codex --worktree "\$worktree" --artifact-root "\$artifact_root" --facts "\$facts_file" --round "\$round"`, exactly once, in the foreground\.\nSet the caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap/.test(pluginsStep) &&
+    /`peer\.sh run --provider codex --worktree "\$worktree" --artifact-root "\$artifact_root" --facts "\$facts_file" --base "\$effective_base" --round "\$round"`, exactly once, in the foreground\.\nSet the caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap/.test(pluginsStep) &&
       !/--model/.test(pluginsStep) &&
       /`review_file` is the peer's full review as plain text: read that file in full before applying verdict logic and relay every finding from it verbatim/.test(pluginsStep) &&
       /`model=null` is that note and never a reason to launch again/.test(pluginsStep),
@@ -2699,7 +2729,7 @@ const PEER_LAUNCH_CHECKS = 18;
   check("the two executable review-cycle cores remain byte-identical", workflowCores[0] === workflowCores[1], `${workflowCores[0].length}/${workflowCores[1].length}`);
   check(
     "both workflow cores launch and preflight through the shim, under the caller wait budget, and assemble no provider command",
-    workflowCores.every((core) => /4\. Launch: run \\`review-cycle-peer run --provider \$\{provider\.id\} --worktree "\$worktree" --artifact-root "\$round_dir" --prompt-file "\$prompt_file"\\` exactly once, in the foreground, inside this Peer stage\. The script makes this launch a directory of its own under that root and answers its path as \\`artifact_dir\\`\. Set the caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap\./.test(core) && /Run \\`review-cycle-peer preflight --provider \$\{provider\.id\}\\`/.test(core) && !/nohup|model_reasoning_effort|--timeout 260|codex login status|muse usage|run-2|artifact_dir=/.test(core) && !/prerequisite/i.test(core.slice(core.indexOf("function cyclePeerPrompt")))),
+    workflowCores.every((core) => /4\. Launch: run \\`review-cycle-peer run --provider \$\{provider\.id\} --worktree "\$worktree" --artifact-root "\$round_dir" --prompt-file "\$prompt_file" --base \$\{cycleShq\(cycle\.base\)\} --round \$\{state\.round\}\\` exactly once, in the foreground, inside this Peer stage\. The script makes this launch a directory of its own under that root and answers its path as \\`artifact_dir\\`\. Set the caller-side Bash\/tool wait to at least 570 seconds but strictly below its roughly 600-second cap\./.test(core) && /Run \\`review-cycle-peer preflight --provider \$\{provider\.id\}\\`/.test(core) && !/nohup|model_reasoning_effort|--timeout 260|codex login status|muse usage|run-2|artifact_dir=/.test(core) && !/prerequisite/i.test(core.slice(core.indexOf("function cyclePeerPrompt")))),
     "shim launch in workflow cores",
   );
 
@@ -2733,8 +2763,12 @@ const PEER_LAUNCH_CHECKS = 18;
         /`--effort <level>` raises it for that one call, on the invoker's request or where you can name the risk in the change that warrants it\./.test(text) &&
         /On `passed`, `basis=unstated` means the review does not say what it checked: still a pass/.test(text) &&
         /`peer\.sh record --artifact-root "\$artifact_root" --round "\$round"`\.\nIt prints each launch's last answer, or `outcome=not-launched`\./.test(text) &&
-        /a prompt above 150000 bytes/.test(text),
+        /150000 bytes/.test(text) &&
+        !/pass `--budget long`/.test(text),
     ) &&
+      /`--base`, the effective review base, has it measure the diff, and prompt and diff above 150000 bytes together get one long attempt/.test(pluginsStep) &&
+      /a prompt above 150000 bytes, the embedded diff included, gets one long attempt/.test(codexStep) &&
+      /\[ "\$\(\(\$\{R_BYTES:-0\} \+ \$\{R_DIFF:-0\}\)\)" -le "\$LONG_BYTES" \] \|\| BUDGET="\$BUDGET_LONG"/.test(script) &&
       /\nLONG_BYTES=150000\n/.test(script) && /\nBUDGET_SHORT="--timeout 260"\nBUDGET_LONG="--timeout 540 --attempts 1"\n/.test(script) &&
       /emit_lines not-launched ''/.test(script) && /record_put "\$\(emit_lines started ''\)"/.test(script) &&
       briefs[0] === briefs[1] && /\n- For `PASS`, one line `CHECKED: <the files you read and what you judged them against>`\.\n/.test(briefs[0]),

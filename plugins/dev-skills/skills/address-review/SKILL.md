@@ -138,7 +138,7 @@ A run that halts instead — a blocker, an unresolved conflict, a failed publica
 At top level, address ordinary feedback **inline** and delegate only large or independent rework — plus every rebase, which is delegated whatever its size.
 Then hand verification to a **fresh, independent reviewer subagent** and, by default, an independent best-effort `codex` peer.
 
-Three top-level subagent roles — all spawned via the `Agent` tool with `subagent_type: "general-purpose"` — plus a best-effort peer CLI:
+Three top-level subagent roles — all spawned via the `Agent` tool with `subagent_type: "general-purpose"` — plus a best-effort peer, spawned the same way to run its CLI:
 
 - **Fixer** (optional) — handles a large, multi-file, or exploratory fix for one or more related comments.
   Skip it for small surgical fixes you can do directly.

@@ -1307,6 +1307,7 @@ const CYCLE_PEER_SCHEMA = {
     detail: { type: "string", description: "For a non-passed/issues outcome: why (logged out, timed out after retry, empty output, provider crash...)." },
     strength: { type: "string", description: "The round's strength note: `model=<model> effort=<effort>` exactly as the script's `model` and `effort` lines report them (a null written as `null`). On the helper path that is what the helper result reports; on the direct launch it is what the launch pinned, `effort=<effort>` alone where it named no model. Empty where the answer carries neither line." },
     basis: { type: "string", description: "The script's `basis` line on a passed review: `stated` where the review carries a `CHECKED:` line saying what it looked at, `unstated` where it does not. Empty on every other outcome. A note for the round's record; it never changes the outcome." },
+    budget: { type: "string", description: "The attempt budget the script applied and the sizes it chose it from: `budget=<short|long> prompt_bytes=<n> diff_bytes=<n>` exactly as its lines report them, a missing line left out. Empty where the answer has no `budget` line. A note a `timeout` is read against; it decides nothing." },
     fallbackReason: { type: "string", description: "Empty on the helper path. When this round took the direct launch, the script's one-line reason: the helper was absent from PATH, its result could not be read, or its passed/issues result carried no usable `reviewFile`." },
     reason: { type: "string", description: "The provider/helper reason verbatim; distinguishes empty/garbled forfeitures for the adaptive throttle. Always emit it: an empty string where the outcome carries no reason, never an omitted field." },
     teardownFailure: { type: "boolean", description: "The ONE result that is not non-blocking: true ONLY when a provider process this stage launched could not be proven dead after the bounded TERM/KILL sequence. The cycle stops on it for operator intervention. False on every ordinary path, including this stage's own failures." },
@@ -1755,9 +1756,9 @@ ${CYCLE_FINISH_IN_TURN} ${direct ? "The launch command runs in the foreground an
 ${preflightStep}
 2. Set \`worktree\` to the absolute worktree path the contract above names, then prepare this stage's own paths under this cycle's artifact directory: \`round_dir=${cycleShq(`${state.artifactDir}/round-${state.round}/peer-${provider.id}`)}\`, \`mkdir -p "$round_dir"\`, and \`prompt_file="$round_dir/peer-prompt.txt"\`. That directory is outside the reviewed worktree by construction. Another peer's stage is running beside this one with a directory of its own; stay inside yours.
 3. Write the peer prompt below VERBATIM to \`$prompt_file\` with a quoted heredoc (\`<<'PEER_PROMPT'\`) — never assemble it through shell interpolation.
-4. Launch: run \`review-cycle-peer run --provider ${provider.id} --worktree "$worktree" --artifact-root "$round_dir" --prompt-file "$prompt_file"\` exactly once, in the foreground, inside this Peer stage. The script makes this launch a directory of its own under that root and answers its path as \`artifact_dir\`. Set the caller-side Bash/tool wait to at least 570 seconds but strictly below its roughly 600-second cap. Do not background, poll, retry, or signal it: the script runs the \`peer-review-run\` helper where that is on PATH, at medium effort and with no model named, and the helper owns timeout, transient-only retry, and provider-tree reaping inside that wait.${provider.launchNote} The script answers in \`key=value\` lines, \`outcome=\` first.
+4. Launch: run \`review-cycle-peer run --provider ${provider.id} --worktree "$worktree" --artifact-root "$round_dir" --prompt-file "$prompt_file" --base ${cycleShq(cycle.base)} --round ${state.round}\` exactly once, in the foreground, inside this Peer stage. The script makes this launch a directory of its own under that root and answers its path as \`artifact_dir\`. Set the caller-side Bash/tool wait to at least 570 seconds but strictly below its roughly 600-second cap. \`--base\` has the script measure the diff, which this prompt does not hold, so a large review gets one long attempt instead of two short ones. Do not background, poll, retry, or signal it: the script runs the \`peer-review-run\` helper where that is on PATH, at medium effort and with no model named, and the helper owns timeout, transient-only retry, and provider-tree reaping inside that wait.${provider.launchNote} The script answers in \`key=value\` lines, \`outcome=\` first.
 5. ${direct ? "If the answer is \`outcome=launched\`, the script started the provider directly, because the helper is absent, \`jq\` is not there to read its result, or its verdict named no usable review file: set \`fallbackReason\` to the \`fallback_reason\` value exactly, then run \`review-cycle-peer collect --artifact-dir \"$artifact_dir\"\`, with the \`artifact_dir\` value of that answer exactly, under the same wait, and again for as long as it answers \`outcome=pending\`. The script owns that launch's deadline, its one retry, and its teardown; never probe or signal the provider yourself. On any other answer \`fallbackReason\` stays empty." : "This provider has no direct launch, so the script never answers \`launched\` and \`fallbackReason\` stays empty: a missing helper, or one too old for this provider, comes back \`unavailable\`."}
-6. Carry the final answer's \`outcome\` and \`reason\` exactly: the script's \`reason\` verbatim, the empty string where it is empty — never omitted, and never invented. Set \`strength\` to \`model=<model> effort=<effort>\` exactly as its \`model\` and \`effort\` lines report them, to \`effort=<effort>\` alone where it has no \`model\` line (a direct launch that named no model), or to the empty string where it has neither; a \`model=null\` is a strength note and never a reason to launch again. Set \`basis\` to the answer's \`basis\` value exactly (\`stated\` or \`unstated\`: whether a passing review said what it checked, which never changes the outcome), or to the empty string where it has no such line. Exit status 3 is the one stop: the script could not prove a provider it launched dead (\`teardown=survivor\`). Do not retry, do not decide the round, and do not advance: return immediately with \`teardownFailure\` true, outcome \`failed\`, and a \`detail\` naming the surviving \`pid\` and the \`reason\`. The cycle stops on that flag for operator intervention; a non-blocking outcome alone would let it keep fixing and publishing while the provider is still alive. Any other non-zero exit, or an answer with no \`outcome=\` line, is the script's own failure and never a verdict: return \`failed\` with its stderr line as \`detail\`.
+6. Carry the final answer's \`outcome\` and \`reason\` exactly: the script's \`reason\` verbatim, the empty string where it is empty — never omitted, and never invented. Set \`strength\` to \`model=<model> effort=<effort>\` exactly as its \`model\` and \`effort\` lines report them, to \`effort=<effort>\` alone where it has no \`model\` line (a direct launch that named no model), or to the empty string where it has neither; a \`model=null\` is a strength note and never a reason to launch again. Set \`basis\` to the answer's \`basis\` value exactly (\`stated\` or \`unstated\`: whether a passing review said what it checked, which never changes the outcome), or to the empty string where it has no such line. Set \`budget\` to \`budget=<budget> prompt_bytes=<n> diff_bytes=<n>\` exactly as those lines report them, leaving out a line the answer lacks, or to the empty string where it has no \`budget\` line. Exit status 3 is the one stop: the script could not prove a provider it launched dead (\`teardown=survivor\`). Do not retry, do not decide the round, and do not advance: return immediately with \`teardownFailure\` true, outcome \`failed\`, and a \`detail\` naming the surviving \`pid\` and the \`reason\`. The cycle stops on that flag for operator intervention; a non-blocking outcome alone would let it keep fixing and publishing while the provider is still alive. Any other non-zero exit, or an answer with no \`outcome=\` line, is the script's own failure and never a verdict: return \`failed\` with its stderr line as \`detail\`.
 7. For \`passed\` or \`issues\`, read the file \`review_file\` names in full — the peer's complete review as plain text — and nothing else: never enumerate the artifact directory, guess a filename, or parse a provider-specific envelope. For \`issues\`, map every numbered finding verbatim into \`findings\` (severity from its \`blocking\`/\`minor\` tag — default \`blocking\` when untagged — plus its \`file:line\` as \`location\` and the finding text as \`claim\`; do not summarize, merge, or rewrite). For either verdict, copy into \`notes\` ONLY valid bullets immediately below the exact \`NOTES (advisory; not necessarily fixes)\` heading: at most three \`- path:line — note\` lines whose note is at most 15 words. Preserve those bullets verbatim; ignore malformed, surplus, or over-budget entries and all other prose, including the verification line and findings. With no valid bullets, return empty \`notes\`.
 
 ## Peer prompt (write this text to the prompt file verbatim, filling only the placeholders)
@@ -1770,7 +1771,7 @@ Reason as deeply as needed, then keep the final output compact. Put exactly \`VE
 
 ## Output
 
-Return the structured result: \`outcome\`, \`findings\` (verbatim, tagged), \`notes\`, \`detail\`, \`reason\` copied exactly from the provider/helper reason (the empty string when there is none — never an omitted field), \`strength\`, \`basis\` and \`fallbackReason\` as steps 5 and 6 define them (empty where they do not apply), and \`teardownFailure\` (\`false\` on every ordinary path, \`true\` only for the surviving-provider stop above).`;
+Return the structured result: \`outcome\`, \`findings\` (verbatim, tagged), \`notes\`, \`detail\`, \`reason\` copied exactly from the provider/helper reason (the empty string when there is none — never an omitted field), \`strength\`, \`basis\`, \`budget\` and \`fallbackReason\` as steps 5 and 6 define them (empty where they do not apply), and \`teardownFailure\` (\`false\` on every ordinary path, \`true\` only for the surviving-provider stop above).`;
 }
 
 function cyclePeerPreflightPrompt(provider) {
@@ -1827,6 +1828,7 @@ function normalizeCyclePeerResult(res) {
     reason: typeof res.reason === "string" ? res.reason : "",
     strength: typeof res.strength === "string" ? res.strength : "",
     basis: outcome === "passed" && (res.basis === "stated" || res.basis === "unstated") ? res.basis : "",
+    budget: typeof res.budget === "string" ? res.budget : "",
     fallbackReason: typeof res.fallbackReason === "string" ? res.fallbackReason : "",
     teardownFailure: res.teardownFailure === true,
     detail: typeof res.detail === "string" && res.detail
@@ -1837,7 +1839,47 @@ function normalizeCyclePeerResult(res) {
     // preflight must not be considered done on their account. A real agent
     // result never sets it (the field is not in CYCLE_PEER_SCHEMA).
     synthesized: res.synthesized === true,
+    // What the round's record answered for a stage that never reported back;
+    // only the script sets it, beside `synthesized`.
+    recordOutcome: res.synthesized === true && typeof res.recordOutcome === "string" ? res.recordOutcome : "",
   };
+}
+
+// A stage that never reported back may still have launched a review, and may
+// even have finished one: the script keeps its own record of the round. One
+// thin stage reads it, so a finished review is recovered, and a launch that was
+// never made is recorded as that rather than guessed at.
+function cyclePeerRecordPrompt(cycle, state, provider) {
+  return `Read-only recovery for one review-cycle round. The \`${provider.id}\` peer stage of this round ended without reporting back, and the script that launches peers keeps its own record of what it did. Launch no review, and never fail: every problem is the \`unreadable\` answer below.
+
+## WORKTREE CONTRACT
+
+${cycleContract(cycle, "peer")}
+
+${CYCLE_DESTROY_BOUNDARY}
+
+${CYCLE_FINISH_IN_TURN}
+
+Run \`review-cycle-peer record --artifact-root ${cycleShq(`${state.artifactDir}/round-${state.round}/peer-${provider.id}`)}\` once. It prints one block of \`key=value\` lines per launch that stage made, normally one; with several, use the last. Return the block's \`outcome\` value exactly as \`outcome\` — \`not-launched\`, \`started\`, \`launched\` and \`pending\` included, which are record answers rather than review outcomes — and its \`reason\` exactly as \`reason\`, the empty string where it is empty. For \`passed\` or \`issues\`, read the file its \`review_file\` line names in full: for \`issues\`, map every numbered finding verbatim into \`findings\` (severity from its \`blocking\`/\`minor\` tag, \`blocking\` when untagged, its \`file:line\` as \`location\`, the finding text as \`claim\`); for either, copy into \`notes\` only valid bullets below the exact \`NOTES (advisory; not necessarily fixes)\` heading. Set \`strength\` to \`model=<model> effort=<effort>\`, \`basis\` to the \`basis\` value, and \`budget\` to \`budget=<budget> prompt_bytes=<n> diff_bytes=<n>\`, each exactly as the block's lines report them, a missing line left out and a field with no line left empty. Set \`teardownFailure\` true only where the block carries \`teardown=survivor\`, and false otherwise. If the command cannot be run or prints no \`outcome=\` line, return outcome \`unreadable\` with its error as \`detail\`. Return only the schema.`;
+}
+
+async function recoverCyclePeerRecord(cycle, state, provider, lost) {
+  let res = null;
+  try {
+    res = await agent(cyclePeerRecordPrompt(cycle, state, provider), {
+      label: `${cycle.labelPrefix || ""}peer-record:${provider.id}#${state.round}`,
+      schema: CYCLE_PEER_SCHEMA,
+      phase: CYCLE_PEER_PHASE,
+    });
+  } catch (e) {
+    res = null;
+  }
+  if (!res || typeof res !== "object" || typeof res.outcome !== "string" || res.outcome === "unreadable") return lost;
+  if (["passed", "issues", "unavailable", "timeout", "forfeited", "failed"].includes(res.outcome)) {
+    const found = normalizeCyclePeerResult(res);
+    return { ...found, detail: [found.detail, "read from the round's record after its stage ended without reporting back"].filter(Boolean).join("; ") };
+  }
+  return { ...lost, recordOutcome: res.outcome, detail: `${lost.detail}; the round's record answers ${JSON.stringify(res.outcome)}` };
 }
 
 // A shared fan-out state cannot coordinate preflight with its boolean alone.
@@ -2022,6 +2064,7 @@ async function runCyclePeerStage(cycle, state, provider) {
     // A thrown stage must not drop the round (or, under pipeline(), the item).
     result = { outcome: "forfeited", findings: [], notes: "", reason: "", detail: `peer stage threw (${e && e.message ? e.message : String(e)}); recorded non-blocking`, synthesized: true };
   }
+  if (result.synthesized) result = await recoverCyclePeerRecord(cycle, state, provider, result);
   releaseCyclePeerSlot(state.peerThrottle, launchGeneration, result, provider);
   if (result.outcome === "unavailable") {
     providerState.unavailable = true;
@@ -2369,7 +2412,10 @@ function cycleUndisposedFindings(findings, fix, knownQuestionIds, retirableQuest
 //     provider-less `disabled` entry per round with the peers off — where `detail`
 //     appends only the peer prompt's bounded advisory bullets when present,
 //     plus `strength` (the model/effort the script reports), `basis`
-//     (whether a passed review said what it checked) and
+//     (whether a passed review said what it checked), `budget` (the attempt
+//     budget applied and the sizes behind it), `recordOutcome` (what the
+//     round's record answered where the stage never reported back and the
+//     record held no review outcome, such as `not-launched`) and
 //     `fallbackReason` (why the round took the direct launch) where set,
 //     plus teardownFailure on the one round that carried it — a provider the
 //     peer stage could not prove dead, which ends the cycle as an `error`
@@ -3039,13 +3085,13 @@ async function runReviewCycle(cycle) {
       })
       .filter(({ peer }) => peer.outcome !== "absent");
     for (const { provider, peer } of peers) {
-      // A stage that never reported back cannot say whether it launched; the
-      // script's own record of the round can.
-      const peerRecordHint = provider && peer.synthesized
-        ? `\`review-cycle-peer record --artifact-root ${cycleShq(`${artifactDir}/round-${rounds}/peer-${provider.id}`)}\` tells a launch that was cut off (\`started\`) from one never made (\`not-launched\`)`
+      // Where even the record could not be read, the entry says the outcome
+      // is unknown and how to find it out, never that the peer was unavailable.
+      const peerRecordHint = provider && peer.synthesized && !peer.recordOutcome
+        ? `outcome unknown until the round's record is read: \`review-cycle-peer record --artifact-root ${cycleShq(`${artifactDir}/round-${rounds}/peer-${provider.id}`)}\` tells a launch that was cut off (\`started\`) from one never made (\`not-launched\`)`
         : "";
       const peerRoundDetail = [peer.detail, peerRecordHint, peer.notes ? `advisory notes:\n${peer.notes}` : ""].filter(Boolean).join("\n");
-      peerRounds.push({ round: rounds, ...(provider ? { provider: provider.id } : {}), outcome: peer.outcome, detail: peerRoundDetail, reason: peer.reason || "", ...(peer.strength ? { strength: peer.strength } : {}), ...(peer.basis ? { basis: peer.basis } : {}), ...(peer.fallbackReason ? { fallbackReason: peer.fallbackReason } : {}), ...(peer.teardownFailure ? { teardownFailure: true } : {}) });
+      peerRounds.push({ round: rounds, ...(provider ? { provider: provider.id } : {}), outcome: peer.outcome, detail: peerRoundDetail, reason: peer.reason || "", ...(peer.strength ? { strength: peer.strength } : {}), ...(peer.basis ? { basis: peer.basis } : {}), ...(peer.budget ? { budget: peer.budget } : {}), ...(peer.recordOutcome ? { recordOutcome: peer.recordOutcome } : {}), ...(peer.fallbackReason ? { fallbackReason: peer.fallbackReason } : {}), ...(peer.teardownFailure ? { teardownFailure: true } : {}) });
       if (!provider) continue;
       const providerState = cyclePeerProviderState(peerState, provider);
       // A round that took the direct launch says why ONCE per run (per batch,

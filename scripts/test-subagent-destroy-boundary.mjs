@@ -903,6 +903,12 @@ const cycleCases = {
     ["cyclePeerPreflightPrompt (codex)", (f) => f.cyclePeerPreflightPrompt(peerProvider(f, "codex")), NO_BUILD],
     ["cyclePeerPreflightPrompt (muse)", (f) => f.cyclePeerPreflightPrompt(peerProvider(f, "muse")), NO_BUILD],
   ],
+  cyclePeerRecordPrompt: [
+    ["cyclePeerRecordPrompt (codex, standalone)", (f) => f.cyclePeerRecordPrompt(cycleStandalone, peerState, peerProvider(f, "codex")), NO_BUILD],
+    ["cyclePeerRecordPrompt (codex, batch/overridden)", (f) => f.cyclePeerRecordPrompt(cycleOverridden, peerState, peerProvider(f, "codex")), NO_BUILD],
+    ["cyclePeerRecordPrompt (muse, standalone)", (f) => f.cyclePeerRecordPrompt(cycleStandalone, peerState, peerProvider(f, "muse")), NO_BUILD],
+    ["cyclePeerRecordPrompt (muse, batch/overridden)", (f) => f.cyclePeerRecordPrompt(cycleOverridden, peerState, peerProvider(f, "muse")), NO_BUILD],
+  ],
   cycleGroundingPrompt: [
     ["cycleGroundingPrompt (standalone)", (f) => f.cycleGroundingPrompt(cycleStandalone, [{ id: "p1", text: "y", severity: "minor" }]), NO_BUILD],
     ["cycleGroundingPrompt (batch/overridden)", (f) => f.cycleGroundingPrompt(cycleOverridden, [{ id: "p1", text: "y", severity: "minor" }]), NO_BUILD],
