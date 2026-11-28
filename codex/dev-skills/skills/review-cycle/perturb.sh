@@ -36,6 +36,8 @@
 #   outcome=refused      the control did not start, by `reason=` (exit 1):
 #                        not-a-repository, missing, outside (the file is not
 #                        inside `-C`), not-a-file (a symlink included),
+#                        itself (the file is this script as it runs, which
+#                        bash reads as it goes: run a copy of it instead),
 #                        untracked, locked (a control's lock stood in this
 #                        repository as this one began), uncommitted (the
 #                        file differs from its commit, staged or not),
@@ -43,8 +45,8 @@
 #                        copied), unwritable (the change could not be
 #                        written), failed (a step of the script's own could
 #                        not be done, and stderr says which)
-#   outcome=interrupted  a signal (`signal=`) ended the run; the command was
-#                        stopped (exit 1)
+#   outcome=interrupted  a signal (`signal=`) ended the run; the command, where
+#                        it had started, was stopped (exit 1)
 #   outcome=unrestored   the file could NOT be put back (exit 1). `backup=`
 #                        names a copy of its prior bytes, which is kept, and
 #                        the lock with it; with no `backup=`, that copy was
@@ -109,12 +111,15 @@
 # show here. Where the lock went or changed hands while it was read, only
 # `lock=` is printed and the control is to be run again.
 #
-# An INT, TERM or HUP sent to this script while it makes its checks, before
-# the change is written, is ignored: the control goes on, and the signal can
-# be sent again. The checks take tens of milliseconds for a small file and
-# seconds per megabyte of a large one. From the write on, a signal stops the
-# command and is answered `interrupted`, as it was in every trial measured
-# under bash 3.2.57 and 5.2.37.
+# An INT, TERM or HUP sent to this script while it makes its checks is
+# ignored: the control goes on, and the signal can be sent again. The checks
+# take tens of milliseconds for a small file and seconds per megabyte of a
+# large one. Once they are done, from just before the change is written, a
+# signal stops the command where it has started and is answered
+# `interrupted`, as it was in every trial measured under bash 3.2.57 and
+# 5.2.37. One that comes before this script's first line has run ends the
+# process with the signal's own status and no output, nothing changed and
+# nothing left.
 #
 # This script cannot catch SIGKILL or a lost machine: the file then stays
 # changed and the lock stands, or, killed as it began or ended, a
@@ -372,6 +377,9 @@ case "$TARGET_DIR/" in
 esac
 [ -e "$TARGET" ] || [ -L "$TARGET" ] || refuse missing "$FILE is not there."
 [ -f "$TARGET" ] && [ ! -L "$TARGET" ] || refuse not-a-file "$FILE is not a regular file."
+# bash reads a script as it runs it, so changing this one under it would run
+# whatever then stood at the place bash had reached.
+[ ! "$TARGET" -ef "$SELF" ] || refuse itself "$FILE is this script, which bash reads as it runs: run a copy of it on $FILE instead."
 git -C "$TARGET_DIR" ls-files --error-unmatch -- "$TARGET_BASE" >/dev/null 2>&1 || refuse untracked "$FILE is not a file git tracks, so all of it is uncommitted."
 
 # Taken before the file is compared with its commit, so that a second control

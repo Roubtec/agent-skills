@@ -251,6 +251,17 @@ printf 'limit=3\n' >"$WORKDIR/plain/conf"
 OUT="$(cd "$WORKDIR/plain" && bash "$HELPER" --file conf --old limit=3 --new limit=4 -- true 2>/dev/null)"
 is "3: outside a repository is refused" "$?:$(val outcome):$(val reason)" "1:refused:not-a-repository"
 is "3: ...and the file there is untouched" "$(cat "$WORKDIR/plain/conf")" "limit=3"
+# bash reads a script as it runs it, so the helper is not to change itself.
+mkdir "$WORKDIR/own"
+cp "$HELPER" "$WORKDIR/own/perturb.sh"
+git init -q -b main "$WORKDIR/own"
+git -C "$WORKDIR/own" add -A
+git -C "$WORKDIR/own" commit -q -m init
+rm -f "$SAW"
+OUT="$(cd "$WORKDIR/own" && bash ./perturb.sh --file perturb.sh --old 'set -u' --new 'set -e' -- sh -c ': >"$SAW"' 2>/dev/null)"
+is "3: the running script itself is refused" "$?:$(val outcome):$(val reason)" "1:refused:itself"
+unrun "3: ...and the command never ran"
+is "3: ...and it is as it was, with nothing left" "$(git -C "$WORKDIR/own" status --porcelain)$(find "$WORKDIR/own/.git" -name 'perturb.*')" ""
 is "3: no refusal left a temporary file" "$(left)" 0
 
 # --- 4: a command that does not end by itself -----------------------------------
@@ -586,9 +597,10 @@ ok "8: ...its command never ran" "$([ ! -e "$WORKDIR/second" ] && echo 0 || echo
 cp "$WORKDIR/kept" "$R/conf"
 same "8: ...and the kept bytes put the repository back"
 
-# A signal during the checks is ignored, at two moments that can be placed
-# exactly: while the first command the helper starts is running, and as the
-# lock is made. Section 4 has the signal that comes once the file is changed.
+# A signal during the checks is ignored, at three moments that can be placed
+# exactly: while the first command the helper starts is running, as the lock
+# is made, and as the last check before the write ends. Section 4 has the
+# signal that comes once the file is changed.
 before
 shim git '[ -e "$SAW.sent" ] || { : >"$SAW.sent"; kill -TERM "$PPID"; }'
 shimmed --file conf --old 'limit=3' --new 'limit=4' -- ./check.sh
@@ -599,6 +611,11 @@ rm -f "$SAW"
 shim ln 'case "$*" in *perturb.lock) kill -TERM "$PPID" ;; esac'
 shimmed --file conf --old 'limit=3' --new 'limit=4' -- ./check.sh
 is "8: a signal sent while the lock is being made is ignored, and the control is answered as usual" "$RC:$(val outcome):$(val signal):$(val restored)" "0:caught::yes"
+has "8: ...its command having run against the changed file" "$(cat "$SAW" 2>/dev/null)" "limit=4"
+rm -f "$SAW"
+shim cmp 'case "$2:$3" in */changed:*/original) kill -TERM "$PPID" ;; esac'
+shimmed --file conf --old 'limit=3' --new 'limit=4' -- ./check.sh
+is "8: a signal sent as the last check before the write ends is ignored, and the control is answered as usual" "$RC:$(val outcome):$(val signal):$(val restored)" "0:caught::yes"
 has "8: ...its command having run against the changed file" "$(cat "$SAW" 2>/dev/null)" "limit=4"
 is "8: ...and nothing is left behind" "$(left)" 0
 same "8: ...and the repository is as it was"
