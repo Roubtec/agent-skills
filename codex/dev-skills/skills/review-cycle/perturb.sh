@@ -36,32 +36,34 @@
 #   outcome=refused      the control did not start, by `reason=` (exit 1):
 #                        not-a-repository, missing, outside (the file is not
 #                        inside `-C`), not-a-file (a symlink included),
-#                        untracked, busy (a control is running in this
-#                        repository), stale (an earlier control here never
-#                        finished), uncommitted (the file differs from its
-#                        commit, staged or not), unreadable (it holds a NUL
-#                        byte, or could not be copied), unwritable (the
-#                        change could not be written)
+#                        untracked, locked (a control's lock stood in this
+#                        repository as this one began), uncommitted (the
+#                        file differs from its commit, staged or not),
+#                        unreadable (it holds a NUL byte, or could not be
+#                        copied), unwritable (the change could not be
+#                        written), failed (a step of the script's own could
+#                        not be done, and stderr says which)
 #   outcome=interrupted  a signal (`signal=`) ended the run; the command was
 #                        stopped (exit 1)
 #   outcome=unrestored   the file could NOT be put back (exit 1). `backup=`
-#                        names a copy of its prior bytes, which is kept; with
-#                        no `backup=`, that copy was removed while the control
-#                        ran, the file was left as it stood, and stderr says
-#                        what git reports of it
+#                        names a copy of its prior bytes, which is kept, and
+#                        the lock with it; with no `backup=`, that copy was
+#                        removed while the control ran, the file was left as
+#                        it stood, and stderr says what git reports of it
 #
 #   file=<path>          as it was named
 #   matches=<n>          how many times `--old` stands in the file, counted no
 #                        further than 2
 #   status=<n>           the command's exit status, on caught, missed and
 #                        not-run
-#   lock=<dir>           on busy and stale, and on unrestored beside
-#                        `backup=`: the directory that marks a control in
-#                        progress
-#   holder=<pid>         on busy and stale: the process the mark records, where
-#                        it records one
-#   backup=<path>        on busy and stale too, where the mark holds a copy of
-#                        the bytes its control's file had
+#   lock=<path>          on locked, and on unrestored beside `backup=`: the
+#                        name that marks a control in progress
+#   holder=<pid>         on locked: the process the lock records, where it
+#                        was read whole and records one
+#   holder-running=<yes|no>  beside `holder=`: whether a process with that
+#                        number is running here now, which is all it says
+#   backup=<path>        on locked too, where the lock holds a copy of the
+#                        bytes its control's file had
 #   restored=yes         wherever the file was written to, on every outcome
 #                        but unrestored: its bytes were compared with the copy
 #                        taken before the change, and git reports it unchanged
@@ -85,24 +87,39 @@
 # the command's, and so are mode bits git does not record.
 #
 # One control runs in a repository at a time: two would each run with the
-# other's change in place. The mark is a directory, `perturb.lock` in the
-# file's git directory (a linked worktree has its own), which also holds the
-# copy of the file and is removed on exit, except on unrestored. This script
-# cannot catch SIGKILL or a lost machine: the file then stays changed and the
-# mark stays. Nothing removes a mark but the run that made it, or you, so the
-# next control is refused: as busy while the process the mark records is
-# running here, as stale otherwise. Neither is certain (a process number
-# passes to another process, and a control in another container or under
-# another user does not show here), so both print the same facts and stderr
-# says what to make sure of before the mark is removed. A control whose mark
-# or copy was removed under it leaves its file as it stands, never empty, and
-# answers unrestored.
+# other's change in place. A control makes a directory of its own,
+# `perturb.XXXXXX` in the file's git directory (a linked worktree has its
+# own), records its process and its file there, and only then takes the lock:
+# `ln -sn` makes `perturb.lock` beside it a symbolic link to that directory,
+# and the link is read back. Making a link fails wherever the name is taken,
+# and no two calls can both make it, so one control holds the lock and it is
+# whole from the moment it stands; reading it back answers for a directory
+# standing at that name, into which `ln` would have put the link. On exit
+# the link goes first and the directory after it, and both stay on unrestored
+# with `backup=`.
+#
+# A second control does not wait and removes nothing: it is refused as locked.
+# Where the lock stood unchanged while it was read, `holder=`,
+# `holder-running=` and `backup=` say what it records and stderr says what to
+# do in each case: wait while that control runs; only where it runs nowhere,
+# put the bytes back, never commit the change, and then remove the lock. This
+# script does not decide which it is, since a process number passes to other
+# processes and a control in another container or under another user does not
+# show here. Where the lock went or changed hands while it was read, only
+# `lock=` is printed and the control is to be run again.
+#
+# This script cannot catch SIGKILL or a lost machine: the file then stays
+# changed and the lock stands, or, killed as it began or ended, a
+# `perturb.XXXXXX` directory is left that nothing reads. A control puts its
+# file back from the copy in its own directory whatever became of the lock,
+# says on stderr where the lock was no longer its own, and leaves what stands
+# at that name alone; one whose copy was removed leaves the file as it
+# stands, never empty, and answers unrestored.
 #
 # Output: `key=value` lines on stdout, `outcome=` first. Exit status: 0 on
 # caught; 3 on missed, no-match, ambiguous, timed-out and not-run; 1 on
-# refused, interrupted and unrestored, and on a failure of the script's own,
-# which prints nothing on stdout; 64 on a usage error. Written for bash 3.2
-# and later.
+# refused, interrupted and unrestored; 64 on a usage error, the one exit with
+# no `outcome=` line. Written for bash 3.2 and later.
 set -u
 
 case "$0" in
@@ -117,7 +134,7 @@ usage() {
 	exit 64
 }
 
-TMP="" LOCK="" BACKUP="" TARGET="" TARGET_DIR="" TARGET_BASE="" MATCHES="" APPLIED=0 WRITTEN=0 KEEP=0 CMD_PID="" WATCH_PID="" TAKING=0 PENDING=""
+FILE="" TMP="" NAME="" LOCK="" HELD=0 BACKUP="" TARGET="" TARGET_DIR="" TARGET_BASE="" MATCHES="" APPLIED=0 WRITTEN=0 KEEP=0 CMD_PID="" WATCH_PID=""
 
 # Empty where git reports the file as its commit has it.
 file_status() {
@@ -164,12 +181,16 @@ stop_children() {
 	fi
 }
 
-# The mark is this run's while it records this process: one removed by hand
-# may since have been made again by another control.
-mine() { [ -n "$TMP" ] && [ "$(cat "$TMP/pid" 2>/dev/null)" = "$$" ]; }
+# The link goes before anything it leads to, so a lock that still stands was
+# read whole. Only this run's own link is removed.
 release() {
 	[ -n "$TMP" ] && [ "$KEEP" = 0 ] || return 0
-	case "$(cat "$TMP/pid" 2>/dev/null)" in "$$" | "") rm -rf -- "$TMP" ;; esac
+	if [ -n "$NAME" ] && [ "$(readlink "$LOCK" 2>/dev/null)" = "$NAME" ]; then
+		rm -f -- "$LOCK"
+	elif [ "$HELD" = 1 ]; then
+		note "$LOCK was removed or taken over while this control ran, so another control may have run beside it. What stands there now was left alone."
+	fi
+	rm -rf -- "$TMP"
 }
 
 # 0 where the file holds its prior bytes again and git agrees.
@@ -181,24 +202,24 @@ restore() {
 	# what it made from the changed file. The copy is opened before the
 	# file is, so a copy that has gone leaves the file as it stands and not
 	# empty.
-	if mine && [ ! -L "$TARGET" ]; then
+	if [ ! -L "$TARGET" ]; then
 		if [ -f "$TARGET" ]; then
 			cat <"$BACKUP" >"$TARGET"
 		elif [ ! -e "$TARGET" ]; then
 			cp -p "$BACKUP" "$TARGET" && touch "$TARGET"
 		fi
 	fi 2>/dev/null
-	if mine && cmp -s "$BACKUP" "$TARGET" 2>/dev/null && [ -f "$TARGET" ] && [ ! -L "$TARGET" ] && [ -z "$(file_status)" ]; then
+	if cmp -s "$BACKUP" "$TARGET" 2>/dev/null && [ -f "$TARGET" ] && [ ! -L "$TARGET" ] && [ -z "$(file_status)" ]; then
 		APPLIED=0
 		return 0
 	fi
 	return 1
 }
-# After a failed restore: 0, the mark kept, where the copy is there to name.
+# After a failed restore: 0, the lock kept, where the copy is there to name.
 kept() {
-	if mine && [ -f "$BACKUP" ]; then
+	if [ -f "$BACKUP" ]; then
 		KEEP=1
-		note "COULD NOT RESTORE $FILE: it does not hold its prior bytes, or git still reports it changed. A copy of them is kept at $BACKUP. Put them back, then remove $TMP: until then the next control here is refused."
+		note "COULD NOT RESTORE $FILE: it does not hold its prior bytes, or git still reports it changed. A copy of them is kept at $BACKUP. Put them back, then remove $TMP, and $LOCK where it still leads there: until then the next control here is refused."
 		return 0
 	fi
 	local now="still as its commit has it"
@@ -229,7 +250,7 @@ answer() { # <outcome> <exit status> [<line>...]
 		[ "$WRITTEN" = 0 ] || printf 'restored=yes\n'
 	else
 		printf 'outcome=unrestored\nfile=%s\nmatches=1\n' "$FILE"
-		if kept; then printf 'backup=%s\nlock=%s\n' "$BACKUP" "$TMP"; fi
+		if kept; then printf 'backup=%s\nlock=%s\n' "$BACKUP" "$LOCK"; fi
 		printf 'was=%s\n' "$outcome"
 		[ $# -eq 0 ] || printf '%s\n' "$@"
 		rc=1
@@ -243,59 +264,56 @@ refuse() { # <reason> <message>
 	note "$2 Nothing was changed and the command was not run."
 	exit 1
 }
-# The mark is already there: say what it records, and remove nothing. Returns
-# only where the mark went away while it was being read.
-held() {
-	local raw pid was reason lead clear n=0
-	# A mark is recorded within moments of being made, so one with no record
-	# yet is given two seconds before it is read as abandoned.
-	while [ -d "$LOCK" ] && [ ! -e "$LOCK/pid" ] && [ "$n" -lt 20 ]; do
-		sleep 0.1
-		n=$((n + 1))
-	done
-	raw="$(cat "$LOCK/pid" 2>/dev/null)"
-	pid="$raw"
-	case "$pid" in "" | *[!0-9]*) pid="" ;; esac
-	if [ -n "$pid" ] && kill -0 "$pid" 2>/dev/null; then
-		reason=busy
-	elif [ -d "$LOCK" ] && [ "$(cat "$LOCK/pid" 2>/dev/null)" = "$raw" ]; then
-		# Still standing with the same record: no finished run's leftovers.
-		reason=stale
-	else
-		return 0
+# The lock's name is taken: say what stands there, and remove nothing of it.
+locked() {
+	local link dir pid="" run="" was="" copy="" also="" says undo
+	# Where a directory stands at the lock's name, `ln` put the link inside it.
+	rm -f -- "$LOCK/$NAME" 2>/dev/null
+	link="$(readlink "$LOCK" 2>/dev/null)"
+	dir="$(cd -P -- "$LOCK" 2>/dev/null && pwd -P)"
+	if [ -n "$dir" ]; then
+		pid="$(cat "$dir/pid" 2>/dev/null)"
+		case "$pid" in "" | *[!0-9]*) pid="" ;; esac
+		was="$(cat "$dir/target" 2>/dev/null)"
+		[ ! -f "$dir/original" ] || copy="$dir/original"
+		[ -z "$pid" ] || { kill -0 "$pid" 2>/dev/null && run=yes; } || run=no
 	fi
-	was="$(cat "$LOCK/target" 2>/dev/null)"
-	printf 'outcome=refused\nfile=%s\nreason=%s\nlock=%s\n' "$FILE" "$reason" "$LOCK"
-	[ -z "$pid" ] || printf 'holder=%s\n' "$pid"
-	if [ -f "$LOCK/original" ]; then
-		printf 'backup=%s\n' "$LOCK/original"
-		clear="Its file is ${was:-not named}, and the bytes that file had are kept in $LOCK/original: where \`git diff\` still shows that control's change, copy them back over the file, and do not commit it. Then remove $LOCK and run this again."
-	else
-		clear="It kept no copy of ${was:-a file}, so it had changed nothing, unless the copy was removed since: \`git diff\` shows such a change, which is not to be committed. Remove $LOCK and run this again."
+	printf 'outcome=refused\nfile=%s\nreason=locked\nlock=%s\n' "$FILE" "$LOCK"
+	# Looked at again after the reading, and after the holder was looked
+	# for: a lock that still leads where it led was whole all the while.
+	if { [ ! -e "$LOCK" ] && [ ! -L "$LOCK" ]; } || [ "$(readlink "$LOCK" 2>/dev/null)" != "$link" ]; then
+		note "$LOCK was taken as this control began and was let go of or changed hands while it was read, as it does when another control ends at that moment: run this again. (Where this repeats with no other control about, a symbolic link cannot be made there.) Nothing was changed and the command was not run."
+		exit 1
 	fi
-	if [ "$reason" = busy ]; then
-		lead="another control is running in this repository (process $pid), and two at once would each run with the other's change in place: wait for it. Only if process $pid is no run of this script was the mark left by a control that was killed, and then: "
-	elif [ -n "$pid" ]; then
-		lead="an earlier control here never finished (its process $pid is gone). Make sure it is not running in another container or as another user, where it would not show here, and then: "
-	else
-		lead="an earlier control here was stopped as it began, before it recorded its process. "
+	[ -z "$link" ] || [ -z "$dir" ] || also=" and $dir"
+	says="It records no process"
+	if [ -n "$pid" ]; then
+		printf 'holder=%s\nholder-running=%s\n' "$pid" "$run"
+		says="It records process $pid, and a process with that number is running here now"
+		[ "$run" = yes ] || says="It records process $pid, and no process with that number is running here now"
 	fi
-	note "$lead$clear Nothing was changed and the command was not run."
+	if [ -n "$copy" ]; then
+		printf 'backup=%s\n' "$copy"
+		undo="copy $copy back over ${was:-its file} wherever \`git diff\` still shows its change"
+	else
+		undo="it kept no copy of ${was:-a file}, so it changed nothing unless the copy was removed since, and \`git diff\` shows such a change to undo"
+	fi
+	note "$LOCK marks a control in progress in this repository, and two at once would each run with the other's change in place. $says, which settles nothing by itself: a process number passes to other processes, and a control in another container or under another user does not show here. While that control is running, wait for it and run this again. Only where it is running nowhere (it was killed, or its machine went down): $undo, never commit that change, and then remove $LOCK$also. Nothing was changed and the command was not run."
 	exit 1
 }
 # shellcheck disable=SC2329 # the signal traps run it
 on_signal() {
-	# Between making the mark and knowing it was made, a signal waits: it
-	# would otherwise leave a mark no run owns.
-	if [ "$TAKING" = 1 ]; then
-		PENDING="$1"
-		return 0
-	fi
 	note "stopped by SIG$1."
 	answer interrupted 1 "signal=$1"
 }
+# Before anything else runs, git included: a signal that arrives with no trap
+# set is one bash drops or dies of without a word.
+trap cleanup EXIT
+trap 'on_signal INT' INT
+trap 'on_signal TERM' TERM
+trap 'on_signal HUP' HUP
 
-DIR="" FILE="" OLD="" NEW="" TIMEOUT="" HAVE_OLD=0 HAVE_NEW=0
+DIR="" OLD="" NEW="" TIMEOUT="" HAVE_OLD=0 HAVE_NEW=0
 while [ $# -gt 0 ]; do
 	case "$1" in
 	-h | --help | help)
@@ -330,14 +348,11 @@ case "$TIMEOUT" in
 *[!0-9]* | 0*) usage "--timeout takes a whole number of seconds, 1 or more" ;;
 esac
 if [ -n "$DIR" ]; then
-	cd -- "$DIR" 2>/dev/null || {
-		note "could not enter $DIR."
-		exit 1
-	}
+	cd -- "$DIR" 2>/dev/null || refuse failed "could not enter $DIR."
 fi
 command -v -- "$1" >/dev/null 2>&1 || usage "'$1' is not a command this shell can run from here, so its failure would say nothing about the change"
 
-ROOT="$(pwd -P)" || exit 1
+ROOT="$(pwd -P)" || refuse failed "could not tell where this control runs."
 git rev-parse --git-dir >/dev/null 2>&1 || refuse not-a-repository "$ROOT is not inside a git repository, so nothing says the file is committed."
 case "$FILE" in
 /*) TARGET="$FILE" ;;
@@ -358,34 +373,14 @@ git -C "$TARGET_DIR" ls-files --error-unmatch -- "$TARGET_BASE" >/dev/null 2>&1 
 # Taken before the file is compared with its commit, so that a second control
 # never reads a file the first is about to change, and under the git directory,
 # where neither `git status` nor a commit sees it.
-LOCK="$(cd -- "$TARGET_DIR" && cd -P -- "$(git rev-parse --git-dir)" 2>/dev/null && pwd -P)" || {
-	note "could not find the git directory of $FILE."
-	exit 1
-}
-LOCK="$LOCK/perturb.lock"
-trap cleanup EXIT
-trap 'on_signal INT' INT
-trap 'on_signal TERM' TERM
-trap 'on_signal HUP' HUP
-TRIES=0
-while :; do
-	TAKING=1
-	if mkdir "$LOCK" 2>/dev/null; then TMP="$LOCK"; fi
-	TAKING=0
-	[ -z "$PENDING" ] || on_signal "$PENDING"
-	[ -z "$TMP" ] || break
-	held
-	TRIES=$((TRIES + 1))
-	[ "$TRIES" -lt 3 ] || {
-		note "could not make $LOCK."
-		exit 1
-	}
-done
-# Each record is moved into place whole, so a reader never sees half of one.
-if ! { printf '%s\n' "$TARGET" >"$TMP/target" && printf '%s\n' "$$" >"$TMP/pid.new" && mv "$TMP/pid.new" "$TMP/pid"; } 2>/dev/null; then
-	note "could not record this control in $TMP."
-	exit 1
+GITDIR="$(cd -- "$TARGET_DIR" && cd -P -- "$(git rev-parse --git-dir)" 2>/dev/null && pwd -P)" || refuse failed "could not find the git directory of $FILE."
+LOCK="$GITDIR/perturb.lock"
+if ! TMP="$(mktemp -d "$GITDIR/perturb.XXXXXX" 2>/dev/null)" || ! { printf '%s\n' "$TARGET" >"$TMP/target" && printf '%s\n' "$$" >"$TMP/pid"; } 2>/dev/null; then
+	refuse failed "could not make a directory for this control in $GITDIR."
 fi
+NAME="${TMP##*/}"
+{ ln -sn "$NAME" "$LOCK" && [ "$(readlink "$LOCK")" = "$NAME" ]; } 2>/dev/null || locked
+HELD=1
 [ -z "$(file_status)" ] || refuse uncommitted "$FILE differs from its commit. \`git diff\` shows the difference, and a control runs on committed work only: where it is work you mean to keep, commit it first; where it is what a control that was stopped left behind, undo it and do not commit it."
 BACKUP="$TMP/original"
 if ! cp -p "$TARGET" "$BACKUP.new" 2>/dev/null || ! cmp -s "$TARGET" "$BACKUP.new" || ! mv "$BACKUP.new" "$BACKUP" 2>/dev/null; then
@@ -432,23 +427,18 @@ unreadable) refuse unreadable "$FILE holds a NUL byte, which this script cannot 
 	exit 3
 	;;
 1) ;;
-"" | *[!0-9]*)
-	note "could not prepare the change. Nothing was changed and the command was not run."
-	exit 1
-	;;
+"" | *[!0-9]*) refuse failed "could not prepare the change." ;;
 *)
 	printf 'outcome=ambiguous\nfile=%s\nmatches=%s\n' "$FILE" "$COUNT"
 	note "--old stands in $FILE more than once. Name a longer string that stands there once. Nothing was changed and the command was not run."
 	exit 3
 	;;
 esac
-if cmp -s "$TMP/changed" "$BACKUP"; then
-	note "the change left $FILE as it was. Nothing was changed and the command was not run."
-	exit 1
-fi
+! cmp -s "$TMP/changed" "$BACKUP" || refuse failed "the change left $FILE as it was."
 
 MATCHES=1 APPLIED=1 WRITTEN=1
-if ! { mine && cat <"$TMP/changed" >"$TARGET"; } 2>/dev/null || ! cmp -s "$TMP/changed" "$TARGET"; then
+# The changed bytes are opened before the file is, as the copy is in restore.
+if ! cat <"$TMP/changed" >"$TARGET" 2>/dev/null || ! cmp -s "$TMP/changed" "$TARGET"; then
 	note "could not write the change to $FILE. The command was not run."
 	answer refused 1 "reason=unwritable"
 fi
