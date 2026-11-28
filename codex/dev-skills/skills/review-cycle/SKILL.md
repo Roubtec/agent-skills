@@ -27,9 +27,7 @@ A Fixer's or Reviewer's prompt opens with the boundary line below, then tells it
 - **Reviewer** — a fresh-eyes verification of the committed state, spawned only after the fixer's commits have landed.
   Its prompt carries the work item(s) and any proposed dispositions verbatim, the effective review base and which range it is, the branch, the round's validation tier, the artifact type below, where any output of its build goes — a path under the cycle's artifact directory or inside the reviewed worktree, never a fixed shared scratchpad name and never left to the reviewer to pick — and whatever the round has to adjudicate: declines, retired questions with the fixer's claim, deviations standing or claimed closed, and any evidenced-unrelated test failure with its evidence.
   Never the fixer's reasoning or report.
-- **Peer** (best-effort, cross-harness) — a read-only `claude` review started at the same moment as the Reviewer, from the committed checkout.
-  Give this role its own concurrent tool invocation and have that invocation run the `peer.sh` launch the peer step below prescribes in the foreground, collecting a direct launch to an answer other than `pending` before it returns.
-  Concurrency belongs between the Peer and Reviewer roles; `peer.sh` owns the provider's timeout, retry, and reaping on either path.
+- **Peer** (best-effort, cross-harness) — a read-only `claude` review launched at the same moment as the Reviewer, from the committed checkout, through the `peer.sh` launch the peer step below prescribes.
   Its prompt is `peer-brief.md` copied in whole — by `peer.sh`, never retyped — followed by the facts file you write, holding the same evidence the Reviewer gets: items and dispositions verbatim, worktree, base, branch, artifact type, and, verbatim, any GitHub thread text or diff it would otherwise need the network for.
   No reasoning, no fixer report, and no Reviewer execution steps: a peer left to infer its job from the Reviewer's tries to do the Reviewer's, and the Reviewer alone owns execution, which is what makes the concurrent launch safe.
   The brief tells it the implementer validated its commits; say beside the evidence what the packet in front of you says ran, or that the claim is carried.
@@ -135,14 +133,18 @@ A batch orchestrator preflights once for the whole batch and never repeats the p
 
 **What the peer is told is a facts file and nothing else.**
 Write the evidence the Peer role above lists to a file of its own, and never the implementer's reasoning: the script builds the prompt from `peer-brief.md` and that file alone.
+Write that file with a quoted heredoc (`<<'FACTS'`) or a file-writing tool, never through shell interpolation: review text can hold `$(…)` and backticks, and a shell that interpolates it runs them.
 Set `artifact_root` to this cycle's artifact directory, outside the reviewed worktree: the script makes every launch a directory of its own under it and answers that path as `artifact_dir`.
 
-**Launch** inside the Peer role, started at the same moment as the Reviewer: `peer.sh run --provider claude --worktree "$worktree" --artifact-root "$artifact_root" --facts "$facts_file" --evidence-base "$effective_base"`, exactly once, in the foreground.
+**The launch has one form; read this paragraph before a run's first peer launch.**
+The Peer is a role of its own: a tool invocation issued in the same batch as the Reviewer's spawn, which is what makes the two concurrent, and which collects a direct launch to an answer other than `pending` before it returns.
+That role runs `peer.sh run --provider claude --worktree "$worktree" --artifact-root "$artifact_root" --facts "$facts_file" --evidence-base "$effective_base" --round "$round"`, exactly once, in the foreground.
 Managed hooks and organization settings policy can still apply to that `claude`, so an operator in a managed environment must disable peer opinions or first ensure those hooks cannot mutate the worktree before launching a peer concurrently with the Reviewer.
 Set the caller-side tool wait to at least 570 seconds but strictly below its roughly 600-second cap, and do not background, poll, retry, or externally signal the call: where `peer-review-run` is on PATH the script runs it, and that helper owns timeout, transient-only retry, and provider-tree reaping inside that wait.
 `outcome=launched` means the script started the provider directly instead, because the helper is absent or its verdict named no review file this cycle could relay; `fallback_reason` says which, and a run states it once rather than every round.
 Then run `peer.sh collect --artifact-dir "$artifact_dir"`, with the `artifact_dir` that answer carries, under the same wait, again for as long as it answers `pending`.
 A direct launch gets a loose 12 minutes per attempt; pass `--deadline <seconds>` to `run` where visible progress or review size justifies waiting longer.
+The script fits the wait to the review: a prompt above 150000 bytes, the embedded diff included, gets one long attempt instead of two short ones, and the answer's `budget` says which, so a `timeout` is read against it; `--budget short` or `--budget long` forces either.
 
 **The evidence travels in the prompt.**
 This peer's read-only tools cannot run git, so `--evidence-base`, the already-selected effective review base, has the script embed the log and diff of that base against `HEAD` in the prompt and ask the peer to prove it read them.
@@ -151,22 +153,29 @@ A base the script cannot resolve forfeits the launch rather than handing the pee
 
 **Review strength is pinned per invocation.**
 The script pins both dimensions for `claude`, `opus` at an explicit medium effort, and the pin never writes back to the saved configuration.
+`--effort <level>` raises it for that one call, on the invoker's request or where you can name the risk in the change that warrants it.
 Record the reported `model` and `effort` as the round's strength note, and say in it where `strength_pin=differs`: the helper then reviewed at another strength than the one pinned.
 
 **Reading the result.**
 For `passed` or `issues`, `review_file` is the peer's full review as plain text: read that file in full before applying verdict logic and relay every finding from it verbatim.
 Never look for the review anywhere else, guess a filename, or parse a provider-specific envelope.
+On `passed`, `basis=unstated` means the review does not say what it checked: still a pass, and said in that round's peer entry.
 
 **The one stop is exit status 3.**
 It means a provider the script launched could not be proved dead (`teardown=survivor`, with its `pid`): stop the cycle and escalate for operator intervention, with no retry, next entry, or publication.
 Any other non-zero exit is the script's own failure, never a verdict: record that round's peer as `failed` with the script's stderr line and continue.
+
+**The round's record.**
+Before deciding a round, read what was launched for it: `peer.sh record --artifact-root "$artifact_root" --round "$round"`.
+It prints each launch's last answer, or `outcome=not-launched`.
+Write a round with no launch up as a peer that was not launched, never as an unavailable one; `outcome=started` is a launch cut off before it answered, and is said as that.
 
 **Optional second peer: Muse.**
 Muse Code is a third harness some containers carry and most do not, so it is strictly additive: everything above describes the cycle without it, and nothing here changes the Peer.
 Preflight it once per run beside the Peer's own preflight, unless `peer-opinions=off`, which disables both: `peer.sh preflight --provider muse`.
 `absent` means this container has no Muse and the run says nothing about it; `unavailable` means no second peer this run, said once in the final summary.
 A batch orchestrator preflights it once for the whole batch, like the Peer.
-Launch it with `peer.sh run --provider muse` on the Peer's facts file, `--artifact-root` and `--evidence-base`, exactly once, in the foreground, inside its own role started at the same moment as the Peer's, under the same caller-side wait.
+Launch it with `peer.sh run --provider muse` on the Peer's facts file, `--artifact-root`, `--evidence-base` and `--round`, exactly once, in the foreground, inside its own role started at the same moment as the Peer's, under the same caller-side wait.
 It runs through `peer-review-run` only, as one long attempt rather than two short ones, so it never answers `launched`; an `unavailable` from the launch itself (the helper is missing, or predates Muse) means no second peer for the rest of the run, stated once.
 Contributor mode is the user's saved Muse setting, which also decides how fast their Muse allowance is spent, so leave it alone: set no `MUSE_CONTRIBUTOR_MODE` for the call.
 Its result lands in the outcome vocabulary below and feeds the gate, the grounding spot-check, the verbatim relay, and the pass-note consumption on the Peer's terms, its `model` and `effort` are recorded beside the Peer's, and its launches count toward the same batch throttle.
