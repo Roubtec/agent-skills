@@ -345,7 +345,13 @@ esac
 assert_eq "a: stdout is exactly one line" "$(wc -l <<<"$OUT" | tr -d '[:space:]')" 1
 require_clone CLONE_A "a: probe"
 assert_true "a: clone is a git repository" "$([ -d "$CLONE_A/.git" ] && echo true || echo false)"
-assert_true "a: clone is outside the source" "$(case "$CLONE_A" in "$SRC1"/*) echo false ;; *) echo true ;; esac)"
+# A statement rather than a `case` inside `$( )`: bash 3.2 cannot parse bare
+# `pattern)` arms there, and reports it only when the line runs (`bash -n` is
+# silent about it).
+case "$CLONE_A" in
+"$SRC1"/*) assert_true "a: clone is outside the source" false ;;
+*) assert_true "a: clone is outside the source" true ;;
+esac
 assert_eq "a: clone tree is clean" "$(git -C "$CLONE_A" status --porcelain)" ""
 assert_eq "a: no remote points back at the source" "$(git -C "$CLONE_A" remote)" ""
 # ... and no config left naming the remote the clone no longer has, which would
