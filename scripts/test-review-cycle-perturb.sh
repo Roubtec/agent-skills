@@ -234,8 +234,18 @@ for flag in assume-unchanged skip-worktree; do
 	has "3: ...named for the flag, not for a difference git cannot show" "$ERR" "tells git not to compare"
 	has "3: ...its hidden edit still there" "$(cat "$R/conf")" "hidden"
 	printf 'limit=3\nmode=strict\nmode_note=strict is the default\n' >"$R/conf"
-	git -C "$R" update-index "--no-$flag" conf
+	git -C "$R" update-index --no-assume-unchanged -- conf
+	git -C "$R" update-index --no-skip-worktree -- conf
+	is "3: ...and the two commands it names clear the flag" "$(git -C "$R" ls-files -v -- conf)" "H conf"
 done
+# Both flags at once: one command naming both would clear only the first.
+git -C "$R" update-index --assume-unchanged conf
+git -C "$R" update-index --skip-worktree conf
+refused "a file under both flags" uncommitted --file conf --old limit=3 --new limit=4
+has "3: ...which names a command for each flag" "$ERR" "--no-assume-unchanged -- <file>\` and \`git update-index --no-skip-worktree -- <file>"
+git -C "$R" update-index --no-assume-unchanged -- conf
+git -C "$R" update-index --no-skip-worktree -- conf
+is "3: ...and those two clear both" "$(git -C "$R" ls-files -v -- conf)" "H conf"
 printf 'limit=3\n' >"$WORKDIR/outside"
 refused "a file outside the directory, by an absolute path" outside --file "$WORKDIR/outside" --old limit=3 --new limit=4
 is "3: ...which was not written to" "$(cat "$WORKDIR/outside")" "limit=3"
