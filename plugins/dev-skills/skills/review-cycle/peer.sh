@@ -356,7 +356,6 @@ peer_abort_unhanded() { # <child pid>
 # A size that cannot be measured leaves the provider's own budget in place.
 choose_budget() { # from the prompt this run wrote: sets BUDGET, R_BUDGET, R_BYTES
 	R_BYTES="$({ wc -c <"$ADIR/peer-review.prompt" | tr -d ' '; } 2>/dev/null)"
-	is_count "$R_BYTES" || R_BYTES=""
 	case "$BUDGET_ARG" in
 	short) BUDGET="$BUDGET_SHORT" ;;
 	long) BUDGET="$BUDGET_LONG" ;;
