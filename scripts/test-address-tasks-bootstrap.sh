@@ -537,7 +537,7 @@ USE="$P_GIT"
 cmp -s "$SHIPPED" "$MIRROR"
 ok "shipped: the two mirrors are byte-identical" $?
 for path in plugins/dev-skills/skills/address-tasks/bootstrap.sh codex/dev-skills/skills/address-tasks/bootstrap.sh plugins/dev-skills/bin/address-tasks-bootstrap; do
-	is "shipped: $path is committed executable" "$(git -C "$ROOT" ls-files -s -- "$path" | cut -c1-6)" 100755
+	is "shipped: $path is committed executable" "$(git -c safe.directory='*' -C "$ROOT" ls-files -s -- "$path" | cut -c1-6)" 100755
 done
 fresh
 OUT="$(cd "$R" && PATH="$USE" bash "$SHIM" ignore 2>/dev/null)"

@@ -464,13 +464,13 @@ cmp -s "$SCRIPT_DIR/../plugins/dev-skills/skills/address-review/record.sh" "$MIR
 ok "6: the codex mirror ships the same bytes" $?
 ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 for f in plugins/dev-skills/skills/address-review/record.sh codex/dev-skills/skills/address-review/record.sh; do
-	is "6: $f is committed executable" "$(git -C "$ROOT" ls-files -s -- "$f" | cut -c1-6)" 100755
+	is "6: $f is committed executable" "$(git -c safe.directory='*' -C "$ROOT" ls-files -s -- "$f" | cut -c1-6)" 100755
 done
 OUT="$(bash "$HELPER" --help)"
 has "6: --help prints the header" "$OUT" "record.sh find"
 lacks "6: ...and none of the code" "$OUT" "set -u"
 SHIM="$SCRIPT_DIR/../plugins/dev-skills/bin/address-review-record"
-is "6: the bin/ shim is committed executable" "$(git -C "$ROOT" ls-files -s -- plugins/dev-skills/bin/address-review-record | cut -c1-6)" 100755
+is "6: the bin/ shim is committed executable" "$(git -c safe.directory='*' -C "$ROOT" ls-files -s -- plugins/dev-skills/bin/address-review-record | cut -c1-6)" 100755
 fresh
 OUT="$(PATH="$(dirname "$SHIM"):$PATH" address-review-record find --repo acme/widgets --pr 7 2>&1)"
 is "6: the shim runs the bundled helper by name" "$OUT" "outcome=none"
