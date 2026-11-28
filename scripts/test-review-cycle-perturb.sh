@@ -508,12 +508,13 @@ lock_by() { # <pid>: a lock as a control with that process would have made it
 }
 unlock() { rm -rf "$LOCK" "$R/.git/perturb.byhand" "$R/.git/perturb.other"; }
 
-# The lock is read, and looked at again after the reading: `readlink` here
-# takes it away, or hands it to another control, once it has answered.
+# The lock is read, and looked at again after the reading: `cat` here takes
+# it away, or hands it to another control, once what it records has been read.
 before
-for then in 'rm -f "$1"' 'rm -f "$1"; ln -s perturb.other "$1"'; do
+export LOCK
+for then in 'rm -f "$LOCK"' 'rm -f "$LOCK"; ln -s perturb.other "$LOCK"'; do
 	lock_by "$live"
-	shim readlink "$then"
+	shim cat 'case "$1" in */target) '"$then"' ;; esac'
 	shimmed --file conf --old 'limit=3' --new 'limit=4' -- sh -c "$SECOND" sh "$WORKDIR/second"
 	is "8: a lock that went or changed hands while it was read is refused with nothing said of a holder" "$RC:$(val outcome):$(val reason):$(val lock):$(val holder):$(val holder-running)" "1:refused:locked:$LOCK::"
 	has "8: ...and the control is to be run again" "$ERR" "run this again"
