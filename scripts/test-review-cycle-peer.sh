@@ -1129,6 +1129,47 @@ launch --deadline 7 >/dev/null
 is "9: ...and a short one keeps the deadline it was given" "$(sed -n 's/^deadline=//p' "$A/manual.state")" 7
 peer collect --artifact-dir "$A" >/dev/null
 
+# The size of a review whose diff is not in the prompt: --base has the script measure it.
+BIGREPO="$WORKDIR/bigrepo"
+git init -q "$BIGREPO"
+git -C "$BIGREPO" config user.email t@example.invalid
+git -C "$BIGREPO" config user.name T
+echo base >"$BIGREPO/a.txt"
+git -C "$BIGREPO" add a.txt
+git -C "$BIGREPO" commit -q -m base
+git -C "$BIGREPO" tag start
+head -c 100000 /dev/zero | tr '\0' x >"$BIGREPO/big.txt"
+git -C "$BIGREPO" add big.txt
+git -C "$BIGREPO" commit -q -m big
+DIFF_BYTES="$(git -C "$BIGREPO" diff start...HEAD | wc -c | tr -d ' ')"
+based_case() { # <label> <prompt bytes> <expected budget> <expected helper flags>
+	fresh
+	sized "$2"
+	OUT="$(peer run --provider codex --worktree "$BIGREPO" --artifact-dir "$A" --prompt-file "$WORKDIR/sized.txt" --base start)"
+	is "9: $1" "$(first)|$(val budget)|$(val prompt_bytes)|$(val diff_bytes)|$(sed 's/.*peer-review-run //' "$STEER/helper.calls")" "outcome=passed|$3|$2|$DIFF_BYTES|$4 --effort medium"
+}
+BIN="$ALL"
+based_case "under --base the diff is measured too: prompt and diff of 150000 bytes together stay short" "$((150000 - DIFF_BYTES))" short "--timeout 260"
+based_case "...and one byte more is long, on a prompt that alone is far below the threshold" "$((150001 - DIFF_BYTES))" long "--timeout 540 --attempts 1"
+cmp -s "$A/peer-review.prompt" "$WORKDIR/sized.txt"
+ok "9: ...with nothing of the diff added to the prompt" $?
+fresh
+OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --base no-such-ref)"
+is "9: a base that names no commit costs the launch nothing and claims no diff size" "$(first)|$(val budget)|$(val diff_bytes)" "outcome=passed|short|"
+fresh
+usage_case "a base beside an evidence base" run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --evidence-base "$BASE_OID" --base "$BASE_OID"
+BIN="$NOHELPER"
+fresh
+sized "$((150001 - DIFF_BYTES))"
+OUT="$(peer run --provider codex --worktree "$BIGREPO" --artifact-dir "$A" --prompt-file "$WORKDIR/sized.txt" --base start)"
+is "9: a review that is large by its diff launches directly, its prompt being small" "$(first)" "outcome=launched"
+OUT="$(peer collect --artifact-dir "$A")"
+is "9: ...on the long budget, and collect reports both sizes" "$(first)|$(val budget)|$(val diff_bytes)|$(sed -n 's/^deadline=//p' "$A/manual.state")" "outcome=passed|long|$DIFF_BYTES|1440"
+fresh
+OUT="$(nojq run --provider claude --worktree "$REPO" --artifact-dir "$A" --facts "$FACTS" --evidence-base "$BASE_OID" 2>/dev/null)"
+OUT="$(peer record --artifact-dir "$A")"
+is "9: a run that failed on its own after starting leaves that in its record, not a launch still under way" "$(first)|$(val reason)" "outcome=failed|jq is required to read the claude result"
+
 BIN="$ALL"
 fresh
 echo '"high"' >"$STEER/helper.effort"
@@ -1250,7 +1291,8 @@ OUT="$(peer run --provider codex --worktree "$REPO" --artifact-dir "$A" --facts 
 is "9: a record that cannot be written changes no answer" "$?|$(first)|$(val review_file)" "0|outcome=passed|$A/peer-review-run/session/attempt-1/review.txt"
 has "9: ...and is said on stderr" "$(cat "$WORKDIR/stderr")" "peer: cannot write $A/peer.record"
 OUT="$(peer record --artifact-dir "$A")"
-is "9: ...leaving nothing to read back" "$(first)" "outcome=not-launched"
+is "9: ...leaving nothing to read back, and no file of the attempt named" "$OUT" "outcome=not-launched
+reason="
 OUT="$(bash "$SHIPPED" --help 2>&1)"
 has "9: the contract states the size threshold" "$OUT" "Up to 150000"
 has "9: ...and the record's two answers that are not review outcomes" "$OUT" "So \`started\` is a launch that was"

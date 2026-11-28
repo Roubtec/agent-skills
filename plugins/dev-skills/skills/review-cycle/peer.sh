@@ -6,7 +6,7 @@
 #   peer.sh run --provider <codex|claude|muse> --worktree <abs dir>
 #               (--artifact-root <abs dir> | --artifact-dir <abs dir>)
 #               (--facts <file> | --prompt-file <file>)
-#               [--evidence-base <ref>] [--effort <level>]
+#               [--evidence-base <ref> | --base <ref>] [--effort <level>]
 #               [--budget <auto|short|long>] [--round <n>] [--deadline <seconds>]
 #   peer.sh collect --artifact-dir <abs dir> [--wait <seconds>]
 #   peer.sh record (--artifact-root <abs dir> | --artifact-dir <abs dir>)
@@ -43,20 +43,27 @@
 #            <ref>..HEAD in the prompt between fixed markers, asks the peer for
 #            three proof lines, and checks them on the result.
 #
-#            The attempt budget follows the size of the review, measured as
-#            the bytes of the assembled prompt (`prompt_bytes=`). Up to 150000
-#            bytes, codex and claude get two attempts of 260 seconds
-#            (`budget=short`); above it, one attempt of 540 (`budget=long`),
-#            which is what muse gets at any size. --budget short|long forces
-#            either. The prompt holds the diff only under --evidence-base, so
-#            a caller that knows a review is large without it passes
-#            `--budget long`. Where 150000 comes from: of the last 60 pull
-#            requests merged here by November 2026, the largest quarter had
-#            diffs above about 160000 bytes. No timeout was there to calibrate
-#            on: the 29 codex reviews measured, all at medium effort on
-#            prompts of 9 to 19 kB with no diff embedded, answered in 22 to 96
-#            seconds. On the direct launch `long` is one attempt of twice
-#            --deadline, with no retry.
+#            The attempt budget follows the size of the review: the bytes of
+#            the assembled prompt (`prompt_bytes=`) and, under --base <ref>,
+#            which names the review's base where the prompt does not embed
+#            the diff, the bytes of `git diff <ref>...HEAD` as well
+#            (`diff_bytes=`). Up to 150000 bytes together, codex and claude
+#            get two attempts of 260 seconds (`budget=short`); above it, one
+#            attempt of 540 (`budget=long`), which is what muse gets at any
+#            size. --budget short|long forces either. Under --evidence-base
+#            the diff is in the prompt and counted there. With neither flag
+#            only the prompt is measured, and a --base that names no commit
+#            adds nothing and prints no `diff_bytes=`. Where 150000 comes
+#            from: of the last 60 pull requests merged here by November 2026,
+#            the largest quarter had diffs above about 160000 bytes. No
+#            timeout was there to calibrate on: the 29 codex reviews
+#            measured, all at medium effort on prompts of 9 to 19 kB with no
+#            diff embedded, answered in 22 to 96 seconds. On the direct
+#            launch `long` is one attempt of twice --deadline, with no retry.
+#            That launch hands codex the prompt as one argument, which Linux
+#            caps at 131072 bytes with 4 kB pages: a longer prompt is `failed`
+#            at launch whatever the budget, and --base, unlike
+#            --evidence-base, keeps the diff out of the prompt.
 #
 #            Where `peer-review-run` is on PATH it is run exactly once, in the
 #            foreground: give this call a tool wait of at least 570 seconds.
@@ -103,7 +110,7 @@
 # `path=manual`, and where they apply `fallback_reason=`, `attempt=`,
 # `review_file=` (the peer's full review as plain text, for passed/issues),
 # `model=`, `effort=`, `strength_pin=held|differs`, `evidence=proved|unproved`,
-# `budget=short|long`, `prompt_bytes=`, `basis=stated|unstated` (on `passed`
+# `budget=short|long`, `prompt_bytes=`, `diff_bytes=`, `basis=stated|unstated` (on `passed`
 # only: whether the review carries a `CHECKED:` line saying what it looked at;
 # the outcome is `passed` either way), `round=`, `pid=`, `prompt_file=` and, on
 # a `run` given --artifact-root, `artifact_dir=`.
@@ -156,6 +163,7 @@ usage() {
 }
 die() {
 	note "$*"
+	[ -z "${RECORD:-}" ] || record_put "$(emit_lines failed "$*")"
 	exit 1
 }
 oneline() { printf '%s' "$1" | tr '\n\r\t' '   '; }
@@ -164,10 +172,10 @@ is_count() {
 	[ "$1" -gt 0 ] 2>/dev/null
 }
 
-PROVIDER="" WORKTREE="" ADIR="" AROOT="" FACTS="" PROMPT_SRC="" EVIDENCE_BASE=""
+PROVIDER="" WORKTREE="" ADIR="" AROOT="" FACTS="" PROMPT_SRC="" EVIDENCE_BASE="" BASE=""
 DEADLINE="$DEADLINE_DEFAULT" WAIT="$WAIT_DEFAULT" BUDGET_ARG=auto ROUND="" RECORD=""
 R_PATH="" R_FALLBACK="" R_ATTEMPT="" R_REVIEW="" R_MODEL="" R_EFFORT="" R_PIN="" R_EVIDENCE="" R_PID="" R_TEARDOWN=""
-R_BUDGET="" R_BYTES="" R_BASIS=""
+R_BUDGET="" R_BYTES="" R_DIFF="" R_BASIS=""
 
 emit_lines() { # <outcome> <reason>
 	printf 'outcome=%s\n' "$1"
@@ -183,6 +191,7 @@ emit_lines() { # <outcome> <reason>
 	[ -z "$R_EVIDENCE" ] || printf 'evidence=%s\n' "$R_EVIDENCE"
 	[ -z "$R_BUDGET" ] || printf 'budget=%s\n' "$R_BUDGET"
 	[ -z "$R_BYTES" ] || printf 'prompt_bytes=%s\n' "$R_BYTES"
+	[ -z "$R_DIFF" ] || printf 'diff_bytes=%s\n' "$R_DIFF"
 	[ -z "$R_BASIS" ] || printf 'basis=%s\n' "$R_BASIS"
 	[ -z "$ROUND" ] || printf 'round=%s\n' "$ROUND"
 	[ -z "$R_TEARDOWN" ] || printf 'teardown=%s\n' "$R_TEARDOWN"
@@ -353,13 +362,18 @@ peer_abort_unhanded() { # <child pid>
 
 # Either budget fits the caller's 570-second wait by the helper's own sum,
 # attempts x (timeout + 5) + 10: 540 seconds for short and 555 for long.
-# A size that cannot be measured leaves the provider's own budget in place.
-choose_budget() { # from the prompt this run wrote: sets BUDGET, R_BUDGET, R_BYTES
+# A size that cannot be measured counts as nothing, which leaves the provider's
+# own budget in place.
+choose_budget() { # sets BUDGET, R_BUDGET, R_BYTES and, under --base, R_DIFF
+	local base_oid
 	R_BYTES="$({ wc -c <"$ADIR/peer-review.prompt" | tr -d ' '; } 2>/dev/null)"
+	if [ -n "$BASE" ] && base_oid="$(git -C "$WORKTREE" rev-parse --verify --quiet "$BASE^{commit}" 2>/dev/null)"; then
+		R_DIFF="$({ git -C "$WORKTREE" diff "$base_oid...HEAD" | wc -c | tr -d ' '; } 2>/dev/null)"
+	fi
 	case "$BUDGET_ARG" in
 	short) BUDGET="$BUDGET_SHORT" ;;
 	long) BUDGET="$BUDGET_LONG" ;;
-	*) [ -z "$R_BYTES" ] || [ "$R_BYTES" -le "$LONG_BYTES" ] || BUDGET="$BUDGET_LONG" ;;
+	*) [ "$((${R_BYTES:-0} + ${R_DIFF:-0}))" -le "$LONG_BYTES" ] || BUDGET="$BUDGET_LONG" ;;
 	esac
 	R_BUDGET=short
 	if [ "$BUDGET" = "$BUDGET_LONG" ]; then
@@ -617,6 +631,7 @@ state_put() { # <attempt> <launched at>
 		printf 'effort=%s\n' "$EFFORT"
 		printf 'budget=%s\n' "$R_BUDGET"
 		printf 'prompt_bytes=%s\n' "$R_BYTES"
+		printf 'diff_bytes=%s\n' "$R_DIFF"
 		printf 'round=%s\n' "$ROUND"
 	} >"$ADIR/manual.state.new" && mv -f "$ADIR/manual.state.new" "$ADIR/manual.state"
 }
@@ -766,6 +781,7 @@ cmd_run() {
 	[ -n "$FACTS$PROMPT_SRC" ] || usage "give --facts <file> or --prompt-file <file>"
 	[ -s "$FACTS$PROMPT_SRC" ] || usage "not a readable, non-empty file: $FACTS$PROMPT_SRC"
 	if [ -n "$EVIDENCE_BASE" ] && [ -z "$FACTS" ]; then usage "--evidence-base needs --facts"; fi
+	if [ -n "$EVIDENCE_BASE" ] && [ -n "$BASE" ]; then usage "give --evidence-base or --base, not both: embedded evidence is measured in the prompt"; fi
 	if [ "$PROVIDER" = claude ] && [ -z "$EVIDENCE_BASE" ]; then usage "--provider claude needs --evidence-base <ref>: its read-only tools cannot run git"; fi
 	is_count "$DEADLINE" || usage "--deadline needs a positive number of seconds"
 	case "$EFFORT" in
@@ -811,7 +827,7 @@ cmd_collect() {
 	[ -f "$ADIR/manual.state" ] || usage "no direct launch is recorded in $ADIR: collect follows a launched answer from run"
 	PROVIDER="$(state_get provider)" DEADLINE="$(state_get deadline)" WORKTREE="$(state_get worktree)"
 	R_FALLBACK="$(state_get fallback_reason)" R_PATH=manual
-	R_BUDGET="$(state_get budget)" R_BYTES="$(state_get prompt_bytes)" ROUND="$(state_get round)"
+	R_BUDGET="$(state_get budget)" R_BYTES="$(state_get prompt_bytes)" R_DIFF="$(state_get diff_bytes)" ROUND="$(state_get round)"
 	EFFORT="$(state_get effort)"
 	[ -n "$EFFORT" ] || EFFORT=medium
 	provider_setup
@@ -882,7 +898,7 @@ cmd_record() {
 		grep -v '^artifact_dir=' "$f"
 		printf 'artifact_dir=%s\n' "${f%/peer.record}"
 	done
-	[ "$found" = 1 ] || emit_lines not-launched ''
+	[ "$found" = 1 ] || ADIR="" emit_lines not-launched ''
 }
 
 main() {
@@ -903,7 +919,7 @@ main() {
 			awk 'NR > 1 && !/^#/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "$SELF"
 			exit 0
 			;;
-		--provider | --worktree | --artifact-root | --artifact-dir | --facts | --prompt-file | --evidence-base | --effort | --budget | --round | --deadline | --wait)
+		--provider | --worktree | --artifact-root | --artifact-dir | --facts | --prompt-file | --evidence-base | --base | --effort | --budget | --round | --deadline | --wait)
 			[ $# -ge 2 ] || usage "$1 needs a value"
 			case "$1" in
 			--provider) PROVIDER="$2" ;;
@@ -913,6 +929,7 @@ main() {
 			--facts) FACTS="$2" ;;
 			--prompt-file) PROMPT_SRC="$2" ;;
 			--evidence-base) EVIDENCE_BASE="$2" ;;
+			--base) BASE="$2" ;;
 			--effort) EFFORT="$2" ;;
 			--budget) BUDGET_ARG="$2" ;;
 			--round) ROUND="$2" ;;
