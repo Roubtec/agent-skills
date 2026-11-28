@@ -17,6 +17,7 @@ Restate, verbatim, every deviation your prompt lists that still stands once this
 **Commit your work, and validate it at the tier your prompt states.**
 Any perturbation-style control — gutting a check, perturbing a predicate to confirm a named failure — runs only after the implementation is committed, and `git restore` never targets a file holding uncommitted implementation edits.
 `perturb.sh`, the script beside this file whose `--help` is its contract, runs a control that is one changed string: point it at your working location with `-C`, and it answers `caught` only where the change applied and the command then failed, having put the file back itself.
+A run that prints no `outcome=` line is not a result: see that `git status` shows the file unchanged, and run it again.
 It is a safer way to run a control you had already decided on, never a reason to run one, and your report names the failure you expected to see.
 
 **A sweep is enumerated, never asserted.**

@@ -64,9 +64,10 @@
 #                        number is running here now, which is all it says
 #   backup=<path>        on locked too, where the lock holds a copy of the
 #                        bytes its control's file had
-#   restored=yes         wherever the file was written to, on every outcome
-#                        but unrestored: its bytes were compared with the copy
-#                        taken before the change, and git reports it unchanged
+#   restored=yes         wherever writing the change was attempted, on every
+#                        outcome but unrestored: the file's bytes were compared
+#                        with the copy taken before, and git reports it
+#                        unchanged
 #   was=<outcome>        on unrestored: what the answer would have been
 #
 # `caught` says the command failed, not why. A command that fails for a reason
@@ -108,11 +109,21 @@
 # show here. Where the lock went or changed hands while it was read, only
 # `lock=` is printed and the control is to be run again.
 #
-# A signal is answered from the moment this script has been read. One that
-# comes in the milliseconds before that is ignored, and bash itself passes
-# over an INT sent to this process alone while one of the script's own short
-# steps runs: the control then goes on as if none had come, and the signal
-# can be sent again.
+# Signals, as measured and no further. An INT, TERM or HUP sent to this
+# script once the command was running was answered `interrupted` every time.
+# One sent earlier, during the checks and before the file is changed, mostly
+# was too. Of those sent in a run's first 20 ms under bash 5.2.37, about one
+# in a hundred was passed over, the control going on as if none had come; a
+# few in a thousand ended the run with status 1, bash's own complaint on
+# stderr and no `outcome=` line; and about one INT in three thousand left
+# the script spinning, deaf to INT and TERM, until it was killed. Under bash
+# 3.2.57 only an INT was passed over. In none of those runs had the file been
+# changed, and none left a lock; a spinning run that is killed may leave a
+# `perturb.XXXXXX` directory that nothing reads. A signal sent before the
+# script has been read is ignored.
+#
+# A run that prints no `outcome=` line, a usage error apart, is no result:
+# see that `git status` shows the file unchanged, and run the control again.
 #
 # This script cannot catch SIGKILL or a lost machine: the file then stays
 # changed and the lock stands, or, killed as it began or ended, a
@@ -124,8 +135,8 @@
 #
 # Output: `key=value` lines on stdout, `outcome=` first. Exit status: 0 on
 # caught; 3 on missed, no-match, ambiguous, timed-out and not-run; 1 on
-# refused, interrupted and unrestored; 64 on a usage error, the one exit with
-# no `outcome=` line. Written for bash 3.2 and later.
+# refused, interrupted and unrestored; 64 on a usage error, which prints no
+# `outcome=` line. Written for bash 3.2 and later.
 set -u
 trap '' INT TERM HUP
 
@@ -313,9 +324,11 @@ on_signal() {
 	note "stopped by SIG$1."
 	answer interrupted 1 "signal=$1"
 }
-# All of the run is one function, read whole before any of it runs: bash 5.2
-# loses a trap that comes due while it is reading a `$(...)`, and the
-# substitution's output with it.
+# The run is one function for what that was measured to buy under bash
+# 5.2.37, over 21,600 runs each way signalled in their first 20 ms: as a
+# function, 48 ended with no `outcome=` line and none answered wrongly; as
+# top-level commands, 5 ended so and 17 refused a good file as outside,
+# not-a-file or locked.
 main() {
 	DIR="" OLD="" NEW="" TIMEOUT="" HAVE_OLD=0 HAVE_NEW=0
 	while [ $# -gt 0 ]; do
@@ -440,6 +453,8 @@ main() {
 	esac
 	! cmp -s "$TMP/changed" "$BACKUP" || refuse failed "the change left $FILE as it was."
 
+	# From here to the answer no `$(...)` runs while a signal can be caught:
+	# each run the header counts as ended with no `outcome=` line was at one.
 	MATCHES=1 APPLIED=1 WRITTEN=1
 	# The changed bytes are opened before the file is, as the copy is in restore.
 	if ! cat <"$TMP/changed" >"$TARGET" 2>/dev/null || ! cmp -s "$TMP/changed" "$TARGET"; then

@@ -586,17 +586,19 @@ ok "8: ...its command never ran" "$([ ! -e "$WORKDIR/second" ] && echo 0 || echo
 cp "$WORKDIR/kept" "$R/conf"
 same "8: ...and the kept bytes put the repository back"
 
-# A signal at the two moments a run could be caught with nothing said: before
-# anything else has run, and as the lock is made.
+# A signal at two moments that can be placed exactly: while the first command
+# the helper starts is running, and as the lock is made. A signal that lands
+# anywhere else before the file is changed is not placed by this suite, and
+# the helper's header says what was measured of those.
 before
 shim git '[ -e "$SAW.sent" ] || { : >"$SAW.sent"; kill -TERM "$PPID"; }'
 shimmed --file conf --old 'limit=3' --new 'limit=4' -- ./check.sh
 rm -f "$SAW.sent"
-is "8: a signal that arrives with the first thing the helper runs is answered interrupted" "$RC:$(val outcome):$(val signal):$(val restored)" "1:interrupted:TERM:"
+is "8: a signal sent while the first command the helper starts is running is answered interrupted" "$RC:$(val outcome):$(val signal):$(val restored)" "1:interrupted:TERM:"
 unrun "8: ...the command never ran"
 shim ln 'case "$*" in *perturb.lock) kill -TERM "$PPID" ;; esac'
 shimmed --file conf --old 'limit=3' --new 'limit=4' -- ./check.sh
-is "8: a signal that arrives as the lock is made is answered interrupted" "$RC:$(val outcome):$(val signal):$(val restored)" "1:interrupted:TERM:"
+is "8: a signal sent while the lock is being made is answered interrupted" "$RC:$(val outcome):$(val signal):$(val restored)" "1:interrupted:TERM:"
 unrun "8: ...the command never ran"
 is "8: ...and the lock it had just made is not left behind" "$(left)" 0
 same "8: ...and the repository is as it was"
