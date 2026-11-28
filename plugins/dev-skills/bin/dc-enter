@@ -1316,9 +1316,17 @@ fi
 # pair and nothing else, with `config --local --get remote.<origin>.uploadpack`
 # exiting 1 — so nothing of it reaches what is handed back, independently of the
 # remote-section removal further down.
+#
+# The quote and its replacement are held in variables rather than spelled inside
+# the expansion: bash 3.2 keeps the backslashes of a `\'` written in a
+# double-quoted `${var//pat/rep}` (measured on 3.2.57: `it's` came out as
+# `it\'\\'\'s`, where 5.2 gives `it'\''s`), which closed the quoting early and
+# failed the clone of any source whose path holds a single quote.
 UPLOAD_PACK="git"
+SQUOTE="'"
+SQUOTE_ESCAPED="'\\''"
 for trust_path_value in "${SRC_TRUST_PATHS[@]}"; do
-	UPLOAD_PACK+=" -c 'safe.directory=${trust_path_value//\'/\'\\\'\'}'"
+	UPLOAD_PACK+=" -c 'safe.directory=${trust_path_value//$SQUOTE/$SQUOTE_ESCAPED}'"
 done
 UPLOAD_PACK+=" upload-pack"
 CLONE_ARGS+=(--upload-pack "$UPLOAD_PACK")
